@@ -4,7 +4,7 @@ use std::time::Duration;
 use gents_documents::inference_defaults::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS;
 
 /// Records a consumer matches to size its own wait on a stopping runtime.
-pub const SHUTDOWN_EVENT_TARGET: &str = "gents::shutdown";
+pub const SHUTDOWN_EVENT_TARGET: &str = "crate::shutdown";
 
 /// How often an outstanding stage names itself while it is still running.
 pub const STAGE_OBSERVATION_INTERVAL: Duration = Duration::from_secs(5);

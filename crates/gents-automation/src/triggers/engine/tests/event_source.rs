@@ -433,12 +433,10 @@ fn resolved_event_trigger(
         max_fires_per_hour: gents_documents::DEFAULT_MAX_FIRES_PER_HOUR,
         trigger_doc_id: format!("{trigger_id}-doc"),
         trigger_id: trigger_id.to_string(),
-        task_id: task.task_id.clone(),
         task,
         source_collection: source_collection.to_string(),
         event_kind: "created".to_string(),
         filter: None,
-        enabled: true,
         concurrency: ConcurrencyMode::Serial,
         fire_mode: gents_documents::automation::EventTriggerFireMode::PerDocument,
         correlation_field: None,
@@ -465,12 +463,10 @@ fn resolved_event_trigger_with_filter(
         max_fires_per_hour: gents_documents::DEFAULT_MAX_FIRES_PER_HOUR,
         trigger_doc_id: format!("{trigger_id}-doc"),
         trigger_id: trigger_id.to_string(),
-        task_id: task.task_id.clone(),
         task,
         source_collection: source_collection.to_string(),
         event_kind: "created".to_string(),
         filter: Some(filter.to_string()),
-        enabled: true,
         concurrency: ConcurrencyMode::Serial,
         fire_mode: gents_documents::automation::EventTriggerFireMode::PerDocument,
         correlation_field: None,
@@ -489,7 +485,7 @@ async fn hydrate_event_config_ids(
     let response = crate::triggers::callback::test_agent_access(node).execute(&format!(
         "{{Trigger(filter:{{trigger_id:{{_eq:\"{}\"}}}}){{_docID}} EventSource(filter:{{event_source_id:{{_eq:\"{}\"}}}}){{_docID}} Task(filter:{{task_id:{{_eq:\"{}\"}}}}){{_docID}}}}",
         escape_graphql_string(&trigger.trigger_id), escape_graphql_string(&trigger.event_source_id),
-        escape_graphql_string(&trigger.task_id))).await.unwrap();
+        escape_graphql_string(&trigger.task.task_id))).await.unwrap();
     trigger.trigger_doc_id = response["data"]["Trigger"][0]["_docID"]
         .as_str()
         .unwrap()
@@ -603,7 +599,7 @@ async fn configured_event_snapshot(
             vec![
                 (
                     gents_store::collection::Collection::Task,
-                    serde_json::json!({"task_id": trigger.task_id,
+                    serde_json::json!({"task_id": trigger.task.task_id,
                         "agent_did": trigger.task.agent_did,
                         "prompt_template": trigger.task.prompt_template,
                         "emit_outcome": trigger.task.emit_outcome}),
@@ -620,8 +616,8 @@ async fn configured_event_snapshot(
                 (
                     gents_store::collection::Collection::Trigger,
                     serde_json::json!({"trigger_id": trigger.trigger_id,
-                        "task_id": trigger.task_id,
-                        "enabled": trigger.enabled,
+                        "task_id": trigger.task.task_id,
+                        "enabled": true,
                         "concurrency": trigger.concurrency,
                         "source": {"kind": "event", "event_source_id": trigger.event_source_id}}),
                 ),
@@ -750,24 +746,26 @@ async fn admit_selected_event(
         .unwrap();
     let trigger_doc = response["data"]["Trigger"][0]["_docID"].as_str().unwrap();
     let spec = gents_session::request::lifecycle::materialize::pending_agent_request_spec(
-        owner,
-        agent.did(),
-        &intent.task.prompt_template,
-        gents_session::request::lifecycle::ExecutionOrigin::Scheduled,
-        gents_session::request::lifecycle::TriggerLineage {
-            trigger_id: intent.trigger_id.clone(),
-            trigger_kind: Some("event".into()),
-            source_doc_id: Some(fire.identity.source_doc_id.clone()),
-            correlation: intent.correlation.clone(),
-            trigger_context: None,
+        gents_session::request::lifecycle::materialize::PendingAgentRequest {
+            node_did: owner,
+            agent_did: agent.did(),
+            content: &intent.task.prompt_template,
+            execution_origin: gents_session::request::lifecycle::ExecutionOrigin::Scheduled,
+            trigger_lineage: gents_session::request::lifecycle::TriggerLineage {
+                trigger_id: intent.trigger_id.clone(),
+                trigger_kind: Some("event".into()),
+                source_doc_id: Some(fire.identity.source_doc_id.clone()),
+                correlation: intent.correlation.clone(),
+                trigger_context: None,
+            },
+            conversation_title: None,
+            workspace_lineage: None,
+            requester_did: None,
+            trigger_doc_id: Some(trigger_doc),
         },
-        None,
-        None,
         &fire.request_id,
         &fire.session_id,
         Some(&fire.fire_key),
-        None,
-        Some(trigger_doc),
     )
     .unwrap();
     let create = gents_session::request::lifecycle::build_signed_request(
@@ -1272,10 +1270,11 @@ async fn correlation_populated_after_create_remains_eligible_for_delivery() {
         crate::triggers::engine::deferred_delivery::DeferralWatch::new(Duration::ZERO);
 
     source.reconcile_subscriptions(snapshot.as_ref()).await;
+    // A completed pass, not a wall-clock window, establishes that the source
+    // observed the row: a timeout can cancel `next_fire` before its first
+    // durable pass reaches the arrival.
     assert!(
-        tokio::time::timeout(Duration::from_millis(500), source.next_fire())
-            .await
-            .is_err(),
+        source.conformance_rescan().await.is_none(),
         "a row without its correlation value must not fire"
     );
     assert_eq!(source.deferrals.stuck(), 1);

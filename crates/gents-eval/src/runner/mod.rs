@@ -59,7 +59,7 @@ use crate::checks::CheckRegistry;
 use crate::runner::freeze::thaw;
 use crate::runner::liveness::{cancel_requested, clear_cancel, marker_poll, refuse_if_held};
 use crate::runner::progress::ProgressWriter;
-use crate::runner::trial::{execute_trial, Slot, ViewWriter};
+use crate::runner::trial::{execute_trial, Slot, TrialContext, ViewWriter};
 use crate::TrialRecord;
 use gents_store::config_client::ConfigAccess;
 
@@ -178,18 +178,28 @@ pub async fn run(
     execute_frozen(&frozen, &recorder, executor, registry, cancel, options).await
 }
 
-#[allow(clippy::too_many_arguments)]
+pub struct RunLocation<'a> {
+    pub owner: &'a str,
+    pub run_id: &'a str,
+    pub runs_dir: &'a Path,
+}
+
 pub async fn resume(
     access: &ConfigAccess,
-    owner: &str,
-    run_id: &str,
-    runs_dir: &Path,
+    location: RunLocation<'_>,
     executor: &dyn TrialExecutor,
     registry: &CheckRegistry,
     cancel: CancellationToken,
     options: &RunOptions,
 ) -> Result<RunOutcome> {
-    let frozen = thaw(access, owner, run_id, runs_dir, executor.isolation()).await?;
+    let frozen = thaw(
+        access,
+        location.owner,
+        location.run_id,
+        location.runs_dir,
+        executor.isolation(),
+    )
+    .await?;
     clear_cancel(&frozen.run_dir)?;
     let recorder = DocumentRecorder::new(access);
     execute_frozen(&frozen, &recorder, executor, registry, cancel, options).await
@@ -247,21 +257,21 @@ pub(crate) async fn execute_frozen(
         let mut tripped: Option<u32> = None;
         let mut failed: Option<anyhow::Error> = None;
         {
-            let mut running = futures::stream::iter(planned.iter().map(|slot| {
-                execute_trial(
-                    frozen,
-                    slot,
-                    recorder,
-                    executor,
-                    registry,
-                    &cancel,
-                    &stop,
-                    &progress,
-                    &views,
-                    options.trial_budget.as_ref(),
-                    &admission_stopped,
-                )
-            }))
+            let trial_context = TrialContext {
+                frozen,
+                recorder,
+                executor,
+                registry,
+                cancel: &cancel,
+                trial_budget: options.trial_budget.as_ref(),
+                progress: &progress,
+                views: &views,
+            };
+            let mut running = futures::stream::iter(
+                planned
+                    .iter()
+                    .map(|slot| execute_trial(&trial_context, slot, &stop, &admission_stopped)),
+            )
             .buffer_unordered(concurrency);
 
             let mut observed_cancel = false;

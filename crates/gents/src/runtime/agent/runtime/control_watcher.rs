@@ -60,6 +60,7 @@ pub(super) struct ControlWatcherInputs {
     pub(super) node_did: String,
     pub(super) resolve_context: DocumentResolveContext,
     pub(super) tool_runtime: ToolRuntimeContext,
+    pub(super) system_log: bool,
     pub(super) proposals_tx: mpsc::Sender<ResolvedRuntimeSnapshot>,
     pub(super) runtime_status: RuntimeStatusHandle,
     pub(super) health_events_rx: mpsc::Receiver<()>,
@@ -81,6 +82,7 @@ pub(super) async fn run_control_watcher_with_timing(
         node_did,
         resolve_context,
         tool_runtime,
+        system_log,
         proposals_tx,
         runtime_status,
         mut health_events_rx,
@@ -184,7 +186,7 @@ pub(super) async fn run_control_watcher_with_timing(
                         &document_view,
                     )
                     .await?;
-                    super::startup::snapshot::demote_unbuildable_agents(&tool_runtime, &mut snapshot).await?;
+                    super::startup::snapshot::demote_unbuildable_agents(system_log, &tool_runtime, &mut snapshot).await?;
                     anyhow::Ok(snapshot)
                 }
                 .await

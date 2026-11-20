@@ -18,6 +18,7 @@ use gents_inference::backends::health::{BackendHealthMap, BackendProberOptions};
 use gents_inference::backends::registry::backend_fields;
 use gents_inference::resolved::{
     ResolvedAgent, DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS, DEFAULT_STREAM_BATCH_MS,
+    DEFAULT_TITLE_TIMEOUT_SECS,
 };
 use gents_store::identity::{NodeIdentity, RuntimeNode};
 use gents_store::schema::migration;
@@ -157,6 +158,11 @@ pub struct DocumentRuntimeOptions {
     pub hook_failure_policy: FailurePolicy,
     pub health_checker_options: HealthCheckerOptions,
     pub backend_prober_options: BackendProberOptions,
+    pub p2p_intervals: gents_p2p::p2p_reconcile::intervals::P2pIntervals,
+    pub p2p_network_id: Option<String>,
+    /// The host sends tracing to the system log (`gents server --system-log`),
+    /// so operator-local startup diagnostics are mirrored to stderr.
+    pub system_log: bool,
     pub backend_health: Option<BackendHealthMap>,
     pub process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
     pub runtime_snapshot_observer: Option<Arc<dyn RuntimeSnapshotObserver>>,
@@ -221,6 +227,9 @@ pub struct Gents {
     inference_observations: gents_inference::inference_observation::InferenceObservationRegistry,
     health_checker_options: HealthCheckerOptions,
     backend_prober_options: BackendProberOptions,
+    p2p_intervals: gents_p2p::p2p_reconcile::intervals::P2pIntervals,
+    p2p_network_id: String,
+    system_log: bool,
     backend_health: BackendHealthMap,
     storage_fault: crate::runtime::storage_fault::StorageFaultObservation,
     process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
@@ -319,6 +328,11 @@ impl Gents {
             inference_observations: Default::default(),
             health_checker_options: options.health_checker_options,
             backend_prober_options: options.backend_prober_options,
+            p2p_intervals: options.p2p_intervals,
+            p2p_network_id: options
+                .p2p_network_id
+                .unwrap_or_else(|| gents_p2p::p2p_reconcile::DEFAULT_NETWORK_ID.to_owned()),
+            system_log: options.system_log,
             backend_health,
             storage_fault: crate::runtime::storage_fault::StorageFaultObservation::new(),
             process_state_observer: options.process_state_observer,
@@ -608,6 +622,11 @@ pub(crate) fn agent_config_from_documents(
         "provider_idle_timeout_secs",
         DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
     )?;
+    let title_secs = positive_duration_secs_or_default(
+        execution.title_timeout_secs,
+        "title_timeout_secs",
+        DEFAULT_TITLE_TIMEOUT_SECS,
+    )?;
     let max_total_tokens = execution
         .max_total_tokens
         .map(|limit| {
@@ -620,6 +639,8 @@ pub(crate) fn agent_config_from_documents(
     }
     let backend = backend_fields(&inference.backend);
     let resolved_max_turns = inference.max_turns()?;
+    let max_invalid_tool_calls = inference.max_invalid_tool_calls()?;
+    let repeated_tool_failure_limit = inference.repeated_tool_failure_limit()?;
     anyhow::ensure!(
         agent_config.node_did == principal.node_did,
         "Agent {} belongs to a different runtime node",
@@ -658,6 +679,7 @@ pub(crate) fn agent_config_from_documents(
         backend_endpoint: backend.backend_endpoint,
         backend_auth: backend.backend_auth,
         claude_platform: backend.claude_platform,
+        client_version: backend.client_version,
         model_name: inference.profile.model_name.clone(),
         service_tier: inference.profile.service_tier,
         resolved_reasoning_efforts: inference.resolved_reasoning_efforts(),
@@ -666,6 +688,8 @@ pub(crate) fn agent_config_from_documents(
         max_turns: resolved_max_turns.value,
         max_turns_provenance: resolved_max_turns.provenance,
         max_total_tokens,
+        max_invalid_tool_calls,
+        repeated_tool_failure_limit,
         system_prompt: context
             .and_then(|context| context.system_prompt.clone())
             .unwrap_or_default(),
@@ -674,6 +698,7 @@ pub(crate) fn agent_config_from_documents(
         stream_batch_ms,
         stream_liveness_timeout: Duration::from_secs(liveness_secs),
         provider_idle_timeout: Duration::from_secs(provider_idle_secs),
+        title_timeout: Duration::from_secs(title_secs),
         deadline_duration: Duration::from_secs(deadline_duration_secs),
         completion_retry: gents_loop::completion_retry::CompletionRetryProfileFields {
             retry_max_transport: retry.max_transport_retries,

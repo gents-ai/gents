@@ -11,8 +11,9 @@ use tokio::task::JoinSet;
 use tokio_util::codec::LengthDelimitedCodec;
 use tokio_util::sync::CancellationToken;
 
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::types::ClientUpdateEvent;
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 use super::protocol::{
     ClientCommand, ClientMessage, HostMessage, MAX_FRAME_BYTES, MAX_PENDING_CALLS, PROTOCOL_VERSION,
@@ -51,7 +52,7 @@ where
     // Subscribe before acknowledging initialization: a first snapshot can then
     // overlap updates without leaving a snapshot-to-live observation gap.
     let mut store = host.core.store_updates();
-    let mut health = host.core.sync_state_updates();
+    let mut health = host.core.runtime_connection_updates();
     frames
         .send(pack(HostMessage::Hello {
             version: PROTOCOL_VERSION,

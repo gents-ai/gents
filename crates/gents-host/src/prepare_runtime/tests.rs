@@ -480,6 +480,7 @@ fn record_home(node: &ControlNode, home: &Path) -> StoredInitConfig {
         tool_ceiling: gents_service::args::ToolCeilingArg::MetaOnly,
         tool_root: None,
         store_encryption: None,
+        document_acp: Default::default(),
     };
     gents_service::home_state::write_init_config(home, &config).unwrap();
     gents_service::home_state::write_runtime_state(

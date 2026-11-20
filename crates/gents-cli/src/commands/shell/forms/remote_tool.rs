@@ -1,4 +1,4 @@
-use gents_desktop_core::tool_service::{test_tool_service, ToolServiceTarget};
+use gents::client_tools::{test_tool_service, ToolServiceTarget};
 use gents_documents::ToolServiceRegistry;
 use gents_shell::sample::Tone;
 use gents_shell::source::{Doc, FieldKind, Form, FormAct, FormAction, FormError};

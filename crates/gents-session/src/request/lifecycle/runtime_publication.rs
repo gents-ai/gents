@@ -55,13 +55,15 @@ async fn stage(txn: &ConfigApplyTxn<'_>, create: &AgentRequestCreate) -> anyhow:
     let reserved = if existing.is_none() {
         crate::session::ensure_reserved_session_in_txn(
             txn,
-            &create.session_id,
-            &create.node_did,
-            &create.agent_did,
-            Some(&create.requester_did),
-            create.input.initial_title.clone(),
-            None,
-            &create.created_at,
+            crate::session::NewAgentSession {
+                session_id: &create.session_id,
+                node_did: &create.node_did,
+                agent_did: &create.agent_did,
+                requester_did: Some(&create.requester_did),
+                title: create.input.initial_title.clone(),
+                provenance: None,
+                created_at: &create.created_at,
+            },
         )
         .await?
     } else {

@@ -65,7 +65,8 @@ pub(super) async fn agent_set(args: AgentUpsertArgs) -> Result<()> {
         }
         None => {
             let binding =
-                gents_desktop_core::agent_identity::provision(&endpoint, &args.node_did).await?;
+                gents_store::identity::provision_agent_identity_remote(&endpoint, &args.node_did)
+                    .await?;
             let agent = Agent {
                 agent_did: binding.agent_did.clone(),
                 creation_nonce: binding.creation_nonce.clone(),
@@ -137,7 +138,7 @@ impl std::fmt::Display for AgentFailure {
         if matches!(self.error, AgentOperationError::CatalogNotHeld) {
             write!(
                 formatter,
-                "\nA Node owner or administrator grants the catalog: gents config agent grant-catalog --graphql <GRAPHQL_URL> --node-did <NODE_DID> <AGENT_DID>"
+                "\nA Node owner or administrator makes the agent a Node administrator, the one grant of the catalog: gents config agent grant-node-admin --graphql <GRAPHQL_URL> --node-did <NODE_DID> <AGENT_DID>"
             )?;
         }
         Ok(())
@@ -175,7 +176,8 @@ async fn submit_create(
     input: AgentCreateInput,
 ) -> Result<()> {
     let endpoint = gents_service::home_state::resolve_graphql_endpoint(graphql, home).await?;
-    let identity_binding = gents_desktop_core::agent_identity::provision(&endpoint, owner).await?;
+    let identity_binding =
+        gents_store::identity::provision_agent_identity_remote(&endpoint, owner).await?;
     let access = ConfigAccess::Graphql(endpoint);
     let mut receipt = create_agent(&access, owner, identity_binding, &input).await?;
     if let Some(Value::String(command)) = receipt.pointer_mut("/host_root_access/user_command") {
@@ -250,22 +252,22 @@ pub(super) async fn agent_self_config_permission(
     }))
 }
 
-pub(super) async fn agent_catalog_permission(
-    args: AgentCatalogPermissionArgs,
+pub(super) async fn agent_node_administration(
+    args: AgentNodeAdministrationArgs,
     grant: bool,
 ) -> Result<()> {
     let receipt = change_permission(
         &args.graphql,
         args.node_did,
         args.agent_did,
-        AgentPermission::Catalog,
+        AgentPermission::NodeAdministration,
         grant,
     )
     .await?;
     print_json(&json!({
         "node_did": receipt.node_did,
         "agent_did": receipt.agent_did,
-        "catalog_granted": receipt.granted,
+        "node_administration_granted": receipt.granted,
     }))
 }
 

@@ -41,7 +41,7 @@ async fn wait_process_refuses_a_job_row_with_the_completion_message_text() {
             None,
             "wait-call",
             args,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
     else {

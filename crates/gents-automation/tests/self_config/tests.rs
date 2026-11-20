@@ -968,7 +968,7 @@ async fn pack_install_uses_current_node_and_inference_chain() {
             .call(
                 json!({"argv": ["pack", "preview", "install", "fixture/plugin_documents_fixture"]})
                     .to_string(),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .expect("incomplete preview remains readable"),
@@ -1006,7 +1006,7 @@ async fn pack_install_uses_current_node_and_inference_chain() {
         &tool
             .call(
                 json!({"argv": preview_argv}).to_string(),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .expect("complete preview succeeds"),
@@ -1025,7 +1025,7 @@ async fn pack_install_uses_current_node_and_inference_chain() {
     let output = tool
         .call(
             json!({"argv": install_argv}).to_string(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .expect("a stored pack installs");
@@ -1054,7 +1054,7 @@ async fn pack_install_uses_current_node_and_inference_chain() {
         &tool
             .call(
                 json!({"argv": ["pack", "get", "fixture/plugin_documents_fixture"]}).to_string(),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .expect("installed pack is inspectable"),
@@ -1087,7 +1087,7 @@ async fn pack_install_uses_current_node_and_inference_chain() {
         &tool
             .call(
                 json!({"argv": staged_preview}).to_string(),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .unwrap(),
@@ -1098,7 +1098,7 @@ async fn pack_install_uses_current_node_and_inference_chain() {
         &tool
             .call(
                 json!({"argv": ["pack", "list"]}).to_string(),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .unwrap(),
@@ -1125,7 +1125,7 @@ async fn pack_install_uses_current_node_and_inference_chain() {
                 "--inference-slot", verifier_slot.as_str()
             ]})
             .to_string(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .expect_err("a digest not returned by preview is rejected");
@@ -1160,7 +1160,7 @@ async fn pack_install_uses_current_node_and_inference_chain() {
                     "--inference-slot", verifier_slot.as_str()
                 ]})
                 .to_string(),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .expect("installed pack update previews"),
@@ -1176,7 +1176,7 @@ async fn pack_install_uses_current_node_and_inference_chain() {
                     "--inference-slot", worker_slot.as_str(),
                     "--inference-slot", verifier_slot.as_str()
                 ]})
-                .to_string(), &gents_loop::tool::ToolCallEnvelope::ambient())
+                .to_string(), &gents_loop::tool::ToolCallEnvelope::default())
             .await
             .expect("same distribution update is idempotent"),
     )
@@ -1211,7 +1211,7 @@ async fn pack_install_uses_current_node_and_inference_chain() {
         &tool
             .call(
                 json!({"argv": ["pack", "list"]}).to_string(),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .unwrap(),
@@ -1234,7 +1234,7 @@ async fn pack_install_uses_current_node_and_inference_chain() {
     // pack is removed and its plugin retired (`ensure_plugins_unreferenced`).
     tool.call(
         json!({"argv": ["pack", "remove", "fixture/plugin_documents_fixture"]}).to_string(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .expect("an unselected plugin retires with its pack");

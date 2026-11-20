@@ -135,6 +135,8 @@ where
     authored_index: u32,
     provider_profile: ProviderInputProfile,
     doc_id: &'a str,
+    /// The capture scope of the request whose stream this processes.
+    capture: Option<std::sync::Arc<crate::rendered_request::scope::RequestCaptureScope>>,
 }
 
 impl<'a, H, W, L> StreamProcessor<'a, H, W, L>
@@ -229,7 +231,16 @@ where
             authored_index: 0,
             provider_profile,
             doc_id,
+            capture: None,
         }
+    }
+
+    pub fn with_capture(
+        mut self,
+        capture: Option<std::sync::Arc<crate::rendered_request::scope::RequestCaptureScope>>,
+    ) -> Self {
+        self.capture = capture;
+        self
     }
 
     pub async fn validate_execution(&self) -> Result<(), L::Error> {
@@ -518,6 +529,12 @@ where
                     .map_err(StreamProcessorError::writer)?;
                 Ok(StreamAction::Continue)
             }
+            Ok(LoopStreamItem::RetryWake) => {
+                self.validate_execution()
+                    .await
+                    .map_err(StreamProcessorError::lifecycle)?;
+                Ok(StreamAction::Continue)
+            }
             Ok(LoopStreamItem::AttemptFailed {
                 turn,
                 attempt,
@@ -596,9 +613,12 @@ where
             .await
             .map_err(StreamProcessorError::lifecycle)?;
         let handled_auxiliary =
-            crate::rendered_request::scope::flush_received_auxiliary_partial().await?;
+            crate::rendered_request::scope::flush_received_auxiliary_partial(self.capture.as_ref())
+                .await?;
         if !handled_auxiliary {
-            for observation in crate::rendered_request::scope::drain_ready_audit().await {
+            for observation in
+                crate::rendered_request::scope::drain_ready_audit(self.capture.as_ref()).await
+            {
                 match self
                     .process_item(Ok(LoopStreamItem::ProviderAudit(observation)))
                     .await?

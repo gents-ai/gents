@@ -166,24 +166,30 @@ impl ConfigAccess {
         delete: bool,
     ) -> Result<(), ConfigClientError> {
         crate::graphql::validate_collection_identifier(collection)?;
+        let grants_member_admin = !delete
+            && collection == "Node"
+            && relation == crate::identity::NODE_ADMINISTRATOR_RELATION
+            && identity::Did::new(target).is_ok();
         match self.write_route() {
             WriteRoute::Local(local) => {
-                local.require_mutation_signer()?;
-                let actor = local
+                local.require_actor_signer()?;
+                local
                     .identity()
-                    .cloned()
                     .ok_or(ConfigClientError::RelationshipActorRequired)?;
+                let context = local.request_context();
                 let (collection, doc_id, relation, target) = (
                     collection.to_owned(),
                     doc_id.to_owned(),
                     relation.to_owned(),
                     target.to_owned(),
                 );
+                let deliberate = grants_member_admin.then(|| (doc_id.clone(), target.clone()));
+                let node = local.node().clone();
                 local
                     .run_owned(move |node| async move {
                         if delete {
-                            node.delete_dac_actor_relationship(
-                                actor.as_str(),
+                            node.delete_dac_actor_relationship_as(
+                                &context,
                                 &collection,
                                 &doc_id,
                                 &relation,
@@ -191,8 +197,8 @@ impl ConfigAccess {
                             )
                             .await?;
                         } else {
-                            node.add_dac_actor_relationship(
-                                actor.as_str(),
+                            node.add_dac_actor_relationship_as(
+                                &context,
                                 &collection,
                                 &doc_id,
                                 &relation,
@@ -202,25 +208,36 @@ impl ConfigAccess {
                         }
                         Ok::<_, ConfigClientError>(())
                     })
-                    .await
+                    .await?;
+                if let Some((doc, member)) = deliberate {
+                    crate::identity::close_owed_removal(&node, &doc, &member).await?;
+                }
+                Ok(())
             }
             WriteRoute::Http(endpoint) => {
                 if endpoint.is_anonymous() {
                     return Err(ConfigClientError::RelationshipActorRequired);
                 }
-                let url = format!(
-                    "{}/acp/document/relationship",
-                    graphql_api_base(endpoint.url())?
-                );
+                let path = if grants_member_admin {
+                    super::owner_staged_route::ADMIN_GRANT_PATH
+                } else {
+                    "/acp/document/relationship"
+                };
+                let url = format!("{}{path}", graphql_api_base(endpoint.url())?);
                 let client = graphql::http_client().await?;
                 let method = if delete {
                     reqwest::Method::DELETE
                 } else {
                     reqwest::Method::POST
                 };
-                let response = endpoint.authorize(client.request(method, url).json(&serde_json::json!({
+                let body = serde_json::json!({
                     "collection": collection, "doc_id": doc_id, "relation": relation, "target_actor": target,
-                })))?.send().await?;
+                });
+                let response = endpoint
+                    .send_resolving(|endpoint| {
+                        endpoint.authorize(client.request(method.clone(), &url).json(&body))
+                    })
+                    .await??;
                 let status = response.status();
                 if !status.is_success() {
                     return Err(ConfigClientError::DocumentRelationshipStatus {

@@ -182,7 +182,7 @@ where
             let mut fallback_config = summary_config;
             fallback_config.structured_output = None;
             fallback_config.on_rendered_request =
-                Some(crate::rendered_request::scope::ambient_arming_sink(
+                Some(crate::rendered_request::scope::arming_sink(
                     crate::rendered_request::CaptureScopeKind::CompactionFallback,
                 ));
             fallback_config.retry_policy =

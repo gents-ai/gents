@@ -5,13 +5,19 @@ use anyhow::{anyhow, Result};
 
 pub mod protocol;
 
+#[cfg(feature = "test-fixtures")]
+mod blocker;
 mod context;
 mod model;
 mod output;
 mod tools;
 mod traversal;
 
+#[cfg(feature = "test-fixtures")]
+pub use blocker::TraversalBlocker;
 pub use output::{error_response_line, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES};
+#[cfg(feature = "test-fixtures")]
+pub use tools::execute_request_with_blocker;
 pub use tools::{execute_request, execute_request_with_base};
 
 use protocol::{GlobArgs, NativeFsRunnerRequest, NativeFsRunnerResponse};
@@ -20,13 +26,21 @@ pub fn run_stdio_from_args(args: impl IntoIterator<Item = String>) -> Result<()>
     let mut args = args.into_iter();
     let mut root = None;
     let mut base = None;
+    #[cfg(feature = "test-fixtures")]
+    let mut blocker = None;
     let mut self_test_requested = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--self-test" => self_test_requested = true,
             "--root" => root = args.next().map(PathBuf::from),
             "--base" => base = args.next().map(PathBuf::from),
-            other => anyhow::bail!("unknown argument {other:?}"),
+            other => {
+                #[cfg(feature = "test-fixtures")]
+                if TraversalBlocker::parse_flag(&mut blocker, other, &mut args)? {
+                    continue;
+                }
+                anyhow::bail!("unknown argument {other:?}")
+            }
         }
     }
 
@@ -41,6 +55,9 @@ pub fn run_stdio_from_args(args: impl IntoIterator<Item = String>) -> Result<()>
         None => std::env::current_dir()?,
     };
     let request = read_request(std::io::stdin())?;
+    #[cfg(feature = "test-fixtures")]
+    let output = execute_request_with_blocker(root, base, request, blocker)?;
+    #[cfg(not(feature = "test-fixtures"))]
     let output = execute_request_with_base(root, base, request)?;
     serde_json::to_writer(
         std::io::stdout(),

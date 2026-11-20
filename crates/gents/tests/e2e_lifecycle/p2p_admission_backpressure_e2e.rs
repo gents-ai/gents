@@ -18,8 +18,8 @@ async fn install_one_way_replicator(
     let sender_addr = wait_for_listen_addr(sender).await;
     let receiver_addr = wait_for_listen_addr(receiver).await;
     // Transport administration runs as each Node's own identity.
-    let sender_p2p = gents_store::identity::node_p2p(sender).expect("sender p2p");
-    let receiver_p2p = gents_store::identity::node_p2p(receiver).expect("receiver p2p");
+    let sender_p2p = gents_p2p::node_access::operations(sender).expect("sender p2p");
+    let receiver_p2p = gents_p2p::node_access::operations(receiver).expect("receiver p2p");
 
     sender_p2p
         .connect_peer(&receiver_addr)

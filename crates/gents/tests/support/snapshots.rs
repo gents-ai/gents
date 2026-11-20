@@ -442,6 +442,31 @@ pub async fn fetch_runtime_snapshot_as(
     decode_runtime_snapshot(response.get("data")?, node_did)
 }
 
+/// Resolves with the first runtime snapshot satisfying `predicate`, failing
+/// once `NodeRuntime` has not changed for
+/// [`STALL_CEILING`](gents_store::test_support::STALL_CEILING).
+pub async fn wait_for_runtime_snapshot_as<F>(
+    access: &gents_store::config_client::ConfigAccess,
+    node_did: &str,
+    predicate: F,
+) -> RuntimeSnapshot
+where
+    F: Fn(&RuntimeSnapshot) -> bool,
+{
+    let data = super::live_inference::rows_when(
+        access,
+        "NodeRuntime",
+        &runtime_snapshot_query(node_did),
+        |data| {
+            decode_runtime_snapshot(data, node_did)
+                .as_ref()
+                .is_some_and(&predicate)
+        },
+    )
+    .await;
+    decode_runtime_snapshot(&data, node_did).expect("runtime snapshot satisfied its predicate")
+}
+
 pub async fn fetch_node_readiness_snapshot(
     node: &EmbeddedNode,
     node_did: &str,

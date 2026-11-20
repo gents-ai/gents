@@ -62,6 +62,13 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
             grant_authority: args.grant_authority,
             wire: Vec::new(),
         };
+        crate::commands::pack::wire::record_approvals(
+            owner,
+            std::iter::once(&source).chain(&dependencies),
+            &[],
+            &[],
+        )
+        .await?;
         let result = gents_host::http::pack_install_client::install_remote(
             endpoint,
             owner,

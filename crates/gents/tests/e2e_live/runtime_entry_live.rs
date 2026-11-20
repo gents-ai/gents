@@ -8,7 +8,7 @@ use gents_store::graphql::escape_graphql_string;
 use serde_json::json;
 
 use crate::support::live_inference::{
-    bind_target, boot_live_agent, live_target, wait_for_request_terminal, wait_for_rows, LiveUser,
+    bind_target, boot_live_agent, live_target, rows_when, wait_for_request_terminal, LiveUser,
 };
 use crate::support::test_db;
 
@@ -119,11 +119,10 @@ async fn scheduled_live_fire_completes_and_persists_trigger_writeback() {
     let request_query = format!(
         r#"{{AgentRequest(filter: {{caused_by_trigger_id: {{_eq: "{TRIGGER}"}}, caused_by_trigger_kind: {{_eq: "schedule"}}}}) {{request_id agent_did content execution_origin}}}}"#
     );
-    let requests = wait_for_rows(
+    let requests = rows_when(
         &actors.agent_access,
         "AgentRequest",
         &request_query,
-        Duration::from_secs(30),
         |data| {
             data["AgentRequest"]
                 .as_array()
@@ -138,8 +137,7 @@ async fn scheduled_live_fire_completes_and_persists_trigger_writeback() {
     assert_eq!(
         wait_for_request_terminal(
             &actors.agent_access,
-            request["request_id"].as_str().unwrap(),
-            Duration::from_secs(120)
+            request["request_id"].as_str().unwrap()
         )
         .await,
         "completed"
@@ -147,17 +145,11 @@ async fn scheduled_live_fire_completes_and_persists_trigger_writeback() {
     let trigger_query = format!(
         r#"{{Trigger(filter: {{trigger_id: {{_eq: "{TRIGGER}"}}}}) {{task_id last_status last_error next_run_at}}}}"#
     );
-    let triggers = wait_for_rows(
-        &actors.fixture.access,
-        "Trigger",
-        &trigger_query,
-        Duration::from_secs(30),
-        |data| {
-            data["Trigger"]
-                .as_array()
-                .is_some_and(|rows| rows.iter().any(|row| row["last_status"] == "fired"))
-        },
-    )
+    let triggers = rows_when(&actors.fixture.access, "Trigger", &trigger_query, |data| {
+        data["Trigger"]
+            .as_array()
+            .is_some_and(|rows| rows.iter().any(|row| row["last_status"] == "fired"))
+    })
     .await;
     let trigger = &triggers["Trigger"][0];
     assert_eq!(trigger["task_id"], TASK);

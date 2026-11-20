@@ -6,16 +6,42 @@ dir = "target/nextest"
 [profile.default]
 retries = 0
 
+# nextest runs each test in its own process, so an in-process lock no longer
+# orders tests. These hold one, so they keep running one at a time.
+[test-groups]
+desktop-live-fixture = { max-threads = 1 }
+
+[[profile.default.overrides]]
+# live_fixture_test_lock: one live bridge fixture (node, mock model) at a time.
+filter = 'binary_id(=gents-desktop-tauri::bin/bridge_runner) & test(/^live_fixture::tests::/)'
+test-group = "desktop-live-fixture"
+
 [profile.ci]
 retries = 0
 fail-fast = false
-# libtest under the gate reported a test after 60 s and killed it 600 s later.
-slow-timeout = { period = "60s", terminate-after = 10 }
+# A test is reported after 60 s and killed after 900 s. The kill must exceed
+# STALL_CEILING (600 s, crates/gents-store/src/test_support.rs): a wait
+# bounded by it fails with the rows it last read, and a kill at or below it
+# would replace that evidence with a bare TIMEOUT.
+slow-timeout = { period = "60s", terminate-after = 15 }
 # Shards print every result so a log shows what ran; failures repeat at the end.
 status-level = "pass"
 final-status-level = "fail"
 failure-output = "immediate-final"
 success-output = "never"
+
+[[profile.ci.overrides]]
+filter = 'binary_id(=gents::e2e_triggers) & test(/^workspace_change_unit_cycle::/)'
+threads-required = "num-test-threads"
+
+[[profile.ci.overrides]]
+# Twenty sequential requests: about 60 s alone and 500-2750 s on a loaded host,
+# every request still progressing. Its waits fail a stalled request after
+# STALL_CEILING (600 s) with the request's rows; this ceiling is only the
+# backstop for a hang outside those waits, so it must exceed both that and the
+# loaded run, or a slow pass becomes a bare TIMEOUT.
+filter = 'binary_id(=gents::integration) & test(=e2e_runtime::storage_budget::per_request_store_growth_follows_new_content_not_history)'
+slow-timeout = { period = "60s", terminate-after = 60 }
 
 [profile.ci.junit]
 path = "junit.xml"

@@ -8,7 +8,7 @@ use std::sync::Arc;
 pub async fn account_choice_core(name: &str) -> (SelfConfigFixture, SelfConfigCore) {
     let fixture = crate::test_support::self_config_fixture(name).await;
     fixture.grant_node_reader().await;
-    fixture.grant_agent_catalog().await;
+    fixture.grant_node_administration().await;
     fixture.grant_user_relation_delete().await;
     fixture.grant_agent_relation_delete().await;
     let owner = fixture.node_did().to_owned();

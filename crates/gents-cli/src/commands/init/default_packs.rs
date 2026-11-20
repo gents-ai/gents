@@ -93,11 +93,18 @@ fn scope(home: &Path) -> ScopeArgs {
     }
 }
 
+/// Returns once the store this access held is released, its node handles
+/// let go first (`tla/StoreHandoff.tla` `AckedHandoff`).
 async fn release(access: gents_store::config_client::ConfigAccess) {
+    let store_release = access.begin_store_release();
     if let Some(node) = access.local_node() {
         if let Err(error) = node.shutdown().await {
             tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
         }
+    }
+    drop(access);
+    if let Some(store_release) = store_release {
+        store_release.released().await;
     }
 }
 
@@ -221,7 +228,8 @@ pub(crate) struct PackStatus {
     pub(crate) without: &'static str,
     pub(crate) state: PackState,
     pub(crate) version: Option<String>,
-    /// Why an `unavailable` pack cannot be installed.
+    /// Why an `unavailable` pack cannot be installed, or why an installed
+    /// pack's plugins do not run on this runtime.
     pub(crate) reason: Option<String>,
     /// The call that installs or turns on a `missing` or `not_enabled` pack.
     pub(crate) enable_with: Option<String>,
@@ -377,6 +385,24 @@ async fn engineer_packs(home: &Path) -> Result<Option<Vec<(CorePack, Option<Inst
     read
 }
 
+/// Why the plugins of `pack`, installed as `record`, do not run on this
+/// runtime: the first plugin record refused for the release its pack was
+/// built for.
+fn interface_refusal(
+    home: &Path,
+    pack: CorePack,
+    record: &gents_pack::pack::HomePackInstall,
+) -> Option<String> {
+    let (namespace, _) = gents_pack::pack::registry::split_pack_coordinate(pack.coordinate());
+    record.plugins.iter().find_map(|plugin| {
+        gents_pack::plugin::store::read_record(home, namespace, &plugin.name)
+            .ok()?
+            .check_interface()
+            .err()
+            .map(|refusal| refusal.to_string())
+    })
+}
+
 /// Each core pack as `home` has it, with `archives` the release's. A home
 /// whose default agent is not the Engineer has none.
 pub(crate) async fn status(home: &Path, archives: Archives<'_>) -> Result<Vec<PackStatus>> {
@@ -387,17 +413,20 @@ pub(crate) async fn status(home: &Path, archives: Archives<'_>) -> Result<Vec<Pa
         .into_iter()
         .map(|(pack, installed)| {
             let (state, version, reason) = match installed {
-                Some((record, observed)) => (
-                    if on_the_engineer(observed)
-                        == on_the_engineer(core_packs::enabled_wiring(pack))
-                    {
-                        PackState::Installed
-                    } else {
-                        PackState::NotEnabled
-                    },
-                    Some(record.version),
-                    None,
-                ),
+                Some((record, observed)) => {
+                    let reason = interface_refusal(home, pack, &record);
+                    (
+                        if on_the_engineer(observed)
+                            == on_the_engineer(core_packs::enabled_wiring(pack))
+                        {
+                            PackState::Installed
+                        } else {
+                            PackState::NotEnabled
+                        },
+                        Some(record.version),
+                        reason,
+                    )
+                }
                 None => match release_archive(archives, pack).map(|bytes| {
                     gents_pack::pack::archive::peek_header(
                         bytes,
@@ -596,25 +625,20 @@ async fn apply(
             }
         }
         let wired = if wiring.wired && !source.manifest().metadata.plugins.is_empty() {
-            let wire_access = match &access {
-                gents_store::config_client::ConfigAccess::Graphql(endpoint) => {
-                    gents_store::config_client::ConfigAccess::Graphql(runtime_operator_endpoint(
-                        home,
-                        endpoint.url(),
-                        &owner,
-                    )?)
-                }
-                local => local.clone(),
-            };
             gents_pack::pack::plugin_wire::wire_pack_plugins_consenting(
-                &wire_access,
+                &access,
                 &owner,
                 home,
-                &source,
+                gents_pack::pack::plugin_wire::SentPack {
+                    archive: &source,
+                    approval: None,
+                },
                 &[engineer.to_owned()],
-                wiring.consent_dynamic,
-                wiring.tool_calls,
-                gents_service::home_state::load_held_user_identity,
+                gents_pack::pack::plugin_wire::WireConsent {
+                    dynamic: wiring.consent_dynamic,
+                    tool_calls: wiring.tool_calls,
+                },
+                gents_host::http::pack_wire_client::SIGNERS,
             )
             .await
             .with_context(|| {
@@ -659,29 +683,6 @@ async fn apply(
         "host_tool_roots": host_tool_roots,
         "agents": agents,
     }))
-}
-
-/// The operator endpoint of the runtime serving `home` at `url`: its plugin
-/// wiring route admits only the Node's own DID, so this same-user host signs
-/// as the Node with the home's key, as the desktop's
-/// `gents_desktop_core::local_runtime::runtime_operator_endpoint` does.
-fn runtime_operator_endpoint(
-    home: &Path,
-    url: &str,
-    owner: &str,
-) -> Result<gents_store::config_client::GraphqlEndpoint> {
-    let stored =
-        gents_service::home_state::read_init_config(home)?.context("home is not initialized")?;
-    let runtime = gents_service::home_state::load_initialized_home_identity(home, &stored)?;
-    anyhow::ensure!(
-        runtime.did() == owner,
-        "the runtime serving {} is not this home's Node",
-        home.display()
-    );
-    Ok(
-        gents_store::config_client::GraphqlEndpoint::as_principal(url, owner)
-            .with_client_signing_capability(runtime.client_signing_capability()?)?,
-    )
 }
 
 /// The agents the installed pack `coordinate` ships, each with whether it is
@@ -1172,7 +1173,7 @@ mod tests {
             "{installed:?}"
         );
         let data = gents_service::home_state::default_data_dir(home.path());
-        let claim = crate::commands::init::lock_init_store(home.path(), &data, false)
+        let claim = gents_store::local::home::lock_store(home.path(), &data)
             .expect("provisioning and all pack readers released the service's home");
         drop(claim);
     }
@@ -1408,7 +1409,7 @@ mod tests {
                 let answer = config
                     .call(
                         call.to_string(),
-                        &gents_loop::tool::ToolCallEnvelope::ambient(),
+                        &gents_loop::tool::ToolCallEnvelope::default(),
                     )
                     .await;
                 let answer = answer.unwrap_or_else(|error| panic!("{call}: {error}"));
@@ -1444,7 +1445,7 @@ mod tests {
                 config
                     .call(
                         call.to_string(),
-                        &gents_loop::tool::ToolCallEnvelope::ambient(),
+                        &gents_loop::tool::ToolCallEnvelope::default(),
                     )
                     .await
                     .unwrap_err()

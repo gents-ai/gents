@@ -127,17 +127,17 @@ pub(crate) enum AgentCommand {
     )]
     RevokeSelfConfig(AgentSelfConfigPermissionArgs),
     #[command(
-        name = "grant-catalog",
-        about = "Let an agent create and clone agents and choose the node's default agent",
-        long_about = "Let an agent create and clone agents and choose the node's default agent. This grants the manage_agents permission on the Node (the agent_manager relation) and nothing else."
+        name = "grant-node-admin",
+        about = "Make an agent an administrator of the Node, which lets it create and clone agents and choose the default agent",
+        long_about = "Make an agent an administrator of the Node (the administrator relation). This is the one way to let an agent create and clone agents and choose the node's default agent, and it gives more than that: the agent can also update and delete the Node, administer every Agent, configuration document and session of the Node, and grant or revoke Node relations. The Engineer holds it from init."
     )]
-    GrantCatalog(AgentCatalogPermissionArgs),
+    GrantNodeAdmin(AgentNodeAdministrationArgs),
     #[command(
-        name = "revoke-catalog",
-        about = "Withdraw an agent's permission to create and clone agents and choose the default agent",
-        long_about = "Withdraw the manage_agents permission on the Node (the agent_manager relation) from an agent: it can no longer create or clone agents or choose the node's default agent. Nothing else changes."
+        name = "revoke-node-admin",
+        about = "Withdraw an agent's administration of the Node",
+        long_about = "Withdraw the administrator relation on the Node from an agent: it can no longer create or clone agents, choose the node's default agent, or administer the Node's Agents, configuration and sessions. Grants made on single documents are unchanged."
     )]
-    RevokeCatalog(AgentCatalogPermissionArgs),
+    RevokeNodeAdmin(AgentNodeAdministrationArgs),
     #[command(name = "list", about = "List Agent documents")]
     List(ConfigListArgs),
     #[command(name = "show", about = "Show an Agent document")]
@@ -549,7 +549,7 @@ pub(crate) struct AgentSelfConfigPermissionArgs {
 }
 
 #[derive(clap::Args)]
-pub(crate) struct AgentCatalogPermissionArgs {
+pub(crate) struct AgentNodeAdministrationArgs {
     #[arg(long)]
     pub(crate) graphql: String,
     #[arg(long)]

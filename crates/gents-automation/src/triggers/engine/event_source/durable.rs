@@ -252,8 +252,7 @@ impl EventSource {
             .active_event_triggers()
             .values()
             .filter(|t| {
-                t.enabled
-                    && t.event_kind == "created"
+                t.event_kind == "created"
                     && t.fire_mode == gents_documents::automation::EventTriggerFireMode::PerDocument
             })
             .cloned()

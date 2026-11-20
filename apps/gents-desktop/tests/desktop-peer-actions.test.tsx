@@ -80,11 +80,11 @@ describe("peer action route ownership", () => {
   it("does not clear newer navigation when removal completes late", async () => {
     const pending = deferred<DesktopClientSnapshot>();
     const api = {
-      removePeer: vi.fn(() => pending.promise),
+      removeRuntime: vi.fn(() => pending.promise),
     } as unknown as DesktopApiAdapter;
     const { result } = renderHook(() => usePeerRoute(api));
 
-    const completion = result.current.actions.removePeer("peer-a", "node-a");
+    const completion = result.current.actions.removeRuntime("node-a");
     act(() => result.current.route.selectNode("node-b"));
     await act(async () => {
       pending.resolve({} as DesktopClientSnapshot);
@@ -96,11 +96,11 @@ describe("peer action route ownership", () => {
 
   it("clears the route when its selected peer is removed", async () => {
     const api = {
-      removePeer: vi.fn(async () => ({})),
+      removeRuntime: vi.fn(async () => ({})),
     } as unknown as DesktopApiAdapter;
     const { result } = renderHook(() => usePeerRoute(api));
 
-    await act(async () => result.current.actions.removePeer("peer-a", "node-a"));
+    await act(async () => result.current.actions.removeRuntime("node-a"));
 
     expect(result.current.node).toBeNull();
     expect(result.current.sessionId).toBeNull();
@@ -114,7 +114,7 @@ describe("enrolment and peer status leave failures to the screen", () => {
     const refreshSnapshot = vi.fn(async () => {});
     const actions = createPeerActions({
       api: {
-        requestStatusEnrollment: vi.fn().mockRejectedValue(new Error("server refused")),
+        requestRuntimeAccess: vi.fn().mockRejectedValue(new Error("server refused")),
       } as unknown as DesktopApiAdapter,
       stores: shellStores(),
       ensureDesktopClientStarted: async () => ({ client: {} }) as DesktopClientSnapshot,
@@ -124,7 +124,7 @@ describe("enrolment and peer status leave failures to the screen", () => {
       reportFailure,
     });
 
-    await expect(actions.requestStatusEnrollment("gents.example:7777")).rejects.toThrow(
+    await expect(actions.requestRuntimeAccess("gents.example:7777")).rejects.toThrow(
       "server refused",
     );
     expect(reportFailure).not.toHaveBeenCalled();

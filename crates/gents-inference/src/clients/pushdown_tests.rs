@@ -168,7 +168,7 @@ async fn chat_projection_matches_actual_rig_wire_body_and_omits_reasoning() {
 
     let transport = WireCapturingClient::default();
     let bodies = transport.bodies.clone();
-    let client = crate::clients::inference_http::build_openai_chat_completions_client(
+    let client = crate::llm::rig_compat::providers::build_openai_chat_completions_client(
         "test-key",
         "http://provider.invalid",
         transport,
@@ -247,7 +247,7 @@ async fn normalized_responses_projection_matches_the_terminal_wire_body() {
     let terminal = WireCapturingClient::default();
     let bodies = terminal.bodies.clone();
     let transport = crate::clients::inference_http::ResponsesNormalizingHttpClient::new(terminal);
-    let client = crate::clients::inference_http::build_openai_responses_client(
+    let client = crate::llm::rig_compat::providers::build_openai_responses_client(
         "test-key",
         "http://provider.invalid",
         transport,
@@ -280,7 +280,7 @@ async fn codex_responses_projection_matches_the_terminal_rewritten_body() {
         Arc::new(StaticBearer),
         terminal,
     );
-    let client = crate::clients::inference_http::build_openai_responses_client(
+    let client = crate::llm::rig_compat::providers::build_openai_responses_client(
         "managed-test-key",
         "http://provider.invalid",
         transport,
@@ -313,7 +313,7 @@ async fn xai_responses_projection_matches_the_terminal_rewritten_body() {
         Arc::new(StaticBearer),
         terminal,
     );
-    let client = crate::clients::inference_http::build_openai_responses_client(
+    let client = crate::llm::rig_compat::providers::build_openai_responses_client(
         "managed-test-key",
         "http://provider.invalid",
         transport,
@@ -501,7 +501,7 @@ async fn terminal_body<H>(
 where
     H: Clone + Default + HttpClientExt + std::fmt::Debug + WasmCompatSend + Sync + 'static,
 {
-    let client = crate::clients::inference_http::build_openai_responses_client(
+    let client = crate::llm::rig_compat::providers::build_openai_responses_client(
         "test-key",
         "http://provider.invalid",
         transport,
@@ -537,7 +537,12 @@ async fn xai_wire_body_without_effort_requests_encrypted_reasoning() {
         Arc::new(StaticBearer),
         terminal,
     );
-    let body = terminal_body(transport, bodies, request).await;
+    let body = terminal_body(
+        crate::llm::rig_compat::http::Lifted::new(transport, Default::default()),
+        bodies,
+        request,
+    )
+    .await;
 
     assert_eq!(body["store"], false);
     assert!(body.get("reasoning").is_none());
@@ -557,7 +562,12 @@ async fn openai_responses_wire_body_never_adds_encrypted_reasoning_even_when_sta
     let terminal = WireCapturingClient::default();
     let bodies = terminal.bodies.clone();
     let transport = crate::clients::inference_http::ResponsesNormalizingHttpClient::new(terminal);
-    let body = terminal_body(transport, bodies, request).await;
+    let body = terminal_body(
+        crate::llm::rig_compat::http::Lifted::new(transport, Default::default()),
+        bodies,
+        request,
+    )
+    .await;
 
     assert_eq!(projected_body, body);
     assert_eq!(body["store"], false);
@@ -571,7 +581,12 @@ async fn openai_responses_wire_body_leaves_include_to_the_server_default_store()
     let terminal = WireCapturingClient::default();
     let bodies = terminal.bodies.clone();
     let transport = crate::clients::inference_http::ResponsesNormalizingHttpClient::new(terminal);
-    let body = terminal_body(transport, bodies, request).await;
+    let body = terminal_body(
+        crate::llm::rig_compat::http::Lifted::new(transport, Default::default()),
+        bodies,
+        request,
+    )
+    .await;
 
     assert!(body.get("store").is_none());
     assert!(!requests_encrypted_reasoning(&body), "{body}");
@@ -611,7 +626,7 @@ async fn service_tier_transport_follows_the_lean_model() {
                 .with_policy(crate::clients::chatgpt_codex::ChatGptCodexPolicy {
                     service_tier: tier,
                 });
-                let client = crate::clients::inference_http::build_openai_responses_client(
+                let client = crate::llm::rig_compat::providers::build_openai_responses_client(
                     "managed-test-key",
                     "http://provider.invalid",
                     transport,
@@ -628,7 +643,7 @@ async fn service_tier_transport_follows_the_lean_model() {
                 let transport =
                     crate::clients::inference_http::ResponsesNormalizingHttpClient::new(terminal)
                         .with_service_tier(tier);
-                let client = crate::clients::inference_http::build_openai_responses_client(
+                let client = crate::llm::rig_compat::providers::build_openai_responses_client(
                     "test-key",
                     "http://provider.invalid",
                     transport,

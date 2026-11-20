@@ -92,6 +92,10 @@ impl EnrollmentOfferIssuer {
         validity: Duration,
         challenge: String,
     ) -> Result<EnrollmentOfferStatus> {
+        gents_store::local::document_acp::ensure_enrollment(
+            &self.node,
+            gents_store::local::document_acp::EnrollmentRequest::Offer,
+        )?;
         anyhow::ensure!(
             validity > Duration::zero() && validity <= MAX_OFFER_VALIDITY,
             "enrollment offer validity must be between 1 and {} seconds",

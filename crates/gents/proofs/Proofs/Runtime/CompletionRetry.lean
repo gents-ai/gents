@@ -1,6 +1,7 @@
 import Proofs.Shared.CompletionRetry.State
 import Proofs.Shared.CompletionRetry.Transition
 import Proofs.Shared.CompletionRetry.Executable
+import Proofs.Shared.CompletionRetry.Directive
 import Proofs.Shared.CompletionRetry.Properties
 import Proofs.Runtime.CompletionRetry.CanonicalExecution
 import Proofs.Runtime.CompletionRetry.CanonicalGate

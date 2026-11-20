@@ -167,24 +167,34 @@ async fn start(
     composition: &gents_store::node_extension::Extensions,
     tool_policy: Arc<dyn ToolSourcePolicy>,
 ) -> Result<(Arc<EmbeddedNode>, String)> {
-    let did = identity.did().to_string();
     let protected =
         gents_store::local::backend_protection::ProtectedBackendStore::open(data_path, key, lock)
             .await?
-            .preflight(key, Some(&did))
+            .preflight(
+                key,
+                &identity,
+                gents_store::local::document_acp::DocumentAcp::Local,
+            )
             .await?;
     let served: ServedNode = ServedNode::default();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr()?);
     let owner_staged = gents_store::config_client::OwnerStagedRoute::new();
     let http = defra_node::HttpConfig::with_listener(listener.into_std()?)?
-        .with_extra_routes(agent_identity_routes(served.clone()).merge(owner_staged.router()));
+        .with_authenticated_routes(
+            agent_identity_routes(served.clone()).merge(owner_staged.router()),
+        );
     let (node, _admission) = protected
         .start_node_with_projection(
             key,
             identity.clone(),
-            Some(http),
-            p2p,
+            move |mut builder| {
+                builder = builder.with_http(http);
+                if let Some(p2p) = p2p {
+                    builder = builder.with_p2p(p2p);
+                }
+                builder
+            },
             tool_policy,
             Vec::new(),
             composition,
@@ -331,7 +341,6 @@ async fn test_db_at_with_tool_policy(
         tokio::task::spawn_blocking(move || KeyIdentity::load_or_create(identity_path, None))
             .await??,
     );
-    let did = identity.did().to_string();
     let data_path = path.join("data");
     tokio::fs::create_dir_all(&data_path).await?;
     let (lock_home, lock_data) = (path.clone(), data_path.clone());
@@ -355,7 +364,18 @@ async fn test_db_at_with_tool_policy(
         )
         .await?;
         let key = store_key(&path, &data_path).await?;
-        fresh.initialize(&key, Some(&did)).await?;
+        let owner_path = path.join("owner.key");
+        let owner =
+            tokio::task::spawn_blocking(move || KeyIdentity::load_or_create(owner_path, None))
+                .await??;
+        fresh
+            .initialize(
+                &key,
+                &identity,
+                &owner.did().parse()?,
+                gents_store::local::document_acp::DocumentAcp::Local,
+            )
+            .await?;
         key
     };
     let (node, endpoint) = start(

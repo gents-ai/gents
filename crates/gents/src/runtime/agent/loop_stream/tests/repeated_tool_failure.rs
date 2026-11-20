@@ -28,8 +28,17 @@ async fn repeated_tool_failures_follow_the_lean_model() {
             RawStreamingChoice::Message("done".into()),
             RawStreamingChoice::FinalResponse(()),
         ]);
-        let model = ScriptedModel::new_turns(turns);
+        let model = scripted(turns);
         let dispatched = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut config = owned_config_for(64, &lifecycle);
+        config.max_invalid_tool_calls = case.input.max_invalid_tool_calls.map_or(
+            gents_loop::loop_stream::DEFAULT_MAX_INVALID_TOOL_CALLS,
+            |limit| usize::try_from(limit).unwrap(),
+        );
+        config.repeated_tool_failure_limit = case.input.repeated_tool_failure_limit.map_or(
+            gents_loop::loop_stream::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
+            |limit| usize::try_from(limit).unwrap(),
+        );
         let stream = run_loop_stream(
             model.clone(),
             Some(hook.clone()),
@@ -40,7 +49,7 @@ async fn repeated_tool_failures_follow_the_lean_model() {
                 model: model.clone(),
                 dispatched: Arc::clone(&dispatched),
             }) as Box<dyn ToolDyn>]),
-            owned_config(64),
+            config,
         );
         let collected = collect_owned_scripted_stream(
             stream,
@@ -61,7 +70,7 @@ async fn repeated_tool_failures_follow_the_lean_model() {
                 panic!("{label}: unexpected ending {error}")
             }
         });
-        let requests = model.seen_requests().await.len();
+        let requests = model.requests().len();
         let call_turns = requests - usize::from(ending.is_none());
         assert!(call_turns <= events.len(), "{label}: provider requests");
         let answered = collected.tool_results.len();

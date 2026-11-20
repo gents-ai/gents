@@ -1,6 +1,7 @@
 use super::*;
 use axum::{body::Bytes, routing::get};
-use gents_desktop_core::client::{DesktopPaths, PrincipalIdentity};
+use gents_store::client_journal::paths::DesktopPaths;
+use gents_store::client_journal::principal_identity::PrincipalIdentity;
 use std::time::Duration;
 
 /// Longer than an ended stream needs, shorter than DefraDB's 30-second
@@ -88,11 +89,16 @@ async fn node_shutdown_with_an_open_graphql_subscription_completes_within_the_bo
     let (shutdown, observed) = watch::channel(false);
     let streams = ShutdownStreams::new(observed);
     let node = gents::defra_node::Node::builder()
-        .with_node_identity_did(owner.did())
+        .with_signing_key(gents::defra_node::SigningKey::Ed25519(
+            owner.private_key_bytes().to_vec(),
+        ))
         .with_node_acp_enabled()
         .with_http(
             gents::defra_node::HttpConfig::with_listener(listener)
                 .unwrap()
+                .with_extra_routes(gents_store::test_support::local_authentication_route(
+                    std::sync::Arc::new(owner.clone()),
+                ))
                 .with_router_transform(std::sync::Arc::new(move |router| streams.wrap(router))),
         )
         .build()

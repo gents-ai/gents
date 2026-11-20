@@ -1,6 +1,6 @@
 use super::*;
 
-fn unfinished_home(temp: &Path) -> (PathBuf, gents_desktop_core::client::DesktopPaths) {
+fn unfinished_home(temp: &Path) -> (PathBuf, gents_store::client_journal::paths::DesktopPaths) {
     let home = temp.join("agent");
     write(
         &home.join("init.json"),
@@ -11,8 +11,8 @@ fn unfinished_home(temp: &Path) -> (PathBuf, gents_desktop_core::client::Desktop
         &home.join(gents_store::local::home::BOOTSTRAP_CONSUMED_FILE_NAME),
         "",
     );
-    let desktop = gents_desktop_core::client::DesktopPaths::from_root(temp.join("desktop"));
-    write(desktop.peer_directory_path(), r#"{"peers":[]}"#);
+    let desktop = gents_store::client_journal::paths::DesktopPaths::from_root(temp.join("desktop"));
+    write(desktop.runtime_directory_path(), r#"{"connections": []}"#);
     (home, desktop)
 }
 
@@ -69,8 +69,8 @@ async fn an_unfinished_home_is_recognized_only_before_it_served_or_paired() {
     std::fs::remove_file(home.join(gents_store::local::home::RUNTIME_STATE_FILE_NAME)).unwrap();
 
     write(
-        desktop.peer_directory_path(),
-        r#"{"peers":[{"peer_id":"p","node_did":"did:key:forge","label":"Forge","addr":"iroh://forge","source":"enrollment","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}]}"#,
+        desktop.runtime_directory_path(),
+        r#"{"connections": [{"node_did": "did:key:forge", "label": "Forge", "graphql": "http://127.0.0.1:9191/api/v0/graphql", "local_node_home": null, "access_request": null, "access_state": null}]}"#,
     );
     assert!(
         !unfinished_local_setup(&state, Some(&home)).await,
@@ -146,21 +146,20 @@ async fn backing_up_drops_the_pairing_with_the_node_it_retired() {
     let desktop = state.policy.desktop_paths.clone();
     let (_, _) = unfinished_home(temp.path());
     write(
-        desktop.peer_directory_path(),
+        desktop.runtime_directory_path(),
         &format!(
-            r#"{{"peers":[
-              {{"peer_id":"local","node_did":"did:key:forge","label":"Forge","addr":"iroh://forge","source":"enrollment","graphql":"http://127.0.0.1:9191/api/v0/graphql","local_node_home":{home:?},"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}},
-              {{"peer_id":"remote","node_did":"did:key:remote","label":"Mandrake","addr":"iroh://mandrake","source":"enrollment","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}}
-            ]}}"#,
+            r#"{{"connections": [{{"node_did": "did:key:forge", "label": "Forge", "graphql": "http://127.0.0.1:9191/api/v0/graphql", "local_node_home": {home:?}, "access_request": null, "access_state": null}}, {{"node_did": "did:key:remote", "label": "Mandrake", "graphql": "http://127.0.0.1:9191/api/v0/graphql", "local_node_home": null, "access_request": null, "access_state": null}}]}}"#,
             home = home.to_string_lossy()
         ),
     );
 
-    let dropped = retire_desktop_pairing(&state, &home, Some("did:key:forge")).await;
+    let dropped = retire_desktop_pairing(&state, &home).await;
     assert_eq!(dropped, 1);
-    let left = gents_desktop_core::client::load_peer_records(desktop.peer_directory_path())
-        .await
-        .unwrap();
+    let left = gents_store::client_journal::runtime_directory::load_runtime_connections(
+        desktop.runtime_directory_path(),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         left.iter()
             .map(|record| record.node_did.clone())

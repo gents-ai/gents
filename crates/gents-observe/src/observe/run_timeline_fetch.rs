@@ -912,13 +912,15 @@ mod tests {
             .transact_write("test.timeline_session", |txn| {
                 Box::pin(gents_session::session::ensure_session_in_txn(
                     txn,
-                    "session-goal-history",
-                    root.did(),
-                    agent.did(),
-                    Some(agent.did()),
-                    None,
-                    None,
-                    "2026-08-14T12:00:00Z",
+                    gents_session::session::NewAgentSession {
+                        session_id: "session-goal-history",
+                        node_did: root.did(),
+                        agent_did: agent.did(),
+                        requester_did: Some(agent.did()),
+                        title: None,
+                        provenance: None,
+                        created_at: "2026-08-14T12:00:00Z",
+                    },
                 ))
             })
             .await

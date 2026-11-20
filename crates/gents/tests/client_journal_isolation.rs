@@ -153,10 +153,17 @@ async fn private_client_journal_obeys_native_policy_and_refuses_exact_peer_pull(
                     .iter()
                     .any(|row| row["_docID"] == doc_id && row["payload"] == "client secret"),
                 Err(error) if identity.is_none() => {
-                    assert!(error.to_string().contains("not authorized"), "{error:#}");
+                    assert!(
+                        error.is_permission_denied(),
+                        "{}",
+                        gents_protocol::error_chain::ErrorChain(&error)
+                    );
                     false
                 }
-                Err(error) => panic!("authenticated journal read failed: {error:#}"),
+                Err(error) => panic!(
+                    "authenticated journal read failed: {}",
+                    gents_protocol::error_chain::ErrorChain(&error)
+                ),
             };
             assert_eq!(
                 visible, allowed,
@@ -276,7 +283,7 @@ async fn private_client_journal_obeys_native_policy_and_refuses_exact_peer_pull(
         )
         .await
         .unwrap();
-    gents_store::identity::node_p2p(receiver)
+    gents_p2p::node_access::operations(receiver)
         .unwrap()
         .sync_documents(
             "PeerRegistry",
@@ -295,7 +302,7 @@ async fn private_client_journal_obeys_native_policy_and_refuses_exact_peer_pull(
         public_on_receiver["data"]["PeerRegistry"][0]["peer_id"],
         "journal-public-probe"
     );
-    let pull = gents_store::identity::node_p2p(receiver)
+    let pull = gents_p2p::node_access::operations(receiver)
         .unwrap()
         .sync_documents(
             "PendingChatSubmission",

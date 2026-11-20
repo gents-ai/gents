@@ -37,19 +37,10 @@ impl Context {
         self
     }
 
-    /// Whether `other` is this request's context: the same review history.
-    pub(crate) fn same_request(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.review_history, &other.review_history)
-    }
-
     fn governs(&self, key: &WorkspaceKey) -> bool {
         key.base() == self.workspace
             && (key.session_id.is_none() || key.session_id == self.session_id)
     }
-}
-
-tokio::task_local! {
-    static CURRENT: Option<Context>;
 }
 
 /// The home comes from the host's runtime options. The request's original
@@ -80,13 +71,14 @@ pub fn for_request(
 }
 
 pub(super) async fn resolve_review(
+    context: Option<&Context>,
     home: &Path,
     decision: &super::BindingDecision,
     action_id: &str,
 ) -> Result<super::Route> {
     use super::{Review, Route};
 
-    let Some(context) = CURRENT.try_with(Clone::clone).ok().flatten() else {
+    let Some(context) = context else {
         return Ok(Route::Deny);
     };
     if !context.governs(&decision.binding.scope.workspace) {
@@ -96,7 +88,7 @@ pub(super) async fn resolve_review(
         return Ok(decision.route);
     }
     let _gate = context.review_gate.lock().await;
-    let settings = super::validate_binding(home, &decision.binding)
+    let settings = super::validate_binding(Some(context), home, &decision.binding)
         .map_err(super::BindingError::into_anyhow)?;
     if context
         .review_history
@@ -130,75 +122,52 @@ pub(super) async fn resolve_review(
         }
         _ => Review::Unavailable,
     };
-    super::validate_binding(home, &decision.binding).map_err(super::BindingError::into_anyhow)?;
-    Ok(review_route(&decision.input, verdict, &decision.binding))
+    super::validate_binding(Some(context), home, &decision.binding)
+        .map_err(super::BindingError::into_anyhow)?;
+    Ok(review_route(
+        Some(context),
+        &decision.input,
+        verdict,
+        &decision.binding,
+    ))
 }
 
 pub(super) fn review_route(
+    context: Option<&Context>,
     input: &super::Input<WorkspaceKey, super::BindingAction>,
     verdict: super::Review,
     grant: &super::Binding,
 ) -> super::Route {
-    CURRENT
-        .try_with(|context| {
-            context.as_ref().map(|context| {
-                if !context.governs(&input.current.workspace) {
-                    return super::Route::Deny;
-                }
-                let mut history = context
-                    .review_history
-                    .lock()
-                    .expect("review history lock poisoned");
-                gents_loop::tool_policy::access_review::apply(input, &mut history, verdict, grant)
-            })
-        })
-        .ok()
-        .flatten()
-        .unwrap_or(super::Route::Deny)
+    let Some(context) = context else {
+        return super::Route::Deny;
+    };
+    if !context.governs(&input.current.workspace) {
+        return super::Route::Deny;
+    }
+    let mut history = context
+        .review_history
+        .lock()
+        .expect("review history lock poisoned");
+    gents_loop::tool_policy::access_review::apply(input, &mut history, verdict, grant)
 }
 
-pub async fn scope<F>(context: Option<Context>, future: F) -> F::Output
-where
-    F: Future,
-{
-    CURRENT.scope(context, future).await
+pub(crate) fn current_home(context: Option<&Context>) -> Option<PathBuf> {
+    context.map(|context| context.home.clone())
 }
 
-pub(crate) fn current() -> Option<Context> {
-    CURRENT.try_with(Clone::clone).ok().flatten()
+pub(super) fn within_workspace(context: Option<&Context>, path: &Path) -> bool {
+    context.is_some_and(|context| path.starts_with(&context.workspace.path))
 }
 
-pub(crate) fn carry<F>(future: F) -> impl Future<Output = F::Output>
-where
-    F: Future,
-{
-    let context = CURRENT.try_with(Clone::clone).ok().flatten();
-    scope(context, future)
+pub(super) fn settings(context: Option<&Context>, home: &Path) -> Result<Option<super::Settings>> {
+    request_settings(context, home).map_err(super::BindingError::into_anyhow)
 }
 
-pub(crate) fn current_home() -> Option<PathBuf> {
-    CURRENT
-        .try_with(|context| context.as_ref().map(|context| context.home.clone()))
-        .ok()
-        .flatten()
-}
-
-pub(super) fn within_workspace(path: &Path) -> bool {
-    CURRENT
-        .try_with(|context| {
-            context
-                .as_ref()
-                .is_some_and(|context| path.starts_with(&context.workspace.path))
-        })
-        .unwrap_or(false)
-}
-
-pub(super) fn settings(home: &Path) -> Result<Option<super::Settings>> {
-    request_settings(home).map_err(super::BindingError::into_anyhow)
-}
-
-fn request_settings(home: &Path) -> Result<Option<super::Settings>, super::BindingError> {
-    let Some(context) = CURRENT.try_with(Clone::clone).ok().flatten() else {
+fn request_settings(
+    context: Option<&Context>,
+    home: &Path,
+) -> Result<Option<super::Settings>, super::BindingError> {
+    let Some(context) = context else {
         return Ok(None);
     };
     if home.canonicalize().context("resolving the approval home")? != context.home {
@@ -215,17 +184,20 @@ fn request_settings(home: &Path) -> Result<Option<super::Settings>, super::Bindi
     Ok(settings)
 }
 
+/// The settings a consent check validates `key` against (Lean
+/// `WorkspacePermissions.governingSettings`): the request's, when the check
+/// carries the request's approval context, wherever it runs; the entry stored
+/// under `key` only for a check outside any request, the operator answering or
+/// listing questions.
 pub(super) fn governing_settings(
+    context: Option<&Context>,
     home: &Path,
     key: &WorkspaceKey,
 ) -> Result<Option<super::Settings>, super::BindingError> {
-    if CURRENT
-        .try_with(|context| context.is_some())
-        .unwrap_or(false)
-    {
-        return request_settings(home);
+    match context {
+        Some(context) => request_settings(Some(context), home),
+        None => Ok(super::entry(home, key)?),
     }
-    Ok(super::entry(home, key)?)
 }
 
 #[cfg(test)]
@@ -236,8 +208,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn background_calls_retain_the_original_scope_without_leaking_it_to_other_requests(
-    ) -> Result<()> {
+    async fn a_request_context_moved_into_a_spawned_task_is_the_same_request() -> Result<()> {
         let home = tempfile::tempdir()?;
         let first = tempfile::tempdir()?;
         let second = tempfile::tempdir()?;
@@ -248,41 +219,25 @@ mod tests {
             "agent",
             Some(first.path()),
             Some("chat"),
-        )?;
-        let expected = context.clone();
-        scope(context, async move {
-            let check = |observed: Option<Context>| {
-                let observed = observed.unwrap();
-                let expected = expected.as_ref().unwrap();
-                assert_eq!(observed.home, expected.home);
-                assert_eq!(observed.workspace, expected.workspace);
-                assert_eq!(observed.session_id, expected.session_id);
-                assert!(observed.governs(&observed.workspace));
-                assert!(observed.governs(&observed.workspace.with_session(Some("chat")).unwrap()));
-                assert!(!observed.governs(
-                    &observed
-                        .workspace
-                        .with_session(Some("another-chat"))
-                        .unwrap()
-                ));
-                assert!(Arc::ptr_eq(
-                    &observed.review_history,
-                    &expected.review_history
-                ));
-            };
-            let inherited = tokio::spawn(super::super::super::carry_interactive(async {
-                CURRENT.try_with(Clone::clone).ok().flatten()
-            }))
-            .await?;
-            check(inherited);
-            assert!(scope(None, async { CURRENT.with(Clone::clone) })
-                .await
-                .is_none());
-            check(CURRENT.with(Clone::clone));
-            Ok::<_, anyhow::Error>(())
-        })
-        .await?;
-        assert!(CURRENT.try_with(Clone::clone).is_err());
+        )?
+        .unwrap();
+        let moved = context.clone();
+        let observed = tokio::spawn(async move { moved }).await?;
+        assert_eq!(observed.home, context.home);
+        assert_eq!(observed.workspace, context.workspace);
+        assert_eq!(observed.session_id, context.session_id);
+        assert!(observed.governs(&observed.workspace));
+        assert!(observed.governs(&observed.workspace.with_session(Some("chat")).unwrap()));
+        assert!(!observed.governs(
+            &observed
+                .workspace
+                .with_session(Some("another-chat"))
+                .unwrap()
+        ));
+        assert!(Arc::ptr_eq(
+            &observed.review_history,
+            &context.review_history
+        ));
         let other = for_request(
             Some(home.path()),
             "node",
@@ -293,6 +248,7 @@ mod tests {
         )?
         .unwrap();
         assert_eq!(other.workspace.path, second.path().canonicalize()?);
+        assert!(!Arc::ptr_eq(&other.review_history, &context.review_history));
         assert!(for_request(
             Some(home.path()),
             "node",
@@ -354,29 +310,93 @@ mod tests {
             scope: input.current.clone(),
             action: input.action.clone(),
         };
-        scope(Some(first), async {
-            for _ in 0..3 {
-                assert_eq!(review_route(&input, Review::Deny, &grant), Route::Deny);
-            }
-            let inherited = tokio::spawn(carry({
-                let input = input.clone();
-                let grant = grant.clone();
-                async move { review_route(&input, Review::Allow, &grant) }
-            }))
-            .await?;
-            assert_eq!(inherited, Route::Ask);
+        for _ in 0..3 {
             assert_eq!(
-                scope(Some(second), async {
-                    review_route(&input, Review::Allow, &grant)
-                })
-                .await,
-                Route::Allow
+                review_route(Some(&first), &input, Review::Deny, &grant),
+                Route::Deny
             );
-            assert_eq!(review_route(&input, Review::Allow, &grant), Route::Ask);
-            Ok::<_, anyhow::Error>(())
+        }
+        let background = first.clone();
+        let inherited = tokio::spawn({
+            let input = input.clone();
+            let grant = grant.clone();
+            async move { review_route(Some(&background), &input, Review::Allow, &grant) }
         })
         .await?;
-        assert_eq!(review_route(&input, Review::Allow, &grant), Route::Deny);
+        assert_eq!(inherited, Route::Ask);
+        assert_eq!(
+            review_route(Some(&second), &input, Review::Allow, &grant),
+            Route::Allow
+        );
+        assert_eq!(
+            review_route(Some(&first), &input, Review::Allow, &grant),
+            Route::Ask
+        );
+        assert_eq!(
+            review_route(None, &input, Review::Allow, &grant),
+            Route::Deny
+        );
+        Ok(())
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum CheckSite {
+        RequestTask,
+        BlockingThread,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum GoverningSettings {
+        Request,
+        StoredEntry,
+    }
+
+    /// The binding's stored entry is the workspace's own preference; the
+    /// request's governing settings are its session's, so the two answers are
+    /// told apart by the key the returned settings carry.
+    #[tokio::test]
+    async fn governing_settings_conform_to_lean() -> Result<()> {
+        use gents_lean_vocab::families::tool_policy_workspace_permissions_governing_settings as family;
+
+        let home = tempfile::tempdir()?;
+        let workspace = tempfile::tempdir()?;
+        let request = for_request(
+            Some(home.path()),
+            "node",
+            Some("requester"),
+            "agent",
+            Some(workspace.path()),
+            Some("chat"),
+        )?
+        .unwrap();
+        let stored = request.workspace.clone();
+        super::super::save_mode(home.path(), &stored, 0, super::super::Mode::Ask, None)?;
+        super::super::save_mode(
+            home.path(),
+            &stored.with_session(Some("chat"))?,
+            0,
+            super::super::Mode::FullAccess,
+            None,
+        )?;
+        for case in family::cases::<CheckSite, GoverningSettings>() {
+            let context = case.input.request_context.then(|| request.clone());
+            let home = home.path().to_owned();
+            let key = stored.clone();
+            let check = move || governing_settings(context.as_ref(), &home, &key);
+            let settings = match case.input.site {
+                CheckSite::RequestTask => check(),
+                CheckSite::BlockingThread => tokio::task::spawn_blocking(check).await?,
+            }
+            .map_err(super::super::BindingError::into_anyhow)?
+            .expect("both settings are stored");
+            case.check(if settings.workspace.session_id.is_some() {
+                GoverningSettings::Request
+            } else {
+                GoverningSettings::StoredEntry
+            });
+        }
         Ok(())
     }
 }

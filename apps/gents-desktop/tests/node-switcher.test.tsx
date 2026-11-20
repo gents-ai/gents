@@ -35,7 +35,7 @@ describe("switching node", () => {
         node({
           nodeDid: "did:key:z6MkJuno",
           label: "Juno",
-          source: "enrollment",
+          local: false,
           nodeConfig: { node_did: "did:key:z6MkJuno", avatar: "12" },
           node: { ...deployment.node, nodeDid: "did:key:z6MkJuno", displayName: null },
         }),
@@ -61,7 +61,7 @@ describe("switching node", () => {
         node({
           nodeDid: "did:key:z6MkJuno",
           label: "Juno",
-          source: "enrollment",
+          local: false,
           sessions: [
             {
               sessionId: "juno-1",
@@ -142,7 +142,7 @@ describe("switching node", () => {
           node({
             nodeDid: "did:key:z6MkJuno",
             label: "Juno",
-            source: "enrollment",
+            local: false,
             sessions: [
               {
                 sessionId: "juno-1",
@@ -178,7 +178,7 @@ describe("switching node", () => {
         node({
           nodeDid: "did:key:z6MkJuno",
           label: "Juno",
-          source: "enrollment",
+          local: false,
           node: { ...deployment.node, nodeDid: "did:key:z6MkJuno", displayName: null },
         }),
       ],

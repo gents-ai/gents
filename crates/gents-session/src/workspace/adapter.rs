@@ -175,20 +175,29 @@ pub(crate) fn observed_tree_hash(dest: &Path) -> Result<String> {
 
 /// Dropping the future kills Git's process group through the managed host
 /// process owner; the temporary index leaves the workspace's own index untouched.
-pub async fn working_tree_hash(dest: &Path) -> Result<String> {
+/// `recorder` records each Git process for the tool call that runs it, if any.
+pub async fn working_tree_hash(
+    dest: &Path,
+    recorder: Option<&crate::exec::ownership::ProcessRecorder>,
+) -> Result<String> {
     let tmp = tempfile::Builder::new()
         .prefix("gents-ws-index")
         .tempdir()
         .context("creating temporary git index for seal")?;
     let index = tmp.path().join("index");
-    managed_git_with_index(dest, &index, &["read-tree", "HEAD"]).await?;
-    managed_git_with_index(dest, &index, &["add", "-A", "--"]).await?;
-    managed_git_with_index(dest, &index, &["write-tree"]).await
+    managed_git_with_index(dest, &index, &["read-tree", "HEAD"], recorder).await?;
+    managed_git_with_index(dest, &index, &["add", "-A", "--"], recorder).await?;
+    managed_git_with_index(dest, &index, &["write-tree"], recorder).await
 }
 
 const MANAGED_GIT_OUTPUT_BYTE_CAP: usize = 64 * 1024;
 
-async fn managed_git_with_index(cwd: &Path, index: &Path, args: &[&str]) -> Result<String> {
+async fn managed_git_with_index(
+    cwd: &Path,
+    index: &Path,
+    args: &[&str],
+    recorder: Option<&crate::exec::ownership::ProcessRecorder>,
+) -> Result<String> {
     use crate::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
 
     let index = index
@@ -217,7 +226,7 @@ async fn managed_git_with_index(cwd: &Path, index: &Path, args: &[&str]) -> Resu
         environment: Some(environment),
         tool_name: None,
         live_output: None,
-        process_recorder: None,
+        process_recorder: recorder.cloned(),
     })
     .await;
     match outcome {
@@ -409,7 +418,7 @@ pub(crate) fn capture_instruction_manifest(repo: &Path, base_sha: &str) -> Resul
     let mut files = Vec::new();
     for path in DEFAULT_INSTRUCTION_PATHS {
         match git_show_blob(repo, base_sha, path)? {
-            Some(bytes) => files.push(InstructionFile::from_bytes(path, &bytes)),
+            Some(bytes) => files.push(InstructionFile::captured(path, &bytes)),
             None => continue,
         }
     }

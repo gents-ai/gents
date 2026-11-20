@@ -54,6 +54,8 @@ enum ServerMessage {
 /// A single runtime-owned transaction, driven by the client's pack interpreter.
 pub struct PackInstallSession {
     socket: WebSocketStream<MaybeTlsStream<TcpStream>>,
+    endpoint: GraphqlEndpoint,
+    presented_at: std::time::Instant,
     actor: ClientSigningCapability,
     scope: PackApprovalScope,
     preparation: gents_pack::pack::HostedPackPreparation,
@@ -65,6 +67,23 @@ impl PackInstallSession {
     pub async fn start(
         endpoint: &GraphqlEndpoint,
         request: Value,
+        node_did: &str,
+        pack_digests: &[String],
+    ) -> Result<Self> {
+        Self::open(
+            endpoint,
+            json!({"type": "start", "request": request}),
+            node_did,
+            pack_digests,
+        )
+        .await
+    }
+
+    /// Open a session whose first message is `first`, for the effects of
+    /// `pack_digests` on `node_did`.
+    pub async fn open(
+        endpoint: &GraphqlEndpoint,
+        first: Value,
         node_did: &str,
         pack_digests: &[String],
     ) -> Result<Self> {
@@ -88,7 +107,8 @@ impl PackInstallSession {
             .map_err(|_| anyhow::anyhow!("invalid runtime WebSocket URL"))?;
         let mut upgrade = url.as_str().into_client_request()?;
         let authorization = endpoint
-            .authorization()?
+            .runtime_authorization()
+            .await?
             .context("client authentication is required")?;
         let mut authorization =
             authorization.parse::<tokio_tungstenite::tungstenite::http::HeaderValue>()?;
@@ -100,10 +120,8 @@ impl PackInstallSession {
         let (mut socket, _) = connect_async(upgrade)
             .await
             .context("connecting remote pack install")?;
-        let mut start = serde_json::Map::new();
-        start.insert("type".into(), "start".into());
-        start.insert("request".into(), request);
-        send(&mut socket, Value::Object(start)).await?;
+        let presented_at = std::time::Instant::now();
+        send(&mut socket, first).await?;
         let (scope, preparation) = match receive(&mut socket).await? {
             ServerMessage::Ready { scope, preparation } => (scope, preparation),
             ServerMessage::Failed { error, outcome } => {
@@ -119,6 +137,8 @@ impl PackInstallSession {
         );
         Ok(Self {
             socket,
+            endpoint: endpoint.clone(),
+            presented_at,
             actor,
             scope,
             preparation,
@@ -131,17 +151,34 @@ impl PackInstallSession {
         &self.preparation
     }
 
+    /// Send `value`, first presenting a fresh delegation when the one the
+    /// session holds is due (`Identity.OwedRegistration.refreshDue`).
+    async fn send(&mut self, value: Value) -> Result<()> {
+        if self.endpoint.mints_delegations()
+            && gents_store::config_client::owed::refresh_due(self.presented_at.elapsed())
+        {
+            let authorization = self
+                .endpoint
+                .authorization()?
+                .context("client authentication is required")?;
+            self.presented_at = std::time::Instant::now();
+            send(
+                &mut self.socket,
+                json!({"type": "delegation", "authorization": authorization}),
+            )
+            .await?;
+        }
+        send(&mut self.socket, value).await
+    }
+
     pub async fn read(&mut self, document: &str, variables: &Value) -> Result<Value> {
         let id = self.next_id;
         self.next_id = self
             .next_id
             .checked_add(1)
             .context("pack install request ID exhausted")?;
-        send(
-            &mut self.socket,
-            json!({"type": "read", "id": id, "document": document, "variables": variables}),
-        )
-        .await?;
+        self.send(json!({"type": "read", "id": id, "document": document, "variables": variables}))
+            .await?;
         loop {
             match receive(&mut self.socket).await? {
                 ServerMessage::ReadResult {
@@ -184,11 +221,8 @@ impl PackInstallSession {
         };
         let evidence =
             prepare_pack_evidence_from_history(&self.actor, &self.scope, expected, history).await?;
-        send(
-            &mut self.socket,
-            json!({"type": "graph_evidence", "id": id, "evidence": evidence}),
-        )
-        .await?;
+        self.send(json!({"type": "graph_evidence", "id": id, "evidence": evidence}))
+            .await?;
         self.applied(id).await
     }
 
@@ -205,11 +239,8 @@ impl PackInstallSession {
             _ => bail!("runtime pack relationship differs from the client's installation plan"),
         };
         let evidence = prepare_pack_relationship(&self.actor, &self.scope, expected).await?;
-        send(
-            &mut self.socket,
-            json!({"type": "relationship_evidence", "id": id, "evidence": evidence}),
-        )
-        .await?;
+        self.send(json!({"type": "relationship_evidence", "id": id, "evidence": evidence}))
+            .await?;
         let result = self.applied(id).await?;
         ensure!(result.is_null(), "unexpected relationship result");
         Ok(())
@@ -237,11 +268,8 @@ impl PackInstallSession {
             _ => bail!("runtime pack timestamp differs from the client installation plan"),
         };
         let value = gents_store::config_client::mint_recreate_identity_timestamp();
-        send(
-            &mut self.socket,
-            json!({"type": "timestamp_value", "id": id, "value": value}),
-        )
-        .await?;
+        self.send(json!({"type": "timestamp_value", "id": id, "value": value}))
+            .await?;
         Ok(value)
     }
 
@@ -250,7 +278,7 @@ impl PackInstallSession {
             self.pending.is_none(),
             "runtime proposed an unexpected extra pack effect"
         );
-        send(&mut self.socket, json!({"type": "finish"})).await?;
+        self.send(json!({"type": "finish"})).await?;
         match receive(&mut self.socket).await? {
             ServerMessage::Finished { result } => Ok(result),
             ServerMessage::Failed { error, outcome } => {
@@ -426,7 +454,10 @@ pub async fn install_remote(
     args: &gents_pack::pack::install_flow::DocumentsInstallRequest,
     explicit: bool,
 ) -> Result<Value> {
-    ensure!(args.wire.is_empty(), "remote pack install does not yet support --wire with client-held signing; install the pack and wire it separately on the owning node");
+    ensure!(
+        args.wire.is_empty(),
+        "a hosted pack install carries no wiring; its plugins are wired after it"
+    );
     let request =
         super::pack_install::encode_install_request(pack, dependencies, args, owner, explicit)
             .await?;
@@ -447,20 +478,22 @@ pub async fn install_remote(
         &access,
         owner,
         pack.archive(),
-        &requested,
-        &dependencies
-            .iter()
-            .map(gents_pack::pack::resolved_pack::ResolvedPack::archive)
-            .collect::<Vec<_>>(),
-        &|name| {
-            gents_pack::operations::pack::install_value(
-                gents_protocol::operations::pack::PackActor::User,
-                &supplied,
-                name,
-            )
+        &gents_pack::pack::PackGraphInputs {
+            dependencies: &dependencies
+                .iter()
+                .map(gents_pack::pack::resolved_pack::ResolvedPack::archive)
+                .collect::<Vec<_>>(),
+            requested: &requested,
+            environment: &|name| {
+                gents_pack::operations::pack::install_value(
+                    gents_protocol::operations::pack::PackActor::User,
+                    &supplied,
+                    name,
+                )
+            },
+            overrides: &overrides,
         },
         &preparation,
-        &overrides,
     )
     .await?;
     gents_pack::pack::resolved_pack::ResolvedPack::record_graph_sources(

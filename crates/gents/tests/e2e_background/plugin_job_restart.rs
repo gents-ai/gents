@@ -1,5 +1,4 @@
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_toolcalls::background::job::job::{JobChildState, JobState};
@@ -13,6 +12,7 @@ use super::plugin_job_support::{
 use crate::support::snapshots::SnapshotReader;
 use crate::support::streaming_backend::{StreamChunk, StreamPlan, StreamResponse, StreamScript};
 use crate::support::test_db_in;
+use gents_store::test_support::STALL_CEILING;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const JOB_CRASH_WORKER_READY: &str = "GENTS_PLUGIN_JOB_CRASH_WORKER_READY";
@@ -129,12 +129,9 @@ async fn run_job_crash_worker(ready_path: &Path) {
         child_plans,
     )
     .await;
-    wait_job(
-        &h,
-        TOOL_CALL,
-        |v| v.children.len() == 3 && v.children.iter().all(|c| c.state == JobChildState::Live),
-        Duration::from_secs(30),
-    )
+    wait_job(&h, TOOL_CALL, |v| {
+        v.children.len() == 3 && v.children.iter().all(|c| c.state == JobChildState::Live)
+    })
     .await;
     let row_doc_id = job_row(&h, TOOL_CALL).await;
     let mut changes = h
@@ -143,7 +140,7 @@ async fn run_job_crash_worker(ready_path: &Path) {
         .access
         .subscribe_changes("AgentRequest")
         .await;
-    let child_states = tokio::time::timeout(Duration::from_secs(30), async {
+    let child_states = tokio::time::timeout(STALL_CEILING, async {
         loop {
             let states = child_states(&h, &row_doc_id).await;
             if states.iter().any(|(_, state)| state == "processing") {
@@ -193,7 +190,7 @@ async fn plugin_job_survives_a_restart_mid_panel() {
         .kill_on_drop(true)
         .spawn()
         .expect("spawn the job crash worker");
-    let ready = tokio::time::timeout(Duration::from_secs(30), async {
+    let ready = tokio::time::timeout(STALL_CEILING, async {
         let (mut connection, _) = listener.accept().await.unwrap();
         let mut bytes = Vec::new();
         connection.read_to_end(&mut bytes).await.unwrap();
@@ -223,17 +220,12 @@ async fn plugin_job_survives_a_restart_mid_panel() {
     )
     .await;
 
-    let view = wait_job(
-        &h,
-        TOOL_CALL,
-        |v| {
-            matches!(
-                v.state,
-                JobState::Completed | JobState::Failed | JobState::Cancelled | JobState::TimedOut
-            )
-        },
-        Duration::from_secs(180),
-    )
+    let view = wait_job(&h, TOOL_CALL, |v| {
+        matches!(
+            v.state,
+            JobState::Completed | JobState::Failed | JobState::Cancelled | JobState::TimedOut
+        )
+    })
     .await;
     assert_eq!(view.state, JobState::Completed, "{view:?}");
 

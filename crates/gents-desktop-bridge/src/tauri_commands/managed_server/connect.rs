@@ -9,9 +9,10 @@ use super::port::{
     PortReadiness,
 };
 use super::start::reconnect_started_runtime;
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::{current_core, DesktopAppState};
 use crate::types::{DesktopInitRequest, ManagedServerStatus};
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 const CONNECT_AGAIN: &str = "then choose Connect this desktop again";
 
@@ -78,7 +79,7 @@ async fn serving_node(
     node_home: &Path,
 ) -> Result<ManagedServerStatus, BridgeError> {
     let refused = |code, message: String| Err(BridgeError::new(code, message));
-    match observe_port_readiness(node_home, user_status_signer(state, node_home).await.as_ref())
+    match observe_port_readiness(node_home, user_status_signer(state).await.as_ref())
         .await?
     {
         PortReadiness::Ready(status) => Ok(status),
@@ -108,7 +109,9 @@ async fn route_saved(state: &DesktopAppState, node_did: Option<&str>) -> bool {
     let Some(node_did) = node_did else {
         return false;
     };
-    gents_desktop_core::client::load_peer_records(state.policy.desktop_paths.peer_directory_path())
-        .await
-        .is_ok_and(|peers| peers.iter().any(|peer| peer.node_did == node_did))
+    gents_store::client_journal::runtime_directory::load_runtime_connections(
+        state.policy.desktop_paths.runtime_directory_path(),
+    )
+    .await
+    .is_ok_and(|peers| peers.iter().any(|peer| peer.node_did == node_did))
 }

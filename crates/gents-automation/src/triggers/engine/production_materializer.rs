@@ -8,7 +8,7 @@ use tokio::sync::watch;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
-use crate::triggers::engine::{MaterializeError, MaterializerHandle};
+use crate::triggers::engine::{FireMaterialization, MaterializeError, MaterializerHandle};
 use crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
 use gents_documents::automation::ResolvedTask;
 use gents_documents::task_delivery::TriggerKind;
@@ -254,20 +254,23 @@ fn row_gates_serial_fire(row: &AgentRequestRow, now: chrono::DateTime<chrono::Ut
 impl MaterializerHandle for ProductionMaterializer {
     fn materialize(
         &self,
-        task: &ResolvedTask,
-        trigger_id: Option<&str>,
-        trigger_kind: TriggerKind,
-        trigger_doc_id: Option<&str>,
-        source_doc_id: Option<&str>,
-        correlation: Option<&str>,
-        trigger_context: Option<&str>,
-        rendered_prompt: &str,
-        rendered_goal_objective: Option<&str>,
-        durable_fire_key: &str,
-        delivery: Option<&crate::triggers::engine::durable::PreparedFire>,
-        prepared_ids: Option<(&str, &str)>,
+        fire: FireMaterialization<'_>,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<String, MaterializeError>> + Send + '_>>
     {
+        let FireMaterialization {
+            task,
+            trigger_id,
+            trigger_kind,
+            trigger_doc_id,
+            source_doc_id,
+            correlation,
+            trigger_context,
+            rendered_prompt,
+            rendered_goal_objective,
+            durable_fire_key,
+            delivery,
+            prepared_ids,
+        } = fire;
         if matches!(trigger_kind, TriggerKind::Manual)
             && (trigger_id.is_some() || trigger_doc_id.is_some())
         {
@@ -369,18 +372,20 @@ impl MaterializerHandle for ProductionMaterializer {
                 };
                 let mut spec =
                     gents_session::request::lifecycle::materialize::pending_agent_request_spec(
-                        &node_did,
-                        &agent_did,
-                        &rendered_prompt,
-                        execution_origin,
-                        lineage,
-                        Some(&title),
-                        workspace_ref,
+                        gents_session::request::lifecycle::materialize::PendingAgentRequest {
+                            node_did: &node_did,
+                            agent_did: &agent_did,
+                            content: &rendered_prompt,
+                            execution_origin,
+                            trigger_lineage: lineage,
+                            conversation_title: Some(&title),
+                            workspace_lineage: workspace_ref,
+                            requester_did: session_scope.as_deref(),
+                            trigger_doc_id: trigger_doc_id.as_deref(),
+                        },
                         &fire.request_id,
                         &fire.session_id,
                         Some(retry_key),
-                        session_scope.as_deref(),
-                        trigger_doc_id.as_deref(),
                     )?;
                 spec.input.goal_assignment = fire.goal_id.as_ref().map(|goal_id| {
                     gents_protocol::request_input::GoalAssignmentInput {
@@ -409,18 +414,20 @@ impl MaterializerHandle for ProductionMaterializer {
                 let conversation_title = task_goal_session_title(&task_label, &identity.retry_key);
                 let mut spec =
                     gents_session::request::lifecycle::materialize::pending_agent_request_spec(
-                        &node_did,
-                        &agent_did,
-                        &rendered_prompt,
-                        execution_origin,
-                        lineage,
-                        Some(&conversation_title),
-                        workspace_ref,
+                        gents_session::request::lifecycle::materialize::PendingAgentRequest {
+                            node_did: &node_did,
+                            agent_did: &agent_did,
+                            content: &rendered_prompt,
+                            execution_origin,
+                            trigger_lineage: lineage,
+                            conversation_title: Some(&conversation_title),
+                            workspace_lineage: workspace_ref,
+                            requester_did: None,
+                            trigger_doc_id: trigger_doc_id.as_deref(),
+                        },
                         &identity.request_id,
                         &identity.session_id,
                         Some(&identity.retry_key),
-                        None,
-                        trigger_doc_id.as_deref(),
                     )?;
                 spec.input.goal_assignment =
                     Some(gents_protocol::request_input::GoalAssignmentInput {
@@ -440,10 +447,12 @@ impl MaterializerHandle for ProductionMaterializer {
                 let enqueued = crate::goal::submit_goal_backed_request_with_identity(
                     &node,
                     agent_actor,
-                    &node_did,
-                    &identity.session_id,
-                    objective,
-                    goal_token_budget,
+                    crate::operations::goal::GoalStart {
+                        node_did: &node_did,
+                        session_id: &identity.session_id,
+                        objective,
+                        token_budget: goal_token_budget,
+                    },
                     &create,
                     Some(agent_identity.as_ref()),
                 )
@@ -469,16 +478,18 @@ impl MaterializerHandle for ProductionMaterializer {
                     gents_session::request::lifecycle::materialize::write_pending_agent_request_with_identity(
                         &node,
                         agent_actor,
-                        &node_did,
-                        &agent_did,
-                        &rendered_prompt,
-                        execution_origin,
-                        lineage,
-                        Some(&conversation_title),
-                        workspace_ref,
+                        gents_session::request::lifecycle::materialize::PendingAgentRequest {
+                            node_did: &node_did,
+                            agent_did: &agent_did,
+                            content: &rendered_prompt,
+                            execution_origin,
+                            trigger_lineage: lineage,
+                            conversation_title: Some(&conversation_title),
+                            workspace_lineage: workspace_ref,
+                            requester_did: None,
+                            trigger_doc_id: trigger_doc_id.as_deref(),
+                        },
                         Some(&request_id),
-                        None,
-                        trigger_doc_id.as_deref(),
                         prepared_ids.as_ref().map(|(_, session)| session.as_str()),
                         Some(agent_identity.as_ref()),
                     )

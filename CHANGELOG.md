@@ -6,6 +6,26 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Tools `host.max_background_tool_calls` (1 to 8, unset 8) bounds the
+  background calls one request holds at once: Bash runs, remote service calls
+  and plugin jobs together. The refusal reports the configured limit.
+- Tools `host.max_instruction_chars` (1 to 262,144, unset 32 KiB) bounds the
+  AGENTS.md text an Agent places in its context, from live discovery and from a
+  workspace's frozen instructions alike. A workspace now freezes each
+  instruction file up to 256 KiB, and each reading Agent bounds it.
+- A pack plugin's `limits.max_rounds` (1 to 256) raises its request rounds per
+  invocation above the default of 64; like the other limits, a raise needs
+  consent at install (#1764).
+
+- InferenceBackend `client_version` sets the wire client version that ChatGPT Codex and
+  Grok OAuth backends advertise, replacing the `GENTS_CHATGPT_CODEX_CLIENT_VERSION` and
+  `GENTS_XAI_GROK_CLIENT_VERSION` environment overrides; unset, each client's built-in
+  version is used. InferenceBackend `request_timeout_secs` (default 120s) bounds one plugin
+  model call through that backend, and InferenceExecution `title_timeout_secs` (default
+  10s) bounds one title-generation attempt, replacing fixed timeouts. The OAuth token
+  endpoint overrides `GENTS_CLAUDE_OAUTH_TOKEN_URL`, `GENTS_XAI_OAUTH_TOKEN_URL`,
+  `CODEX_REFRESH_TOKEN_URL_OVERRIDE`, `GENTS_XAI_OAUTH_DEVICE_URL` are removed; refresh
+  takes its endpoint as an argument (#1764).
 - An application pairing no longer reinstalls its collections on authority
   read before its author lost the P2P mutation grant: each install re-reads
   the author's authority after the operations before it, and a change to the
@@ -27,6 +47,22 @@ source consistency checks, not a separate runtime compatibility version.
   change such a service, the command names the two calls that start a node
   beside it or move the service. Test builds no longer reach the machine's
   service manager at all.
+- Breaking: the runtime no longer reads its behaviour from environment
+  variables; each is a `gents server` flag (#1764). `--block-cache-mb`
+  replaces `GENTS_BLOCK_CACHE_MB` and refuses zero.
+  `--p2p-registry-heartbeat-ms`, `--p2p-pairing-sweep-ms`,
+  `--p2p-endpoint-heartbeat-ms` and `--p2p-registry-stale-ms` replace
+  `GENTS_REGISTRY_HEARTBEAT_MS`, `GENTS_PAIRING_SWEEP_MS`,
+  `GENTS_ENDPOINT_HEARTBEAT_MS` and `GENTS_REGISTRY_STALE_MS`, and
+  `--p2p-network-id` replaces `GENTS_NETWORK_ID`.
+- Breaking: `gents server --system-log` replaces `GENTS_SYSTEM_LOG=1`. The
+  installed launchd and systemd definitions pass the flag, and a definition
+  without it gains it from `gents service repair` or a managed update. On
+  macOS, setup and repair no longer report the service log as out of date
+  after a managed update re-serializes the LaunchAgent.
+- Breaking: `gents init` and the interactive backend setup take the inference
+  endpoint only from `--inference-url` (or a preset); `INFERENCE_ENDPOINT` is
+  no longer read.
 
 ## 1.0.0-rc2 - 2026-11-10
 

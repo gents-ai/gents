@@ -10,4 +10,18 @@ providerEofIsFailure_table ==
 providerEofIsFailure(saw_explicit_final) ==
   providerEofIsFailure_table[<<saw_explicit_final>>]
 
+\* Lean `RequestExecutionLease.retryWakeDispatches`.
+retryWakeDispatches_table ==
+  (((<<FALSE, FALSE, FALSE>> :> FALSE
+     @@ <<FALSE, FALSE, TRUE>> :> FALSE)
+    @@ (<<FALSE, TRUE, FALSE>> :> FALSE
+        @@ <<FALSE, TRUE, TRUE>> :> FALSE))
+   @@ ((<<TRUE, FALSE, FALSE>> :> FALSE
+        @@ <<TRUE, FALSE, TRUE>> :> FALSE)
+       @@ (<<TRUE, TRUE, FALSE>> :> FALSE
+           @@ <<TRUE, TRUE, TRUE>> :> TRUE)))
+
+retryWakeDispatches(owned, processing, before_deadline) ==
+  retryWakeDispatches_table[<<owned, processing, before_deadline>>]
+
 ====
