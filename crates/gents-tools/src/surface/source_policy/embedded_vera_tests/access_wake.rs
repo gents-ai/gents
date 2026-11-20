@@ -68,9 +68,7 @@ async fn handed_over_after(provider: DocumentAcp) -> anyhow::Result<Duration> {
     Ok(after)
 }
 
-/// TLA `AccessWake` (`MCAccessWakeGreen`, `MCAccessWakeNodeStore`): a client's
-/// request reaches the runtime's request watcher when the request's access
-/// settles, before the watcher's fallback rescan, on either kind of home.
+/// TLA `AccessWake` (`MCAccessWakeGreen`, `MCAccessWakeNodeStore`).
 #[tokio::test]
 async fn a_client_request_reaches_the_watcher_before_its_fallback_rescan() -> anyhow::Result<()> {
     for provider in PROVIDERS {

@@ -1,0 +1,3 @@
+---- MODULE MCControlDebounceUncapped ----
+EXTENDS ControlDebounce
+====
