@@ -4,7 +4,7 @@ use gents_store::graphql::{escape_graphql_string, response_has_documents};
 use gents_tools::native::CommandPolicyDenial;
 
 use super::{AwaitMode, FailureClass, ToolCallLifecycle, ToolRowKind};
-use gents_protocol::tool_call::{CancelCause, ToolCallState};
+use gents_session::session::tool_call_state::{CancelCause, ToolCallState};
 
 #[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum IllegalToolCallTransition {

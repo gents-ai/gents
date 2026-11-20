@@ -618,7 +618,7 @@ async fn run_generated_wait_observations() {
                             } else if case.name.starts_with("cancelled_") {
                                 target
                                     .cancel_during_run(
-                                        gents_protocol::tool_call::CancelCause::UserCancelled,
+                                        gents_session::session::tool_call_state::CancelCause::UserCancelled,
                                     )
                                     .await
                                     .unwrap();

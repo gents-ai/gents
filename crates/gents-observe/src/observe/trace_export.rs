@@ -5,7 +5,7 @@ use gents_protocol::transcript::{present_message, PersistedMessagePresentation};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use gents_protocol::tool_call::ToolCallState;
+use gents_session::session::tool_call_state::ToolCallState;
 use gents_session::session::SequencedMessage;
 
 pub use gents_loop::tool_call_lifecycle::FailureClass as ToolFailureClass;

@@ -53,7 +53,8 @@ use gents_pack::plugin::store::PluginData;
 use gents_pack::plugin::PluginVerdict;
 use gents_protocol::job_settings::effective_ceiling;
 use gents_protocol::request_lifecycle::SessionMessageCause;
-use gents_protocol::tool_call::{AwaitMode, ToolCallState};
+use gents_protocol::tool_call::AwaitMode;
+use gents_session::session::tool_call_state::ToolCallState;
 use gents_store::config_client::ConfigAccess;
 use gents_tools::surface::EndpointScope;
 

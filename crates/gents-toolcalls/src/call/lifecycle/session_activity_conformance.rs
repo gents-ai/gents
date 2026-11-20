@@ -7,8 +7,8 @@ use super::{
     AwaitMode,
 };
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
-use gents_protocol::tool_call::ToolCallState;
 use gents_protocol::{output::PayloadPresentation, session::SessionObservation};
+use gents_session::session::tool_call_state::ToolCallState;
 use gents_store::graphql::escape_graphql_string;
 use serde_json::Value;
 

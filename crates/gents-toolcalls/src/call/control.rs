@@ -8,7 +8,8 @@ use crate::background::job::control::control_by_doc_id;
 use crate::background::status::ProcessControlScope;
 use crate::call::hook::background_executions::BackgroundExecutionRegistry;
 use crate::call::lifecycle::{ToolCallLifecycle, ToolRowKind};
-use gents_protocol::tool_call::{AwaitMode, CancelCause};
+use gents_protocol::tool_call::AwaitMode;
+use gents_session::session::tool_call_state::CancelCause;
 use gents_store::config_client::{ConfigAccess, ConfigClientError};
 
 pub mod client;
@@ -167,7 +168,7 @@ pub(crate) async fn cancel_loaded_background_tool_call(
 
     // Lean `Background.ProcessControl.stopAction`: an undispatched invocation
     // has no process, so the stop races dispatch on the durable pending row.
-    if lifecycle.state() == gents_protocol::tool_call::ToolCallState::Pending {
+    if lifecycle.state() == gents_session::session::tool_call_state::ToolCallState::Pending {
         if lifecycle
             .cancel_before_dispatch_owned(CancelCause::UserCancelled)
             .await?
@@ -496,7 +497,7 @@ mod tests {
     /// Adapted from Ivan's #3264 stop races onto the owning cancellation path.
     #[tokio::test]
     async fn generated_stop_actions_select_the_durable_transition() {
-        use gents_protocol::tool_call::ToolCallState;
+        use gents_session::session::tool_call_state::ToolCallState;
         for case in gents_lean_vocab::families::native_refinement_stop_action::cases::<
             String,
             ToolCallState,
@@ -593,7 +594,7 @@ mod tests {
 
     #[tokio::test]
     async fn stops_after_a_pending_observation_match_the_lean_model() {
-        use gents_protocol::tool_call::ToolCallState;
+        use gents_session::session::tool_call_state::ToolCallState;
         for case in gents_lean_vocab::families::background_stop_after_pending_observation::cases::<
             String,
             ToolCallState,

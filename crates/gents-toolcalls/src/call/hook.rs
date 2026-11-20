@@ -13,8 +13,9 @@ use tokio::sync::Mutex;
 use crate::call::lifecycle::{InterruptDisposition, ToolCallLifecycle};
 use gents_loop::output_obligation::OutputObligationCheck;
 use gents_loop::truncation::TruncationLimits;
-use gents_protocol::tool_call::{AwaitMode, CancelCause};
+use gents_protocol::tool_call::AwaitMode;
 use gents_session::session;
+use gents_session::session::tool_call_state::CancelCause;
 use gents_tools::mcp::meta::selected_remote_identity;
 
 pub mod background_executions;
@@ -1213,9 +1214,9 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
             };
             let cause = match outcome {
                 gents_loop::tool_call_lifecycle::ToolOutcome::TimedOut { .. } => {
-                    gents_protocol::tool_call::CancelCause::Deadline
+                    gents_session::session::tool_call_state::CancelCause::Deadline
                 }
-                _ => gents_protocol::tool_call::CancelCause::Interrupted,
+                _ => gents_session::session::tool_call_state::CancelCause::Interrupted,
             };
             current.settle_interrupted_plugin_effect(cause).await?;
             self.in_flight_lifecycles.lock().await.remove(internal_id);
@@ -1244,9 +1245,9 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
         };
         let cause = match stop {
             gents_loop::tool_call_lifecycle::ToolOutcome::TimedOut { .. } => {
-                gents_protocol::tool_call::CancelCause::Deadline
+                gents_session::session::tool_call_state::CancelCause::Deadline
             }
-            _ => gents_protocol::tool_call::CancelCause::Interrupted,
+            _ => gents_session::session::tool_call_state::CancelCause::Interrupted,
         };
         let settled = parent
             .settle_unfinished_plugin_effects(cause)

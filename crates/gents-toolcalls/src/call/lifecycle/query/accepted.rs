@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 #[cfg(any(test, feature = "test-fixtures"))]
 use defra_node::Node as EmbeddedNode;
 use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole, OutputOutcome};
-use gents_protocol::tool_call::ToolCallState;
 
 use gents_protocol::output::rows::{decode_transcript_message_row, AGENT_MESSAGE_FIELDS};
 use gents_session::request::streaming::AcceptedToolCall;
@@ -291,10 +290,10 @@ impl ToolCallLifecycle {
         anyhow::ensure!(
             message.outcome == OutputOutcome::Complete
                 || (!require_complete
-                    && tool["lifecycle_state"]
-                        .as_str()
-                        .and_then(ToolCallState::from_persisted)
-                        .is_some_and(ToolCallState::is_terminal)),
+                    && matches!(
+                        tool["lifecycle_state"].as_str(),
+                        Some("completed" | "failed" | "timedOut" | "cancelled")
+                    )),
             "partial diagnostic tool bindings must already be terminal and cannot dispatch"
         );
         let MessagePublication::RequestExecution {

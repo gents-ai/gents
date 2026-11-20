@@ -167,7 +167,7 @@ async fn denied_plugin_write_rolls_back_completed_terminal_and_settles_failed() 
     .unwrap();
     assert_eq!(
         fixture.tool.state,
-        gents_protocol::tool_call::ToolCallState::Failed
+        gents_session::session::tool_call_state::ToolCallState::Failed
     );
     assert_eq!(
         fixture.tool.failure_class,

@@ -10,7 +10,7 @@ use crate::call::lifecycle::{FailureClass, ToolCallLifecycle, ToolRowKind};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use gents_protocol::output::PayloadPresentation;
-use gents_protocol::tool_call::ToolCallState;
+use gents_session::session::tool_call_state::ToolCallState;
 use gents_store::config_client::{ConfigApplyTxn, IdempotentTransactionRetry};
 
 impl ToolCallLifecycle {

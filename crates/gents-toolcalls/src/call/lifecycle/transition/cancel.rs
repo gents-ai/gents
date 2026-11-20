@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use gents_protocol::tool_call::{CancelCause, ToolCallState};
+use gents_session::session::tool_call_state::{CancelCause, ToolCallState};
 
 impl super::ToolCallLifecycle {
     pub const CANCEL_DURING_RUN_OUTPUT: &'static str = "tool call cancelled";

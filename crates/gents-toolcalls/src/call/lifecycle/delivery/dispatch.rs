@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
 use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole, OutputOutcome};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
-use gents_protocol::tool_call::ToolCallState;
+use gents_session::session::tool_call_state::ToolCallState;
 use gents_store::config_client::{ConfigApplyTxn, IdempotentTransactionRetry};
 use gents_store::graphql::escape_graphql_string;
 
