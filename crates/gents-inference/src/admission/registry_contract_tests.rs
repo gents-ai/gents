@@ -81,11 +81,9 @@ async fn acquire_with_signer(
 ) -> Result<AdmissionPermit, AdmissionError> {
     let request = super::super::tests::seeded_request(node, signer, request_id).await;
     let context = AdmissionCallContext::for_request(&request, signer.did(), backend_id);
-    scope_request(
-        context,
-        registry.acquire_current_call_with_signer(connection, None, None, Some(signer.clone())),
-    )
-    .await
+    registry
+        .acquire_call_with_signer(Some(&context), connection, None, None, Some(signer.clone()))
+        .await
 }
 
 struct Harness {

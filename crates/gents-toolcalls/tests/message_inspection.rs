@@ -13,7 +13,9 @@ struct ReadWorkerGoal;
 async fn trigger_worker_inspection_reads_canonical_output_status_and_goal() {
     use gents_protocol::tool_call::AwaitMode;
     use gents_store::identity::NodeIdentity;
-    use gents_toolcalls::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
+    use gents_toolcalls::call::lifecycle::admission_fixture::{
+        publish_accepted_on_claimed_request, AcceptedFixtureCall,
+    };
     let (message, caller, _) = gents_toolcalls::call::lifecycle::admission_fixture::started(
         "agent-session-inspection",
         gents_session::test_support::no_lifecycle_plugins(),
@@ -31,13 +33,15 @@ async fn trigger_worker_inspection_reads_canonical_output_status_and_goal() {
         .transact_write("test.inspection.worker_session", |txn| {
             Box::pin(gents_session::session::ensure_session_in_txn(
                 txn,
-                "read-worker",
-                identity.did(),
-                signer.did(),
-                Some(signer.did()),
-                None,
-                None,
-                "2026-11-04T00:00:00Z",
+                gents_session::session::NewAgentSession {
+                    session_id: "read-worker",
+                    node_did: identity.did(),
+                    agent_did: signer.did(),
+                    requester_did: Some(signer.did()),
+                    title: None,
+                    provenance: None,
+                    created_at: "2026-11-04T00:00:00Z",
+                },
             ))
         })
         .await
@@ -92,12 +96,14 @@ async fn trigger_worker_inspection_reads_canonical_output_status_and_goal() {
         node.clone(),
         &mut worker,
         identity.did(),
-        0,
-        "bash",
-        "worker-check",
-        json!({"command": "private tool arguments"}),
-        AwaitMode::Foreground,
-        true,
+        AcceptedFixtureCall {
+            turn: 0,
+            tool_name: "bash",
+            tool_call_id: "worker-check",
+            arguments: json!({"command": "private tool arguments"}),
+            await_mode: AwaitMode::Foreground,
+            start_running: true,
+        },
     )
     .await
     .unwrap();

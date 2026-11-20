@@ -3,22 +3,31 @@ use gents_protocol::file_changes::{
     MAX_FILE_IMAGE_BYTES,
 };
 use gents_protocol::job::{JobBudget, JobProgress, JobState};
-use gents_store::config_client::ConfigAccess;
+use gents_protocol::output::rows::{
+    output_segment_create_variables, transcript_message_create_variables,
+    CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+};
+use gents_protocol::output::{
+    MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
+    OutputWriter, PayloadRef, SegmentRun, SourceClose, StreamDeclaration, StreamPayload,
+    TranscriptMessage,
+};
+use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
+
 use gents_store::graphql::escape_graphql_string;
 
-use super::operations_job_control::seed_admission_for_node;
-use super::support::{create_session, seed_job_row_for_node, OPERATOR};
+use super::support::{seed_served_job_row, served_desktop, ServedDesktop};
 
 #[tokio::test]
 async fn file_change_review_reads_the_bound_request_without_touching_a_local_checkout() {
-    let (core, _dir) = boot_review_core().await;
-    let node = core.node_identity().did().to_owned();
+    let served = served_desktop().await;
+    let core = served.core.clone();
+    let node = core.runtime_connections()[0].node_did.clone();
     let session = "file-review-session";
     let call = "file-review-call";
     let request = format!("req-{call}");
-    create_session(&core, &node, session, None).await;
     let (physical, expected) = seed_review(
-        &core,
+        &served,
         session,
         call,
         FileImage::Missing,
@@ -73,9 +82,8 @@ async fn file_change_review_reads_the_bound_request_without_touching_a_local_che
     )
     .await
     .is_err());
-    let other = seed_job_row_for_node(
-        &core,
-        &node,
+    let other = seed_served_job_row(
+        &served,
         session,
         "foreign-call",
         "completed",
@@ -83,7 +91,7 @@ async fn file_change_review_reads_the_bound_request_without_touching_a_local_che
         None,
     )
     .await;
-    seed_admission_for_node(&core, &node, session, &other, "foreign-call", 2).await;
+    seed_admission(&served, session, &other, "foreign-call", 2).await;
     assert!(crate::commands::tool_file_changes(
         &core,
         node.clone(),
@@ -121,7 +129,9 @@ async fn file_change_review_reads_the_bound_request_without_touching_a_local_che
             Ok(Some(_))
         ));
     }
-    let access = ConfigAccess::local(core.node_arc());
+    let access = core
+        .operator_access(&core.runtime_connections()[0].node_did)
+        .unwrap();
     let observation = access.execute(&format!(
         r#"{{ ToolFileChange(filter: {{ tool_call_doc_id: {{ _eq: "{}" }} }}) {{ _docID tool_call_doc_id request_doc_id node_did session_id requester_did file_changes }} }}"#,
         escape_graphql_string(&physical),
@@ -153,13 +163,18 @@ async fn file_change_review_reads_the_bound_request_without_touching_a_local_che
     foreign.as_object_mut().unwrap().remove("_docID");
     foreign["requester_did"] = serde_json::json!("did:key:another-requester");
     let variables = serde_json::json!({"input": foreign});
-    access.transact_write("test.file_review.ambiguous", |txn| {
-        let variables = &variables;
+    let image_access = served.runtime.agent_access(&served.agent).await;
+    let reader = core.node_identity().did().parse().unwrap();
+    image_access.transact_write("test.file_review.ambiguous", |txn| {
+        let (variables, reader) = (&variables, &reader);
         Box::pin(async move {
-            txn.execute_with_variables(
+            let response = txn.execute_with_variables(
                 "mutation($input: ToolFileChangeMutationInputArg!) { create_ToolFileChange(input: $input) { _docID } }",
                 variables,
-            ).await
+            ).await?;
+            let observation = gents_store::graphql::created_doc_id(&response, "ToolFileChange")?;
+            txn.add_actor_relationship("ToolFileChange", &observation, "reader", reader).await?;
+            Ok::<_, anyhow::Error>(())
         })
     }).await.unwrap();
     let error = crate::commands::tool_file_changes(
@@ -180,7 +195,7 @@ async fn file_change_review_reads_the_bound_request_without_touching_a_local_che
 }
 
 async fn seed_review(
-    core: &std::sync::Arc<gents_desktop_core::client::ClientCore>,
+    served: &ServedDesktop,
     session: &str,
     call: &str,
     before: FileImage,
@@ -204,10 +219,9 @@ async fn seed_review(
         observed_terminal_children: 0,
         revision: 1,
     };
-    let node = core.node_identity().did();
-    let physical =
-        seed_job_row_for_node(core, node, session, call, "completed", &progress, None).await;
-    seed_admission_for_node(core, node, session, &physical, call, 1).await;
+    let node = served.node_did();
+    let physical = seed_served_job_row(served, session, call, "completed", &progress, None).await;
+    seed_admission(served, session, &physical, call, 1).await;
     let expected = ToolFileChanges {
         version: FILE_CHANGES_VERSION,
         tool_call_doc_id: physical.clone(),
@@ -218,7 +232,7 @@ async fn seed_review(
             after,
         }],
     };
-    let access = ConfigAccess::local(core.node_arc());
+    let access = served.runtime.agent_access(&served.agent).await;
     let binding = access
         .execute(&format!(
             r#"{{ AgentToolCall(docID: "{}") {{ request_doc_id }} }}"#,
@@ -226,31 +240,53 @@ async fn seed_review(
         ))
         .await
         .unwrap();
-    let mutation = "mutation($input: ToolFileChangeMutationInputArg!) { create_ToolFileChange(input: $input) { _docID } }";
-    let variables = serde_json::json!({"input": {
-        "tool_call_doc_id": physical, "request_doc_id": binding["data"]["AgentToolCall"][0]["request_doc_id"],
-        "node_did": node, "session_id": session, "requester_did": OPERATOR,
-        "file_changes": expected,
-    }});
-    access
-        .transact_write("test.file_review.images", |txn| {
-            let (mutation, variables) = (mutation, &variables);
-            Box::pin(async move { txn.execute_with_variables(mutation, variables).await })
+    let scope = gents_protocol::session::SessionScope {
+        node_did: node.into(),
+        session_id: session.into(),
+        requester_did: Some(served.core.node_identity().did().into()),
+    };
+    access.transact_write("test.file_review.images", |txn| {
+        let (expected, scope, binding) = (&expected, &scope, &binding);
+        Box::pin(async move {
+            let stored = gents_session::file_contents::store(txn, scope, expected).await?;
+            let result = txn.execute_with_variables(
+                "mutation($input: ToolFileChangeMutationInputArg!) { create_ToolFileChange(input: $input) { _docID } }",
+                &serde_json::json!({"input": {
+                    "tool_call_doc_id": expected.tool_call_doc_id,
+                    "request_doc_id": binding["data"]["AgentToolCall"][0]["request_doc_id"],
+                    "node_did": scope.node_did, "session_id": scope.session_id,
+                    "requester_did": scope.requester_did, "file_changes": stored,
+                }}),
+            ).await?;
+            let observation = gents_store::graphql::created_doc_id(&result, "ToolFileChange")?;
+            let reader = scope.requester_did.as_deref().unwrap().parse()?;
+            txn.add_actor_relationship("ToolFileChange", &observation, "reader", &reader).await?;
+            for change in stored.changes {
+                if let Some(content) = change.content_doc_id {
+                    txn.add_actor_relationship("ToolFileContent", &content, "reader", &reader).await?;
+                }
+            }
+            Ok::<_, anyhow::Error>(())
         })
-        .await
-        .unwrap();
+    }).await.unwrap();
     (physical, expected)
 }
 
 #[tokio::test]
 async fn concurrent_file_reviews_preserve_each_retained_image() {
-    let (core, _directory) = boot_review_core().await;
-    let node = core.node_identity().did().to_owned();
+    let served = served_desktop().await;
+    let core = served.core.clone();
+    let node = core.runtime_connections()[0].node_did.clone();
     let session = "concurrent-file-review";
     let call = "concurrent-file-call";
-    create_session(&core, &node, session, None).await;
-    let (physical, expected) =
-        seed_review(&core, session, call, FileImage::Missing, FileImage::Missing).await;
+    let (physical, expected) = seed_review(
+        &served,
+        session,
+        call,
+        FileImage::Missing,
+        FileImage::Missing,
+    )
+    .await;
     let request = format!("req-{call}");
     let results = futures::future::join_all((0..5).map(|_| {
         crate::commands::tool_file_changes(
@@ -271,8 +307,9 @@ async fn concurrent_file_reviews_preserve_each_retained_image() {
 
 #[tokio::test]
 async fn unavailable_file_review_scope_is_retryable_not_missing_versions() {
-    let (core, _directory) = boot_review_core().await;
-    let node = core.node_identity().did().to_owned();
+    let served = served_desktop().await;
+    let core = served.core.clone();
+    let node = core.runtime_connections()[0].node_did.clone();
     let error = crate::commands::tool_file_changes(
         &core,
         node,
@@ -283,8 +320,13 @@ async fn unavailable_file_review_scope_is_retryable_not_missing_versions() {
     )
     .await
     .unwrap_err();
-    let classified = error.downcast_ref::<crate::BridgeError>().unwrap();
-    assert_eq!(classified.code, crate::BridgeErrorCode::ProjectionPending);
+    let classified = error
+        .downcast_ref::<gents_store::client_error::BridgeError>()
+        .unwrap();
+    assert_eq!(
+        classified.code,
+        gents_store::client_error::BridgeErrorCode::ProjectionPending
+    );
     assert!(classified.retryable);
     core.shutdown().await.unwrap();
 }
@@ -297,11 +339,11 @@ async fn maximum_file_images_cross_the_editor_host_frames_without_truncation() {
     use std::{sync::Arc, time::Duration};
     use tokio_util::{codec::LengthDelimitedCodec, sync::CancellationToken};
 
-    let (core, _dir) = boot_review_core().await;
-    let node = core.node_identity().did().to_owned();
+    let served = served_desktop().await;
+    let core = served.core.clone();
+    let node = core.runtime_connections()[0].node_did.clone();
     let session = "file-review-maximum";
     let call = "maximum-file-call";
-    create_session(&core, &node, session, None).await;
     let image = |triplet: &str, tail: &str, hash: &str| FileImage::File {
         content_hash: format!("sha256:{hash}"),
         data: triplet.repeat(MAX_FILE_IMAGE_BYTES as usize / 3) + tail,
@@ -313,7 +355,7 @@ async fn maximum_file_images_cross_the_editor_host_frames_without_truncation() {
     };
     assert_eq!(MAX_FILE_IMAGE_BYTES % 3, 1);
     let (physical, expected) = seed_review(
-        &core,
+        &served,
         session,
         call,
         image(
@@ -387,43 +429,162 @@ async fn maximum_file_images_cross_the_editor_host_frames_without_truncation() {
     core.shutdown().await.unwrap();
 }
 
-async fn boot_review_core() -> (
-    std::sync::Arc<gents_desktop_core::client::ClientCore>,
-    tempfile::TempDir,
+async fn seed_admission(
+    served: &ServedDesktop,
+    session_id: &str,
+    row_doc_id: &str,
+    call: &str,
+    sequence: u32,
 ) {
-    use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
-    let directory = tempfile::tempdir().unwrap();
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    drop(listener);
-    let core = std::sync::Arc::new(
-        ClientCore::start_with_paths_and_options(
-            DesktopPaths::from_root(directory.path().join("client")),
-            ClientCoreOptions {
-                http_addr: Some(address),
-                ..ClientCoreOptions::local_simulated_route()
+    let node_did = served.node_did();
+    let requester = served.core.node_identity().did().to_owned();
+    let access = served.runtime.agent_access(&served.agent).await;
+    let read = format!(
+        r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ request_doc_id session_doc_id }} }}"#,
+        escape_graphql_string(row_doc_id)
+    );
+    let response = access
+        .transact_write("test.fixture.job_row_request", |txn| {
+            let read = read.clone();
+            Box::pin(async move {
+                txn.execute_with_variables(&read, &serde_json::json!({}))
+                    .await
+            })
+        })
+        .await
+        .expect("read job row request");
+    let request_doc_id = response
+        .pointer("/data/AgentToolCall/0/request_doc_id")
+        .and_then(|value| value.as_str())
+        .expect("job row request_doc_id")
+        .to_owned();
+    let session_doc = response["data"]["AgentToolCall"][0]["session_doc_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let deadline = format!(
+        r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ deadline_at: "2126-06-01T10:00:00Z", message_sequence: {sequence} }}) {{ _docID }} }}"#,
+        escape_graphql_string(row_doc_id)
+    );
+    access
+        .transact_write("test.fixture.job_row_deadline", |txn| {
+            let deadline = deadline.clone();
+            Box::pin(async move { txn.execute(&deadline).await })
+        })
+        .await
+        .expect("seed job row deadline");
+    let arguments = "{}";
+    let generation = format!("cli-job-fixture:{request_doc_id}");
+    let created_at = "2026-06-01T10:00:00Z";
+    let segment = OutputSegment {
+        node_did: node_did.into(),
+        requester_did: Some(requester.clone()),
+        session_id: session_id.into(),
+        request_doc_id: request_doc_id.clone(),
+        source: OutputSource::ProviderTurn {
+            scope: CaptureScope {
+                kind: CaptureScopeKind::Inference,
+                seq: 1,
             },
+            turn_index: 0,
+            attempt: 0,
+        },
+        writer: OutputWriter::RequestExecution {
+            execution_generation: generation.clone(),
+        },
+        ordinal: Some(0),
+        runs: vec![SegmentRun {
+            stream: 0,
+            bytes: arguments.len() as u32,
+            declaration: Some(StreamDeclaration {
+                block_index: 0,
+                part_index: 0,
+                payload: StreamPayload::ToolArguments {
+                    id: call.into(),
+                    call_id: Some(call.into()),
+                    name: "workflow".into(),
+                },
+            }),
+        }],
+        payload: arguments.into(),
+        close: Some(SourceClose::Closed {
+            outcome: OutputOutcome::Complete,
+            segments: 1,
+            stream_bytes: vec![arguments.len() as u64],
+        }),
+        created_at: created_at.into(),
+    };
+    let variables = output_segment_create_variables(&segment).expect("segment variables");
+    let response = access
+        .transact_write("test.fixture.job_admission_segment", |txn| {
+            let variables = variables.clone();
+            Box::pin(async move {
+                txn.execute_with_variables(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION, &variables)
+                    .await
+            })
+        })
+        .await
+        .expect("seed admission segment");
+    let close_doc_id =
+        gents_protocol::graphql::extract_mutation_doc_id(&response, "AgentOutputSegment")
+            .expect("segment doc id");
+    access
+        .add_resource_relationship(
+            "AgentOutputSegment",
+            &close_doc_id,
+            "parent",
+            "sessions",
+            &session_doc,
         )
         .await
-        .unwrap(),
-    );
-    let endpoint = format!("http://{address}/api/v0/graphql");
-    let runtime_home = directory.path().join("runtime");
-    std::fs::create_dir(&runtime_home).unwrap();
-    std::fs::write(runtime_home.join("runtime.json"), serde_json::to_vec(&serde_json::json!({
-        "node_name": "file-review-fixture", "node_did": core.node_identity().did(), "graphql": endpoint,
-    })).unwrap()).unwrap();
-    core.add_local_standard_peer_route_for_test(
-        "File review fixture",
-        "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
-        core.node_identity().did(),
-        &endpoint,
-        runtime_home.to_str().unwrap(),
-    )
-    .await
-    .unwrap();
-    assert!(core
-        .operator_observation_graphql(core.node_identity().did())
-        .is_some());
-    (core, directory)
+        .unwrap();
+    let message = TranscriptMessage {
+        native_request_id: None,
+        message_key: gents_session::session::sequence_message_key(
+            node_did,
+            session_id,
+            Some(requester.as_str()),
+            sequence,
+        ),
+        session_id: session_id.into(),
+        node_did: node_did.into(),
+        requester_did: Some(requester.clone()),
+        request_doc_id: Some(request_doc_id),
+        publication: MessagePublication::RequestExecution {
+            execution_generation: generation,
+        },
+        outcome: OutputOutcome::Complete,
+        sequence,
+        role: MessageRole::Assistant,
+        native_id: None,
+        blocks: vec![MessageBlock::ToolCall {
+            tool_call_doc_id: row_doc_id.into(),
+            id: call.into(),
+            call_id: Some(call.into()),
+            name: "workflow".into(),
+            arguments: PayloadRef {
+                close_doc_id,
+                stream: 0,
+            },
+            signature: None,
+            additional_params: None,
+        }],
+        created_at: created_at.into(),
+    };
+    let variables = transcript_message_create_variables(&message).expect("message variables");
+    let response = access
+        .transact_write("test.fixture.job_admission_header", |txn| {
+            let variables = variables.clone();
+            Box::pin(async move {
+                txn.execute_with_variables(CREATE_AGENT_MESSAGE_MUTATION, &variables)
+                    .await
+            })
+        })
+        .await
+        .expect("seed admission header");
+    let header = gents_store::graphql::created_doc_id(&response, "AgentMessage").unwrap();
+    access
+        .add_resource_relationship("AgentMessage", &header, "parent", "sessions", &session_doc)
+        .await
+        .unwrap();
 }

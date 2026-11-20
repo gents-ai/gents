@@ -2,33 +2,31 @@
 mod agent;
 #[path = "live_fixture/backend.rs"]
 mod backend;
-#[path = "live_fixture/replication.rs"]
-mod replication;
+#[path = "live_fixture/connection.rs"]
+mod connection;
 #[path = "live_fixture/workspace.rs"]
 mod workspace;
 
-use std::net::{IpAddr, Ipv4Addr};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use gents::client_runtime::DesktopInitSummary;
 use gents::runtime::embedded::EmbeddedHome;
-use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths, PeerRecord};
-use gents_desktop_core::local_runtime::DesktopInitSummary;
+use gents_desktop_bridge::client_runtime::{ClientRuntime, ClientRuntimeOptions};
+use gents_protocol::runtime_connection::RuntimeConnection;
+use gents_store::client_journal::paths::DesktopPaths;
 use tokio::sync::Mutex;
 use tracing_subscriber::prelude::*;
 
-use gents_desktop_bridge::types::{DesktopBootstrapSummary, InitConfigStatus, SavedPeerView};
+use gents_desktop_bridge::types::{DesktopBootstrapSummary, InitConfigStatus, SavedRuntimeView};
 
 use self::agent::{spawn_live_node, RunningNode};
 use self::backend::LiveBackendConfig;
 pub(crate) use self::backend::LiveBackendOverride;
 pub(crate) use self::backend::LiveTargetBackendOverride;
-use self::replication::{
-    connect_runtime_peer, wait_for_connected_peer, wait_for_live_documents,
-    wait_for_ready_peer_status, wait_for_runtime_iroh_addr, write_peer_directory_records,
-};
+use self::connection::{wait_for_live_documents, wait_for_runtime_iroh_addr};
 use self::workspace::seed_runner_node_home;
 
 const DEFAULT_DEPLOYMENT_LABEL: &str = "Fleet E2E Agent";
@@ -38,14 +36,14 @@ pub(crate) struct LiveBridgeFixture {
     tempdir: Mutex<Option<tempfile::TempDir>>,
     desktop_paths: DesktopPaths,
     node_home: PathBuf,
-    desktop_core: Arc<ClientCore>,
-    remote_core: Arc<ClientCore>,
+    desktop_core: Arc<ClientRuntime>,
+    remote_core: Arc<ClientRuntime>,
     runtime_home: Option<EmbeddedHome>,
     deployment_label: String,
     node_did: String,
     tool_root: PathBuf,
     init_summary: DesktopInitSummary,
-    bootstrap_saved_peers: Vec<SavedPeerView>,
+    bootstrap_saved_runtimes: Vec<SavedRuntimeView>,
     update_version: Arc<AtomicU64>,
     update_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     running_node: Mutex<Option<RunningNode>>,
@@ -56,8 +54,8 @@ pub(crate) struct LiveBridgeFixture {
 
 /// Reads every node that has a connection, each through its own connection
 /// into its own store.
-pub(crate) async fn refresh_every_node(core: &ClientCore) -> Result<()> {
-    for record in core.peer_records().await {
+pub(crate) async fn refresh_every_node(core: &ClientRuntime) -> Result<()> {
+    for record in core.runtime_connections() {
         if core
             .operator_observation_graphql(&record.node_did)
             .is_some()
@@ -71,8 +69,8 @@ pub(crate) async fn refresh_every_node(core: &ClientCore) -> Result<()> {
 /// The first value `find` reports from any node's own store.
 #[cfg(test)]
 fn find_in_node_stores<T>(
-    core: &ClientCore,
-    mut find: impl FnMut(&gents_desktop_core::client::ClientStore) -> Option<T>,
+    core: &ClientRuntime,
+    mut find: impl FnMut(&gents_observe::client_projection::store::ClientStore) -> Option<T>,
 ) -> Option<T> {
     core.stores()
         .node_dids()
@@ -99,11 +97,11 @@ impl LiveBridgeFixture {
         self.init_summary.clone()
     }
 
-    pub(crate) fn desktop_core(&self) -> &Arc<ClientCore> {
+    pub(crate) fn desktop_core(&self) -> &Arc<ClientRuntime> {
         &self.desktop_core
     }
 
-    pub(crate) fn remote_core(&self) -> &Arc<ClientCore> {
+    pub(crate) fn remote_core(&self) -> &Arc<ClientRuntime> {
         &self.remote_core
     }
 
@@ -115,16 +113,8 @@ impl LiveBridgeFixture {
             .node)
     }
 
-    pub(crate) fn runtime_identity(&self) -> Result<&Arc<dyn gents_store::identity::NodeIdentity>> {
-        Ok(&self
-            .runtime_home
-            .as_ref()
-            .context("live runtime unavailable")?
-            .identity)
-    }
-
     pub(crate) fn runtime_p2p(&self) -> Result<Arc<dyn defra_p2p_adapter::P2POperations>> {
-        gents_store::identity::node_p2p(self.runtime_node()?.as_ref())
+        gents_p2p::node_access::operations(self.runtime_node()?.as_ref())
             .context("live runtime P2P unavailable")
     }
 
@@ -225,15 +215,15 @@ impl LiveBridgeFixture {
         let desktop_paths = DesktopPaths::from_root(tempdir.path().join("desktop"));
         desktop_paths.ensure_root_dirs().await?;
         let config_actor =
-            gents_desktop_core::client::PrincipalIdentity::load_or_create(&desktop_paths).await?;
+            gents_store::client_journal::principal_identity::PrincipalIdentity::load_or_create(
+                &desktop_paths,
+            )
+            .await?;
         let node_home = tempdir.path().join("agent-home");
 
-        let p2p_options = live_core_options();
         let p2p = Arc::new(move |path: &Path| gents::defra_node::P2PConfig {
             port: Some(0),
-            bind_addr: p2p_options.bind_addr,
-            relay_mode: p2p_options.relay_mode.clone(),
-            discovery: p2p_options.discovery.clone(),
+            bind_addr: Some(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
             secret_key_path: Some(path.join("node.iroh.key")),
             ..Default::default()
         });
@@ -243,7 +233,7 @@ impl LiveBridgeFixture {
             .context("runtime endpoint missing")?
             .to_owned();
         let remote_core = Arc::new(
-            ClientCore::start_with_paths_and_options(remote_paths, live_core_options()).await?,
+            ClientRuntime::start_with_paths_and_options(remote_paths, live_core_options()).await?,
         );
 
         let agent_root = tempdir.path().join("agent");
@@ -256,49 +246,28 @@ impl LiveBridgeFixture {
             agent_target_backend.as_ref(),
         )
         .await?;
-        let runtime_p2p = gents_store::identity::node_p2p(&runtime_home.node)
+        let runtime_p2p = gents_p2p::node_access::operations(&runtime_home.node)
             .context("runtime P2P unavailable")?;
         let remote_addr =
             wait_for_runtime_iroh_addr(&runtime_p2p, DEFAULT_DEPLOYMENT_LABEL).await?;
         let remote_peer_id = runtime_p2p.local_peer_id().await?;
-        let mut peer_record = PeerRecord::local_standard(
-            DEFAULT_DEPLOYMENT_LABEL,
-            &remote_addr,
-            &running_node.node_did,
-            &operator_graphql,
-        );
-        // Keep the durable route truthful while the normal supervisor is
-        // intentionally disabled for this manually managed topology.
-        peer_record.pairing_ready = true;
-        write_peer_directory_records(&desktop_paths, &[peer_record.clone()])?;
+        let connection = RuntimeConnection {
+            node_did: running_node.node_did.clone(),
+            label: DEFAULT_DEPLOYMENT_LABEL.to_owned(),
+            graphql: operator_graphql.clone(),
+            local_node_home: Some(node_home.display().to_string()),
+            access_request: None,
+            access_state: None,
+        };
 
         let desktop_core = Arc::new(
-            ClientCore::start_with_paths_and_options(desktop_paths.clone(), live_core_options())
+            ClientRuntime::start_with_paths_and_options(desktop_paths.clone(), live_core_options())
                 .await?,
         );
 
-        connect_runtime_peer(
-            desktop_core.as_ref(),
-            &runtime_p2p,
-            DEFAULT_DEPLOYMENT_LABEL,
-        )
-        .await?;
-        wait_for_connected_peer(desktop_core.as_ref(), &remote_peer_id, "desktop -> amy").await?;
-        desktop_core
-            .add_local_standard_peer_route_for_test(
-                &peer_record.label,
-                &peer_record.addr,
-                &peer_record.node_did,
-                peer_record.graphql.as_deref().unwrap_or_default(),
-                &node_home.display().to_string(),
-            )
-            .await?;
-        wait_for_ready_peer_status(
-            desktop_core.as_ref(),
-            &peer_record.peer_id,
-            "desktop -> amy",
-        )
-        .await?;
+        desktop_core.connect_runtime(connection.clone()).await?;
+        desktop_core.start_authored_delivery();
+        remote_core.start_authored_delivery();
         wait_for_live_documents(desktop_core.as_ref(), &running_node.node_did, &docs).await?;
 
         seed_runner_node_home(
@@ -313,29 +282,21 @@ impl LiveBridgeFixture {
 
         let init_summary = DesktopInitSummary {
             status: "initialized",
-            source: "bridge-runner",
             node_home: node_home.display().to_string(),
             desktop_home: desktop_paths.root().display().to_string(),
-            peer_directory: desktop_paths.peer_directory_path().display().to_string(),
+            runtime_directory: desktop_paths.runtime_directory_path().display().to_string(),
             label: DEFAULT_DEPLOYMENT_LABEL.to_string(),
             node_name: DEFAULT_NODE_NAME.to_string(),
             node_did: running_node.node_did.clone(),
-            graphql: String::new(),
-            p2p_transport: "iroh".to_string(),
-            p2p_peer_id: remote_peer_id.clone(),
-            p2p_listen_address: remote_addr.clone(),
-            peer_record_id: peer_record.peer_id.clone(),
+            graphql: operator_graphql.clone(),
             next_steps: vec![],
         };
 
-        let bootstrap_saved_peers = vec![SavedPeerView {
-            peer_id: peer_record.peer_id.clone(),
-            label: peer_record.label.clone(),
-            node_did: peer_record.node_did.clone(),
-            addr: peer_record.addr.clone(),
-            source: peer_record.source.clone(),
-            graphql: peer_record.graphql.clone(),
-            local: peer_record.is_managed_runtime(),
+        let bootstrap_saved_runtimes = vec![SavedRuntimeView {
+            label: connection.label,
+            node_did: connection.node_did,
+            graphql: Some(connection.graphql),
+            local: true,
         }];
 
         tracing::info!(
@@ -351,7 +312,7 @@ impl LiveBridgeFixture {
             let update_version = Arc::clone(&update_version);
             tokio::spawn(async move {
                 let mut store_updates = desktop_core.store_updates();
-                let mut sync_updates = desktop_core.sync_state_updates();
+                let mut sync_updates = desktop_core.runtime_connection_updates();
                 let mut remote_store_updates = remote_core.store_updates();
                 loop {
                     tokio::select! {
@@ -389,7 +350,7 @@ impl LiveBridgeFixture {
             node_did: running_node.node_did.clone(),
             tool_root,
             init_summary,
-            bootstrap_saved_peers,
+            bootstrap_saved_runtimes,
             update_version,
             update_task: Mutex::new(Some(update_task)),
             running_node: Mutex::new(Some(running_node)),
@@ -408,32 +369,24 @@ impl LiveBridgeFixture {
         std::fs::create_dir_all(&node_home)?;
 
         let remote_core = Arc::new(
-            ClientCore::start_with_paths_and_options(remote_paths, live_core_options()).await?,
+            ClientRuntime::start_with_paths_and_options(remote_paths, live_core_options()).await?,
         );
         let desktop_core = Arc::new(
-            ClientCore::start_with_paths_and_options(desktop_paths.clone(), live_core_options())
+            ClientRuntime::start_with_paths_and_options(desktop_paths.clone(), live_core_options())
                 .await?,
         );
-        let p2p_listen_address = desktop_core
-            .listen_addresses()
-            .first()
-            .cloned()
-            .unwrap_or_default();
+        desktop_core.start_authored_delivery();
+        remote_core.start_authored_delivery();
 
         let init_summary = DesktopInitSummary {
             status: "initialized",
-            source: "bridge-runner-desktop-only",
             node_home: node_home.display().to_string(),
             desktop_home: desktop_paths.root().display().to_string(),
-            peer_directory: desktop_paths.peer_directory_path().display().to_string(),
+            runtime_directory: desktop_paths.runtime_directory_path().display().to_string(),
             label: "Desktop Only".to_string(),
             node_name: String::new(),
             node_did: String::new(),
             graphql: String::new(),
-            p2p_transport: "iroh".to_string(),
-            p2p_peer_id: desktop_core.local_peer_id().to_string(),
-            p2p_listen_address,
-            peer_record_id: String::new(),
             next_steps: vec![],
         };
 
@@ -445,7 +398,7 @@ impl LiveBridgeFixture {
             let update_version = Arc::clone(&update_version);
             tokio::spawn(async move {
                 let mut store_updates = desktop_core.store_updates();
-                let mut sync_updates = desktop_core.sync_state_updates();
+                let mut sync_updates = desktop_core.runtime_connection_updates();
                 loop {
                     tokio::select! {
                         changed = store_updates.changed() => {
@@ -476,7 +429,7 @@ impl LiveBridgeFixture {
             node_did: String::new(),
             tool_root: PathBuf::new(),
             init_summary,
-            bootstrap_saved_peers: Vec::new(),
+            bootstrap_saved_runtimes: Vec::new(),
             update_version,
             update_task: Mutex::new(Some(update_task)),
             running_node: Mutex::new(None),
@@ -508,11 +461,11 @@ impl LiveBridgeFixture {
             local_setup_unfinished: gents_desktop_core::home_reset::local_setup_unfinished(
                 &self.node_home,
                 non_empty_clone(&self.init_summary.node_did).as_deref(),
-                self.bootstrap_saved_peers
+                self.bootstrap_saved_runtimes
                     .iter()
                     .map(|peer| peer.node_did.as_str()),
             ),
-            saved_peers: self.bootstrap_saved_peers.clone(),
+            saved_runtimes: self.bootstrap_saved_runtimes.clone(),
         }
     }
 }
@@ -546,14 +499,11 @@ where
     Ok(runtime.block_on(start(handle)))
 }
 
-fn live_core_options() -> ClientCoreOptions {
-    let mut options = ClientCoreOptions::local_only();
-    options.bind_addr = Some(IpAddr::V4(Ipv4Addr::LOCALHOST));
-    options.max_concurrent_push_tasks = 32;
-    options.rate_limit_burst = 5_000;
-    options.rate_limit_rate = 500.0;
-    options.install_replicators_on_bootstrap = false;
-    options
+fn live_core_options() -> ClientRuntimeOptions {
+    ClientRuntimeOptions {
+        store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+        ..Default::default()
+    }
 }
 
 fn init_live_runner_tracing() {
@@ -589,7 +539,7 @@ mod tests {
     use axum::response::{IntoResponse, Response};
     use axum::routing::{get, post};
     use axum::Router;
-    use gents_desktop_core::client::ClientCore;
+    use gents_desktop_bridge::client_runtime::ClientRuntime;
     use gents_protocol::row::{decode_node_readiness_snapshot, AgentRequestRow};
     use serde_json::Value;
     use tokio::sync::oneshot;
@@ -778,16 +728,17 @@ mod tests {
         )
         .await?;
         let access = fixture.desktop_core().operator_access(&node_did)?;
-        let transcript_page = gents_desktop_core::client::load_session_transcript_page_on(
-            &access,
-            &submitted.session_id,
-            Some(&node_did),
-            Some(&requester_scope),
-            None,
-            None,
-        )
-        .await?;
-        let context_store = gents_desktop_core::client::load_session_context_store_on(
+        let transcript_page =
+            gents_observe::client_projection::query::load_session_transcript_page_on(
+                &access,
+                &submitted.session_id,
+                Some(&node_did),
+                Some(&requester_scope),
+                None,
+                None,
+            )
+            .await?;
+        let context_store = gents_observe::client_projection::query::load_session_context_store_on(
             &access,
             &submitted.session_id,
             Some(&node_did),
@@ -956,7 +907,7 @@ mod tests {
     }
 
     async fn wait_for_remote_context_skill_ids(
-        core: &ClientCore,
+        core: &ClientRuntime,
         agent_did: &str,
         expected_skill_ids: &[&str],
     ) -> Result<()> {
@@ -996,7 +947,7 @@ mod tests {
         }
     }
 
-    async fn wait_for_remote_skill(core: &ClientCore, skill_id: &str) -> Result<()> {
+    async fn wait_for_remote_skill(core: &ClientRuntime, skill_id: &str) -> Result<()> {
         wait_for_condition("remote Skill create", Duration::from_secs(60), || async {
             refresh_every_node(core).await?;
             Ok(find_in_node_stores(core, |store| {
@@ -1011,7 +962,7 @@ mod tests {
         .await
     }
 
-    async fn wait_for_remote_skill_absent(core: &ClientCore, skill_id: &str) -> Result<()> {
+    async fn wait_for_remote_skill_absent(core: &ClientRuntime, skill_id: &str) -> Result<()> {
         wait_for_condition("remote Skill delete", Duration::from_secs(60), || async {
             refresh_every_node(core).await?;
             Ok(find_in_node_stores(core, |store| {
@@ -1027,7 +978,7 @@ mod tests {
     }
 
     async fn wait_for_remote_request(
-        core: &ClientCore,
+        core: &ClientRuntime,
         request_id: &str,
     ) -> Result<AgentRequestRow> {
         wait_for_row("remote AgentRequest", Duration::from_secs(60), || async {
@@ -1051,7 +1002,7 @@ mod tests {
     }
 
     async fn query_runtime_observation(
-        core: &ClientCore,
+        core: &ClientRuntime,
         node_did: &str,
     ) -> Result<Option<RemoteRuntimeObservation>> {
         core.refresh_node(node_did).await?;
@@ -1072,7 +1023,10 @@ mod tests {
         }))
     }
 
-    async fn wait_for_remote_runtime_generation(core: &ClientCore, node_did: &str) -> Result<u64> {
+    async fn wait_for_remote_runtime_generation(
+        core: &ClientRuntime,
+        node_did: &str,
+    ) -> Result<u64> {
         wait_for_row(
             "remote authoritative runtime generation",
             Duration::from_secs(60),
@@ -1083,7 +1037,7 @@ mod tests {
     }
 
     async fn wait_for_remote_runtime_generation_after(
-        core: &ClientCore,
+        core: &ClientRuntime,
         node_did: &str,
         previous_generation: u64,
     ) -> Result<()> {

@@ -1,0 +1,3 @@
+---- MODULE MCAuthoredOutboxDeliveryLostJournal ----
+EXTENDS AuthoredOutboxDelivery
+====

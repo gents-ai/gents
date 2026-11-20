@@ -67,20 +67,11 @@ fn resolve_backend_endpoint(
     normalize_optional_string(explicit)
         .or_else(|| preset.and_then(|candidate| candidate.default_endpoint().map(str::to_string)))
         .or_else(|| {
-            (mode == BackendResolutionMode::Init)
-                .then(|| std::env::var("INFERENCE_ENDPOINT").ok())
-                .flatten()
-                .and_then(|value| {
-                    let trimmed = value.trim();
-                    (!trimmed.is_empty()).then(|| trimmed.to_string())
-                })
-        })
-        .or_else(|| {
             (mode == BackendResolutionMode::Init).then(|| DEFAULT_INIT_ENDPOINT.to_string())
         })
         .ok_or_else(|| match mode {
             BackendResolutionMode::Init => anyhow::anyhow!(
-                "an inference endpoint is required\nNext:\n  1. Pass it explicitly: `gents init --inference-url http://HOST:PORT/v1 --model-name MODEL`\n  2. Or choose a preset with a default endpoint: `gents init --backend-preset openrouter --model-name MODEL`\n  3. Or set INFERENCE_ENDPOINT before running `gents init`"
+                "an inference endpoint is required\nNext:\n  1. Pass it explicitly: `gents init --inference-url http://HOST:PORT/v1 --model-name MODEL`\n  2. Or choose a preset with a default endpoint: `gents init --backend-preset openrouter --model-name MODEL`"
             ),
             BackendResolutionMode::ConfigWrite => anyhow::anyhow!(
                 "an inference endpoint is required\nNext:\n  1. Pass --inference-url explicitly\n  2. Or choose a preset with a default endpoint, such as --backend-preset openrouter"

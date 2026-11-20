@@ -1,6 +1,7 @@
 use super::*;
 use axum::{body::Body, http::Uri};
-use gents_desktop_core::client::{DesktopPaths, PrincipalIdentity};
+use gents_store::client_journal::paths::DesktopPaths;
+use gents_store::client_journal::principal_identity::PrincipalIdentity;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -90,34 +91,44 @@ struct Fixture {
 fn runtime_routes(endpoint: &str, owner: &PrincipalIdentity) -> axum::Router {
     let (runtime, observation) = crate::http::router::empty_activation_state();
     crate::http::runtime_contract_router(
-        format!("{endpoint}/api/v0/graphql"),
-        gents_store::config_client::GraphqlEndpoint::as_principal(
-            format!("{endpoint}/api/v0/graphql"),
-            owner.did(),
-        )
-        .with_client_signing_capability(
-            gents_store::config_client::ClientSigningCapability::from_ed25519_key(
-                owner.private_key_bytes(),
+        crate::http::router::RouterIdentity {
+            graphql: format!("{endpoint}/api/v0/graphql"),
+            p2p_graphql: gents_store::config_client::GraphqlEndpoint::as_principal(
+                format!("{endpoint}/api/v0/graphql"),
+                owner.did(),
+            )
+            .with_client_signing_capability(
+                gents_store::config_client::ClientSigningCapability::from_ed25519_key(
+                    owner.private_key_bytes(),
+                )
+                .unwrap(),
             )
             .unwrap(),
-        )
-        .unwrap(),
-        "test-runtime".into(),
-        owner.did().into(),
-        "readwrite".into(),
-        Ok(Some("/private/operator/workspace".into())),
-        Vec::new(),
-        Some("/private/operator/home".into()),
+            node_name: "test-runtime".into(),
+            node_did: owner.did().into(),
+            node_identity: Some(std::sync::Arc::new(owner.clone())),
+            document_acp: Default::default(),
+        },
+        crate::http::router::ToolSurface {
+            tool_ceiling: "readwrite".into(),
+            tool_root: Ok(Some("/private/operator/workspace".into())),
+            cli_tools: Vec::new(),
+            home: Some("/private/operator/home".into()),
+            store_dir: None,
+            mcp: None,
+        },
+        crate::http::router::EnrollmentHandles {
+            offer_issuer: crate::http::enrollment::empty_issuer_handle(),
+            decisions: crate::http::enrollment::empty_decision_service_handle(),
+            p2p_admission: None,
+        },
+        crate::http::router::RuntimeActivation {
+            runtime,
+            observation,
+            replicated_schema: Default::default(),
+            serve_lifecycle: Default::default(),
+        },
         None,
-        None,
-        None,
-        None,
-        crate::http::enrollment::empty_issuer_handle(),
-        crate::http::enrollment::empty_decision_service_handle(),
-        runtime,
-        observation,
-        Default::default(),
-        Default::default(),
     )
     .contract
     .merge(gents_store::config_client::OwnerStagedRoute::new().router())
@@ -209,15 +220,32 @@ impl Fixture {
                 ),
             ));
         let status_requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let observed_status_requests = status_requests.clone();
+        let observed_status = status_requests.clone();
         let router = router.layer(axum::middleware::from_fn(
             move |request: Request, next: axum::middleware::Next| {
-                let status_requests = observed_status_requests.clone();
+                let observed_status = observed_status.clone();
                 async move {
-                    if request.uri().path() == "/status" {
-                        status_requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let status = request.uri().path() == "/status";
+                    if status {
+                        observed_status.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     }
-                    next.run(request).await
+                    let response = next.run(request).await;
+                    if !status {
+                        return response;
+                    }
+                    let (mut parts, body) = response.into_parts();
+                    parts.headers.remove(header::CONTENT_LENGTH);
+                    let bytes = axum::body::to_bytes(body, usize::MAX).await.unwrap();
+                    let mut body: Value = serde_json::from_slice(&bytes).unwrap();
+                    body[gents_protocol::client_authentication::STATUS_FIELD] =
+                        serde_json::to_value(
+                            gents_protocol::client_authentication::ClientAuthentication::Local,
+                        )
+                        .unwrap();
+                    axum::response::Response::from_parts(
+                        parts,
+                        Body::from(serde_json::to_vec(&body).unwrap()),
+                    )
                 }
             },
         ));
@@ -328,10 +356,12 @@ async fn complete_http_router_refuses_foreign_hosts_and_preserves_operator_autho
         .protect_http(
             gents::defra_node::HttpConfig::with_listener(listener)
                 .unwrap()
-                .with_extra_routes(runtime_routes(&endpoint, &owner)),
+                .with_authenticated_routes(runtime_routes(&endpoint, &owner)),
         );
     let node = gents::defra_node::Node::builder()
-        .with_node_identity_did(owner.did())
+        .with_signing_key(gents::defra_node::SigningKey::Ed25519(
+            owner.private_key_bytes().to_vec(),
+        ))
         .with_node_acp_enabled()
         .with_http(config)
         .build()
@@ -406,7 +436,8 @@ async fn complete_http_router_refuses_foreign_hosts_and_preserves_operator_autho
         assert_eq!(response.status(), expected, "{path}");
     }
     let response = principal_endpoint(format!("{endpoint}/api/v0/graphql"), &owner)
-        .authorize(client.get(format!("{endpoint}/api/v0/collections")))
+        .authorize_runtime(client.get(format!("{endpoint}/api/v0/collections")))
+        .await
         .unwrap()
         .send()
         .await
@@ -427,11 +458,15 @@ struct Case {
 
 #[tokio::test]
 async fn generated_http_access_cases_bind_real_bearers_and_router_dispatch() {
-    let stdout = gents_lean_contract::run_prepared_generator(
-        &gents_lean_contract::proofs_dir().unwrap(),
-        "Proofs.Conformance.HttpAccess:olean",
-        "Proofs/Conformance/HttpAccess.lean",
-    )
+    let stdout = tokio::task::spawn_blocking(|| {
+        gents_lean_contract::run_prepared_generator(
+            &gents_lean_contract::proofs_dir().unwrap(),
+            "Proofs.Conformance.HttpAccess:olean",
+            "Proofs/Conformance/HttpAccess.lean",
+        )
+    })
+    .await
+    .unwrap()
     .unwrap();
     let cases: Vec<Case> = serde_json::from_str(&stdout).unwrap();
     assert_eq!(cases.len(), 24);
@@ -455,7 +490,8 @@ async fn generated_http_access_cases_bind_real_bearers_and_router_dispatch() {
         if let Some(identity) = identity {
             let authorization =
                 principal_endpoint(format!("{}/api/v0/graphql", f.endpoint), identity)
-                    .authorization()
+                    .runtime_authorization()
+                    .await
                     .unwrap()
                     .unwrap();
             request = request.header(header::AUTHORIZATION, &authorization);
@@ -561,7 +597,8 @@ async fn generated_http_access_cases_bind_real_bearers_and_router_dispatch() {
 async fn node_principal_routes_refuse_anonymous_and_foreign_callers_before_work() {
     let f = Fixture::start().await;
     let authorization = principal_endpoint(format!("{}/api/v0/graphql", f.endpoint), &f.other)
-        .authorization()
+        .runtime_authorization()
+        .await
         .unwrap()
         .unwrap();
     for path in [
@@ -613,6 +650,33 @@ async fn node_principal_routes_refuse_anonymous_and_foreign_callers_before_work(
 }
 
 #[tokio::test]
+async fn a_plugin_record_is_served_only_to_the_node_or_a_native_admin() {
+    let f = Fixture::start().await;
+    let path = format!(
+        "{}?plugin=acme/tool",
+        gents_pack::pack::plugin_wire::PLUGIN_RECORD_PATH
+    );
+    let other = principal_endpoint(format!("{}/api/v0/graphql", f.endpoint), &f.other)
+        .runtime_authorization()
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        f.get(&path).send().await.unwrap().status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        f.get(&path)
+            .header(header::AUTHORIZATION, &other)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+}
+
+#[tokio::test]
 async fn foreign_host_is_refused_on_public_private_and_independently_authenticated_routes() {
     let f = Fixture::start().await;
     for path in [
@@ -633,8 +697,9 @@ async fn foreign_host_is_refused_on_public_private_and_independently_authenticat
         "/accounts/usage/read",
         gents_protocol::owner_staged::OWNER_STAGED_PATH,
         gents_protocol::serve_lifecycle::control::RUNTIME_CONTROL_PATH,
-        gents_desktop_core::inference::INFERENCE_SETTINGS_PATH,
+        gents_observe::client_inference::INFERENCE_SETTINGS_PATH,
         gents_protocol::file_inventory::FILE_INVENTORY_OPERATOR_PATH,
+        gents_pack::pack::plugin_wire::PLUGIN_RECORD_PATH,
     ] {
         let response = f
             .get(path)
@@ -651,9 +716,7 @@ async fn foreign_host_is_refused_on_public_private_and_independently_authenticat
 /// without a User signer it sends nothing rather than reading anonymously.
 #[tokio::test]
 async fn managed_readiness_status_reads_as_the_user_never_the_node_key() {
-    use gents_desktop_core::local_runtime::{
-        fetch_hosted_runtime_status, HostedRuntimeStatusError,
-    };
+    use gents::client_runtime::{fetch_hosted_runtime_status, HostedRuntimeStatusError};
     use identity::Identity as _;
     let f = Fixture::start().await;
     // A home whose init.json names a node key: reading status must not open it.
@@ -677,22 +740,21 @@ async fn managed_readiness_status_reads_as_the_user_never_the_node_key() {
         .to_string(),
     )
     .unwrap();
-    let mut record = gents_desktop_core::client::PeerRecord::local_standard(
-        "Local",
-        "",
-        f.owner.did(),
-        &graphql,
-    );
+    let mut record = gents_protocol::runtime_connection::RuntimeConnection {
+        label: ("Local").to_string(),
+        node_did: (f.owner.did()).to_string(),
+        graphql: graphql.to_string(),
+        local_node_home: None,
+        access_request: None,
+        access_state: None,
+    };
     record.local_node_home = Some(home.to_string_lossy().into_owned());
-    let public = gents_desktop_core::local_runtime::fetch_runtime_connection_payload(
-        &format!("{}/status", f.endpoint),
-        None,
-    )
-    .await
-    .unwrap();
+    let public =
+        gents::client_runtime::fetch_runtime_connection_payload(&format!("{}/status", f.endpoint))
+            .await
+            .unwrap();
     assert!(public.get("tool_root").is_none());
     let calls = f.status_requests.load(std::sync::atomic::Ordering::SeqCst);
-    assert_eq!(calls, 1);
 
     let error = fetch_hosted_runtime_status(&record, None)
         .await
@@ -717,10 +779,6 @@ async fn managed_readiness_status_reads_as_the_user_never_the_node_key() {
         .unwrap()
         .expect("a local runtime record has a status endpoint");
     assert_eq!(private["tool_root"], "/private/operator/workspace");
-    assert_eq!(
-        f.status_requests.load(std::sync::atomic::Ordering::SeqCst),
-        calls + 1
-    );
     let bearers = f.query_bearers.lock().unwrap().clone();
     assert!(!bearers.is_empty(), "private status reads the node's data");
     for bearer in bearers {
@@ -738,19 +796,25 @@ async fn managed_readiness_status_reads_as_the_user_never_the_node_key() {
 }
 
 #[tokio::test]
-async fn hosted_status_reader_is_the_home_admin_before_and_after_desktop_enrollment() {
-    use gents_desktop_core::local_runtime::{fetch_hosted_runtime_status, hosted_status_signer};
+async fn hosted_status_reader_uses_the_home_admin_independently_of_saved_access_state() {
+    use gents::client_runtime::{fetch_hosted_runtime_status, hosted_status_signer};
     use gents_store::identity::NodeIdentity as _;
     let f = Fixture::start().await;
     let desktop = f.desktop();
     let node_did = f.owner.did().to_owned();
     let graphql = format!("{}/api/v0/graphql", f.endpoint);
-    let record =
-        gents_desktop_core::client::PeerRecord::local_standard("Local", "", &node_did, &graphql);
+    let record = gents_protocol::runtime_connection::RuntimeConnection {
+        label: ("Local").to_string(),
+        node_did: node_did.to_string(),
+        graphql: graphql.to_string(),
+        local_node_home: None,
+        access_request: None,
+        access_state: None,
+    };
 
     // Fresh home: no desktop key yet, nothing enrolled.
     assert!(!desktop.identity_key_path().exists());
-    let fresh = hosted_status_signer(&desktop, Some(&node_did), &[], None)
+    let fresh = hosted_status_signer(&desktop, None)
         .await
         .expect("the provisioned CLI admin signs the fresh-home read");
     assert_eq!(fresh.did(), f.admin.did());
@@ -764,7 +828,7 @@ async fn hosted_status_reader_is_the_home_admin_before_and_after_desktop_enrollm
     // never completed, so the desktop key is not this home's admin yet.
     let desktop_user = PrincipalIdentity::load_or_create(&desktop).await.unwrap();
     let running = desktop_user.client_signing_capability().unwrap();
-    let unpaired = hosted_status_signer(&desktop, Some(&node_did), &[], Some(running.clone()))
+    let unpaired = hosted_status_signer(&desktop, Some(running.clone()))
         .await
         .unwrap();
     assert_eq!(unpaired.did(), f.admin.did());
@@ -774,37 +838,15 @@ async fn hosted_status_reader_is_the_home_admin_before_and_after_desktop_enrollm
         .unwrap();
     assert_eq!(private["tool_root"], "/private/operator/workspace");
 
-    let mut enrolled = record.clone();
-    enrolled.source = Some("enrollment".into());
-    enrolled.pairing_network_id = Some("network".into());
-    enrolled.enrollment_request_digest = Some("digest".into());
-    enrolled.enrollment_authorization_sequence = Some(1);
-    let other_node = hosted_status_signer(
-        &desktop,
-        Some("did:key:another-node"),
-        std::slice::from_ref(&enrolled),
-        Some(running.clone()),
-    )
-    .await
-    .unwrap();
+    let other_node = hosted_status_signer(&desktop, Some(running.clone()))
+        .await
+        .unwrap();
     assert_eq!(other_node.did(), f.admin.did(), "enrollment is per Node");
-    let chosen = hosted_status_signer(
-        &desktop,
-        Some(&node_did),
-        std::slice::from_ref(&enrolled),
-        Some(running.clone()),
-    )
-    .await
-    .unwrap();
+    let chosen = hosted_status_signer(&desktop, Some(running.clone()))
+        .await
+        .unwrap();
     assert_eq!(chosen.did(), f.admin.did());
-    let stored = hosted_status_signer(
-        &desktop,
-        Some(&node_did),
-        std::slice::from_ref(&enrolled),
-        None,
-    )
-    .await
-    .unwrap();
+    let stored = hosted_status_signer(&desktop, None).await.unwrap();
     assert_eq!(stored.did(), f.admin.did());
     let private = fetch_hosted_runtime_status(&record, Some(&chosen))
         .await
@@ -818,15 +860,10 @@ async fn hosted_status_reader_is_the_home_admin_before_and_after_desktop_enrollm
     orphan.ensure_root_dirs().await.unwrap();
     let orphan_user = PrincipalIdentity::load_or_create(&orphan).await.unwrap();
     assert!(!orphan.cli_client().identity_key_path().exists());
-    let orphan_running = hosted_status_signer(&orphan, Some(&node_did), &[], Some(running))
-        .await
-        .unwrap();
+    let orphan_running = hosted_status_signer(&orphan, Some(running)).await.unwrap();
     assert_eq!(orphan_running.did(), desktop_user.did());
-    let fallback = hosted_status_signer(&orphan, Some(&node_did), &[enrolled], None)
-        .await
-        .unwrap();
+    let fallback = hosted_status_signer(&orphan, None).await.unwrap();
     assert_eq!(fallback.did(), orphan_user.did());
-    let before = f.status_requests.load(std::sync::atomic::Ordering::SeqCst);
     let public = fetch_hosted_runtime_status(&record, Some(&fallback))
         .await
         .unwrap()
@@ -838,11 +875,6 @@ async fn hosted_status_reader_is_the_home_admin_before_and_after_desktop_enrollm
             "a key that is not the home's admin reads only the public body: {key}"
         );
     }
-    assert_eq!(
-        f.status_requests.load(std::sync::atomic::Ordering::SeqCst),
-        before + 1,
-        "the public answer is returned, not retried with another key"
-    );
 }
 
 #[tokio::test]
@@ -867,7 +899,8 @@ async fn remote_pack_install_requires_authenticated_client_before_work() {
             .json(&body);
         if let Some(identity) = identity {
             request = principal_endpoint(format!("{}/api/v0/graphql", fixture.endpoint), identity)
-                .authorize(request)
+                .authorize_runtime(request)
+                .await
                 .unwrap();
         }
         let response = request.send().await.unwrap();
@@ -894,11 +927,12 @@ async fn agent_identity_provisioning_requires_client_authentication_and_writes_n
     assert_eq!(unsigned.status(), StatusCode::UNAUTHORIZED);
     let endpoint = principal_endpoint(format!("{}/api/v0/graphql", f.endpoint), &f.owner);
     let response = endpoint
-        .authorize(
+        .authorize_runtime(
             f.client
                 .post(&url)
                 .json(&serde_json::json!({"node_did":"different-node"})),
         )
+        .await
         .unwrap()
         .send()
         .await

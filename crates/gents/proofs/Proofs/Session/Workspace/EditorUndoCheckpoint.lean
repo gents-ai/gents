@@ -2,6 +2,9 @@ import Proofs.Session.Workspace.EditorUndo
 
 namespace Workspace.EditorUndo.Checkpoint
 
+/-- The one envelope version the durable owner writes and reads back. -/
+def currentVersion : Nat := 1
+
 /-- One workspace-private journal, selected by the editor host rather than a
 webview or recorded source path. Decoding `present` requires a bounded, exact
 refs-only envelope; malformed, truncated or unreadable data is never absence. -/
@@ -141,7 +144,7 @@ private def read (world : World) (holder : Holder) (legacy : LegacyObservation) 
   else match world.stored with
   | .absent => keep world {holder with loaded := true, ledger := []} .loaded
   | .present version ledger =>
-    if version == 1 && ledgerValid ledger && !unresolved ledger then
+    if version == currentVersion && ledgerValid ledger && !unresolved ledger then
       keep world {holder with loaded := true, ledger} .loaded
     else refuse world holder
   | .corrupt | .unavailable => refuse world holder
@@ -175,7 +178,7 @@ private def finishWrite (world : World) (holder : Holder) (receipt : Receipt) : 
       | none => true
       | some value => value.candidate == some proposal
     let detached := world.detached.any (fun value => value.holder.caller == holder.caller)
-    let stored := if receipt.installed && allowed && !detached then Stored.present 1 proposal.ledger else world.stored
+    let stored := if receipt.installed && allowed && !detached then Stored.present currentVersion proposal.ledger else world.stored
     let next := {world with stored}
     if allowed && receipt.installed && receipt.durable && receipt.acknowledged then
       let grant := if holder.cancelled then Effect.none else proposal.effect
@@ -229,13 +232,13 @@ def step (world : World) (input : Input) : World × Output :=
       else
         let candidate := if candidateInstalled then holder.pending else none
         let stored := match candidate with
-          | some proposal => Stored.present 1 proposal.ledger
+          | some proposal => Stored.present currentVersion proposal.ledger
           | none => world.stored
         ({world with stored, holder := none, detached := world.detached ++ [⟨holder, candidate⟩]}, .guardLost)
   | .helperLost caller candidateInstalled => owned world caller fun holder =>
     let alreadyDetached := world.detached.any (fun value => value.holder.caller == caller)
     let stored := match holder.pending with
-      | some proposal => if candidateInstalled && !alreadyDetached then Stored.present 1 proposal.ledger else world.stored
+      | some proposal => if candidateInstalled && !alreadyDetached then Stored.present currentVersion proposal.ledger else world.stored
       | none => world.stored
     let orphans := if holder.running == .none then world.orphans
       else world.orphans ++ [(caller, holder.running)]
@@ -299,7 +302,7 @@ theorem withdrawal_cannot_rewrite_journal (world : World) (caller : Nat) :
 
 theorem unresolved_journal_refuses_new_connection (ledger : Ledger) (caller : Nat)
     (orphans : List (Nat × Effect)) (blocked : unresolved ledger = true) :
-    (step ⟨.present 1 ledger, some {caller}, orphans, []⟩ (.load caller .empty)).2 = .refused := by
+    (step ⟨.present currentVersion ledger, some {caller}, orphans, []⟩ (.load caller .empty)).2 = .refused := by
   simp [step, owned, Option.filter, read, blocked, refuse, keep]
 
 end Workspace.EditorUndo.Checkpoint

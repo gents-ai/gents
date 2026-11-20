@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-runtime-access-request"
+description = "Enables the desktop_runtime_access_request command without any pre-configured scope."
+commands.allow = ["desktop_runtime_access_request"]
+
+[[permission]]
+identifier = "deny-desktop-runtime-access-request"
+description = "Denies the desktop_runtime_access_request command without any pre-configured scope."
+commands.deny = ["desktop_runtime_access_request"]

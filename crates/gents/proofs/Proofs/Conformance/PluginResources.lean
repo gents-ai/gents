@@ -35,7 +35,7 @@ structure LimitBudgetInput where
 
 @[conformance_family]
 def limitBudget : Family LimitBudgetInput Nat where
-  inputs := [(64, 4096), (5, 900), (60, 900), (1, 4)].flatMap fun (baseline, ceiling) =>
+  inputs := [(64, 4096), (5, 900), (60, 900), (1, 4), (64, 256)].flatMap fun (baseline, ceiling) =>
     [0, 1, baseline, ceiling, ceiling + 1, 4294967295].map fun requested =>
       { baseline, requested, ceiling }
   model := fun i => effectivePluginResource i.baseline i.requested i.ceiling

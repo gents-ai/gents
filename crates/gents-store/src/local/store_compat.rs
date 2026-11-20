@@ -185,7 +185,8 @@ pub(crate) async fn check_copy(
         .map_err(io(&std::env::temp_dir()))?;
     let copied = copy.path().join("data");
     let (from, to) = (data.clone(), copied.clone());
-    tokio::task::spawn_blocking(move || copy_tree(&from, &to))
+    let skipped = crate::local::document_acp::vera_dir(&data);
+    tokio::task::spawn_blocking(move || copy_tree(&from, &to, &skipped))
         .await
         .map_err(|source| StoreCompatibilityError::Check {
             path: data.clone(),
@@ -196,10 +197,14 @@ pub(crate) async fn check_copy(
         path: data.clone(),
         source: Box::new(source),
     };
-    let node = crate::local::store_key::persistent_builder(&copied, key)?
-        .build()
-        .await
-        .map_err(opened)?;
+    let node = crate::local::store_key::persistent_builder(
+        &copied,
+        key,
+        crate::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+    )?
+    .build()
+    .await
+    .map_err(opened)?;
     let verdict = match crate::local::backend_protection::validate_policy_binding(&node).await {
         Err(BackendProtectionError::InvalidBinding) => {
             Ok(Some(IncompatibleStoreKind::OtherVersionSchema))
@@ -264,14 +269,19 @@ fn insecure_key_file(home: &Path) -> Result<Option<PathBuf>, StoreCompatibilityE
     }
 }
 
-fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
+/// `skipped` is the embedded Vera node's directory: the copy is opened to
+/// read collection bindings and schema only, which never reach it.
+fn copy_tree(from: &Path, to: &Path, skipped: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(to)?;
     for entry in std::fs::read_dir(from)? {
         let entry = entry?;
+        if entry.path() == skipped {
+            continue;
+        }
         let kind = entry.file_type()?;
         let target = to.join(entry.file_name());
         if kind.is_dir() {
-            copy_tree(&entry.path(), &target)?;
+            copy_tree(&entry.path(), &target, skipped)?;
         } else if kind.is_file() {
             std::fs::copy(entry.path(), &target)?;
         }

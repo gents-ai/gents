@@ -5,7 +5,7 @@ use super::core_start::{
     deliver_client_start, start_client_core_async, ClientStartDelivery, NO_STAGE_COMPLETED,
 };
 use super::exclusion::shutdown_excluded_client;
-use gents_desktop_core::client::ClientCore;
+use crate::client_runtime::ClientRuntime;
 
 use super::*;
 use crate::state::ClientStartProgress;
@@ -154,16 +154,16 @@ async fn cancelled_exclusion_waiter_observations() -> Vec<(bool, bool)> {
     let state = Arc::new(state);
     let paths = state.policy.desktop_paths.clone();
     let core = Arc::new(
-        ClientCore::start_with_paths_and_options(
+        ClientRuntime::start_with_paths_and_options(
             paths.clone(),
-            gents_desktop_core::client::ClientCoreOptions::local_only(),
+            crate::client_test_support::file_journal_options(),
         )
         .await
         .expect("start claimed desktop client"),
     );
     let home = paths.root().to_path_buf();
     let data = paths.node_data_dir().to_path_buf();
-    let released = core.store_release().expect("a claimed client");
+    let released = core.store_release();
     let lifecycle_guard = Arc::clone(&state.client_lifecycle).lock_owned().await;
     let started = Arc::new(tokio::sync::Notify::new());
     let allow_shutdown = Arc::new(tokio::sync::Notify::new());
@@ -297,7 +297,7 @@ async fn a_client_start_cannot_open_the_store_while_a_reset_excludes_it() {
 async fn an_insecure_old_client_key_fails_start_as_an_incompatible_local_store() {
     use std::os::unix::fs::PermissionsExt;
     let temp = tempfile::tempdir().expect("tempdir");
-    let paths = gents_desktop_core::client::DesktopPaths::from_root(temp.path());
+    let paths = gents_store::client_journal::paths::DesktopPaths::from_root(temp.path());
     gents_store::identity::load_or_create_file_identity(paths.identity_key_path()).unwrap();
     std::fs::set_permissions(
         paths.identity_key_path(),
@@ -331,7 +331,7 @@ async fn an_insecure_old_client_key_fails_start_as_an_incompatible_local_store()
             & 0o777,
         0o644
     );
-    assert!(!paths.peer_directory_path().exists());
+    assert!(!paths.runtime_directory_path().exists());
 }
 
 #[tokio::test]
@@ -350,7 +350,7 @@ async fn a_remote_only_start_sets_aside_another_versions_client_store() {
     )
     .unwrap();
     let paths = policy.desktop_paths.clone();
-    gents_desktop_core::test_fixtures::write_other_version_client_store(&paths, true, false).await;
+    gents::client_test_support::write_other_version_client_store(&paths, true, false).await;
     let identity = std::fs::read(paths.identity_key_path()).unwrap();
     let app = tauri::test::mock_builder()
         .manage(DesktopAppState::new(policy))

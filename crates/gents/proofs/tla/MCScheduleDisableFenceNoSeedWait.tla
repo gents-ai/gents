@@ -1,0 +1,4 @@
+---- MODULE MCScheduleDisableFenceNoSeedWait ----
+EXTENDS ScheduleDisableFence
+
+====

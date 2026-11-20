@@ -14,6 +14,7 @@ export type GoalDraft = {
   sessionId: string;
   selectedSessionId: string | null;
   queued: boolean;
+  locallyRetained?: true;
   commandJson: string;
   receipt?: GoalSubmissionReceipt;
   result?: GoalControlResult;
@@ -51,6 +52,7 @@ function decode(value: unknown): GoalDraft {
     sessionId: value.sessionId,
     selectedSessionId: value.selectedSessionId,
     queued: value.queued === true,
+    ...(value.locallyRetained === true ? { locallyRetained: true as const } : {}),
     commandJson: value.commandJson,
   };
   if (value.receipt !== undefined && !object(value.receipt))

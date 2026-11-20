@@ -164,124 +164,175 @@ async fn restart_obligations(
     (messages, wakes)
 }
 
+/// Restarts a running native row through the canonical recovery owner and
+/// reads its recovery back; a replay must change nothing.
+#[cfg(unix)]
+async fn observe_native_restart(
+    name: &str,
+    await_mode: &str,
+    deadline_expired: bool,
+    parent_observation: &str,
+    process_outcome: &str,
+) -> RestartObservation {
+    let admission = published_admission(PublishedAdmissionOptions {
+        name: format!("restart-{name}"),
+        real_identity: true,
+        await_mode: AwaitMode::from_persisted(await_mode).expect("modeled await mode"),
+        start_running: true,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let tool_doc = admission.tool.doc_id().unwrap().to_owned();
+    let request_doc = admission.tool.request_doc_id().unwrap().to_owned();
+    if deadline_expired {
+        update(
+            &admission,
+            "AgentToolCall",
+            &tool_doc,
+            r#"deadline_at: "2020-01-01T00:00:00Z""#,
+        )
+        .await;
+    }
+    match parent_observation {
+        "live" => {}
+        "interrupted" => {
+            update(
+                &admission,
+                "AgentRequest",
+                &request_doc,
+                r#"lifecycle_state: "interrupted""#,
+            )
+            .await;
+        }
+        "otherTerminal" => {
+            update(
+                &admission,
+                "AgentRequest",
+                &request_doc,
+                r#"lifecycle_state: "failed""#,
+            )
+            .await;
+        }
+        other => panic!("unsupported native restart parent observation {other}"),
+    }
+
+    let records = tempfile::tempdir().unwrap();
+    let registry = crate::call::hook::BackgroundExecutionRegistry::default()
+        .with_process_records(records.path().to_path_buf());
+    let process = if await_mode == "background" {
+        crate::call::hook::tests::process_records::process_for_generated_outcome(
+            &registry,
+            admission.tool.tool_call_id(),
+            &tool_doc,
+            process_outcome,
+        )
+        .await
+    } else {
+        None
+    };
+    let report = ToolCallLifecycle::recover_all_with_executions(
+        &admission.node,
+        &admission.node_did,
+        &super::recovery_closeout_conformance::recovery_identities(&admission),
+        &registry,
+    )
+    .await
+    .unwrap();
+    if let Some(process) = process {
+        assert_ne!(
+            process.identity.observe(),
+            gents_session::exec::ownership::ProcessObservation::Running,
+            "{name}: restart recovery left the recorded process running"
+        );
+        process.finish().await;
+    }
+    let actual = row(&admission, &tool_doc).await;
+    let session_id = format!("session-restart-{name}");
+    let (messages, wakes) = restart_obligations(
+        &admission,
+        &session_id,
+        &admission.node_did,
+        admission.tool.requester_did(),
+    )
+    .await;
+    if messages.is_empty() {
+        assert_eq!(report.notifications_repaired, 0, "{name}");
+    }
+    let observed = observed_restart(
+        report.tool_calls_recovered,
+        &actual,
+        &messages,
+        &wakes,
+        &session_id,
+    );
+    let second = ToolCallLifecycle::recover_all_with_executions(
+        &admission.node,
+        &admission.node_did,
+        &super::recovery_closeout_conformance::recovery_identities(&admission),
+        &registry,
+    )
+    .await
+    .unwrap();
+    assert_eq!(second.tool_calls_recovered, 0, "{name}");
+    let (messages_after, wakes_after) = restart_obligations(
+        &admission,
+        &session_id,
+        &admission.node_did,
+        admission.tool.requester_did(),
+    )
+    .await;
+    assert_eq!(messages_after, messages, "{name}");
+    assert_eq!(wakes_after, wakes, "{name}");
+    teardown(admission).await;
+    observed
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
     for case in gents_lean_vocab::families::contracts_restart_native::cases::<String, String>() {
         let input = &case.input;
-        let name = input.name.as_str();
-        let admission = published_admission(PublishedAdmissionOptions {
-            name: format!("restart-{name}"),
-            real_identity: true,
-            await_mode: AwaitMode::from_persisted(&input.await_mode).expect("modeled await mode"),
-            start_running: true,
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-        let tool_doc = admission.tool.doc_id().unwrap().to_owned();
-        let request_doc = admission.tool.request_doc_id().unwrap().to_owned();
-        if input.deadline_expired {
-            update(
-                &admission,
-                "AgentToolCall",
-                &tool_doc,
-                r#"deadline_at: "2020-01-01T00:00:00Z""#,
-            )
-            .await;
-        }
-        match input.parent_observation.as_str() {
-            "live" => {}
-            "interrupted" => {
-                update(
-                    &admission,
-                    "AgentRequest",
-                    &request_doc,
-                    r#"lifecycle_state: "interrupted""#,
-                )
-                .await;
-            }
-            "otherTerminal" => {
-                update(
-                    &admission,
-                    "AgentRequest",
-                    &request_doc,
-                    r#"lifecycle_state: "failed""#,
-                )
-                .await;
-            }
-            other => panic!("unsupported native restart parent observation {other}"),
-        }
-
-        let records = tempfile::tempdir().unwrap();
-        let registry = crate::call::hook::BackgroundExecutionRegistry::default()
-            .with_process_records(records.path().to_path_buf());
-        let process = if input.await_mode == "background" {
-            crate::call::hook::tests::process_records::process_for_generated_outcome(
-                &registry,
-                admission.tool.tool_call_id(),
-                &tool_doc,
-                &input.process_outcome,
-            )
-            .await
-        } else {
-            None
-        };
-        let report = ToolCallLifecycle::recover_all_with_executions(
-            &admission.node,
-            &admission.node_did,
-            &super::recovery_closeout_conformance::recovery_identities(&admission),
-            &registry,
-        )
-        .await
-        .unwrap();
-        if let Some(process) = process {
-            assert_ne!(
-                process.identity.observe(),
-                gents_session::exec::ownership::ProcessObservation::Running,
-                "{name}: restart recovery left the recorded process running"
-            );
-            process.finish().await;
-        }
-        let actual = row(&admission, &tool_doc).await;
-        let session_id = format!("session-restart-{name}");
-        let (messages, wakes) = restart_obligations(
-            &admission,
-            &session_id,
-            &admission.node_did,
-            admission.tool.requester_did(),
+        let observed = observe_native_restart(
+            &input.name,
+            &input.await_mode,
+            input.deadline_expired,
+            &input.parent_observation,
+            &input.process_outcome,
         )
         .await;
-        if messages.is_empty() {
-            assert_eq!(report.notifications_repaired, 0, "{name}");
-        }
-        let observed = observed_restart(
-            report.tool_calls_recovered,
-            &actual,
-            &messages,
-            &wakes,
-            &session_id,
-        );
-        let second = ToolCallLifecycle::recover_all_with_executions(
-            &admission.node,
-            &admission.node_did,
-            &super::recovery_closeout_conformance::recovery_identities(&admission),
-            &registry,
-        )
-        .await
-        .unwrap();
-        assert_eq!(second.tool_calls_recovered, 0, "{name}");
-        let (messages_after, wakes_after) = restart_obligations(
-            &admission,
-            &session_id,
-            &admission.node_did,
-            admission.tool.requester_did(),
-        )
-        .await;
-        assert_eq!(messages_after, messages, "{name}");
-        assert_eq!(wakes_after, wakes, "{name}");
-        teardown(admission).await;
         case.check(observed);
+    }
+}
+
+/// The session key of a restart wake is the runtime's session id; the model
+/// names it by the input's key.
+#[cfg(unix)]
+#[tokio::test]
+async fn generated_r6_restart_terminalizes_through_the_recovery_owner() {
+    for case in gents_lean_vocab::families::contracts_r6_restart::cases() {
+        let input = &case.input;
+        let observed = observe_native_restart(
+            &input.name,
+            &input.await_mode,
+            false,
+            &input.parent_observation,
+            &input.process_outcome,
+        )
+        .await;
+        case.check(
+            gents_lean_vocab::families::contracts_r6_restart::RestartOutput {
+                action: observed.cause.unwrap_or_default(),
+                terminal_state: observed
+                    .terminal_state
+                    .unwrap_or_else(|| "running".to_owned()),
+                reason: observed.notification_reason,
+                queue_source: observed.queue_source,
+                queue_key: observed
+                    .queue_key_prefix
+                    .map(|prefix| format!("{prefix}{}", input.session_key)),
+            },
+        );
     }
 }
 
@@ -377,25 +428,22 @@ async fn generated_session_message_restart_dispositions_use_canonical_admission_
     }
 }
 
+fn optional_text(value: &serde_json::Value) -> Option<String> {
+    value.as_str().map(str::to_owned)
+}
+
+fn swept(count: usize) -> u64 {
+    u64::try_from(count).expect("a sweep count fits u64")
+}
+
 #[tokio::test]
 async fn generated_native_recovery_cases_use_canonical_admission_owner() {
-    let cases = gents_lean_vocab::lean_recovery_sweep_cases();
-    for name in [
-        "tool_backgrounded_running_unowned_process_to_failed",
-        "tool_running_deadline_exceeded_to_timed_out",
-        "tool_running_parent_interrupted_to_cancelled",
-        "live_running_native_tool_parent_interrupted_to_cancelled",
-        "tool_running_terminal_parent_to_failed",
-        "live_running_tool_parent_terminal_to_failed",
-    ] {
-        let case = cases.iter().find(|case| case.name == name).unwrap();
+    for case in gents_lean_vocab::families::recovery_sweeps_tool_call::cases() {
+        let input = &case.input;
+        let name = input.name.as_str();
         let admission = published_admission(PublishedAdmissionOptions {
             name: format!("recovery-{name}"),
-            await_mode: if name.starts_with("tool_backgrounded") {
-                AwaitMode::Background
-            } else {
-                AwaitMode::Foreground
-            },
+            await_mode: AwaitMode::from_persisted(&input.await_mode).expect("modeled await mode"),
             start_running: true,
             ..Default::default()
         })
@@ -403,60 +451,125 @@ async fn generated_native_recovery_cases_use_canonical_admission_owner() {
         .unwrap();
         let tool_doc = admission.tool.doc_id().unwrap().to_owned();
         let request_doc = admission.tool.request_doc_id().unwrap().to_owned();
-        let deadline_expired = name == "tool_running_deadline_exceeded_to_timed_out";
-        let parent_interrupted = matches!(
-            name,
-            "tool_running_parent_interrupted_to_cancelled"
-                | "live_running_native_tool_parent_interrupted_to_cancelled"
+        assert_eq!(
+            row(&admission, &tool_doc).await["lifecycle_state"],
+            input.pre_state,
+            "{name}"
         );
-        let parent_terminal = matches!(
-            name,
-            "tool_running_terminal_parent_to_failed"
-                | "live_running_tool_parent_terminal_to_failed"
+        match input.cause.as_str() {
+            "deadlineExceeded" => {
+                update(
+                    &admission,
+                    "AgentToolCall",
+                    &tool_doc,
+                    r#"deadline_at: "2020-01-01T00:00:00Z""#,
+                )
+                .await;
+            }
+            "parentInterrupted" => {
+                update(
+                    &admission,
+                    "AgentRequest",
+                    &request_doc,
+                    r#"lifecycle_state: "interrupted""#,
+                )
+                .await;
+            }
+            "parentTerminal" => {
+                update(
+                    &admission,
+                    "AgentRequest",
+                    &request_doc,
+                    r#"lifecycle_state: "completed""#,
+                )
+                .await;
+            }
+            "processLost" => {}
+            other => panic!("{name}: no fixture establishes recovery cause {other}"),
+        }
+        let identities = super::recovery_closeout_conformance::recovery_identities(&admission);
+        let first =
+            ToolCallLifecycle::recover_all(&admission.node, &admission.node_did, &identities)
+                .await
+                .unwrap();
+        let actual = row(&admission, &tool_doc).await;
+        let second =
+            ToolCallLifecycle::recover_all(&admission.node, &admission.node_did, &identities)
+                .await
+                .unwrap();
+        assert_eq!(actual["request_doc_id"], request_doc, "{name}");
+        teardown(admission).await;
+        case.check(
+            gents_lean_vocab::families::recovery_sweeps_tool_call::SweptRow {
+                terminal_state: actual["lifecycle_state"]
+                    .as_str()
+                    .expect("recovered row has a lifecycle state")
+                    .to_owned(),
+                measure_before: swept(first.tool_calls_recovered),
+                measure_after: swept(second.tool_calls_recovered),
+                cancel_cause: optional_text(&actual["cancel_cause"]),
+                tool_failure_class: optional_text(&actual["tool_failure_class"]),
+            },
         );
-        if deadline_expired {
-            update(
-                &admission,
-                "AgentToolCall",
-                &tool_doc,
-                r#"deadline_at: "2020-01-01T00:00:00Z""#,
-            )
-            .await;
-        }
-        if parent_interrupted {
-            update(
-                &admission,
-                "AgentRequest",
-                &request_doc,
-                r#"lifecycle_state: "interrupted""#,
-            )
-            .await;
-        } else if parent_terminal {
-            update(
-                &admission,
-                "AgentRequest",
-                &request_doc,
-                r#"lifecycle_state: "completed""#,
-            )
-            .await;
-        }
-        let report = ToolCallLifecycle::recover_all(
+    }
+}
+
+#[tokio::test]
+async fn generated_terminal_parent_cases_use_canonical_admission_owner() {
+    for case in gents_lean_vocab::families::recovery_sweeps_terminal_parent::cases() {
+        let input = &case.input;
+        let name = input.name.as_str();
+        let admission = published_admission(PublishedAdmissionOptions {
+            name: format!("terminal-parent-{name}"),
+            await_mode: AwaitMode::Foreground,
+            start_running: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let tool_doc = admission.tool.doc_id().unwrap().to_owned();
+        let request_doc = admission.tool.request_doc_id().unwrap().to_owned();
+        assert_eq!(
+            row(&admission, &tool_doc).await["lifecycle_state"],
+            input.pre_state,
+            "{name}"
+        );
+        update(
+            &admission,
+            "AgentRequest",
+            &request_doc,
+            &format!(r#"lifecycle_state: "{}""#, input.parent_state),
+        )
+        .await;
+        let identities = super::recovery_closeout_conformance::recovery_identities(&admission);
+        let first = ToolCallLifecycle::reconcile_terminal_parent_owned_tools(
             &admission.node,
             &admission.node_did,
-            &super::recovery_closeout_conformance::recovery_identities(&admission),
+            &identities,
         )
         .await
         .unwrap();
-        assert_eq!(report.tool_calls_recovered, 1, "{name}");
         let actual = row(&admission, &tool_doc).await;
+        let second = ToolCallLifecycle::reconcile_terminal_parent_owned_tools(
+            &admission.node,
+            &admission.node_did,
+            &identities,
+        )
+        .await
+        .unwrap();
         assert_eq!(actual["request_doc_id"], request_doc, "{name}");
-        assert_eq!(actual["lifecycle_state"], case.terminal_state, "{name}");
-        if parent_interrupted {
-            assert_eq!(actual["cancel_cause"], "interrupted", "{name}");
-            assert!(actual["tool_failure_class"].is_null(), "{name}");
-        } else if name.starts_with("tool_backgrounded") || deadline_expired || parent_terminal {
-            assert_eq!(actual["tool_failure_class"], "external", "{name}");
-        }
         teardown(admission).await;
+        case.check(
+            gents_lean_vocab::families::recovery_sweeps_terminal_parent::SweptRow {
+                terminal_state: actual["lifecycle_state"]
+                    .as_str()
+                    .expect("recovered row has a lifecycle state")
+                    .to_owned(),
+                measure_before: swept(first.tool_calls_terminalized),
+                measure_after: swept(second.tool_calls_terminalized),
+                cancel_cause: optional_text(&actual["cancel_cause"]),
+                tool_failure_class: optional_text(&actual["tool_failure_class"]),
+            },
+        );
     }
 }

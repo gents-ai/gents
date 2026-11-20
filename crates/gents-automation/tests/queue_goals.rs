@@ -60,8 +60,10 @@ async fn background_wakes_and_goal_continuations_keep_the_project_directory() {
         db.agent_did().into(),
         "goal",
         "continue",
-        1,
-        false,
+        gents_protocol::request_input::GoalContinuationInput {
+            sequence: 1,
+            wrapup: false,
+        },
         "2030-01-01T00:00:01Z",
         wake.request_hop,
     )
@@ -90,8 +92,10 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
                 db.agent_did().into(),
                 "goal",
                 "continue",
-                1,
-                false,
+                gents_protocol::request_input::GoalContinuationInput {
+                    sequence: 1,
+                    wrapup: false,
+                },
                 "2030-01-01T00:00:01Z",
                 parent.request_hop,
             )
@@ -361,13 +365,15 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
                 Box::pin(async move {
                     session::ensure_session_in_txn(
                         txn,
-                        "other-session",
-                        node_did,
-                        agent_did,
-                        Some(desktop_did),
-                        None,
-                        None,
-                        now,
+                        gents_session::session::NewAgentSession {
+                            session_id: "other-session",
+                            node_did,
+                            agent_did,
+                            requester_did: Some(desktop_did),
+                            title: None,
+                            provenance: None,
+                            created_at: now,
+                        },
                     )
                     .await?;
                     Ok::<_, anyhow::Error>(())

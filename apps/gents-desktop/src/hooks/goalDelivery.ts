@@ -47,12 +47,14 @@ export function createGoalDelivery(api: DesktopApiAdapter, stores: ShellStores) 
     return draft;
   }
   async function query(draft: GoalDraft) {
+    if (clientDid() !== draft.clientDid)
+      throw new Error("The original Goal change is unavailable for this client.");
     const recovered = await api.recoverGoalSubmission({
       clientDid: draft.clientDid,
       nodeDid: draft.nodeDid,
       commandId: draft.commandId,
     });
-    if (recovered.kind === "unconfirmed") {
+    if (recovered.kind === "unconfirmed" || recovered.kind === "retained") {
       if (
         recovered.nodeDid !== draft.nodeDid ||
         recovered.commandId !== draft.commandId
@@ -86,6 +88,7 @@ export function createGoalDelivery(api: DesktopApiAdapter, stores: ShellStores) 
       result,
       receipt: result.submissionReceipt!,
       rejection: undefined,
+      locallyRetained: undefined,
     });
     const consumed = applied(result, draft);
     void Promise.resolve()
@@ -142,6 +145,11 @@ export function createGoalDelivery(api: DesktopApiAdapter, stores: ShellStores) 
           throw new Error("The selected client changed before dispatch.");
         return settle(draft, await api.controlGoal(goalDraftCommand(draft)), applied);
       } catch (error) {
+        const retained = await query(draft).catch(() => null);
+        if (retained?.kind === "retained" && retained.sessionId === draft.sessionId) {
+          saveGoalDraft(stores.chat, { ...draft, locallyRetained: true });
+          return null;
+        }
         if (asBridgeErrorPayload(error)?.code === "goalControlRejected")
           await rejected(draft).catch(() => {});
         throw error;
@@ -171,6 +179,10 @@ export function createGoalDelivery(api: DesktopApiAdapter, stores: ShellStores) 
             receipt: recovered.receipt,
             rejection: { reason: recovered.outcome.reason, receipt: recovered.receipt },
           });
+          return null;
+        }
+        if (recovered.kind === "retained") {
+          saveGoalDraft(stores.chat, { ...draft, locallyRetained: true });
           return null;
         }
         if (!resume) return null;

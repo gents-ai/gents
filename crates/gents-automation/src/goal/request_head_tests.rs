@@ -496,8 +496,10 @@ impl Fixture<'_> {
                 self.identity(model.owner).did().into(),
                 &format!("goal-{goal}"),
                 "signed child",
-                i64::try_from(model.sequence).unwrap(),
-                false,
+                gents_protocol::request_input::GoalContinuationInput {
+                    sequence: i64::try_from(model.sequence).unwrap(),
+                    wrapup: false,
+                },
                 &now,
                 parent.request_hop,
             )
@@ -671,13 +673,15 @@ async fn task_assignment_root_fences_older_chain_even_when_its_child_is_newer() 
         .transact_write("test.assignment_session", |txn| {
             Box::pin(gents_session::session::ensure_session_in_txn(
                 txn,
-                "bound-session",
-                identity.did(),
-                agent.did(),
-                Some(agent.did()),
-                None,
-                None,
-                "2026-01-01T00:00:00Z",
+                gents_session::session::NewAgentSession {
+                    session_id: "bound-session",
+                    node_did: identity.did(),
+                    agent_did: agent.did(),
+                    requester_did: Some(agent.did()),
+                    title: None,
+                    provenance: None,
+                    created_at: "2026-01-01T00:00:00Z",
+                },
             ))
         })
         .await
@@ -743,8 +747,10 @@ async fn task_assignment_root_fences_older_chain_even_when_its_child_is_newer() 
             agent.did().into(),
             &goal.goal_id,
             "old continuation",
-            sequence,
-            false,
+            gents_protocol::request_input::GoalContinuationInput {
+                sequence,
+                wrapup: false,
+            },
             "2026-01-01T00:00:02Z",
             parent.request_hop,
         )

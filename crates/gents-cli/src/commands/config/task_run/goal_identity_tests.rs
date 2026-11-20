@@ -226,7 +226,16 @@ async fn generated_manual_task_identity_is_frozen_before_signed_admission() -> R
             task.current_task_goal.as_deref().map(goal_id).as_deref(),
         )
         .await?;
-        let selected = prepare_task_run_goal_id(access, &owner, &session, true, None).await?;
+        let selected = prepare_task_run_goal_id(
+            access,
+            TaskRunTarget {
+                node_did: &owner,
+                session_id: &session,
+                goal_backed: true,
+                admitted: None,
+            },
+        )
+        .await?;
         let task_goal = selected
             .clone()
             .context("goal-backed Task selects a Goal")?;
@@ -307,17 +316,27 @@ async fn generated_manual_task_identity_is_frozen_before_signed_admission() -> R
                         access.actor_did().context("test actor")?,
                         None,
                     )?,
-                    &owner,
-                    &session,
+                    TaskRunTarget {
+                        node_did: &owner,
+                        session_id: &session,
+                        goal_backed: true,
+                        admitted: Some(&row),
+                    },
                     true,
-                    true,
-                    Some(&row),
                     RequestInput::default(),
                 )
                 .await?;
                 assert_eq!(retained, input);
-                fire.goal_id =
-                    prepare_task_run_goal_id(access, &owner, &session, true, Some(&row)).await?;
+                fire.goal_id = prepare_task_run_goal_id(
+                    access,
+                    TaskRunTarget {
+                        node_did: &owner,
+                        session_id: &session,
+                        goal_backed: true,
+                        admitted: Some(&row),
+                    },
+                )
+                .await?;
                 assert_eq!(fire.goal_id, None);
                 let retry = signed_request(&home, &binding.agent_did, &fire, retained).await?;
                 assert_eq!(retry.admission.signature, request.admission.signature);
@@ -358,9 +377,16 @@ async fn manual_task_replay_keeps_signed_goal_identity_without_observing_current
         input.goal_assignment = reference.clone();
         let row = super::tests::signed_task_receipt(&source, input).await?;
         let receipt: AgentRequestRow = serde_json::from_value(row)?;
-        let selected =
-            prepare_task_run_goal_id(&access, &source.node_did, "chat", true, Some(&receipt))
-                .await?;
+        let selected = prepare_task_run_goal_id(
+            &access,
+            TaskRunTarget {
+                node_did: &source.node_did,
+                session_id: "chat",
+                goal_backed: true,
+                admitted: Some(&receipt),
+            },
+        )
+        .await?;
         assert_eq!(selected, reference.map(|reference| reference.goal_id));
     }
     assert_eq!(source.exchanges(), 0);

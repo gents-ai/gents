@@ -8,10 +8,15 @@ use anyhow::{Context, Result};
 
 use crate::pack::{BindAccess, PackPlugin};
 use gents_protocol::plugin::{
-    MAX_DECLARED_MEMORY_MIB, MAX_DECLARED_OUTPUT_MIB, MAX_DECLARED_WALL_CLOCK_SECS,
+    MAX_DECLARED_MEMORY_MIB, MAX_DECLARED_OUTPUT_MIB, MAX_DECLARED_ROUNDS,
+    MAX_DECLARED_WALL_CLOCK_SECS,
 };
 
 const DEFAULT_MAX_OUTPUT_BYTES: usize = 1024 * 1024;
+
+/// Host-serviced request rounds one plugin invocation may take when its pack
+/// declares no `max_rounds`.
+pub const DEFAULT_MAX_ROUNDS: u32 = 64;
 
 /// Afterburner's compiled WASI stdout pipe has this capacity; its limit must
 /// stay aligned with the largest accepted plugin result.
@@ -36,6 +41,9 @@ pub struct PluginBudget {
     pub memory_bytes: u64,
     pub wall_clock: std::time::Duration,
     pub max_output_bytes: usize,
+    /// Host-serviced request rounds one invocation may take; a pack
+    /// declaration raises it up to `MAX_DECLARED_ROUNDS`.
+    pub max_rounds: u32,
 }
 
 impl PluginBudget {
@@ -86,6 +94,10 @@ impl PluginBudget {
                     * 1024,
             )
             .min(MAX_DECLARED_OUTPUT_MIB as usize * 1024 * 1024);
+        self.max_rounds = self
+            .max_rounds
+            .max(limits.max_rounds.unwrap_or(0))
+            .min(MAX_DECLARED_ROUNDS);
         self
     }
 }
@@ -101,6 +113,7 @@ impl Default for PluginBudget {
             memory_bytes: 64 * 1024 * 1024,
             wall_clock: std::time::Duration::from_secs(5),
             max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
+            max_rounds: DEFAULT_MAX_ROUNDS,
         }
     }
 }

@@ -69,13 +69,15 @@ async fn ensure_agent_session(
             Box::pin(async move {
                 gents_session::session::ensure_session_in_txn(
                     txn,
-                    session,
-                    node_did,
-                    &test_agent_did(),
-                    requester_did,
-                    None,
-                    None,
-                    "2026-09-01T00:00:00Z",
+                    gents_session::session::NewAgentSession {
+                        session_id: session,
+                        node_did,
+                        agent_did: &test_agent_did(),
+                        requester_did,
+                        title: None,
+                        provenance: None,
+                        created_at: "2026-09-01T00:00:00Z",
+                    },
                 )
                 .await
                 .map(|_| ())
@@ -927,26 +929,30 @@ async fn background_claim_snapshots_transcript_before_successor_input() {
     let (request, source_doc) = signed_background_claim_fixture(&node, session_id).await;
     gents_session::session::import_history_observation_as(
         &agent,
-        &source_doc,
-        session_id,
-        &node_did,
-        Some(&agent_did),
-        "first notification",
-        "background-completion-notification:child-1:agent",
-        1,
-        None,
+        gents_session::session::HistoryObservation {
+            request_id: &source_doc,
+            session_id,
+            node_did: &node_did,
+            requester_did: Some(&agent_did),
+            text: "first notification",
+            message_key_suffix: "background-completion-notification:child-1:agent",
+            sequence: 1,
+            tool_call: None,
+        },
     )
     .await;
     gents_session::session::import_history_observation_as(
         &agent,
-        &source_doc,
-        session_id,
-        &node_did,
-        Some(&agent_did),
-        "prior context",
-        "prior-context",
-        2,
-        None,
+        gents_session::session::HistoryObservation {
+            request_id: &source_doc,
+            session_id,
+            node_did: &node_did,
+            requester_did: Some(&agent_did),
+            text: "prior context",
+            message_key_suffix: "prior-context",
+            sequence: 2,
+            tool_call: None,
+        },
     )
     .await;
 
@@ -993,14 +999,16 @@ async fn background_claim_snapshots_transcript_before_successor_input() {
 
     gents_session::session::import_history_observation_as(
         &agent,
-        &source_doc,
-        session_id,
-        &node_did,
-        Some(&agent_did),
-        "successor notification",
-        "background-completion-notification:child-2:agent",
-        3,
-        None,
+        gents_session::session::HistoryObservation {
+            request_id: &source_doc,
+            session_id,
+            node_did: &node_did,
+            requester_did: Some(&agent_did),
+            text: "successor notification",
+            message_key_suffix: "background-completion-notification:child-2:agent",
+            sequence: 3,
+            tool_call: None,
+        },
     )
     .await;
     let history = gents_session::session::load_sequenced_history_projection_on(
@@ -1031,14 +1039,16 @@ async fn background_claim_keeps_fork_imports_out_of_notification_input() {
     let (request, source_doc) = signed_background_claim_fixture(&node, session_id).await;
     gents_session::session::import_history_observation_as(
         &agent,
-        &source_doc,
-        session_id,
-        &node_did,
-        Some(&agent_did),
-        "notification",
-        origin_key,
-        1,
-        None,
+        gents_session::session::HistoryObservation {
+            request_id: &source_doc,
+            session_id,
+            node_did: &node_did,
+            requester_did: Some(&agent_did),
+            text: "notification",
+            message_key_suffix: origin_key,
+            sequence: 1,
+            tool_call: None,
+        },
     )
     .await;
     let access = &agent;

@@ -1,4 +1,4 @@
-use gents_desktop_core::inference::AgentView;
+use gents_observe::client_inference::AgentView;
 use gents_shell::sample::Tone;
 use gents_shell::source::{FieldKind, Form, MenuAct, MenuRow, Update};
 

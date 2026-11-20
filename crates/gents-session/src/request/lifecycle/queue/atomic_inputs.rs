@@ -50,21 +50,23 @@ pub fn background_completion_gate(
     gate
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "atomic notification retains the caller's signed access and exact publication inputs"
-)]
+/// The notification a finished background tool publishes into its parent's
+/// session, and the coalesced wake request that delivers it.
+pub struct BackgroundCompletionNotification<'a> {
+    pub content: &'a str,
+    pub message_key: &'a str,
+    pub wake_content: &'a str,
+    pub queue: RequestQueue,
+    pub existing_notification_doc_id: Option<&'a str>,
+    pub wake: gents_protocol::request_lifecycle::RequestHopCause,
+}
+
 pub async fn persist_background_completion_with_message_canonical_with_access(
     access: &gents_store::config_client::ConfigAccess,
     node: &std::sync::Arc<EmbeddedNode>,
     parent: &AgentRequest,
-    notification_content: &str,
-    message_key: &str,
-    wake_content: &str,
-    queue: RequestQueue,
-    existing_notification_doc_id: Option<&str>,
+    notification: BackgroundCompletionNotification<'_>,
     native: &ToolNotificationPublication,
-    wake: gents_protocol::request_lifecycle::RequestHopCause,
 ) -> Result<EnqueuedBackgroundCompletionInput> {
     let signer = access
         .managed_agent_signer()
@@ -79,34 +81,28 @@ pub async fn persist_background_completion_with_message_canonical_with_access(
         Some(&signer),
         node,
         parent,
-        notification_content,
-        message_key,
-        wake_content,
-        queue,
-        existing_notification_doc_id,
+        notification,
         native,
-        wake,
     )
     .await
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "atomic publication shares the same inputs between managed execution and test fixtures"
-)]
 async fn persist_background_completion_with_message_canonical_inner(
     access: &gents_store::config_client::ConfigAccess,
     signer: Option<&gents_store::identity::ManagedAgentSigner>,
     node: &std::sync::Arc<EmbeddedNode>,
     parent: &AgentRequest,
-    notification_content: &str,
-    message_key: &str,
-    wake_content: &str,
-    queue: RequestQueue,
-    existing_notification_doc_id: Option<&str>,
+    notification: BackgroundCompletionNotification<'_>,
     native: &ToolNotificationPublication,
-    wake: gents_protocol::request_lifecycle::RequestHopCause,
 ) -> Result<EnqueuedBackgroundCompletionInput> {
+    let BackgroundCompletionNotification {
+        content: notification_content,
+        message_key,
+        wake_content,
+        queue,
+        existing_notification_doc_id,
+        wake,
+    } = notification;
     anyhow::ensure!(
         queue.source == QueueSource::BackgroundCompletion && queue.policy == QueuePolicy::Coalesce,
         "atomic background completion enqueue requires coalescing background queue input"
@@ -190,18 +186,14 @@ async fn persist_background_completion_with_message_canonical_inner(
 }
 
 #[cfg(any(test, feature = "test-fixtures"))]
-#[allow(clippy::too_many_arguments)]
 pub async fn persist_background_completion_with_message_waking_with_access(
     access: &gents_store::config_client::ConfigAccess,
     node: &std::sync::Arc<EmbeddedNode>,
     parent: &AgentRequest,
-    notification_content: &str,
-    message_key: &str,
-    wake_content: &str,
-    queue: RequestQueue,
-    existing_notification_doc_id: Option<&str>,
-    wake: gents_protocol::request_lifecycle::RequestHopCause,
+    notification: BackgroundCompletionNotification<'_>,
 ) -> Result<EnqueuedBackgroundCompletionInput> {
+    let notification_content = notification.content;
+    let message_key = notification.message_key;
     use gents_protocol::output::{
         OutputOutcome, OutputSegment, OutputSource, OutputWriter, SegmentRun, SourceClose,
         StreamDeclaration, StreamPayload,
@@ -350,11 +342,7 @@ pub async fn persist_background_completion_with_message_waking_with_access(
         access,
         node,
         parent,
-        notification_content,
-        message_key,
-        wake_content,
-        queue,
-        existing_notification_doc_id,
+        notification,
         &ToolNotificationPublication {
             tool_call_doc_id,
             presentation: vec![gents_protocol::output::PresentationPart::OutputRange {
@@ -362,7 +350,6 @@ pub async fn persist_background_completion_with_message_waking_with_access(
                 end_byte: notification_content.len() as u64,
             }],
         },
-        wake,
     )
     .await
 }

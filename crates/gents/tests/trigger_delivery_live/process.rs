@@ -48,10 +48,13 @@ async fn wait_ready(child: &mut ChildGuard, artifacts: &Path, phase: &str) -> Re
     .await
     .context("child readiness deadline")??;
     let mut marker = [0];
-    tokio::time::timeout(Duration::from_secs(30), stream.read_exact(&mut marker))
-        .await
-        .context("child readiness marker deadline")??;
-    ensure!(marker == [b'r'], "child sent an invalid readiness marker");
+    tokio::time::timeout(
+        gents_store::test_support::STALL_CEILING,
+        stream.read_exact(&mut marker),
+    )
+    .await
+    .context("child readiness marker deadline")??;
+    ensure!(marker == *b"r", "child sent an invalid readiness marker");
     Ok(())
 }
 

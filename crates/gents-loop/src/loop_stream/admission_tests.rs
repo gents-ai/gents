@@ -6,6 +6,14 @@ use std::sync::{
     Arc,
 };
 
+#[cfg(test)]
+tokio::task_local! {
+    /// A task-local the caller of the loop stream sets, standing in for the
+    /// ones that remain (the workspace-approval context, the rendered-request
+    /// capture scope): work the stream drives must observe the caller's.
+    static CALLER_SCOPE: &'static str;
+}
+
 fn drive_admissions<S>(
     stream: S,
 ) -> impl futures::Stream<Item = Result<super::LoopStreamItem, super::LoopStreamError>>
@@ -48,10 +56,6 @@ async fn dropping_the_loop_cancels_pending_compaction() {
 
 #[tokio::test]
 async fn dropping_pending_provider_dispatch_keeps_scope_and_cancels_work() {
-    use crate::tool_call_lifecycle::runtime::{
-        current_tool_runtime_context, scope_request_tool_execution_with_session,
-        ToolRequestIdentity,
-    };
     struct Dropped(Arc<AtomicBool>);
     impl Drop for Dropped {
         fn drop(&mut self) {
@@ -67,32 +71,19 @@ async fn dropping_pending_provider_dispatch_keeps_scope_and_cancels_work() {
     let inner = async_stream::stream! {
         yield Ok(OwnedLoopItem::ProviderWork(Box::pin(async move {
             let _marker = marker;
-            let context = current_tool_runtime_context().expect("request scope");
-            *capture.lock().unwrap() = context.request_id;
+            *capture.lock().unwrap() = CALLER_SCOPE.try_with(|scope| *scope).ok();
             std::future::pending::<()>().await;
             let _ = reply.send(());
         })));
     };
     let mut stream = Box::pin(drive_admissions(inner));
-    scope_request_tool_execution_with_session(
-        Some(ToolRequestIdentity::new(
-            Some("requester".into()),
-            Some("node".into()),
-            Some("agent".into()),
-            Some("request".into()),
-        )),
-        None,
-        Default::default(),
-        None,
-        None,
-        None,
-        async {
+    CALLER_SCOPE
+        .scope("request", async {
             assert!(futures::poll!(stream.next()).is_pending());
             drop(stream);
-        },
-    )
-    .await;
-    assert_eq!(*observed.lock().unwrap(), Some("request".into()));
+        })
+        .await;
+    assert_eq!(*observed.lock().unwrap(), Some("request"));
     assert!(dropped.load(Ordering::SeqCst));
     assert!(result.await.is_err());
 }
@@ -339,25 +330,13 @@ async fn skip_keeps_the_hook_effect_as_the_lean_admission_model() {
 }
 
 #[tokio::test]
-async fn handoff_retains_the_calling_request_scope() {
-    use crate::tool_call_lifecycle::runtime::{
-        current_tool_runtime_context, scope_request_tool_execution_with_trigger_context,
-        ToolRequestIdentity,
-    };
+async fn admission_work_runs_in_the_callers_task_scope() {
     let observed = Arc::new(std::sync::Mutex::new(None));
     let capture = observed.clone();
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let work = AdmissionWork {
         future: Box::pin(async move {
-            let context = current_tool_runtime_context().expect("tool request scope");
-            *capture.lock().unwrap() = Some((
-                context.node_did,
-                context.agent_did,
-                context.requester_did,
-                context.request_id,
-                context.session_id,
-                context.correlation,
-            ));
+            *capture.lock().unwrap() = CALLER_SCOPE.try_with(|scope| *scope).ok();
             ToolCallHookAction::Continue
         }),
         reply: sender,
@@ -367,35 +346,10 @@ async fn handoff_retains_the_calling_request_scope() {
         let _ = receiver.await;
     };
     let mut stream = Box::pin(drive_admissions(inner));
-    scope_request_tool_execution_with_trigger_context(
-        Some(ToolRequestIdentity::new(
-            Some("requester".into()),
-            Some("node".into()),
-            Some("selected-agent".into()),
-            Some("request".into()),
-        )),
-        None,
-        Default::default(),
-        None,
-        None,
-        Some("session".into()),
-        Some("correlation".into()),
-        Default::default(),
-        false,
-        async {
+    CALLER_SCOPE
+        .scope("request", async {
             assert!(stream.next().await.is_none());
-        },
-    )
-    .await;
-    assert_eq!(
-        *observed.lock().unwrap(),
-        Some((
-            Some("node".into()),
-            Some("selected-agent".into()),
-            Some("requester".into()),
-            Some("request".into()),
-            Some("session".into()),
-            Some("correlation".into())
-        ))
-    );
+        })
+        .await;
+    assert_eq!(*observed.lock().unwrap(), Some("request"));
 }

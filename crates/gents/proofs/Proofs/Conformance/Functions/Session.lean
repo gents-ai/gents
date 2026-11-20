@@ -59,7 +59,7 @@ namespace RequestExecutionLease
 
 deriving instance Lean.ToJson for Outcome
 
-attribute [conformance_function] Outcome.requestState providerEofIsFailure
+attribute [conformance_function] Outcome.requestState providerEofIsFailure retryWakeDispatches
 
 end RequestExecutionLease
 

@@ -1009,6 +1009,16 @@ mod tests {
     ) -> anyhow::Result<()> {
         use gents_store::identity::NodeIdentity;
 
+        harness
+            .grant_node_permissions(
+                outsider.did(),
+                &[
+                    gents_store::config_client::NodePermission::CollectionGet,
+                    gents_store::config_client::NodePermission::DocumentRead,
+                    gents_store::config_client::NodePermission::DocumentUpdate,
+                ],
+            )
+            .await?;
         let hidden = promote(foreign, harness.owner(), job_id, digest)
             .await
             .unwrap_err();
@@ -1048,16 +1058,6 @@ mod tests {
                 &node_doc,
                 "administrator",
                 &identity::Did::new(outsider.did())?,
-            )
-            .await?;
-        harness
-            .grant_node_permissions(
-                outsider.did(),
-                &[
-                    gents_store::config_client::NodePermission::CollectionGet,
-                    gents_store::config_client::NodePermission::DocumentRead,
-                    gents_store::config_client::NodePermission::DocumentUpdate,
-                ],
             )
             .await?;
         let before_prompt = live_prompt(harness).await.expect("target prompt");

@@ -5,6 +5,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use super::{HomeError, Result, INIT_CONFIG_FILE_NAME, KEYS_DIR_NAME};
+use crate::local::document_acp::DocumentAcp;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(bound(deserialize = "ToolPackage: Deserialize<'de>, ToolCeiling: Deserialize<'de>"))]
@@ -25,6 +26,8 @@ pub struct StoredInitConfig<ToolPackage = String, ToolCeiling = String> {
     pub tool_root: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub store_encryption: Option<crate::local::store_key::StoreEncryption>,
+    #[serde(default, skip_serializing_if = "DocumentAcp::is_local")]
+    pub document_acp: DocumentAcp,
 }
 
 pub fn default_key_path(home_dir: &Path, node_name: &str) -> PathBuf {

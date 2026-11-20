@@ -181,25 +181,28 @@ pub trait TriggerSource: Send + Sync {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<FireIntent>> + Send + '_>>;
 }
 
+/// One fire a materializer turns into a request: the Task and its rendered
+/// prompt, the trigger and source that caused it, and the fire's durable
+/// identity, prepared delivery and reserved request and session ids.
+pub(crate) struct FireMaterialization<'a> {
+    pub(crate) task: &'a gents_documents::automation::ResolvedTask,
+    pub(crate) trigger_id: Option<&'a str>,
+    pub(crate) trigger_kind: TriggerKind,
+    pub(crate) trigger_doc_id: Option<&'a str>,
+    pub(crate) source_doc_id: Option<&'a str>,
+    pub(crate) correlation: Option<&'a str>,
+    pub(crate) trigger_context: Option<&'a str>,
+    pub(crate) rendered_prompt: &'a str,
+    pub(crate) rendered_goal_objective: Option<&'a str>,
+    pub(crate) durable_fire_key: &'a str,
+    pub(crate) delivery: Option<&'a durable::PreparedFire>,
+    pub(crate) prepared_ids: Option<(&'a str, &'a str)>,
+}
+
 pub(crate) trait MaterializerHandle: Send + Sync {
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "positional contract shared by the production and spy materializers"
-    )]
     fn materialize(
         &self,
-        task: &gents_documents::automation::ResolvedTask,
-        trigger_id: Option<&str>,
-        trigger_kind: TriggerKind,
-        trigger_doc_id: Option<&str>,
-        source_doc_id: Option<&str>,
-        correlation: Option<&str>,
-        trigger_context: Option<&str>,
-        rendered_prompt: &str,
-        rendered_goal_objective: Option<&str>,
-        durable_fire_key: &str,
-        delivery: Option<&crate::triggers::engine::durable::PreparedFire>,
-        prepared_ids: Option<(&str, &str)>,
+        fire: FireMaterialization<'_>,
     ) -> std::pin::Pin<
         Box<dyn std::future::Future<Output = Result<String, MaterializeError>> + Send + '_>,
     >;
@@ -330,22 +333,22 @@ impl TriggerEngine {
         };
         let mut materialized = self
             .materializer
-            .materialize(
-                &intent.task,
-                intent.trigger_id.as_deref(),
-                intent.trigger_kind,
-                trigger_doc_id.as_deref(),
-                source_doc_id.as_deref(),
-                intent.correlation.as_deref(),
-                intent.trigger_context.as_deref(),
-                &rendered,
-                rendered_goal_objective.as_deref(),
-                &intent.durable_fire_key,
-                delivery.as_ref(),
-                prepared_ids
+            .materialize(FireMaterialization {
+                task: &intent.task,
+                trigger_id: intent.trigger_id.as_deref(),
+                trigger_kind: intent.trigger_kind,
+                trigger_doc_id: trigger_doc_id.as_deref(),
+                source_doc_id: source_doc_id.as_deref(),
+                correlation: intent.correlation.as_deref(),
+                trigger_context: intent.trigger_context.as_deref(),
+                rendered_prompt: &rendered,
+                rendered_goal_objective: rendered_goal_objective.as_deref(),
+                durable_fire_key: &intent.durable_fire_key,
+                delivery: delivery.as_ref(),
+                prepared_ids: prepared_ids
                     .as_ref()
                     .map(|(request, session)| (request.as_str(), session.as_str())),
-            )
+            })
             .await;
         if materialized.is_err() && rendered_goal_objective.is_some() && delivery.is_none() {
             if let Ok(Some(request_id)) = self

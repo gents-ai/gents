@@ -566,10 +566,7 @@ async fn title_observation_uses_selected_agent_session_access() {
         second_identity.as_ref(),
     )
     .unwrap();
-    let runtime_access = gents_store::config_client::ConfigAccess::local_as(
-        db.node.clone(),
-        identity::Did::new(db.node_identity.did()).unwrap(),
-    );
+    let unrelated_access = gents_store::test_support::unrelated_document_reader(&db.node).await;
     let node_did = db.node_identity.did();
     for (agent, session) in [
         (&first, "title-target"),
@@ -614,7 +611,7 @@ async fn title_observation_uses_selected_agent_session_access() {
     );
     assert_eq!(
         super::observations::session_needs_generated_title(
-            &runtime_access,
+            &unrelated_access,
             node_did,
             Some(user_did.as_str()),
             "title-target"

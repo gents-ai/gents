@@ -39,7 +39,7 @@ function mount(
   getJobView: (request: { rowDocId?: string }) => Promise<JobView>,
   api: object = {},
   tool: RenderedToolCallView = row(),
-  owner: { nodeDid: string; source: string } = { nodeDid: NODE, source: "local" },
+  owner: { nodeDid: string; local: boolean } = { nodeDid: NODE, local: true },
 ) {
   const app = testApp({
     api: { getJobView, ...api },
@@ -224,7 +224,7 @@ describe("WorkflowRunSheet", () => {
 
     mount(vi.fn().mockResolvedValue(script), {}, row({ nodeDid: "did:test:remote" }), {
       nodeDid: "did:test:remote",
-      source: "enrollment",
+      local: false,
     });
     sheet = await openRun();
     expect(within(sheet).queryByRole("button", { name: "Promote" })).toBeNull();

@@ -37,8 +37,10 @@ async fn pending_requests_are_scoped_by_node_did_without_host_identity() {
         pending[0].agent_did.clone(),
         "goal-workspace-owner",
         "continue",
-        1,
-        false,
+        gents_protocol::request_input::GoalContinuationInput {
+            sequence: 1,
+            wrapup: false,
+        },
         "2026-08-21T00:00:01Z",
         pending[0].request_hop,
     )

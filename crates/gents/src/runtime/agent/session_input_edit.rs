@@ -42,6 +42,37 @@ pub(super) async fn verified_receipt(
     Ok(Some(receipt))
 }
 
+/// The reason a stored command is rejected for, when the writes it carries
+/// for its User are refused (`Identity.SessionInputEdit.answer`).
+fn answer(
+    admission: Result<(), gents_store::config_client::user_write::UserWriteRefusal>,
+) -> Option<String> {
+    admission.err().map(|refusal| {
+        tracing::info!(%refusal, "stored command refused before any write");
+        gents_store::config_client::user_write::REFUSED_FOR_A_PERSON.to_owned()
+    })
+}
+
+/// Whether each replacement the command creates for its User may be made with
+/// the credentials the command carries for it, asked before anything is
+/// written.
+async fn admit_replacements(
+    txn: &ConfigApplyTxn<'_>,
+    command: &SessionInputEdit,
+    graphs: &[Arc<db::block::builder::VerifiedClientCreate>],
+) -> Result<Result<(), gents_store::config_client::user_write::UserWriteRefusal>> {
+    for (index, (create, graph)) in command.replacements.iter().zip(graphs).enumerate() {
+        let credentials = command
+            .replacement_credentials
+            .get(index)
+            .map_or(&[][..], Vec::as_slice);
+        if let Err(refusal) = txn.admit_stored_user_create(create, graph.doc_id(), credentials)? {
+            return Ok(Err(refusal));
+        }
+    }
+    Ok(Ok(()))
+}
+
 async fn intrinsic_rejection(
     identity: &dyn NodeIdentity,
     command: &SessionInputEdit,
@@ -449,6 +480,10 @@ pub(crate) async fn process_command(
                         let rejection = if now >= DateTime::parse_from_rfc3339(&command.expires_at)? {
                             Some("edit intent has expired".into())
                         } else { authority_rejection(txn, &command).await? };
+                        let rejection = match rejection {
+                            None => answer(admit_replacements(txn, &command, graphs).await?),
+                            other => other,
+                        };
                         match rejection {
                             Some(reason) => (SessionInputEditOutcome::Rejected, reason, Vec::new()),
                             None => {
@@ -518,6 +553,8 @@ async fn test_signed_replacement_fields(
     (session_doc, agent_did, agent_doc, evidence)
 }
 
+#[cfg(test)]
+mod answer_conformance;
 #[cfg(test)]
 mod recovery_tests;
 #[cfg(test)]

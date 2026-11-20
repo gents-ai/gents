@@ -2,11 +2,11 @@ use anyhow::Result;
 use tracing::Instrument;
 
 use super::{AgentDaemon, HandleRequestOutcome, RequestInterruptionSource};
-use gents_inference::admission::{self, AdmissionCallContext};
 use gents_loop::loop_stream::TaggedMessage;
+use gents_loop::provider_call::admission::AdmissionCallContext;
 use gents_observe::observe::runtime_trace::RequestTraceAttrs;
 
-mod prepare;
+pub(super) mod prepare;
 
 const CANCELLATION_GRACE_PERIOD: std::time::Duration = std::time::Duration::from_millis(100);
 
@@ -40,10 +40,13 @@ pub(super) async fn prepare_unless_interrupted<T>(
     }
 }
 
-pub(super) async fn flush_received_preparation_partial(context: &str) -> Result<()> {
+pub(super) async fn flush_received_preparation_partial(
+    capture: Option<&std::sync::Arc<gents_inference::rendered_request::scope::RequestCaptureScope>>,
+    context: &str,
+) -> Result<()> {
     match tokio::time::timeout(
         gents_store::config_client::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
-        gents_inference::rendered_request::scope::flush_received_auxiliary_partial(),
+        gents_inference::rendered_request::scope::flush_received_auxiliary_partial(capture),
     ).await {
         Ok(Ok(_)) => Ok(()),
         Ok(Err(error)) => Err(super::ShutdownDrainFailure {
@@ -65,25 +68,31 @@ where
     /// Size the exact first-turn provider request for session-compaction
     /// admission through the owned loop's assembly owner. The loop remains the
     /// sole final legality authority.
-    #[allow(clippy::too_many_arguments)]
     async fn estimate_initial_provider_input(
         &self,
-        request: &gents_protocol::row::AgentRequest,
-        preamble: String,
-        history: &[TaggedMessage],
-        skill_reminders: &[gents_inference::llm::message::Message],
-        request_context_message: Option<&gents_inference::llm::message::Message>,
-        folded_prompts: &[crate::runtime::agent::loop_stream::FoldedPrompt],
-        aggregate_token_budget: Option<crate::runtime::agent::loop_stream::AggregateTokenBudget>,
+        inputs: prepare::RequestInputs<'_>,
+        built: &crate::turn::prompt::BuiltPrompt,
+        assembly: prepare::PromptAssembly<'_>,
         replay: &gents_loop::loop_stream::LoopReplayInput,
-        resume_from_history: bool,
-        wake_notifications: &[TaggedMessage],
     ) -> Result<usize> {
-        let config = crate::turn::completion_factory::loop_config_for_request(
-            &self.agent_config,
-            preamble,
+        let prepare::RequestInputs {
             request,
             aggregate_token_budget,
+            resume_from_history,
+            ..
+        } = inputs;
+        let prepare::PromptAssembly {
+            skill_reminders,
+            request_context_message,
+            folded_prompts,
+            wake_notifications,
+        } = assembly;
+        let request_context_message = request_context_message.as_ref();
+        let config = crate::turn::completion_factory::loop_config_for_request(
+            &self.agent_config,
+            built.preamble.clone(),
+            request,
+            aggregate_token_budget.clone(),
             self.loop_tools.len(),
             self.account_hops,
         )?;
@@ -91,7 +100,7 @@ where
             .iter()
             .cloned()
             .map(TaggedMessage::unassociated)
-            .chain(history.iter().cloned())
+            .chain(built.messages.iter().cloned())
             .collect::<Vec<_>>();
         let (mut provider_history, prompt) = super::inference::request_entry(
             provider_history,
@@ -154,19 +163,25 @@ where
                 RequestInterruptionSource::Claimed,
             ));
         };
-        let (resume_from_history, resume_same_request, aggregate_token_budget, context_calibration) =
-            admitted?;
+        let prepare::LoadedAdmission {
+            resume_from_history,
+            resume_same_request,
+            aggregate_token_budget,
+            context_calibration,
+            last_call_seq,
+        } = admitted?;
         let trace_attrs = RequestTraceAttrs::from_request(&request);
         let agent_name = self.agent_config.agent_did.clone();
         let admission_context = AdmissionCallContext::for_request(
             &request,
             lifecycle.agent_did(),
             lifecycle.backend_id(),
-        );
+        )
+        .resumed_after(last_call_seq);
         // One capture scope for the whole request: the pre-request compaction
         // summarizer issues real provider calls whose input is the entire
-        // pre-truncated transcript, so scoping only the inference block left
-        // those calls with no ambient scope and no durable record. It must
+        // pre-truncated transcript, so capturing only the inference loop left
+        // those calls with no capture scope and no durable record. It must
         // stay a single scope instance: the per-kind sequence keeping the
         // inference loop, the summarizer, and its JSON fallback from colliding
         // on `(turn 0, attempt 0)` lives in the scope.
@@ -182,7 +197,7 @@ where
         let capture_scope = self
             .request_capture_scope(&request, lifecycle, stream_writer, &request_commit_cid)
             .await?;
-        let handled = admission::scope_request(admission_context, async {
+        let handled = async {
             let response_agent_did = lifecycle.agent_did().to_string();
             lifecycle
                 .begin_owned_execution(stream_writer)
@@ -195,9 +210,8 @@ where
                     request_hop = trace_attrs.request_hop,
                 ))
                 .await?;
-            let preparation = self.prepare_request_input(prepare::RequestInputs {
+            let inputs = prepare::RequestInputs {
                 request: &request,
-                lifecycle: &*lifecycle,
                 request_commit_cid: &request_commit_cid,
                 agent_name: &agent_name,
                 trace_attrs: &trace_attrs,
@@ -206,48 +220,36 @@ where
                 effective_seed,
                 resume_from_history,
                 resume_same_request,
-            });
+                admission: &admission_context,
+                capture: capture_scope.as_ref(),
+            };
+            let preparation = self.prepare_request_input(&*lifecycle, inputs);
             let Some(prepared) = prepare_unless_interrupted(&mut interrupt_rx, preparation).await
             else {
-                flush_received_preparation_partial("interrupted request preparation").await?;
+                flush_received_preparation_partial(
+                    capture_scope.as_ref(),
+                    "interrupted request preparation",
+                )
+                .await?;
                 return Ok(HandleRequestOutcome::Interrupted(
                     RequestInterruptionSource::Preparation,
                 ));
             };
-            let prepare::PreparedRequestInput {
-                workspace,
-                request_context_message,
-                built,
-                replay,
-                consumed_prompts,
-                folded_prompts,
-                wake_notifications,
-            } = prepared?;
-
-            let doc_id = lifecycle.request().doc_id.clone();
+            let prepared = prepared?;
 
             let inference_agent_did = lifecycle.agent_did().to_string();
             let inference_backend_id = lifecycle.backend_id().to_string();
             let result = self
                 .run_inference(
-                    &request,
-                    &doc_id,
-                    &built.messages,
-                    &wake_notifications,
-                    replay,
                     lifecycle,
                     stream_writer,
-                    &mut shutdown,
-                    &mut interrupt_rx,
-                    &request_token,
-                    aggregate_token_budget,
-                    effective_seed,
-                    workspace,
-                    request_context_message,
-                    resume_from_history,
-                    consumed_prompts,
-                    folded_prompts,
-                    context_calibration,
+                    super::inference::RequestSignals {
+                        shutdown: &mut shutdown,
+                        interrupt_rx: &mut interrupt_rx,
+                        request_token: &request_token,
+                    },
+                    inputs,
+                    prepared,
                 )
                 .instrument(tracing::info_span!(
                     "request.run_inference",
@@ -276,14 +278,9 @@ where
 
             resolve_inference_outcome(lifecycle, &request, &request_token, &interrupt_rx, result)
                 .await
-        });
+        };
 
-        match capture_scope {
-            Some(scope) => {
-                gents_inference::rendered_request::scope::scope_request(scope, handled).await
-            }
-            None => handled.await,
-        }
+        Box::pin(handled).await
     }
 }
 

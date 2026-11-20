@@ -2,8 +2,9 @@
 //! rather than a generic opener because a packaged build's environment cannot
 //! open a working browser; the bridge strips the package's contributions first.
 
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::host_browser;
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 #[tauri::command]
 pub async fn desktop_open_external_url(url: String) -> Result<(), BridgeError> {

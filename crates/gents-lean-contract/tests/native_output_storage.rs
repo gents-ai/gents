@@ -26,7 +26,8 @@ fn node_identity() -> String {
             remote_signer: None,
             signing_authorization: None,
         },
-    );
+    )
+    .expect("the signing identity registers");
     did
 }
 

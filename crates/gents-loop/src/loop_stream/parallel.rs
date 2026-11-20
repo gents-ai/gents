@@ -462,7 +462,7 @@ mod control_tests {
                 token.cancel();
             }
             self.request_tokens.lock().await.push(token.clone());
-            let runtime = context.runtime_unchecked().map(|mut runtime| {
+            let runtime = context.runtime().map(|mut runtime| {
                 runtime.cancellation_token = token.clone();
                 runtime
             });
@@ -484,14 +484,7 @@ mod control_tests {
                         },
                     )
                 })));
-            let runtime = hook.runtime_unchecked();
-            ForegroundResult::Settled(
-                crate::tool_call_lifecycle::runtime::enter_ambient_runtime(
-                    runtime.as_ref(),
-                    call(hook, None),
-                )
-                .await,
-            )
+            ForegroundResult::Settled(call(hook, None).await)
         }
         async fn on_completion_call_with_context(
             &self,
@@ -628,7 +621,7 @@ mod control_tests {
                     tools,
                     Some(hook.clone()),
                     None,
-                    crate::tool::ToolCallEnvelope::ambient(),
+                    crate::tool::ToolCallEnvelope::default(),
                     false,
                     None,
                 ),
@@ -673,7 +666,7 @@ mod control_tests {
             tools,
             Some(hook.clone()),
             None,
-            crate::tool::ToolCallEnvelope::ambient(),
+            crate::tool::ToolCallEnvelope::default(),
             false,
             Some(admission_tx),
         );
@@ -774,7 +767,7 @@ mod control_tests {
                 tools,
                 Some(hook.clone()),
                 None,
-                crate::tool::ToolCallEnvelope::ambient(),
+                crate::tool::ToolCallEnvelope::default(),
                 false,
                 None,
             ),
@@ -846,7 +839,7 @@ mod control_tests {
                 tools,
                 Some(hook.clone()),
                 None,
-                crate::tool::ToolCallEnvelope::ambient(),
+                crate::tool::ToolCallEnvelope::default(),
                 false,
                 None,
             )

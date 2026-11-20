@@ -39,7 +39,8 @@ private def context : StepContext :=
   , engineDigest := "engine-1", engineProvenanceOperator := true
   , maxHop := none, targetHop := fun _ => 0
   , cwdAllowed := fun _ => true, within := fun base cwd => base == cwd
-  , liveBackground := 0, startedByJob := false, adoptionFacts := facts
+  , liveBackground := 0, backgroundLimit := Background.backgroundLimit none
+  , startedByJob := false, adoptionFacts := facts
   , callerScope
   , controlTarget := fun d =>
       if d == "own" then some (callerScope, true)
@@ -194,10 +195,12 @@ theorem duplicate_handle_is_suffixed_and_the_scratch_path_is_unchanged :
 
 /-- A later step of the adopted job `own`, whose one child in slot `s` is
 live, answering `spawn` (one spawn of `worker` in slot `later`) or nothing.
-The runtime reads its Node's hop cap: `capReadable` with `cap`, or a Node it
-cannot read. The Agent's own view of the Node plays no part. -/
+The runtime uses its Node's hop cap: `nodeUsable` with `cap`, or a Node it may
+not use (`Identity.Household.runtimeMayUse`), which is unavailable and bounds
+every spawn at hop 0 even though the hosting runtime still reads it (gents#3935).
+The Agent's own view of the Node plays no part. -/
 structure LaterStep where
-  capReadable : Bool
+  nodeUsable : Bool
   cap : Option Nat
   spawn : Bool
   deriving ToJson
@@ -216,27 +219,29 @@ private def laterOutput (spawn : Bool) : StepOutput :=
 
 private def laterContext (l : LaterStep) : StepContext :=
   { context with
-    maxHop := CausalHop.observedHopBound (if l.capReadable then some l.cap else none) }
+    maxHop := CausalHop.observedHopBound (if l.nodeUsable then some l.cap else none) }
+
+def laterObserved (l : LaterStep) : LaterObserved :=
+  match admitStepGuarded (laterContext l) ownJob (laterOutput l.spawn) with
+  | .ok j =>
+    { code := none, rowState := rowStateWire j.state
+    , spawnedLater := j.children.any (·.key.slot == "later") }
+  | .error r =>
+    { code := r.code
+    , rowState := rowStateWire (settleStepGuarded (laterContext l) ownJob (laterOutput l.spawn)
+        observation).1.state
+    , spawnedLater := false }
 
 @[conformance_family]
 def laterStep : Conformance.Family LaterStep LaterObserved where
   inputs :=
-    [ { capReadable := true, cap := none, spawn := true }
-    , { capReadable := true, cap := some 0, spawn := true }
-    , { capReadable := true, cap := some 1, spawn := true }
-    , { capReadable := false, cap := none, spawn := true }
-    , { capReadable := false, cap := none, spawn := false }
-    , { capReadable := true, cap := some 0, spawn := false } ]
-  model := fun l =>
-    match admitStepGuarded (laterContext l) ownJob (laterOutput l.spawn) with
-    | .ok j =>
-      { code := none, rowState := rowStateWire j.state
-      , spawnedLater := j.children.any (·.key.slot == "later") }
-    | .error r =>
-      { code := r.code
-      , rowState := rowStateWire (settleStepGuarded (laterContext l) ownJob (laterOutput l.spawn)
-          observation).1.state
-      , spawnedLater := false }
+    [ { nodeUsable := true, cap := none, spawn := true }
+    , { nodeUsable := true, cap := some 0, spawn := true }
+    , { nodeUsable := true, cap := some 1, spawn := true }
+    , { nodeUsable := false, cap := none, spawn := true }
+    , { nodeUsable := false, cap := none, spawn := false }
+    , { nodeUsable := true, cap := some 0, spawn := false } ]
+  model := laterObserved
 
 theorem later_step_hop_cap_ignores_agent_node_visibility_and_fails_closed :
     (admitStepGuarded (laterContext ⟨true, none, true⟩) ownJob (laterOutput true)).toOption.isSome ∧

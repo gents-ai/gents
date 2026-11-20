@@ -1,0 +1,4 @@
+---- MODULE MCUsageRecordObservationReadOnce ----
+EXTENDS UsageRecordObservation
+
+====

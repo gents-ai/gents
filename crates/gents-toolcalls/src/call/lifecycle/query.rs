@@ -451,6 +451,7 @@ impl ToolCallLifecycle {
             cancel_cause,
             selected_tool_identity,
             await_mode,
+            background_limit: Default::default(),
         }))
     }
 }
@@ -541,7 +542,7 @@ mod tests {
     async fn load_preserves_requester_route_and_selected_tool_identity() {
         use crate::call::lifecycle::admission_fixture::{
             publish_accepted_on_claimed_request, published_admission_with_owner,
-            PublishedAdmissionOptions,
+            AcceptedFixtureCall, PublishedAdmissionOptions,
         };
         // The request is client-admitted for its User and claimed by its
         // selected Agent; the requester route is the User, not the Agent.
@@ -573,12 +574,14 @@ mod tests {
             node.clone(),
             &mut request,
             &fixture.node_did,
-            1,
-            "call_tool",
-            "tool-call-routed",
-            arguments,
-            AwaitMode::Foreground,
-            false,
+            AcceptedFixtureCall {
+                turn: 1,
+                tool_name: "call_tool",
+                tool_call_id: "tool-call-routed",
+                arguments,
+                await_mode: AwaitMode::Foreground,
+                start_running: false,
+            },
         )
         .await
         .expect("canonical publication accepted call_tool")

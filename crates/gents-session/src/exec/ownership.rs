@@ -115,9 +115,6 @@ impl LiveProcessEvidenceOwner {
 }
 
 impl ProcessObservation {
-    #[cfg(test)]
-    pub(crate) const ALL: [Self; 3] = [Self::Running, Self::Exited, Self::Unowned];
-
     #[cfg(any(test, feature = "test-fixtures"))]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -384,21 +381,6 @@ impl ProcessRecorder {
     }
 }
 
-tokio::task_local! {
-    static PROCESS_RECORDER: ProcessRecorder;
-}
-
-pub async fn scope_process_recorder<F>(recorder: ProcessRecorder, future: F) -> F::Output
-where
-    F: std::future::Future,
-{
-    PROCESS_RECORDER.scope(recorder, future).await
-}
-
-pub(super) fn current_process_recorder() -> Option<ProcessRecorder> {
-    PROCESS_RECORDER.try_with(Clone::clone).ok()
-}
-
 impl std::fmt::Debug for ProcessRecorder {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -408,46 +390,10 @@ impl std::fmt::Debug for ProcessRecorder {
     }
 }
 
-impl ProcessRecorder {
-    fn same_owner(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self._record, &other._record)
-    }
-}
-
-/// Debug builds only: panics when an explicit recorder differs from the
-/// ambient one. Exists while the task-local recorder does (#3765).
-#[track_caller]
-pub(super) fn debug_assert_same_recorder(
-    explicit: Option<&ProcessRecorder>,
-    ambient: Option<&ProcessRecorder>,
-) {
-    if !cfg!(debug_assertions) {
-        return;
-    }
-    let same = match (explicit, ambient) {
-        (Some(explicit), Some(ambient)) => explicit.same_owner(ambient),
-        (None, None) => true,
-        _ => false,
-    };
-    assert!(
-        same,
-        "explicit process recorder differs from the ambient one: explicit present {}, ambient present {}",
-        explicit.is_some(),
-        ambient.is_some()
-    );
-}
-
 /// The process recorder of the tool call `envelope` serves, if its owner
 /// records the processes it spawns.
-#[track_caller]
 pub fn process_recorder(envelope: &gents_loop::tool::ToolCallEnvelope) -> Option<ProcessRecorder> {
-    let extensions = envelope.extensions();
-    if extensions.is_ambient() {
-        return current_process_recorder();
-    }
-    let explicit = extensions.get::<ProcessRecorder>().cloned();
-    debug_assert_same_recorder(explicit.as_ref(), current_process_recorder().as_ref());
-    explicit
+    envelope.extensions().get::<ProcessRecorder>().cloned()
 }
 
 pub fn with_process_recorder(
@@ -696,7 +642,7 @@ mod platform {
 // A test-owned process group. Tests signal only groups spawned here.
 #[cfg(all(any(test, feature = "test-fixtures"), unix))]
 pub mod test_support {
-    use super::{scope_process_recorder, ProcessIdentity, ProcessRecorder};
+    use super::{ProcessIdentity, ProcessRecorder};
     use crate::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
     use tokio_util::sync::CancellationToken;
 
@@ -723,21 +669,18 @@ pub mod test_support {
                 }
             });
             let token = CancellationToken::new();
-            let task = tokio::spawn(scope_process_recorder(
-                observer,
-                run_managed_exec(ManagedExecRequest {
-                    argv: vec!["sleep".into(), "60".into()],
-                    cwd: std::env::temp_dir(),
-                    deadline_at: None,
-                    cancellation_token: token.clone(),
-                    max_output_bytes: 1024,
-                    stdin: Vec::new(),
-                    environment: None,
-                    tool_name: Some("process-ownership-test".into()),
-                    live_output: None,
-                    process_recorder: None,
-                }),
-            ));
+            let task = tokio::spawn(run_managed_exec(ManagedExecRequest {
+                argv: vec!["sleep".into(), "60".into()],
+                cwd: std::env::temp_dir(),
+                deadline_at: None,
+                cancellation_token: token.clone(),
+                max_output_bytes: 1024,
+                stdin: Vec::new(),
+                environment: None,
+                tool_name: Some("process-ownership-test".into()),
+                live_output: None,
+                process_recorder: Some(observer),
+            }));
             let identity = receiver.await.expect("test process was recorded");
             Self {
                 identity,
@@ -850,5 +793,50 @@ mod conformance {
         families::background_process_control_may_settle_terminal::replay(|i| {
             may_settle_native(i.intent, i.evidence)
         });
+    }
+
+    #[test]
+    fn process_stop_host_verdicts_match_lean() {
+        gents_lean_vocab::families::process_stop_host::replay::<
+            CancelProcessReply,
+            ProcessObservation,
+            ProcessStopOutcome,
+        >(|i| {
+            let outcome = ProcessStopOutcome::from_observations(i.before, i.after);
+            gents_lean_vocab::families::process_stop_host::HostOutput {
+                outcome,
+                may_terminate: i.before.may_terminate(),
+                retain_record: i.after.retain_process_record(),
+                cancel_reply: outcome.cancel_reply(),
+            }
+        });
+    }
+
+    #[test]
+    fn process_stop_live_settlement_matches_lean() {
+        gents_lean_vocab::families::process_stop_live_settlement::replay::<
+            LiveProcessEvidence,
+            ProcessStopOutcome,
+        >(
+            |i| gents_lean_vocab::families::process_stop_live_settlement::LiveOutput {
+                outcome: settle_live_cancel(i.worker_released, i.live_evidence),
+                settle_completed: may_settle_native(
+                    NativeTerminalIntent::Completed,
+                    i.live_evidence,
+                ),
+                settle_cancelled: may_settle_native(
+                    NativeTerminalIntent::Cancelled,
+                    i.live_evidence,
+                ),
+                settle_timed_out: may_settle_native(
+                    NativeTerminalIntent::TimedOut,
+                    i.live_evidence,
+                ),
+                settle_failed: may_settle_native(NativeTerminalIntent::Failed, i.live_evidence),
+                settle_panicked: may_settle_native(NativeTerminalIntent::Panicked, i.live_evidence),
+                retire_before_commit: retire_stop_receipt(false),
+                retire_after_commit: retire_stop_receipt(true),
+            },
+        );
     }
 }

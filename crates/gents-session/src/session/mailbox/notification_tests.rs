@@ -311,7 +311,7 @@ async fn content_tool_provenance_follows_lean_model() {
             let receipt = tool
                 .call_with_request(
                     args,
-                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                    &gents_loop::tool::ToolCallEnvelope::default(),
                     &request_context,
                 )
                 .await
@@ -432,7 +432,7 @@ async fn question_files_an_ask_whatever_the_surface_policy_and_refuses_invalid_p
         optional: None,
         recommended_order: None,
     };
-    let envelope = gents_loop::tool::ToolCallEnvelope::ambient();
+    let envelope = gents_loop::tool::ToolCallEnvelope::default();
     let call = |args: MailboxContentArgs| tool.call_with_request(args, &envelope, &request_context);
     let content = |title: &str, payload: Option<&str>, question: Option<MailboxQuestion>| {
         MailboxContentArgs {
