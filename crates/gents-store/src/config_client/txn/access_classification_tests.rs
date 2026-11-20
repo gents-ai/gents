@@ -144,6 +144,10 @@ fn wrapped(wrapper: &str, failure: AccessFailure, erasure: Erasure) -> AccessCla
         "legacy_backend_preflight_error_query" => {
             classify_erased(erasure, LegacyBackendPreflightError::Query(access))
         }
+        "own_grant_error_unanswered" => classify_erased(
+            erasure,
+            crate::config_client::owed::OwnGrantError::Unanswered(access),
+        ),
         other => panic!(
             "store owner variant {other} has no constructor here; add it with its \
              `AccessClassification.StoreWrapper` constructor"
