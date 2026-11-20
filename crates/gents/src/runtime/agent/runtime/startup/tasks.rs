@@ -16,7 +16,7 @@ use gents_automation::triggers::runtime_snapshot::{
 };
 use gents_inference::admission::AdmissionRegistry;
 use gents_p2p::p2p_reconcile::{EnrollmentAuthorityHandle, EnrollmentAuthorityOwner};
-use gents_tools::mcp::health::{spawn_health_checker, ServiceHealthMap};
+use gents_tools::mcp::health::{spawn_health_checker, HealthCheckerRuntime, ServiceHealthMap};
 use gents_tools::surface::ToolRuntimeContext;
 
 #[derive(Clone, Copy)]
@@ -81,14 +81,16 @@ pub(super) fn spawn_health_probes(
     mpsc::Receiver<()>,
 ) {
     let health_checker = AbortOnDropHandle::new(spawn_health_checker(
-        agent.node.clone(),
-        agent.mcp_pool.clone(),
-        health_map.clone(),
-        agent.local_hostname.clone(),
-        agent.local_subnet.clone(),
+        HealthCheckerRuntime {
+            node: agent.node.clone(),
+            node_did: agent.node_did().to_string(),
+            mcp_pool: agent.mcp_pool.clone(),
+            health_map: health_map.clone(),
+            local_hostname: agent.local_hostname.clone(),
+            local_subnet: agent.local_subnet.clone(),
+            options: agent.health_checker_options.clone(),
+        },
         cancel.child_token(),
-        agent.health_checker_options.clone(),
-        agent.node_did().to_string(),
     ));
     let (backend_health_events_tx, backend_health_events_rx) = mpsc::channel::<()>(1);
     let backend_prober =

@@ -270,13 +270,15 @@ async fn remembered_invocations_until_revocation(launch: bool) {
                     &call,
                     &tools,
                     "bash",
-                    "printf",
-                    &args,
-                    None,
-                    Duration::from_secs(10),
+                    crate::native::CommandRequest {
+                        command_name: "printf",
+                        args: &args,
+                        cwd: None,
+                        timeout: Duration::from_secs(10),
+                        raw_json: false,
+                        max_output_chars: 1024,
+                    },
                     &policy,
-                    false,
-                    1024,
                 )
                 .await?;
                 assert!(output.contains("remembered-invocation"));
@@ -360,13 +362,15 @@ async fn one_time_workspace_approval_creates_a_profile_only_inside_its_write_roo
                 &call,
                 &tools,
                 "bash",
-                "/bin/sh",
-                &args,
-                None,
-                Duration::from_secs(10),
+                crate::native::CommandRequest {
+                    command_name: "/bin/sh",
+                    args: &args,
+                    cwd: None,
+                    timeout: Duration::from_secs(10),
+                    raw_json: false,
+                    max_output_chars: 4096,
+                },
                 &policy,
-                false,
-                4096,
             )
         };
         let (operator, observation) =
@@ -524,13 +528,15 @@ async fn guarded_command_launch_rejects_unsupported_isolation_before_asking() {
         &call,
         &tools,
         "bash_unrestricted",
-        "/bin/sh",
-        &args,
-        None,
-        Duration::from_secs(1),
+        crate::native::CommandRequest {
+            command_name: "/bin/sh",
+            args: &args,
+            cwd: None,
+            timeout: Duration::from_secs(1),
+            raw_json: false,
+            max_output_chars: 1024,
+        },
         &command_policy,
-        false,
-        1024,
     )
     .await
     .unwrap_err();

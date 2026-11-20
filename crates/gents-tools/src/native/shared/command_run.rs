@@ -15,22 +15,30 @@ use crate::runtime_context::tool_execution_bounds;
 use gents_loop::tool_call_lifecycle::FailureClass;
 use gents_session::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "run_command_for_test is called by tests outside the toolset module"
-)]
+pub struct CommandRequest<'a> {
+    pub command_name: &'a str,
+    pub args: &'a [String],
+    pub cwd: Option<&'a str>,
+    pub timeout: Duration,
+    pub raw_json: bool,
+    pub max_output_chars: usize,
+}
+
 pub async fn run_command(
     call: &gents_loop::tool::ToolCallEnvelope,
     context: &ToolContext,
     tool_name: &'static str,
-    command_name: &str,
-    args: &[String],
-    cwd: Option<&str>,
-    timeout: Duration,
+    request: CommandRequest<'_>,
     policy: &CommandExecutionPolicy,
-    raw_json: bool,
-    max_output_chars: usize,
 ) -> std::result::Result<String, ToolError> {
+    let CommandRequest {
+        command_name,
+        args,
+        cwd,
+        timeout,
+        raw_json,
+        max_output_chars,
+    } = request;
     let policy = effective_command_policy(call, policy);
     validate_command_policy(command_name, args, &policy)?;
     let cwd = context.resolve_existing_dir(cwd)?;

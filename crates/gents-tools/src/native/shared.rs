@@ -15,6 +15,7 @@ pub(super) use command::command_output::{captured_channel, stopped_stream, trunc
 pub(super) use command::command_run::run_command;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use command::command_run::run_command as run_command_for_test;
+pub use command::command_run::CommandRequest;
 pub use command::command_validation::validate_command_policy;
 #[cfg(test)]
 pub(super) use command::command_validation::validate_read_only_command;

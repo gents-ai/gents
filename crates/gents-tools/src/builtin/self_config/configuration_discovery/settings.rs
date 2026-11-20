@@ -148,14 +148,16 @@ impl Scanner {
                 self.emit(
                     source,
                     relative,
-                    DiscoveryCategory::RemoteTool,
-                    name,
-                    DiscoveryItemState::Unknown,
-                    DiscoveryFacts::UnsupportedSetting {
-                        key: sanitize_text(name),
-                        value_type: value_type(&servers[name]).to_owned(),
+                    ItemDraft {
+                        category: DiscoveryCategory::RemoteTool,
+                        display_label: name,
+                        state: DiscoveryItemState::Unknown,
+                        facts: DiscoveryFacts::UnsupportedSetting {
+                            key: sanitize_text(name),
+                            value_type: value_type(&servers[name]).to_owned(),
+                        },
+                        mapping: MappingSupport::unsupported("remote tool entry was not an object"),
                     },
-                    MappingSupport::unsupported("remote tool entry was not an object"),
                 );
                 continue;
             };
@@ -207,13 +209,7 @@ impl Scanner {
             }
             header_keys.sort();
             header_keys.dedup();
-            self.emit(
-                source,
-                relative,
-                DiscoveryCategory::RemoteTool,
-                name,
-                state,
-                DiscoveryFacts::RemoteTool {
+            self.emit(source, relative, ItemDraft { category: DiscoveryCategory::RemoteTool, display_label: name, state, facts: DiscoveryFacts::RemoteTool {
                     transport: config
                         .get("type")
                         .and_then(Value::as_str)
@@ -225,11 +221,9 @@ impl Scanner {
                     argument_count: args.map_or(0, Vec::len),
                     environment_keys,
                     header_keys,
-                },
-                MappingSupport::partial(
+                }, mapping: MappingSupport::partial(
                     "discovery preserves disabled state and inert metadata but does not translate or launch the server",
-                ),
-            );
+                ) });
         }
     }
 
@@ -250,21 +244,13 @@ impl Scanner {
                 .collect();
             executables.sort();
             executables.dedup();
-            self.emit(
-                source,
-                relative,
-                DiscoveryCategory::Hook,
-                event,
-                DiscoveryItemState::Unknown,
-                DiscoveryFacts::Hook {
+            self.emit(source, relative, ItemDraft { category: DiscoveryCategory::Hook, display_label: event, state: DiscoveryItemState::Unknown, facts: DiscoveryFacts::Hook {
                     event: sanitize_text(event),
                     command_count: commands.len(),
                     executables,
-                },
-                MappingSupport::unsupported(
+                }, mapping: MappingSupport::unsupported(
                     "foreign hook ordering, authority, matching, and lifecycle semantics are not imported",
-                ),
-            );
+                ) });
         }
     }
 
@@ -280,21 +266,13 @@ impl Scanner {
             .filter_map(scalar_summary)
             .map(|value| bounded_sanitized_text(&value))
             .collect::<Vec<_>>();
-        self.emit(
-            source,
-            relative,
-            DiscoveryCategory::Permission,
-            effect,
-            DiscoveryItemState::Enabled,
-            DiscoveryFacts::Permission {
+        self.emit(source, relative, ItemDraft { category: DiscoveryCategory::Permission, display_label: effect, state: DiscoveryItemState::Enabled, facts: DiscoveryFacts::Permission {
                 effect: sanitize_text(effect),
                 rule_count: rules.len(),
                 rules: sanitized_rules,
-            },
-            MappingSupport::unsupported(
+            }, mapping: MappingSupport::unsupported(
                 "foreign permission rules are retained for review but cannot be claimed equivalent to Gents authority",
-            ),
-        );
+            ) });
     }
 
     pub(super) fn model_item(
@@ -304,22 +282,14 @@ impl Scanner {
         model: &str,
         provider: Option<&str>,
     ) {
-        self.emit(
-            source,
-            relative,
-            DiscoveryCategory::ModelPreference,
-            "default",
-            DiscoveryItemState::Enabled,
-            DiscoveryFacts::ModelPreference {
+        self.emit(source, relative, ItemDraft { category: DiscoveryCategory::ModelPreference, display_label: "default", state: DiscoveryItemState::Enabled, facts: DiscoveryFacts::ModelPreference {
                 role: sanitize_text("default"),
                 model: sanitize_text(model),
                 provider: provider.map(sanitize_text),
                 endpoint_origin: None,
-            },
-            MappingSupport::partial(
+            }, mapping: MappingSupport::partial(
                 "model names and provider catalogs differ; this is a preference hint, not a compatible binding",
-            ),
-        );
+            ) });
     }
 
     pub(super) fn unsupported_setting(
@@ -329,20 +299,12 @@ impl Scanner {
         key: &str,
         value: &Value,
     ) {
-        self.emit(
-            source,
-            relative,
-            DiscoveryCategory::Permission,
-            &format!("unsupported setting: {key}"),
-            DiscoveryItemState::Unknown,
-            DiscoveryFacts::UnsupportedSetting {
+        self.emit(source, relative, ItemDraft { category: DiscoveryCategory::Permission, display_label: &format!("unsupported setting: {key}"), state: DiscoveryItemState::Unknown, facts: DiscoveryFacts::UnsupportedSetting {
                 key: sanitize_text(key),
                 value_type: value_type(value).to_owned(),
-            },
-            MappingSupport::unsupported(
+            }, mapping: MappingSupport::unsupported(
                 "setting is retained by name and type only; its value and semantics were not imported",
-            ),
-        );
+            ) });
     }
 
     pub(super) fn unsupported_nested_settings(

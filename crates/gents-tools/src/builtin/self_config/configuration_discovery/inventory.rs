@@ -3,18 +3,23 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::Path;
 
+pub(super) struct ItemDraft<'a> {
+    pub(super) category: DiscoveryCategory,
+    pub(super) display_label: &'a str,
+    pub(super) state: DiscoveryItemState,
+    pub(super) facts: DiscoveryFacts,
+    pub(super) mapping: MappingSupport,
+}
+
 impl Scanner {
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn emit(
-        &mut self,
-        source: &mut SourceScan,
-        relative: &Path,
-        category: DiscoveryCategory,
-        display_label: &str,
-        state: DiscoveryItemState,
-        facts: DiscoveryFacts,
-        mapping: MappingSupport,
-    ) {
+    pub(super) fn emit(&mut self, source: &mut SourceScan, relative: &Path, draft: ItemDraft<'_>) {
+        let ItemDraft {
+            category,
+            display_label,
+            state,
+            facts,
+            mapping,
+        } = draft;
         if self.inventory.items.len() >= self.limits.max_items {
             source.partial = true;
             if !self.item_limit_reported {

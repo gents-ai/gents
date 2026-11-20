@@ -116,6 +116,7 @@ pub use shared::run_command_for_test;
 pub(crate) use shared::shell_join;
 #[cfg(test)]
 pub(crate) use shared::validate_command_policy;
+pub use shared::CommandRequest;
 pub use shared::ToolContext;
 pub(crate) use shared::{
     admit_host_executable, current_managed_command_credential_snapshot, default_lsp_network_mode,
