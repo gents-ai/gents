@@ -109,17 +109,22 @@ impl Receipt {
     }
 }
 
-fn service_config(plan: &Plan) -> Result<NativeServiceConfig> {
+fn job_config(plan: &Plan) -> Result<NativeServiceConfig> {
     let mut config = NativeServiceConfig::new(
         plan.home.clone(),
         operation_dir(&plan.home, plan.id).join("gents"),
     )?;
+    config.service_config_dir = plan.service_config_dir.clone();
+    config.user_home = plan.user_home.clone();
+    Ok(config)
+}
+
+fn service_config(plan: &Plan) -> Result<NativeServiceConfig> {
+    let mut config = job_config(plan)?;
     if !plan.intent.executable_update {
         config.executable = NativeServiceManager::new(config.clone())?
             .definition_executable(&plan.prior_definition)?;
     }
-    config.service_config_dir = plan.service_config_dir.clone();
-    config.user_home = plan.user_home.clone();
     Ok(config)
 }
 
@@ -359,21 +364,21 @@ fn metadata(schema_checked: bool) -> serde_json::Value {
 
 pub async fn run(home: PathBuf, id: uuid::Uuid) -> Result<()> {
     let directory = operation_dir(&home, id);
-    let lock_dir = directory.clone();
-    let _lock =
-        tokio::task::spawn_blocking(move || files::lock(&lock_dir.join("helper.lock"))).await??;
     let plan: Plan = files::read_json_async(&directory.join("plan.json")).await?;
     anyhow::ensure!(
         plan.version == 1 && plan.id == id && plan.home == tokio::fs::canonicalize(&home).await?,
         "update plan does not match helper invocation"
     );
-    let guarded = service_config(&plan)?;
+    let guarded = job_config(&plan)?;
     tokio::task::spawn_blocking(move || -> Result<()> {
         Ok(crate::lifecycle::refuse_update_from_its_runtime(
             &NativeServiceManager::new(guarded)?,
         )?)
     })
     .await??;
+    let lock_dir = directory.clone();
+    let _lock =
+        tokio::task::spawn_blocking(move || files::lock(&lock_dir.join("helper.lock"))).await??;
     let mut receipt: Receipt = files::read_json_async(&directory.join("receipt.json")).await?;
     if matches!(receipt.phase, Phase::Healthy | Phase::Failed) {
         return cleanup_helper(&plan).await;
