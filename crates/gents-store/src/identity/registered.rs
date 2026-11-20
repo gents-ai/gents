@@ -3,8 +3,8 @@ use defra_core::signing::{SigningConfig, SigningKeyType};
 use identity::{FullIdentity as _, RawIdentity};
 
 use super::{
-    known_public_key_for_did, register_public_key, verify_with_public_key, IdentityError,
-    KnownPublicKey, NodeIdentity, Result, ServiceAccount,
+    known_public_key_for_did, verify_with_public_key, IdentityError, KnownPublicKey, NodeIdentity,
+    Result, ServiceAccount,
 };
 
 pub struct RegisteredIdentity {
@@ -22,11 +22,6 @@ impl RegisteredIdentity {
         let config = defra_core::signing::get_identity(&did)
             .ok_or_else(|| IdentityError::NoDefraSigningIdentity { did: did.clone() })?;
         validate_registered_identity_config(&did, &config)?;
-        register_public_key(
-            &did,
-            signing_key_type_to_crypto_key_type(config.key_type)?,
-            config.public_key_bytes.clone(),
-        );
         Ok(Self {
             did,
             service_account,

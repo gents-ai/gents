@@ -2,23 +2,54 @@ use super::dispatch::TurnContextDecision;
 use super::*;
 use gents_protocol::error_chain::ErrorChain;
 
-#[allow(clippy::too_many_arguments)]
+pub(in crate::loop_stream) struct TurnInputs<'a, M> {
+    pub(in crate::loop_stream) model: &'a M,
+    pub(in crate::loop_stream) tools: &'a [Box<dyn ToolDyn>],
+    pub(in crate::loop_stream) config: &'a LoopConfig,
+    pub(in crate::loop_stream) turn_index: usize,
+}
+
+pub(in crate::loop_stream) struct TurnState<'a> {
+    pub(in crate::loop_stream) history: &'a mut Vec<TaggedMessage>,
+    pub(in crate::loop_stream) new_messages: &'a mut Vec<TaggedMessage>,
+    pub(in crate::loop_stream) replay: &'a mut LoopReplayInput,
+    pub(in crate::loop_stream) reduction_chain_keys: &'a mut Vec<String>,
+    pub(in crate::loop_stream) active_reduction_keys: &'a mut Vec<String>,
+}
+
+pub(in crate::loop_stream) struct RejectedProviderInput {
+    pub(in crate::loop_stream) overflow: crate::error::ContextOverflow,
+    pub(in crate::loop_stream) input_tokens: usize,
+}
+
+struct ReductionPlan {
+    admission: crate::compaction::ReductionAdmission,
+    provider_budget: usize,
+    pre_compaction_tokens: usize,
+}
+
 pub(in crate::loop_stream) async fn build_budgeted_request<M>(
-    model: &M,
-    history: &mut Vec<TaggedMessage>,
-    new_messages: &mut Vec<TaggedMessage>,
-    tools: &[Box<dyn ToolDyn>],
-    config: &LoopConfig,
-    replay: &mut LoopReplayInput,
-    turn_index: usize,
-    reduction_chain_keys: &mut Vec<String>,
-    active_reduction_keys: &mut Vec<String>,
+    turn: &TurnInputs<'_, M>,
+    state: &mut TurnState<'_>,
 ) -> Result<(CompletionRequest, TurnContextDecision), crate::error::LoopStreamError>
 where
     M: CompletionModel,
 {
-    let request =
-        assemble_provider_request(model, history, new_messages, tools, config, replay).await?;
+    let TurnInputs {
+        model,
+        tools,
+        config,
+        ..
+    } = *turn;
+    let request = assemble_provider_request(
+        model,
+        state.history,
+        state.new_messages,
+        tools,
+        config,
+        state.replay,
+    )
+    .await?;
     let projection =
         completion_request_input_components(&request, config.provider_input_counter.as_ref())?;
     let before_tokens = projection.estimated_input_tokens;
@@ -50,18 +81,13 @@ where
         ));
     };
     reduce_and_rebuild(
-        model,
-        history,
-        new_messages,
-        tools,
-        config,
-        replay,
-        turn_index,
-        reduction_chain_keys,
-        active_reduction_keys,
-        admission,
-        provider_budget,
-        context.tokens,
+        turn,
+        state,
+        ReductionPlan {
+            admission,
+            provider_budget,
+            pre_compaction_tokens: context.tokens,
+        },
     )
     .await
 }
@@ -72,23 +98,24 @@ where
 /// (`overflow.limit`, else the configured window) less the output reserve, in
 /// this estimator's units at that ratio, so the reduced request is measured
 /// against what the provider will count.
-#[allow(clippy::too_many_arguments)]
 pub(in crate::loop_stream) async fn rebuild_after_provider_overflow<M>(
-    model: &M,
-    history: &mut Vec<TaggedMessage>,
-    new_messages: &mut Vec<TaggedMessage>,
-    tools: &[Box<dyn ToolDyn>],
-    config: &LoopConfig,
-    replay: &mut LoopReplayInput,
-    turn_index: usize,
-    reduction_chain_keys: &mut Vec<String>,
-    active_reduction_keys: &mut Vec<String>,
-    overflow: crate::error::ContextOverflow,
-    rejected_input_tokens: usize,
+    turn: &TurnInputs<'_, M>,
+    state: &mut TurnState<'_>,
+    rejected: RejectedProviderInput,
 ) -> Result<(CompletionRequest, TurnContextDecision), crate::error::LoopStreamError>
 where
     M: CompletionModel,
 {
+    let TurnInputs {
+        model,
+        tools,
+        config,
+        turn_index,
+    } = *turn;
+    let RejectedProviderInput {
+        overflow,
+        input_tokens: rejected_input_tokens,
+    } = rejected;
     use crate::provider_input::budget;
     let provider_limit = overflow
         .limit
@@ -114,8 +141,15 @@ where
         budget::configured_output_ceiling(config.max_tokens),
     );
     let estimator_budget = config.context_calibration.estimator_budget(provider_budget);
-    let request =
-        assemble_provider_request(model, history, new_messages, tools, config, replay).await?;
+    let request = assemble_provider_request(
+        model,
+        state.history,
+        state.new_messages,
+        tools,
+        config,
+        state.replay,
+    )
+    .await?;
     let before_tokens =
         completion_request_input_components(&request, config.provider_input_counter.as_ref())?
             .estimated_input_tokens;
@@ -131,18 +165,16 @@ where
         "provider rejected the request as over its context window; compacting once"
     );
     reduce_and_rebuild(
-        model,
-        history,
-        new_messages,
-        tools,
-        config,
-        replay,
-        turn_index,
-        reduction_chain_keys,
-        active_reduction_keys,
-        crate::compaction::ReductionAdmission::required(before_tokens, estimator_budget),
-        provider_budget,
-        usize::try_from(observed_input_tokens).unwrap_or(usize::MAX),
+        turn,
+        state,
+        ReductionPlan {
+            admission: crate::compaction::ReductionAdmission::required(
+                before_tokens,
+                estimator_budget,
+            ),
+            provider_budget,
+            pre_compaction_tokens: usize::try_from(observed_input_tokens).unwrap_or(usize::MAX),
+        },
     )
     .await
 }
@@ -156,24 +188,25 @@ where
 /// The transcript, replay keys and anchor change only when the rebuilt
 /// request fits: a reduction that fails, or cannot fit, leaves the session as
 /// it was.
-#[allow(clippy::too_many_arguments)]
 async fn reduce_and_rebuild<M>(
-    model: &M,
-    history: &mut Vec<TaggedMessage>,
-    new_messages: &mut Vec<TaggedMessage>,
-    tools: &[Box<dyn ToolDyn>],
-    config: &LoopConfig,
-    replay: &mut LoopReplayInput,
-    turn_index: usize,
-    reduction_chain_keys: &mut Vec<String>,
-    active_reduction_keys: &mut Vec<String>,
-    admission: crate::compaction::ReductionAdmission,
-    provider_budget: usize,
-    pre_compaction_tokens: usize,
+    turn: &TurnInputs<'_, M>,
+    state: &mut TurnState<'_>,
+    plan: ReductionPlan,
 ) -> Result<(CompletionRequest, TurnContextDecision), crate::error::LoopStreamError>
 where
     M: CompletionModel,
 {
+    let TurnInputs {
+        model,
+        tools,
+        config,
+        turn_index,
+    } = *turn;
+    let ReductionPlan {
+        admission,
+        provider_budget,
+        pre_compaction_tokens,
+    } = plan;
     let Some(compactor) = config.turn_compactor.as_ref() else {
         return Err(StreamingError::Completion(CompletionError::RequestError(Box::new(
             std::io::Error::new(
@@ -184,17 +217,18 @@ where
         .into());
     };
     let before_tokens = admission.input_tokens();
-    let provider_messages = history
+    let provider_messages = state
+        .history
         .iter()
-        .chain(new_messages.iter())
+        .chain(state.new_messages.iter())
         .cloned()
         .collect::<Vec<_>>();
     let outcome = compactor(TurnCompactionRequest {
         messages: provider_messages,
-        required: replay.required.clone(),
+        required: state.replay.required.clone(),
         admission,
         turn_index,
-        prior_reduction_keys: reduction_chain_keys.clone(),
+        prior_reduction_keys: state.reduction_chain_keys.clone(),
         provider_call: config.provider_call.clone(),
     })
     .await
@@ -239,7 +273,7 @@ where
         &mut rebuilt_new_messages,
         tools,
         config,
-        replay,
+        state.replay,
     )
     .await?;
     let rebuilt_projection =
@@ -285,13 +319,13 @@ where
         }
         None => None,
     };
-    *history = rebuilt_history;
-    *new_messages = rebuilt_new_messages;
+    *state.history = rebuilt_history;
+    *state.new_messages = rebuilt_new_messages;
     config.context_calibration.invalidate_anchor();
     if let Some(reduction_key) = reduction_key {
-        reduction_chain_keys.push(reduction_key.clone());
-        active_reduction_keys.clear();
-        active_reduction_keys.push(reduction_key);
+        state.reduction_chain_keys.push(reduction_key.clone());
+        state.active_reduction_keys.clear();
+        state.active_reduction_keys.push(reduction_key);
     }
 
     Ok((

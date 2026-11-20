@@ -1782,7 +1782,7 @@ async fn rolling_chunk_failure_does_not_advance_session_and_retry_commits_once()
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal_state(&actors, &failed_doc, STALL_CEILING).await,
+        wait_for_request_terminal_state(&actors, &failed_doc).await,
         RequestLifecycleState::Failed
     );
     assert!(

@@ -8,7 +8,6 @@ import {
   type Route as ShellRoute,
 } from "@gents/shell";
 
-import { flag } from "@/preferences";
 import { isAppLink, linkRoute, parseLink } from "./links";
 
 /* the desktop's routes: the kit's, and a UX plugin's own page. The kit's
@@ -163,7 +162,7 @@ export function navigate(route: Route) {
     names nothing this app opens, or the person stayed where they were. */
 export function openLink(href: string): boolean {
   const link = parseLink(href);
-  if (!link || (link.kind === "pack" && !flag("packs"))) {
+  if (!link) {
     console.warn("ignored a gents link this app doesn't open", href);
     return false;
   }

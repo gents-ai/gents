@@ -9,6 +9,7 @@ import type { ProviderRecoveryApply } from "../generated/ProviderRecoveryApply.j
 import type { ProviderRecoveryResult } from "../generated/ProviderRecoveryResult.js";
 import type { SessionContextDetails } from "../generated/SessionContextDetails.js";
 import type { SessionContextDetailsRequest } from "../generated/SessionContextDetailsRequest.js";
+import type { SessionLiveDeltaRequest } from "../generated/SessionLiveDeltaRequest.js";
 import type { DesktopBackgroundToolRequest } from "../generated/DesktopBackgroundToolRequest.js";
 import type { SessionForkBeforeRequest } from "../generated/SessionForkBeforeRequest.js";
 import type { SessionForkResult } from "../generated/SessionForkResult.js";
@@ -271,16 +272,9 @@ export type DesktopApiAdapter = {
     requestId: string;
     toolCallDocId: string;
   }) => Promise<ToolFileChanges | null>;
-  fetchSessionLiveDelta?: (request: {
-    sessionId: string;
-    nodeDid?: string | null;
-    requestId: string;
-    baseLiveCursor: string;
-    baseContentByteLen: number;
-    baseContentHash: string;
-    baseReasoningByteLen: number;
-    baseReasoningHash: string;
-  }) => Promise<SessionLiveDeltaView | null>;
+  fetchSessionLiveDelta?: (
+    request: SessionLiveDeltaRequest,
+  ) => Promise<SessionLiveDeltaView | null>;
   sendChatMessage: (request: ChatSendRequest) => Promise<ChatSendResult>;
   steerPendingMessage: (
     request: PendingMessageSteerRequest,
@@ -504,7 +498,9 @@ export type DesktopApiAdapter = {
   /** installs a pack, or with `preview` reports what installing it would write */
   installPack: (request: PackInstallRequest) => Promise<PackInstallReport>;
   updatePack: (pack: string, edited: PackEditedChoice) => Promise<void>;
-  removePack: (pack: string) => Promise<void>;
+  /** `edited` says what becomes of the pack's documents edited since it was
+      installed: refused by default, or deleted with the rest (`overwrite`). */
+  removePack: (pack: string, edited?: PackEditedChoice) => Promise<void>;
   bindPackPlugin: (plugin: string, profile: string | null) => Promise<void>;
   wirePack: (request: PackWireRequest) => Promise<PackWireResult>;
   listPackWireSources: () => Promise<PackWireSources>;

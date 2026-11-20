@@ -73,13 +73,15 @@ async fn snapshot_of(
         Some(node),
         session_id,
         None,
-        Some(&page.store),
-        Some(&page.canonical_dependencies),
-        None,
-        None,
-        false,
-        true,
-        None,
+        SessionReadInputs {
+            transcript_store: Some(&page.store),
+            canonical_dependencies: Some(&page.canonical_dependencies),
+            context_store: None,
+            prompt_ownership: None,
+            context_totals_exact: false,
+            include_live_tail: true,
+            request_projection: None,
+        },
     )
     .await
     .expect("session snapshot read")

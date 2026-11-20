@@ -321,11 +321,7 @@ fn a_rewritten_target_selects_the_pool_for_where_the_bytes_go() {
         .expect("HTTPS_PROXY builds the pool");
 
     let outgoing = outgoing("https://api.anthropic.com/v1/messages");
-    let client = ClaudeHttpClient::new(None).with_test_route(
-        Arc::new(AtomicBool::new(false)),
-        "127.0.0.1",
-        8443,
-    );
+    let client = ClaudeHttpClient::new(None, Arc::default()).with_test_route("127.0.0.1", 8443);
 
     let (selected, is_proxied, target) = client.select(&shared, &outgoing).unwrap();
     assert_eq!(target.host, "127.0.0.1");
@@ -369,11 +365,8 @@ fn a_rewritten_target_that_is_proxied_uses_the_proxied_pool() {
         .expect("HTTPS_PROXY builds the pool");
 
     let outgoing = outgoing("https://127.0.0.1:8443/v1/messages");
-    let client = ClaudeHttpClient::new(None).with_test_route(
-        Arc::new(AtomicBool::new(false)),
-        "gateway.internal",
-        8443,
-    );
+    let client =
+        ClaudeHttpClient::new(None, Arc::default()).with_test_route("gateway.internal", 8443);
 
     let (selected, is_proxied, target) = client.select(&shared, &outgoing).unwrap();
     assert_eq!(target.host, "gateway.internal");

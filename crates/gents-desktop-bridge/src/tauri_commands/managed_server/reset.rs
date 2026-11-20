@@ -295,7 +295,8 @@ pub(super) fn launch_reset_helper_with_timeout(
             .arg(std::process::id().to_string())
             .arg("--desktop-executable")
             .arg(std::env::current_exe()?)
-            .env("GENTS_DESKTOP_HOME", desktop)
+            .arg("--desktop-home")
+            .arg(desktop)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());

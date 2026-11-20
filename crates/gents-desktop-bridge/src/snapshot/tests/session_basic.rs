@@ -58,23 +58,27 @@ fn session_snapshot_is_node_scoped_when_session_ids_match() {
     };
     push_canonical_text_message_for_node(
         &mut rows,
-        "msg-mini-1",
-        "shared-session",
-        None,
-        1,
-        MessageRole::User,
-        "mini 1 only",
+        CanonicalText {
+            doc_id: "msg-mini-1",
+            session_id: "shared-session",
+            request_doc_id: None,
+            sequence: 1,
+            role: MessageRole::User,
+            text: "mini 1 only",
+        },
         "did:test:mini-1",
         None,
     );
     push_canonical_text_message_for_node(
         &mut rows,
-        "msg-mini-2",
-        "shared-session",
-        None,
-        2,
-        MessageRole::User,
-        "mini 2 only",
+        CanonicalText {
+            doc_id: "msg-mini-2",
+            session_id: "shared-session",
+            request_doc_id: None,
+            sequence: 2,
+            role: MessageRole::User,
+            text: "mini 2 only",
+        },
         "did:test:mini-2",
         None,
     );

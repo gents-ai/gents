@@ -254,7 +254,7 @@ async fn foreground_handoff_after_parent_completion(
         .unwrap();
     for filler in &mut fillers {
         filler
-            .cancel_during_run(gents_session::session::tool_call_state::CancelCause::UserCancelled)
+            .cancel_during_run(gents_protocol::tool_call::CancelCause::UserCancelled)
             .await
             .unwrap();
     }
@@ -480,11 +480,14 @@ async fn refused_foreground_handoff_can_be_retried() {
     .unwrap());
     gents_store::test_support::read_when_changed(
         &node,
-        &["AgentToolCall"],
+        "AgentToolCall",
         "the refused handoff clears its request",
         async || {
             let state = access.execute(&format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{doc}" }} }}) {{ background_requested_at }} }}"#)).await.unwrap();
-            state["data"]["AgentToolCall"][0]["background_requested_at"].is_null().then_some(())
+            if state["data"]["AgentToolCall"][0]["background_requested_at"].is_null() {
+                return Ok(());
+            }
+            Err(state)
         },
     )
     .await;
@@ -589,11 +592,9 @@ async fn concurrent_background_starts_on_one_request_fill_exactly_the_ceiling() 
         .collect::<Vec<_>>();
     assert_eq!(refusals, vec![capacity]);
     for start in &mut starts {
-        if start.state() == gents_session::session::tool_call_state::ToolCallState::Running {
+        if start.state() == gents_protocol::tool_call::ToolCallState::Running {
             start
-                .cancel_during_run(
-                    gents_session::session::tool_call_state::CancelCause::UserCancelled,
-                )
+                .cancel_during_run(gents_protocol::tool_call::CancelCause::UserCancelled)
                 .await
                 .unwrap();
         }

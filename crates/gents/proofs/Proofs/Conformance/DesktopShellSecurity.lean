@@ -24,7 +24,10 @@ def cases : Json := Json.mkObj [
       ("confirmed", toJson confirmed), ("sameTarget", toJson sameTarget),
       ("expected", toJson (send gesture confirmed sameTarget))])),
   ("openExternal", toJson (bools.map fun gesture => Json.mkObj [
-      ("gesture", toJson gesture), ("expected", toJson (openExternal gesture))]))]
+      ("gesture", toJson gesture), ("expected", toJson (openExternal gesture))])),
+  ("pageWindowNavigate", toJson (bools.flatMap fun withinPage => bools.map fun gesture =>
+    Json.mkObj [("withinPage", toJson withinPage), ("gesture", toJson gesture),
+      ("expected", toJson (pageWindowNavigate withinPage gesture))]))]
 
 end Conformance.DesktopShellSecurity
 
