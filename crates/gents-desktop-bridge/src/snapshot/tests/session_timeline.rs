@@ -200,31 +200,39 @@ fn live_delta_requires_a_canonical_source() {
         request_event_version: 1,
     };
     let current = build_session_live_delta_from_store(
-        &store,
-        &store,
-        revision,
+        LiveDeltaStores {
+            request: &store,
+            store: &store,
+            revision,
+        },
         "sess-1",
         Some("did:test:amy"),
         "req-1",
-        "missing-source",
-        5,
-        "4f9f2cab",
-        0,
-        "811c9dc5",
+        LiveDeltaBase {
+            cursor: "missing-source",
+            content_byte_len: 5,
+            content_hash: "4f9f2cab",
+            reasoning_byte_len: 0,
+            reasoning_hash: "811c9dc5",
+        },
     );
     assert_eq!(current.outcome, "snapshotRequired");
     let fenced = build_session_live_delta_from_store(
-        &store,
-        &store,
-        revision,
+        LiveDeltaStores {
+            request: &store,
+            store: &store,
+            revision,
+        },
         "sess-1",
         Some("did:test:amy"),
         "req-1",
-        "other-source",
-        5,
-        "4f9f2cab",
-        0,
-        "811c9dc5",
+        LiveDeltaBase {
+            cursor: "other-source",
+            content_byte_len: 5,
+            content_hash: "4f9f2cab",
+            reasoning_byte_len: 0,
+            reasoning_hash: "811c9dc5",
+        },
     );
     assert_eq!(fenced.outcome, "snapshotRequired");
     assert!(fenced.content.is_none());

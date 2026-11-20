@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
@@ -95,10 +95,7 @@ async fn reservation_rebuilds_after_a_concurrent_agent_write() {
     let request = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "contended-request",
-        &node_did,
-        user.did(),
-        actors.agent_did(),
-        SESSION,
+        RequestScope::new(&node_did, user.did(), actors.agent_did(), SESSION),
         "submitted while the Agent is reconfigured",
         "interactive",
         canonical_now(),

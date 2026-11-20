@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use gents_host::serve::{BoundRootAgents, ServeClient};
@@ -21,6 +21,10 @@ impl ServeClient for CliServeClient {
 
     fn version(&self) -> gents_host::http::version::VersionResponse {
         crate::version::build_version()
+    }
+
+    fn host_executable(&self) -> Option<PathBuf> {
+        crate::host_executable()
     }
 
     async fn bound_root_agents(

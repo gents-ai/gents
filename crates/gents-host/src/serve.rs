@@ -351,6 +351,8 @@ pub trait ServeClient: Send + Sync {
 
     fn version(&self) -> crate::http::version::VersionResponse;
 
+    fn host_executable(&self) -> Option<PathBuf>;
+
     async fn bound_root_agents(
         &self,
         root: &Path,
@@ -830,9 +832,7 @@ async fn serve_foreground(
     });
     let serving = async {
         wait_for_embedded_http_bind(http_addr, &bind_probe_path, &bind_probe_token).await?;
-        if let Err(error) =
-            gents_store::schema::migration::ensure_all_runtime_migrations(node.clone()).await
-        {
+        if let Err(error) = gents_store::schema::catalog::ensure_runtime_owned(node.clone()).await {
             return Err(gents_store::local::storage_backend::classify_store_error(
                 error, &data_dir,
             )
@@ -887,10 +887,15 @@ async fn serve_foreground(
                 advertised_graphql_url,
                 tool_ceiling,
                 plugin_home: Some(home_dir.clone()),
+                native_executables: gents_tools::native::NativeExecutables {
+                    host: client.host_executable(),
+                    fs_runner: args.fs_runner.clone(),
+                },
                 backend_health: Some(backend_health.clone()),
                 p2p_intervals: p2p_intervals(&args),
                 p2p_network_id: args.p2p_network_id.clone(),
                 system_log: args.system_log,
+                registry_url: args.registry.clone(),
                 process_state_observer: Some(Arc::new(CliReadyObserver { tx: ready_tx })),
                 runtime_snapshot_observer: Some(Arc::new(CliRuntimeSnapshotObserver {
                     configuration_tx,
@@ -1189,12 +1194,7 @@ async fn serve_foreground(
                 tracing::info!("gents server is running local-only. Press Ctrl-C to stop.");
             }
 
-            let notices = gents_service::service_update::watch_notices(runtime_configuration_probe.clone(), home_dir.clone());
-            tokio::select! {
-                result = runtime.join() => result,
-                _ = notices => unreachable!("the notice observer remains scoped to the serving runtime"),
-            }
-
+            runtime.join().await
         }
         .await;
         outcome

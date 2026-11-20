@@ -131,7 +131,7 @@ private def setups : List HomeSetup :=
 
 @[conformance_family]
 def clientCommands : Conformance.Family ClientCommand ClientIdentityAction where
-  inputs := [HomeSelection.flag, .env, .remembered, .fallback].flatMap fun selection =>
+  inputs := [HomeSelection.flag, .remembered, .fallback].flatMap fun selection =>
     [false, true].flatMap fun keyPresent => setups.flatMap fun selected =>
       [⟨false, false⟩, ⟨true, false⟩].map fun other => ⟨selection, keyPresent, selected, other⟩
   model := commandIdentityAction

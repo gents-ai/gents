@@ -17,7 +17,6 @@ mod backup_conformance;
 mod copy_executable_tests;
 mod execute;
 mod files;
-mod notices;
 mod recovery;
 mod repair_backups;
 mod stage;
@@ -39,8 +38,6 @@ struct Plan {
     id: uuid::Uuid,
     home: PathBuf,
     node_did: String,
-    session_id: Option<String>,
-    request_id: Option<String>,
     endpoint: String,
     prior_build: String,
     intent: Intent,
@@ -65,8 +62,6 @@ struct HelperReady {
 struct Receipt {
     operation_id: uuid::Uuid,
     node_did: String,
-    session_id: Option<String>,
-    request_id: Option<String>,
     phase: Phase,
     message: String,
     updated_at: String,
@@ -114,17 +109,22 @@ impl Receipt {
     }
 }
 
-fn service_config(plan: &Plan) -> Result<NativeServiceConfig> {
+fn job_config(plan: &Plan) -> Result<NativeServiceConfig> {
     let mut config = NativeServiceConfig::new(
         plan.home.clone(),
         operation_dir(&plan.home, plan.id).join("gents"),
     )?;
+    config.service_config_dir = plan.service_config_dir.clone();
+    config.user_home = plan.user_home.clone();
+    Ok(config)
+}
+
+fn service_config(plan: &Plan) -> Result<NativeServiceConfig> {
+    let mut config = job_config(plan)?;
     if !plan.intent.executable_update {
         config.executable = NativeServiceManager::new(config.clone())?
             .definition_executable(&plan.prior_definition)?;
     }
-    config.service_config_dir = plan.service_config_dir.clone();
-    config.user_home = plan.user_home.clone();
     Ok(config)
 }
 
@@ -307,7 +307,6 @@ pub async fn status(home: Option<PathBuf>, id: uuid::Uuid) -> Result<()> {
     emit(&receipt).await
 }
 
-pub use notices::watch_notices;
 pub fn executable_digest(path: &Path) -> Result<String> {
     files::digest(path)
 }
@@ -347,14 +346,8 @@ async fn check_metadata(home: Option<PathBuf>) -> Result<serde_json::Value> {
         .into_iter()
         .map(serde_json::from_value)
         .collect::<std::result::Result<Vec<gents::defra_node::CollectionVersion>, _>>()?;
-    gents_store::schema::migration::check_migration_compatibility(&versions)?;
-    let lineage = gents_store::schema::migration::non_canonical_store_lineages(&versions)?;
-    for mismatch in &lineage {
-        eprintln!("warning: {mismatch}");
-    }
-    let mut metadata = metadata(true);
-    metadata["non_canonical_lineages"] = serde_json::json!(lineage);
-    Ok(metadata)
+    gents_store::schema::catalog::check_lineages(&versions)?;
+    Ok(metadata(true))
 }
 
 fn metadata(schema_checked: bool) -> serde_json::Value {
@@ -364,20 +357,22 @@ fn metadata(schema_checked: bool) -> serde_json::Value {
 }
 
 pub async fn run(home: PathBuf, id: uuid::Uuid) -> Result<()> {
-    let guarded_home = home.clone();
-    tokio::task::spawn_blocking(move || {
-        crate::lifecycle::refuse_update_from_its_runtime(&guarded_home)
-    })
-    .await??;
     let directory = operation_dir(&home, id);
-    let lock_dir = directory.clone();
-    let _lock =
-        tokio::task::spawn_blocking(move || files::lock(&lock_dir.join("helper.lock"))).await??;
     let plan: Plan = files::read_json_async(&directory.join("plan.json")).await?;
     anyhow::ensure!(
         plan.version == 1 && plan.id == id && plan.home == tokio::fs::canonicalize(&home).await?,
         "update plan does not match helper invocation"
     );
+    let guarded = job_config(&plan)?;
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        Ok(crate::lifecycle::refuse_update_from_its_runtime(
+            &NativeServiceManager::new(guarded)?,
+        )?)
+    })
+    .await??;
+    let lock_dir = directory.clone();
+    let _lock =
+        tokio::task::spawn_blocking(move || files::lock(&lock_dir.join("helper.lock"))).await??;
     let mut receipt: Receipt = files::read_json_async(&directory.join("receipt.json")).await?;
     if matches!(receipt.phase, Phase::Healthy | Phase::Failed) {
         return cleanup_helper(&plan).await;

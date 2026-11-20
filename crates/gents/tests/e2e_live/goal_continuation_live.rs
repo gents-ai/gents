@@ -9,8 +9,8 @@ use crate::support::live_inference::{
     bind_target, boot_live_agent, live_target, rows_when, wait_for_assistant_answer,
     wait_for_request_terminal,
 };
-use crate::support::snapshots::SnapshotReader;
 use crate::support::test_db;
+use gents_store::test_support::snapshot_reader::SnapshotReader;
 use gents_store::test_support::STALL_CEILING;
 
 #[derive(Debug, Deserialize)]

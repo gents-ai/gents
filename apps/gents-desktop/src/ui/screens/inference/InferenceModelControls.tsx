@@ -2,8 +2,9 @@ import type {
   InferenceModelRecommendation,
   ReasoningEffort,
 } from "@source-inc/gents-desktop-client";
-import { Button } from "@gents/ui/components/button";
+import { ChevronDown } from "lucide-react";
 import { Input } from "@gents/ui/components/input";
+import { cn } from "@gents/ui/lib/utils";
 import {
   Select,
   SelectContent,
@@ -141,27 +142,20 @@ export function InferenceModelControls({
         />
       ) : null}
       {!alwaysExpanded && (
-        <p
-          className="text-xs text-muted-foreground"
-          data-testid="inference-settings-later"
-        >
-          {recommendation.reasoningEffort && value.reasoningEffort
-            ? `Reasoning effort ${value.reasoningEffort}. `
-            : ""}
-          You can change the model, reasoning effort and limits later under the agent’s
-          Providers settings.
-        </p>
-      )}
-      {!alwaysExpanded && (
-        <Button
+        <button
           type="button"
-          variant="outline"
-          className="justify-self-start"
+          className="inline-flex cursor-pointer items-center gap-1 justify-self-start text-xs text-muted-foreground hover:text-foreground"
           aria-expanded={expanded}
           onClick={() => onExpandedChange(!expanded)}
         >
           {expanded ? "Hide advanced settings" : "Advanced settings"}
-        </Button>
+          <ChevronDown
+            className={cn(
+              "size-3 transition-transform duration-150 motion-reduce:transition-none",
+              expanded && "rotate-180",
+            )}
+          />
+        </button>
       )}
       {expanded && !alwaysExpanded && effort}
       {expanded || alwaysExpanded ? (
@@ -205,6 +199,18 @@ export function InferenceModelControls({
           ) : null}
         </div>
       ) : null}
+      {!alwaysExpanded && (
+        <p
+          className="text-xs text-muted-foreground"
+          data-testid="inference-settings-later"
+        >
+          {recommendation.reasoningEffort && value.reasoningEffort
+            ? `Reasoning effort ${value.reasoningEffort}. `
+            : ""}
+          You can change the model, reasoning effort and limits later under the agent’s
+          Providers settings.
+        </p>
+      )}
     </div>
   );
 }

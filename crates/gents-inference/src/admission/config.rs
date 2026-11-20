@@ -94,7 +94,7 @@ impl BackendAdmissionConfig {
             &fields.openai_wire_api,
             &fields.backend_endpoint,
             &fields.backend_auth,
-            backend.connect_timeout_secs.unwrap_or(10),
+            backend.effective_connect_timeout_secs(),
             max_concurrent,
             max_queue_depth,
         );

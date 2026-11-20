@@ -111,10 +111,12 @@ mod tests {
         let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             "image-request",
-            &node_did,
-            &requester,
-            &agent.agent_did,
-            "image-session",
+            gents_protocol::request_admission::RequestScope::new(
+                &node_did,
+                &requester,
+                &agent.agent_did,
+                "image-session",
+            ),
             "",
             "interactive",
             "2026-10-28T00:00:00Z",

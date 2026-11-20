@@ -1,6 +1,6 @@
 use gents_protocol::transcript::{present_message, PresentedMessageRole};
 
-use crate::observe::run_timeline::{
+use crate::observe::run_timeline::events::{
     RunTimeline, RunTimelineEvent, TimelineMessageEvent, TimelineRequestEvent,
 };
 

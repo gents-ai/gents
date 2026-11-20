@@ -1,3 +1,5 @@
+import { isTerminalTurnState } from "@source-inc/gents-desktop-client";
+
 import type {
   RemoteAheadDesktopLagObservation,
   RemoteTerminalDesktopStallObservation,
@@ -7,15 +9,6 @@ import type {
 
 const REMOTE_TERMINAL_DESKTOP_STALL_MS = 30_000;
 const REMOTE_AHEAD_DESKTOP_LAG_MS = 30_000;
-
-export function isTerminalTurnState(value?: string | null) {
-  return (
-    value === "completed" ||
-    value === "failed" ||
-    value === "superseded" ||
-    value === "interrupted"
-  );
-}
 
 export function observeRemoteTerminalDesktopStall({
   diagnostics,

@@ -271,9 +271,21 @@ where
     tauri_plugin_single_instance::init(|app, _args, _cwd| show_main_window(app))
 }
 
+/// `--desktop-home <PATH>` keeps the desktop client state in PATH instead of
+/// the platform's application data folder.
+fn launch_home_policy() -> HomePolicy {
+    std::env::args_os()
+        .skip(1)
+        .skip_while(|arg| arg != "--desktop-home")
+        .nth(1)
+        .map_or(HomePolicy::Default, |root| {
+            HomePolicy::FixedRoot(root.into())
+        })
+}
+
 fn platform_bridge_config() -> BridgeConfig {
     let config = BridgeConfig {
-        home: HomePolicy::Default,
+        home: launch_home_policy(),
         bootstrap: platform_bootstrap_policy(),
         app_meta: AppMeta {
             app_name: "Gents".into(),
@@ -303,7 +315,6 @@ fn native_local_e2e_config(config: BridgeConfig) -> BridgeConfig {
         assert!(path.is_absolute(), "{name} must be absolute");
         path
     };
-    path(gents_store::client_journal::paths::DESKTOP_HOME_ENV);
     BridgeConfig {
         bootstrap: BootstrapPolicy::LocalRuntimeAllowed {
             node_home: NodeHomePolicy::Fixed(path("GENTS_E2E_NODE_HOME")),

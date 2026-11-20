@@ -72,10 +72,7 @@ fn run_command(command: Command) -> anyhow::Result<()> {
                 .enable_all()
                 .build()
                 .map_err(|error| anyhow::anyhow!(error))?;
-            let desktop_paths = match args.desktop_home {
-                Some(root) => DesktopPaths::from_root(root),
-                None => DesktopPaths::discover()?,
-            };
+            let desktop_paths = DesktopPaths::resolve(args.desktop_home)?;
             if args.dangerously_overwrite {
                 dangerously_overwrite_desktop_home(desktop_paths.root())?;
             } else if args.reset {

@@ -8,8 +8,9 @@ use tokio::sync::watch;
 
 use crate::support::fixtures::bind_managed_agent_backend;
 use crate::support::interrupt::TEST_RUNTIME_READY_TIMEOUT;
-use crate::support::snapshots::{fetch_runtime_snapshot_as, RuntimeSnapshot, SnapshotReader};
+use crate::support::snapshots::{fetch_runtime_snapshot_as, RuntimeSnapshot};
 use crate::support::{managed_agent_fixture, test_db};
+use gents_store::test_support::snapshot_reader::SnapshotReader;
 
 const UNUSED_BACKEND_ENDPOINT: &str = "http://127.0.0.1:9/v1";
 
