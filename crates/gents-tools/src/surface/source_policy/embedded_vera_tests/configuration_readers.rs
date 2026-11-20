@@ -105,6 +105,28 @@ impl Automated {
         Ok(binding)
     }
 
+    /// Wait, bounded, until `binding` owes the provider nothing, so what it
+    /// committed has taken effect; a local home owes nothing.
+    pub(super) async fn settled(&self, binding: &AgentIdentityBinding) -> anyhow::Result<()> {
+        if gents_store::local::document_acp::provider_of(&self.node) == DocumentAcp::Local {
+            return Ok(());
+        }
+        let context =
+            defra_core::RequestContext::default().with_identity(Some(self.node_did.to_string()));
+        let started = std::time::Instant::now();
+        loop {
+            let owed = self.node.owed_acp_as(&context, &binding.agent_did).await?;
+            if owed.is_empty() {
+                return Ok(());
+            }
+            anyhow::ensure!(
+                started.elapsed() < std::time::Duration::from_secs(60),
+                "still owed: {owed:?}"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
+
     pub(super) fn agent_access(
         &self,
         binding: &AgentIdentityBinding,
@@ -199,6 +221,7 @@ pub(super) async fn rebind_own_automation(provider: DocumentAcp) -> anyhow::Resu
     let engineer_access = home.agent_access(&engineer)?;
     let node_did = home.node_did.to_string();
     apply(&engineer_access, automation(&node_did, &first.agent_did)).await?;
+    home.settled(&engineer).await?;
     assert!(
         home.reads(&first, "Trigger", "trigger_id", "trigger")
             .await?
@@ -209,6 +232,7 @@ pub(super) async fn rebind_own_automation(provider: DocumentAcp) -> anyhow::Resu
             .await?
     );
     apply(&engineer_access, automation(&node_did, &second.agent_did)).await?;
+    home.settled(&engineer).await?;
     for (collection, field, value) in [
         ("Trigger", "trigger_id", "trigger"),
         ("EventSource", "event_source_id", "source"),
@@ -284,6 +308,11 @@ async fn a_reader_change_on_another_agents_trigger_is_refused_naming_its_creator
             automation(&node_did, &first.agent_did),
         )
         .await?;
+        home.settled(&creator).await?;
+        assert!(
+            home.reads(&first, "Trigger", "trigger_id", "trigger")
+                .await?
+        );
         let trigger = home
             .agent_access(&creator)?
             .execute("{ Trigger { _docID } }")
