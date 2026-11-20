@@ -112,21 +112,32 @@ async fn write_fixture_job_pin_with_access(
     Ok(())
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "shared fixture with call sites across many test modules"
-)]
+/// The one tool call a fixture provider turn publishes: the turn it is in,
+/// its tool name, id and arguments, how it is awaited, and whether it starts
+/// running once accepted.
+pub struct AcceptedFixtureCall<'a> {
+    pub turn: usize,
+    pub tool_name: &'a str,
+    pub tool_call_id: &'a str,
+    pub arguments: serde_json::Value,
+    pub await_mode: AwaitMode,
+    pub start_running: bool,
+}
+
 pub async fn publish_accepted_on_claimed_request(
     node: Arc<EmbeddedNode>,
     request: &mut RequestLifecycle,
     node_did: &str,
-    turn: usize,
-    tool_name: &str,
-    tool_call_id: &str,
-    arguments: serde_json::Value,
-    await_mode: AwaitMode,
-    start_running: bool,
+    call: AcceptedFixtureCall<'_>,
 ) -> anyhow::Result<ToolCallLifecycle> {
+    let AcceptedFixtureCall {
+        turn,
+        tool_name,
+        tool_call_id,
+        arguments,
+        await_mode,
+        start_running,
+    } = call;
     let writer =
         DefraStreamWriter::new_for_lifecycle(node.clone(), request, Duration::from_millis(1))?;
     if turn == 0 {

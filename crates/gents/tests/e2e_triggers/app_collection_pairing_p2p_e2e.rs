@@ -1367,31 +1367,39 @@ async fn install_shared_fixture(
     .unwrap();
     let access = db.client_access(&user);
     let prepared = prepare_document_pack_install(
-        &access,
-        &owner,
+        &gents_pack::pack::InstallTarget {
+            access: &access,
+            owner: &owner,
+            plugin_home: None,
+        },
         archive.manifest(),
         &config,
-        &PackInferenceBindings::new(),
-        &[],
-        InstalledVia::Operator,
-        None,
         Some(archive),
-        &|_| None,
-        &Default::default(),
+        &gents_pack::pack::PackGraphInputs {
+            dependencies: &[],
+            requested: &PackInferenceBindings::new(),
+            environment: &|_| None,
+            overrides: &Default::default(),
+        },
+        InstalledVia::Operator,
     )
     .await
     .unwrap();
     install_prepared_document_pack(
-        &access,
-        &owner,
+        &gents_pack::pack::InstallTarget {
+            access: &access,
+            owner: &owner,
+            plugin_home: None,
+        },
         archive,
         &[],
         &prepared,
-        None,
         false,
         InstalledVia::Operator,
-        DriftPolicy::Refuse,
-        &gents_inference::resolved::ProviderProfilePolicy,
+        gents_pack::pack::DocumentGraphPolicy {
+            drift: DriftPolicy::Refuse,
+            profiles: &gents_inference::resolved::ProviderProfilePolicy,
+        },
     )
     .await
     .unwrap();
