@@ -2,9 +2,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use events::{
-    Bus, ChannelBus, DocumentChangeSubscription, EventName, Message, Subscription, Update,
-};
+use events::{Bus, ChannelBus, EventName, Message, Subscription, Update};
 use gents_store::subscription_source::UpdateSubscriptionSource;
 use tokio::sync::Notify;
 
@@ -72,13 +70,13 @@ impl UpdateSubscriptionSource for MockUpdateSubscriptionSource {
         subscription
     }
 
-    fn subscribe_collection_changes(
+    fn subscribe_changes(
         &self,
         collection_ids: Vec<String>,
-    ) -> DocumentChangeSubscription {
+    ) -> gents_store::subscription_source::ChangeSubscription {
         let subscription = self.bus.subscribe_collection_changes(collection_ids);
         self.subscriber_count.fetch_add(1, Ordering::SeqCst);
         self.subscriber_notify.notify_waiters();
-        subscription
+        subscription.into()
     }
 }

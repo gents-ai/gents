@@ -1,0 +1,3 @@
+---- MODULE MCAccessWakeNodeStore ----
+EXTENDS AccessWake
+====

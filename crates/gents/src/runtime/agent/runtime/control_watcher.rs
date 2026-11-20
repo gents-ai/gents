@@ -40,7 +40,7 @@ const CONTROL_WATCHER_TIMING: ControlWatcherTiming = ControlWatcherTiming {
 /// Coalesced changes to the control collections, with each subscribed
 /// collection id mapped back to its name.
 pub(super) struct ControlSubscription {
-    changes: events::DocumentChangeSubscription,
+    changes: gents_store::subscription_source::ChangeSubscription,
     names_by_id: RapidHashMap<String, &'static str>,
 }
 
@@ -48,7 +48,7 @@ pub(super) fn subscribe_control_changes(node: &defra_node::Node) -> Result<Contr
     let names = document_view::control_collection_names().collect::<Vec<_>>();
     let ids = gents_store::subscription_source::collection_ids(node, names.iter().copied())?;
     Ok(ControlSubscription {
-        changes: node.subscribe_collection_changes(ids.clone()),
+        changes: gents_store::subscription_source::subscribe(node, ids.clone()),
         names_by_id: ids.into_iter().zip(names).collect(),
     })
 }
@@ -260,11 +260,13 @@ pub(super) async fn run_control_watcher_with_timing(
                 };
 
                 if batch.resync_required {
-                    tracing::warn!(
-                        node_did = %node_did,
-                        updates = batch.updates,
-                        "runtime control watcher document-change capacity exceeded; scheduling full reconcile"
-                    );
+                    if gents_store::subscription_source::overflowed(&batch) {
+                        tracing::warn!(
+                            node_did = %node_did,
+                            updates = batch.updates,
+                            "runtime control watcher document-change capacity exceeded; scheduling full reconcile"
+                        );
+                    }
                     resync_required = true;
                     dirty = true;
                     phase_transition_pending = true;

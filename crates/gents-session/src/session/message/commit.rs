@@ -225,7 +225,7 @@ async fn observe_unconfirmed_child<C>(
     cause: &SessionMessageCause,
     lifecycle: &mut C,
     expected: &gents_protocol::request_admission::AgentRequestCreate,
-    changes: &mut events::DocumentChangeSubscription,
+    changes: &mut gents_store::subscription_source::ChangeSubscription,
 ) -> std::result::Result<SessionMessageReceipt, CommitError>
 where
     C: SessionMessageCall,

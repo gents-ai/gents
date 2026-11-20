@@ -69,7 +69,7 @@ pub struct GoalSource {
     snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
     node: Arc<EmbeddedNode>,
     subscription_source: Arc<dyn UpdateSubscriptionSource>,
-    subscription: Option<events::DocumentChangeSubscription>,
+    subscription: Option<gents_store::subscription_source::ChangeSubscription>,
     cancel: CancellationToken,
     rescan_tick: tokio::time::Interval,
     runtime_status: Option<Arc<dyn GoalReconcileSettled>>,
@@ -131,10 +131,7 @@ impl GoalSource {
                 tracing::warn!(%error, "goal source rescans on its interval only");
                 Vec::new()
             });
-            self.subscription = Some(
-                self.subscription_source
-                    .subscribe_collection_changes(collection_ids),
-            );
+            self.subscription = Some(self.subscription_source.subscribe_changes(collection_ids));
             tracing::info!("goal source opened coalesced document-change subscription");
         }
     }

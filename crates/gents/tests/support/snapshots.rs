@@ -5,7 +5,7 @@ use gents_store::graphql::escape_graphql_string;
 use serde::Deserialize;
 
 pub enum SnapshotChanges {
-    Local(events::DocumentChangeSubscription),
+    Local(gents_store::subscription_source::ChangeSubscription),
     Remote {
         access: Box<gents_store::config_client::ConfigAccess>,
         query: String,

@@ -391,11 +391,11 @@ trait InterruptChangeFeed: Send {
     ) -> impl std::future::Future<Output = Option<events::DocumentChangeBatch>> + Send;
 }
 
-impl InterruptChangeFeed for events::DocumentChangeSubscription {
+impl InterruptChangeFeed for gents_store::subscription_source::ChangeSubscription {
     fn recv(
         &mut self,
     ) -> impl std::future::Future<Output = Option<events::DocumentChangeBatch>> + Send {
-        events::DocumentChangeSubscription::recv(self)
+        gents_store::subscription_source::ChangeSubscription::recv(self)
     }
 }
 

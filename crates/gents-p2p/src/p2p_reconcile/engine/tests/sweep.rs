@@ -75,7 +75,7 @@ async fn pairing_reconciler_retries_sweeps_as_the_lean_supervisor_model() {
         };
         let admin = MockAdmin::default();
         let event_bus = events::ChannelBus::new();
-        let subscription = event_bus.subscribe_collection_changes(Vec::new());
+        let subscription = event_bus.subscribe_collection_changes(Vec::new()).into();
         let cancel = CancellationToken::new();
         let connections = event_bus.subscribe(&[events::EventName::PeerConnection]);
         let reconciler =
@@ -238,7 +238,7 @@ async fn peer_reconnect_between_sweeps_replays_on_connection_event() {
         },
     );
     let event_bus = events::ChannelBus::new();
-    let subscription = event_bus.subscribe_collection_changes(Vec::new());
+    let subscription = event_bus.subscribe_collection_changes(Vec::new()).into();
     let connections = event_bus.subscribe(&[events::EventName::PeerConnection]);
     let cancel = CancellationToken::new();
     let reconciler =

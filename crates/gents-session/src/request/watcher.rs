@@ -40,7 +40,7 @@ pub trait Watcher: Send + Sync {
 pub struct DefraWatcher {
     node: Arc<EmbeddedNode>,
     node_did: String,
-    subscription: events::DocumentChangeSubscription,
+    subscription: gents_store::subscription_source::ChangeSubscription,
     processed_request_ids: cooldown::ProcessedRequests,
     agents: Vec<Arc<dyn gents_store::identity::NodeIdentity>>,
     scan_failed: bool,
@@ -60,7 +60,7 @@ impl DefraWatcher {
         node: Arc<EmbeddedNode>,
         node_did: &str,
     ) -> Result<Self> {
-        let subscription = subs.subscribe_collection_changes(
+        let subscription = subs.subscribe_changes(
             gents_store::subscription_source::collection_ids(&node, ["AgentRequest"])?,
         );
         Ok(Self {
@@ -109,17 +109,17 @@ impl EventDeliveryRuntimeContract for DefraWatcher {
 }
 
 pub(crate) async fn wait_for_request_change(
-    subscription: &mut events::DocumentChangeSubscription,
+    subscription: &mut gents_store::subscription_source::ChangeSubscription,
 ) -> Result<Option<events::DocumentChangeBatch>, tokio::time::error::Elapsed> {
     tokio::time::timeout(GOSSIP_FALLBACK_POLL, subscription.recv()).await
 }
 
 pub(crate) async fn wait_for_change_or_resubscribe<F>(
-    subscription: &mut events::DocumentChangeSubscription,
+    subscription: &mut gents_store::subscription_source::ChangeSubscription,
     reopen: F,
 ) -> anyhow::Result<()>
 where
-    F: FnOnce() -> anyhow::Result<events::DocumentChangeSubscription>,
+    F: FnOnce() -> anyhow::Result<gents_store::subscription_source::ChangeSubscription>,
 {
     if matches!(wait_for_request_change(subscription).await, Ok(None)) {
         tokio::time::sleep(GOSSIP_FALLBACK_POLL).await;
@@ -229,7 +229,7 @@ impl Watcher for DefraWatcher {
                 }
             };
 
-            if batch.resync_required {
+            if gents_store::subscription_source::overflowed(&batch) {
                 tracing::warn!(
                     updates = batch.updates,
                     "request watcher document-change capacity exceeded; durable queue scan remains authoritative"

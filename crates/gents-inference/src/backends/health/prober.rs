@@ -114,7 +114,7 @@ pub fn spawn_backend_prober(
                 tracing::warn!(%error, "backend prober: probing on the interval only");
                 Vec::new()
             });
-    let mut changes = node.subscribe_collection_changes(backend_collection);
+    let mut changes = gents_store::subscription_source::subscribe(&node, backend_collection);
     tokio::spawn(async move {
         let client = match reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
