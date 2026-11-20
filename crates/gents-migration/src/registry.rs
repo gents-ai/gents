@@ -528,7 +528,8 @@ static BASELINE_ROOTS: LazyLock<Vec<String>> = LazyLock::new(|| {
         .map(|entry| entry.sdl)
         .collect::<Vec<_>>()
         .join("\n");
-    let parsed = query::parse_sdl(&sdl).expect("bundled baseline SDL must parse");
+    let parsed = query::parse_sdl(&gents_protocol::schemas::HomePolicyIds::shared().render(&sdl))
+        .expect("bundled baseline SDL must parse");
     assert_eq!(
         parsed.len(),
         BASELINE_SCHEMAS.len(),
