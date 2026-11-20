@@ -62,6 +62,14 @@ impl RuntimeEndpoints {
 }
 
 impl GraphqlEndpoint {
+    /// The runtime this endpoint was opened for, when it was opened for one.
+    pub fn runtime_node_did(&self) -> Option<&str> {
+        match &*self.client_authentication {
+            EndpointAuthentication::Runtime { node, .. } => Some(node),
+            _ => None,
+        }
+    }
+
     pub async fn refresh_runtime_authentication(&self) -> Result<()> {
         if let EndpointAuthentication::Runtime { node, current } = &*self.client_authentication {
             let mut current = current.lock().await;

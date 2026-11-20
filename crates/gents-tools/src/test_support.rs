@@ -36,3 +36,6 @@ pub fn test_agent_access(
     )
     .unwrap()
 }
+
+#[cfg(feature = "vera")]
+pub mod vera_test_home;
