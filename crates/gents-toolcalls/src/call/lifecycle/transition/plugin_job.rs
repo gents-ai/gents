@@ -199,14 +199,16 @@ impl ToolCallLifecycle {
             crate::background::completion::append_background_tool_completion(
                 &self.node,
                 &self.access()?,
-                &self.session_id,
-                &calling_request_id,
-                &doc_id,
-                &self.tool_name,
-                status,
-                &terminal.output,
-                terminal.reason.as_deref(),
-                gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+                &crate::background::completion::BackgroundToolCompletion {
+                    parent_session_id: &self.session_id,
+                    parent_request_id: &calling_request_id,
+                    tool_call_doc_id: &doc_id,
+                    tool_name: &self.tool_name,
+                    status,
+                    result: &terminal.output,
+                    reason: terminal.reason.as_deref(),
+                    wake: gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+                },
             )
             .await?;
         }

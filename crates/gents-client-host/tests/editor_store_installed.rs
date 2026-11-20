@@ -2,7 +2,7 @@ use anyhow::{ensure, Context, Result};
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use gents_desktop_bridge::host::{local, protocol};
-use gents_desktop_core::client::DesktopPaths;
+use gents_store::client_journal::paths::DesktopPaths;
 use gents_store::local::store_key::{StoreEncryption, StoreKeyCustody};
 use serde_json::{json, Value};
 use std::path::Path;

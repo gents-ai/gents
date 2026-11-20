@@ -93,7 +93,7 @@ impl SessionMessageCall for ToolCallLifecycle {
             return Ok(None);
         };
         durable.inherit_signer(self)?;
-        Ok(Some(durable))
+        Ok(Some(durable.with_background_limit(self.background_limit())))
     }
 
     async fn start_running_in_txn(

@@ -4,7 +4,6 @@ use super::pairing::drain_managed_runtime_pairing;
 use super::port::{matching_external_server, user_status_signer};
 use super::status::emit_status;
 use crate::config::ManagedServerPolicy;
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
 use crate::tauri_commands::service_executable::resolve_service_executable;
 use crate::types::{HomeResetDisposition, ManagedServerResetResult};
@@ -12,6 +11,8 @@ use gents_desktop_core::home_reset::*;
 use gents_service::args::ServiceAction;
 use gents_service::repair::crash_loop::CrashLoopWatch;
 use gents_service::repair::port::read_initialized_did;
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 use std::path::Path;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Runtime};
@@ -27,8 +28,8 @@ pub(super) async fn unfinished_local_setup(
     };
     // Peers that cannot be read are not evidence that none exist, so an
     // unreadable directory never offers to start over.
-    let Ok(peers) = gents_desktop_core::client::load_peer_records(
-        state.policy.desktop_paths.peer_directory_path(),
+    let Ok(peers) = gents_store::client_journal::runtime_directory::load_runtime_connections(
+        state.policy.desktop_paths.runtime_directory_path(),
     )
     .await
     else {
@@ -165,8 +166,8 @@ where
             let native =
                 run_native(native_service(app, state)?, |service| service.status()).await?;
             ensure_managed_runtime_stopped(native.is_active_or_transitioning())?;
-            ensure_home_not_served(home, user_status_signer(state, home).await.as_ref()).await?;
-            Some(lock_home_for_retirement(home)?)
+            ensure_home_not_served(home, user_status_signer(state).await.as_ref()).await?;
+            Some(lock_home_for_retirement(home).await?)
         }
         None => None,
     };
@@ -200,8 +201,8 @@ where
         return Ok(settled.preview());
     }
     let mut result = settled.retire(disposition, backup.as_deref())?;
-    if let Some((home, node_did)) = retiring.as_ref() {
-        result.retired_pairings = retire_desktop_pairing(state, home, node_did.as_deref()).await;
+    if let Some((home, _)) = retiring.as_ref() {
+        result.retired_pairings = retire_desktop_pairing(state, home).await;
     }
     drop(_client);
     drop(_store_lock);
@@ -237,25 +238,19 @@ where
 /// client is still excluded here, so the pairing is dropped rather than queued.
 /// A failure leaves a stale record the user can see; the retirement itself has
 /// already completed and is not undone for it.
-pub(super) async fn retire_desktop_pairing(
-    state: &DesktopAppState,
-    node_home: &Path,
-    node_did: Option<&str>,
-) -> u32 {
-    match gents_desktop_core::client::retire_local_node_records(
-        state.policy.desktop_paths.peer_directory_path(),
-        node_home,
-        node_did,
-    )
-    .await
-    {
-        Ok(retired) => retired.len() as u32,
+pub(super) async fn retire_desktop_pairing(state: &DesktopAppState, node_home: &Path) -> u32 {
+    let result = async {
+        let directory = gents_store::client_journal::runtime_directory::RuntimeDirectory::open(
+            state.policy.desktop_paths.runtime_directory_path(),
+        )
+        .await?;
+        directory.retire_local_home(node_home, None).await
+    }
+    .await;
+    match result {
+        Ok(retired) => retired as u32,
         Err(error) => {
-            tracing::warn!(
-                target: "gents_desktop::managed_server",
-                ?error,
-                "the desktop's pairing with the retired node was left in place"
-            );
+            tracing::warn!(error = %error, "runtime connections could not be retired");
             0
         }
     }

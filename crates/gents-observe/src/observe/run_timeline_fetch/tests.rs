@@ -472,7 +472,7 @@ async fn accepted_tool_arguments_read_only_the_accepted_message() {
     };
     use gents_protocol::tool_call::AwaitMode;
     use gents_toolcalls::call::lifecycle::admission_fixture::{
-        publish_accepted_on_claimed_request, published_admission_with_owner,
+        publish_accepted_on_claimed_request, published_admission_with_owner, AcceptedFixtureCall,
         PublishedAdmissionOptions,
     };
 
@@ -492,12 +492,14 @@ async fn accepted_tool_arguments_read_only_the_accepted_message() {
         node.clone(),
         &mut owner,
         &admitted.node_did,
-        1,
-        gents_protocol::tool_names::AGENT_NEW_TOOL_NAME,
-        "bridge-second",
-        second_arguments.clone(),
-        AwaitMode::Background,
-        true,
+        AcceptedFixtureCall {
+            turn: 1,
+            tool_name: gents_protocol::tool_names::AGENT_NEW_TOOL_NAME,
+            tool_call_id: "bridge-second",
+            arguments: second_arguments.clone(),
+            await_mode: AwaitMode::Background,
+            start_running: true,
+        },
     )
     .await
     .expect("publish second accepted spawn");
@@ -648,7 +650,7 @@ async fn list_processes_skip_publishes_canonical_tool_result() {
             None,
             "list-call",
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient()
+            &gents_loop::tool::ToolCallEnvelope::default()
         )
         .await,
         ToolCallHookAction::Skip { .. }
@@ -723,7 +725,7 @@ async fn wait_and_cancel_process_skip_publish_canonical_tool_results() {
                 None,
                 id,
                 args,
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await;
         let ToolCallHookAction::Skip { reason } = action else {

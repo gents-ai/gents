@@ -48,22 +48,24 @@ async fn keyed_delivery(
         max_fires_per_hour: gents_documents::DEFAULT_MAX_FIRES_PER_HOUR,
     };
     let spec = pending_agent_request_spec(
-        owner,
-        agent.did(),
-        "play",
-        gents_session::request::lifecycle::ExecutionOrigin::Scheduled,
-        gents_session::request::lifecycle::TriggerLineage {
-            trigger_id: Some("player-red".to_owned()),
-            trigger_kind: Some("schedule".to_owned()),
-            ..Default::default()
+        gents_session::request::lifecycle::materialize::PendingAgentRequest {
+            node_did: owner,
+            agent_did: agent.did(),
+            content: "play",
+            execution_origin: gents_session::request::lifecycle::ExecutionOrigin::Scheduled,
+            trigger_lineage: gents_session::request::lifecycle::TriggerLineage {
+                trigger_id: Some("player-red".to_owned()),
+                trigger_kind: Some("schedule".to_owned()),
+                ..Default::default()
+            },
+            conversation_title: None,
+            workspace_lineage: None,
+            requester_did: None,
+            trigger_doc_id: Some("player-red-document"),
         },
-        None,
-        None,
         &fire.request_id,
         session,
         Some(&fire.fire_key),
-        None,
-        Some("player-red-document"),
     )?;
     let create = build_request(spec)?;
     write_trigger_delivery_with_identity(
@@ -309,24 +311,26 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
         created_at: "2026-01-01T00:00:00Z".into(),
     };
     let spec = pending_agent_request_spec(
-        node_did,
-        agent.did(),
-        "complete assignment",
-        ExecutionOrigin::Interactive,
-        TriggerLineage {
-            trigger_id: None,
-            trigger_kind: Some("manual".into()),
-            source_doc_id: None,
-            correlation: None,
-            trigger_context: None,
+        gents_session::request::lifecycle::materialize::PendingAgentRequest {
+            node_did,
+            agent_did: agent.did(),
+            content: "complete assignment",
+            execution_origin: ExecutionOrigin::Interactive,
+            trigger_lineage: TriggerLineage {
+                trigger_id: None,
+                trigger_kind: Some("manual".into()),
+                source_doc_id: None,
+                correlation: None,
+                trigger_context: None,
+            },
+            conversation_title: Some("task"),
+            workspace_lineage: None,
+            requester_did: None,
+            trigger_doc_id: None,
         },
-        Some("task"),
-        None,
         &fire.request_id,
         &fire.session_id,
         Some(&fire.fire_key),
-        None,
-        None,
     )
     .unwrap();
     let create = build_signed_request(spec, RequestSigner::Identity(agent.as_ref()))
@@ -524,44 +528,6 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
         user_sessions["data"]["AgentSession"][0]["relationships_pending"],
         false
     );
-    let household = gents_lean_vocab::lean_identity_household_cases()
-        .first()
-        .expect("modeled household");
-    let modeled_user = &household
-        .objects
-        .iter()
-        .find(|object| object.resource == "nodes" && object.id == "home")
-        .unwrap()
-        .owner;
-    let modeled_agent = &household
-        .objects
-        .iter()
-        .find(|object| object.resource == "delivered_requests" && object.id == "automated-request")
-        .unwrap()
-        .owner;
-    let modeled_outsider = household.enrolled.last().expect("modeled outsider");
-    let expected_read = |actor: &str| {
-        household
-            .actions
-            .iter()
-            .find_map(|action| match action {
-                gents_lean_vocab::LeanIdentityAction::Check {
-                    actor: checked,
-                    resource,
-                    id,
-                    permission,
-                    expected,
-                } if checked == actor
-                    && resource == "delivered_requests"
-                    && id == "automated-request"
-                    && permission == "read" =>
-                {
-                    Some(*expected)
-                }
-                _ => None,
-            })
-            .expect("modeled automated request read")
-    };
     let outsider = gents_store::identity::KeyIdentity::load_or_create(
         identity_dir.path().join("outsider.key"),
         None,
@@ -579,20 +545,19 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
         "{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{}\" }} }}) {{ _docID lifecycle_state }} }}",
         escape_graphql_string(&first.request.doc_id)
     );
-    for (reader, modeled_actor) in [
-        (&user_access, modeled_user.as_str()),
-        (&access, modeled_agent.as_str()),
-        (&outsider_access, modeled_outsider.as_str()),
-    ] {
+    for case in gents_lean_vocab::families::household_automated_request_visibility::cases() {
+        let reader = match case.input.role.as_str() {
+            "user" => &user_access,
+            "agent" => &access,
+            "outsider" => &outsider_access,
+            role => panic!("unmodeled request reader {role}"),
+        };
         let response = reader.execute(&request_query).await.unwrap();
-        let visible = !response["data"]["AgentRequest"]
-            .as_array()
-            .unwrap()
-            .is_empty();
-        assert_eq!(
-            visible,
-            expected_read(modeled_actor),
-            "Task request visibility for {modeled_actor}"
+        case.check(
+            !response["data"]["AgentRequest"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
         );
     }
     access.write("test.task.finish", &format!(
@@ -671,58 +636,18 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
     let receipt_doc = receipt["data"]["TriggerFire"][0]["_docID"]
         .as_str()
         .unwrap();
-    let receipt_contract = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .unwrap();
-    let creator = &receipt_contract
-        .objects
-        .iter()
-        .find(|object| object.id == "agent-created")
-        .unwrap()
-        .owner;
-    let user = &receipt_contract
-        .objects
-        .iter()
-        .find(|object| object.id == "home")
-        .unwrap()
-        .owner;
-    let sibling = receipt_contract
-        .task_receipt_cases
-        .iter()
-        .find(|case| {
-            case["creator"] == *creator
-                && case["permission"] == "read"
-                && case["producer_reader"] == false
-                && case["expected"] == false
-        })
-        .unwrap()["actor"]
-        .as_str()
-        .unwrap();
-    for (reader, actor) in [
-        (&user_access, user.as_str()),
-        (&access, creator.as_str()),
-        (&outsider_access, sibling),
-    ] {
-        let expected = receipt_contract
-            .task_receipt_cases
-            .iter()
-            .find(|case| {
-                case["creator"] == *creator
-                    && case["actor"] == actor
-                    && case["permission"] == "read"
-                    && case["producer_reader"] == false
-            })
-            .unwrap()["expected"]
-            .as_bool()
-            .unwrap();
+    for case in gents_lean_vocab::families::household_task_receipt_delivery::cases() {
+        let reader = match case.input.role.as_str() {
+            "user" => &user_access,
+            "agent" => &access,
+            _ => &outsider_access,
+        };
         let response = reader.execute("{TriggerFire {_docID}}").await.unwrap();
-        assert_eq!(
+        case.check(
             !response["data"]["TriggerFire"]
                 .as_array()
                 .unwrap()
                 .is_empty(),
-            expected
         );
     }
     gents_store::test_support::relationships::resource_in_txn(
@@ -777,16 +702,18 @@ async fn reserved_trigger_cause_is_refused() {
     let err = write_pending_agent_request_with_lineage_workspace_and_conversation_title(
         &node,
         actor,
-        node_did,
-        agent.did(),
-        "work",
-        ExecutionOrigin::Interactive,
-        lineage(),
+        gents_session::request::lifecycle::materialize::PendingAgentRequest {
+            node_did,
+            agent_did: agent.did(),
+            content: "work",
+            execution_origin: ExecutionOrigin::Interactive,
+            trigger_lineage: lineage(),
+            conversation_title: None,
+            workspace_lineage: None,
+            requester_did: None,
+            trigger_doc_id: Some("trigger-doc"),
+        },
         None,
-        None,
-        None,
-        None,
-        Some("trigger-doc"),
         None,
         agent.as_ref(),
     )
@@ -821,18 +748,20 @@ async fn reserved_trigger_cause_is_refused() {
         created_at: "2026-01-01T00:00:00Z".into(),
     };
     let spec = pending_agent_request_spec(
-        node_did,
-        agent.did(),
-        "work",
-        ExecutionOrigin::Interactive,
-        lineage(),
-        None,
-        None,
+        gents_session::request::lifecycle::materialize::PendingAgentRequest {
+            node_did,
+            agent_did: agent.did(),
+            content: "work",
+            execution_origin: ExecutionOrigin::Interactive,
+            trigger_lineage: lineage(),
+            conversation_title: None,
+            workspace_lineage: None,
+            requester_did: None,
+            trigger_doc_id: Some("trigger-doc"),
+        },
         &fire.request_id,
         &fire.session_id,
         Some(&fire.fire_key),
-        None,
-        Some("trigger-doc"),
     )
     .unwrap();
     let create = build_signed_request(spec, RequestSigner::Identity(agent.as_ref()))

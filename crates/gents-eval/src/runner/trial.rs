@@ -22,20 +22,33 @@ pub(super) enum Slot {
     Completed { attempt: u32, not_evidence: bool },
 }
 
-#[allow(clippy::too_many_arguments)]
+pub(super) struct TrialContext<'a> {
+    pub(super) frozen: &'a FrozenRun,
+    pub(super) recorder: &'a dyn Recorder,
+    pub(super) executor: &'a dyn TrialExecutor,
+    pub(super) registry: &'a CheckRegistry,
+    pub(super) cancel: &'a CancellationToken,
+    pub(super) trial_budget: Option<&'a TrialBudget>,
+    pub(super) progress: &'a Arc<ProgressWriter>,
+    pub(super) views: &'a ViewWriter,
+}
+
 pub(super) async fn execute_trial(
-    frozen: &FrozenRun,
+    context: &TrialContext<'_>,
     planned: &PlannedTrial,
-    recorder: &dyn Recorder,
-    executor: &dyn TrialExecutor,
-    registry: &CheckRegistry,
-    cancel: &CancellationToken,
     stop: &AtomicBool,
-    progress: &Arc<ProgressWriter>,
-    views: &ViewWriter,
-    trial_budget: Option<&TrialBudget>,
     admission_stopped: &CancellationToken,
 ) -> Result<Slot> {
+    let TrialContext {
+        frozen,
+        recorder,
+        executor,
+        registry,
+        cancel,
+        trial_budget,
+        progress,
+        views,
+    } = *context;
     if stop.load(Ordering::Relaxed) || cancel_requested(&frozen.run_dir, cancel) {
         return Ok(Slot::Skipped);
     }

@@ -5,8 +5,9 @@ that died never excludes anyone. The lock file also carries what the holder
 last declared: its process id, then, once it has begun to stop, that it is
 releasing. The interleaving of a holder and its successors is
 `tla/StoreHandoff.tla`; this module is its acquirer's sequential choice
-(`Read` there). The holder's order (declare, release, then acknowledge) is
-`ClientInstallation.step` for the client installation. -/
+(`Read` there) and its holder's release (`Release` there). The holder's order
+(declare, release, then acknowledge) is `ClientInstallation.step` for the
+client installation. -/
 
 namespace StoreHandoff
 
@@ -64,5 +65,35 @@ theorem only_a_serving_holder_is_refused (phase : HolderPhase)
 theorem a_held_store_is_never_taken_without_its_release (releasing : Bool) :
     decide (.held releasing) ≠ .acquire := by
   cases releasing <;> simp [decide]
+
+/-- Whether the storage engine inside the holder's node still holds its own
+lock on the data directory (regolith's `<data dir>/LOCK`) when the holder
+would release the store lock. -/
+inductive Directory where
+  | free | held
+  deriving DecidableEq, Repr
+
+/-- The store lock is released only once the engine's directory lock is free.
+Every opener takes the store lock before it builds its node, so a store lock
+released while the engine still holds the directory hands the successor a
+store it cannot open: its engine fails with "database directory is already
+locked", read-only or read-write (`SuccessorOpensStore`; the TLC
+counterexamples are `MCStoreHandoffSuccessorCurrent`, a shutdown that released
+on return while the closed engine still held the directory, and
+`MCStoreHandoffReleaseBeforeDirectory`). External premise: regolith keeps the
+directory locked after `Db::close` until the engine drops with the node's
+last handle, so whoever acknowledges a stop lets go of its node handles before
+it awaits the release (`MCStoreHandoffHolderOutlivesAck` is the hang when it
+keeps them). Were the close to release the directory, the shutdown alone
+would free the store (`MCStoreHandoffCloseReleasesDirectory`). -/
+def mayRelease : Directory → Bool
+  | .free => true
+  | .held => false
+
+theorem a_store_is_released_only_after_its_directory (directory : Directory)
+    (h : mayRelease directory = true) : directory = .free := by
+  cases directory <;> simp_all [mayRelease]
+
+theorem a_free_directory_never_delays_the_release : mayRelease .free = true := rfl
 
 end StoreHandoff

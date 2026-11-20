@@ -27,6 +27,7 @@ default = [
     "defra-node/p2p",
     "defra-node/wasmtime-runtime",
 ]
+vera = ["gents-store/vera"]
 typescript = ["dep:ts-rs", "gents-loop/typescript", "gents-protocol/typescript", "gents-store/typescript", "gents-documents/typescript", "gents-inference/typescript", "gents-p2p/typescript", "gents-pack/typescript", "gents-session/typescript", "gents-tools/typescript", "gents-toolcalls/typescript", "gents-automation/typescript", "gents-observe/typescript"]
 # Gates the optional live-inference collection out of default builds.
 live-e2e = ["gents-store/live-e2e", "gents-documents/live-e2e", "gents-inference/live-e2e", "gents-p2p/live-e2e", "gents-pack/live-e2e", "gents-session/live-e2e", "gents-tools/live-e2e", "gents-toolcalls/live-e2e", "gents-automation/live-e2e", "gents-observe/live-e2e"]
@@ -34,7 +35,7 @@ live-e2e = ["gents-store/live-e2e", "gents-documents/live-e2e", "gents-inference
 # through dev-dependencies, never by production builds.
 test-home-guard = ["gents-store/test-home-guard", "gents-documents/test-home-guard", "gents-inference/test-home-guard", "gents-p2p/test-home-guard", "gents-pack/test-home-guard", "gents-session/test-home-guard", "gents-tools/test-home-guard", "gents-toolcalls/test-home-guard", "gents-automation/test-home-guard", "gents-observe/test-home-guard"]
 # Native fixtures for downstream conformance tests; never enabled in production.
-test-fixtures = ["dep:gents-lean-vocab", "test-home-guard", "axum/ws", "gents-store/test-fixtures", "gents-documents/test-fixtures", "gents-inference/test-fixtures", "gents-p2p/test-fixtures", "gents-pack/test-fixtures", "gents-session/test-fixtures", "gents-tools/test-fixtures", "gents-toolcalls/test-fixtures", "gents-automation/test-fixtures", "gents-observe/test-fixtures"]
+test-fixtures = ["gents-loop/test-fixtures", "dep:gents-lean-vocab", "test-home-guard", "axum/ws", "gents-store/test-fixtures", "gents-documents/test-fixtures", "gents-inference/test-fixtures", "gents-p2p/test-fixtures", "gents-pack/test-fixtures", "gents-session/test-fixtures", "gents-tools/test-fixtures", "gents-toolcalls/test-fixtures", "gents-automation/test-fixtures", "gents-observe/test-fixtures"]
 
 [dependencies]
 # Decoder of Lean-generated cases; compiled in only for test-fixtures.
@@ -95,7 +96,7 @@ opentelemetry.workspace = true
 p2p.workspace = true
 query.workspace = true
 rand.workspace = true
-regolith = "0.2.4"
+regolith = "0.2.5"
 serde.workspace = true
 serde_json.workspace = true
 serde_path_to_error = "0.1"
@@ -114,7 +115,7 @@ toml.workspace = true
 tracing.workspace = true
 tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
-tokio-tungstenite = { version = "0.26.2", features = ["rustls-tls-native-roots"] }
+tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-native-roots"] }
 uuid.workspace = true
 rig-core.workspace = true
 reqwest = { workspace = true, features = ["stream"] }
@@ -175,6 +176,7 @@ windows-sys = { version = "0.61.2", features = [
 ] }
 
 [dev-dependencies]
+wiremock = "0.6"
 gents-workspace-hack = { workspace = true }
 # Integration tests link the library with its fixtures.
 gents = { path = ".", features = ["test-fixtures", "typescript"] }

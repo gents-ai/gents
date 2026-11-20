@@ -320,7 +320,7 @@ pub async fn promote(
             dynamic_consent: false,
             tool_calls_consent: false,
         },
-        gents_service::home_state::load_held_user_identity,
+        gents_host::http::pack_wire_client::SIGNERS,
     )
     .await
     .with_context(|| format!("promote wire failed{recovery}"))?;

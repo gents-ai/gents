@@ -63,36 +63,80 @@ fn tool_output_identity(tool_doc_id: &str) -> (OutputSource, OutputWriter) {
     (source, writer)
 }
 
-#[allow(clippy::too_many_arguments)]
+/// The accepted tool-call row a terminal closes, as its lifecycle holds it.
+#[derive(Clone, Copy)]
+pub(super) struct TerminalRow<'a> {
+    pub(super) tool_doc_id: &'a str,
+    pub(super) request_doc_id: &'a str,
+    pub(super) accepted_header_doc_id: &'a str,
+    pub(super) node_did: &'a str,
+    pub(super) requester_did: Option<&'a str>,
+    pub(super) session_id: &'a str,
+    pub(super) tool_call_id: &'a str,
+    pub(super) call_id: Option<&'a str>,
+    pub(super) message_sequence: u32,
+    pub(super) arguments: Option<&'a gents_protocol::output::PayloadRef>,
+    pub(super) spawned_by_tool_call_doc_id: Option<&'a str>,
+    pub(super) plugin_effect:
+        Option<&'a crate::call::lifecycle::plugin_effect::PluginEffectTerminal>,
+    pub(super) tool_name: &'a str,
+    pub(super) deadline_at: DateTime<Utc>,
+    pub(super) started_at: Option<DateTime<Utc>>,
+}
+
+/// The terminal a transaction writes onto its row at `now`, if the row is
+/// still in `expected`: its fields and status, the plugin receipt, the
+/// delivered text and presentation, and how a competing terminal and the
+/// native result are treated.
+pub(super) struct TerminalWrite<'a> {
+    pub(super) now: DateTime<Utc>,
+    pub(super) expected: ToolCallState,
+    pub(super) fields: TerminalFields<'a>,
+    pub(super) terminal_status: &'a str,
+    pub(super) plugin_receipt: Option<&'a gents_protocol::plugin::PluginExecutionReceipt>,
+    pub(super) text: &'a str,
+    pub(super) pending_raw: Option<&'a str>,
+    pub(super) presentation: Option<&'a PayloadPresentation>,
+    pub(super) output_budget: Option<usize>,
+    pub(super) adopt_competing_terminal: bool,
+    pub(super) publish_native_result: bool,
+}
+
 pub(super) async fn terminalize_transaction(
     txn: &ConfigApplyTxn<'_>,
-    tool_doc_id: &str,
-    request_doc_id: &str,
-    accepted_header_doc_id: &str,
-    node_did: &str,
-    requester_did: Option<&str>,
-    session_id: &str,
-    tool_call_id: &str,
-    call_id: Option<&str>,
-    message_sequence: u32,
-    arguments: Option<&gents_protocol::output::PayloadRef>,
-    spawned_by_tool_call_doc_id: Option<&str>,
-    plugin_effect: Option<&crate::call::lifecycle::plugin_effect::PluginEffectTerminal>,
-    tool_name: &str,
-    deadline_at: DateTime<Utc>,
-    started_at: Option<DateTime<Utc>>,
-    now: DateTime<Utc>,
-    expected: ToolCallState,
-    fields: TerminalFields<'_>,
-    terminal_status: &str,
-    plugin_receipt: Option<&gents_protocol::plugin::PluginExecutionReceipt>,
-    text: &str,
-    pending_raw: Option<&str>,
-    presentation: Option<&PayloadPresentation>,
-    output_budget: Option<usize>,
-    adopt_competing_terminal: bool,
-    publish_native_result: bool,
+    row: TerminalRow<'_>,
+    write: TerminalWrite<'_>,
 ) -> Result<bool> {
+    let TerminalRow {
+        tool_doc_id,
+        request_doc_id,
+        accepted_header_doc_id,
+        node_did,
+        requester_did,
+        session_id,
+        tool_call_id,
+        call_id,
+        message_sequence,
+        arguments,
+        spawned_by_tool_call_doc_id,
+        plugin_effect,
+        tool_name,
+        deadline_at,
+        started_at,
+    } = row;
+    let TerminalWrite {
+        now,
+        expected,
+        fields,
+        terminal_status,
+        plugin_receipt,
+        text,
+        pending_raw,
+        presentation,
+        output_budget,
+        adopt_competing_terminal,
+        publish_native_result,
+    } = write;
     let tool = escape_graphql_string(tool_doc_id);
     let request = escape_graphql_string(request_doc_id);
     let agent = escape_graphql_string(node_did);

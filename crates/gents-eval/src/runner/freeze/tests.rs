@@ -40,6 +40,13 @@ impl Launching {
         crate::runner::embedded::executor::install::grant_trial_operations(&home, &evaluator_did)
             .await
             .unwrap();
+        gents_store::identity::GrantSet::HouseholdOwner
+            .grant(
+                &ConfigAccess::local_as(home.node.clone(), identity::Did::new(home.did()).unwrap()),
+                &identity::Did::new(&evaluator_did).unwrap(),
+            )
+            .await
+            .unwrap();
         let access = home.client_access(&evaluator_did).unwrap();
         let launching = Self { home, access, dirs };
         launching
@@ -66,16 +73,6 @@ impl Launching {
             ])
             .await;
         launching
-    }
-
-    /// The Node owner's own signed access. Source-projected documents (Agent,
-    /// Tools, AgentContext) are refused for the evaluator's client access, so
-    /// fixtures that install them must write as the owner.
-    pub(crate) fn owner_access(&self) -> anyhow::Result<ConfigAccess> {
-        Ok(ConfigAccess::local_as(
-            self.home.node.clone(),
-            identity::Did::new(self.owner())?,
-        ))
     }
 
     pub(crate) async fn install(&self, documents: Vec<(Collection, Value)>) {

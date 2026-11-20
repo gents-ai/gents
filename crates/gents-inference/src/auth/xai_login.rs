@@ -15,9 +15,6 @@ const TOKEN_URL: &str = "https://auth.x.ai/oauth2/token";
 
 pub const XAI_OAUTH_SCOPES: &str = "openid profile email offline_access grok-cli:access api:access conversations:read conversations:write";
 
-pub const XAI_OAUTH_DEVICE_URL_OVERRIDE_ENV: &str = "GENTS_XAI_OAUTH_DEVICE_URL";
-pub const XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV: &str = "GENTS_XAI_OAUTH_TOKEN_URL";
-
 #[derive(Clone)]
 pub struct XaiLoginTokens {
     pub access_token: String,
@@ -74,19 +71,11 @@ struct TokenSuccess {
 struct TokenErrorBody {
     #[serde(default)]
     error: Option<String>,
-    #[serde(default)]
-    #[allow(dead_code)]
-    error_description: Option<String>,
 }
 
 pub async fn request_device_code(http: &reqwest::Client) -> Result<DeviceCodeChallenge> {
-    let endpoint = std::env::var(XAI_OAUTH_DEVICE_URL_OVERRIDE_ENV)
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| DEVICE_CODE_URL.to_string());
-
     let response = http
-        .post(&endpoint)
+        .post(DEVICE_CODE_URL)
         .header("Accept", "application/json")
         .header("Content-Type", "application/x-www-form-urlencoded")
         .form(&[
@@ -124,11 +113,6 @@ pub async fn poll_device_token(
     challenge: &DeviceCodeChallenge,
     cancel: Option<Arc<AtomicBool>>,
 ) -> Result<XaiLoginTokens> {
-    let endpoint = std::env::var(XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV)
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| TOKEN_URL.to_string());
-
     let deadline = Instant::now() + Duration::from_secs(challenge.expires_in.max(30));
     let mut interval = Duration::from_secs(challenge.interval.max(1));
 
@@ -144,7 +128,7 @@ pub async fn poll_device_token(
         }
 
         let response = http
-            .post(&endpoint)
+            .post(TOKEN_URL)
             .header("Accept", "application/json")
             .header("Content-Type", "application/x-www-form-urlencoded")
             .form(&[

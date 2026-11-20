@@ -1,0 +1,4 @@
+---- MODULE MCNativeWorkerRecordObservationStalledOwner ----
+EXTENDS NativeWorkerRecordObservation
+
+====

@@ -550,9 +550,14 @@ export function createSessionReads({
       if (clientDid && recentClientDid && clientDid !== recentClientDid) recent.clear();
       if (clientDid) recentClientDid = clientDid;
       const listed = new Set(client.deployments.map((node) => node.nodeDid));
-      const ended = new Set((client.endedAccess ?? []).map((node) => node.nodeDid));
+      const refused = new Set(
+        client.deployments
+          .filter((node) => node.runtimeConnection === "refused")
+          .map((node) => node.nodeDid),
+      );
       for (const [key, entry] of recent)
-        if (!listed.has(entry.nodeDid) || ended.has(entry.nodeDid)) recent.delete(key);
+        if (!listed.has(entry.nodeDid) || refused.has(entry.nodeDid))
+          recent.delete(key);
     },
     refreshSession,
     /** a waiting phase's re-read, which continues its streak */

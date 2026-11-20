@@ -1,12 +1,14 @@
 use gents_documents::test_support::{bootstrap_signed_test_node, set_test_default_agent_as};
 use gents_inference::test_support::install_test_agent_binding_with_access;
 
+#[cfg(test)]
 const CAPTURED_EVENT_TARGETS: &[&str] = &[
     gents_store::config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET,
     crate::runtime::status::RECONCILE_PHASE_EVENT_TARGET,
     gents_session::session::REFUSAL_PROJECTION_EVENT_TARGET,
 ];
 
+#[cfg(test)]
 pub(crate) fn enable_scoped_event_capture() {
     static INSTALLED: std::sync::Once = std::sync::Once::new();
     INSTALLED.call_once(|| {
@@ -15,8 +17,10 @@ pub(crate) fn enable_scoped_event_capture() {
     });
 }
 
+#[cfg(test)]
 struct CapturedTargetSubscriber;
 
+#[cfg(test)]
 impl tracing::Subscriber for CapturedTargetSubscriber {
     fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
         CAPTURED_EVENT_TARGETS.contains(&metadata.target())
@@ -37,6 +41,7 @@ impl tracing::Subscriber for CapturedTargetSubscriber {
     fn exit(&self, _span: &tracing::Id) {}
 }
 
+#[cfg(test)]
 pub(crate) async fn signed_test_node(
     name: &str,
 ) -> (
@@ -49,6 +54,7 @@ pub(crate) async fn signed_test_node(
     signed_test_node_from_db(db, name).await
 }
 
+#[cfg(test)]
 pub(crate) async fn signed_test_node_without_agent(
     name: &str,
 ) -> (

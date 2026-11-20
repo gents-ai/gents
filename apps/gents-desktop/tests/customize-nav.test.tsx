@@ -555,7 +555,7 @@ describe("the expanded nav's Nodes section", () => {
   const amy = () =>
     node({
       nodeDid: "did:key:amy",
-      source: "peer",
+      local: false,
       node: { ...deployment.node, nodeDid: "did:key:amy", displayName: "Amy" },
     });
   const show = (deployments: ReturnType<typeof node>[]) =>

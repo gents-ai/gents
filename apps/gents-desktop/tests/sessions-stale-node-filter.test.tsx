@@ -33,7 +33,7 @@ const session = (overrides: Partial<SessionSummary>): SessionSummary => ({
   ...overrides,
 });
 const nodeWith = (nodeDid: string, sessions: SessionSummary[]) =>
-  node({ nodeDid, label: nodeDid, source: "enrollment", sessions });
+  node({ nodeDid, label: nodeDid, local: false, sessions });
 
 const app = (deployments: ReturnType<typeof nodeWith>[]) =>
   testApp({

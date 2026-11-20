@@ -121,19 +121,17 @@ async fn cancelled_budget_wait_creates_no_attempt_and_does_not_leak_capacity() {
         &[],
         request.max_infra_retries,
     );
-    let trial = execute_trial(
-        &frozen,
-        &planned[0],
-        &recorder,
-        &executor,
-        &registry,
-        &cancel,
-        &stop,
-        &progress,
-        &views,
-        Some(&budget),
-        &admission_stopped,
-    );
+    let context = TrialContext {
+        frozen: &frozen,
+        recorder: &recorder,
+        executor: &executor,
+        registry: &registry,
+        cancel: &cancel,
+        trial_budget: Some(&budget),
+        progress: &progress,
+        views: &views,
+    };
+    let trial = execute_trial(&context, &planned[0], &stop, &admission_stopped);
     tokio::pin!(trial);
     assert!(futures::poll!(&mut trial).is_pending());
     cancel.cancel();
@@ -187,19 +185,17 @@ async fn stopped_budget_wait_finishes_without_waiting_for_unrelated_capacity() {
         &[],
         request.max_infra_retries,
     );
-    let trial = execute_trial(
-        &frozen,
-        &planned[0],
-        &recorder,
-        &executor,
-        &registry,
-        &cancel,
-        &stop,
-        &progress,
-        &views,
-        Some(&budget),
-        &admission_stopped,
-    );
+    let context = TrialContext {
+        frozen: &frozen,
+        recorder: &recorder,
+        executor: &executor,
+        registry: &registry,
+        cancel: &cancel,
+        trial_budget: Some(&budget),
+        progress: &progress,
+        views: &views,
+    };
+    let trial = execute_trial(&context, &planned[0], &stop, &admission_stopped);
     tokio::pin!(trial);
     assert!(futures::poll!(&mut trial).is_pending());
     stop.store(true, Ordering::Relaxed);

@@ -76,13 +76,16 @@ env:
   TARGET_TRIPLE: aarch64-apple-darwin
 
 jobs:
-  # The Engineer's core packs, built and tested once; the CLI embeds them.
+  # A tag embeds the core packs Release core packs built once for it; a
+  # manual run without a tag builds its own.
   core-packs:
+    if: github.ref_type != 'tag'
     uses: ./.github/workflows/core-packs.yml
 
   build-sign-package:
     name: Build, sign, and package macOS CLI and desktop
     needs: core-packs
+    if: ${{ !cancelled() && needs.core-packs.result != 'failure' }}
     # Release artifacts live in this job's RUNNER_TEMP target tree, so every
     # release links from a clean tree and never sees PR-built artifacts.
     # SCCACHE_RECACHE stays enabled above: rustc invocations still cannot
@@ -335,11 +338,16 @@ jobs:
             exit 1
           fi
 
-      - name: Download core packs
+      - name: Download the core packs built for this run
+        if: github.ref_type != 'tag'
         uses: actions/download-artifact@v7
         with:
           name: core-packs
           path: target/core-packs
+
+      - name: Download the release's core packs
+        if: github.ref_type == 'tag'
+        run: .github/scripts/fetch-release-core-packs.sh "${{ github.ref_name }}" target/core-packs
 
       - name: Build release binary
         env:

@@ -8,7 +8,7 @@ resources:
       - name: runtime_reader
         types: [actor]
       - name: agent_manager
-        types: [actor]
+        types: [nodes->administrator]
     permissions:
       - name: read
         expr: administrator + runtime_reader

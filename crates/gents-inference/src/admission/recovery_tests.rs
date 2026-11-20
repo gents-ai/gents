@@ -194,7 +194,7 @@ fn pending_call(
         backend_id: "recovery-cas-backend".into(),
         agent_did: signer.did().into(),
         node_did: signer.node_did().into(),
-        call_kind: super::super::CallKind::Inference,
+        call_kind: gents_loop::provider_call::admission::CallKind::Inference,
         attempt: 1,
     }
 }

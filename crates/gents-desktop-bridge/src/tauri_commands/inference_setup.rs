@@ -10,7 +10,7 @@ use crate::accounts::{observe_provider_accounts, retry_pending_credential};
 use crate::accounts::{require_reachable_configuration, save_issued_credential};
 use std::time::Duration;
 
-use gents_desktop_core::client::ClientCore;
+use crate::client_runtime::ClientRuntime;
 #[cfg(test)]
 use gents_inference::auth::credential::list_oauth_credentials_on;
 #[cfg(test)]
@@ -25,7 +25,6 @@ use tauri::{AppHandle, Emitter, Runtime, State};
 
 #[cfg(test)]
 use crate::accounts::{CredentialSave, PendingOAuthCredentials};
-use crate::error::{BridgeError, BridgeErrorCode};
 pub use crate::inference_setup::{
     discover_inference_models_for_core, inference_backend_recommendation,
     inference_model_recommendation, InferenceBackendRecommendationRequest,
@@ -34,15 +33,17 @@ pub use crate::inference_setup::{
 };
 use crate::state::{current_core, DesktopAppState};
 use crate::types::ClientUpdateEvent;
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 const PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
 
-const LOG_TARGET: &str = "gents_desktop_bridge::inference_setup";
+const LOG_TARGET: &str = "crate::inference_setup";
 
 mod sign_in;
 mod sign_in_platform;
 
-async fn notify_config_changed<R>(app: &AppHandle<R>, core: &ClientCore, node_did: &str)
+async fn notify_config_changed<R>(app: &AppHandle<R>, core: &ClientRuntime, node_did: &str)
 where
     R: Runtime,
 {
@@ -442,7 +443,7 @@ mod provider_account_tests {
     use std::sync::Arc;
 
     use super::*;
-    use gents_desktop_core::test_fixtures::ServedRuntimeHome;
+    use gents::client_test_support::ServedRuntimeHome;
 
     #[test]
     fn provider_account_view_never_serializes_tokens() {
@@ -508,7 +509,7 @@ mod provider_account_tests {
     }
 
     /// A runtime whose User saves sign-ins through the client-signed
-    /// endpoint `ClientCore::operator_access` builds; credentials are scoped
+    /// endpoint `ClientRuntime::operator_access` builds; credentials are scoped
     /// to its published Node.
     async fn served() -> ServedRuntimeHome {
         ServedRuntimeHome::start().await
@@ -1053,19 +1054,19 @@ mod provider_account_tests {
 
     #[tokio::test]
     async fn an_added_accounts_backend_is_in_the_client_snapshot_after_sign_in() {
-        use gents_desktop_core::client::{ClientCoreOptions, DesktopPaths};
+        use gents_store::client_journal::paths::DesktopPaths;
 
         let temp = tempfile::TempDir::new().expect("tmpdir");
-        let core = ClientCore::start_with_paths_and_options(
+        let core = ClientRuntime::start_with_paths_and_options(
             DesktopPaths::from_root(temp.path().join("client")),
-            ClientCoreOptions::local_simulated_route(),
+            crate::client_test_support::file_journal_options(),
         )
         .await
         .expect("client core");
         let runtime =
             ServedRuntimeHome::start_unpublished_for(Arc::new(core.node_identity().clone())).await;
         runtime.publish_node(serde_json::json!({})).await;
-        runtime.connect(&core).await;
+        crate::client_test_support::connect_runtime(&runtime, &core).await;
         let node_did = runtime.node_did();
         assert!(matches!(
             core.operator_access(node_did),
@@ -1696,8 +1697,8 @@ mod provider_account_tests {
 
     #[tokio::test]
     async fn discovery_reads_the_account_its_backend_names() {
-        use gents_desktop_core::inference::discovery_account;
         use gents_documents::BackendAuth;
+        use gents_observe::client_inference::discovery_account;
 
         let runtime = served().await;
         let access = runtime.user_access();

@@ -89,8 +89,8 @@ async fn set_node_hop_cap(owner: &ConfigAccess, node_did: &str, cap: u32) -> any
 }
 
 #[tokio::test]
-async fn agent_transaction_reads_hidden_node_cap_as_runtime_and_fails_closed() -> anyhow::Result<()>
-{
+async fn agent_transaction_uses_the_node_cap_only_while_the_runtime_may_use_its_node(
+) -> anyhow::Result<()> {
     let (db, user, user_access, binding) = crate::test_support::signed_test_node(
         "runtime-hop-cap",
         gents_store::node_extension::Extensions::none(),
@@ -134,21 +134,240 @@ async fn agent_transaction_reads_hidden_node_cap_as_runtime_and_fails_closed() -
             &identity::Did::new(runtime.did())?,
         )
         .await?;
+    let usable = {
+        let (runtime, doc) = (identity::Did::new(runtime.did())?, node_doc.to_owned());
+        admin
+            .transact_readonly("test.runtime_use.hop_cap_node", |txn| {
+                let (runtime, doc) = (&runtime, &doc);
+                Box::pin(async move {
+                    Ok::<_, anyhow::Error>(
+                        txn.runtime_may_use(runtime, "Node", std::slice::from_ref(doc))
+                            .await?,
+                    )
+                })
+            })
+            .await?
+    };
+    assert_eq!(usable, vec![false]);
+    assert_eq!(
+        admin.execute("{ Node { _docID } }").await?["data"]["Node"]
+            .as_array()
+            .map(Vec::len),
+        Some(0)
+    );
+    assert_eq!(single_doc_id(&user_access, "Node", "{}").await?, node_doc);
+    assert_eq!(observe(runtime.did().to_owned()).await?, None);
+    admin
+        .grant_node_permission(
+            &identity::Did::new(user.did())?,
+            NodePermission::DocumentDelete,
+        )
+        .await?;
+    user_access
+        .transact_write("test.runtime_hop_cap.remove_node", |txn| {
+            Box::pin(async move { txn.delete_configuration_document("Node", node_doc).await })
+        })
+        .await?;
     assert_eq!(observe(runtime.did().to_owned()).await?, None);
     Ok(())
 }
 
-fn recipient_sets(name: &str) -> Vec<GrantSet> {
-    let case = gents_lean_vocab::lean_contract_snapshot()
-        .identity_grant_recipient_cases
-        .iter()
-        .find(|case| case.recipient == name)
-        .unwrap_or_else(|| panic!("Lean recipient {name:?}"));
-    case.direct
-        .iter()
-        .chain(&case.projected)
-        .map(|set| set_named(set))
-        .collect()
+async fn single_doc_id(
+    access: &ConfigAccess,
+    collection: &str,
+    filter: &str,
+) -> anyhow::Result<String> {
+    let response = access
+        .execute(&format!(
+            "{{ {collection}(filter: {filter}) {{ _docID }} }}"
+        ))
+        .await?;
+    match response["data"][collection].as_array().map(Vec::as_slice) {
+        Some([row]) => Ok(row["_docID"]
+            .as_str()
+            .context("row has no _docID")?
+            .to_owned()),
+        rows => anyhow::bail!("expected one {collection}, found {rows:?}"),
+    }
+}
+
+/// Each runtime use after revoking the Node's `runtime_reader`, the
+/// credential's `runtime_writer`, both or neither, on a separately owned store.
+#[tokio::test]
+async fn runtime_uses_follow_document_acp_as_the_lean_model_says() -> anyhow::Result<()> {
+    use gents_lean_vocab::families::runtime_use_revocation::RevocationObserved;
+
+    let (db, user, user_access, binding) = crate::test_support::signed_test_node(
+        "runtime-use",
+        gents_store::node_extension::Extensions::none(),
+    )
+    .await;
+    let runtime = db.node_identity.as_ref();
+    let did = runtime.did();
+    let runtime_did = identity::Did::new(did)?;
+    let user_did = identity::Did::new(user.did())?;
+    let signer = gents_store::identity::resolve_agent_identity(runtime, &binding)?;
+    let agent = ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        identity::Did::new(&binding.agent_did)?,
+        signer.as_ref(),
+    )?;
+    let admin = ConfigAccess::local_as(db.node.clone(), runtime_did.clone());
+    admin
+        .grant_node_permission(&user_did, NodePermission::DacRelationDelete)
+        .await?;
+    set_node_hop_cap(&user_access, did, 1).await?;
+
+    let provider = "runtime-use-test";
+    let credential = crate::auth::credential::OAuthCredential {
+        doc_id: None,
+        credential_id: "runtime-use".into(),
+        node_did: did.into(),
+        provider: provider.into(),
+        access_token: "private-access-token".into(),
+        refresh_token: "private-refresh-token".into(),
+        id_token: None,
+        account_id: None,
+        chatgpt_plan_type: None,
+        is_fedramp: false,
+        access_token_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+        last_refresh: None,
+        enabled: true,
+        account_ref: None,
+        connected_at: None,
+        provider_account_key: None,
+        label: None,
+    };
+    let credential_doc =
+        crate::auth::credential::upsert_oauth_credential_on(&user_access, &credential).await?;
+    let backend = gents_documents::InferenceBackend {
+        physical_doc_id: None,
+        node_did: did.to_owned(),
+        backend_id: "runtime-use".to_owned(),
+        name: "runtime-use".to_owned(),
+        provider_kind: crate::backends::provider::BackendProviderKind::OpenAiCompatible,
+        openai_wire_api: None,
+        endpoint: "http://127.0.0.1:9/v1".to_owned(),
+        claude_platform: None,
+        auth: gents_documents::BackendAuth::Unauthenticated,
+        client_version: None,
+        connect_timeout_secs: None,
+        discovery_timeout_secs: None,
+        request_timeout_secs: None,
+        max_concurrent: Some(1),
+        max_queue_depth: Some(gents_documents::inference_defaults::DEFAULT_MAX_QUEUE_DEPTH),
+        enabled: true,
+        tags: Vec::new(),
+    };
+    gents_documents::write_inference_backend_document(
+        &user_access,
+        &backend,
+        &crate::resolved::ProviderProfilePolicy,
+    )
+    .await?;
+    let escaped = gents_store::graphql::escape_graphql_string(did);
+    let node_doc = single_doc_id(
+        &user_access,
+        "Node",
+        &format!(r#"{{node_did: {{_eq: "{escaped}"}}}}"#),
+    )
+    .await?;
+    let backend_doc = single_doc_id(
+        &user_access,
+        "InferenceBackendMetadata",
+        r#"{backend_id: {_eq: "runtime-use"}}"#,
+    )
+    .await?;
+
+    let cases =
+        tokio::task::spawn_blocking(gents_lean_vocab::families::runtime_use_revocation::cases)
+            .await?;
+    assert_eq!(cases.len(), 16);
+    for case in cases {
+        let input = &case.input;
+        if input.revoke_node_reader {
+            user_access
+                .delete_actor_relationship("Node", &node_doc, "runtime_reader", &runtime_did)
+                .await?;
+        }
+        if input.revoke_credential_writer {
+            user_access
+                .delete_actor_relationship(
+                    "OAuthCredential",
+                    &credential_doc,
+                    "runtime_writer",
+                    &runtime_did,
+                )
+                .await?;
+        }
+        let (collection, doc) = match input.runtime_use.as_str() {
+            "oauth_credential" => ("OAuthCredential", &credential_doc),
+            "backend" => ("InferenceBackendMetadata", &backend_doc),
+            "hop_cap" | "agent_creation" => ("Node", &node_doc),
+            other => panic!("unmodeled runtime use {other}"),
+        };
+        let hosting_read = single_doc_id(
+            &admin,
+            collection,
+            &format!(
+                r#"{{_docID: {{_eq: "{}"}}}}"#,
+                gents_store::graphql::escape_graphql_string(doc)
+            ),
+        )
+        .await
+        .is_ok();
+        let may_use = match input.runtime_use.as_str() {
+            "oauth_credential" => crate::auth::credential::resolve_oauth_credential(
+                &crate::auth::credential::runtime_credential_access(&db.node, did)?,
+                did,
+                provider,
+                crate::auth::credential::AccountPick::ProviderDefault,
+            )
+            .await?
+            .is_some(),
+            "backend" => {
+                crate::backends::registry::list_enabled_backends_for_runtime(&db.node, did)
+                    .await?
+                    .iter()
+                    .any(|listed| listed.backend_id == backend.backend_id)
+            }
+            "hop_cap" => {
+                agent
+                    .transact_readonly("test.runtime_use.hop_cap", |txn| {
+                        Box::pin(async move {
+                            Ok::<_, anyhow::Error>(txn.runtime_max_request_hop(did).await?)
+                        })
+                    })
+                    .await?
+                    == Some(Some(1))
+            }
+            _ => {
+                gents_store::identity::observe_agent_admission(&db.node, did, &user_did, &[])
+                    .await?
+                    .catalog
+            }
+        };
+        case.check(RevocationObserved {
+            hosting_read,
+            may_use,
+        });
+        if input.revoke_node_reader {
+            user_access
+                .add_actor_relationship("Node", &node_doc, "runtime_reader", &runtime_did)
+                .await?;
+        }
+        if input.revoke_credential_writer {
+            user_access
+                .add_actor_relationship(
+                    "OAuthCredential",
+                    &credential_doc,
+                    "runtime_writer",
+                    &runtime_did,
+                )
+                .await?;
+        }
+    }
+    Ok(())
 }
 
 pub(crate) async fn agent_step(

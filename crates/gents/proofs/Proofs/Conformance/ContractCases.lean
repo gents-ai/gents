@@ -7,7 +7,6 @@ import Proofs.Conformance.ContractCases.LiveOverlay
 import Proofs.Conformance.ContractCases.QueueDeadline
 import Proofs.Conformance.ContractCases.R6Background
 import Proofs.Conformance.ContractCases.InterruptDisposition
-import Proofs.Conformance.ContractCases.Transcript
 import Proofs.Conformance.ContractCases.ManagedExec
 import Proofs.Conformance.ContractCases.PromptAssembly
 import Proofs.Conformance.ContractCases.RenderedCapture

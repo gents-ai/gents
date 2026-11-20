@@ -70,6 +70,17 @@ See `../README.md` for how this fits the broader formal-verification model.
   order and breaks `OwnerPublishes`; `MarginSpent` spends half a lease and
   breaks `LeaseHeld`; `Unfenced` drops the deadline check and breaks
   `SingleWriter`.
+- `RetryBackoffLease` — one request's execution lease while its owner backs
+  off a failed provider call, beside the drive's lease poll, the renewal task,
+  recovery and the e2e fixture that expires the lease. The wake decision is
+  Lean `RequestExecutionLease.retryWakeDispatches`. `DispatchOnlyLive` holds
+  only when the wake is authorized against the lease (`Fenced`); `Unfenced`
+  is the product before the fix, where an expiry after the drive's last poll
+  and before the wake dispatches the retry under an expired lease. The
+  fixture's observations hold with an unreached backoff and a
+  generation-only expiry write (green); `WallClock` (a backoff shorter than a
+  slow fixture) and `DeadlineCas` (a renewal between the fixture's read and
+  write) are the test's accidents.
 - `ClientSubmissionContention` — a User's optimistic chat send (Lean
   `ClientOptimisticSend`) racing writes to the documents it reads. The client
   picks the request identity, shows the message pending, keeps its payload
@@ -169,6 +180,19 @@ See `../README.md` for how this fits the broader formal-verification model.
   driven by the test after the steps it must follow (`Driven`), passes under
   every schedule and still fails an owner that never commits
   (`StalledOwner`); `SlowHost` is the ceiling's premise.
+- `NativeWorkerRecordObservation` — a test waiting until two background
+  native workers run and have recorded their process ownership. Each
+  `spawn_process` handler commits its spawned row running and then the
+  worker's task spawns the child and renames its record into the runtime's
+  record directory, a host file no document commit follows. Green subscribes
+  to `AgentToolCall` and watches the record directory before the request
+  exists, re-reads after each notification and fails only at the stall
+  ceiling. RED: `FixedWindow` (the CI failure: a 20 s timeout fails a
+  progressing owner on a loaded host), `DocumentsOnly` (the last record lands
+  after the last commit and the waiter fails a finished owner),
+  `SubscribeAfterRead` (a change between a short read and the subscription
+  is never signalled); `StalledOwner` shows the waiter still fails an owner
+  that never records.
 - `ToolDeadlineInheritance` — where an accepted tool call's deadline comes
   from. The claim fixes the request's one deadline; the provider-turn
   publication writes it on the `AgentToolCall` row and the session hook's
@@ -255,6 +279,25 @@ See `../README.md` for how this fits the broader formal-verification model.
   the fix without renewals as a regression guard for arm-then-snapshot.
   `NodeScopeOnly`, `NoPublicationFence`, `NoEventQueue` and
   `SnapshotBeforeArm` each break one remaining guard.
+- `ObserverCollectionReload` — the observer's collection reloads beside its
+  full node reloads (Lean `ObserverResync.deliver`, `collectionStartable`,
+  `startCollections`, `settleCollections`). A change to a collection whose
+  snapshot root is self-contained queues that collection's own reload; any
+  other change queues the node's full reload. One read per node is in flight,
+  full reloads first, and a full reload takes the queued collections with it.
+  A collection reload publishes only its collection through the reload fence
+  (the generated table of `ClientDataPublication.reloadAcceptedSince`); a
+  rejected one queues its collections again and a failed one queues the full
+  reload. `NoLostWrite`, `NoStaleCommit`, `EventualPublication` and
+  `Convergence` hold with a touch (the per-minute observation rewrite) and a
+  lease renewal during every full load, a stream drop, a direct refresh and a
+  failed collection read (GREEN `MCObserverCollectionReload`). RED:
+  `IgnoreFence` (a collection reload publishes through a moved fence) breaks
+  `NoStaleCommit`; `DropRejected` (a rejected collection reload drops its
+  collections) and `DropFailure` (a failed collection read queues nothing)
+  break `NoLostWrite`; `ConcurrentReads` (a collection reload may run beside a
+  full reload) breaks `EventualPublication`: every touch rejects the full
+  reload in flight.
 - `DesktopUpdateListener` — the last leg of the desktop's event path: the
   bridge emitter (`spawn_client_update_task`: coalesced watch wakes, one
   `desktop://client-updated` event each), Tauri delivery (an event with no
@@ -401,6 +444,20 @@ See `../README.md` for how this fits the broader formal-verification model.
   each tool's output observed at the wall clock and was refused by the claim
   deadline before any notification ran; `NoGate` loses a notifier to aborted
   attempts; `NoGateNoConflict` creates two wakes.
+- `BackgroundEnvelopeProjection` — a session transcript where two background
+  completions, their coalesced wake request and a person's look-alike inputs
+  (the wake text and a quoted envelope) arrive in any order
+  (`live_background_completions_project_as_tool_attributed_activity`). The
+  worker claims in arrival order and publishes each input with its claim or
+  fold; the projection classifies by Lean
+  `TranscriptInputOrigin.classification` over the authoring request's facts.
+  The observer stops once the notifications and every input, the wake's and
+  each submitted one, are published; then `TestPasses` (the person's inputs
+  render as a person's, the wake as a wake, the notifications as results)
+  holds. `NoInputWait` is the observer before the fix: jobs that finish
+  before the quote is submitted put the wake ahead of it, and the observer
+  stops with the quote still pending. `ByText` classifies by the input's
+  text and fails even the waiting observer.
 - `StreamDelivery` — streamed provider text reaching a subscribed client
   while the provider pauses (#2131, #3803): the provider's chunks and its
   gated completion, the owned drive loop and stream writer (flush on the
@@ -437,6 +494,71 @@ See `../README.md` for how this fits the broader formal-verification model.
   reaps before its exec (`write_executable_script`), and its RED
   `ChildWriterUnwaited` drops the reap. `Darwin` (no such execve check) and
   `Alone` (no sibling) explain why the old order passed on macOS and alone.
+- `TestPortReservation` — two gents-cli integration tests on one host, each
+  in its own nextest process, reserving a port with `allocate_port`,
+  starting a server on it and waiting with `wait_for_port`, which accepts any
+  listener. `NoCrossTalk`: the server answering on a test's port is its own.
+  RED: `PerRunner` locks reservations where each CI runner has its own
+  view (TMPDIR, or `/tmp` under the runners' `PrivateTmp=yes`), so two jobs on one machine reserve the same port and one test talks
+  to the other's server (the subscription EOFs and foreign-node errors on
+  the shared Linux runners); `EphemeralOverlap` lets an outbound connection
+  take the reserved port, which fails the server's bind. Green reserves with an
+  abstract Unix socket, in the network namespace the ports share, below
+  every ephemeral range; `PerRunnerSpread` shows
+  why separate directories rarely collided while one process per binary
+  spread its cursor.
+- `ExecutableStaging` — the service updater stages an executable that is
+  exec'd afterwards (`copy_executable`), while other threads spawn. A
+  sibling's spawn copies the updater's descriptors until that child execs,
+  and Linux execve refuses a file open for writing (ETXTBSY); a later exec by
+  the service manager is not ordered after the siblings' execs. RED:
+  `InProcessCopy` (`fs::copy` in the updater), `TempHandle` (a
+  `NamedTempFile` held open until persist), `Unwaited` (the copy child not
+  reaped). Green copies with a reaped `/bin/cp` child into a file the updater
+  never opens for writing.
+- `UsageRecordObservation` — a provider response's usage headers reach the
+  runtime's `UsageCache` through a detached writer (`UsageReporter::observe`
+  spawns credential resolution and the record), while the caller backfills
+  the credential's `provider_account_key` between two responses and then
+  reads the backend's usage. The binding is the row's stable `_docID`, so the
+  backfill strands no observation; the reader is the side that can be wrong.
+  Green subscribes to the cache's record count before checking and reads once
+  both writers have recorded. RED: `ReadOnce` (the 2026-11-19 CI failure: the
+  read is ordered after neither write and finds nothing), `SubscribeAfterRead`
+  (a record landing between a short check and the subscription is never
+  signalled).
+- `CommitResponseWait` — a client's wait for a store request's answer over
+  the runtime's HTTP endpoint on a loaded host (`txn_commit`, e.g. the pack
+  document install; auto-commit mutations and reads are the same wait).
+  RED: `ClientWindow`, a total or read-idle timeout, reports a live server's
+  commit as unconfirmed (the change-unit CI failure); `NoKeepalive` waits
+  forever on a connection whose host vanished; `Wedged` drops the premise
+  that the server answers every commit it works on; `DroppedAnswer` reports a
+  live server's outcome unknown after a broken connection. Green waits for
+  the answer, a reset or a failed keepalive. `WedgedProgress` (a published
+  commit step) and `DroppedAnswerQueried` (a transaction outcome query) are
+  green designs DefraDB does not offer yet.
+- `OfflineAccessRouting` — a CLI command against a home another process
+  holds: a server claims the store, binds its port and publishes
+  `runtime.json` only once ready; the command routes to a published runtime
+  and otherwise tries the store lock, which `StoreHandoff.decide` refuses
+  while the holder serves. `AssertionHolds`: the outcome is the one the test
+  expects. Green waits for the publication and expects the server's answer,
+  or holds the store itself and expects the refusal. RED: `PortWait` and
+  `PortWaitAnswered` wait only for the port, where both outcomes are
+  reachable (the `cli_session` fork test on CI).
+- `ScheduleDisableFence` — a User disabling a schedule Trigger while the
+  sequential schedule source fires it. Dispatch re-borrows the active
+  snapshot and admits only an enabled Trigger; the router acknowledges only
+  a generation it borrowed from the watch. `AdmissionFence` and `NoDueFire`
+  hold: nothing admits the Trigger once its disabling generation is
+  acknowledged, and a cursor written after that never fires. A fire admitted
+  under the old generation can still commit after the acknowledgement.
+  `OldObserver` is the CI failure: the test disabled while the interval
+  cadence's seeded fire was in flight and counted its commit. Green waits for
+  the seeded fire before disabling and judges once a witness Trigger, due
+  after the disabled one, fires (`Settled`). RED: `NoSeedWait`, `NoWitness`
+  (observer), `NoRecheck`, `AckBeforeWatch` (product).
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## Checking
@@ -488,7 +610,11 @@ header, a TLC error or a timeout (`--timeout`, seconds per config) fails it.
 `--spec`, `--config`, `--crate`, `--lean` and `--files` narrow the run. The
 pull request gate runs the specs whose headers name a changed crate or Lean
 owner, declaration or path, or whose own files or generated imports changed; main
-and the nightly `TLA+ nightly` workflow run every config.
+and the nightly `TLA+ nightly` workflow run every config. TLC's outcome is
+recorded under a digest of the script, the pinned tools, the config and every
+module it reads, in `~/.cache/gents-tla/results`; a run reuses a recorded
+outcome for the same digest and judges it against the header again. The
+nightly passes `--fresh`, which runs TLC on every config regardless.
 `scripts/tla_check.py install` installs the pinned JDK and `tla2tools.jar`
 (version and SHA-256 in the script) under `~/.cache/gents-tla`.
 `scripts/run-tlc.sh <MC config>` runs TLC with them and prints its full
@@ -645,6 +771,23 @@ and `NodeScopeOnly` violate `EventualPublication` and `Convergence`;
 ./scripts/run-tlc.sh MCObserverResyncNoEventQueue
 ./scripts/run-tlc.sh MCObserverResyncSnapshotBeforeArm
 ./scripts/run-tlc.sh MCObserverResyncStaleCommit
+```
+
+For ObserverCollectionReload — the green model (a write per collection, a
+touch and a renewal during every full load, a drop, a direct refresh and a
+failed collection read) checks clean:
+```bash
+./scripts/run-tlc.sh MCObserverCollectionReload
+```
+
+Its four diagnostics are EXPECTED to report violations: `IgnoreFence`
+violates `NoStaleCommit`; `DropRejected` and `DropFailure` violate
+`NoLostWrite`; `ConcurrentReads` violates `EventualPublication`:
+```bash
+./scripts/run-tlc.sh MCObserverCollectionReloadIgnoreFence
+./scripts/run-tlc.sh MCObserverCollectionReloadDropRejected
+./scripts/run-tlc.sh MCObserverCollectionReloadDropFailure
+./scripts/run-tlc.sh MCObserverCollectionReloadConcurrentReads
 ```
 
 For DesktopUpdateListener — the green model (every guard on, one rejected

@@ -1,64 +1,59 @@
-use anyhow::Result;
-use gents_desktop_core::client::{ClientCore, PeerMutationResult};
-
 use super::util::require_trimmed;
+use crate::client_runtime::ClientRuntime;
+use crate::types::ClientAccessRequestView;
+use crate::types::RuntimeAccessConnectRequest;
+use gents_protocol::runtime_connection::RuntimeConnection;
+use gents_store::client_error::BridgeError;
 
-pub async fn remove_peer(core: &ClientCore, peer_id: String) -> Result<PeerMutationResult> {
-    let peer_id = require_trimmed("peer_id", peer_id)?;
-    core.remove_peer(&peer_id).await
-}
-
-pub async fn rename_peer(core: &ClientCore, peer_id: String, label: String) -> Result<()> {
-    let peer_id = require_trimmed("peer_id", peer_id)?;
-    let label = require_trimmed("label", label)?;
-    core.rename_peer(&peer_id, &label).await?;
-    Ok(())
-}
-
-pub async fn request_status_enrollment(
-    core: &ClientCore,
-    request: crate::types::EnrollmentStatusRequest,
-) -> Result<crate::types::EnrollmentRequestView, crate::error::BridgeError> {
-    use crate::error::BridgeError;
-    use crate::types::EnrollmentRequestView;
-    use gents_desktop_core::local_runtime::fetch_runtime_connection_payload;
-    let address = request.server_address.trim();
-    if address.is_empty() {
-        return Err(BridgeError::untyped("server_address is required"));
-    }
-    let status = fetch_runtime_connection_payload(address, Some(core.node_identity()))
+pub async fn forget_runtime(core: &ClientRuntime, node_did: String) -> anyhow::Result<bool> {
+    core.forget_runtime(require_trimmed("node_did", node_did)?.as_str())
         .await
-        .map_err(BridgeError::classify_transport_error)?;
-    let server_label = status
-        .get("node_name")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|label| !label.is_empty())
-        .map(str::to_owned);
-    core.request_status_enrollment_with_names(
-        &status,
-        server_label.as_deref(),
-        request.candidate_name.as_deref(),
+}
+
+pub async fn rename_runtime(
+    core: &ClientRuntime,
+    node_did: String,
+    label: String,
+) -> anyhow::Result<()> {
+    core.rename_runtime(
+        &require_trimmed("node_did", node_did)?,
+        &require_trimmed("label", label)?,
     )
     .await
-    .map(|result| {
-        let mut view = EnrollmentRequestView::from(result);
-        view.server_label = server_label;
-        view
-    })
-    .map_err(|error| BridgeError::untyped(format!("{error:#}")))
 }
 
-pub async fn request_invite_enrollment(
-    core: &ClientCore,
-    request: crate::types::EnrollmentInviteRequest,
-) -> Result<crate::types::EnrollmentRequestView, crate::error::BridgeError> {
-    let token = request
-        .invite
-        .strip_prefix("gents://invite/")
-        .unwrap_or(&request.invite);
-    core.request_invite_enrollment(token, request.candidate_name.as_deref())
+pub async fn request_runtime_access(
+    core: &ClientRuntime,
+    request: RuntimeAccessConnectRequest,
+) -> Result<ClientAccessRequestView, BridgeError> {
+    let address = require_trimmed("server_address", request.server_address)
+        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+    let status = gents::client_runtime::fetch_runtime_connection_payload(&address)
         .await
-        .map(crate::types::EnrollmentRequestView::from)
-        .map_err(|error| crate::error::BridgeError::untyped(format!("{error:#}")))
+        .map_err(BridgeError::classify_transport_error)?;
+    let node_did = status
+        .get("node_did")
+        .and_then(serde_json::Value::as_str)
+        .filter(|did| !did.is_empty())
+        .ok_or_else(|| BridgeError::untyped("the runtime did not identify its Node"))?;
+    let label = status
+        .get("node_name")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(node_did);
+    let graphql = gents::client_runtime::graphql_endpoint_for_desktop_access(
+        &gents::client_runtime::runtime_status_url(&address)
+            .map_err(|error| BridgeError::untyped(error.to_string()))?,
+    )
+    .ok_or_else(|| BridgeError::untyped("the runtime address is invalid"))?;
+    core.request_runtime_access(RuntimeConnection {
+        node_did: node_did.to_owned(),
+        label: label.to_owned(),
+        graphql,
+        local_node_home: None,
+        access_request: None,
+        access_state: None,
+    })
+    .await
+    .map(Into::into)
+    .map_err(|error| BridgeError::untyped(format!("{error:#}")))
 }

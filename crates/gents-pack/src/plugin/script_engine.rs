@@ -120,6 +120,7 @@ mod tests {
             memory_bytes: 64 * 1024 * 1024,
             wall_clock: Duration::from_secs(5),
             max_output_bytes: 1024 * 1024,
+            max_rounds: crate::plugin::DEFAULT_MAX_ROUNDS,
         }
     }
 

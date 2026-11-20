@@ -267,11 +267,6 @@ impl ToolSurface {
         &self.plugin_resolutions
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn agent_tools(&self) -> &AgentToolConfig {
-        &self.agent_tools
-    }
-
     pub fn agent_targets(&self) -> &[AgentTargetDocument] {
         if self.agent_tools.enabled {
             &self.agent_tools.targets
@@ -677,6 +672,9 @@ impl ToolSurface {
                 plugin,
                 self.host_tools
                     .read_root()
+                    .map(std::path::Path::to_path_buf),
+                self.host_tools
+                    .write_root()
                     .map(std::path::Path::to_path_buf),
                 runtime.node.clone(),
                 &runtime.node_did,

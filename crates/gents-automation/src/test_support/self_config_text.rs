@@ -12,7 +12,7 @@ pub async fn call(tools: &Vec<Box<dyn ToolDyn>>, args: Value) -> Result<Value, S
     match tool
         .call(
             args.to_string(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
     {
@@ -52,7 +52,7 @@ pub async fn structured_failure(tools: &Vec<Box<dyn ToolDyn>>, args: Value) -> V
     match tool
         .call(
             args.to_string(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
     {
@@ -102,7 +102,7 @@ pub async fn text(tools: &Vec<Box<dyn ToolDyn>>, args: Value) -> String {
         .expect("config registered");
     tool.call(
         args.to_string(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .unwrap_or_else(|error| panic!("{args}: {error:#}"))

@@ -1,14 +1,15 @@
 use super::authority::suggested_tool_root;
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
 use crate::types::{ManagedServerState, ManagedServerStatus};
-use gents_desktop_core::local_runtime::HostedRuntimeStatusError;
+use gents::client_runtime::HostedRuntimeStatusError;
 use gents_desktop_core::preference::parse_tool_ceiling;
 use gents_protocol::operations::install_repair::Blocker;
 use gents_protocol::serve_lifecycle::ObservedServeLifecycle;
 use gents_service::repair::port::{
     observe_port, read_initialized_did, served_identity, PortObservation, ServedIdentity,
 };
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 use gents_store::config_client::ClientSigningCapability;
 use std::path::Path;
 
@@ -32,31 +33,11 @@ pub(super) enum PortReadiness {
     },
 }
 
-pub(super) async fn user_status_signer(
-    state: &DesktopAppState,
-    node_home: &Path,
-) -> Option<ClientSigningCapability> {
+pub(super) async fn user_status_signer(state: &DesktopAppState) -> Option<ClientSigningCapability> {
     use gents_store::identity::NodeIdentity as _;
-    let paths = &state.policy.desktop_paths;
-    let core = crate::state::current_core(state);
-    let peers = match &core {
-        Some(core) => core.peer_records().await,
-        None => gents_desktop_core::client::load_peer_records(paths.peer_directory_path())
-            .await
-            .unwrap_or_else(|error| {
-                tracing::warn!(target: "gents_desktop::managed_server", error = %format!("{error:#}"), "reading the peer directory to choose the status reader failed");
-                Vec::new()
-            }),
-    };
-    let running = core.and_then(|core| core.node_identity().client_signing_capability().ok());
-    let node_did = read_initialized_did(node_home).await;
-    gents_desktop_core::local_runtime::hosted_status_signer(
-        paths,
-        node_did.as_deref(),
-        &peers,
-        running,
-    )
-    .await
+    let running = crate::state::current_core(state)
+        .and_then(|core| core.node_identity().client_signing_capability().ok());
+    gents::client_runtime::hosted_status_signer(&state.policy.desktop_paths, running).await
 }
 
 pub(super) fn status_unreadable_error(cause: &HostedRuntimeStatusError) -> BridgeError {
@@ -155,15 +136,16 @@ pub(super) async fn observe_port_readiness_at(
     let mut graphql = reqwest::Url::parse(&config.status_url())
         .map_err(|error| BridgeError::untyped(error.to_string()))?;
     graphql.set_path("/api/v0/graphql");
-    let mut record = gents_desktop_core::client::PeerRecord::local_standard(
-        "Local",
-        "",
-        initialized_did.as_deref().unwrap_or_default(),
-        graphql.as_str(),
-    );
-    record.local_node_home = Some(node_home.to_string_lossy().into_owned());
+    let record = gents_protocol::runtime_connection::RuntimeConnection {
+        node_did: initialized_did.as_deref().unwrap_or_default().to_owned(),
+        label: "Local".to_owned(),
+        graphql: graphql.to_string(),
+        local_node_home: Some(node_home.to_string_lossy().into_owned()),
+        access_request: None,
+        access_state: None,
+    };
     Ok(
-        match gents_desktop_core::local_runtime::fetch_hosted_runtime_status(&record, user).await {
+        match gents::client_runtime::fetch_hosted_runtime_status(&record, user).await {
             Ok(Some(payload)) => {
                 classify_port_payload(config.http_port, initialized_did.as_deref(), payload)
             }

@@ -2,16 +2,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use ts_rs::TS;
 
-use crate::error::BridgeError;
 use crate::types::{
-    ChatSendRequest, DesktopInterruptRequest, EnrollmentInviteRequest, EnrollmentStatusRequest,
-    PendingMessageSteerRequest, PendingQueueEditRequest, SessionRenameRequest,
+    ChatSendRequest, DesktopInterruptRequest, PendingMessageSteerRequest, PendingQueueEditRequest,
+    RuntimeAccessConnectRequest, SessionRenameRequest,
 };
+use gents_store::client_error::BridgeError;
 
 /// Change the version for incompatible framing or operation semantics.
 /// Additional commands are negotiated through the initialization inventory.
 /// Typed captures require a host that preserves their submitted snapshots.
-pub const PROTOCOL_VERSION: u32 = 7;
+pub const PROTOCOL_VERSION: u32 = 8;
 pub const INSTALLATION_CONTROL_VERSION: u32 = 1;
 /// The private store-key channel completes before ordinary host framing begins.
 /// Its failures use the canonical bridge error contract and never raw causes.
@@ -128,7 +128,7 @@ pub enum ClientCommand {
         node_did: String,
         collection: String,
         id: String,
-        revision: gents_desktop_core::client::ConfigEditorRevision,
+        revision: gents::client_operations::ConfigEditorRevision,
         content: String,
     },
     #[serde(rename = "client_action_catalog")]
@@ -258,10 +258,19 @@ pub enum ClientCommand {
     },
     #[serde(rename = "desktop_client_snapshot")]
     Snapshot {},
-    #[serde(rename = "desktop_peer_enroll_status")]
-    Enroll { request: EnrollmentStatusRequest },
-    #[serde(rename = "desktop_peer_enroll_invite")]
-    EnrollInvite { request: EnrollmentInviteRequest },
+    #[serde(rename = "desktop_runtime_access_request")]
+    RequestRuntimeAccess {
+        request: RuntimeAccessConnectRequest,
+    },
+    #[serde(rename = "desktop_runtime_access_list")]
+    ListRuntimeAccess {
+        #[serde(rename = "nodeDid")]
+        node_did: String,
+    },
+    #[serde(rename = "desktop_runtime_access_decide")]
+    DecideRuntimeAccess {
+        request: crate::types::RuntimeAccessDecisionRequest,
+    },
     #[serde(rename = "desktop_session_snapshot")]
     SessionSnapshot(SessionSnapshotArgs),
     #[serde(rename = "desktop_session_context_details")]
@@ -369,8 +378,9 @@ impl ClientCommand {
         "client_plugin_approval_pending",
         "client_plugin_approval_decide",
         "desktop_client_snapshot",
-        "desktop_peer_enroll_status",
-        "desktop_peer_enroll_invite",
+        "desktop_runtime_access_request",
+        "desktop_runtime_access_list",
+        "desktop_runtime_access_decide",
         "desktop_session_snapshot",
         "desktop_session_context_details",
         "desktop_session_live_delta",

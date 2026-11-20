@@ -22,7 +22,7 @@ const unfinished = {
   initConfigStatus: "configured" as const,
   nodeHomeExists: true,
   localSetupUnfinished: true,
-  savedPeers: [],
+  savedRuntimes: [],
 };
 
 function managedStatus(

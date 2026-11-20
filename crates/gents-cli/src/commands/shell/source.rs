@@ -4,12 +4,14 @@ use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
 use chrono::{DateTime, Local, Utc};
-use gents_desktop_core::client::canonical_output::CanonicalLiveText;
-use gents_desktop_core::client::{
+use gents_observe::client_file_review::tool_file_changes_on;
+use gents_observe::client_inference::{load_inference_setup_state, AgentView};
+use gents_observe::client_projection::canonical_output::CanonicalLiveText;
+use gents_observe::client_projection::query::{
     load_node_snapshot_on, load_session_compaction_entries_on, load_session_live_text_on,
-    load_session_transcript_window_on, tool_file_changes_on, ClientStore, TranscriptWindow,
+    load_session_transcript_window_on, TranscriptWindow,
 };
-use gents_desktop_core::inference::{load_inference_setup_state, AgentView};
+use gents_observe::client_projection::store::ClientStore;
 use gents_protocol::node_readiness::{
     AgentReadinessState, AgentReadinessUnavailableReason, NodeReadinessSnapshot,
 };

@@ -81,10 +81,9 @@ pub fn project_bootstrap_summary(
         summary.diagnostics_hint = String::new();
     }
     if !grants.fleet_read {
-        summary.saved_peers.clear();
+        summary.saved_runtimes.clear();
     } else if !grants.runtime_admin {
-        for peer in &mut summary.saved_peers {
-            peer.addr = String::new();
+        for peer in &mut summary.saved_runtimes {
             peer.graphql = None;
         }
     }
@@ -99,7 +98,7 @@ pub fn project_runtime_snapshot(
         runtime.operator_config_authoritative_node_dids = None;
     }
     if !grants.fleet_read {
-        runtime.enrollment_requests = None;
+        runtime.access_requests.clear();
     }
     runtime.deployments = runtime
         .deployments
@@ -111,12 +110,9 @@ pub fn project_runtime_snapshot(
 
 fn project_deployment(mut deployment: DeploymentView, grants: SnapshotGrants) -> DeploymentView {
     if !grants.fleet_read {
-        deployment.addr = String::new();
         deployment.graphql = None;
-        deployment.dial_succeeded = false;
         // `runtime_connection` stays: it is this client's own observation and
         // admission reads it (`RuntimeConnectionObservation.presentation`).
-        deployment.last_error = None;
     }
 
     if !grants.session_read {
@@ -213,9 +209,9 @@ fn project_backend_for_fleet(mut backend: InferenceBackendView) -> InferenceBack
 mod tests {
     use super::*;
     use crate::types::{
-        AgentEnvironmentView, AgentView, DeploymentView, DesktopBootstrapSummary,
-        DesktopClientSnapshot, DesktopRuntimeSnapshot, EnrollmentRequestView, MailboxItemView,
-        NodeView, P2PHealthView, SavedPeerView, SessionSummary, SkillView, SyncHealthView,
+        AgentEnvironmentView, AgentView, ClientAccessRequestView, DeploymentView,
+        DesktopBootstrapSummary, DesktopClientSnapshot, DesktopRuntimeSnapshot, MailboxItemView,
+        NodeView, SavedRuntimeView, SessionSummary, SkillView, SyncHealthView,
     };
 
     fn sample_snapshot() -> DesktopClientSnapshot {
@@ -232,63 +228,38 @@ mod tests {
                 node_home_exists: true,
                 client_state_exists: true,
                 local_setup_unfinished: false,
-                saved_peers: vec![SavedPeerView {
-                    peer_id: "peer_1".into(),
+                saved_runtimes: vec![SavedRuntimeView {
                     label: "Remote".into(),
                     node_did: "did:test:remote".into(),
-                    addr: "/ip4/10.0.0.1/tcp/1".into(),
-                    source: Some("manual".into()),
                     graphql: Some("http://10.0.0.1/graphql".into()),
                     local: false,
                 }],
             },
             client: Some(DesktopRuntimeSnapshot {
                 client_did: "did:fixture:client".into(),
-                p2p_health: P2PHealthView {
-                    status: "ok".into(),
-                    connected_peer_count: 1,
-                    consecutive_failures: 0,
-                    last_error: None,
-                    last_ok_at: None,
-                    last_failure_at: None,
-                },
                 sync_health: SyncHealthView {
                     state: "healthy".into(),
                     cause: None,
                     next_action: None,
-                    last_error: None,
                     runtime_count: 1,
                     connected_runtime_count: 1,
-                    activation_error_count: 0,
                 },
-                enrollment_requests: Some(vec![EnrollmentRequestView {
-                    request_id: "request_1".into(),
-                    network_id: "network_1".into(),
-                    admin_did: "did:test:admin".into(),
-                    server_peer: "peer_1".into(),
-                    server_label: None,
-                    owner_node: "did:test:remote".into(),
-                    state: "pending_approval".into(),
-                    expires_at: "2099-01-01T00:00:00Z".into(),
-                    activation_error: None,
-                }]),
+                access_requests: vec![ClientAccessRequestView {
+                    request_id: "request_1".into(), node_did: "did:test:remote".into(),
+                    client_did: "did:fixture:client".into(), state: "pending".into(),
+                }],
                 row_count: 10,
                 approx_serialized_bytes: 100,
                 operator_config_authoritative_node_dids: Some(vec!["did:test:local".into()]),
                 deployments: vec![DeploymentView {
-                    peer_id: "local".into(),
+                    local: true,
                     label: "Local".into(),
                     node_did: "did:test:local".into(),
-                    addr: "/ip4/127.0.0.1/tcp/1".into(),
-                    source: Some("local".into()),
                     graphql: Some("http://127.0.0.1/graphql".into()),
-                    dial_succeeded: true,
                     runtime_connection: Some("connected".to_owned()),
                     chat_safe: true,
                     chat_refusal: None,
-                    lease_expires_at: None,
                     operator_access: true,
-                    last_error: None,
                     node: NodeView {
                         node_did: "did:test:local".into(),
                         display_name: Some("Local".into()),
@@ -411,7 +382,7 @@ mod tests {
                         created_at: "2026-08-25T12:00:00Z".into(),
                     }],
                 }],
-                ended_access: Vec::new(),
+                unkept_changes: Vec::new(),
             }),
             repair_note: None,
         }
@@ -453,7 +424,7 @@ mod tests {
         let projected = project_client_snapshot(sample_snapshot(), SnapshotGrants::core_only());
         assert!(projected.bootstrap.desktop_home.is_empty());
         assert!(projected.bootstrap.default_node_home.is_empty());
-        assert!(projected.bootstrap.saved_peers.is_empty());
+        assert!(projected.bootstrap.saved_runtimes.is_empty());
         let client = projected.client.expect("client");
         let dep = &client.deployments[0];
         assert_eq!(dep.runtime_connection.as_deref(), Some("connected"));
@@ -462,7 +433,7 @@ mod tests {
         assert_eq!(dep.agent_environments[0].session_count, 0);
         assert!(dep.agent_environments[0].workspace_root.is_none());
         assert!(dep.agent_environments[0].inference_profile_name.is_none());
-        assert!(dep.addr.is_empty());
+        assert!(dep.graphql.is_none());
         assert!(dep.contexts.is_empty());
         assert!(dep.tools.is_empty());
         assert!(dep.compactions.is_empty());
@@ -526,11 +497,11 @@ mod tests {
     fn fleet_read_keeps_peer_summaries_without_paths() {
         let projected = project_client_snapshot(sample_snapshot(), SnapshotGrants::fleet_package());
         assert!(projected.bootstrap.desktop_home.is_empty());
-        assert_eq!(projected.bootstrap.saved_peers.len(), 1);
-        assert!(projected.bootstrap.saved_peers[0].addr.is_empty());
-        assert!(projected.bootstrap.saved_peers[0].graphql.is_none());
+        assert_eq!(projected.bootstrap.saved_runtimes.len(), 1);
+        assert!(projected.bootstrap.saved_runtimes[0].graphql.is_none());
+        assert!(projected.bootstrap.saved_runtimes[0].graphql.is_none());
         let dep = &projected.client.as_ref().unwrap().deployments[0];
-        assert_eq!(dep.addr, "/ip4/127.0.0.1/tcp/1");
+        assert_eq!(dep.graphql.as_deref(), Some("http://127.0.0.1/graphql"));
         assert!(dep.sessions.is_empty());
         assert_eq!(dep.agent_environments[0].session_count, 0);
         assert!(dep.agent_environments[0].workspace_root.is_none());

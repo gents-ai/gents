@@ -1,5 +1,5 @@
-use gents_desktop_core::inference::load_inference_setup_state;
 use gents_documents::SkillDocument;
+use gents_observe::client_inference::load_inference_setup_state;
 use gents_shell::source::{Doc, FieldKind, Form, FormError};
 use gents_store::config_client::ConfigAccess;
 use serde_json::{json, Value};

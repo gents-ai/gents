@@ -260,7 +260,7 @@ describe("the starter packs card", () => {
       snapshot: {
         bootstrap,
         client: {
-          deployments: [{ ...deployment, nodeDid: "did:key:remote", source: "peer" }],
+          deployments: [{ ...deployment, nodeDid: "did:key:remote", local: false }],
         },
       },
     });

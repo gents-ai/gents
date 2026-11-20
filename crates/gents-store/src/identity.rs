@@ -7,13 +7,16 @@ use defra_core::signing::{SigningConfig, SigningKeyType};
 use identity::{FullIdentity as _, Identity as _, RawIdentity};
 
 pub mod agent;
+pub mod client_access;
 mod enrollment_approval;
+mod enrollment_gate;
 mod enrollment_grant;
 mod error;
 mod file_key;
 pub mod grant_sets;
+pub mod home_status;
 pub(crate) mod macos;
-mod provision_client;
+pub(crate) mod provision_client;
 mod registered;
 pub mod request_receipt;
 
@@ -27,15 +30,24 @@ pub use enrollment_approval::{
     approve_enrollment, grant_as_approver, verify_pending_client_request, ApprovalStep,
     EnrollmentApproval, EnrollmentApprovalError,
 };
+pub use enrollment_gate::enrollment_decision_gate;
 pub use enrollment_grant::{
-    grant_enrollment_authority, load_enrollment_grant_receipts, plan_grant,
-    plan_membership_withdrawal, plan_withdrawal, EnrollmentGrantError, EnrollmentGrantOutcome,
-    EnrollmentGrantReceipt, EnrollmentGrantTuple, EnrollmentGrantWithdrawal,
+    administration_owed, after_removal, grant_enrollment_authority, lapse_clock,
+    load_enrollment_grant_receipts, membership_lapsed, owed_removals, permission_grant_admitted,
+    plan_grant, plan_membership_withdrawal, plan_owing, plan_withdrawal, restoration_step,
+    settle_owed_withdrawals, settlement_step, AfterRemoval, EnrollmentGrantError,
+    EnrollmentGrantOutcome, EnrollmentGrantReceipt, EnrollmentGrantTuple,
+    EnrollmentGrantWithdrawal, RestorationStep, SettlementStep,
+};
+pub(crate) use enrollment_grant::{
+    close_owed_removal, owed_removal_receipts, NODE_ADMINISTRATOR_RELATION,
 };
 pub use error::{identity_key_unavailable, IdentityError, IdentityKeyUnavailable};
 pub use file_key::{load_file_identity, load_or_create_file_identity, InsecureKeyPermissions};
 pub(crate) use file_key::{publish_private_key_file, read_private_key_file};
-pub use grant_sets::{GrantSet, GrantSetError};
+pub use grant_sets::{
+    node_runtime_permissions, GrantSet, GrantSetError, Recipient, RecipientGrants,
+};
 pub use macos::{
     load_macos_keychain_identity, load_macos_secure_enclave_identity,
     load_or_create_macos_keychain_identity, load_or_create_macos_secure_enclave_identity,
@@ -163,8 +175,19 @@ impl ManagedAgentSigner {
         self.runtime_proof.as_ref()
     }
 
-    pub fn native(&self) -> &defra_node::EmbeddedSigner {
-        &self.signer
+    /// `request`, signed with this Agent's key and decided by document ACP
+    /// even where node access control grants the Agent `bypass-dac`.
+    pub fn attach(&self, request: query::QueryRequest) -> query::QueryRequest {
+        Self::deny_dac_bypass(self.signer.attach(request))
+    }
+
+    /// `request` made as a managed Agent, decided by document ACP even where
+    /// node access control grants the Agent `bypass-dac`: managed-Agent
+    /// signing never resolves the bypass (Lean
+    /// `Configuration.toolSessionReadAllowed`).
+    pub fn deny_dac_bypass(mut request: query::QueryRequest) -> query::QueryRequest {
+        request.context = request.context.with_dac_bypass_denied();
+        request
     }
 }
 
@@ -275,7 +298,7 @@ pub fn register_ed25519_signing_identity(
             remote_signer: None,
             signing_authorization: None,
         },
-    );
+    )?;
     Ok(())
 }
 
@@ -344,11 +367,16 @@ pub fn can_mint_defradb_bearer(did: &str) -> bool {
     defra_core::signing::get_identity(did).is_some_and(|config| config.has_local_private_key())
 }
 
-/// P2P administration must carry the node DID explicitly across worker boundaries.
-pub fn node_p2p(node: &defra_node::Node) -> Option<Arc<dyn defra_p2p_adapter::P2POperations>> {
-    let context = defra_core::RequestContext::default()
-        .with_identity(node.node_identity_did().map(ToOwned::to_owned));
-    node.p2p_arc().and_then(|p2p| p2p.bind_request(&context))
+impl KeyIdentity {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn sign_now(&self, payload: &[u8]) -> Result<Vec<u8>> {
+        self.identity
+            .sign(payload)
+            .map_err(|source| IdentityError::SignPayload {
+                did: self.did.clone(),
+                source,
+            })
+    }
 }
 
 #[async_trait]

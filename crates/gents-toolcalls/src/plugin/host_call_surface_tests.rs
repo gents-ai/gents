@@ -53,6 +53,7 @@ async fn only_a_host_call_plugin_adds_the_process_tools() {
             &gents_tools::surface::BackgroundToolConfig {
                 allowlist: vec!["plugin".to_owned()],
                 timeouts: Default::default(),
+                limit: Default::default(),
             },
         );
         if host_call {

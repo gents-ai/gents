@@ -2,8 +2,7 @@ use std::future::Future;
 use std::time::Duration;
 
 use anyhow::Context;
-use gents_desktop_core::client::apply_config_components_on;
-use gents_desktop_core::inference::{discover_models, load_inference_setup_state};
+use gents::client_operations::apply_config_components_on;
 use gents_documents::{AdvertisedModel, BackendAuth, PackConfig};
 use gents_inference::auth::credential::effective_account_label;
 use gents_inference::backends::setup::{
@@ -12,6 +11,7 @@ use gents_inference::backends::setup::{
     InferenceProviderId, InferenceProviderOption, RecommendedIntegerControl,
     RecommendedNumberControl,
 };
+use gents_observe::client_inference::{discover_models, load_inference_setup_state};
 use gents_shell::source::{
     Discovered, SavedAccount, SettingKey, SetupAuth, SetupConnection, SetupMethod, SetupModel,
     SetupProvider, SetupSetting,
@@ -294,7 +294,7 @@ pub(crate) async fn connect_first_sign_in(
     };
     let state = load_inference_setup_state(access, node_did).await?;
     let kind = spec.provider_kind.as_str();
-    let served = |backend: &gents_desktop_core::inference::InferenceBackendView| {
+    let served = |backend: &gents_observe::client_inference::InferenceBackendView| {
         backend.provider_kind.as_deref() == Some(kind)
     };
     if state.inference_backends.iter().any(served) {

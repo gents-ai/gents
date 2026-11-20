@@ -1,6 +1,7 @@
 use super::*;
 use crate::snapshot::tests::push_canonical_text_message;
-use gents_desktop_core::client::{CanonicalTranscriptDependencies, ClientStoreRows};
+use gents_observe::client_projection::query::CanonicalTranscriptDependencies;
+use gents_observe::client_projection::store::ClientStoreRows;
 use gents_protocol::output::{MessagePublication, MessageRole};
 
 fn fork_fixture() -> (ClientStore, CanonicalTranscriptDependencies) {
@@ -189,7 +190,7 @@ async fn real_fork_reads_exact_input_metadata_and_preserves_provider_history() {
         assert_eq!(fork.copied_messages, 1);
         source = fork.session_id;
     }
-    let page = gents_desktop_core::client::load_session_transcript_page_on(
+    let page = gents_observe::client_projection::query::load_session_transcript_page_on(
         &ConfigAccess::local_as(node.clone(), amy.parse().unwrap()),
         &source,
         Some(&amy),

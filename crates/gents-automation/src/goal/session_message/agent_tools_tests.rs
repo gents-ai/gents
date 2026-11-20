@@ -365,25 +365,23 @@ async fn agent_new_goal_publishes_for_target_with_the_caller_as_native_owner() {
         target.as_ref(),
     )
     .unwrap();
-    let publication = tokio::task::spawn_blocking(|| {
-        gents_lean_vocab::lean_contract_snapshot()
-            .delegated_publication_cases
-            .iter()
-            .find(|case| case["name"] == "published")
-            .unwrap()
-            .clone()
-    })
-    .await
-    .unwrap();
+    let [publication] = <[_; 1]>::try_from(
+        tokio::task::spawn_blocking(|| {
+            gents_lean_vocab::families::delegated_publication_agent_new_publication::cases()
+        })
+        .await
+        .unwrap(),
+    )
+    .unwrap_or_else(|_| panic!("the agent_new scenario commits one complete publication"));
     let creation: gents_protocol::session::SessionProvenance =
         serde_json::from_value(sessions[0]["provenance"].clone()).unwrap();
     let creation = creation.creation_receipt.unwrap();
-    assert!(gents_store::identity::verify_did_signature(
+    let creation_receipt = gents_store::identity::verify_did_signature(
         &caller.agent_did,
         &creation.signing_payload(),
-        &creation.signature
+        &creation.signature,
     )
-    .unwrap());
+    .unwrap();
     assert!(matches!(
         gents_store::identity::verify_did_signature(
             target.did(),
@@ -393,6 +391,7 @@ async fn agent_new_goal_publishes_for_target_with_the_caller_as_native_owner() {
         Err(gents_store::identity::IdentityError::VerifyPayload { did, .. })
             if did == target.did()
     ));
+    let mut target_reads = Vec::new();
     for (collection, row) in [
         ("AgentSession", &sessions[0]),
         ("AgentRequest", &requests[0]),
@@ -419,11 +418,18 @@ async fn agent_new_goal_publishes_for_target_with_the_caller_as_native_owner() {
             ))
             .await
             .unwrap();
-        assert_eq!(
-            !view["data"][collection].as_array().unwrap().is_empty(),
-            publication["expected_target_read"].as_bool().unwrap()
-        );
+        target_reads.push(!view["data"][collection].as_array().unwrap().is_empty());
     }
+    assert_eq!(
+        target_reads[0], target_reads[1],
+        "the target reads its session exactly when it reads its opening request"
+    );
+    publication.check(
+        gents_lean_vocab::families::delegated_publication_agent_new_publication::AgentNewOutput {
+            creation_receipt,
+            target_read: target_reads[1],
+        },
+    );
     for case in gents_lean_vocab::families::goal_links_agent_target::cases() {
         let collection = case.input.collection.as_str();
         let child = match collection {

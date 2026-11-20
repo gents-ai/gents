@@ -1,0 +1,4 @@
+---- MODULE MCExecutableStagingInProcessCopy ----
+EXTENDS ExecutableStaging
+
+====

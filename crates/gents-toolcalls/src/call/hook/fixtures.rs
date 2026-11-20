@@ -376,13 +376,15 @@ pub async fn accepted_hook_tool_lifecycle(
         .expect("accepted test tool requires active session");
     drop(state);
     hook.adopt_accepted_tool_dispatch(
-        internal_call_id,
-        None,
-        &request_id,
-        &session_id,
-        tool_name,
-        arguments,
-        deadline_at,
+        &crate::call::hook::ToolDispatch {
+            internal_call_id,
+            provider_call_id: None,
+            request_id: &request_id,
+            session_id: &session_id,
+            tool_name,
+            args: arguments,
+            deadline_at,
+        },
         await_mode,
     )
     .await

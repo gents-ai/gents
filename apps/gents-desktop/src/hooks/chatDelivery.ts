@@ -122,6 +122,16 @@ export function createChatDelivery(
       stores.chat.setState(loadChatDrafts());
       return reply.result;
     }
+    if (reply.result.publication === "retained") {
+      saveChatDraft(stores.chat, {
+        ...current,
+        locallyRetained: true,
+        pendingUntil: undefined,
+        failure: undefined,
+      });
+      await applied(reply.result, current);
+      return reply.result;
+    }
     // Confirmed before the view applies it: a view failure never shows a
     confirm(stores.chat, current);
     try {

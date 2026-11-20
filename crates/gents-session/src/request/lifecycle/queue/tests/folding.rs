@@ -1,9 +1,23 @@
 use super::*;
 use crate::request::lifecycle::RequestTerminalOutcome;
-use gents_lean_vocab::LeanFoldQueueEntry;
 use rapidhash::{HashMapExt, RapidHashMap};
 use serde::Deserialize;
 use serde_json::json;
+
+#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ModeledEntry {
+    pub(super) request_id: u64,
+    pub(super) execution_origin: String,
+    pub(super) delivery: String,
+    pub(super) order_key: u64,
+    pub(super) source: String,
+    pub(super) policy: String,
+    pub(super) queued_after: Option<u64>,
+    pub(super) requester_id: Option<u64>,
+    pub(super) turn_context: u64,
+    pub(super) fresh: bool,
+}
 
 const FOREIGN_REQUESTER: &str = "did:test:fold-foreign-requester";
 
@@ -35,7 +49,7 @@ fn requester_did(db: &TestDb, requester: Option<u64>) -> Option<String> {
     }
 }
 
-pub(super) fn generated_input(entry: &LeanFoldQueueEntry) -> RequestInput {
+pub(super) fn generated_input(entry: &ModeledEntry) -> RequestInput {
     let source: QueueSource = serde_json::from_value(json!(entry.source)).unwrap();
     let policy: QueuePolicy = serde_json::from_value(json!(entry.policy)).unwrap();
     let queue = match (source, entry.queued_after) {
@@ -65,7 +79,7 @@ pub(super) fn generated_input(entry: &LeanFoldQueueEntry) -> RequestInput {
 pub(super) async fn enqueue(
     db: &TestDb,
     session_id: &str,
-    entry: &LeanFoldQueueEntry,
+    entry: &ModeledEntry,
     arrival: usize,
 ) -> String {
     enqueue_with_ttl(
@@ -81,7 +95,7 @@ pub(super) async fn enqueue(
 async fn enqueue_with_ttl(
     db: &TestDb,
     session_id: &str,
-    entry: &LeanFoldQueueEntry,
+    entry: &ModeledEntry,
     arrival: usize,
     valid_until: Option<&str>,
 ) -> String {
@@ -111,7 +125,7 @@ async fn enqueue_with_ttl(
 async fn enqueue_signed(
     db: &TestDb,
     session_id: &str,
-    entry: &LeanFoldQueueEntry,
+    entry: &ModeledEntry,
     arrival: usize,
 ) -> String {
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
@@ -287,7 +301,7 @@ async fn generated_fold_queue_cases_bind_to_native_claims() {
     }
 }
 
-pub(super) fn modeled_entry<T>(entry: &T) -> LeanFoldQueueEntry
+pub(super) fn modeled_entry<T>(entry: &T) -> ModeledEntry
 where
     T: serde::Serialize,
 {
@@ -571,7 +585,7 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
         let clock_origin = chrono::Utc::now();
         let mut observed_now = None;
         for (arrival, id) in [input.head, input.selected].into_iter().enumerate() {
-            let entry = LeanFoldQueueEntry {
+            let entry = ModeledEntry {
                 request_id: id,
                 execution_origin: "interactive".into(),
                 delivery: if id == input.selected {
@@ -706,7 +720,7 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
                 }
                 "enqueue_steering" => {
                     let request_id = step.request_id.unwrap();
-                    let entry = LeanFoldQueueEntry {
+                    let entry = ModeledEntry {
                         request_id,
                         execution_origin: "interactive".into(),
                         delivery: "steer".into(),
@@ -893,7 +907,7 @@ async fn claim_selected_publication_keeps_later_incompatible_pending_row() {
     for (arrival, (id, context, queued_after)) in
         [(2, 0, None), (3, 0, Some(2))].into_iter().enumerate()
     {
-        let entry = LeanFoldQueueEntry {
+        let entry = ModeledEntry {
             request_id: id,
             execution_origin: "interactive".into(),
             delivery: if id == 3 { "steer" } else { "queue" }.into(),
@@ -913,7 +927,7 @@ async fn claim_selected_publication_keeps_later_incompatible_pending_row() {
         DefraStreamWriter::new_managed(db.node.clone(), db.agent_identity.as_ref(), Duration::ZERO)
             .unwrap();
     active.begin(&writer).await;
-    let incompatible = LeanFoldQueueEntry {
+    let incompatible = ModeledEntry {
         request_id: 1,
         execution_origin: "interactive".into(),
         delivery: "queue".into(),
@@ -963,7 +977,7 @@ async fn direct_user_steer_passes_ordinary_queue_without_consuming_it() {
     {
         let db = test_db("direct-steer-queued-followups").await;
         let session_id = "direct-steer-queued-followups";
-        let entry = |id, delivery: &str| LeanFoldQueueEntry {
+        let entry = |id, delivery: &str| ModeledEntry {
             request_id: id,
             execution_origin: "interactive".into(),
             delivery: delivery.into(),
@@ -976,7 +990,7 @@ async fn direct_user_steer_passes_ordinary_queue_without_consuming_it() {
             fresh: true,
         };
         let mut bound = RapidHashMap::new();
-        let head = LeanFoldQueueEntry {
+        let head = ModeledEntry {
             queued_after: None,
             ..entry(99, "queue")
         };

@@ -34,14 +34,18 @@ pub(super) fn spawn_server_with_args_and_env(
         "disabled",
         "--p2p-discovery",
         "disabled",
+        "--p2p-registry-heartbeat-ms",
+        "1000",
+        "--p2p-pairing-sweep-ms",
+        "1000",
+        "--p2p-registry-stale-ms",
+        "300000",
+        "--p2p-endpoint-heartbeat-ms",
+        "1000",
     ]);
     cmd.args(extra);
     cmd.envs(environment.iter().map(|(key, value)| (*key, value)));
     cmd.env("GENTS_OPENAI_CHAT_COMPLETIONS", "1");
-    cmd.env("GENTS_REGISTRY_HEARTBEAT_MS", "1000");
-    cmd.env("GENTS_PAIRING_SWEEP_MS", "1000");
-    cmd.env("GENTS_REGISTRY_STALE_MS", "300000");
-    cmd.env("GENTS_ENDPOINT_HEARTBEAT_MS", "1000");
     cmd.stdout(file).stderr(errfile).kill_on_drop(true);
     gents_session::exec::native_spawn::spawn_tokio(&mut cmd).context("spawning pack server")
 }

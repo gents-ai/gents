@@ -219,7 +219,12 @@ async fn remembered_workspace_access_reaches_the_waiter_without_widening_global_
     let (send, mut receive) = mpsc::channel(1);
     let _watch = QueueWatch::start(&fixture.home, send).unwrap();
     let mut pending = PendingQueue::default();
-    let waiting = approval::ask(&fixture.home, &fixture.request, Duration::from_secs(10));
+    let waiting = approval::ask(
+        None,
+        &fixture.home,
+        &fixture.request,
+        Duration::from_secs(10),
+    );
     let answer = async {
         until_pending_changes(&fixture.home, &mut pending, &mut receive).await;
         approval::decide(&fixture.home, &fixture.request.id, Answer::AlwaysFolder).unwrap();
@@ -253,7 +258,12 @@ async fn changing_permissions_cancels_the_waiting_question() {
     let (send, mut receive) = mpsc::channel(1);
     let _watch = QueueWatch::start(&fixture.home, send).unwrap();
     let mut pending = PendingQueue::default();
-    let waiting = approval::ask(&fixture.home, &fixture.request, Duration::from_secs(10));
+    let waiting = approval::ask(
+        None,
+        &fixture.home,
+        &fixture.request,
+        Duration::from_secs(10),
+    );
     let change = async {
         until_pending_changes(&fixture.home, &mut pending, &mut receive).await;
         fixture.change_mode();
@@ -310,7 +320,7 @@ async fn command_questions_resume_once_without_granting_filesystem_access() {
     let (send, mut receive) = mpsc::channel(1);
     let _watch = QueueWatch::start(&fixture.home, send).unwrap();
     let mut pending = PendingQueue::default();
-    let waiting = approval::ask(&fixture.home, &request, Duration::from_secs(10));
+    let waiting = approval::ask(None, &fixture.home, &request, Duration::from_secs(10));
     let answer = async {
         until_pending_changes(&fixture.home, &mut pending, &mut receive).await;
         let questions = approval::pending_requests(&fixture.home).unwrap();
@@ -347,9 +357,14 @@ async fn an_unscoped_listener_cannot_keep_a_workspace_question_waiting() {
         .unwrap()
         .set_modified(SystemTime::now())
         .unwrap();
-    let error = approval::ask(&fixture.home, &fixture.request, Duration::from_secs(10))
-        .await
-        .unwrap_err();
+    let error = approval::ask(
+        None,
+        &fixture.home,
+        &fixture.request,
+        Duration::from_secs(10),
+    )
+    .await
+    .unwrap_err();
     assert!(error.to_string().contains("updated client"));
     assert!(!fixture.question_file().exists());
     assert!(gents_pack::plugin::allowed::list(&fixture.home)
@@ -438,7 +453,12 @@ async fn a_changed_path_retires_its_waiting_question() {
     let (send, mut receive) = mpsc::channel(1);
     let _watch = QueueWatch::start(&fixture.home, send).unwrap();
     let mut pending = PendingQueue::default();
-    let waiting = approval::ask(&fixture.home, &fixture.request, Duration::from_secs(10));
+    let waiting = approval::ask(
+        None,
+        &fixture.home,
+        &fixture.request,
+        Duration::from_secs(10),
+    );
     let remove = async {
         until_pending_changes(&fixture.home, &mut pending, &mut receive).await;
         std::fs::remove_file(fixture.request.filesystem().unwrap().path).unwrap();

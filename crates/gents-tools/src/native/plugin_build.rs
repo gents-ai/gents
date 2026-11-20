@@ -33,6 +33,7 @@ pub struct PluginBuildOutcome {
 /// to `root`, no network. The whole build runs inside it, source mirroring
 /// included, because a source tree can hold links this process must not follow.
 pub async fn run_plugin_build(
+    call: &gents_loop::tool::ToolCallEnvelope,
     root: &Path,
     pack_dir: &Path,
     run_cases: bool,
@@ -49,6 +50,7 @@ pub async fn run_plugin_build(
         args.push("--test".to_owned());
     }
     let mut command = prepare_managed_command(
+        call,
         root,
         &program,
         &args,
@@ -65,7 +67,7 @@ pub async fn run_plugin_build(
     .await
     .map_err(|error| anyhow!("{error}"))?;
     keep_toolchain_state_in_root(&mut command.environment);
-    let bounds = tool_execution_bounds(BUILD_TIMEOUT);
+    let bounds = tool_execution_bounds(call, BUILD_TIMEOUT);
     let argv = std::iter::once(command.program.to_string_lossy().into_owned())
         .chain(command.args)
         .collect();
@@ -79,7 +81,7 @@ pub async fn run_plugin_build(
         environment: Some(command.environment),
         tool_name: Some("config".to_owned()),
         live_output: None,
-        process_recorder: None,
+        process_recorder: gents_session::exec::ownership::process_recorder(call),
     })
     .await;
     match outcome {
