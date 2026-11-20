@@ -3,9 +3,9 @@
    page documents the selected node holds, fetch each module's source, and
    push it through the loader. A manual Reload re-reads every entry (an
    installer that replaces a folder atomically keeps the same path); a page
-   document is re-read whenever its listed digest changes, so an edit on the
-   node reaches the app without a reinstall. Rust owns the scan; this owns
-   the lifecycle. */
+   document or pack plugin is re-read whenever its listed digest changes, so
+   an edit on the node or a pack reinstalled from the CLI reaches the app
+   without a restart. Rust owns the scan; this owns the lifecycle. */
 import type { UxPluginListing, UxPluginSource } from "@source-inc/gents-desktop-client";
 import { loadRuntimeUxPlugin, retireRuntimeUxPlugin } from "./loader";
 import {
@@ -45,8 +45,8 @@ const known = new Map<string, Known>();
    one name; the first listing (scan order) owns the id whatever its state,
    and the other is shown as shadowed until the owner leaves. */
 const owners = new Map<string, string>();
-/* page document listing key -> the content digest it was last loaded or
-   listed at; a different digest in a later scan is an edit */
+/* page document or pack listing key -> the digest it was last loaded or
+   listed at; a different digest in a later scan is an edit or a reinstall */
 const digests = new Map<string, string | null>();
 /* the scan in flight; a scan asked for meanwhile runs after it */
 let inFlight: Promise<void> | null = null;
@@ -150,9 +150,17 @@ function enabledByListing(entry: Scanned): boolean {
   );
 }
 
-/* whether a page document differs from what this window holds: its content
-   was edited, or it was enabled or disabled since it was loaded or listed */
-function documentChanged(entry: Scanned): boolean {
+/* a pack reinstalled outside this window (the CLI) announces nothing here;
+   its listing digest is how a scan learns of the reinstall */
+const tracksDigest = (entry: Scanned) =>
+  isDocument(entry) || (entry.door === "pack" && entry.digest != null);
+
+/* whether a listing differs from what this window holds: a page document
+   was edited or a pack reinstalled, or a page document was enabled or
+   disabled since it was loaded or listed */
+function contentChanged(entry: Scanned): boolean {
+  if (entry.door === "pack")
+    return entry.digest != null && digests.get(entry.key) !== entry.digest;
   if (!isDocument(entry) || !digests.has(entry.key)) return false;
   const loaded =
     uxPluginRecords()[known.get(entry.key)?.loaded ?? ""]?.status === "loaded";
@@ -163,7 +171,7 @@ function documentChanged(entry: Scanned): boolean {
 }
 
 function noteDigest(entry: Scanned): void {
-  if (isDocument(entry)) digests.set(entry.key, entry.digest ?? null);
+  if (tracksDigest(entry)) digests.set(entry.key, entry.digest ?? null);
 }
 
 function note(entry: Scanned, loaded: string | null): void {
@@ -392,7 +400,7 @@ async function reconcile(reloadKnown: boolean, reloadPack?: string): Promise<voi
     if (
       known.get(entry.key)?.loaded &&
       !reloadKnown &&
-      !documentChanged(entry) &&
+      !contentChanged(entry) &&
       (reloadPack === undefined || entry.pack !== reloadPack)
     )
       continue;
