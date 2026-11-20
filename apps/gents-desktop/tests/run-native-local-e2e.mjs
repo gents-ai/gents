@@ -150,11 +150,15 @@ async function runPhase(phase) {
     GENTS_E2E_EXPECTED_RESPONSE: marker,
   };
   log = createWriteStream(join(artifactRoot, `${phase}.log`));
-  app = spawn(join(binaries, "gents-desktop-tauri"), ["--desktop-home", desktopHome, "--console-log"], {
-    cwd: repoRoot,
-    env,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  app = spawn(
+    join(binaries, "gents-desktop-tauri"),
+    ["--desktop-home", desktopHome, "--console-log"],
+    {
+      cwd: repoRoot,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
   app.stdout.pipe(log, { end: false });
   app.stderr.pipe(log, { end: false });
   let spawnError;
