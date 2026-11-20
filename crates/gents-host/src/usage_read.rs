@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use gents_inference::usage_observation::UsageTrigger;
+use gents_protocol::enrollment::{signed_command_staleness, SignedCommandStaleness};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -59,14 +60,12 @@ impl UsageReadCommand {
         let issued = chrono::DateTime::parse_from_rfc3339(&self.issued_at)
             .context("usage read issued_at")?
             .with_timezone(&chrono::Utc);
-        anyhow::ensure!(
-            issued <= now + chrono::Duration::seconds(5),
-            "usage read request is issued in the future"
-        );
-        anyhow::ensure!(
-            now - issued <= chrono::Duration::seconds(60),
-            "usage read request expired"
-        );
-        Ok(())
+        match signed_command_staleness(issued, now) {
+            Some(SignedCommandStaleness::FromFuture) => {
+                anyhow::bail!("usage read request is issued in the future")
+            }
+            Some(SignedCommandStaleness::Expired) => anyhow::bail!("usage read request expired"),
+            None => Ok(()),
+        }
     }
 }

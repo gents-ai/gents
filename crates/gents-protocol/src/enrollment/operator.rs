@@ -1,7 +1,10 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::canonical::{canonical_domain_payload, parse_canonical_timestamp, validate_exact_field};
+use super::canonical::{
+    canonical_domain_payload, parse_canonical_timestamp, signed_command_staleness,
+    validate_exact_field, SignedCommandStaleness,
+};
 use super::error::{EnrollmentError, Result};
 use super::{
     ENROLLMENT_PROTOCOL_VERSION, MAX_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS,
@@ -112,13 +115,13 @@ impl EnrollmentOperatorDecisionCommand {
         }
         let issued = parse_canonical_timestamp("operator command issued_at", &self.issued_at)?
             .with_timezone(&Utc);
-        if issued > now + chrono::Duration::seconds(5) {
-            return Err(EnrollmentError::OperatorDecisionFromFuture);
+        match signed_command_staleness(issued, now) {
+            Some(SignedCommandStaleness::FromFuture) => {
+                Err(EnrollmentError::OperatorDecisionFromFuture)
+            }
+            Some(SignedCommandStaleness::Expired) => Err(EnrollmentError::OperatorDecisionExpired),
+            None => Ok(()),
         }
-        if now - issued > chrono::Duration::seconds(60) {
-            return Err(EnrollmentError::OperatorDecisionExpired);
-        }
-        Ok(())
     }
 }
 
@@ -170,13 +173,13 @@ impl EnrollmentOperatorQueryCommand {
         }
         let issued = parse_canonical_timestamp("operator query issued_at", &self.issued_at)?
             .with_timezone(&Utc);
-        if issued > now + chrono::Duration::seconds(5) {
-            return Err(EnrollmentError::OperatorQueryFromFuture);
+        match signed_command_staleness(issued, now) {
+            Some(SignedCommandStaleness::FromFuture) => {
+                Err(EnrollmentError::OperatorQueryFromFuture)
+            }
+            Some(SignedCommandStaleness::Expired) => Err(EnrollmentError::OperatorQueryExpired),
+            None => Ok(()),
         }
-        if now - issued > chrono::Duration::seconds(60) {
-            return Err(EnrollmentError::OperatorQueryExpired);
-        }
-        Ok(())
     }
 }
 

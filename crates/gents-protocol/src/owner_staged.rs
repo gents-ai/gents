@@ -1,7 +1,9 @@
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::enrollment::canonical_domain_payload;
+use crate::enrollment::{
+    canonical_domain_payload, signed_command_staleness, SignedCommandStaleness,
+};
 use crate::pairing_reader::{PairingObservation, PairingReadReason};
 
 /// The runtime route that decides a client's owner-staged relationship change
@@ -196,13 +198,13 @@ impl OwnerStagedCommand {
             return Err(OwnerStagedCommandError::SignatureLength);
         }
         let issued = DateTime::parse_from_rfc3339(&self.issued_at)?.with_timezone(&Utc);
-        if issued > now + Duration::seconds(5) {
-            return Err(OwnerStagedCommandError::FutureTimestamp);
+        match signed_command_staleness(issued, now) {
+            Some(SignedCommandStaleness::FromFuture) => {
+                Err(OwnerStagedCommandError::FutureTimestamp)
+            }
+            Some(SignedCommandStaleness::Expired) => Err(OwnerStagedCommandError::ExpiredTimestamp),
+            None => Ok(()),
         }
-        if now - issued > Duration::seconds(60) {
-            return Err(OwnerStagedCommandError::ExpiredTimestamp);
-        }
-        Ok(())
     }
 }
 
@@ -221,6 +223,7 @@ pub enum OwnerStagedRefusal {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Duration;
 
     #[test]
     fn owner_staged_signatures_bind_every_decided_field() {
