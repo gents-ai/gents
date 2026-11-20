@@ -440,6 +440,9 @@ pub fn supports_foreground_backgrounding(name: &str) -> bool {
 
 /// Requests a handoff of one exact native invocation. The runtime publishes
 /// its background receipt only after assuming responsibility for completion.
+/// The count here is checked against the host ceiling because the caller has
+/// no Agent configuration; the runtime checks the Agent's Tools
+/// `host.max_background_tool_calls` when it adopts the handoff.
 pub async fn request_foreground_backgrounding(
     access: &gents_store::config_client::ConfigAccess,
     node_did: &str,

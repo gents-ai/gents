@@ -165,6 +165,11 @@ pub struct ToolCallLifecycle {
     cancel_cause: Option<CancelCause>,
     selected_tool_identity: Option<SelectedToolIdentity>,
     pub(crate) await_mode: AwaitMode,
+    /// The Agent's resolved Tools `host.max_background_tool_calls`, checked
+    /// when this call reserves a background slot on its parent request. The
+    /// hook binds it at dispatch; a lifecycle read back from its row uses the
+    /// host ceiling.
+    background_limit: gents_protocol::job::BackgroundLimit,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -261,6 +266,7 @@ impl ToolCallLifecycle {
             cancel_cause: None,
             selected_tool_identity: None,
             await_mode,
+            background_limit: Default::default(),
         })
     }
 
@@ -312,6 +318,18 @@ impl ToolCallLifecycle {
     pub fn with_request_doc_id(mut self, request_doc_id: Option<String>) -> Self {
         self.request_doc_id = request_doc_id.filter(|doc_id| !doc_id.trim().is_empty());
         self
+    }
+
+    pub(crate) fn with_background_limit(
+        mut self,
+        limit: gents_protocol::job::BackgroundLimit,
+    ) -> Self {
+        self.background_limit = limit;
+        self
+    }
+
+    pub(crate) fn background_limit(&self) -> gents_protocol::job::BackgroundLimit {
+        self.background_limit
     }
 
     pub(crate) fn with_selected_tool_identity(

@@ -35,6 +35,7 @@ async fn a_script_spawned_by_a_script_cannot_call_tools() {
             gents_tools::surface::BackgroundToolConfig {
                 allowlist: vec!["plugin".into()],
                 timeouts: Default::default(),
+                limit: Default::default(),
             },
         )))
         .await;
