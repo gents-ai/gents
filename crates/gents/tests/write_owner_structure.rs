@@ -3321,6 +3321,7 @@ const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-store/src/config_client/user_write.rs", &["UserWriteRefusal::in_chain"]),
     ("crates/gents-store/src/identity/error.rs", &["identity_key_unavailable"]),
     ("crates/gents-store/src/local/backend_protection.rs", &["BackendProtectionError::in_chain"]),
+    ("crates/gents-store/src/local/document_acp.rs", &["DocumentAcpError::in_chain"]),
     ("crates/gents-store/src/local/home.rs", &["store_lock_held"]),
     ("crates/gents-store/src/local/storage_backend.rs", &["find_incompatible", "find_insecure_key"]),
     ("crates/gents-store/src/local/store_key.rs", &["store_key_unavailable"]),

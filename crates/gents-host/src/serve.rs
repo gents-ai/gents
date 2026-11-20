@@ -927,13 +927,15 @@ async fn serve_foreground(
             let p2p_status =
                 load_local_server_p2p_status(node.as_ref(), args.p2p_transport, p2p_admission)
                     .await?;
-            if let Some(p2p) = gents_p2p::node_access::operations(&node) {
+            if let (Some(p2p), Some(network)) =
+                (gents_p2p::node_access::operations(&node), enrollment_network)
+            {
                 *enrollment_offer_issuer.write().await =
                     Some(gents_p2p::p2p_reconcile::EnrollmentOfferIssuer::new(
                         node.clone(),
                         identity.clone(),
                         p2p,
-                        enrollment_network.network_id,
+                        network.network_id,
                         identity.did().to_string(),
                         "client".to_string(),
                     ));
