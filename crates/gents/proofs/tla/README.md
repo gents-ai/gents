@@ -180,6 +180,19 @@ See `../README.md` for how this fits the broader formal-verification model.
   driven by the test after the steps it must follow (`Driven`), passes under
   every schedule and still fails an owner that never commits
   (`StalledOwner`); `SlowHost` is the ceiling's premise.
+- `NativeWorkerRecordObservation` — a test waiting until two background
+  native workers run and have recorded their process ownership. Each
+  `spawn_process` handler commits its spawned row running and then the
+  worker's task spawns the child and renames its record into the runtime's
+  record directory, a host file no document commit follows. Green subscribes
+  to `AgentToolCall` and watches the record directory before the request
+  exists, re-reads after each notification and fails only at the stall
+  ceiling. RED: `FixedWindow` (the CI failure: a 20 s timeout fails a
+  progressing owner on a loaded host), `DocumentsOnly` (the last record lands
+  after the last commit and the waiter fails a finished owner),
+  `SubscribeAfterRead` (a change between a short read and the subscription
+  is never signalled); `StalledOwner` shows the waiter still fails an owner
+  that never records.
 - `ToolDeadlineInheritance` — where an accepted tool call's deadline comes
   from. The claim fixes the request's one deadline; the provider-turn
   publication writes it on the `AgentToolCall` row and the session hook's
