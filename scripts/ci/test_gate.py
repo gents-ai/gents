@@ -754,6 +754,21 @@ class Runners(unittest.TestCase):
                     if "${{" not in value and "self-hosted" in labels:
                         self.assertIn(sorted(labels), [sorted(labels) for labels in role_sets], value)
 
+    def test_a_literal_runner_is_the_role_its_rust_runner_names(self):
+        # The role sets the kept tree's cap and the host compiler cache, so it
+        # must be the role whose runners the job lands on.
+        for path in sorted((gate.ROOT / ".github/workflows").glob("*.yml")):
+            text = path.read_text()
+            jobs = workflow_jobs(text) if "\njobs:\n" in text else {}
+            for job, value in runs_on_values(text):
+                roles = set(re.findall(r"uses: \./\.github/actions/rust-runner\n\s+with:\n(?:\s+[\w-]+: .*\n)*?"
+                                       r"\s+role: ([\w-]+)\n", jobs[job]))
+                if "${{" in value or not roles:
+                    continue
+                with self.subTest(workflow=path.name, job=job):
+                    self.assertEqual(len(roles), 1, roles)
+                    self.assertEqual(sorted(labels_of(value)), sorted(ROLES[roles.pop()]["labels"]), value)
+
     def test_actionlint_knows_exactly_the_inventory_labels(self):
         config = (gate.ROOT / ".github/actionlint.yaml").read_text()
         listed = set(re.findall(r"^    - (\S+)$", config.split("paths:")[0], flags=re.M))
