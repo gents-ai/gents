@@ -35,6 +35,7 @@ async fn a_script_spawned_by_a_script_cannot_call_tools() {
             gents_tools::surface::BackgroundToolConfig {
                 allowlist: vec!["plugin".into()],
                 timeouts: Default::default(),
+                limit: Default::default(),
             },
         )))
         .await;
@@ -233,7 +234,7 @@ async fn background_plugin_keeps_the_selected_tool_surface() {
             None,
             "start-script",
             &args,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
     else {
@@ -250,7 +251,7 @@ async fn background_plugin_keeps_the_selected_tool_surface() {
             None,
             "wait-script",
             &wait,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
     else {

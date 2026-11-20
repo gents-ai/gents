@@ -29,7 +29,12 @@ impl ConfigApplyTxn<'_> {
             crate::graphql::escape_graphql_string(doc_id),
         );
         let response = self
-            .execute_verified_client_mutation(&mutation, &json!({}), graph)
+            .execute_verified_client_mutation(
+                &mutation,
+                &json!({}),
+                graph,
+                crate::config_client::user_write::WriteKind::Delete,
+            )
             .await?;
         super::delete_confirmation::confirm_configuration_delete(&response, collection, doc_id)
     }
@@ -447,7 +452,7 @@ impl ConfigApplyTxn<'_> {
         // The node owns the transaction; native NAC judges each changing
         // edge against the explicit actor and admits an unchanged one without
         // authority (Lean `Configuration.sourceChangeAllowed`).
-        let context = defra_core::RequestContext::default().with_identity(Some(actor.to_string()));
+        let context = self.request_context(Some(actor.clone()));
         let roots = |records: &[crate::local::ProjectedPlugin]| {
             let mut roots = std::collections::BTreeSet::new();
             for record in records {
@@ -567,8 +572,31 @@ impl ConfigApplyTxn<'_> {
                 let actor = identity
                     .as_ref()
                     .ok_or(ConfigClientError::RelationshipActorRequired)?;
-                let context =
-                    defra_core::RequestContext::default().with_identity(Some(actor.to_string()));
+                let credential = crate::config_client::user_write::signer_credential(
+                    node,
+                    crate::config_client::user_write::author_of(
+                        node,
+                        actor.as_str(),
+                        self.managed_agent_signer().is_some(),
+                    ),
+                    crate::config_client::user_write::Carrier::Direct,
+                    if delete {
+                        crate::config_client::user_write::WriteKind::Delete
+                    } else {
+                        crate::config_client::user_write::WriteKind::Update
+                    },
+                    actor.as_str(),
+                    self.presented_delegation.as_ref(),
+                )?;
+                let context = match credential {
+                    defra_node::SignerCredential::Delegation(token) => self
+                        .request_context(Some(actor.clone()))
+                        .with_bearer(Some(actor.to_string()), Some(token)),
+                    defra_node::SignerCredential::None
+                    | defra_node::SignerCredential::RequestBound(_) => {
+                        self.request_context(Some(actor.clone()))
+                    }
+                };
                 let node = Arc::clone(node);
                 let handle = handle.clone();
                 let (collection, doc_id, relation, target) = (
@@ -624,9 +652,9 @@ impl ConfigApplyTxn<'_> {
                 } else {
                     reqwest::Method::POST
                 };
-                let response = endpoint.authorize(client.request(method, url).header("x-defradb-tx", id).json(&json!({
+                let response = endpoint.authorize_in_transaction(client.request(method, url).json(&json!({
                     "collection": collection, "doc_id": doc_id, "relation": relation, "target_actor": target,
-                })))?.send().await?;
+                })), id)?.send().await?;
                 let status = response.status();
                 if !status.is_success() {
                     return Err(ConfigClientError::RelationshipStatus {
@@ -666,8 +694,31 @@ impl ConfigApplyTxn<'_> {
         let doc_ids = doc_ids.to_vec();
         execute_owned_native(
             async move {
-                node.observe_document_access_in_txn(&handle, &collection, &doc_ids, subject, mode)
-                    .await
+                if doc_ids.is_empty() {
+                    return node
+                        .observe_document_access_in_txn(
+                            &handle,
+                            &collection,
+                            &doc_ids,
+                            subject,
+                            mode,
+                        )
+                        .await;
+                }
+                let mut decisions = Vec::with_capacity(doc_ids.len());
+                for batch in doc_ids.chunks(query::owners::MAX_OWNER_OBSERVATIONS) {
+                    decisions.extend(
+                        node.observe_document_access_in_txn(
+                            &handle,
+                            &collection,
+                            batch,
+                            subject.clone(),
+                            mode.clone(),
+                        )
+                        .await?,
+                    );
+                }
+                Ok(decisions)
             },
             Arc::clone(native_operations),
             self.operation,
@@ -864,18 +915,16 @@ impl ConfigApplyTxn<'_> {
                 let node = Arc::clone(node);
                 let request = QueryRequest::new(document)
                     .with_variables(variables.clone())
-                    .with_identity(identity.clone());
+                    .with_identity(identity.clone())
+                    .with_context(self.request_context(identity.clone()));
                 let handle = handle.clone();
                 let agent_signer = agent_signer.as_deref().cloned();
                 let result = execute_owned_native(
                     async move {
                         match agent_signer {
                             Some(signer) => {
-                                node.execute_request_in_txn(
-                                    signer.native().attach(request),
-                                    &handle,
-                                )
-                                .await
+                                node.execute_request_in_txn(signer.attach(request), &handle)
+                                    .await
                             }
                             None => node.execute_request_in_txn(request, &handle).await,
                         }
@@ -1059,9 +1108,12 @@ impl ConfigApplyTxn<'_> {
             graphql_api_base(endpoint.url())?
         );
         let response = endpoint
-            .authorize(client.post(url).header("x-defradb-tx", id).json(&json!({
-                "collection": collection, "doc_ids": doc_ids,
-            })))?
+            .authorize_in_transaction(
+                client.post(url).json(&json!({
+                    "collection": collection, "doc_ids": doc_ids,
+                })),
+                id,
+            )?
             .send()
             .await?
             .error_for_status()?;
@@ -1107,7 +1159,7 @@ impl ConfigApplyTxn<'_> {
                     graphql_api_base(endpoint.url())?
                 );
                 let versions: Value = endpoint
-                    .authorize(client.get(&url).header("x-defradb-tx", id))?
+                    .authorize_in_transaction(client.get(&url), id)?
                     .send()
                     .await?
                     .error_for_status()?
@@ -1172,57 +1224,6 @@ impl ConfigApplyTxn<'_> {
         .await
     }
 
-    /// Read only account-selection metadata as this transaction's bound
-    /// runtime. Native document ACP still filters and authorizes the read.
-    /// The credential owner supplies `query`; store holds no OAuthCredential
-    /// selection of its own.
-    pub async fn execute_runtime_account_metadata_query(
-        &self,
-        node_did: &str,
-        query: &str,
-    ) -> Result<defra_node::QueryResponse> {
-        self.execute_runtime_metadata_query(node_did, query).await
-    }
-
-    /// Read only the runtime Node's hop cap as this transaction's bound
-    /// runtime. Native document ACP still filters the Node row.
-    pub(super) async fn execute_runtime_hop_cap_query(
-        &self,
-        node_did: &str,
-    ) -> Result<defra_node::QueryResponse> {
-        self.execute_runtime_metadata_query(
-            node_did,
-            &super::runtime_hop_cap::runtime_hop_cap_query(node_did),
-        )
-        .await
-    }
-
-    async fn execute_runtime_metadata_query(
-        &self,
-        node_did: &str,
-        query: &str,
-    ) -> Result<defra_node::QueryResponse> {
-        let TxnBackend::Embedded {
-            node,
-            agent_signer: Some(agent_signer),
-            ..
-        } = &self.backend
-        else {
-            return Err(ConfigClientError::EmbeddedAccessRequired);
-        };
-        if node.node_identity_did() != Some(node_did)
-            || agent_signer.node_did() != node_did
-            || self.actor_did() != Some(agent_signer.did())
-        {
-            return Err(ConfigClientError::TransactionActorMismatch);
-        }
-        let runtime =
-            identity::Did::new(node_did).map_err(ConfigClientError::RelationshipTargetIdentity)?;
-        graphql::ensure_query_document(query)?;
-        self.execute_local_response_with_actor(query, None, Some(runtime), None)
-            .await
-    }
-
     pub(super) async fn execute_local_response_with_actor(
         &self,
         document: &str,
@@ -1241,7 +1242,9 @@ impl ConfigApplyTxn<'_> {
         };
         let started = Instant::now();
         let node = Arc::clone(node);
-        let mut request = QueryRequest::new(document).with_identity(identity);
+        let mut request = QueryRequest::new(document)
+            .with_identity(identity.clone())
+            .with_context(self.request_context(identity));
         if let Some(variables) = variables {
             request = request.with_variables(variables);
         }
@@ -1250,7 +1253,7 @@ impl ConfigApplyTxn<'_> {
             async move {
                 match agent_signer {
                     Some(signer) => {
-                        node.execute_request_in_txn(signer.native().attach(request), &handle)
+                        node.execute_request_in_txn(signer.attach(request), &handle)
                             .await
                     }
                     None => node.execute_request_in_txn(request, &handle).await,
@@ -1293,8 +1296,15 @@ fn native_observation_error(error: query::error::QueryError) -> ConfigClientErro
     }
 }
 
+/// External premise: DefraDB refuses a relationship change by an actor that
+/// neither owns the document nor manages the relation with `acp::Error::NotOwner`
+/// or `acp::Error::NotManager`, on the node's own store and when staging for an
+/// external provider alike.
 pub(super) fn native_relationship_error(error: defra_node::Error) -> ConfigClientError {
     match error {
+        defra_node::Error::Acp(acp::Error::NotOwner { .. } | acp::Error::NotManager { .. }) => {
+            ConfigClientError::RelationshipNotManaged(Box::new(error))
+        }
         defra_node::Error::TransactionConflict
         | defra_node::Error::Query(query::error::QueryError::TransactionConflict(_)) => {
             retry::transaction_conflict(ConflictSource::TypedError)

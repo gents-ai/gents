@@ -95,6 +95,12 @@ pub const CLIENT_JOURNAL_POLICY: &str = include_str!("../schemas/agent/client_jo
 pub const CLIENT_JOURNAL_POLICY_ID: &str =
     "0db680be49781d06d5793ca0eecc8fad2b1a5d05467c535325ddeb148f679b9c";
 pub const CLIENT_JOURNAL_POLICY_RESOURCE: &str = "journals";
+pub const CLIENT_OUTBOX_SEQUENCE_NAME: &str = "ClientOutboxSequence";
+pub const CLIENT_OUTBOX_SEQUENCE: &str =
+    include_str!("../schemas/agent/client_outbox_sequence.graphql");
+pub const CLIENT_AUTHORED_SUBMISSION_NAME: &str = "ClientAuthoredSubmission";
+pub const CLIENT_AUTHORED_SUBMISSION: &str =
+    include_str!("../schemas/agent/client_authored_submission.graphql");
 pub const PENDING_CHAT_SUBMISSION_NAME: &str = "PendingChatSubmission";
 pub const PENDING_CHAT_SUBMISSION: &str =
     include_str!("../schemas/agent/pending_chat_submission.graphql");
@@ -174,6 +180,9 @@ pub const NETWORK_AUTHORIZATION_REVISION: &str =
 pub const NETWORK_ENROLLMENT_ROUTE_RECEIPT_NAME: &str = "NetworkEnrollmentRouteReceipt";
 pub const NETWORK_ENROLLMENT_ROUTE_RECEIPT: &str =
     include_str!("../schemas/agent/network_enrollment_route_receipt.graphql");
+pub const CLIENT_RUNTIME_ACCESS_REQUEST_NAME: &str = "ClientRuntimeAccessRequest";
+pub const CLIENT_RUNTIME_ACCESS_REQUEST: &str =
+    include_str!("../schemas/agent/client_runtime_access_request.graphql");
 pub const NETWORK_ENROLLMENT_GRANT_NAME: &str = "NetworkEnrollmentGrant";
 pub const NETWORK_ENROLLMENT_GRANT: &str =
     include_str!("../schemas/agent/network_enrollment_grant.graphql");
@@ -228,6 +237,8 @@ pub const ALL: &[&str] = &[
     DATASTORE_TOOL_SURFACE,
     PAGE,
     PLUGIN_SOURCE,
+    CLIENT_OUTBOX_SEQUENCE,
+    CLIENT_AUTHORED_SUBMISSION,
     PENDING_CHAT_SUBMISSION,
     WORKSPACE_ROOT,
     ISOLATED_WORKSPACE,
@@ -277,6 +288,7 @@ pub const ALL: &[&str] = &[
     NETWORK_ENROLLMENT_ROUTE_RECEIPT,
     ENROLLMENT_OPERATOR_NONCE,
     NETWORK_ENROLLMENT_GRANT,
+    CLIENT_RUNTIME_ACCESS_REQUEST,
     ENROLLMENT_RENEWAL_POLICY,
     ENROLLMENT_RENEWAL_INTENT,
     ENROLLMENT_RENEWAL_OFFER,
@@ -313,6 +325,8 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     DATASTORE_TOOL_SURFACE_NAME,
     PAGE_NAME,
     PLUGIN_SOURCE_NAME,
+    CLIENT_OUTBOX_SEQUENCE_NAME,
+    CLIENT_AUTHORED_SUBMISSION_NAME,
     PENDING_CHAT_SUBMISSION_NAME,
     WORKSPACE_ROOT_NAME,
     ISOLATED_WORKSPACE_NAME,
@@ -362,6 +376,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     NETWORK_ENROLLMENT_ROUTE_RECEIPT_NAME,
     ENROLLMENT_OPERATOR_NONCE_NAME,
     NETWORK_ENROLLMENT_GRANT_NAME,
+    CLIENT_RUNTIME_ACCESS_REQUEST_NAME,
     ENROLLMENT_RENEWAL_POLICY_NAME,
     ENROLLMENT_RENEWAL_INTENT_NAME,
     ENROLLMENT_RENEWAL_OFFER_NAME,
@@ -423,10 +438,13 @@ pub const LOCAL_ONLY_COLLECTION_NAMES: &[&str] = &[
     NETWORK_ADMIN_PIN_NAME,
     ENROLLMENT_OPERATOR_NONCE_NAME,
     NETWORK_ENROLLMENT_GRANT_NAME,
+    CLIENT_RUNTIME_ACCESS_REQUEST_NAME,
     ENROLLMENT_RENEWAL_POLICY_NAME,
     FILE_INVENTORY_REPLY_NAME,
     FILE_INVENTORY_PROGRESS_NAME,
     OWED_DELIVERY_NAME,
+    CLIENT_OUTBOX_SEQUENCE_NAME,
+    CLIENT_AUTHORED_SUBMISSION_NAME,
     PENDING_CHAT_SUBMISSION_NAME,
 ];
 

@@ -32,6 +32,7 @@ fn claude_config_without_compactor(
     max_tokens: u64,
 ) -> LoopConfig {
     LoopConfig {
+        provider_call: Default::default(),
         replay: crate::loop_stream::LoopReplayInput::default(),
         provider_input_counter: Arc::new(ProviderInputCounter::new(
             BackendProviderKind::AnthropicApiKey,
@@ -60,10 +61,12 @@ fn claude_config_without_compactor(
         provider_idle_timeout: None,
         deadline: None,
         max_turns: 1,
+        max_invalid_tool_calls: crate::loop_stream::DEFAULT_MAX_INVALID_TOOL_CALLS,
+        repeated_tool_failure_limit: crate::loop_stream::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
         output_obligation_gate: None,
         folded_prompts: Vec::new(),
         authored_input: None,
-        tool_context: crate::tool::ToolCallEnvelope::ambient(),
+        tool_context: crate::tool::ToolCallEnvelope::default(),
     }
 }
 

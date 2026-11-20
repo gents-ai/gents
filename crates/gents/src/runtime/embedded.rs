@@ -1,3 +1,5 @@
+mod client_access;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -48,7 +50,6 @@ pub struct EmbeddedHome {
     store_lock: Option<gents_store::local::home::StoreLock>,
     backend_admission: gents_store::local::backend_protection::BackendAdmission,
     p2p: Option<P2PConfigForPath>,
-    #[allow(dead_code)]
     tempdir: Option<TempDir>,
 }
 
@@ -153,12 +154,12 @@ impl EmbeddedHome {
             ensure!(initialize_schemas, "retained trial store is unavailable");
             tokio::fs::create_dir_all(&data_path).await?;
         }
-        let lock_home = path.clone();
-        let lock_data = data_path.clone();
-        let store_lock = tokio::task::spawn_blocking(move || {
-            gents_store::local::home::lock_store(&lock_home, &lock_data)
-        })
-        .await??;
+        let store_lock = gents_store::local::home::acquire_store(
+            &path,
+            &data_path,
+            gents_store::local::home::STORE_RELEASE_WAIT,
+        )
+        .await?;
         let fresh = tokio::fs::read_dir(&data_path)
             .await?
             .next_entry()
@@ -178,7 +179,22 @@ impl EmbeddedHome {
         };
         let store_key = trial_store_key(&path, &data_path, fresh).await?;
         if let Some(fresh_store) = fresh_store {
-            fresh_store.initialize(&store_key, Some(&did)).await?;
+            // A trial node's NAC is owned by its home's own owner key, never
+            // its Node (`Identity.NodeProvisioning.nacOwner`); installation
+            // issues the evaluator's direct set as that owner.
+            let owner_path = path.join("owner.key");
+            let owner =
+                tokio::task::spawn_blocking(move || KeyIdentity::load_or_create(owner_path, None))
+                    .await?
+                    .context("trial NAC owner identity")?;
+            fresh_store
+                .initialize(
+                    &store_key,
+                    &identity,
+                    &::identity::Did::new(owner.did())?,
+                    gents_store::local::document_acp::DocumentAcp::Local,
+                )
+                .await?;
         }
         let protected = gents_store::local::backend_protection::ProtectedBackendStore::open(
             &data_path,
@@ -186,7 +202,11 @@ impl EmbeddedHome {
             &store_lock,
         )
         .await?
-        .preflight(&store_key, Some(&did))
+        .preflight(
+            &store_key,
+            &identity,
+            gents_store::local::document_acp::DocumentAcp::Local,
+        )
         .await?;
         let served = ServedNode::default();
         let (http, client_endpoint, owner_staged) = trial_http(served.clone()).await?;
@@ -330,7 +350,11 @@ impl EmbeddedHome {
                 .context("trial store lock was released")?,
         )
         .await?
-        .preflight(&self.store_key, Some(&self.did))
+        .preflight(
+            &self.store_key,
+            &self.identity,
+            gents_store::local::document_acp::DocumentAcp::Local,
+        )
         .await?;
         let served = ServedNode::default();
         let (http, client_endpoint, owner_staged) = trial_http(served.clone()).await?;
@@ -417,9 +441,94 @@ async fn trial_http(
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr()?);
     let owner_staged = gents_store::config_client::OwnerStagedRoute::new();
+    let status = served.clone();
+    let metadata = axum::Router::new().route(
+        "/status",
+        axum::routing::get(
+            move |query: axum::extract::Query<rapidhash::RapidHashMap<String, String>>| {
+                let served = status.clone();
+                async move {
+                    use axum::response::IntoResponse;
+                    let Ok(nonce) = query
+                        .get(gents_protocol::home_attestation::HOME_NONCE_QUERY)
+                        .map(|nonce| gents_protocol::home_attestation::HomeNonce::parse(nonce))
+                        .transpose()
+                    else {
+                        return axum::http::StatusCode::BAD_REQUEST.into_response();
+                    };
+                    let Some((node, runtime)) = served
+                        .get()
+                        .and_then(|(node, runtime)| Some((node.upgrade()?, runtime)))
+                    else {
+                        return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
+                    };
+                    let Ok(authentication) =
+                        gents_store::config_client::client_authentication::runtime_authentication(
+                            &gents_store::config_client::ConfigAccess::local(node),
+                        )
+                        .await
+                    else {
+                        return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
+                    };
+                    let mut status = serde_json::json!({
+                        "node_did": runtime.did(),
+                        (gents_protocol::client_authentication::STATUS_FIELD): authentication,
+                    });
+                    if let Some(nonce) = &nonce {
+                        gents_store::identity::home_status::attest(
+                            Some(runtime.as_ref()),
+                            nonce,
+                            &mut status,
+                        )
+                        .await;
+                    }
+                    axum::Json(status).into_response()
+                }
+            },
+        ),
+    );
     let config = crate::defra_node::HttpConfig::with_listener(listener.into_std()?)?
-        .with_extra_routes(agent_identity_routes(served).merge(owner_staged.router()));
+        .with_extra_routes(metadata)
+        .with_authenticated_routes(
+            agent_identity_routes(served.clone())
+                .merge(trial_inference_settings_routes(served.clone()))
+                .merge(client_access::routes(served))
+                .merge(owner_staged.router()),
+        );
     Ok((config, endpoint, owner_staged))
+}
+
+fn trial_inference_settings_routes(served: ServedNode) -> axum::Router {
+    axum::Router::new().route(
+        gents_observe::client_inference::INFERENCE_SETTINGS_PATH,
+        axum::routing::get(move |identity: defra_http::ExtractIdentity, headers: axum::http::HeaderMap| {
+            let served = served.clone();
+            async move {
+                use axum::response::IntoResponse;
+                let Some((node, runtime)) = served.get().and_then(|(node, runtime)| Some((node.upgrade()?, runtime))) else {
+                    return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
+                };
+                let Some(actor) = identity.did().cloned() else {
+                    return axum::http::StatusCode::UNAUTHORIZED.into_response();
+                };
+                let authorization = match gents_store::config_client::client_authentication::ClientAuthorization::from_http(&identity, &headers) {
+                    Ok(authorization) => authorization,
+                    Err(_) => return axum::http::StatusCode::UNAUTHORIZED.into_response(),
+                };
+                let access = match gents_store::config_client::ConfigAccess::local_as(node, actor).with_client_authorization(authorization) {
+                    Ok(access) => access,
+                    Err(_) => return axum::http::StatusCode::FORBIDDEN.into_response(),
+                };
+                match gents_observe::client_inference::load_inference_setup_state(&access, runtime.did()).await {
+                    Ok(settings) => axum::Json(gents_observe::client_inference::InferenceSettingsResponse {
+                        contract_version: gents_observe::client_inference::INFERENCE_SETTINGS_CONTRACT_VERSION,
+                        state: settings.for_client_observation(),
+                    }).into_response(),
+                    Err(_) => axum::http::StatusCode::FORBIDDEN.into_response(),
+                }
+            }
+        }),
+    )
 }
 
 /// A trial home serves Agent identity provisioning and agent admission facts
@@ -433,8 +542,33 @@ pub fn agent_identity_routes(served: ServedNode) -> axum::Router {
     let failure = |status: StatusCode, message: &str| {
         (status, axum::Json(serde_json::json!({ "error": message }))).into_response()
     };
+    let goal = served.clone();
     let admission = served.clone();
     axum::Router::new()
+        .route(
+            gents_protocol::goal_control::APPLY_GOAL_CONTROL_PATH,
+            axum::routing::post(
+                move |identity: defra_http::ExtractIdentity,
+                      headers: axum::http::HeaderMap,
+                      axum::Json(request): axum::Json<
+                    gents_protocol::goal_control::ApplyGoalControl,
+                >| {
+                    let served = goal.clone();
+                    async move {
+                        let Some((node, runtime)) = served
+                            .get()
+                            .and_then(|(node, runtime)| Some((node.upgrade()?, runtime)))
+                        else {
+                            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+                        };
+                        gents_automation::goal::client_application::apply_http(
+                            &node, runtime, &identity, &headers, request,
+                        )
+                        .await
+                    }
+                },
+            ),
+        )
         .route(
             gents_protocol::agent_identity::AGENT_ADMISSION_PATH,
             axum::routing::post(

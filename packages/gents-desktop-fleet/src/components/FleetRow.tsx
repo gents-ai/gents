@@ -1,6 +1,5 @@
 import { useState, type KeyboardEvent, type MouseEvent } from "react";
 
-import { formatPeerConnectionError } from "../peerConnectionErrors.js";
 import type {
   BootstrapSummary,
   DeploymentView,
@@ -19,7 +18,6 @@ import {
   deploymentStatus,
   formatRelativeTime,
   inferenceBackendTitle,
-  isLocalRuntimeSource,
   needsInferenceSetup,
   toolCeilingIcons,
   type ToolIcon,
@@ -31,8 +29,8 @@ export type FleetRowProps = {
   syncHealth?: SyncHealthView | null;
   onOpenChat: (nodeDid: string) => void;
   onOpenConfig: (nodeDid: string) => void;
-  onRemovePeer?: (peerId: string) => Promise<unknown> | void;
-  onRenamePeer?: (peerId: string, label: string) => Promise<unknown> | void;
+  onRemoveRuntime?: (nodeDid: string) => Promise<unknown> | void;
+  onRenameRuntime?: (nodeDid: string, label: string) => Promise<unknown> | void;
   onSetupInference?: (deployment: DeploymentView) => void;
 };
 
@@ -42,22 +40,22 @@ export function FleetRow({
   syncHealth = null,
   onOpenChat,
   onOpenConfig,
-  onRemovePeer,
-  onRenamePeer,
+  onRemoveRuntime,
+  onRenameRuntime,
   onSetupInference,
 }: FleetRowProps) {
   const [editingLabel, setEditingLabel] = useState<string | null>(null);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
   const status = deploymentStatus(deployment, syncHealth);
-  const localRuntime = isLocalRuntimeSource(deployment.source);
-  const remoteRuntime = deployment.source === "enrollment";
+  const localRuntime = deployment.local;
+  const remoteRuntime = !deployment.operatorAccess;
   const chatReady = status.chatReady;
 
   function commitRename() {
     const label = (editingLabel ?? "").trim();
     setEditingLabel(null);
-    if (label && label !== deployment.label && onRenamePeer) {
-      void Promise.resolve(onRenamePeer(deployment.peerId, label)).catch(
+    if (label && label !== deployment.label && onRenameRuntime) {
+      void Promise.resolve(onRenameRuntime(deployment.nodeDid, label)).catch(
         () => {},
       );
     }
@@ -80,7 +78,7 @@ export function FleetRow({
     deployment.contexts.find(
       (context) => context.context_id === defaultAgent?.contextId,
     )?.tools_id,
-    isLocalRuntimeSource(deployment.source) ? bootstrap?.initToolCeiling : null,
+    deployment.local ? bootstrap?.initToolCeiling : null,
   );
   const runtimeLastUpdate = deployment.runtime?.updatedAt ?? null;
 
@@ -101,7 +99,7 @@ export function FleetRow({
     <tr
       aria-label={`Open ${deployment.label} details`}
       className="fleet-deployment-row"
-      data-testid={`fleet-row-${deployment.peerId}`}
+      data-testid={`fleet-row-${deployment.nodeDid}`}
       onClick={openDetailsFromCard}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
@@ -125,7 +123,7 @@ export function FleetRow({
             />
             <span
               className="fleet-status-label"
-              data-testid={`fleet-status-${deployment.peerId}`}
+              data-testid={`fleet-status-${deployment.nodeDid}`}
             >
               {status.label}
             </span>
@@ -135,7 +133,7 @@ export function FleetRow({
               <input
                 autoFocus
                 className="fleet-rename-input"
-                data-testid={`fleet-rename-input-${deployment.peerId}`}
+                data-testid={`fleet-rename-input-${deployment.nodeDid}`}
                 onBlur={commitRename}
                 onChange={(event) => setEditingLabel(event.currentTarget.value)}
                 onKeyDown={(event) => {
@@ -150,7 +148,7 @@ export function FleetRow({
             ) : (
               <button
                 className="fleet-agent-name"
-                data-testid={`fleet-detail-name-${deployment.peerId}`}
+                data-testid={`fleet-detail-name-${deployment.nodeDid}`}
                 onClick={() => onOpenChat(deployment.nodeDid)}
                 title={`Open ${deployment.label} details`}
                 type="button"
@@ -160,7 +158,7 @@ export function FleetRow({
             )}
             <span
               className="muted fleet-agent-summary"
-              data-testid={`fleet-summary-${deployment.peerId}`}
+              data-testid={`fleet-summary-${deployment.nodeDid}`}
             >
               {deployment.agents.length} agents · {deployment.sessions.length}{" "}
               sessions · {deployment.tasks.length} tasks
@@ -168,17 +166,17 @@ export function FleetRow({
             {status.lastError ? (
               <span
                 className="fleet-agent-error"
-                data-testid={`fleet-error-${deployment.peerId}`}
+                data-testid={`fleet-error-${deployment.nodeDid}`}
               >
-                {formatPeerConnectionError(status.lastError, "repair-p2p")}
+                {status.lastError}
               </span>
             ) : null}
           </div>
-          {onRenamePeer && editingLabel == null ? (
+          {onRenameRuntime && editingLabel == null ? (
             <button
               aria-label={`Rename ${deployment.label}`}
               className="ghost-button fleet-row-icon fleet-rename"
-              data-testid={`fleet-rename-${deployment.peerId}`}
+              data-testid={`fleet-rename-${deployment.nodeDid}`}
               onClick={() => setEditingLabel(deployment.label)}
               title="Rename deployment (saved label)"
               type="button"
@@ -211,7 +209,7 @@ export function FleetRow({
             onSetupInference ? (
               <button
                 className="ghost-button fleet-inference-needed"
-                data-testid={`fleet-inference-setup-${deployment.peerId}`}
+                data-testid={`fleet-inference-setup-${deployment.nodeDid}`}
                 onClick={() => onSetupInference(deployment)}
                 title={`Configure inference for ${deployment.label}`}
                 type="button"
@@ -238,13 +236,13 @@ export function FleetRow({
           <button
             aria-label={`Open ${deployment.label} chat`}
             className="primary-button fleet-table-action fleet-open-chat-action"
-            data-testid={`fleet-chat-${deployment.peerId}`}
+            data-testid={`fleet-chat-${deployment.nodeDid}`}
             disabled={!chatReady}
             onClick={() => onOpenChat(deployment.nodeDid)}
             title={
               chatReady
                 ? "Open chat"
-                : "Chat unlocks after signed enrollment and node readiness complete"
+                : "Chat becomes available after runtime access and agent readiness are confirmed"
             }
             type="button"
           >
@@ -253,18 +251,18 @@ export function FleetRow({
           <button
             aria-label={`Configure ${deployment.label}`}
             className="ghost-button fleet-table-action"
-            data-testid={`fleet-config-${deployment.peerId}`}
+            data-testid={`fleet-config-${deployment.nodeDid}`}
             onClick={() => onOpenConfig(deployment.nodeDid)}
             title="Configure node"
             type="button"
           >
             <ConfigIcon />
           </button>
-          {onRemovePeer && !localRuntime ? (
+          {onRemoveRuntime && !localRuntime ? (
             <button
               aria-label={`Remove ${deployment.label}`}
               className="ghost-button fleet-table-action danger-button"
-              data-testid={`fleet-remove-${deployment.peerId}`}
+              data-testid={`fleet-remove-${deployment.nodeDid}`}
               onClick={() => setConfirmingRemove(true)}
               title="Remove saved deployment"
               type="button"
@@ -280,7 +278,7 @@ export function FleetRow({
             danger
             onConfirm={() => {
               setConfirmingRemove(false);
-              void Promise.resolve(onRemovePeer?.(deployment.peerId)).catch(
+              void Promise.resolve(onRemoveRuntime?.(deployment.nodeDid)).catch(
                 () => {},
               );
             }}

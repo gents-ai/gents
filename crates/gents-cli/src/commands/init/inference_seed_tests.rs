@@ -30,129 +30,167 @@ fn parse_case(case: &family::SeedInput) -> InitArgs {
     args
 }
 
-#[tokio::test]
-async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned() -> Result<()> {
-    for case in family::cases() {
-        let args = parse_case(&case.input);
-        let home = gents::runtime::embedded::EmbeddedHome::create_temp("init-seed").await?;
-        let identity = home.identity.clone();
-        let owner = home.did();
-        let node = home.node.clone();
-        let graphql = home.graphql_endpoint().context("served init home")?;
-        let user_home = tempfile::tempdir()?;
-        let user = KeyIdentity::load_or_create(user_home.path().join("user.key"), None)?;
-        let binding = provision_fresh_home(&node, identity.as_ref(), user.did()).await?;
-        let access = gents_host::test_support::user_access(graphql, &user);
-        let initialized = initialize_runtime_home(
-            &access,
-            &node,
-            &args,
-            identity.as_ref(),
-            resolve_initial_tool_package(&args)?,
-            Some(binding),
-            None,
-        )
-        .await;
-        let Ok(summary) = initialized else {
-            assert!(
-                gents_inference::backends::registry::list_all_backends(&node)
-                    .await?
-                    .is_empty()
-            );
-            assert!(load_node(&node, owner).await?.is_none());
-            case.check(None);
-            continue;
-        };
-        let backends = gents_inference::backends::registry::list_all_backends(&node).await?;
-        assert_eq!(backends.len(), 1);
-        let backend = &backends[0];
-        let profile =
-            gents_documents::load_inference_profile(&node, owner, &summary.inference_profile_id)
-                .await?
-                .expect("the agent's profile exists even before model selection");
-        let model = (!profile.model_name.is_empty()).then(|| profile.model_name.clone());
-        let observation = gents_inference::backends::registry::lookup_backend_observation(
-            &node,
-            owner,
-            &summary.backend_id,
-        )
-        .await?
-        .expect("the backend exists");
-        assert_eq!(
-            observation.probe_status.is_some(),
-            observation.last_probe.is_some()
+macro_rules! generated_initial_inference_shards {
+    ($($shard:ident),+ $(,)?) => {
+        const SHARDS: &[&str] = &[$(stringify!($shard)),+];
+        $(
+            #[tokio::test]
+            async fn $shard() -> Result<()> {
+                replay_shard(stringify!($shard)).await
+            }
+        )+
+    };
+}
+
+mod generated_initial_inference_keeps_unselected_models_and_limits_unpinned {
+    use super::*;
+
+    generated_initial_inference_shards!(
+        shard_00, shard_01, shard_02, shard_03, shard_04, shard_05, shard_06, shard_07, shard_08,
+        shard_09, shard_10, shard_11,
+    );
+
+    async fn replay_shard(name: &str) -> Result<()> {
+        let shard = SHARDS
+            .iter()
+            .position(|known| *known == name)
+            .expect("a declared shard");
+        gents_lean_vocab::snapshot().await;
+        let cases = family::cases();
+        assert!(
+            cases.len() >= SHARDS.len(),
+            "{} cases leave shards empty; declare at most that many shards",
+            cases.len()
         );
-        let mut unselected_model_reason = None;
-        let mut enabled_unselected_model_reason = None;
-        if model.is_none() {
-            let runtime = gents::Gents::from_default_agent_documents(
-                node.clone(),
-                identity.clone(),
-                gents::DocumentRuntimeOptions {
-                    backend_admission: Some(home.backend_admission()),
-                    ..Default::default()
-                },
-            )
-            .await?;
-            assert!(runtime.agents().is_empty());
-            let unavailable = runtime
-                .unavailable_agents()
-                .get(&summary.default_agent_did)
-                .expect("the unselected agent remains visible for setup");
-            unselected_model_reason = serde_json::to_value(unavailable.public_reason)?
-                .as_str()
-                .map(str::to_owned);
-            drop(runtime);
-            let mut enabled_backend = backend.clone();
-            enabled_backend.enabled = true;
-            publish_home_config(
-                &access,
-                owner,
-                "Incomplete selection",
-                &summary.default_agent_did,
-                true,
-                vec![replacement(Collection::InferenceBackend, &enabled_backend)?],
-            )
-            .await?;
-            let runtime = gents::Gents::from_default_agent_documents(
-                node.clone(),
-                identity.clone(),
-                gents::DocumentRuntimeOptions {
-                    backend_admission: Some(home.backend_admission()),
-                    ..Default::default()
-                },
-            )
-            .await?;
-            assert!(runtime.agents().is_empty());
-            let unavailable = runtime
-                .unavailable_agents()
-                .get(&summary.default_agent_did)
-                .expect("an enabled backend still requires model selection");
-            enabled_unselected_model_reason = serde_json::to_value(unavailable.public_reason)?
-                .as_str()
-                .map(str::to_owned);
-            drop(runtime);
-            let steps = init_next_steps(&summary, Path::new("/srv/home"), false, false, false);
-            assert!(
+        for case in cases.iter().skip(shard).step_by(SHARDS.len()) {
+            replay_case(case).await?;
+        }
+        Ok(())
+    }
+}
+
+async fn replay_case(
+    case: &gents_lean_vocab::family::Case<family::SeedInput, Option<family::SeedPlan>>,
+) -> Result<()> {
+    let args = parse_case(&case.input);
+    let home = gents::runtime::embedded::EmbeddedHome::create_temp("init-seed").await?;
+    let identity = home.identity.clone();
+    let owner = home.did();
+    let node = home.node.clone();
+    let graphql = home.graphql_endpoint().context("served init home")?;
+    let user_home = tempfile::tempdir()?;
+    let user = KeyIdentity::load_or_create(user_home.path().join("user.key"), None)?;
+    let binding = provision_fresh_home(&node, identity.as_ref(), user.did()).await?;
+    let access = gents_host::test_support::user_access(graphql, &user);
+    let initialized = initialize_runtime_home(
+        &access,
+        &node,
+        &args,
+        identity.as_ref(),
+        resolve_initial_tool_package(&args)?,
+        Some(binding),
+        None,
+    )
+    .await;
+    let Ok(summary) = initialized else {
+        assert!(
+            gents_inference::backends::registry::list_all_backends(&node)
+                .await?
+                .is_empty()
+        );
+        assert!(load_node(&node, owner).await?.is_none());
+        case.check(None);
+        return Ok(());
+    };
+    let backends = gents_inference::backends::registry::list_all_backends(&node).await?;
+    assert_eq!(backends.len(), 1);
+    let backend = &backends[0];
+    let profile =
+        gents_documents::load_inference_profile(&node, owner, &summary.inference_profile_id)
+            .await?
+            .expect("the agent's profile exists even before model selection");
+    let model = (!profile.model_name.is_empty()).then(|| profile.model_name.clone());
+    let observation = gents_inference::backends::registry::lookup_backend_observation(
+        &node,
+        owner,
+        &summary.backend_id,
+    )
+    .await?
+    .expect("the backend exists");
+    assert_eq!(
+        observation.probe_status.is_some(),
+        observation.last_probe.is_some()
+    );
+    let mut unselected_model_reason = None;
+    let mut enabled_unselected_model_reason = None;
+    if model.is_none() {
+        let runtime = gents::Gents::from_default_agent_documents(
+            node.clone(),
+            identity.clone(),
+            gents::DocumentRuntimeOptions {
+                backend_admission: Some(home.backend_admission()),
+                ..Default::default()
+            },
+        )
+        .await?;
+        assert!(runtime.agents().is_empty());
+        let unavailable = runtime
+            .unavailable_agents()
+            .get(&summary.default_agent_did)
+            .expect("the unselected agent remains visible for setup");
+        unselected_model_reason = serde_json::to_value(unavailable.public_reason)?
+            .as_str()
+            .map(str::to_owned);
+        drop(runtime);
+        let mut enabled_backend = backend.clone();
+        enabled_backend.enabled = true;
+        publish_home_config(
+            &access,
+            owner,
+            "Incomplete selection",
+            &summary.default_agent_did,
+            true,
+            vec![replacement(Collection::InferenceBackend, &enabled_backend)?],
+        )
+        .await?;
+        let runtime = gents::Gents::from_default_agent_documents(
+            node.clone(),
+            identity.clone(),
+            gents::DocumentRuntimeOptions {
+                backend_admission: Some(home.backend_admission()),
+                ..Default::default()
+            },
+        )
+        .await?;
+        assert!(runtime.agents().is_empty());
+        let unavailable = runtime
+            .unavailable_agents()
+            .get(&summary.default_agent_did)
+            .expect("an enabled backend still requires model selection");
+        enabled_unselected_model_reason = serde_json::to_value(unavailable.public_reason)?
+            .as_str()
+            .map(str::to_owned);
+        drop(runtime);
+        let steps = init_next_steps(&summary, Path::new("/srv/home"), false, false, false);
+        assert!(
                 !steps
                     .iter()
                     .any(|step| step.starts_with("llama-server -hf")
                         || step.starts_with("ollama pull")),
                 "{steps:?}"
             );
-        }
-        case.check(Some(family::SeedPlan {
-            model,
-            enabled: backend.enabled,
-            concurrent: backend.max_concurrent,
-            effective_concurrent: backend.effective_max_concurrent() as u64,
-            context_override: profile.context_window,
-            output_override: profile.max_output_tokens,
-            records_probe: observation.probe_status.is_some(),
-            unselected_model_reason,
-            enabled_unselected_model_reason,
-        }));
     }
+    case.check(Some(family::SeedPlan {
+        model,
+        enabled: backend.enabled,
+        concurrent: backend.max_concurrent,
+        effective_concurrent: backend.effective_max_concurrent() as u64,
+        context_override: profile.context_window,
+        output_override: profile.max_output_tokens,
+        records_probe: observation.probe_status.is_some(),
+        unselected_model_reason,
+        enabled_unselected_model_reason,
+    }));
     Ok(())
 }
 

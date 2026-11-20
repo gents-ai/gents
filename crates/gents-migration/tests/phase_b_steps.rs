@@ -1,6 +1,6 @@
 use defra_node::Node as EmbeddedNode;
 use gents_migration::{
-    ensure_migrations_dynamic, fixture_lens_wasm, predict_transform_id, BaselineCollectionOwned,
+    ensure_migrations_dynamic, fixture_lens_wasm, lens_config, BaselineCollectionOwned,
     CollectionExpectation, DynamicRegistry, LensSpec, LensSpecOwned, MigrationStepOwned,
 };
 
@@ -21,7 +21,7 @@ type UnrelatedDoc {
 
 const ADD_LABEL_PATCH: &str = r#"[
   {"op":"add","path":"/FixtureDoc/Fields/-","value":{"Name":"label","Kind":"String"}},
-  {"op":"replace","path":"/IsActive","value":false}
+  {"op":"replace","path":"/FixtureDoc/IsActive","value":false}
 ]"#;
 
 async fn discover_inactive_patch_pin(node: &EmbeddedNode) -> (String, String) {
@@ -195,13 +195,16 @@ async fn patch_versioned_with_fixture_lens_registers_transform() {
 
     let discover = fresh_node().await;
     let (v0, v1) = discover_inactive_patch_pin(discover.as_ref()).await;
-    discover.shutdown().await.expect("shut down test node");
-
     let lens = LensSpec {
         wasm,
         args_json: None,
     };
-    let predicted_tx = predict_transform_id(&lens);
+    let configuration = serde_json::to_value(lens_config(&lens, &v0, &v1)).unwrap();
+    let predicted_tx = discover
+        .add_lens_as(&common::node_context(&discover), &configuration)
+        .await
+        .expect("native content-derived lens identity");
+    discover.shutdown().await.expect("shut down test node");
 
     let node = fresh_node().await;
     {

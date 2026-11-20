@@ -3,6 +3,9 @@ pub mod accounts;
 mod app_exit;
 pub mod approvals_watch;
 pub mod cause_derivation;
+pub mod client_runtime;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod client_test_support;
 pub mod commands;
 pub mod config;
 pub mod contract;
@@ -24,6 +27,7 @@ pub mod plugin_access;
 pub mod process_control;
 pub mod provenance;
 pub mod provider_recovery;
+pub mod runtime_pack_watch;
 #[cfg(feature = "tauri-host")]
 pub mod runtime_setup;
 pub mod snapshot;
@@ -39,7 +43,6 @@ pub use config::{
     AppMeta, BootstrapPolicy, BridgeConfig, HomePolicy, ManagedServerPolicy, NodeHomePolicy,
     TracingConfig,
 };
-pub use error::{BridgeError, BridgeErrorCode};
 pub use gents_store::local::store_key::StoreKeyCustodyChoice;
 pub use package_tools::{prefer_host_tools, prepare_host_command};
 #[cfg(feature = "tauri-host")]
@@ -52,5 +55,5 @@ pub use state::resolve_policy;
 
 #[cfg(test)]
 mod tests;
-#[cfg(all(test, feature = "tauri-host"))]
-mod typegen;
+#[cfg(any(feature = "typegen", all(test, feature = "tauri-host")))]
+pub mod typegen;

@@ -541,14 +541,6 @@ def enrollmentPolicyAllowed (i : EnrollmentPolicyInput) : Allowed :=
   { allowed := allowed 5 (enrollmentPolicyState i.name) i.actor "enrollment_records" i.document
       i.permission }
 
-/-- The thin-client scenario writes its own enrollment request with no local
-Node and asks native ACP and the authenticated GraphQL server for each actor's
-access to it. -/
-@[conformance_family]
-def enrollmentPolicyThin : Family EnrollmentPolicyInput Allowed where
-  inputs := enrollmentPolicyInputs.filter (·.name.startsWith "thin-")
-  model := enrollmentPolicyAllowed
-
 /-- model-production-gap: the thin-client scenario builds only the request a
 client writes before it has a Node; no production scenario builds the admin's
 received request, its parent, the revoked admin reader or the terminal
@@ -563,11 +555,11 @@ structure ReplicaInput where
   deriving ToJson
 
 def replicaPending : State :=
-  replicaGrant privateReplicaFixture "enrollment_records" "remote" "runtime" "local-node" "user"
+  replicaGrant privateReplicaFixture "foreign" "enrollment_records" "remote" "runtime" "local-node" "user"
     true true true false false
 
 def replicaLinked : State :=
-  replicaLinkPending replicaPending "enrollment_records" "remote" "runtime" "local-node" "user"
+  replicaLinkPending replicaPending "foreign" "enrollment_records" "remote" "runtime" "local-node" "user"
     true true true
 
 def replicaRevoked : State :=
@@ -577,7 +569,7 @@ def replicaState : String → State
   | "pending" => replicaPending
   | "linked" => replicaLinked
   | "revoked" => replicaRevoked
-  | "after-repair" => replicaLinkPending replicaRevoked "enrollment_records" "remote" "runtime"
+  | "after-repair" => replicaLinkPending replicaRevoked "foreign" "enrollment_records" "remote" "runtime"
       "local-node" "user" true true true
   | _ => privateReplicaFixture
 
@@ -595,8 +587,14 @@ structure ReplicaReads where
   outsiderRead : Bool
   deriving ToJson
 
+/-- `runtime` in this scenario is the receiving node's own key, which reads
+past document ACP (`Household.nativeRead`); the other actors read what document
+ACP grants. -/
+def replicaHostRead (i : ReplicaInput) (collection document : String) : Bool :=
+  nativeRead true 5 (replicaState i.name) "runtime" collection document
+
 def replicaReads (i : ReplicaInput) : ReplicaReads :=
-  { runtimeRead := replicaRead i "runtime" "enrollment_records" "remote"
+  { runtimeRead := replicaHostRead i "enrollment_records" "remote"
     userRead := replicaRead i "user" "enrollment_records" "remote"
     agentRead := replicaRead i "agent" "enrollment_records" "remote"
     outsiderRead := replicaRead i "outsider" "enrollment_records" "remote" }
@@ -625,11 +623,12 @@ structure AppRead where
   deriving ToJson
 
 /-- The replicated enrollment scenario creates a private application session
-only after the revoked parent is repaired. -/
+only after the revoked parent is repaired. Document ACP grants the receiving
+runtime nothing on it; it reads it as the hosting node key. -/
 @[conformance_family]
 def replicaGrantAppRead : Family ReplicaInput AppRead where
   inputs := replicaInputs.filter (·.name = "after-repair")
-  model := fun i => { appRead := replicaRead i "runtime" "children" "application" }
+  model := fun i => { appRead := replicaHostRead i "children" "application" }
 
 structure ReplicaPending where
   pending : Bool
@@ -669,7 +668,7 @@ def replicaGrantUnreached : Family ReplicaInput ReplicaGrant where
     { runtimeRead := (replicaReads i).runtimeRead, userRead := (replicaReads i).userRead
       userWrite := allowed 5 (replicaState i.name) "user" "enrollment_records" "remote" "update"
       agentRead := (replicaReads i).agentRead, outsiderRead := (replicaReads i).outsiderRead
-      appRead := replicaRead i "runtime" "children" "application"
+      appRead := replicaHostRead i "children" "application"
       pending := (replicaPendingRelation i).pending }
 
 end Conformance.IdentityOperations

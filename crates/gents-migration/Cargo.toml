@@ -24,11 +24,11 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-sha2.workspace = true
 hex = "0.4"
 rapidhash = { workspace = true }
 
 [dev-dependencies]
+hex = "0.4"
 gents-workspace-hack = { workspace = true }
 crypto.workspace = true
 defra-node.workspace = true

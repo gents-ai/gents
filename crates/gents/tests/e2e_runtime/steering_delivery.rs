@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use gents::Gents;
 use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
@@ -13,6 +12,7 @@ use gents_session::request::lifecycle::{
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
+use gents_store::test_support::UNREACHED_DEADLINE;
 use tokio::sync::Notify;
 
 use super::queue_management::{enqueue_owned, row_as};
@@ -27,6 +27,7 @@ use crate::support::streaming_backend::{
     MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse, StreamScript,
 };
 use crate::support::test_db;
+use gents_store::test_support::STALL_CEILING;
 
 const MODEL: &str = "steering-model";
 const BACKEND: &str = "steering-backend";
@@ -62,12 +63,8 @@ impl ToolDyn for HeldTool {
     }
 }
 
-async fn wait_for_signed_request_terminal(
-    access: &ConfigAccess,
-    request_id: &str,
-    timeout: Duration,
-) -> String {
-    crate::support::live_inference::wait_for_request_terminal(access, request_id, timeout).await
+async fn wait_for_signed_request_terminal(access: &ConfigAccess, request_id: &str) -> String {
+    crate::support::live_inference::wait_for_request_terminal(access, request_id).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -128,7 +125,7 @@ async fn steering_arriving_during_terminal_response_continues_same_physical_requ
         .backend_id(BACKEND)
         .model_name(MODEL)
         .stream_batch_ms(0)
-        .deadline_duration_secs(60)
+        .deadline_duration_secs(UNREACHED_DEADLINE.as_secs())
         .done()
         .build()
         .await
@@ -216,12 +213,7 @@ async fn steering_arriving_during_terminal_response_continues_same_physical_requ
     );
     backend.release(name);
     assert_eq!(
-        wait_for_signed_request_terminal(
-            &access,
-            "active-steering-request",
-            Duration::from_secs(60)
-        )
-        .await,
+        wait_for_signed_request_terminal(&access, "active-steering-request").await,
         "completed"
     );
     let consumed = row_as(&fixture, &replacement.request_doc_ids[0]).await;
@@ -237,18 +229,28 @@ async fn steering_arriving_during_terminal_response_continues_same_physical_requ
     runtime.shutdown().await;
 }
 
-#[allow(clippy::too_many_arguments)]
+struct ToolCallMessage<'a> {
+    tool_call_doc: &'a str,
+    tool_call_id: &'a str,
+    request_id: &'a str,
+    content: &'a str,
+    queue: Option<RequestQueue>,
+}
+
 async fn caller_message(
     caller: &RequestActors,
     cause: &agent_transcript::Source,
-    tool_call_doc: &str,
-    tool_call_id: &str,
     target_agent_did: &str,
     session_id: &str,
-    request_id: &str,
-    content: &str,
-    queue: Option<RequestQueue>,
+    message: ToolCallMessage<'_>,
 ) -> String {
+    let ToolCallMessage {
+        tool_call_doc,
+        tool_call_id,
+        request_id,
+        content,
+        queue,
+    } = message;
     let caller_did = caller.agent_did();
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,
@@ -342,7 +344,7 @@ fn held_runtime(
         .backend_id(BACKEND)
         .model_name(MODEL)
         .stream_batch_ms(0)
-        .deadline_duration_secs(60)
+        .deadline_duration_secs(UNREACHED_DEADLINE.as_secs())
         .custom_tool(HeldTool {
             entered: entered.clone(),
             release: release.clone(),
@@ -408,13 +410,15 @@ async fn signed_agent_steering_survives_a_forced_mid_turn_crash() {
     let active = caller_message(
         &caller,
         &cause,
-        &open_call,
-        "agent-new-call",
         worker.agent_did(),
         name,
-        "priority-head",
-        name,
-        None,
+        ToolCallMessage {
+            tool_call_doc: &open_call,
+            tool_call_id: "agent-new-call",
+            request_id: "priority-head",
+            content: name,
+            queue: None,
+        },
     )
     .await;
     let caller_did = caller.agent_did().to_owned();
@@ -448,30 +452,34 @@ async fn signed_agent_steering_survives_a_forced_mid_turn_crash() {
             .unwrap(),
     )
     .await;
-    let reached = tokio::time::timeout(Duration::from_secs(60), entered.notified()).await;
+    let reached = tokio::time::timeout(STALL_CEILING, entered.notified()).await;
     assert!(reached.is_ok(), "head did not reach the held tool");
     let queued = caller_message(
         &caller,
         &cause,
-        &queue_call,
-        "agent-message-queue",
         worker.agent_did(),
         name,
-        "priority-queued",
-        "queued turn",
-        Some(steering_queue(QueueDelivery::Queue, "priority-head")),
+        ToolCallMessage {
+            tool_call_doc: &queue_call,
+            tool_call_id: "agent-message-queue",
+            request_id: "priority-queued",
+            content: "queued turn",
+            queue: Some(steering_queue(QueueDelivery::Queue, "priority-head")),
+        },
     )
     .await;
     let steer_doc = caller_message(
         &caller,
         &cause,
-        &steer_call,
-        "agent-message-steer",
         worker.agent_did(),
         name,
-        "priority-steer",
-        "steer at tool boundary",
-        Some(steering_queue(QueueDelivery::Steer, "priority-head")),
+        ToolCallMessage {
+            tool_call_doc: &steer_call,
+            tool_call_id: "agent-message-steer",
+            request_id: "priority-steer",
+            content: "steer at tool boundary",
+            queue: Some(steering_queue(QueueDelivery::Steer, "priority-head")),
+        },
     )
     .await;
     const FIELDS: &str = "lifecycle_state failure_reason superseded_by_request_doc_id";
@@ -493,24 +501,15 @@ async fn signed_agent_steering_survives_a_forced_mid_turn_crash() {
             .unwrap(),
     )
     .await;
-    let head_state = wait_for_signed_request_terminal(
-        &worker.agent_access,
-        "priority-head",
-        Duration::from_secs(60),
-    )
-    .await;
+    let head_state = wait_for_signed_request_terminal(&worker.agent_access, "priority-head").await;
     let head_row = worker.request_row(&active, FIELDS).await;
     assert_eq!(head_state, "failed", "head={head_row}");
     assert_eq!(
         head_row["failure_reason"], "execution lease expired",
         "head={head_row}"
     );
-    let queued_state = wait_for_signed_request_terminal(
-        &worker.agent_access,
-        "priority-queued",
-        Duration::from_secs(60),
-    )
-    .await;
+    let queued_state =
+        wait_for_signed_request_terminal(&worker.agent_access, "priority-queued").await;
     let queued_row = worker.request_row(&queued, FIELDS).await;
     assert_eq!(
         queued_state, "completed",

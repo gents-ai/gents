@@ -13,6 +13,8 @@ use std::time::Duration;
 
 #[cfg(test)]
 mod backup_conformance;
+#[cfg(all(test, target_os = "linux"))]
+mod copy_executable_tests;
 mod execute;
 mod files;
 mod notices;
@@ -499,8 +501,13 @@ pub(crate) async fn finish_repair_backup(backup: Option<&RepairBackup>) -> Resul
     let Some(backup) = backup.cloned() else {
         return Ok(());
     };
+    let store = gents_store::local::home::acquire_home_store(
+        &backup.config.home,
+        gents_store::local::home::STORE_RELEASE_WAIT,
+    )
+    .await?;
     tokio::task::spawn_blocking(move || {
-        let _store = gents_store::local::home::lock_home_store(&backup.config.home)?;
+        let _store = store;
         files::backup_snapshot(
             &backup.config.home,
             &backup.definition,
@@ -612,14 +619,24 @@ pub(crate) async fn restore_repair_service(
         ),
         None => None,
     };
+    let mut locks = vec![
+        gents_store::local::home::acquire_home_store(
+            &backup.config.home,
+            gents_store::local::home::STORE_RELEASE_WAIT,
+        )
+        .await?,
+    ];
+    if let Some(home) = other_home {
+        locks.push(
+            gents_store::local::home::acquire_home_store(
+                &home,
+                gents_store::local::home::STORE_RELEASE_WAIT,
+            )
+            .await?,
+        );
+    }
     let locked = backup.clone();
     let store_locks = tokio::task::spawn_blocking(move || -> Result<_> {
-        let mut locks = vec![gents_store::local::home::lock_home_store(
-            &locked.config.home,
-        )?];
-        if let Some(home) = other_home {
-            locks.push(gents_store::local::home::lock_home_store(&home)?);
-        }
         let saved_init = locked.directory.join("before-stop/init.json");
         if saved_init.is_file() {
             anyhow::ensure!(
@@ -790,14 +807,19 @@ pub fn stage_repair_executable(
         if target.exists() && files::digest(&target)? == digest {
             return Ok(target);
         }
-        let staged = tempfile::NamedTempFile::new_in(&directory)?;
-        files::copy_executable(source, staged.path())?;
+        // A directory rather than a NamedTempFile: its open descriptor would
+        // be a writer of the executable (see `files::copy_executable`).
+        let staging = tempfile::Builder::new()
+            .prefix(".staging-")
+            .tempdir_in(&directory)?;
+        let staged = staging.path().join("gents");
+        files::copy_executable(source, &staged)?;
         anyhow::ensure!(
-            files::digest(staged.path())? == digest,
+            files::digest(&staged)? == digest,
             "repair source changed while staging"
         );
-        files::validate_native_executable(staged.path())?;
-        staged.persist(&target)?;
+        files::validate_native_executable(&staged)?;
+        std::fs::rename(&staged, &target)?;
         std::fs::File::open(&directory)?.sync_all()?;
         Ok(target)
     })()

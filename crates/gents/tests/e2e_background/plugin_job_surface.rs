@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use gents_protocol::job::JobResultRequest;
 use gents_store::identity::NodeIdentity;
 use gents_toolcalls::background::job::job::JobState;
@@ -14,6 +12,7 @@ use super::plugin_job_support::{
 };
 use crate::support::streaming_backend::{StreamPlan, StreamResponse};
 use crate::support::test_db;
+use gents_store::test_support::STALL_CEILING;
 
 const TOOL_CALL: &str = "job-s";
 const CHILD_PROMPT: &str = "surface child a";
@@ -54,13 +53,7 @@ async fn completed_harness(name: &str, value: Value) -> (JobHarness, String) {
         )],
     )
     .await;
-    wait_job(
-        &h,
-        TOOL_CALL,
-        |view| view.state == JobState::Completed,
-        Duration::from_secs(30),
-    )
-    .await;
+    wait_job(&h, TOOL_CALL, |view| view.state == JobState::Completed).await;
     let row = job_row(&h, TOOL_CALL).await;
     (h, row)
 }
@@ -138,7 +131,6 @@ async fn session_texts(h: &JobHarness) -> Vec<String> {
 async fn notification(h: &JobHarness) -> String {
     use crate::support::snapshots::SnapshotReader;
     let marker = format!("<tool-completion tool_call_id=\"{TOOL_CALL}\"");
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     let mut changes = h
         .actors
         .fixture
@@ -153,9 +145,11 @@ async fn notification(h: &JobHarness) -> String {
         {
             return text;
         }
-        tokio::time::timeout_at(deadline, changes.recv())
+        tokio::time::timeout(STALL_CEILING, changes.recv())
             .await
-            .unwrap_or_else(|_| panic!("no completion notification for {TOOL_CALL}"));
+            .unwrap_or_else(|_| {
+                panic!("no completion notification for {TOOL_CALL}; AgentMessage stalled for {STALL_CEILING:?}")
+            });
     }
 }
 

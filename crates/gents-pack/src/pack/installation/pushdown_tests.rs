@@ -78,17 +78,21 @@ async fn document_install_records_portable_source_and_history() {
     )
     .unwrap();
     let mut prepared = prepare_document_pack_install(
-        &access,
-        &owner,
+        &crate::pack::InstallTarget {
+            access: &access,
+            owner: &owner,
+            plugin_home: None,
+        },
         archive.manifest(),
         &config,
-        &BTreeMap::new(),
-        &[],
-        InstalledVia::Operator,
-        None,
         Some(&archive),
-        &|_| None,
-        &Default::default(),
+        &crate::pack::PackGraphInputs {
+            dependencies: &[],
+            requested: &BTreeMap::new(),
+            environment: &|_| None,
+            overrides: &Default::default(),
+        },
+        InstalledVia::Operator,
     )
     .await
     .unwrap();
@@ -97,15 +101,19 @@ async fn document_install_records_portable_source_and_history() {
     for source in [local.clone(), PackSource::Store] {
         prepared.sources.insert(coordinate.into(), source);
         install_prepared_document_graph(
-            &access,
-            &owner,
+            &crate::pack::InstallTarget {
+                access: &access,
+                owner: &owner,
+                plugin_home: None,
+            },
             &archive,
             &prepared,
-            DriftPolicy::Refuse,
-            None,
+            crate::pack::DocumentGraphPolicy {
+                drift: DriftPolicy::Refuse,
+                profiles: &gents_inference::resolved::ProviderProfilePolicy,
+            },
             false,
             true,
-            &gents_inference::resolved::ProviderProfilePolicy,
         )
         .await
         .unwrap();
@@ -185,15 +193,19 @@ async fn installed_baseline_after_local_pack_install() -> Vec<String> {
         .unwrap();
     let requested = BTreeMap::from([("worker".to_owned(), "profile".to_owned())]);
     let prepared = crate::pack::prepare_document_pack_archive_with_runtime(
-        &local,
-        runtime.did(),
+        &crate::pack::InstallTarget {
+            access: &local,
+            owner: runtime.did(),
+            plugin_home: None,
+        },
         &archive,
-        &requested,
-        &[],
-        None,
-        &|_| None,
+        &crate::pack::PackGraphInputs {
+            dependencies: &[],
+            requested: &requested,
+            environment: &|_| None,
+            overrides: &Default::default(),
+        },
         runtime.as_ref(),
-        &Default::default(),
     )
     .await
     .unwrap();
@@ -221,15 +233,19 @@ async fn installed_baseline_after_local_pack_install() -> Vec<String> {
     };
     assert!(held(db.node.clone(), agent.clone()).await.is_empty());
     crate::pack::install_prepared_document_graph(
-        &user_access,
-        runtime.did(),
+        &crate::pack::InstallTarget {
+            access: &user_access,
+            owner: runtime.did(),
+            plugin_home: None,
+        },
         &archive,
         &prepared,
-        DriftPolicy::Refuse,
-        None,
+        crate::pack::DocumentGraphPolicy {
+            drift: DriftPolicy::Refuse,
+            profiles: &gents_inference::resolved::ProviderProfilePolicy,
+        },
         false,
         true,
-        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -300,28 +316,36 @@ async fn pack_install_applies_exactly_the_declared_placement_readers() {
         move |name: &str| (name == "PLACEMENT_FIXTURE_ROOT").then(|| host_path.clone());
     let install = || async {
         let prepared = crate::pack::prepare_document_pack_archive_with_runtime(
-            &local,
-            runtime.did(),
+            &crate::pack::InstallTarget {
+                access: &local,
+                owner: runtime.did(),
+                plugin_home: None,
+            },
             &archive,
-            &requested,
-            &[],
-            None,
-            &environment,
+            &crate::pack::PackGraphInputs {
+                dependencies: &[],
+                requested: &requested,
+                environment: &environment,
+                overrides: &Default::default(),
+            },
             runtime.as_ref(),
-            &Default::default(),
         )
         .await
         .unwrap();
         crate::pack::install_prepared_document_graph(
-            &user_access,
-            runtime.did(),
+            &crate::pack::InstallTarget {
+                access: &user_access,
+                owner: runtime.did(),
+                plugin_home: None,
+            },
             &archive,
             &prepared,
-            DriftPolicy::Refuse,
-            None,
+            crate::pack::DocumentGraphPolicy {
+                drift: DriftPolicy::Refuse,
+                profiles: &gents_inference::resolved::ProviderProfilePolicy,
+            },
             false,
             true,
-            &gents_inference::resolved::ProviderProfilePolicy,
         )
         .await
         .unwrap();

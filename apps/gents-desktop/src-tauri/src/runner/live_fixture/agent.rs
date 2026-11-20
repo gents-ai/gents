@@ -4,9 +4,9 @@ mod inference;
 use anyhow::{Context, Result};
 use gents::runtime::embedded::EmbeddedHome;
 use gents::{DocumentRuntimeOptions, Gents};
-use gents_desktop_core::client::PrincipalIdentity;
 use gents_documents::{default_inference_profile_id_for_agent, InferenceBackend};
 use gents_protocol::row::{decode_node_readiness_snapshot, NodeReadinessRow};
+use gents_store::client_journal::principal_identity::PrincipalIdentity;
 use gents_tools::{surface::cli_tool, surface::ToolCeiling};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -108,7 +108,7 @@ async fn seed_live_agent_documents(
     use gents_documents::{
         load_inference_backend_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
-    use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
+    use gents_store::config_client::ConfigAccess;
     use serde_json::json;
     let inference = inference::LiveInferenceSettings::from_env()?;
     let tool_root = tool_root
@@ -135,13 +135,13 @@ async fn seed_live_agent_documents(
         config_actor.private_key_bytes(),
     )?;
     let access = ConfigAccess::Graphql(
-        GraphqlEndpoint::as_principal(
-            home.graphql_endpoint()
-                .context("runtime HTTP endpoint missing")?,
-            config_actor_did,
-        )
-        .with_client_signing_capability(capability)?
-        .with_client_signed_agent_creates(),
+        gents_store::config_client::runtime_endpoints::RuntimeEndpoints::new(capability)
+            .endpoint(
+                node_did,
+                home.graphql_endpoint()
+                    .context("runtime HTTP endpoint missing")?,
+            )?
+            .with_client_signed_agent_creates(),
     );
     let node_input =
         json!({"node_did":node_did,"display_name":agent_name,"created_by":config_actor_did});
@@ -322,6 +322,8 @@ fn live_backend_candidate(
         claude_platform: existing.and_then(|value| value.claude_platform),
         connect_timeout_secs: None,
         discovery_timeout_secs: None,
+        client_version: None,
+        request_timeout_secs: None,
         max_concurrent: Some(2),
         max_queue_depth: Some(100),
         enabled: true,

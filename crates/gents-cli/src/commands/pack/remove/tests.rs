@@ -626,7 +626,7 @@ async fn referenced_plugin_removal_refuses_before_changing_pack_or_store_records
             &owner,
             home.path(),
             &request,
-            gents_service::home_state::load_held_user_identity,
+            gents_host::http::pack_wire_client::SIGNERS,
         )
         .await
         .unwrap();
@@ -673,7 +673,7 @@ async fn referenced_plugin_removal_refuses_before_changing_pack_or_store_records
             &owner,
             home.path(),
             &request,
-            gents_service::home_state::load_held_user_identity,
+            gents_host::http::pack_wire_client::SIGNERS,
         )
         .await
         .unwrap();
@@ -746,7 +746,7 @@ async fn wiring_holds_store_lock_through_pin_commit() {
                         &owner,
                         &path,
                         &request,
-                        gents_service::home_state::load_held_user_identity,
+                        gents_host::http::pack_wire_client::SIGNERS,
                     )
                     .await
                 }
@@ -764,8 +764,10 @@ async fn wiring_holds_store_lock_through_pin_commit() {
             home.path(),
             &archive,
             false,
-            Some(&owner),
-            &std::collections::BTreeMap::new(),
+            gents_pack::pack::plugin_lifecycle::PluginSlotBindings {
+                owner: Some(&owner),
+                bindings: &std::collections::BTreeMap::new(),
+            },
             gents_pack::pack::InstalledVia::Operator,
             gents_pack::pack::PackSource::Local { file_name: None },
             move |identity, _| async move {
@@ -956,7 +958,7 @@ async fn remote_wire_refuses_new_pin_before_http_access_but_allows_preview_and_r
 }
 
 #[tokio::test]
-async fn wire_reports_unconfirmed_when_the_served_endpoint_is_unreachable() {
+async fn wire_through_a_served_endpoint_reads_its_plan_before_reaching_the_runtime() {
     let home = initialized_home().await;
     let init = gents_service::home_state::read_init_config(home.path())
         .unwrap()
@@ -999,11 +1001,11 @@ async fn wire_reports_unconfirmed_when_the_served_endpoint_is_unreachable() {
         &init.node_did,
         home.path(),
         &request,
-        gents_service::home_state::load_held_user_identity,
+        gents_host::http::pack_wire_client::SIGNERS,
     )
     .await
     .unwrap_err();
-    assert!(format!("{error:#}").contains("outcome is unconfirmed"));
+    assert!(format!("{error:#}").contains("acme/missing is not installed"));
 }
 
 #[tokio::test]
@@ -1051,7 +1053,7 @@ async fn removal_holds_plugin_lock_after_reference_check_until_deletion() {
                 &owner,
                 home.path(),
                 &request,
-                gents_service::home_state::load_held_user_identity,
+                gents_host::http::pack_wire_client::SIGNERS,
             )
             .await;
             access

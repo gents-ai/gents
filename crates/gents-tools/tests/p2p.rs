@@ -8,7 +8,7 @@ async fn call(tool: &P2pTool, value: Value) -> Value {
     let output = Tool::call(
         tool,
         serde_json::from_value(value).unwrap(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .unwrap();
@@ -50,7 +50,7 @@ async fn node_requested_enrollment_is_approved_by_the_offering_node() {
     assert!(Tool::call(
         &server_readonly,
         serde_json::from_value(json!({"action":"enrollment_offer"})).unwrap(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .unwrap_err()
@@ -60,7 +60,7 @@ async fn node_requested_enrollment_is_approved_by_the_offering_node() {
         &server_readonly,
         serde_json::from_value(json!({"action":"enrollment_renewal_policy", "auto_renew":true}))
             .unwrap(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .unwrap_err()
@@ -90,7 +90,7 @@ async fn node_requested_enrollment_is_approved_by_the_offering_node() {
     assert!(Tool::call(
         &readonly,
         serde_json::from_value(request.clone()).unwrap(),
-        &gents_loop::tool::ToolCallEnvelope::ambient()
+        &gents_loop::tool::ToolCallEnvelope::default()
     )
     .await
     .unwrap_err()
@@ -129,7 +129,7 @@ async fn node_requested_enrollment_is_approved_by_the_offering_node() {
                 "action": "enrollment_approve", "request_id": request_id, "lease_seconds": invalid
             }))
             .unwrap(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap_err()
@@ -141,7 +141,7 @@ async fn node_requested_enrollment_is_approved_by_the_offering_node() {
     let refused = Tool::call(
         &server_tool,
         serde_json::from_value(approve).unwrap(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .unwrap_err()
@@ -186,7 +186,7 @@ async fn node_requested_enrollment_is_approved_by_the_offering_node() {
         serde_json::from_value(json!({"action":"pairings_preview","peer_id":candidate_peer,
             "peer_did":candidate.node_identity.did(),"collections":["DeploymentNote"]}))
         .unwrap(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .unwrap_err()
@@ -236,7 +236,7 @@ async fn p2p_administration_admits_as_the_lean_model() {
         let outcome = match Tool::call(
             &tool,
             serde_json::from_value(arguments).unwrap(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         {
@@ -270,7 +270,7 @@ async fn help_scopes_pairing_to_explicit_application_opt_in() {
         let error = Tool::call(
             &tool,
             serde_json::from_value(json!({"argv":argv})).unwrap(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap_err()
@@ -281,7 +281,7 @@ async fn help_scopes_pairing_to_explicit_application_opt_in() {
         let unknown = Tool::call(
             &tool,
             serde_json::from_value(json!({"argv":argv})).unwrap(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap_err()
@@ -377,7 +377,7 @@ async fn typed_actions_are_the_closed_schema_and_argv_remains_accepted() {
         let error = Tool::call(
             &tool,
             serde_json::from_value(args.clone()).unwrap(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap_err()
@@ -387,6 +387,7 @@ async fn typed_actions_are_the_closed_schema_and_argv_remains_accepted() {
             error.contains("next call: p2p {\"action\":\"help\""),
             "{args}: {error}"
         );
+        assert_eq!(error.matches("next call:").count(), 1, "{args}: {error}");
     }
 }
 
@@ -430,7 +431,7 @@ async fn deny_is_signed_and_a_shared_offer_names_the_single_use_rule() {
                 json!({"action":"enrollment_offer","valid_for_secs":valid_for_secs}),
             )
             .unwrap(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap_err()
@@ -494,7 +495,7 @@ async fn deny_is_signed_and_a_shared_offer_names_the_single_use_rule() {
             &server_tool,
             serde_json::from_value(json!({"action":"enrollment_approve","request_id":ids[1]}))
                 .unwrap(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap_err()

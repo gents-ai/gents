@@ -1,0 +1,481 @@
+use anyhow::{Context, Result};
+use gents_store::config_client::ConfigAccess;
+
+use super::ClientRuntime;
+use gents_store::client_journal::records::publication;
+
+impl ClientRuntime {
+    pub async fn save_agent(
+        &self,
+        row: &gents_documents::Agent,
+        context_patch: Option<&gents_protocol::operations::agent::AgentContextPatch>,
+    ) -> Result<()> {
+        let access = self.operator_access(&row.node_did)?;
+        let result = async {
+            publication::ensure_recovered(
+                &self.node,
+                &access,
+                self.node_identity.did(),
+                &row.node_did,
+                &row.agent_did,
+            )
+            .await?;
+            let observer = publication::Observer::new(
+                self.node.clone(),
+                self.node_identity.did().to_owned(),
+                vec![(row.agent_did.clone(), row.node_did.clone())],
+            );
+            gents::client_operations::upsert_agent_with_publication_on(
+                &access,
+                row,
+                context_patch,
+                observer,
+            )
+            .await
+        }
+        .await;
+        match result {
+            Ok(()) => {
+                self.observe_committed_config(&row.node_did, "save agent")
+                    .await;
+                self.clear_mutation_error();
+                tracing::info!(
+                    target: "gents_desktop_core::writes",
+                    doc_type = "agent",
+                    row_id = %row.agent_did,
+                    "desktop write saved"
+                );
+                Ok(())
+            }
+            Err(error) => Err(self.record_mutation_error("save agent", error)),
+        }
+    }
+
+    pub async fn patch_config_components(
+        &self,
+        node_did: &str,
+        patches: &[(
+            gents_documents::patch::SelfConfigTarget,
+            String,
+            gents_documents::patch::SelfConfigPatch,
+        )],
+    ) -> Result<()> {
+        let access = self.operator_access(node_did)?;
+        match gents::client_operations::patch_config_components_on(&access, node_did, patches).await
+        {
+            Ok(()) => {
+                self.observe_committed_config(node_did, "patch config components")
+                    .await;
+                self.clear_mutation_error();
+                Ok(())
+            }
+            Err(error) => Err(self.record_mutation_error("patch config components", error)),
+        }
+    }
+
+    pub async fn read_config_editor(
+        &self,
+        node_did: &str,
+        target: gents_documents::patch::SelfConfigTarget,
+        id: &str,
+    ) -> Result<gents::client_operations::ConfigEditorDocument> {
+        let access = self
+            .operator_graphql(node_did)
+            .map(ConfigAccess::Graphql)
+            .context("Connect this local runtime before editing its configuration.")?;
+        gents::client_operations::read_config_editor_on(&access, node_did, target, id).await
+    }
+
+    pub async fn read_backend_authentication(
+        &self,
+        node_did: &str,
+        id: &str,
+    ) -> Result<(
+        gents::client_operations::ConfigEditorRevision,
+        gents_documents::InferenceBackend,
+    )> {
+        let access = self
+            .operator_graphql(node_did)
+            .map(ConfigAccess::Graphql)
+            .context("Connect this local runtime before changing authentication.")?;
+        gents::client_operations::read_backend_authentication_on(&access, node_did, id).await
+    }
+
+    pub async fn save_backend_authentication(
+        &self,
+        node_did: &str,
+        id: &str,
+        revision: &gents::client_operations::ConfigEditorRevision,
+        auth: &gents_documents::BackendAuth,
+    ) -> Result<()> {
+        let access = self
+            .operator_graphql(node_did)
+            .map(ConfigAccess::Graphql)
+            .context("Connect this local runtime before changing authentication.")?;
+        gents::client_operations::save_backend_authentication_on(
+            &access, node_did, id, revision, auth,
+        )
+        .await?;
+        self.observe_committed_config(node_did, "save backend authentication")
+            .await;
+        Ok(())
+    }
+
+    pub async fn save_config_editor(
+        &self,
+        node_did: &str,
+        target: gents_documents::patch::SelfConfigTarget,
+        id: &str,
+        revision: &gents::client_operations::ConfigEditorRevision,
+        content: &str,
+    ) -> Result<Option<gents::client_operations::ConfigEditorDocument>> {
+        let access = self
+            .operator_graphql(node_did)
+            .map(ConfigAccess::Graphql)
+            .context("Connect this local runtime before editing its configuration.")?;
+        let saved = gents::client_operations::save_config_editor_on(
+            &access, node_did, target, id, revision, content,
+        )
+        .await?;
+        self.observe_committed_config(node_did, "save config editor")
+            .await;
+        Ok(saved)
+    }
+
+    pub async fn apply_config_components(
+        &self,
+        document: &gents_documents::PackConfig,
+    ) -> Result<()> {
+        let access = self.operator_access(&document.node.node_did)?;
+        let result = async {
+            for agent in &document.agents {
+                publication::ensure_recovered(
+                    &self.node,
+                    &access,
+                    self.node_identity.did(),
+                    &agent.node_did,
+                    &agent.agent_did,
+                )
+                .await?;
+            }
+            let bindings = document
+                .agents
+                .iter()
+                .map(|agent| (agent.agent_did.clone(), agent.node_did.clone()))
+                .collect();
+            let observer = publication::Observer::new(
+                self.node.clone(),
+                self.node_identity.did().to_owned(),
+                bindings,
+            );
+            gents::client_operations::apply_config_components_with_publication_on(
+                &access, document, observer,
+            )
+            .await
+        }
+        .await;
+        match result {
+            Ok(()) => {
+                self.observe_committed_config(&document.node.node_did, "apply config components")
+                    .await;
+                self.clear_mutation_error();
+                Ok(())
+            }
+            Err(error) => Err(self.record_mutation_error("apply config components", error)),
+        }
+    }
+
+    pub async fn save_node(&self, row: &gents_documents::Node) -> Result<()> {
+        let access = self.operator_access(&row.node_did)?;
+        let result = gents::client_operations::upsert_node_on(&access, row).await;
+        match result {
+            Ok(()) => {
+                self.observe_committed_config(&row.node_did, "save node")
+                    .await;
+                self.clear_mutation_error();
+                tracing::info!(
+                    target: "gents_desktop_core::writes",
+                    doc_type = "node",
+                    row_id = %row.node_did,
+                    "desktop write saved"
+                );
+                Ok(())
+            }
+            Err(error) => Err(self.record_mutation_error("save node", error)),
+        }
+    }
+
+    pub async fn set_default_agent(&self, node_did: &str, agent_did: &str) -> Result<()> {
+        let access = self.operator_access(node_did)?;
+        match gents::client_operations::set_default_agent_on(&access, node_did, agent_did).await {
+            Ok(()) => {
+                self.observe_committed_config(node_did, "set default agent")
+                    .await;
+                self.clear_mutation_error();
+                Ok(())
+            }
+            Err(error) => Err(self.record_mutation_error("set default agent", error)),
+        }
+    }
+
+    pub async fn save_backend(&self, row: &gents_documents::InferenceBackend) -> Result<()> {
+        let access = self.operator_access(&row.node_did)?;
+        match gents::client_operations::upsert_inference_backend_on(&access, row).await {
+            Ok(()) => {
+                self.observe_committed_config(&row.node_did, "save backend")
+                    .await;
+                self.clear_mutation_error();
+                tracing::info!(
+                    target: "gents_desktop_core::writes",
+                    doc_type = "backend",
+                    row_id = %row.backend_id,
+                    "desktop write saved"
+                );
+                Ok(())
+            }
+            Err(error) => Err(self.record_mutation_error("save backend", error)),
+        }
+    }
+
+    /// Switches a subscription backend between one account and the account
+    /// pool. `expected` is the revision the caller last read, when it holds one.
+    pub async fn set_backend_rotation(
+        &self,
+        node_did: &str,
+        id: &str,
+        expected: Option<&gents::client_operations::ConfigEditorRevision>,
+        rotation: gents_inference::backends::rotation::BackendRotation,
+    ) -> Result<gents_inference::backends::rotation::RotationOutcome> {
+        let access = self.operator_access(node_did)?;
+        match gents::client_operations::set_backend_rotation_on(
+            &access, node_did, id, expected, rotation,
+        )
+        .await
+        {
+            Ok(outcome) => {
+                self.observe_committed_config(node_did, "set backend rotation")
+                    .await;
+                self.clear_mutation_error();
+                tracing::info!(
+                    target: "gents_desktop_core::writes",
+                    doc_type = "backend",
+                    row_id = %id,
+                    "desktop write saved"
+                );
+                Ok(outcome)
+            }
+            Err(error) => Err(self.record_mutation_error("set backend rotation", error)),
+        }
+    }
+
+    pub async fn save_tools(&self, row: &gents_documents::Tools) -> Result<()> {
+        let access = self.operator_access(&row.node_did)?;
+        let result = gents::client_operations::upsert_tools_on(&access, row).await;
+        match result {
+            Ok(()) => {
+                self.observe_committed_config(&row.node_did, "save tools")
+                    .await;
+                self.clear_mutation_error();
+                tracing::info!(
+                    target: "gents_desktop_core::writes",
+                    doc_type = "tools",
+                    row_id = %row.tools_id,
+                    "desktop write saved"
+                );
+                Ok(())
+            }
+            Err(error) => Err(self.record_mutation_error("save tools", error)),
+        }
+    }
+
+    pub async fn save_tool_service_registry(
+        &self,
+        row: &gents_documents::ToolServiceRegistry,
+    ) -> Result<()> {
+        let access = self.operator_access(&row.node_did)?;
+        match gents::client_operations::upsert_tool_service_registry_on(&access, row).await {
+            Ok(()) => {
+                self.observe_committed_config(&row.node_did, "save tool service registry")
+                    .await;
+                self.clear_mutation_error();
+                tracing::info!(
+                    target: "gents_desktop_core::writes",
+                    doc_type = "tool_service_registry",
+                    row_id = %row.service_id,
+                    "desktop write saved"
+                );
+                Ok(())
+            }
+            Err(error) => Err(self.record_mutation_error("save tool service registry", error)),
+        }
+    }
+
+    pub async fn select_agent_model(
+        &self,
+        node_did: &str,
+        agent_did: &str,
+        backend_id: &str,
+        model_name: &str,
+        reasoning_effort: Option<gents_documents::inference_defaults::ReasoningEffort>,
+        service_tier: Option<gents_inference::resolved::ServiceTier>,
+    ) -> Result<gents_documents::InferenceProfile> {
+        let access = self.operator_access(node_did)?;
+        let saved = gents::client_operations::select_agent_model_on(
+            &access,
+            node_did,
+            agent_did,
+            backend_id,
+            model_name,
+            reasoning_effort,
+            service_tier,
+        )
+        .await?;
+        self.observe_committed_config(node_did, "select agent model")
+            .await;
+        Ok(saved)
+    }
+
+    pub async fn save_inference_profile(
+        &self,
+        row: &gents_documents::InferenceProfile,
+    ) -> Result<()> {
+        let access = self.operator_access(&row.node_did)?;
+        match gents::client_operations::upsert_inference_profile_on(&access, row).await {
+            Ok(()) => {
+                self.observe_committed_config(&row.node_did, "save inference profile")
+                    .await;
+                self.clear_mutation_error();
+                tracing::info!(
+                    target: "gents_desktop_core::writes",
+                    doc_type = "inference_profile",
+                    row_id = %row.profile_id,
+                    "desktop write saved"
+                );
+                Ok(())
+            }
+            Err(error) => Err(self.record_mutation_error("save inference profile", error)),
+        }
+    }
+
+    /// A disconnected runtime must not stage its reviewer in the client replica.
+    /// Preparing this Task also requires an already available signer; it never
+    /// unlocks a runtime identity as a side effect of selecting permissions.
+    pub async fn prepare_access_review_task(
+        &self,
+        node: &str,
+        agent: &str,
+        preferred: Option<&str>,
+    ) -> Result<gents_tools::plugin::approval::workspace::ReviewTaskSelection> {
+        let access = self.operator_access(node)?;
+        gents::client_operations::prepare_access_review_task_on(&access, node, agent, preferred)
+            .await
+    }
+
+    pub async fn save_task(&self, row: &gents_documents::Task) -> Result<()> {
+        let access = self.operator_access(&row.node_did)?;
+        match gents::client_operations::upsert_task_on(&access, row).await {
+            Ok(()) => {
+                self.observe_committed_config(&row.node_did, "save task")
+                    .await;
+                self.clear_mutation_error();
+                tracing::info!(
+                    target: "gents_desktop_core::writes",
+                    doc_type = "task",
+                    row_id = %row.task_id,
+                    "desktop write saved"
+                );
+                Ok(())
+            }
+            Err(error) => Err(self.record_mutation_error("save task", error)),
+        }
+    }
+
+    pub async fn save_skill(&self, row: &gents_documents::SkillDocument) -> Result<()> {
+        let access = self.operator_access(&row.node_did)?;
+        match gents::client_operations::upsert_skill_on(&access, row).await {
+            Ok(()) => {
+                self.observe_committed_config(&row.node_did, "save skill")
+                    .await;
+                self.clear_mutation_error();
+                tracing::info!(
+                    target: "gents_desktop_core::writes",
+                    doc_type = "skill",
+                    row_id = %row.skill_id,
+                    "desktop write saved"
+                );
+                Ok(())
+            }
+            Err(error) => Err(self.record_mutation_error("save skill", error)),
+        }
+    }
+
+    pub async fn save_schedule(&self, row: &gents_documents::Schedule) -> Result<()> {
+        let access = self.operator_access(&row.node_did)?;
+        match gents::client_operations::upsert_schedule_on(&access, row).await {
+            Ok(()) => {
+                self.observe_committed_config(&row.node_did, "save schedule")
+                    .await;
+                self.clear_mutation_error();
+                tracing::info!(
+                    target: "gents_desktop_core::writes",
+                    doc_type = "schedule",
+                    row_id = %row.schedule_id,
+                    "desktop write saved"
+                );
+                Ok(())
+            }
+            Err(error) => Err(self.record_mutation_error("save schedule", error)),
+        }
+    }
+
+    pub async fn save_trigger(&self, row: &gents_documents::Trigger) -> Result<()> {
+        let access = self.operator_access(&row.node_did)?;
+        match gents::client_operations::upsert_trigger_on(&access, row).await {
+            Ok(()) => {
+                self.observe_committed_config(&row.node_did, "save trigger")
+                    .await;
+                self.clear_mutation_error();
+                tracing::info!(
+                    target: "gents_desktop_core::writes",
+                    doc_type = "trigger",
+                    row_id = %row.trigger_id,
+                    "desktop write saved"
+                );
+                Ok(())
+            }
+            Err(error) => Err(self.record_mutation_error("save trigger", error)),
+        }
+    }
+
+    pub async fn save_event_source(&self, document: &gents_documents::EventSource) -> Result<()> {
+        let access = self.operator_access(&document.node_did)?;
+        match gents::client_operations::upsert_event_source_on(&access, document).await {
+            Ok(()) => {
+                self.observe_committed_config(&document.node_did, "save event source")
+                    .await;
+                self.clear_mutation_error();
+                Ok(())
+            }
+            Err(error) => Err(self.record_mutation_error("save event source", error)),
+        }
+    }
+
+    pub async fn delete_event_source(&self, event_source_id: &str, node_did: &str) -> Result<()> {
+        let access = self.operator_access(node_did)?;
+        match gents::client_operations::delete_event_source_on(&access, node_did, event_source_id)
+            .await
+        {
+            Ok(0) => Err(self.record_mutation_error(
+                "delete event source",
+                anyhow::anyhow!("no EventSource document with event_source_id {event_source_id:?}"),
+            )),
+            Ok(_) => {
+                self.observe_committed_config(node_did, "delete event source")
+                    .await;
+                self.clear_mutation_error();
+                Ok(())
+            }
+            Err(error) => Err(self.record_mutation_error("delete event source", error)),
+        }
+    }
+}

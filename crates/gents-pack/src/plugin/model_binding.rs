@@ -19,10 +19,10 @@ pub struct ModelBinding {
 }
 
 const DEFAULT_CONNECT_TIMEOUT_SECS: i64 = 10;
-/// Bound one host-side model exchange independently of the guest's remaining
-/// wall-clock budget, so a stalled endpoint cannot occupy its permit for the
-/// entire guest lifetime.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+/// Unset `request_timeout_secs` default. Bounds one host-side model exchange
+/// independently of the guest's remaining wall-clock budget, so a stalled
+/// endpoint cannot occupy its permit for the entire guest lifetime.
+const DEFAULT_REQUEST_TIMEOUT_SECS: i64 = 120;
 
 pub struct ModelEndpoint {
     pub url: String,
@@ -220,6 +220,10 @@ fn endpoint_for_selected(
         .connect_timeout_secs
         .filter(|secs| *secs > 0)
         .unwrap_or(DEFAULT_CONNECT_TIMEOUT_SECS);
+    let request = backend
+        .request_timeout_secs
+        .filter(|secs| *secs > 0)
+        .unwrap_or(DEFAULT_REQUEST_TIMEOUT_SECS);
     Ok(ModelEndpoint {
         url: format!(
             "{}/chat/completions",
@@ -230,10 +234,14 @@ fn endpoint_for_selected(
         max_concurrent,
         backend_key: format!("{}/{}", backend.node_did, backend.backend_id),
         connect_timeout: Duration::from_secs(connect.unsigned_abs()),
-        request_timeout: REQUEST_TIMEOUT,
+        request_timeout: Duration::from_secs(request.unsigned_abs()),
         max_output_tokens: profile
             .max_output_tokens
             .and_then(|tokens| u64::try_from(tokens).ok()),
         profile_visibility: None,
     })
 }
+
+#[cfg(test)]
+#[path = "model_binding_tests.rs"]
+mod tests;

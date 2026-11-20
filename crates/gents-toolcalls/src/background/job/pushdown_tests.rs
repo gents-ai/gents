@@ -9,11 +9,8 @@ use crate::background::job::recovery::{
 use crate::plugin::job_calls;
 use crate::test_support::plugin_job::*;
 use gents_lean_vocab::families::plugin_job_recoveries::PluginJobRow;
-use gents_lean_vocab::lean_recovery_sweep_cases;
 use gents_protocol::job::{JobControlKind, JobControlOutcome, JobResume, JobState, JobStepOutput};
 use std::collections::{BTreeMap, BTreeSet};
-
-const PLUGIN_JOB_SWEEP_ID: &str = "tool_call_lifecycle_recover_plugin_job_rows";
 
 /// Lean `admitStep` and `settleStep` through the production admission owner:
 /// the refusal code, the admitted row, the state a refused row fails closed
@@ -524,7 +521,6 @@ fn observed_row(row: &RecoveryFacts) -> PluginJobRow {
 /// Lean's measures stay with its own `recovery_regressions`.
 #[tokio::test]
 async fn generated_plugin_job_recovery_cases_drive_redrive_owner() {
-    let mut names = Vec::new();
     for case in gents_lean_vocab::families::plugin_job_recoveries::cases() {
         let name = case.input.name.clone();
         let before = facts_of(&case.input.before);
@@ -547,15 +543,5 @@ async fn generated_plugin_job_recovery_cases_drive_redrive_owner() {
                 ),
             },
         );
-        names.push(name);
     }
-    let sweep_cases = lean_recovery_sweep_cases()
-        .iter()
-        .filter(|case| case.sweep_id == PLUGIN_JOB_SWEEP_ID)
-        .map(|case| case.name.clone())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        sweep_cases, names,
-        "the registered sweep's witnesses are the plugin-job tick rows"
-    );
 }

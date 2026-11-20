@@ -152,10 +152,8 @@ pub async fn install_remote(
     })
     .await??;
     let response = endpoint
-        .authorize(client.post(url))?
-        .json(&body)
-        .send()
-        .await
+        .send_resolving(|endpoint| Ok(endpoint.authorize(client.post(url.clone()))?.json(&body)))
+        .await?
         .context(
             "remote pack install outcome is unconfirmed; inspect the runtime before retrying",
         )?;
@@ -275,6 +273,12 @@ pub async fn install_handler(
         Ok(Err(error)) => return refused(StatusCode::BAD_REQUEST, error),
         Err(error) => return refused(StatusCode::INTERNAL_SERVER_ERROR, error),
     };
+    if !received.request.wire.is_empty() && !received.request.preview {
+        return refused(
+            StatusCode::BAD_REQUEST,
+            "a remote install carries no wiring; the client wires its plugins after it, signing each write itself",
+        );
+    }
     if received.root.manifest().metadata.kind != PackKind::Documents {
         return refused(
             StatusCode::BAD_REQUEST,
@@ -433,7 +437,7 @@ async fn install_owned(
         grant_authority: request.grant_authority,
         wire: request.wire,
     };
-    let mut result = gents_pack::pack::install_flow::install_documents_pack_resolved(
+    let result = gents_pack::pack::install_flow::install_documents_pack_resolved(
         &access,
         &state.node_did,
         &root,
@@ -444,18 +448,6 @@ async fn install_owned(
     )
     .await
     .map_err(gents_pack::pack::PackChangeError::into_anyhow)?;
-    if !args.wire.is_empty() && !args.preview {
-        result["wired"] = gents_pack::pack::plugin_wire::wire_pack_plugins(
-            &access,
-            &state.node_did,
-            &home,
-            &root,
-            &args.wire,
-            gents_service::home_state::load_held_user_identity,
-        )
-        .await?
-        .into();
-    }
     Ok(result)
 }
 

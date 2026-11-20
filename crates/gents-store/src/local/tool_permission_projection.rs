@@ -261,12 +261,16 @@ impl ToolPermissionProjection {
                 );
                 continue;
             }
-            let baseline = self.source(&agent_doc, "", agent, "agent-baseline");
-            for permission in crate::identity::GrantSet::AgentBaseline.permissions() {
-                desired
-                    .entry(permission.as_str())
-                    .or_default()
-                    .insert(baseline.clone(), agent.to_owned());
+            for set in crate::identity::GrantSet::for_recipient(crate::identity::Recipient::Agent)
+                .projected
+            {
+                let source = self.source(&agent_doc, "", agent, set.name());
+                for permission in set.permissions() {
+                    desired
+                        .entry(permission.as_str())
+                        .or_default()
+                        .insert(source.clone(), agent.to_owned());
+                }
             }
             // The baseline follows the live Agent alone (Lean
             // `Identity.GrantSets.baselineWanted`); a Context is optional.

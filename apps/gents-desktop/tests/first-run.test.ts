@@ -40,23 +40,18 @@ describe("first-run inference gate", () => {
   });
 
   it("treats only a persisted non-local enrollment as a saved remote setup", () => {
-    const saved = [{ ...deployment, source: "enrollment", local: false }];
+    const saved = [{ ...deployment, local: false }];
     expect(
       hasSavedRemote({
-        bootstrap: { ...bootstrap, initNodeDid: null, savedPeers: saved },
+        bootstrap: { ...bootstrap, initNodeDid: null, savedRuntimes: saved },
       }),
     ).toBe(true);
     expect(
       hasSavedRemote({
-        bootstrap: { ...bootstrap, initNodeDid: deployment.nodeDid, savedPeers: saved },
-      }),
-    ).toBe(false);
-    expect(
-      hasSavedRemote({
         bootstrap: {
           ...bootstrap,
-          initNodeDid: null,
-          savedPeers: [{ ...deployment, source: "paired-remote", local: false }],
+          initNodeDid: deployment.nodeDid,
+          savedRuntimes: saved,
         },
       }),
     ).toBe(false);
@@ -65,7 +60,16 @@ describe("first-run inference gate", () => {
         bootstrap: {
           ...bootstrap,
           initNodeDid: null,
-          savedPeers: [{ ...deployment, source: "enrollment", local: true }],
+          savedRuntimes: [],
+        },
+      }),
+    ).toBe(false);
+    expect(
+      hasSavedRemote({
+        bootstrap: {
+          ...bootstrap,
+          initNodeDid: null,
+          savedRuntimes: [{ ...deployment, local: true }],
         },
       }),
     ).toBe(false);
@@ -79,7 +83,7 @@ describe("first-run inference gate", () => {
   });
 
   it("recognizes the initialized local node after background enrollment changes its route source", () => {
-    const paired = { ...deployment, source: "enrollment" };
+    const paired = { ...deployment, local: false };
     expect(isLocalNode(paired, deployment.nodeDid)).toBe(true);
     expect(isLocalNode(paired, "did:another-home")).toBe(false);
     expect(
@@ -167,8 +171,8 @@ describe("first-run inference gate", () => {
 });
 
 describe("the node first-run setup configured", () => {
-  const remote = { ...deployment, nodeDid: "did:key:remote", source: "enrollment" };
-  const home = { ...deployment, nodeDid: "did:key:home", source: "enrollment" };
+  const remote = { ...deployment, nodeDid: "did:key:remote", local: false };
+  const home = { ...deployment, nodeDid: "did:key:home", local: false };
   const read = (deployments: (typeof deployment)[]) =>
     ({
       bootstrap: { ...bootstrap, initNodeDid: "did:key:home" },

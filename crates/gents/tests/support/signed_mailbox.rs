@@ -1,7 +1,7 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::Context;
+
 use gents_documents::apply_desired_state_plan;
 use gents_documents::mailbox_write_decl::canonical_mailbox_write_decl;
 use gents_documents::DatastoreToolSurfaceDocument;
@@ -74,10 +74,6 @@ impl SignedMailboxTurn {
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "fixture binds one signed request to its provider script"
-)]
 pub async fn prepare_signed_mailbox_turn(
     db: &TestDb,
     backend_id: &str,
@@ -86,8 +82,6 @@ pub async fn prepare_signed_mailbox_turn(
     session_id: &str,
     prompt: &str,
     chunks: Vec<StreamChunk>,
-    child_plans: Vec<StreamPlan>,
-    live_target: Option<&super::live_inference::InferenceTarget>,
 ) -> anyhow::Result<(PreparedAcceptedTurn, SignedMailboxTurn)> {
     let user = KeyIdentity::load_or_create(db.data_path().join("mailbox-client.key"), None)?;
     let admin = ConfigAccess::local_as(db.node.clone(), db.node_identity.did().parse()?);
@@ -135,18 +129,13 @@ pub async fn prepare_signed_mailbox_turn(
     let tools_id = format!("{}:tools", agent.did());
     let profile_id = format!("{}:profile", agent.did());
     let surface_id = format!("{}:mailbox", agent.did());
-    let mut plans = vec![StreamPlan::current_authored_user(
+    let plans = vec![StreamPlan::current_authored_user(
         prompt,
         vec![
             StreamResponse::streams(prompt, chunks),
             StreamResponse::completes(prompt, ["parent complete"]),
         ],
     )];
-    plans.extend(
-        child_plans
-            .into_iter()
-            .map(StreamPlan::with_current_authored_user),
-    );
     let backend = MockStreamingBackend::start_with_plans(model, plans)?;
     let tools = Tools {
         tools_id: tools_id.clone(),
@@ -178,25 +167,11 @@ pub async fn prepare_signed_mailbox_turn(
         created_at: None,
         tags: Vec::new(),
     };
-    let (backend_doc, profile_doc, sampling) = if let Some(target) = live_target {
-        let backend = target.backend(&node_did);
-        let mut profile = target.profile(&node_did);
-        profile.profile_id = profile_id.clone();
-        (
-            serde_json::to_value(backend)?,
-            serde_json::to_value(profile)?,
-            target.sampling(&node_did),
-        )
-    } else {
-        (
-            serde_json::json!({"node_did":node_did, "backend_id":backend_id, "name":backend_id,
-            "provider_kind":"OpenAiCompatible", "openai_wire_api":"chat_completions", "auth":{"kind":"unauthenticated"},
-            "endpoint":backend.endpoint(), "max_concurrent":1, "max_queue_depth":100, "enabled":true}),
-            serde_json::json!({"node_did":node_did, "profile_id":profile_id, "backend_id":backend_id, "model_name":model}),
-            None,
-        )
-    };
-    let mut docs = vec![
+    let backend_doc = serde_json::json!({"node_did":node_did, "backend_id":backend_id, "name":backend_id,
+    "provider_kind":"OpenAiCompatible", "openai_wire_api":"chat_completions", "auth":{"kind":"unauthenticated"},
+    "endpoint":backend.endpoint(), "max_concurrent":1, "max_queue_depth":100, "enabled":true});
+    let profile_doc = serde_json::json!({"node_did":node_did, "profile_id":profile_id, "backend_id":backend_id, "model_name":model});
+    let docs = vec![
         (Collection::Node, serde_json::json!({"node_did":node_did})),
         (
             Collection::DefaultAgentSelection,
@@ -219,12 +194,6 @@ pub async fn prepare_signed_mailbox_turn(
         (Collection::InferenceProfile, profile_doc),
         (Collection::InferenceBackend, backend_doc),
     ];
-    if let Some(sampling) = sampling {
-        docs.push((
-            Collection::InferenceSampling,
-            serde_json::to_value(sampling)?,
-        ));
-    }
     let plan = DesiredStateApplyPlan::new(
         docs.into_iter()
             .map(|(collection, value)| DesiredStateApplyDocument {
@@ -303,45 +272,4 @@ pub async fn prepare_signed_mailbox_turn(
     };
     turn.submit(create).await?;
     Ok((PreparedAcceptedTurn { backend }, turn))
-}
-
-pub async fn request_state_on(
-    access: &ConfigAccess,
-    request_id: &str,
-) -> anyhow::Result<Option<String>> {
-    let query = format!(
-        r#"{{AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}, limit: 2) {{lifecycle_state}}}}"#,
-        gents_store::graphql::escape_graphql_string(request_id)
-    );
-    let response = access.execute(&query).await?;
-    let rows = response["data"]["AgentRequest"]
-        .as_array()
-        .context("request state query omitted rows")?;
-    anyhow::ensure!(rows.len() <= 1, "request state ambiguous");
-    Ok(rows
-        .first()
-        .and_then(|row| row["lifecycle_state"].as_str())
-        .map(str::to_owned))
-}
-
-pub async fn wait_for_request_terminal_on(
-    access: &ConfigAccess,
-    request_id: &str,
-    timeout: Duration,
-) -> anyhow::Result<String> {
-    let deadline = tokio::time::Instant::now() + timeout;
-    loop {
-        if let Some(state) = request_state_on(access, request_id).await? {
-            if gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal_str(Some(
-                &state,
-            )) {
-                return Ok(state);
-            }
-        }
-        anyhow::ensure!(
-            tokio::time::Instant::now() < deadline,
-            "request {request_id} did not terminalize"
-        );
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
 }

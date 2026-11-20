@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
-use gents_lean_vocab::{lean_identity_household_cases, LeanIdentityAction};
 use gents_store::config_client::node_deferred_operation::*;
 use gents_store::config_client::{ConfigAccess, GraphqlEndpoint, NodePermission};
 use gents_store::graphql::escape_graphql_string;
@@ -12,18 +11,9 @@ use gents_store::identity::NodeIdentity;
 async fn deferred_enrollment_documents_remain_private_then_follow_the_node() -> Result<()> {
     let mut linked = std::collections::BTreeMap::new();
     let mut granted = std::collections::BTreeMap::new();
-    let operations = lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "operations-parent-publication")
-        .context("missing operations policy model")?;
-    let access_checks: Vec<_> = operations
-        .actions
-        .iter()
-        .filter_map(|action| match action {
-            LeanIdentityAction::Check { expected, .. } => Some(*expected),
-            _ => None,
-        })
-        .collect();
+    let access_checks =
+        gents_lean_vocab::families::household_operations_deferred_enrollment::cases();
+    let mut observed_access = vec![Vec::new(); access_checks.len()];
     let dir = tempfile::tempdir()?;
     let user = gents_store::identity::KeyIdentity::load_or_create(dir.path().join("user"), None)?;
     let runtime =
@@ -258,29 +248,46 @@ async fn deferred_enrollment_documents_remain_private_then_follow_the_node() -> 
             r#"mutation {{ update_{collection}(docID: "{}", input: {{node_doc_id: "forged"}}) {{_docID}} }}"#,
             gents_store::graphql::escape_graphql_string(doc)
         );
-        let updated = user_access.write("test.deferred.denied", &mutation).await;
-        assert_eq!(
-            updated.is_ok_and(|response| gents_protocol::graphql::extract_mutation_doc_id(
-                &response, collection
-            )
-            .is_ok()),
-            access_checks[4]
-        );
-        for (actor, expected) in [
-            (&agent, access_checks[6]),
-            (&sibling, access_checks[7]),
-            (&outsider, access_checks[11]),
-        ] {
-            let response = access(actor)?.execute(&query).await?;
-            assert_eq!(
-                !gents_protocol::graphql::graphql_rows_from_response(&response, collection)
-                    .is_empty(),
-                expected
-            );
+        for (index, check) in access_checks.iter().enumerate() {
+            let check = &check.input;
+            anyhow::ensure!(check.phase == "attached", "unmodeled phase {check:?}");
+            let actor = match check.role.as_str() {
+                "user" => &user,
+                "agent" => &agent,
+                "sibling" => &sibling,
+                "outsider" => &outsider,
+                other => anyhow::bail!("unmodeled operations actor {other}"),
+            };
+            let allowed = match check.permission.as_str() {
+                "update" => access(actor)?
+                    .write("test.deferred.denied", &mutation)
+                    .await
+                    .is_ok_and(|response| {
+                        gents_protocol::graphql::extract_mutation_doc_id(&response, collection)
+                            .is_ok()
+                    }),
+                "read" => {
+                    let response = access(actor)?.execute(&query).await?;
+                    !gents_protocol::graphql::graphql_rows_from_response(&response, collection)
+                        .is_empty()
+                }
+                other => anyhow::bail!("unmodeled operations permission {other}"),
+            };
+            observed_access[index].push(allowed);
         }
         runtime_access
             .delete_resource_relationship(collection, doc, "parent", "nodes", &parent)
             .await?;
+    }
+    for (check, observed) in access_checks.iter().zip(&observed_access) {
+        anyhow::ensure!(
+            observed
+                .iter()
+                .all(|allowed| Some(allowed) == observed.first()),
+            "deferred documents disagree for {:?}: {observed:?}",
+            check.input
+        );
+        check.check(*observed.first().context("no deferred document observed")?);
     }
     recover_deferred_node_operations(&node, runtime.did()).await?;
     for (collection, _) in &created {

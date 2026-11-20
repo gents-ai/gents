@@ -57,13 +57,14 @@ fn log_rate_ceiling() -> gents_session::log_rate::RateLimitFilter {
     )
 }
 
-pub fn init(default_log_filter: &str) -> Result<TelemetryGuard> {
+/// `system_log` replaces the console layer with the platform's system log.
+pub fn init(default_log_filter: &str, system_log: bool) -> Result<TelemetryGuard> {
     install_trace_context_propagator();
 
     let env_filter = with_default_transport_noise_filters(
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_log_filter)),
     );
-    let native = gents::runtime::native_logging::service_logging_enabled()
+    let native = system_log
         .then(|| gents::runtime::native_logging::layer("runtime"))
         .flatten();
     let console = native.is_none();

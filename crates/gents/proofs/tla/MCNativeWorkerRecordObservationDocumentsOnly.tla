@@ -1,0 +1,4 @@
+---- MODULE MCNativeWorkerRecordObservationDocumentsOnly ----
+EXTENDS NativeWorkerRecordObservation
+
+====

@@ -32,6 +32,12 @@ pub enum OwnerStagedChange {
         agent_doc_id: String,
         callback_doc_id: String,
     },
+    /// `reader` of selected configuration granted to the Agent it selects.
+    ConfigurationReader {
+        configuration: SelectedConfiguration,
+        doc_id: String,
+        agent_did: String,
+    },
     /// A pairing observation's reader for one reason.
     PairingReader {
         observation: PairingObservation,
@@ -41,12 +47,37 @@ pub enum OwnerStagedChange {
     },
 }
 
+/// The configuration an Agent is granted `reader` of because it selects that
+/// Agent (Lean `Identity.OwnerStaged.readerAuthority`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SelectedConfiguration {
+    Trigger,
+    EventSource,
+    Callback,
+    CallbackBinding,
+    CallbackModule,
+}
+
+impl SelectedConfiguration {
+    pub fn collection(self) -> &'static str {
+        match self {
+            Self::Trigger => "Trigger",
+            Self::EventSource => "EventSource",
+            Self::Callback => "Callback",
+            Self::CallbackBinding => "CallbackBinding",
+            Self::CallbackModule => "CallbackModule",
+        }
+    }
+}
+
 impl OwnerStagedChange {
     fn kind(&self) -> &'static str {
         match self {
             Self::EventCursorWriter { .. } => "event_cursor_writer",
             Self::PlacementReader { .. } => "placement_reader",
             Self::WorkspaceSelection { .. } => "workspace_selection",
+            Self::ConfigurationReader { .. } => "configuration_reader",
             Self::PairingReader { .. } => "pairing_reader",
         }
     }
@@ -71,6 +102,15 @@ impl OwnerStagedChange {
             } => vec![
                 ("agent_doc_id", agent_doc_id),
                 ("callback_doc_id", callback_doc_id),
+            ],
+            Self::ConfigurationReader {
+                configuration,
+                doc_id,
+                agent_did,
+            } => vec![
+                ("configuration", configuration.collection()),
+                ("doc_id", doc_id),
+                ("agent_did", agent_did),
             ],
             Self::PairingReader {
                 observation,

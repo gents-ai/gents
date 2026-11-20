@@ -12,10 +12,11 @@ use super::sse::{self, stream_sse_body_observed, MessagesSseState};
 use super::transport::{send_capturing, url_parts, ClaudeHttpClient};
 use super::MESSAGES_URI;
 use crate::auth::credential::BearerSource;
-use crate::clients::claude_subscription::ClaudeStreamResponse;
 use crate::llm::rig_compat::completion::{CompletionError, CompletionRequest, RawStreamingChoice};
 use crate::llm::rig_compat::http::{self as http_client, Request};
+use crate::llm::rig_compat::model::StreamEnd;
 use bytes::Bytes;
+use gents_loop::provider_call::ProviderCall;
 use rapidhash::RapidHashSet;
 use reqwest::header::HeaderValue;
 
@@ -32,29 +33,36 @@ use gents_loop::claude_messages_body::{
 };
 
 pub async fn stream_messages<S>(
+    call: &ProviderCall,
     model: &str,
     request: &CompletionRequest,
-    account: &ClaudeAccountContext,
+    account: MessagesAccount<'_, S>,
     surface: RapidHashSet<String>,
-    bearer: &S,
-    usage: Option<Arc<crate::usage_observation::UsageReporter>>,
 ) -> Result<
-    impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>,
+    impl futures::Stream<Item = Result<RawStreamingChoice<StreamEnd>, CompletionError>>,
     CompletionError,
 >
 where
     S: BearerSource,
 {
     stream_messages_routed(
+        call,
         &ClaudeRoute::first_party(MESSAGES_URI),
         model,
         request,
         account,
         surface,
-        bearer,
-        usage,
     )
     .await
+}
+
+/// The account a Messages request goes out as: the context its body and
+/// headers are planned for, the bearer that authorizes it, and where its
+/// usage is reported.
+pub struct MessagesAccount<'a, S> {
+    pub context: &'a ClaudeAccountContext,
+    pub bearer: &'a S,
+    pub usage: Option<Arc<crate::usage_observation::UsageReporter>>,
 }
 
 /// A failed open of a Messages stream; `rejected` is set when the provider answered with a non-success status.
@@ -74,48 +82,45 @@ impl From<CompletionError> for MessagesOpenError {
 
 #[cfg(test)]
 pub(crate) async fn stream_messages_at<S>(
+    call: &ProviderCall,
     uri: &str,
     model: &str,
     request: &CompletionRequest,
-    account: &ClaudeAccountContext,
+    account: MessagesAccount<'_, S>,
     surface: RapidHashSet<String>,
-    bearer: &S,
-    usage: Option<Arc<crate::usage_observation::UsageReporter>>,
 ) -> Result<
-    impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>,
+    impl futures::Stream<Item = Result<RawStreamingChoice<StreamEnd>, CompletionError>>,
     CompletionError,
 >
 where
     S: BearerSource,
 {
     stream_messages_routed(
+        call,
         &ClaudeRoute::first_party(uri),
         model,
         request,
         account,
         surface,
-        bearer,
-        usage,
     )
     .await
 }
 
 pub(crate) async fn stream_messages_routed<S>(
+    call: &ProviderCall,
     route: &ClaudeRoute,
     model: &str,
     request: &CompletionRequest,
-    account: &ClaudeAccountContext,
+    account: MessagesAccount<'_, S>,
     surface: RapidHashSet<String>,
-    bearer: &S,
-    usage: Option<Arc<crate::usage_observation::UsageReporter>>,
 ) -> Result<
-    impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>,
+    impl futures::Stream<Item = Result<RawStreamingChoice<StreamEnd>, CompletionError>>,
     CompletionError,
 >
 where
     S: BearerSource,
 {
-    open_messages_at(route, model, request, account, surface, bearer, usage)
+    open_messages_at(call, route, model, request, account, surface)
         .await
         .map_err(|failure| failure.error)
 }
@@ -257,15 +262,14 @@ impl Replay {
 /// set in Claude Code's insertion order, and the [`ClaudeHttpClient`] that writes them with
 /// Bun's casing, order, defaults and gzip.
 pub(crate) async fn open_messages_at<S>(
+    call: &ProviderCall,
     route: &ClaudeRoute,
     model: &str,
     request: &CompletionRequest,
-    account: &ClaudeAccountContext,
+    account: MessagesAccount<'_, S>,
     surface: RapidHashSet<String>,
-    bearer: &S,
-    usage: Option<Arc<crate::usage_observation::UsageReporter>>,
 ) -> Result<
-    impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>,
+    impl futures::Stream<Item = Result<RawStreamingChoice<StreamEnd>, CompletionError>>,
     MessagesOpenError,
 >
 where
@@ -274,27 +278,28 @@ where
     // Boxed: the open path (planning, signing, profile listing, the transport and its
     // replays) is a large state machine that would otherwise sit inline in every
     // caller's future, the agent loop's included.
-    Box::pin(open_messages(
-        route, model, request, account, surface, bearer, usage,
-    ))
-    .await
+    Box::pin(open_messages(call, route, model, request, account, surface)).await
 }
 
 async fn open_messages<S>(
+    call: &ProviderCall,
     route: &ClaudeRoute,
     model: &str,
     request: &CompletionRequest,
-    account: &ClaudeAccountContext,
+    account: MessagesAccount<'_, S>,
     surface: RapidHashSet<String>,
-    bearer: &S,
-    usage: Option<Arc<crate::usage_observation::UsageReporter>>,
 ) -> Result<
-    impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>,
+    impl futures::Stream<Item = Result<RawStreamingChoice<StreamEnd>, CompletionError>>,
     MessagesOpenError,
 >
 where
     S: BearerSource,
 {
+    let MessagesAccount {
+        context: account,
+        bearer,
+        usage,
+    } = account;
     let bearer_error = |error: anyhow::Error| {
         CompletionError::ProviderError(format!("Claude Messages bearer: {error}"))
     };
@@ -368,6 +373,7 @@ where
     let response = loop {
         let http_request = render_request(route, &plan, account, &token, &uri, &body)?;
         let send = send_capturing(
+            call,
             fixture.clone(),
             ClaudeHttpClient::new(usage.clone()),
             http_request,
@@ -422,8 +428,9 @@ where
             rejected: true,
         });
     }
-    let audit_sender = gents_loop::rendered_request::scope::current_audit_sender();
-    if gents_loop::rendered_request::scope::current_scope().is_some() && audit_sender.is_none() {
+    let audit_sender =
+        gents_loop::rendered_request::scope::current_audit_sender(call.capture.as_ref());
+    if call.capture.is_some() && audit_sender.is_none() {
         return Err(CompletionError::ProviderError(
             "Claude Messages response has no exact provider audit attempt".into(),
         )

@@ -9,7 +9,9 @@ use super::gate::mutation_write_gate;
 use super::native::NativeOperationTracker;
 #[cfg(test)]
 use super::rollback::RollbackDropCleanupPause;
-use super::rollback::{begin_embedded_owned, begin_http_owned, RollbackOnDrop};
+use super::rollback::{
+    begin_embedded_owned, begin_http_owned, EmbeddedBegin, EmbeddedOwnerHandles, RollbackOnDrop,
+};
 use super::{ConfigClientError, GraphqlEndpoint, Result};
 use crate::config_client::write_telemetry::WriteOperation;
 use crate::config_client::AgentPublicationObserver;
@@ -46,6 +48,8 @@ pub struct ConfigApplyTxn<'a> {
     pub(super) owner_staged_revocations: Mutex<super::OwnerStagedRevocations>,
     /// The runtime key's derivation proof this transaction's access carried.
     pub(super) agent_proof: Option<crate::identity::RuntimeAgentProof>,
+    pub(super) client_authorization:
+        Option<crate::config_client::client_authentication::ClientAuthorization>,
     /// The apply's owner authorized rerunning its callback after PLAN
     /// (`Identity.OwnerStaged.applyOverHttp`).
     pub(super) planned_replay_authorized: AtomicBool,
@@ -54,6 +58,13 @@ pub struct ConfigApplyTxn<'a> {
     /// The node whose own loopback endpoint carries this HTTP transaction,
     /// when an embedded access routed its client-signed writes through it.
     pub(super) loopback_node: Option<Arc<EmbeddedNode>>,
+    /// The Vera delegation of the direct request this embedded transaction
+    /// serves for its User actor.
+    pub(super) presented_delegation: Option<crate::config_client::user_write::PresentedDelegation>,
+    /// The request-bound credentials a stored command carries for each
+    /// document it creates for its User, by that document, once admitted.
+    pub(super) stored_creates:
+        Mutex<rapidhash::RapidHashMap<String, Arc<crate::config_client::user_write::StoredCreate>>>,
 }
 
 pub(super) enum EmbeddedTransactionPurpose {
@@ -64,11 +75,76 @@ pub(super) enum EmbeddedTransactionPurpose {
 }
 
 impl<'a> ConfigApplyTxn<'a> {
+    /// What lets the caller wait, once this transaction committed, for the
+    /// access changes it owes (`Identity.OwedRegistration.dependentStep`).
+    pub fn owed_access_ticket(&self) -> Result<crate::config_client::owed::OwedAccessTicket> {
+        use crate::config_client::owed::OwedAccessTicket;
+        match &self.backend {
+            TxnBackend::Embedded {
+                node,
+                handle,
+                identity,
+                ..
+            } => Ok(OwedAccessTicket::Embedded {
+                node: node.clone(),
+                handle: handle.clone(),
+                actor: identity.as_ref().map(ToString::to_string),
+            }),
+            TxnBackend::Http { endpoint, id, .. } => match &self.loopback_node {
+                Some(node) => Ok(OwedAccessTicket::Embedded {
+                    node: node.clone(),
+                    handle: id
+                        .parse()
+                        .map_err(|_| ConfigClientError::OwedAwaitTransaction)?,
+                    actor: endpoint.principal_did().map(str::to_owned),
+                }),
+                None if !endpoint.reports_external_provider() => Ok(OwedAccessTicket::NothingOwed),
+                None => Ok(OwedAccessTicket::Http {
+                    endpoint: (*endpoint).clone(),
+                    node_did: endpoint
+                        .runtime_node_did()
+                        .ok_or(ConfigClientError::OwedAwaitTransaction)?
+                        .to_owned(),
+                    transaction: id.clone(),
+                }),
+            },
+        }
+    }
+
+    /// The node's handle of this embedded transaction, which names what it
+    /// owes the document ACP provider once it commits.
+    #[cfg(any(test, feature = "test-fixtures"))]
+    #[doc(hidden)]
+    pub fn embedded_handle_for_test(&self) -> Option<TransactionHandle> {
+        match &self.backend {
+            TxnBackend::Embedded { handle, .. } => Some(handle.clone()),
+            TxnBackend::Http { .. } => None,
+        }
+    }
+
     fn local_node(&self) -> Option<&Arc<EmbeddedNode>> {
         match &self.backend {
             TxnBackend::Embedded { node, .. } => Some(node),
             TxnBackend::Http { .. } => self.loopback_node.as_ref(),
         }
+    }
+
+    pub(super) fn request_context(
+        &self,
+        actor: Option<identity::Did>,
+    ) -> defra_core::RequestContext {
+        crate::config_client::client_authentication::ClientAuthorization::request_context(
+            self.client_authorization.as_ref(),
+            actor,
+        )
+    }
+
+    pub(super) fn with_client_authorization(
+        mut self,
+        authorization: Option<crate::config_client::client_authentication::ClientAuthorization>,
+    ) -> Self {
+        self.client_authorization = authorization;
+        self
     }
 
     pub fn has_local_node(&self) -> bool {
@@ -226,13 +302,17 @@ impl<'a> ConfigApplyTxn<'a> {
             | EmbeddedTransactionPurpose::ReadOnly => Arc::new(NativeOperationTracker::default()),
         };
         let (rollback_on_drop, handle) = begin_embedded_owned(
-            Arc::clone(node),
-            native_gate,
-            read_only,
-            operation,
-            write_guard,
-            Arc::clone(&native_operations),
-            cancellation_rollback_scheduled,
+            EmbeddedOwnerHandles {
+                node: Arc::clone(node),
+                native_gate,
+                native_operations: Arc::clone(&native_operations),
+                cancellation_rollback_scheduled,
+            },
+            EmbeddedBegin {
+                read_only,
+                operation,
+                write_guard,
+            },
             |_| std::future::ready(()),
         )
         .await?;
@@ -253,10 +333,13 @@ impl<'a> ConfigApplyTxn<'a> {
             rerun_notes: Vec::new(),
             owner_staged_revocations: Mutex::new(super::OwnerStagedRevocations::Send),
             agent_proof: None,
+            client_authorization: None,
             planned_replay_authorized: AtomicBool::new(false),
             publication_observer: None,
             pack_approval: None,
             loopback_node: None,
+            presented_delegation: None,
+            stored_creates: Default::default(),
             operation: Some(operation.as_str()),
         })
     }
@@ -379,10 +462,13 @@ impl<'a> ConfigApplyTxn<'a> {
                 rerun_notes: Vec::new(),
                 owner_staged_revocations: Mutex::new(super::OwnerStagedRevocations::Send),
                 agent_proof: None,
+                client_authorization: None,
                 planned_replay_authorized: AtomicBool::new(false),
                 publication_observer: None,
                 pack_approval: None,
                 loopback_node: None,
+                presented_delegation: None,
+                stored_creates: Default::default(),
                 operation: None,
             });
         }
@@ -408,10 +494,13 @@ impl<'a> ConfigApplyTxn<'a> {
             rerun_notes: Vec::new(),
             owner_staged_revocations: Mutex::new(super::OwnerStagedRevocations::Send),
             agent_proof: None,
+            client_authorization: None,
             planned_replay_authorized: AtomicBool::new(false),
             publication_observer: None,
             pack_approval: None,
             loopback_node: None,
+            presented_delegation: None,
+            stored_creates: Default::default(),
             operation: None,
         };
         Ok(txn)

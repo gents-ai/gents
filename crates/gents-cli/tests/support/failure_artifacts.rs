@@ -58,13 +58,6 @@ impl FailureArtifacts {
         self.server.take()
     }
 
-    pub fn captured_output(&self) -> Result<(String, String)> {
-        self.server
-            .as_ref()
-            .context("fixture server was not started")?
-            .captured_output()
-    }
-
     pub fn finish<T>(mut self, result: Result<T>) -> Result<T> {
         self.succeeded = result.is_ok();
         match (result, self.finalize()) {

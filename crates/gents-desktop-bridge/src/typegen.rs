@@ -1,12 +1,13 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 
 mod commands;
 
-use gents_desktop_core::local_runtime::DesktopInitSummary;
+use gents::client_runtime::DesktopInitSummary;
 use ts_rs::TS;
 
 use crate::accounts::usage::{AccountUsageView, ProviderUsageReadRequest, UsageWindowView};
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::inference_setup::InferenceSetupState;
 use crate::tauri_commands::inference_setup::{
     ClaudeLoginRequest, ClaudeLoginResult, ClaudeLoginUrl, CodexLoginRequest, CodexLoginResult,
@@ -20,7 +21,10 @@ use crate::tauri_commands::inference_setup::{
 use crate::tauri_commands::lifecycle::DesktopObserverMetrics;
 use crate::tauri_commands::workspace::WorkspaceListingView;
 use crate::types::*;
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
+#[cfg(test)]
 fn bindings_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../packages/gents-desktop-client/src/generated")
@@ -87,6 +91,7 @@ fn normalize_generated_types(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(test)]
 fn bridge_visible_derived_types(source: &str, derive_marker: &str) -> Vec<String> {
     let mut names = Vec::new();
     let mut derive = String::new();
@@ -140,6 +145,7 @@ fn bridge_visible_derived_types(source: &str, derive_marker: &str) -> Vec<String
     names
 }
 
+#[cfg(test)]
 fn contract_source_paths() -> Vec<PathBuf> {
     fn collect_rust_files(directory: &Path, output: &mut Vec<PathBuf>) {
         for entry in std::fs::read_dir(directory).expect("read contract source directory") {
@@ -158,7 +164,7 @@ fn contract_source_paths() -> Vec<PathBuf> {
         source_root.join("host/protocol.rs"),
         source_root.join("inference_setup.rs"),
         source_root.join("provider_recovery.rs"),
-        source_root.join("../../gents-desktop-core/src/error.rs"),
+        source_root.join("../../gents-store/src/client_error.rs"),
         source_root.join("../../gents-desktop-core/src/home_reset.rs"),
         source_root.join("tauri_commands/chat.rs"),
         source_root.join("tauri_commands/attachments.rs"),
@@ -189,7 +195,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         crate::accounts::BackendAuthenticationView,
         ConfiguredActionView,
         crate::host::settings::ConfigEditorEntry,
-        gents_desktop_core::client::ConfigEditorDocument,
+        gents::client_operations::ConfigEditorDocument,
         crate::accounts::ProviderSignInRequest,
         crate::host::permissions::WorkspacePermissionsRequest,
         crate::host::permissions::WorkspacePermissionsSaveRequest,
@@ -221,8 +227,8 @@ fn export_all(dir: &Path) -> Result<(), String> {
         ManagedServerRootValidationRequest,
         AgentWorkspaceRootSelectRequest,
         gents_protocol::operations::workspace_root::AgentWorkspaceRoot,
-        EnrollmentStatusRequest,
-        EnrollmentInviteRequest,
+        RuntimeAccessConnectRequest,
+        RuntimeAccessDecisionRequest,
         ChatSendRequest,
         gents_protocol::request_input::AuthoredRequestInput,
         PendingMessageEditRequest,
@@ -319,8 +325,8 @@ fn export_all(dir: &Path) -> Result<(), String> {
         ManagedServerResetResult,
         ManagedServerRepairResult,
         ManagedServerRepairOutcome,
-        PeerRemoveResponse,
-        EnrollmentRequestView,
+        RuntimeRemoveResponse,
+        ClientAccessRequestView,
         ToolServiceTestResult,
         TaskRunResult,
         ChatSendResult,
@@ -746,27 +752,27 @@ fn committed_bindings_match_regeneration() {
     }
 }
 
-#[test]
-#[ignore = "run explicitly to regenerate packages/gents-desktop-client/src/generated/"]
-fn write_bindings() {
-    let temporary = tempfile::tempdir().expect("temporary bindings");
-    export_all(temporary.path()).expect("export bindings");
-    let expected = list_ts_files(temporary.path()).expect("generated bindings");
-    let dir = bindings_dir();
-    for obsolete in list_ts_files(&dir).expect("committed bindings") {
+pub fn write_bindings(dir: &Path) -> Result<(), String> {
+    let temporary = tempfile::tempdir().map_err(|error| error.to_string())?;
+    export_all(temporary.path())?;
+    let expected = list_ts_files(temporary.path())?;
+    std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
+    for obsolete in list_ts_files(dir)? {
         if !expected.contains(&obsolete) {
-            std::fs::remove_file(dir.join(obsolete)).expect("remove obsolete binding");
+            std::fs::remove_file(dir.join(obsolete)).map_err(|error| error.to_string())?;
         }
     }
     for name in expected {
         let path = dir.join(&name);
-        std::fs::create_dir_all(path.parent().unwrap()).expect("binding directory");
-        let source = std::fs::read(temporary.path().join(name)).expect("generated binding");
+        std::fs::create_dir_all(path.parent().ok_or("binding has no directory")?)
+            .map_err(|error| error.to_string())?;
+        let source =
+            std::fs::read(temporary.path().join(name)).map_err(|error| error.to_string())?;
         if std::fs::read(&path).ok().as_deref() != Some(source.as_slice()) {
-            std::fs::write(path, source).expect("write binding");
+            std::fs::write(path, source).map_err(|error| error.to_string())?;
         }
     }
-    eprintln!("wrote bindings to {}", dir.display());
+    Ok(())
 }
 
 #[test]

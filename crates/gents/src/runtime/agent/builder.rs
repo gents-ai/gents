@@ -25,7 +25,7 @@ use gents_inference::compaction::CompactionStrategy;
 use gents_inference::resolved::{
     ResolvedAgent, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
     DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS, DEFAULT_MODEL_NAME,
-    DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS, DEFAULT_STREAM_BATCH_MS,
+    DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS, DEFAULT_STREAM_BATCH_MS, DEFAULT_TITLE_TIMEOUT_SECS,
 };
 use gents_loop::completion_retry::CompletionRetryProfileFields;
 use gents_store::identity::{NodeIdentity, RuntimeNode};
@@ -284,6 +284,9 @@ impl GentsBuilder {
             health_checker_options: self.health_checker_options,
             backend_prober_options:
                 gents_inference::backends::health::BackendProberOptions::default(),
+            p2p_intervals: Default::default(),
+            p2p_network_id: gents_p2p::p2p_reconcile::DEFAULT_NETWORK_ID.to_owned(),
+            system_log: false,
             backend_health: self.backend_health,
             storage_fault: crate::runtime::storage_fault::StorageFaultObservation::new(),
             process_state_observer: self.process_state_observer,
@@ -493,8 +496,18 @@ impl AgentBuilder {
         self
     }
 
+    pub fn title_timeout_secs(mut self, title_timeout_secs: u64) -> Self {
+        self.pending_agent.title_timeout = Duration::from_secs(title_timeout_secs);
+        self
+    }
+
     pub fn deadline_duration_secs(mut self, deadline_duration_secs: u64) -> Self {
         self.pending_agent.deadline_duration = Duration::from_secs(deadline_duration_secs);
+        self
+    }
+
+    pub fn completion_retry(mut self, completion_retry: CompletionRetryProfileFields) -> Self {
+        self.pending_agent.completion_retry = completion_retry;
         self
     }
 
@@ -535,7 +548,9 @@ pub(crate) struct PendingAgent {
     stream_batch_ms: u64,
     stream_liveness_timeout: Duration,
     provider_idle_timeout: Duration,
+    title_timeout: Duration,
     deadline_duration: Duration,
+    completion_retry: CompletionRetryProfileFields,
     sampling: SamplingConfig,
     skills: Vec<gents_documents::skills::Skill>,
 }
@@ -561,7 +576,9 @@ impl PendingAgent {
             stream_batch_ms: DEFAULT_STREAM_BATCH_MS,
             stream_liveness_timeout: Duration::from_secs(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS),
             provider_idle_timeout: Duration::from_secs(DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS),
+            title_timeout: Duration::from_secs(DEFAULT_TITLE_TIMEOUT_SECS),
             deadline_duration: Duration::from_secs(DEFAULT_DEADLINE_DURATION_SECS),
+            completion_retry: CompletionRetryProfileFields::default(),
             sampling: SamplingConfig::default(),
             skills: Vec::new(),
         }
@@ -677,6 +694,7 @@ impl PendingAgent {
             backend_endpoint: backend_fields.backend_endpoint,
             backend_auth: backend_fields.backend_auth,
             claude_platform: backend_fields.claude_platform,
+            client_version: backend_fields.client_version,
             model_name: self.model_name,
             service_tier: None,
             resolved_reasoning_efforts: None,
@@ -692,11 +710,15 @@ impl PendingAgent {
             compaction: Some(compaction),
             compaction_inference: None,
             max_total_tokens: None,
+            max_invalid_tool_calls: gents_loop::loop_stream::DEFAULT_MAX_INVALID_TOOL_CALLS,
+            repeated_tool_failure_limit:
+                gents_loop::loop_stream::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
             stream_batch_ms: self.stream_batch_ms,
             stream_liveness_timeout: self.stream_liveness_timeout,
             provider_idle_timeout: self.provider_idle_timeout,
+            title_timeout: self.title_timeout,
             deadline_duration: self.deadline_duration,
-            completion_retry: CompletionRetryProfileFields::default(),
+            completion_retry: self.completion_retry,
             sampling: self.sampling,
             skills: self.skills,
             oauth_pool: Vec::new(),
@@ -751,6 +773,7 @@ impl PendingAgent {
                 backend_endpoint,
                 backend_auth: gents_documents::BackendAuth::Unauthenticated,
                 claude_platform: None,
+                client_version: None,
             },
             &ToolCeiling::meta_only(),
         )

@@ -1,12 +1,8 @@
 //! Scripted summary models and reduction fixtures shared with the tests of the
 //! layers above that drive a full request.
-use std::sync::{Arc, Mutex};
-
 use crate::llm::message::{AssistantContent, Message, Text, UserContent};
-use rig::completion::{
-    CompletionError, CompletionModel, CompletionRequest, CompletionResponse, Usage,
-};
-use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
+use gents_loop::test_support::scripted_provider::{Reply, ScriptedProvider};
+use rig::streaming::RawStreamingChoice;
 
 use super::*;
 use gents_loop::provider_input::ProviderInputProfile;
@@ -41,65 +37,10 @@ pub fn required_reduction(result: &ReductionResult) -> ExactReduction<'_> {
         .expect("the test requires an exact reduction")
 }
 
-#[derive(Clone, Default)]
-pub struct MockSummaryModel {
-    pub response: String,
-    pub last_request: Arc<Mutex<Option<CompletionRequest>>>,
-    pub requests: Arc<Mutex<Vec<CompletionRequest>>>,
-}
-
-impl MockSummaryModel {
-    pub fn new(response: &str) -> Self {
-        Self {
-            response: response.to_string(),
-            last_request: Arc::new(Mutex::new(None)),
-            requests: Arc::new(Mutex::new(Vec::new())),
-        }
-    }
-}
-
-#[allow(refining_impl_trait)]
-impl CompletionModel for MockSummaryModel {
-    type Response = ();
-    type StreamingResponse = ();
-    type Client = ();
-
-    fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-        Self::default()
-    }
-
-    async fn completion(
-        &self,
-        request: CompletionRequest,
-    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-        *self.last_request.lock().unwrap() = Some(request.clone());
-        self.requests.lock().unwrap().push(request);
-        Ok(CompletionResponse {
-            choice: rig::one_or_many::OneOrMany::one(rig::completion::AssistantContent::Text(
-                rig::completion::message::Text {
-                    text: self.response.clone(),
-                },
-            )),
-            usage: Usage::new(),
-            raw_response: (),
-            message_id: None,
-        })
-    }
-
-    async fn stream(
-        &self,
-        request: CompletionRequest,
-    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        *self.last_request.lock().unwrap() = Some(request.clone());
-        self.requests.lock().unwrap().push(request);
-        let items: Vec<Result<RawStreamingChoice<()>, CompletionError>> = vec![
-            Ok(RawStreamingChoice::Message(self.response.clone())),
-            Ok(RawStreamingChoice::FinalResponse(())),
-        ];
-        Ok(StreamingCompletionResponse::stream(Box::pin(
-            futures::stream::iter(items),
-        )))
-    }
+/// A summarizer answering every request with `response`.
+pub fn mock_summary_model(response: &str) -> ScriptedProvider {
+    let response = response.to_owned();
+    ScriptedProvider::responding(move |_| Reply::text(response.clone()))
 }
 
 pub fn summary_worthy_messages() -> Vec<Message> {
@@ -115,6 +56,7 @@ pub fn summary_worthy_messages() -> Vec<Message> {
 
 pub fn scheduled_origin_config() -> gents_loop::loop_stream::LoopConfig {
     gents_loop::loop_stream::LoopConfig {
+        provider_call: Default::default(),
         replay: gents_loop::loop_stream::LoopReplayInput::default(),
         provider_input_counter: std::sync::Arc::new(
             gents_loop::provider_input::ProviderInputCounter::new(
@@ -145,102 +87,53 @@ pub fn scheduled_origin_config() -> gents_loop::loop_stream::LoopConfig {
         provider_idle_timeout: None,
         deadline: None,
         max_turns: 0,
+        max_invalid_tool_calls: gents_loop::loop_stream::DEFAULT_MAX_INVALID_TOOL_CALLS,
+        repeated_tool_failure_limit: gents_loop::loop_stream::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
         output_obligation_gate: None,
         folded_prompts: Vec::new(),
         authored_input: None,
-        tool_context: gents_loop::tool::ToolCallEnvelope::ambient(),
+        tool_context: gents_loop::tool::ToolCallEnvelope::default(),
     }
 }
 
-#[derive(Clone)]
-pub struct ScriptedSummaryModel {
-    pub calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    pub script: Arc<Mutex<std::collections::VecDeque<Vec<RawStreamingChoice<()>>>>>,
-    pub requests: Arc<Mutex<Vec<CompletionRequest>>>,
+/// A summarizer answering its calls with `script`, claiming each call's
+/// armed capture as the capturing transport would; a call past the script
+/// (past the internal retry budget) panics.
+pub fn scripted_summary_model(script: Vec<Vec<RawStreamingChoice<()>>>) -> ScriptedProvider {
+    ScriptedProvider::turns(script).claiming_capture()
 }
 
-impl ScriptedSummaryModel {
-    pub fn new(script: Vec<Vec<RawStreamingChoice<()>>>) -> Self {
-        Self {
-            calls: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            script: Arc::new(Mutex::new(script.into_iter().collect())),
-            requests: Arc::new(Mutex::new(Vec::new())),
-        }
-    }
-
-    pub fn empty_turn() -> Vec<RawStreamingChoice<()>> {
-        vec![RawStreamingChoice::FinalResponse(())]
-    }
-
-    pub fn summary_turn() -> Vec<RawStreamingChoice<()>> {
-        vec![
-            RawStreamingChoice::Message(valid_summary_json()),
-            RawStreamingChoice::FinalResponse(()),
-        ]
-    }
-
-    pub fn malformed_summary_turn() -> Vec<RawStreamingChoice<()>> {
-        vec![
-            RawStreamingChoice::Message(
-                r#"{"goal":"Continue the task.","key_decisions":["unfinished"#.to_string(),
-            ),
-            RawStreamingChoice::FinalResponse(()),
-        ]
-    }
-
-    pub fn schema_invalid_summary_turn() -> Vec<RawStreamingChoice<()>> {
-        vec![
-            RawStreamingChoice::Message(
-                serde_json::json!({
-                    "key_decisions": [],
-                    "files_read": ["hallucinated.rs"]
-                })
-                .to_string(),
-            ),
-            RawStreamingChoice::FinalResponse(()),
-        ]
-    }
+pub fn empty_turn() -> Vec<RawStreamingChoice<()>> {
+    vec![RawStreamingChoice::FinalResponse(())]
 }
 
-#[allow(refining_impl_trait)]
-impl CompletionModel for ScriptedSummaryModel {
-    type Response = ();
-    type StreamingResponse = ();
-    type Client = ();
+pub fn summary_turn() -> Vec<RawStreamingChoice<()>> {
+    vec![
+        RawStreamingChoice::Message(valid_summary_json()),
+        RawStreamingChoice::FinalResponse(()),
+    ]
+}
 
-    fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-        Self::new(Vec::new())
-    }
+pub fn malformed_summary_turn() -> Vec<RawStreamingChoice<()>> {
+    vec![
+        RawStreamingChoice::Message(
+            r#"{"goal":"Continue the task.","key_decisions":["unfinished"#.to_string(),
+        ),
+        RawStreamingChoice::FinalResponse(()),
+    ]
+}
 
-    async fn completion(
-        &self,
-        _request: CompletionRequest,
-    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-        unreachable!("compaction summarizes via the owned loop, which streams");
-    }
-
-    async fn stream(
-        &self,
-        request: CompletionRequest,
-    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        self.requests.lock().unwrap().push(request);
-        // Stand in for the capturing transport: a real send claims the armed
-        // capture, without which the owned loop's fence fires. No-op outside a
-        // capture scope.
-        let _ = crate::rendered_request::scope::claim_pending();
-        let turn = self
-            .script
-            .lock()
-            .unwrap()
-            .pop_front()
-            .expect("provider called past the scripted internal retry budget");
-        let items: Vec<Result<RawStreamingChoice<()>, CompletionError>> =
-            turn.into_iter().map(Ok).collect();
-        Ok(StreamingCompletionResponse::stream(Box::pin(
-            futures::stream::iter(items),
-        )))
-    }
+pub fn schema_invalid_summary_turn() -> Vec<RawStreamingChoice<()>> {
+    vec![
+        RawStreamingChoice::Message(
+            serde_json::json!({
+                "key_decisions": [],
+                "files_read": ["hallucinated.rs"]
+            })
+            .to_string(),
+        ),
+        RawStreamingChoice::FinalResponse(()),
+    ]
 }
 
 pub fn valid_summary_json() -> String {

@@ -36,7 +36,8 @@ pub async fn fetch_local_operator_status(
         .build()
         .context("building local runtime status client")?;
     let mut response = graphql
-        .authorize(client.get(&status_url))?
+        .authorize_runtime(client.get(&status_url))
+        .await?
         .send()
         .await
         .context("reading local runtime status")?;

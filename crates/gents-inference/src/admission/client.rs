@@ -1,13 +1,11 @@
 use std::future::Future;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
-
-use tokio_util::sync::CancellationToken;
+use std::sync::Arc;
 
 use super::controller::PendingCallMetadata;
 use super::permit::AdmissionPermit;
 use super::AdmissionRegistry;
-use gents_protocol::row::AgentRequest;
+use gents_loop::provider_call::admission::AdmissionCallContext;
+use gents_loop::provider_call::{ForCall, ProviderCall};
 
 const CANCELLED_BY_INTERRUPT_MSG: &str = "inference cancelled by request interrupt";
 
@@ -36,6 +34,26 @@ pub struct AdmittedCompletionModel<M> {
     pub(crate) profile_id: Option<String>,
     pub(crate) separate_reasoning: bool,
     pub agent_signer: Option<gents_store::identity::ManagedAgentSigner>,
+    /// The call this model was built for.
+    call: ProviderCall,
+}
+
+impl<M> ForCall for AdmittedCompletionModel<M>
+where
+    M: ForCall,
+{
+    fn for_call(&self, call: &ProviderCall) -> Self {
+        Self {
+            inner: self.inner.for_call(call),
+            admission: self.admission.clone(),
+            connection: self.connection.clone(),
+            model_name: self.model_name.clone(),
+            profile_id: self.profile_id.clone(),
+            separate_reasoning: self.separate_reasoning,
+            agent_signer: self.agent_signer.clone(),
+            call: call.clone(),
+        }
+    }
 }
 
 impl<M> AdmittedCompletionModel<M> {
@@ -48,6 +66,7 @@ impl<M> AdmittedCompletionModel<M> {
             profile_id: None,
             separate_reasoning: false,
             agent_signer: None,
+            call: ProviderCall::default(),
         }
     }
 
@@ -63,7 +82,8 @@ impl<M> AdmittedCompletionModel<M> {
     {
         let mut permit = self
             .admission
-            .acquire_current_call_with_signer(
+            .acquire_call_with_signer(
+                self.call.admission.as_ref(),
                 &self.connection,
                 self.model_name.as_deref(),
                 self.profile_id.as_deref(),
@@ -73,10 +93,17 @@ impl<M> AdmittedCompletionModel<M> {
             .map_err(AdmittedCallError::Admission)?;
         if observe_provider_activity {
             permit.observe_provider_activity(
-                crate::rendered_request::scope::current_attempt_activity(),
+                crate::rendered_request::scope::current_attempt_activity(
+                    self.call.capture.as_ref(),
+                ),
             );
         }
-        let result = match current_context().ok().and_then(|c| c.inference_token) {
+        let result = match self
+            .call
+            .admission
+            .as_ref()
+            .and_then(|context| context.inference_token().cloned())
+        {
             Some(token) => {
                 tokio::select! {
                     biased;
@@ -101,223 +128,31 @@ impl<M> AdmittedCompletionModel<M> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CallKind {
-    Inference,
-    Compaction,
-    #[cfg_attr(not(test), allow(dead_code))]
-    Scheduled,
-    OneOff,
-}
-
-impl CallKind {
-    pub(super) fn as_str(self) -> &'static str {
-        match self {
-            Self::Inference => "inference",
-            Self::Compaction => "compaction",
-            Self::Scheduled => "scheduled",
-            Self::OneOff => "oneoff",
-        }
+/// The pending call admission records for the next call under `context`.
+pub(super) fn next_call(
+    context: &AdmissionCallContext,
+    runtime_instance_id: &str,
+    model_name: Option<&str>,
+    profile_id: Option<&str>,
+    agent_signer: Option<gents_store::identity::ManagedAgentSigner>,
+) -> PendingCallMetadata {
+    let (call_seq, join) = context.mint(uuid::Uuid::new_v4().to_string());
+    PendingCallMetadata {
+        agent_signer,
+        call_id: join.call_id,
+        runtime_instance_id: runtime_instance_id.to_string(),
+        request_id: context.request_id().to_owned(),
+        request_doc_id: context.request_doc_id().to_owned(),
+        request_purpose: context.request_purpose(),
+        session_id: context.session_id().to_owned(),
+        requester_did: context.requester_did().map(str::to_owned),
+        model_name: model_name.map(str::to_owned),
+        profile_id: profile_id.map(str::to_owned),
+        call_seq,
+        backend_id: context.backend_id().to_owned(),
+        agent_did: context.agent_did().to_owned(),
+        node_did: context.node_did().to_owned(),
+        call_kind: context.call_kind(),
+        attempt: context.attempt(),
     }
-}
-
-/// The identity of the admission call currently in flight on this task:
-/// exactly what `next_call` minted for it.
-#[derive(Clone, Debug)]
-pub struct CurrentCallJoin {
-    pub call_id: String,
-    pub call_seq: i64,
-    pub call_kind: CallKind,
-}
-
-#[derive(Clone)]
-pub struct AdmissionCallContext {
-    pub(super) request_id: String,
-    pub(super) request_doc_id: String,
-    pub(super) request_purpose: gents_protocol::request_admission::RequestPurpose,
-    pub(super) backend_id: String,
-    pub(super) agent_did: String,
-    pub(super) node_did: String,
-    pub(super) session_id: String,
-    pub(super) requester_did: Option<String>,
-    pub(super) call_kind: CallKind,
-    pub(super) attempt: i64,
-    pub(super) call_seq: Arc<AtomicU64>,
-    /// Written by `next_call`, read by `current_call_join()` at the transport
-    /// seam. Every call scope installs its own slot so concurrent calls
-    /// cannot replace each other's joins.
-    pub(super) current_call: Arc<Mutex<Option<CurrentCallJoin>>>,
-    pub(super) inference_token: Option<CancellationToken>,
-    pub(super) terminal_failure_reason: Option<TerminalFailureReasonObserver>,
-}
-
-impl AdmissionCallContext {
-    pub fn for_request(
-        request: &AgentRequest,
-        agent_did: impl Into<String>,
-        backend_id: impl Into<String>,
-    ) -> Self {
-        Self {
-            request_id: request.request_id.clone(),
-            request_doc_id: request.doc_id.clone(),
-            request_purpose: request.purpose,
-            backend_id: backend_id.into(),
-            agent_did: agent_did.into(),
-            node_did: request.node_did.clone(),
-            session_id: request.session_id.clone(),
-            requester_did: request.requester_did.clone(),
-            call_kind: CallKind::Inference,
-            attempt: 1,
-            call_seq: Arc::new(AtomicU64::new(0)),
-            current_call: Arc::new(Mutex::new(None)),
-            inference_token: None,
-            terminal_failure_reason: None,
-        }
-    }
-
-    pub(super) fn next_call(
-        &self,
-        runtime_instance_id: &str,
-        model_name: Option<&str>,
-        profile_id: Option<&str>,
-        agent_signer: Option<gents_store::identity::ManagedAgentSigner>,
-    ) -> PendingCallMetadata {
-        let call_seq = self.call_seq.fetch_add(1, Ordering::SeqCst) + 1;
-        let metadata = PendingCallMetadata {
-            agent_signer,
-            call_id: uuid::Uuid::new_v4().to_string(),
-            runtime_instance_id: runtime_instance_id.to_string(),
-            request_id: self.request_id.clone(),
-            request_doc_id: self.request_doc_id.clone(),
-            request_purpose: self.request_purpose,
-            session_id: self.session_id.clone(),
-            requester_did: self.requester_did.clone(),
-            model_name: model_name.map(str::to_owned),
-            profile_id: profile_id.map(str::to_owned),
-            call_seq,
-            backend_id: self.backend_id.clone(),
-            agent_did: self.agent_did.clone(),
-            node_did: self.node_did.clone(),
-            call_kind: self.call_kind,
-            attempt: self.attempt,
-        };
-        let join = CurrentCallJoin {
-            call_id: metadata.call_id.clone(),
-            call_seq: i64::try_from(call_seq).unwrap_or(i64::MAX),
-            call_kind: self.call_kind,
-        };
-        match self.current_call.lock() {
-            Ok(mut slot) => *slot = Some(join),
-            Err(poisoned) => *poisoned.into_inner() = Some(join),
-        }
-        metadata
-    }
-}
-
-tokio::task_local! {
-    static ADMISSION_CALL_CONTEXT: AdmissionCallContext;
-}
-
-pub async fn scope_request<T>(context: AdmissionCallContext, future: impl Future<Output = T>) -> T {
-    ADMISSION_CALL_CONTEXT.scope(context, future).await
-}
-
-/// Select an internal call's backend without changing the enclosing scope's
-/// physical request identity, cancellation, call sequence or join slot.
-pub(crate) async fn scope_backend<T>(backend_id: &str, future: impl Future<Output = T>) -> T {
-    let mut context =
-        current_context().expect("backend selection requires request admission context");
-    context.backend_id = backend_id.to_owned();
-    ADMISSION_CALL_CONTEXT.scope(context, future).await
-}
-
-pub async fn scope_call<T>(
-    call_kind: CallKind,
-    attempt: i64,
-    future: impl Future<Output = T>,
-) -> T {
-    let context = context_for_call(call_kind, attempt);
-    ADMISSION_CALL_CONTEXT.scope(context, future).await
-}
-
-pub async fn scope_call_with_join<T>(
-    call_kind: CallKind,
-    attempt: i64,
-    future: impl Future<Output = T>,
-) -> (T, Option<CurrentCallJoin>) {
-    let context = context_for_call(call_kind, attempt);
-    let current_call = context.current_call.clone();
-    ADMISSION_CALL_CONTEXT
-        .scope(context, async move {
-            let output = future.await;
-            let join = match current_call.lock() {
-                Ok(slot) => slot.clone(),
-                Err(poisoned) => poisoned.into_inner().clone(),
-            };
-            (output, join)
-        })
-        .await
-}
-
-fn context_for_call(call_kind: CallKind, attempt: i64) -> AdmissionCallContext {
-    let mut context = current_context().expect("admission call scope requires request context");
-    context.call_kind = call_kind;
-    context.attempt = attempt;
-    context.current_call = Arc::new(Mutex::new(None));
-    context
-}
-
-pub(crate) type TerminalFailureReasonObserver = Arc<Mutex<Option<String>>>;
-
-pub fn terminal_failure_reason_observer() -> TerminalFailureReasonObserver {
-    Arc::new(Mutex::new(None))
-}
-
-pub fn set_terminal_failure_reason(
-    observer: &TerminalFailureReasonObserver,
-    reason: impl Into<String>,
-) {
-    let reason = reason.into();
-    match observer.lock() {
-        Ok(mut slot) => *slot = Some(reason),
-        Err(poisoned) => *poisoned.into_inner() = Some(reason),
-    }
-}
-
-pub async fn scope_call_with_token_and_failure_reason<T>(
-    call_kind: CallKind,
-    attempt: i64,
-    token: CancellationToken,
-    terminal_failure_reason: TerminalFailureReasonObserver,
-    future: impl Future<Output = T>,
-) -> T {
-    let mut context = context_for_call(call_kind, attempt);
-    context.inference_token = Some(token);
-    context.terminal_failure_reason = Some(terminal_failure_reason);
-    ADMISSION_CALL_CONTEXT.scope(context, future).await
-}
-
-pub(super) fn current_context() -> Result<AdmissionCallContext, AdmissionError> {
-    ADMISSION_CALL_CONTEXT
-        .try_with(Clone::clone)
-        .map_err(|_| AdmissionError("missing inference admission context".into()))
-}
-
-pub(crate) fn current_session_id() -> Option<String> {
-    ADMISSION_CALL_CONTEXT
-        .try_with(|context| context.session_id.clone())
-        .ok()
-}
-
-/// The admission identity of the call currently in flight on this task, if
-/// one has been admitted. `None` outside an admission scope and before the
-/// first `next_call` of a scope.
-pub(crate) fn current_call_join() -> Option<CurrentCallJoin> {
-    ADMISSION_CALL_CONTEXT
-        .try_with(|context| match context.current_call.lock() {
-            Ok(slot) => slot.clone(),
-            Err(poisoned) => poisoned.into_inner().clone(),
-        })
-        .ok()
-        .flatten()
 }

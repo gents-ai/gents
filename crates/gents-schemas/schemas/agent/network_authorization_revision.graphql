@@ -2,6 +2,7 @@
 # sequence is authoritative and equal-sequence conflicts fail closed.
 # Revocation is a tombstone; history is never deleted.
 type NetworkAuthorizationRevision @policy(id: "fd59b3cc10193581adb497fd6d55c7e740f4866f720af6f18da780248ce26a5c", resource: "enrollment_records") @branchable {
+    initial_reader_did: String @immutable
     protocol_version: Int @immutable
     revision_id: String @index(unique: true) @immutable
     request_id: String @index @immutable

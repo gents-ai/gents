@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod client_observation_tests;
+
 #[cfg(any(test, feature = "test-fixtures"))]
 extern crate self as gents;
 
@@ -5,6 +8,15 @@ extern crate self as gents;
 #[doc(hidden)]
 #[path = "../tests/support/mod.rs"]
 pub mod support;
+
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod client_test_support;
+
+pub mod client_admin;
+pub mod client_operations;
+pub mod client_runtime;
+pub mod client_tools;
+pub mod client_workspace;
 
 mod claude_request_context;
 pub mod eval;
@@ -17,7 +29,6 @@ pub mod runtime;
 
 #[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
-#[allow(dead_code)]
 pub mod test_support;
 pub use gents_protocol::request_admission::SIGNED_REQUEST_FIELDS;
 pub mod turn;

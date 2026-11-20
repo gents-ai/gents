@@ -1,13 +1,20 @@
 # Local receipt of the authority one explicit enrollment grant derived for its
 # member (Lean `Identity.EnrollmentGrant.Receipt`). Native relations carry no
-# provenance, so revocation withdraws exactly the recorded tuples. Deliberately
-# NOT branchable: it accounts for this node's own relations only.
+# provenance, so revocation withdraws exactly the recorded tuples. A withdrawn
+# receipt with `withdrawal_owed_at` still owes the withdrawal of its member's
+# Node `administrator` relation, which only the Node owner or an administrator
+# can issue (Lean `Identity.EnrollmentGrant.oweRevoke`); one with
+# `restoration_owed_at` owes the relation's restoration after an approval or a
+# deliberate grant took that removal over (`takeOver`). Deliberately NOT
+# branchable: it accounts for this node's own relations only.
 type NetworkEnrollmentGrant @policy(id: "fd59b3cc10193581adb497fd6d55c7e740f4866f720af6f18da780248ce26a5c", resource: "operations") {
     request_id: String @index(unique: true) @immutable
     member_did: String @index @immutable
     tuples: [String]
     granted_at: DateTime @immutable
     withdrawn_at: DateTime
+    withdrawal_owed_at: DateTime
+    restoration_owed_at: DateTime
     node_doc_id: String
     parent_linked: Boolean
 }

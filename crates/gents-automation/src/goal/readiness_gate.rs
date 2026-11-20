@@ -83,42 +83,20 @@ pub fn observe_goal_agent_readiness(
 
 fn base_goal_decision(cause: GoalFailureCause, facts: &GoalContinuationFacts) -> GoalDecision {
     match cause {
-        GoalFailureCause::Attempt => decide_goal_continuation(
-            facts.status,
-            facts.terminal,
-            facts.session_idle,
-            facts.child_exists,
-            facts.budget_reached,
-            facts.has_activity,
-            facts.request_is_wrapup,
-            facts.infrastructure_retries,
-            facts.wrapup_requested,
-            facts.wrapup_completed,
-        ),
-        GoalFailureCause::GoalControlUnavailable => decide_goal_continuation(
-            facts.status,
-            GoalRequestTerminal::Failed,
-            facts.session_idle,
-            facts.child_exists,
-            facts.budget_reached,
-            false,
-            facts.request_is_wrapup,
-            facts.infrastructure_retries,
-            facts.wrapup_requested,
-            facts.wrapup_completed,
-        ),
-        GoalFailureCause::AgentUnavailable => decide_goal_continuation(
-            facts.status,
-            GoalRequestTerminal::Completed,
-            facts.session_idle,
-            facts.child_exists,
-            facts.budget_reached,
-            true,
-            false,
-            facts.infrastructure_retries,
-            facts.wrapup_requested,
-            facts.wrapup_completed,
-        ),
+        GoalFailureCause::Attempt => decide_goal_continuation(*facts),
+        GoalFailureCause::GoalControlUnavailable => {
+            decide_goal_continuation(GoalContinuationFacts {
+                terminal: GoalRequestTerminal::Failed,
+                has_activity: false,
+                ..*facts
+            })
+        }
+        GoalFailureCause::AgentUnavailable => decide_goal_continuation(GoalContinuationFacts {
+            terminal: GoalRequestTerminal::Completed,
+            has_activity: true,
+            request_is_wrapup: false,
+            ..*facts
+        }),
     }
 }
 

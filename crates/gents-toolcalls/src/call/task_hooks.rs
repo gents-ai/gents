@@ -508,19 +508,14 @@ impl TaskHookExec for ManagedTaskHookExec {
             .record
             .as_ref()
             .map(|record| record.process_recorder(&hook.hook_id));
-        let execution = run_managed_exec(hook_exec_request(
+        let outcome = run_managed_exec(hook_exec_request(
             hook,
             self.cwd.clone(),
             deadline_at,
             cancellation.clone(),
-            recorder.clone(),
-        ));
-        let outcome = match recorder {
-            Some(recorder) => {
-                gents_session::exec::ownership::scope_process_recorder(recorder, execution).await
-            }
-            None => execution.await,
-        };
+            recorder,
+        ))
+        .await;
         let (result, detail) = match outcome {
             ManagedExecOutcome::Exited {
                 code,

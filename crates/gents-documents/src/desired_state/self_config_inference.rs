@@ -153,7 +153,8 @@ mod tests {
         let tools = gents_store::graphql::created_doc_id(&tools, "Tools")?;
         let context = owner.write("test.inference.context", &format!(r#"mutation {{ create_AgentContext(input: {{node_did:"{node_did}",context_id:"context",tools_id:"tools"}}) {{_docID}} }}"#)).await?;
         let context = gents_store::graphql::created_doc_id(&context, "AgentContext")?;
-        owner.write("test.inference.backend", &format!(r#"mutation {{ create_InferenceBackendMetadata(input: {{node_did:"{node_did}",backend_id:"backend",name:"backend",provider_kind:"OpenAiCompatible",endpoint:"http://localhost:8000/v1",auth_kind:"unauthenticated"}}) {{_docID}} }}"#)).await?;
+        let backend = owner.write("test.inference.backend", &format!(r#"mutation {{ create_InferenceBackendMetadata(input: {{node_did:"{node_did}",backend_id:"backend",name:"backend",provider_kind:"OpenAiCompatible",endpoint:"http://localhost:8000/v1",auth_kind:"unauthenticated"}}) {{_docID}} }}"#)).await?;
+        let backend = gents_store::graphql::created_doc_id(&backend, "InferenceBackendMetadata")?;
         let profile = owner.write("test.inference.profile", &format!(r#"mutation {{ create_InferenceProfile(input: {{node_did:"{node_did}",profile_id:"profile",backend_id:"backend",model_name:"model",execution_id:"execution"}}) {{_docID}} }}"#)).await?;
         let profile = gents_store::graphql::created_doc_id(&profile, "InferenceProfile")?;
         let agent_doc = owner.write("test.inference.agent", &format!(r#"mutation {{ create_Agent(input: {{node_did:"{node_did}",agent_did:"{agent_did}",creation_nonce:"{nonce}",context_id:"context",inference_profile_id:"profile"}}) {{_docID}} }}"#)).await?;
@@ -179,33 +180,37 @@ mod tests {
                 })
             })
             .await?;
-        let case = gents_lean_vocab::lean_identity_household_cases()
-            .iter()
-            .find(|case| case.name == "configuration-explicit-grants")
-            .unwrap();
-        let modeled = |phase: &str, document: &str| {
-            case.configuration_inference_self_config_cases
-                .iter()
-                .find(|value| {
-                    value["phase"] == phase
-                        && value["actor"] == "agent"
-                        && value["document"] == document
-                })
-                .unwrap()["expected"]
-                .as_bool()
-                .unwrap()
-        };
-        let modeled_manager = |phase: &str, document: &str| {
-            case.configuration_inference_self_config_cases
-                .iter()
-                .find(|value| {
-                    value["phase"] == phase
-                        && value["actor"] == "agent"
-                        && value["document"] == document
-                })
-                .unwrap()["manager_expected"]
-                .as_bool()
-                .unwrap()
+        let sibling_binding = gents_store::identity::provision_agent_identity(&runtime)?;
+        let sibling_signer =
+            gents_store::identity::resolve_agent_identity(&runtime, &sibling_binding)?;
+        let sibling_actor = identity::Did::new(&sibling_binding.agent_did)?;
+        gents_store::identity::GrantSet::AgentBaseline
+            .grant(&owner, &sibling_actor)
+            .await?;
+        let sibling = ConfigAccess::local_managed_agent(
+            node.clone(),
+            sibling_actor,
+            sibling_signer.as_ref(),
+        )?;
+        let mut updates = std::collections::BTreeMap::<String, bool>::new();
+        let mut managers = std::collections::BTreeMap::<String, bool>::new();
+        let backend_value = gents_store::graphql::escape_graphql_string(&backend);
+        let backend_update = format!(
+            r#"mutation {{ update_InferenceBackendMetadata(docID:"{backend_value}",input:{{name:"backend"}}) {{_docID}} }}"#
+        );
+        let write_backend = |access: &ConfigAccess, operation: &'static str| {
+            let access = access.clone();
+            let backend_update = backend_update.clone();
+            let backend = backend.clone();
+            async move {
+                match access.write(operation, &backend_update).await {
+                    Ok(response) => updated(&response, "update_InferenceBackendMetadata", &backend),
+                    Err(error) if error.is_graphql_rejection() || error.is_permission_denied() => {
+                        Ok(false)
+                    }
+                    Err(error) => Err(error.into()),
+                }
+            }
         };
         let doc_value = gents_store::graphql::escape_graphql_string(&execution);
         let update = format!(
@@ -214,13 +219,17 @@ mod tests {
         let execution_query =
             format!(r#"{{ InferenceExecution(docID:"{doc_value}") {{ max_turns }} }}"#);
         let before = owner.execute(&execution_query).await?;
-        assert_eq!(
+        updates.insert(
+            "before/agent/execution".to_owned(),
             updated(
                 &agent.write("test.inference.before", &update).await?,
                 "update_InferenceExecution",
                 &execution,
             )?,
-            modeled("before", "execution")
+        );
+        updates.insert(
+            "before/agent/backend-metadata".to_owned(),
+            write_backend(&agent, "test.inference.backend_before").await?,
         );
         assert_eq!(owner.execute(&execution_query).await?, before);
         let runtime_did = runtime.did().to_owned();
@@ -234,13 +243,29 @@ mod tests {
                 })
             })
             .await?;
-        assert_eq!(
+        updates.insert(
+            "granted/agent/execution".to_owned(),
             updated(
                 &agent.write("test.inference.after", &update).await?,
                 "update_InferenceExecution",
                 &execution,
             )?,
-            modeled("granted", "execution")
+        );
+        updates.insert(
+            "granted/sibling/execution".to_owned(),
+            updated(
+                &sibling.write("test.inference.sibling", &update).await?,
+                "update_InferenceExecution",
+                &execution,
+            )?,
+        );
+        updates.insert(
+            "granted/agent/backend-metadata".to_owned(),
+            write_backend(&agent, "test.inference.backend_granted").await?,
+        );
+        updates.insert(
+            "granted/sibling/backend-metadata".to_owned(),
+            write_backend(&sibling, "test.inference.backend_sibling").await?,
         );
         let context_id = gents_store::graphql::escape_graphql_string(&context);
         let tools_id = gents_store::graphql::escape_graphql_string(&tools);
@@ -250,7 +275,8 @@ mod tests {
         let tools_update = format!(
             r#"mutation {{ update_Tools(docID:"{tools_id}",input:{{display_name:"updated"}}) {{_docID}} }}"#
         );
-        assert_eq!(
+        updates.insert(
+            "granted/agent/context".to_owned(),
             updated(
                 &agent
                     .write("test.inference.context_granted", &context_update)
@@ -258,9 +284,9 @@ mod tests {
                 "update_AgentContext",
                 &context,
             )?,
-            modeled("granted", "context")
         );
-        assert_eq!(
+        updates.insert(
+            "granted/agent/tools".to_owned(),
             updated(
                 &agent
                     .write("test.inference.tools_granted", &tools_update)
@@ -268,7 +294,6 @@ mod tests {
                 "update_Tools",
                 &tools,
             )?,
-            modeled("granted", "tools")
         );
         let new_execution = owner.write("test.inference.new_execution", &format!(r#"mutation {{ create_InferenceExecution(input: {{node_did:"{node_did}",execution_id:"new-execution"}}) {{_docID}} }}"#)).await?;
         let new_execution =
@@ -294,7 +319,8 @@ mod tests {
         let new_update = format!(
             r#"mutation {{ update_InferenceExecution(docID:"{new_doc}",input:{{max_turns:20}}) {{_docID}} }}"#
         );
-        assert_eq!(
+        updates.insert(
+            "granted/agent/new-execution".to_owned(),
             updated(
                 &agent
                     .write("test.inference.new_granted", &new_update)
@@ -302,9 +328,23 @@ mod tests {
                 "update_InferenceExecution",
                 &new_execution,
             )?,
-            modeled("granted", "new-execution")
         );
         let profile_value = gents_store::graphql::escape_graphql_string(&profile);
+        updates.insert(
+            "granted/agent/profile".to_owned(),
+            updated(
+                &agent
+                    .write(
+                        "test.inference.profile_granted",
+                        &format!(
+                            r#"mutation {{ update_InferenceProfile(docID:"{profile_value}",input:{{model_name:"model"}}) {{_docID}} }}"#
+                        ),
+                    )
+                    .await?,
+                "update_InferenceProfile",
+                &profile,
+            )?,
+        );
         let profile_update = format!(
             r#"mutation {{ update_InferenceProfile(docID:"{profile_value}",input:{{execution_id:"new-execution"}}) {{_docID}} }}"#
         );
@@ -344,7 +384,7 @@ mod tests {
                 })
             })
             .await;
-        assert_eq!(rebind.is_ok(), modeled_manager("granted", "execution"));
+        managers.insert("granted/execution".to_owned(), rebind.is_ok());
         rebind?;
         let profile_after = agent
             .execute(&format!(
@@ -365,7 +405,8 @@ mod tests {
                 gents_store::config_client::AgentSelfConfigPermission::Revoke,
             )
             .await?;
-        assert_eq!(
+        updates.insert(
+            "direct-after-revoke/agent/execution".to_owned(),
             updated(
                 &agent
                     .write("test.inference.direct_after_revoke", &update)
@@ -373,13 +414,13 @@ mod tests {
                 "update_InferenceExecution",
                 &execution,
             )?,
-            modeled("direct-after-revoke", "execution")
         );
         let revoked_new_update = new_update.replace("max_turns:20", "max_turns:21");
         let revoked_profile_update = profile_update.replace("new-execution", "execution");
         let revoked_context_update = context_update.replace("updated", "revoked");
         let revoked_tools_update = tools_update.replace("updated", "revoked");
-        assert_eq!(
+        updates.insert(
+            "revoked/agent/new-execution".to_owned(),
             updated(
                 &agent
                     .write("test.inference.new_revoked", &revoked_new_update)
@@ -387,9 +428,9 @@ mod tests {
                 "update_InferenceExecution",
                 &new_execution,
             )?,
-            modeled("revoked", "new-execution")
         );
-        assert_eq!(
+        updates.insert(
+            "revoked/agent/profile".to_owned(),
             updated(
                 &agent
                     .write("test.inference.profile_revoked", &revoked_profile_update)
@@ -397,9 +438,9 @@ mod tests {
                 "update_InferenceProfile",
                 &profile,
             )?,
-            modeled("revoked", "profile")
         );
-        assert_eq!(
+        updates.insert(
+            "revoked/agent/context".to_owned(),
             updated(
                 &agent
                     .write("test.inference.context_revoked", &revoked_context_update)
@@ -407,9 +448,9 @@ mod tests {
                 "update_AgentContext",
                 &context,
             )?,
-            modeled("revoked", "context")
         );
-        assert_eq!(
+        updates.insert(
+            "revoked/agent/tools".to_owned(),
             updated(
                 &agent
                     .write("test.inference.tools_revoked", &revoked_tools_update)
@@ -417,7 +458,10 @@ mod tests {
                 "update_Tools",
                 &tools,
             )?,
-            modeled("revoked", "tools")
+        );
+        updates.insert(
+            "revoked/agent/backend-metadata".to_owned(),
+            write_backend(&agent, "test.inference.backend_revoked").await?,
         );
         let observed = owner.execute(&format!(
             r#"{{ InferenceExecution(docID:"{new_doc}") {{ max_turns }} InferenceProfile(docID:"{profile_value}") {{ execution_id }} AgentContext(docID:"{context_id}") {{ display_name }} Tools(docID:"{tools_id}") {{ display_name }} }}"#
@@ -450,15 +494,13 @@ mod tests {
                 })
             })
             .await;
-        assert_eq!(
-            relation_revoke.is_ok(),
-            modeled_manager("revoked", "new-execution")
-        );
+        managers.insert("revoked/new-execution".to_owned(), relation_revoke.is_ok());
         owner
             .delete_actor_relationship("InferenceExecution", &execution, "writer", &actor)
             .await?;
         let revoked_update = update.replace("max_turns:20", "max_turns:21");
-        assert_eq!(
+        updates.insert(
+            "revoked/agent/execution".to_owned(),
             updated(
                 &agent
                     .write("test.inference.revoked", &revoked_update)
@@ -466,8 +508,25 @@ mod tests {
                 "update_InferenceExecution",
                 &execution,
             )?,
-            modeled("revoked", "execution")
         );
+        for case in gents_lean_vocab::families::household_inference_self_config_update::cases() {
+            let key = format!(
+                "{}/{}/{}",
+                case.input.phase, case.input.actor, case.input.document
+            );
+            let observed = *updates
+                .get(&key)
+                .unwrap_or_else(|| panic!("scenario never updated {key}"));
+            case.check(observed);
+        }
+        for case in gents_lean_vocab::families::household_inference_self_config_manager::cases() {
+            anyhow::ensure!(case.input.actor == "agent", "unmodeled manager actor");
+            let key = format!("{}/{}", case.input.phase, case.input.document);
+            let observed = *managers
+                .get(&key)
+                .unwrap_or_else(|| panic!("scenario never linked {key}"));
+            case.check(observed);
+        }
         assert_eq!(
             owner.execute(&execution_query).await?["data"]["InferenceExecution"][0]["max_turns"],
             20

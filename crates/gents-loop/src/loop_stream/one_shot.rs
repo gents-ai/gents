@@ -172,6 +172,7 @@ fn missing_final_failure(last_attempt_error: Option<InferenceError>) -> OneShotE
 }
 
 async fn emit_auxiliary(
+    capture: Option<&Arc<crate::rendered_request::scope::RequestCaptureScope>>,
     identity: (CaptureScope, usize, u32),
     event: AuxiliaryOutputEvent,
 ) -> Result<(), OneShotError> {
@@ -181,11 +182,11 @@ async fn emit_auxiliary(
         attempt: identity.2,
         event,
     };
-    match crate::rendered_request::scope::emit_auxiliary_output(observation).await {
+    match crate::rendered_request::scope::emit_auxiliary_output(capture, observation).await {
         Ok(()) => Ok(()),
         Err(error) => {
             let error = persistence_failure("observation", error);
-            match crate::rendered_request::scope::flush_received_auxiliary_partial().await {
+            match crate::rendered_request::scope::flush_received_auxiliary_partial(capture).await {
                 Ok(_) => Err(error),
                 Err(close_error) => Err(OneShotError::PersistenceCleanup {
                     operation: "observation cleanup",
@@ -198,8 +199,10 @@ async fn emit_auxiliary(
     }
 }
 
-async fn close_received_auxiliary() -> Result<(), OneShotError> {
-    match crate::rendered_request::scope::flush_received_auxiliary_partial().await {
+async fn close_received_auxiliary(
+    capture: Option<&Arc<crate::rendered_request::scope::RequestCaptureScope>>,
+) -> Result<(), OneShotError> {
+    match crate::rendered_request::scope::flush_received_auxiliary_partial(capture).await {
         Ok(true) => Ok(()),
         Ok(false) => Err(persistence_failure(
             "close",
@@ -209,8 +212,11 @@ async fn close_received_auxiliary() -> Result<(), OneShotError> {
     }
 }
 
-async fn close_received_auxiliary_after_error(error: OneShotError) -> OneShotError {
-    match close_received_auxiliary().await {
+async fn close_received_auxiliary_after_error(
+    capture: Option<&Arc<crate::rendered_request::scope::RequestCaptureScope>>,
+    error: OneShotError,
+) -> OneShotError {
+    match close_received_auxiliary(capture).await {
         Ok(()) => error,
         Err(close_error) => OneShotError::ErrorCleanup {
             original: ErrorChain(&error).to_string(),
@@ -219,12 +225,15 @@ async fn close_received_auxiliary_after_error(error: OneShotError) -> OneShotErr
     }
 }
 
-async fn finish_one_shot_result<T>(result: Result<T, OneShotError>) -> Result<T, OneShotError> {
+async fn finish_one_shot_result<T>(
+    capture: Option<&Arc<crate::rendered_request::scope::RequestCaptureScope>>,
+    result: Result<T, OneShotError>,
+) -> Result<T, OneShotError> {
     match result {
         Ok(value) => Ok(value),
         Err(error) if error.is_persistence_failure() => Err(error),
         Err(error) => {
-            match crate::rendered_request::scope::flush_received_auxiliary_partial().await {
+            match crate::rendered_request::scope::flush_received_auxiliary_partial(capture).await {
                 Ok(_) => Err(error),
                 Err(close_error) => Err(OneShotError::PersistenceCleanup {
                     operation: "error cleanup",
@@ -272,11 +281,15 @@ pub async fn run_loop_to_text<M>(
     config: LoopConfig,
 ) -> Result<String, OneShotError>
 where
-    M: CompletionModel + 'static,
+    M: crate::rig_compat::ProviderModel,
     M::StreamingResponse: 'static,
 {
-    finish_one_shot_result(run_loop_to_text_inner(model, prompt, history, tools, config).await)
-        .await
+    let capture = config.provider_call.capture.clone();
+    finish_one_shot_result(
+        capture.as_ref(),
+        run_loop_to_text_inner(model, prompt, history, tools, config).await,
+    )
+    .await
 }
 
 async fn run_loop_to_text_inner<M>(
@@ -287,10 +300,12 @@ async fn run_loop_to_text_inner<M>(
     config: LoopConfig,
 ) -> Result<String, OneShotError>
 where
-    M: CompletionModel + 'static,
+    M: crate::rig_compat::ProviderModel,
     M::StreamingResponse: 'static,
 {
     let provider_profile = config.provider_input_counter.profile();
+    let capture = config.provider_call.capture.clone();
+    let capture = capture.as_ref();
     let mut stream = Box::pin(run_loop_stream::<M, crate::session_hook::NoopSessionHook>(
         model,
         None,
@@ -303,7 +318,7 @@ where
         config,
     ));
     let mut accumulator = AssistantTurnAccumulator::default();
-    let auxiliary_sink = crate::rendered_request::scope::auxiliary_output_sink();
+    let auxiliary_sink = crate::rendered_request::scope::auxiliary_output_sink(capture);
     let mut auxiliary_enabled = false;
     let mut active_auxiliary: Option<(CaptureScope, usize, u32)> = None;
     let mut last_auxiliary: Option<(CaptureScope, usize, u32)> = None;
@@ -318,10 +333,10 @@ where
                     Ok(deadline) => deadline,
                     Err(error) => {
                         drop(stream);
-                        return Err(close_received_auxiliary_after_error(persistence_failure(
-                            "next flush deadline",
-                            error,
-                        ))
+                        return Err(close_received_auxiliary_after_error(
+                            capture,
+                            persistence_failure("next flush deadline", error),
+                        )
                         .await);
                     }
                 }
@@ -347,7 +362,7 @@ where
                                 flush_failure = Some(error);
                             } else {
                                 drop(stream);
-                                return Err(close_received_auxiliary_after_error(error).await);
+                                return Err(close_received_auxiliary_after_error(capture, error).await);
                             }
                         }
                         match item {
@@ -376,7 +391,7 @@ where
                     None => error,
                 };
                 return Err(if active_auxiliary.is_some() {
-                    close_received_auxiliary_after_error(error).await
+                    close_received_auxiliary_after_error(capture, error).await
                 } else {
                     error
                 });
@@ -394,7 +409,7 @@ where
                         observation.attempt,
                     );
                     ensure_auxiliary_identity(active_auxiliary, identity)?;
-                    emit_auxiliary(identity, AuxiliaryOutputEvent::Audit(observation.event))
+                    emit_auxiliary(capture, identity, AuxiliaryOutputEvent::Audit(observation.event))
                         .await?;
                 }
                 LoopStreamItem::SteeringBoundary { .. }
@@ -422,7 +437,7 @@ where
                         if active_auxiliary.is_some() {
                             return Err(OneShotError::AttemptOverlapsSource);
                         }
-                        emit_auxiliary(identity, AuxiliaryOutputEvent::AttemptStarted).await?;
+                        emit_auxiliary(capture, identity, AuxiliaryOutputEvent::AttemptStarted).await?;
                         active_auxiliary = Some(identity);
                         last_auxiliary = Some(identity);
                     }
@@ -442,7 +457,7 @@ where
                         let accepted = crate::tool_policy::access_review::accepts_completion(
                             identity.0.kind.request_purpose(), has_tools,
                         );
-                        emit_auxiliary(identity, AuxiliaryOutputEvent::TurnReady { message })
+                        emit_auxiliary(capture, identity, AuxiliaryOutputEvent::TurnReady { message })
                             .await?;
                         active_auxiliary = None;
                         // The producer can dispatch tools after this yield.
@@ -458,7 +473,7 @@ where
                         if (identity.1, identity.2) != (turn, attempt) {
                             return Err(OneShotError::RetractChangedSource);
                         }
-                        emit_auxiliary(identity, AuxiliaryOutputEvent::Retract).await?;
+                        emit_auxiliary(capture, identity, AuxiliaryOutputEvent::Retract).await?;
                         active_auxiliary = None;
                     } else {
                         accumulator = AssistantTurnAccumulator::default();
@@ -469,8 +484,7 @@ where
                     if auxiliary_enabled {
                         let identity = last_auxiliary
                             .ok_or(OneShotError::ReminderWithoutSource)?;
-                        emit_auxiliary(
-                            identity,
+                        emit_auxiliary(capture, identity,
                             AuxiliaryOutputEvent::OutputObligationPending { reminder },
                         )
                         .await?;
@@ -490,8 +504,7 @@ where
                             if (identity.1, identity.2) != (turn, attempt) {
                             return Err(OneShotError::FailureChangedSource);
                         }
-                            emit_auxiliary(
-                                identity,
+                            emit_auxiliary(capture, identity,
                                 AuxiliaryOutputEvent::AttemptFailed { will_retry },
                             )
                             .await?;
@@ -504,7 +517,7 @@ where
                 LoopStreamItem::Text(text) => {
                     if auxiliary_enabled {
                         let identity = active_auxiliary.ok_or(OneShotError::TextWithoutSource)?;
-                        emit_auxiliary(identity, AuxiliaryOutputEvent::TextDelta(text)).await?;
+                        emit_auxiliary(capture, identity, AuxiliaryOutputEvent::TextDelta(text)).await?;
                     } else {
                         accumulator.push_text(&text);
                     }
@@ -512,7 +525,7 @@ where
                 LoopStreamItem::Reasoning(reasoning) => {
                     if auxiliary_enabled {
                         let identity = active_auxiliary.ok_or(OneShotError::ReasoningWithoutSource)?;
-                        emit_auxiliary(identity, AuxiliaryOutputEvent::Reasoning(reasoning))
+                        emit_auxiliary(capture, identity, AuxiliaryOutputEvent::Reasoning(reasoning))
                             .await?;
                     } else {
                         accumulator.push_provider_reasoning(provider_profile, reasoning)?;
@@ -521,8 +534,7 @@ where
                 LoopStreamItem::ReasoningDelta { id, reasoning } => {
                     if auxiliary_enabled {
                         let identity = active_auxiliary.ok_or(OneShotError::ReasoningDeltaWithoutSource)?;
-                        emit_auxiliary(
-                            identity,
+                        emit_auxiliary(capture, identity,
                             AuxiliaryOutputEvent::ReasoningDelta {
                                 id,
                                 fragment: reasoning,
@@ -536,16 +548,16 @@ where
                 LoopStreamItem::ToolCall { tool_call, .. } => {
                     if auxiliary_enabled {
                         let identity = active_auxiliary.ok_or(OneShotError::ToolCallWithoutSource)?;
-                        emit_auxiliary(identity, AuxiliaryOutputEvent::ToolCall(tool_call)).await?;
+                        emit_auxiliary(capture, identity, AuxiliaryOutputEvent::ToolCall(tool_call)).await?;
                     } else {
                         accumulator.push_tool_call(tool_call);
                     }
                 }
-                LoopStreamItem::ToolResult { .. } => {}
+                LoopStreamItem::ToolResult { .. } | LoopStreamItem::RetryWake => {}
                 LoopStreamItem::Final { text } => {
                     if auxiliary_enabled {
                         let identity = active_auxiliary.or(last_auxiliary).ok_or(OneShotError::FinalWithoutSource)?;
-                        emit_auxiliary(identity, AuxiliaryOutputEvent::FinalText(text.clone()))
+                        emit_auxiliary(capture, identity, AuxiliaryOutputEvent::FinalText(text.clone()))
                             .await?;
                     } else {
                         accumulator.reconcile_text(&text);
@@ -560,7 +572,7 @@ where
             drop(stream);
             return Err(match processed {
                 Ok(()) if active_auxiliary.is_some() => {
-                    close_received_auxiliary_after_error(error).await
+                    close_received_auxiliary_after_error(capture, error).await
                 }
                 Ok(()) => error,
                 Err(receipt_error) => OneShotError::RetainingAfterFlushFailed {
@@ -572,7 +584,7 @@ where
         processed?;
     }
     if active_auxiliary.is_some() {
-        close_received_auxiliary().await?;
+        close_received_auxiliary(capture).await?;
     }
     final_text.ok_or_else(|| missing_final_failure(last_attempt_error))
 }
@@ -585,7 +597,7 @@ pub async fn run_loop_to_typed<M, T>(
     mut config: LoopConfig,
 ) -> Result<T, OneShotError>
 where
-    M: CompletionModel + 'static,
+    M: crate::rig_compat::ProviderModel,
     M::StreamingResponse: 'static,
     T: DeserializeOwned + schemars::JsonSchema + 'static,
 {
@@ -608,7 +620,7 @@ mod tests {
     use super::*;
     use crate::provider_audit::{ClaudeAuditEvent, ClaudeBlockKind};
     use crate::rendered_request::scope::{
-        arm, claim_pending, current_audit_sender, flush_received_auxiliary_partial, scope_request,
+        arm, claim_pending, current_audit_sender, flush_received_auxiliary_partial,
         CaptureScopeKind, RequestCaptureScope,
     };
     use crate::rendered_request::{
@@ -656,20 +668,23 @@ mod tests {
             capture_sink,
         );
         scope.set_auxiliary_output_sink(sink.clone());
-        scope_request(Arc::new(scope), async {
+        async {
+            let capture_scope = Arc::new(scope);
+            let capture = Some(&capture_scope);
             let label = arm(
+                capture,
                 CaptureScopeKind::Compaction,
                 0,
                 0,
                 AssemblyTrace::from_effective_messages(AssemblyBuildPath::Budgeted, Vec::new()),
             )
             .unwrap();
-            claim_pending().expect("armed auxiliary attempt");
+            claim_pending(capture).expect("armed auxiliary attempt");
             let identity = (label.parse().expect("capture scope"), 0, 0);
-            emit_auxiliary(identity, AuxiliaryOutputEvent::AttemptStarted)
+            emit_auxiliary(capture, identity, AuxiliaryOutputEvent::AttemptStarted)
                 .await
                 .unwrap();
-            let sender = current_audit_sender().expect("claimed audit sender");
+            let sender = current_audit_sender(capture).expect("claimed audit sender");
             let mut reservation = sender.reserve().await.expect("audit capacity");
             reservation
                 .emit(ClaudeAuditEvent::BlockStart {
@@ -692,8 +707,11 @@ mod tests {
             .await
             .expect("bounded flush failure cleanup");
             assert!(item.is_none());
-            let error =
-                close_received_auxiliary_after_error(result.expect_err("mock flush fails")).await;
+            let error = close_received_auxiliary_after_error(
+                capture,
+                result.expect_err("mock flush fails"),
+            )
+            .await;
             assert!(ErrorChain(&error)
                 .to_string()
                 .contains("mock flush failure"));
@@ -713,8 +731,8 @@ mod tests {
                 ));
                 assert!(matches!(events[3], AuxiliaryOutputEvent::ClosePartial));
             }
-            assert!(!flush_received_auxiliary_partial().await.unwrap());
-        })
+            assert!(!flush_received_auxiliary_partial(capture).await.unwrap());
+        }
         .await;
     }
 
@@ -749,20 +767,23 @@ mod tests {
             capture_sink,
         );
         scope.set_auxiliary_output_sink(sink);
-        scope_request(Arc::new(scope), async {
+        async {
+            let capture_scope = Arc::new(scope);
+            let capture = Some(&capture_scope);
             let label = arm(
+                capture,
                 CaptureScopeKind::Compaction,
                 0,
                 0,
                 AssemblyTrace::from_effective_messages(AssemblyBuildPath::Budgeted, Vec::new()),
             )
             .unwrap();
-            claim_pending().expect("armed auxiliary attempt");
+            claim_pending(capture).expect("armed auxiliary attempt");
             let identity = (label.parse().expect("capture scope"), 0, 0);
-            emit_auxiliary(identity, AuxiliaryOutputEvent::AttemptStarted)
+            emit_auxiliary(capture, identity, AuxiliaryOutputEvent::AttemptStarted)
                 .await
                 .unwrap();
-            let sender = current_audit_sender().expect("claimed audit sender");
+            let sender = current_audit_sender(capture).expect("claimed audit sender");
             let mut reservation = sender.reserve().await.expect("audit capacity");
             reservation
                 .emit(ClaudeAuditEvent::BlockStart {
@@ -786,7 +807,7 @@ mod tests {
 
             let error = ensure_auxiliary_identity(Some(identity), (identity.0, 0, 1))
                 .expect_err("changed identity must fail closed");
-            let error = finish_one_shot_result::<String>(Err(error))
+            let error = finish_one_shot_result::<String>(capture, Err(error))
                 .await
                 .expect_err("identity error must remain visible");
             assert!(error.to_string().contains("auxiliary audit changed source"));
@@ -812,8 +833,8 @@ mod tests {
                 assert!(matches!(events[4], AuxiliaryOutputEvent::ClosePartial));
                 assert_eq!(events.len(), 5);
             }
-            assert!(!flush_received_auxiliary_partial().await.unwrap());
-        })
+            assert!(!flush_received_auxiliary_partial(capture).await.unwrap());
+        }
         .await;
     }
 
@@ -907,26 +928,30 @@ mod tests {
             capture_sink,
         );
         scope.set_auxiliary_output_sink(sink);
-        scope_request(Arc::new(scope), async {
+        async {
+            let capture_scope = Arc::new(scope);
+            let capture = Some(&capture_scope);
             let label = arm(
+                capture,
                 CaptureScopeKind::Compaction,
                 0,
                 0,
                 AssemblyTrace::from_effective_messages(AssemblyBuildPath::Budgeted, Vec::new()),
             )
             .unwrap();
-            claim_pending().expect("armed auxiliary attempt");
+            claim_pending(capture).expect("armed auxiliary attempt");
             let identity = (label.parse().expect("capture scope"), 0, 0);
-            emit_auxiliary(identity, AuxiliaryOutputEvent::AttemptStarted)
+            emit_auxiliary(capture, identity, AuxiliaryOutputEvent::AttemptStarted)
                 .await
                 .unwrap();
             let error = match case {
                 CleanupCase::ProviderError => {
-                    close_received_auxiliary_after_error(missing_final_failure(Some(
-                        InferenceError::TransientFailure {
+                    close_received_auxiliary_after_error(
+                        capture,
+                        missing_final_failure(Some(InferenceError::TransientFailure {
                             reason: "provider failed".into(),
-                        },
-                    )))
+                        })),
+                    )
                     .await
                 }
                 CleanupCase::NoVisibleOutput => {
@@ -937,12 +962,13 @@ mod tests {
                             super::super::NO_VISIBLE_OUTPUT_PREFIX
                         ),
                     );
-                    close_received_auxiliary_after_error(stream_failure(no_visible, None)).await
+                    close_received_auxiliary_after_error(capture, stream_failure(no_visible, None))
+                        .await
                 }
                 CleanupCase::IdentityError => {
                     let identity_error =
                         ensure_auxiliary_identity(Some(identity), (identity.0, 0, 1)).unwrap_err();
-                    finish_one_shot_result::<String>(Err(identity_error))
+                    finish_one_shot_result::<String>(capture, Err(identity_error))
                         .await
                         .expect_err("cleanup failure must dominate identity error")
                 }
@@ -952,12 +978,12 @@ mod tests {
                 .to_string()
                 .contains("mock close failure"));
             assert_eq!(closes.load(Ordering::SeqCst), 1);
-            let error = finish_one_shot_result::<String>(Err(error))
+            let error = finish_one_shot_result::<String>(capture, Err(error))
                 .await
                 .expect_err("persistence failure remains fatal");
             assert!(error.is_persistence_failure());
             assert_eq!(closes.load(Ordering::SeqCst), 1);
-        })
+        }
         .await;
     }
 

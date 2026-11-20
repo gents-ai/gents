@@ -39,11 +39,4 @@ def rootAccess : Family AccessInput AccessOutput where
       afterParentRevocation := rootAllowed workspaceRootAfterRevocation i
       afterIntegratorRevocation := rootAllowed workspaceRootAfterIntegratorRevocation i }
 
-/-- The live delegation scenario reads the root as an Agent the workspace never
-selected: the modeled `other` actor. -/
-@[conformance_family]
-def unrelatedAgentRead : Family AccessInput Bool where
-  inputs := [{ actor := "other", permission := "read" }]
-  model := fun i => workspaceRootPermission i.actor i.permission
-
 end Conformance.WorkspaceRootAccess

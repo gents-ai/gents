@@ -17,8 +17,6 @@ use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::waits::RecordingProcessObserver;
 use crate::support::{managed_agent_fixture, test_db};
 
-const STARTUP_DEADLOCK_GUARD: std::time::Duration = std::time::Duration::from_secs(30);
-
 #[derive(Clone, Debug)]
 struct BuildFailure {
     agent_did: String,
@@ -194,7 +192,7 @@ async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<(
     let run_task = tokio::spawn(agent.run(shutdown_rx));
 
     tokio::time::timeout(
-        STARTUP_DEADLOCK_GUARD,
+        gents_store::test_support::STALL_CEILING,
         observer.wait_for(ProcessLifecycleState::Ready),
     )
     .await

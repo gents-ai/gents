@@ -1,173 +1,22 @@
 use std::sync::Arc;
 
-use gents_desktop_core::client::ClientCore;
-use gents_desktop_core::error::BridgeErrorCode;
+use crate::client_runtime::ClientRuntime;
 use gents_protocol::job::{JobControlKind, JobControlOutcome, JobState};
-use gents_protocol::output::rows::{
-    output_segment_create_variables, transcript_message_create_variables,
-    CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-};
-use gents_protocol::output::{
-    MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
-    OutputWriter, PayloadRef, SegmentRun, SourceClose, StreamDeclaration, StreamPayload,
-    TranscriptMessage,
-};
 use gents_protocol::process_control::{
     ToolControlIntent, ToolControlReceipt, ToolControlReceiptOutcome,
 };
-use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
+use gents_store::client_error::BridgeErrorCode;
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
 
 use crate::job_control::job_control;
-use crate::tests::support::OPERATOR;
 use crate::types::DesktopJobControlRequest;
-
-pub(super) async fn seed_admission_for_node(
-    core: &Arc<ClientCore>,
-    node_did: &str,
-    session_id: &str,
-    row_doc_id: &str,
-    call: &str,
-    sequence: u32,
-) {
-    let access = ConfigAccess::local(core.node_arc());
-    let read = format!(
-        r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ request_doc_id }} }}"#,
-        escape_graphql_string(row_doc_id)
-    );
-    let response = access
-        .transact_write("test.fixture.job_row_request", |txn| {
-            let read = read.clone();
-            Box::pin(async move {
-                txn.execute_with_variables(&read, &serde_json::json!({}))
-                    .await
-            })
-        })
-        .await
-        .expect("read job row request");
-    let request_doc_id = response
-        .pointer("/data/AgentToolCall/0/request_doc_id")
-        .and_then(|value| value.as_str())
-        .expect("job row request_doc_id")
-        .to_owned();
-    let deadline = format!(
-        r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ deadline_at: "2126-06-01T10:00:00Z", message_sequence: {sequence} }}) {{ _docID }} }}"#,
-        escape_graphql_string(row_doc_id)
-    );
-    access
-        .transact_write("test.fixture.job_row_deadline", |txn| {
-            let deadline = deadline.clone();
-            Box::pin(async move { txn.execute(&deadline).await })
-        })
-        .await
-        .expect("seed job row deadline");
-    let arguments = "{}";
-    let generation = format!("cli-job-fixture:{request_doc_id}");
-    let created_at = "2026-06-01T10:00:00Z";
-    let segment = OutputSegment {
-        node_did: node_did.into(),
-        requester_did: Some(OPERATOR.into()),
-        session_id: session_id.into(),
-        request_doc_id: request_doc_id.clone(),
-        source: OutputSource::ProviderTurn {
-            scope: CaptureScope {
-                kind: CaptureScopeKind::Inference,
-                seq: 1,
-            },
-            turn_index: 0,
-            attempt: 0,
-        },
-        writer: OutputWriter::RequestExecution {
-            execution_generation: generation.clone(),
-        },
-        ordinal: Some(0),
-        runs: vec![SegmentRun {
-            stream: 0,
-            bytes: arguments.len() as u32,
-            declaration: Some(StreamDeclaration {
-                block_index: 0,
-                part_index: 0,
-                payload: StreamPayload::ToolArguments {
-                    id: call.into(),
-                    call_id: Some(call.into()),
-                    name: "workflow".into(),
-                },
-            }),
-        }],
-        payload: arguments.into(),
-        close: Some(SourceClose::Closed {
-            outcome: OutputOutcome::Complete,
-            segments: 1,
-            stream_bytes: vec![arguments.len() as u64],
-        }),
-        created_at: created_at.into(),
-    };
-    let variables = output_segment_create_variables(&segment).expect("segment variables");
-    let response = access
-        .transact_write("test.fixture.job_admission_segment", |txn| {
-            let variables = variables.clone();
-            Box::pin(async move {
-                txn.execute_with_variables(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION, &variables)
-                    .await
-            })
-        })
-        .await
-        .expect("seed admission segment");
-    let close_doc_id =
-        gents_protocol::graphql::extract_mutation_doc_id(&response, "AgentOutputSegment")
-            .expect("segment doc id");
-    let message = TranscriptMessage {
-        native_request_id: None,
-        message_key: gents_session::session::sequence_message_key(
-            node_did,
-            session_id,
-            Some(OPERATOR),
-            sequence,
-        ),
-        session_id: session_id.into(),
-        node_did: node_did.into(),
-        requester_did: Some(OPERATOR.into()),
-        request_doc_id: Some(request_doc_id),
-        publication: MessagePublication::RequestExecution {
-            execution_generation: generation,
-        },
-        outcome: OutputOutcome::Complete,
-        sequence,
-        role: MessageRole::Assistant,
-        native_id: None,
-        blocks: vec![MessageBlock::ToolCall {
-            tool_call_doc_id: row_doc_id.into(),
-            id: call.into(),
-            call_id: Some(call.into()),
-            name: "workflow".into(),
-            arguments: PayloadRef {
-                close_doc_id,
-                stream: 0,
-            },
-            signature: None,
-            additional_params: None,
-        }],
-        created_at: created_at.into(),
-    };
-    let variables = transcript_message_create_variables(&message).expect("message variables");
-    access
-        .transact_write("test.fixture.job_admission_header", |txn| {
-            let variables = variables.clone();
-            Box::pin(async move {
-                txn.execute_with_variables(CREATE_AGENT_MESSAGE_MUTATION, &variables)
-                    .await
-            })
-        })
-        .await
-        .expect("seed admission header");
-}
 
 /// A runtime node served over HTTP that the desktop client controls through
 /// its client-signed GraphQL path, with a selected Agent key that answers
 /// control intents in place of the runtime's control owner.
 pub(super) struct ControlRuntime {
-    pub core: Arc<ClientCore>,
+    pub core: Arc<ClientRuntime>,
     pub runtime: Arc<gents::defra_node::Node>,
     pub node_did: String,
     pub client_did: String,
@@ -181,9 +30,11 @@ pub(super) async fn control_runtime() -> ControlRuntime {
 
     let directory = tempfile::tempdir().unwrap();
     let core = Arc::new(
-        ClientCore::start_with_paths_and_options(
-            gents_desktop_core::client::DesktopPaths::from_root(directory.path().join("desktop")),
-            gents_desktop_core::client::ClientCoreOptions::local_only(),
+        ClientRuntime::start_with_paths_and_options(
+            gents_store::client_journal::paths::DesktopPaths::from_root(
+                directory.path().join("desktop"),
+            ),
+            crate::client_test_support::file_journal_options(),
         )
         .await
         .unwrap(),
@@ -195,11 +46,20 @@ pub(super) async fn control_runtime() -> ControlRuntime {
     .unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let graphql = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
+    let routes = gents_store::test_support::local_authentication_route(Arc::new(
+        gents_store::identity::KeyIdentity::load_or_create(
+            directory.path().join("owner.key"),
+            None,
+        )
+        .unwrap(),
+    ));
     let runtime = Arc::new(
         gents::defra_node::Node::builder()
             .enable_signing()
             .with_http(
-                gents::defra_node::HttpConfig::with_listener(listener.into_std().unwrap()).unwrap(),
+                gents::defra_node::HttpConfig::with_listener(listener.into_std().unwrap())
+                    .unwrap()
+                    .with_extra_routes(routes),
             )
             .with_node_identity_did(owner.did())
             .build()
@@ -213,9 +73,16 @@ pub(super) async fn control_runtime() -> ControlRuntime {
     let agent = gents_store::identity::resolve_agent_identity(&owner, &binding).unwrap();
     let home = directory.path().join("runtime");
     std::fs::create_dir(&home).unwrap();
-    core.add_managed_enrollment_peer_for_test(owner.did(), &graphql, home.to_str().unwrap(), 1)
-        .await
-        .unwrap();
+    core.connect_runtime(gents_protocol::runtime_connection::RuntimeConnection {
+        node_did: (owner.did()).to_string(),
+        label: ("Served runtime").to_string(),
+        graphql: graphql.to_string(),
+        local_node_home: Some((home.to_str().unwrap()).to_string()),
+        access_request: None,
+        access_state: None,
+    })
+    .await
+    .unwrap();
     let client_did = core.node_identity().did().to_owned();
     assert_ne!(client_did, owner.did());
     ControlRuntime {

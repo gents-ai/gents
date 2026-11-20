@@ -20,8 +20,10 @@ use serde::Serialize;
 use super::shared::ToolError;
 use gents_loop::tool_call_lifecycle::FailureClass;
 
-pub(super) fn deny_workspace_file_writes() -> Result<(), ToolError> {
-    if crate::runtime_context::current_tool_runtime_context()
+pub(super) fn deny_workspace_file_writes(
+    call: &gents_loop::tool::ToolCallEnvelope,
+) -> Result<(), ToolError> {
+    if crate::runtime_context::tool_runtime_context(call)
         .and_then(|scope| scope.workspace_authority)
         .is_some_and(|authority| !authority.allows_file_writes())
     {

@@ -61,8 +61,13 @@ pub struct EnrollmentApproval<'a> {
     /// The approving actor's own access: a User's signed client or an Agent's
     /// managed identity. ACP decides whether it may grant Node administration.
     pub approver: &'a ConfigAccess,
-    /// The runtime principal that records the receipt and issues node permissions.
+    /// The runtime principal that records the receipt.
     pub runtime: &'a ConfigAccess,
+    /// The access the node permissions are issued with, as the NAC owner
+    /// (`Identity.NodeProvisioning.nacOwner`): the runtime principal in
+    /// process, whose NAC changes are issued as the owner, or the owning
+    /// User's own signed client.
+    pub nac_owner: &'a ConfigAccess,
     /// The runtime's identity, which signed the offer and owns the enrollment.
     pub node: &'a dyn NodeIdentity,
     /// The signed pending request, as the runtime's enrollment projection reports it.
@@ -130,6 +135,7 @@ pub async fn grant_as_approver(
     grant_enrollment_authority(
         approval.approver,
         approval.runtime,
+        approval.nac_owner,
         node_doc_id,
         &request.request_id,
         &candidate,

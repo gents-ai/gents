@@ -240,12 +240,14 @@ async fn generated_goal_wake_scopes_preserve_atomic_notification_bindings() {
                     &access,
                     &node,
                     &parent,
-                    notice,
-                    notice,
-                    "review notifications",
-                    queue(&parent, key),
-                    None,
-                    gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+                    gents_session::request::lifecycle::queue::BackgroundCompletionNotification {
+                        content: notice,
+                        message_key: notice,
+                        wake_content: "review notifications",
+                        queue: queue(&parent, key),
+                        existing_notification_doc_id: None,
+                        wake: gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+                    },
                 )
                 .await
             }

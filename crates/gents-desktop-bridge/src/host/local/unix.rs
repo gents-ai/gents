@@ -2,7 +2,7 @@ use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt,
 use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
-use gents_desktop_core::client::DesktopPaths;
+use gents_store::client_journal::paths::DesktopPaths;
 use tokio::net::{UnixListener, UnixStream};
 
 pub type Connection = UnixStream;

@@ -1,0 +1,4 @@
+---- MODULE MCCommitResponseWaitClientWindow ----
+EXTENDS CommitResponseWait
+
+====

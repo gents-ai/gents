@@ -1,7 +1,5 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
-use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
 use serde_json::{json, Value};
 
 use super::*;
@@ -9,77 +7,51 @@ use crate::backend_provider::BackendProviderKind;
 use crate::claude_messages_body::{build_messages_body, ADVERTISED_REASONING_EFFORTS_PARAM};
 use crate::openai_wire::OpenAiWireApi;
 use crate::provider_input::ProviderInputCounter;
+use crate::test_support::scripted_provider::{Reply, ScriptedProvider};
 use gents_protocol::message::Message;
 
-#[derive(Clone)]
-struct ClaudeCheckpointModel {
+/// Answers a guided request with `canonical` when its Claude body carries the
+/// JSON schema (unless `reject_guidance`), and an unguided one, whose strict
+/// JSON instruction must ride in the final user message, with `fallback`.
+fn claude_checkpoint_model(
     reject_guidance: bool,
     canonical: Value,
     fallback: String,
-    requests: Arc<Mutex<Vec<(bool, Value)>>>,
-}
-
-#[allow(refining_impl_trait)]
-impl CompletionModel for ClaudeCheckpointModel {
-    type Response = ();
-    type StreamingResponse = ();
-    type Client = ();
-
-    fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-        unreachable!("the fixture constructs its model explicitly")
-    }
-
-    async fn completion(
-        &self,
-        _: CompletionRequest,
-    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-        unreachable!("the owned summarizer uses streaming")
-    }
-
-    async fn stream(
-        &self,
-        request: CompletionRequest,
-    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        let guided = request.output_schema.is_some();
-        let body = build_messages_body("claude-sonnet-5", &request).unwrap();
-        let output = if guided {
-            if !self.reject_guidance && body["output_config"]["format"]["type"] == "json_schema" {
-                self.canonical.to_string()
-            } else {
-                "# Continuation checkpoint\nThe structured schema was unavailable.".into()
+) -> ScriptedProvider {
+    ScriptedProvider::responding(move |dispatch| {
+        let request = &dispatch.request;
+        let body = build_messages_body("claude-sonnet-5", request).unwrap();
+        if request.output_schema.is_some() {
+            if !reject_guidance && body["output_config"]["format"]["type"] == "json_schema" {
+                return Reply::text(canonical.to_string());
             }
-        } else {
-            let schema = schemars::schema_for!(summary::ContinuationCheckpoint)
-                .as_value()
-                .to_string();
-            let texts = |value: &Value| {
-                let mut texts = Vec::new();
-                collect_texts(value, &mut texts);
-                texts
-            };
-            assert!(
-                texts(body["messages"].as_array().unwrap().last().unwrap())
-                    .iter()
-                    .any(|text| text.contains(&schema)),
-                "the strict JSON instruction rides in the final user message"
+            return Reply::text(
+                "# Continuation checkpoint\nThe structured schema was unavailable.",
             );
-            assert!(
-                !texts(&body["system"])
-                    .iter()
-                    .any(|text| text.contains(&schema)),
-                "the system prefix stays the guided attempts' prefix"
-            );
-            self.fallback.clone()
+        }
+        let schema = schemars::schema_for!(summary::ContinuationCheckpoint)
+            .as_value()
+            .to_string();
+        let texts = |value: &Value| {
+            let mut texts = Vec::new();
+            collect_texts(value, &mut texts);
+            texts
         };
-        self.requests.lock().unwrap().push((guided, body));
-        let _ = crate::rendered_request::scope::claim_pending();
-        Ok(StreamingCompletionResponse::stream(Box::pin(
-            futures::stream::iter([
-                Ok(RawStreamingChoice::Message(output)),
-                Ok(RawStreamingChoice::FinalResponse(())),
-            ]),
-        )))
-    }
+        assert!(
+            texts(body["messages"].as_array().unwrap().last().unwrap())
+                .iter()
+                .any(|text| text.contains(&schema)),
+            "the strict JSON instruction rides in the final user message"
+        );
+        assert!(
+            !texts(&body["system"])
+                .iter()
+                .any(|text| text.contains(&schema)),
+            "the system prefix stays the guided attempts' prefix"
+        );
+        Reply::text(fallback.clone())
+    })
+    .claiming_capture()
 }
 
 /// Where `cache_control` breakpoints sit: "system" or "messages[i]".
@@ -132,13 +104,7 @@ async fn exercise(reject_guidance: bool) {
         BackendProviderKind::ClaudeCliSubscription,
         BackendProviderKind::AnthropicApiKey,
     ] {
-        let requests = Arc::new(Mutex::new(Vec::new()));
-        let model = ClaudeCheckpointModel {
-            reject_guidance,
-            canonical: canonical.clone(),
-            fallback: fallback.clone(),
-            requests: requests.clone(),
-        };
+        let model = claude_checkpoint_model(reject_guidance, canonical.clone(), fallback.clone());
         let mut config = crate::end_to_end_test::test_loop_config();
         config.provider_input_counter = Arc::new(ProviderInputCounter::new(
             kind,
@@ -148,7 +114,7 @@ async fn exercise(reject_guidance: bool) {
         config.additional_params = Some(json!({
             (ADVERTISED_REASONING_EFFORTS_PARAM): ["high"], "output_config":{"effort":"high"},
         }));
-        let engine = ProviderReductionEngine::new(Arc::new(model), config);
+        let engine = ProviderReductionEngine::new(Arc::new(model.clone()), config);
         let history = (0..12)
             .flat_map(|turn| {
                 [
@@ -178,7 +144,16 @@ async fn exercise(reject_guidance: bool) {
         assert!(reduced
             .checkpoint
             .contains(canonical["next_actions"][0].as_str().unwrap()));
-        let requests = requests.lock().unwrap();
+        let requests = model
+            .requests()
+            .iter()
+            .map(|request| {
+                (
+                    request.output_schema.is_some(),
+                    build_messages_body("claude-sonnet-5", request).unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
         assert!(!requests.is_empty());
         assert_eq!(
             requests.iter().filter(|(guided, _)| !guided).count(),

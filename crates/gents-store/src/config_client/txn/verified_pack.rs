@@ -209,6 +209,7 @@ impl ConfigAccess {
                 unconfirmed: false,
             });
         }
+        let presented = local.presented_delegation();
         let unconfirmed = Arc::new(AtomicBool::new(false));
         let mode = if approval.is_some() {
             TransactionMode::SingleAttempt
@@ -223,6 +224,7 @@ impl ConfigAccess {
             move |operation, rollback| {
                 let actor = actor.clone();
                 let approval = approval.clone();
+                let presented = presented.clone();
                 Box::pin(async move {
                     let mut txn = ConfigApplyTxn::begin_local_owned(
                         local.node(),
@@ -233,6 +235,7 @@ impl ConfigAccess {
                     )
                     .await?;
                     txn.pack_approval = approval;
+                    txn.presented_delegation = presented.clone();
                     Ok(txn)
                 })
             },

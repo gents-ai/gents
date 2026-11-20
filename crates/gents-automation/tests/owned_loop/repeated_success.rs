@@ -14,7 +14,11 @@ impl ToolDyn for SuccessfulProbe {
     fn emits_command_envelope(&self) -> bool {
         true
     }
-    fn footprint(&self, _args: &str) -> ToolFootprint {
+    fn footprint(
+        &self,
+        _args: &str,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> ToolFootprint {
         ToolFootprint::Read
     }
     fn definition<'a>(
@@ -81,7 +85,7 @@ async fn check(batched_tail: bool) {
         call(9, "success_probe"),
         RawStreamingChoice::FinalResponse(()),
     ]);
-    let model = ScriptedModel::new_turns(turns);
+    let model = scripted(turns);
     let tools = Arc::new(
         ["success_probe", "other_probe"]
             .map(|name| {
@@ -99,7 +103,7 @@ async fn check(batched_tail: bool) {
         TaggedMessage::unassociated(Message::user("observe the tool")),
         Vec::new(),
         tools,
-        owned_config(32),
+        owned_config_for(32, &lifecycle),
     );
     let collected = collect_owned_scripted_stream(
         stream,
@@ -115,7 +119,7 @@ async fn check(batched_tail: bool) {
         .expect("the repetition guard stops execution");
     assert!(error.contains(REPEATED_TOOL_SUCCESS_PREFIX), "{error}");
     assert_eq!(calls.load(Ordering::SeqCst), 8);
-    assert_eq!(model.seen_requests().await.len(), 8);
+    assert_eq!(model.requests().len(), 8);
     assert_eq!(collected.tool_results.len(), 8);
     assert!(collected.tool_results.iter().all(
         |result| result.contains("unchanged") && !result.contains(REPEATED_TOOL_SUCCESS_PREFIX)

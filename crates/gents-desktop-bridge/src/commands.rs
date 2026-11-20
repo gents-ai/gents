@@ -42,7 +42,6 @@ pub use chat::{
     request_output, retry_request, send_chat_message, session_file_inventory, set_session_archived,
     steer_pending_message, tool_file_changes,
 };
-#[cfg_attr(test, allow(unused_imports))]
 pub use config::{
     apply_config_components, delete_agent_config, delete_backend_config, delete_context_config,
     delete_inference_profile_config, delete_schedule_config, delete_skill_config,
@@ -52,7 +51,7 @@ pub use config::{
     set_default_agent,
 };
 pub use mailbox::{dismiss_mailbox, observe_mailbox_item, start_mailbox_request};
-pub use peer::{remove_peer, rename_peer, request_invite_enrollment, request_status_enrollment};
+pub use peer::{forget_runtime, rename_runtime, request_runtime_access};
 pub use task::{
     delete_event_source_config, run_schedule_config, run_task_config, save_event_source_config,
     save_schedule_config, save_task_config, save_trigger_config,

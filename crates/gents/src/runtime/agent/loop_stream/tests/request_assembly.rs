@@ -7,19 +7,19 @@ async fn generated_authored_input_is_durable_before_provider_stream_entry() {
         let node_did = lifecycle.request().node_did.clone();
         let requester_did = lifecycle.request().requester_did.clone();
         let prompt = Message::user(case.input.prompt.clone());
-        let gate = Arc::new(StreamEntryGate::default());
-        let model = ScriptedModel::new(vec![
+        let gate = Arc::new(DispatchGate::default());
+        let model = scripted([vec![
             RawStreamingChoice::Message("accepted".to_string()),
             RawStreamingChoice::FinalResponse(()),
-        ])
-        .with_stream_entry_gate(gate.clone());
+        ]])
+        .gated(gate.clone());
         let stream = run_loop_stream(
             model.clone(),
             Some(hook.clone()),
             TaggedMessage::unassociated(prompt.clone()),
             Vec::new(),
             Arc::new(Vec::new()),
-            owned_config(0),
+            owned_config_for(0, &lifecycle),
         );
         let scoped_doc_id = gents_store::graphql::escape_graphql_string(&doc_id);
         let query = format!(
@@ -47,7 +47,7 @@ async fn generated_authored_input_is_durable_before_provider_stream_entry() {
                         .await;
                         assert_eq!(collected.error, None, "{name}");
                         assert!(
-                            !model.seen_requests().await.is_empty(),
+                            !model.requests().is_empty(),
                             "{name} ended before entering the provider stream"
                         );
                         collected
@@ -84,7 +84,7 @@ async fn generated_authored_input_is_durable_before_provider_stream_entry() {
             .await
             .expect("provider stream did not reach the authored-input handoff");
         assert_eq!(collected.error, None, "{name}");
-        let sent = model.seen_requests().await;
+        let sent = model.requests();
         assert!(sent.len() <= 1, "{name} sent its provider request twice");
         case.check(Some(
         gents_lean_vocab::families::contracts_queued_steering_trace_publication::PublicationOutput {

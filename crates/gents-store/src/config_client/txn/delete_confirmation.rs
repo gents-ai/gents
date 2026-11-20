@@ -23,29 +23,15 @@ mod tests {
 
     #[test]
     fn pack_delete_confirmation_matches_modeled_physical_identity() {
-        let modeled = gents_lean_vocab::lean_identity_household_cases()
-            .iter()
-            .find(|case| case.name == "configuration-explicit-grants")
-            .expect("configuration policy model");
-        assert_eq!(modeled.configuration_pack_removal_cases.len(), 5);
-        for name in ["agent-owner", "wrong-document"] {
-            let case = modeled
-                .configuration_pack_removal_cases
-                .iter()
-                .find(|case| case["name"] == name)
-                .expect("modeled removal case");
-            let returned = if case["returned_matches"] == true {
+        gents_lean_vocab::families::household_pack_removal_confirmation::replay(|input| {
+            let returned = if input.returned_matches {
                 "pack"
             } else {
                 "other"
             };
             let response = json!({"data": {"delete_PackInstallation": [{"_docID": returned}]}});
-            assert_eq!(
-                confirm_configuration_delete(&response, "PackInstallation", "pack").is_ok(),
-                case["expected"].as_bool().unwrap(),
-                "{name}"
-            );
-        }
+            confirm_configuration_delete(&response, "PackInstallation", "pack").is_ok()
+        });
         for response in [
             json!({"data": {"delete_PackInstallation": []}}),
             json!({"data": {"delete_PackInstallation": [{"_docID":"pack"}, {"_docID":"pack"}]}}),

@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
 use gents_inference::resolved::ResolvedConfiguration;
-#[cfg(test)]
-use gents_inference::resolved::{SelectedConfiguration, SelectedConfigurationDocument};
 use gents_loop::loop_stream::{ProviderConfigurationGuard, ProviderConfigurationGuardError};
 
 pub(crate) fn configuration_guard(
@@ -23,6 +21,3 @@ pub(crate) fn configuration_guard(
         }
     }
 }
-
-#[cfg(test)]
-mod tests;

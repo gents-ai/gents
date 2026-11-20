@@ -20,7 +20,7 @@ async fn call(tool: &SessionHistoryTool, params: Value) -> Value {
         &Tool::call(
             tool,
             serde_json::from_value(params).unwrap(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap(),
@@ -112,7 +112,7 @@ resources:
     let error = Tool::call(
         &denied_tool,
         serde_json::from_value(json!({"action":"get","session_id":"shared"})).unwrap(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .unwrap_err();
@@ -123,7 +123,7 @@ resources:
         &denied_tool,
         serde_json::from_value(json!({"action":"output","session_id":"shared","call_id":"any"}))
             .unwrap(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .unwrap_err();
@@ -207,7 +207,7 @@ async fn discovery_counts_and_pages_canonical_sessions_without_requests() {
     let recovery = Tool::call(
         &tool,
         serde_json::from_value(json!({"action":"get","session_id":"atlas-typo"})).unwrap(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .unwrap_err();
@@ -217,7 +217,7 @@ async fn discovery_counts_and_pages_canonical_sessions_without_requests() {
     let other_node = Tool::call(
         &tool,
         serde_json::from_value(json!({"action":"get","session_id":"foreign-session"})).unwrap(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .unwrap_err();
@@ -269,27 +269,31 @@ async fn transcript_search_reconstructs_canonical_text_and_pages_hits() {
     ] {
         gents_session::session::import_history_observation(
             &node,
-            "physical-request",
-            "work",
-            owner.did(),
-            None,
-            text,
-            &format!("evidence-{sequence}"),
-            sequence,
-            None,
+            gents_session::session::HistoryObservation {
+                request_id: "physical-request",
+                session_id: "work",
+                node_did: owner.did(),
+                requester_did: None,
+                text,
+                message_key_suffix: &format!("evidence-{sequence}"),
+                sequence,
+                tool_call: None,
+            },
         )
         .await;
     }
     gents_session::session::import_history_observation(
         &node,
-        "foreign-request",
-        "foreign",
-        PIN_FIXED_DID,
-        Some("other-requester"),
-        "The retry secret is protected.",
-        "private-evidence",
-        1,
-        None,
+        gents_session::session::HistoryObservation {
+            request_id: "foreign-request",
+            session_id: "foreign",
+            node_did: PIN_FIXED_DID,
+            requester_did: Some("other-requester"),
+            text: "The retry secret is protected.",
+            message_key_suffix: "private-evidence",
+            sequence: 1,
+            tool_call: None,
+        },
     )
     .await;
     let tool = SessionHistoryTool::new(
@@ -303,7 +307,7 @@ async fn transcript_search_reconstructs_canonical_text_and_pages_hits() {
             json!({"action":"search","filter":{"text":"retry decision","tag":"release"},"limit":1}),
         )
         .unwrap(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .unwrap_err();
@@ -332,12 +336,13 @@ async fn transcript_search_reconstructs_canonical_text_and_pages_hits() {
         let error = Tool::call(
             &tool,
             serde_json::from_value(missing.clone()).unwrap(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap_err()
         .to_string();
         assert!(error.contains("next call: sessions"), "{missing}: {error}");
+        assert_eq!(error.matches("next call:").count(), 1, "{missing}: {error}");
     }
     let validator = jsonschema::validator_for(&definition.parameters).unwrap();
     for valid in [

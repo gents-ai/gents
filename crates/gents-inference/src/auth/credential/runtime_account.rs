@@ -12,13 +12,12 @@ pub enum RuntimeAccountMetadataError {
     Access(#[from] ConfigClientError),
     #[error("decoding runtime-visible account metadata")]
     Decode,
-    #[error("runtime account read was not authorized")]
-    ReadNotAuthorized,
 }
 
 /// Resolve only the provider default account reference as the configured
-/// runtime, on this Agent transaction's native snapshot. DefraDB filters
-/// unreadable rows; the resolver uses this same runtime-visible set.
+/// runtime, on this Agent transaction's native snapshot, among the accounts
+/// the runtime may use (`Identity.Household.runtimeMayUse`); the resolver
+/// uses this same set.
 pub(crate) async fn runtime_default_oauth_account_ref(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
@@ -33,7 +32,8 @@ pub(crate) async fn runtime_default_oauth_account_ref(
 
 /// Reset scheduling observes only whether the selected enabled account was
 /// connected at the failed call. The held Node is bound to this managed
-/// Agent transaction, and native ACP still authorizes its metadata read.
+/// Agent transaction, and document ACP decides whether the runtime may still
+/// use the account.
 pub async fn runtime_oauth_account_served_before(
     txn: &ConfigApplyTxn<'_>,
     runtime: &dyn NodeIdentity,
@@ -58,8 +58,6 @@ async fn runtime_oauth_account_selection(
     provider: &str,
     pick: AccountPick<'_>,
 ) -> Result<Option<RuntimeAccountSelection>, RuntimeAccountMetadataError> {
-    let runtime =
-        identity::Did::new(node_did).map_err(ConfigClientError::RelationshipTargetIdentity)?;
     let response = txn
         .execute_runtime_account_metadata_query(
             node_did,
@@ -74,23 +72,9 @@ async fn runtime_oauth_account_selection(
             error => RuntimeAccountMetadataError::Access(error),
         })?;
     let response = gents_store::graphql::into_data_envelope(response.data);
-    let selected = runtime_account_from_response(&response, node_did, provider, pick)
-        .map_err(|_| RuntimeAccountMetadataError::Decode)?;
-    let Some(selected) = selected else {
-        return Ok(None);
-    };
-    let decisions = txn
-        .observe_document_access(
-            &runtime,
-            "OAuthCredential",
-            std::slice::from_ref(&selected.doc_id),
-            defra_node::DocumentAccessMode::DelegatedRead,
-        )
-        .await?;
-    match decisions.as_slice() {
-        [defra_node::DocumentAccessDecision::Allowed] => Ok(Some(selected)),
-        _ => Err(RuntimeAccountMetadataError::ReadNotAuthorized),
-    }
+
+    runtime_account_from_response(&response, node_did, provider, pick)
+        .map_err(|_| RuntimeAccountMetadataError::Decode)
 }
 
 #[cfg(test)]
@@ -126,17 +110,7 @@ mod tests {
                 })
             })
             .await?;
-        let model = gents_lean_vocab::lean_identity_household_cases()
-            .iter()
-            .find(|case| case.name == "configuration-explicit-grants")
-            .unwrap();
-        let case = |name: &str| {
-            model
-                .runtime_default_account_cases
-                .iter()
-                .find(|case| case["name"] == name)
-                .unwrap()
-        };
+        let mut account_reads: Vec<(&str, bool, Option<Option<String>>)> = Vec::new();
         let provider = "default-account-test";
         let metadata_query = super::super::runtime_account_query(runtime.did(), provider);
         for secret_field in [
@@ -240,7 +214,7 @@ mod tests {
                 })
             })
             .await;
-        assert!(foreign.is_err());
+        account_reads.push(("agent-actor", foreign.is_ok(), None));
 
         let mut disabled = credential.clone();
         disabled.enabled = false;
@@ -278,16 +252,7 @@ mod tests {
                 })
             })
             .await;
-        assert_eq!(
-            result.is_ok(),
-            case("visible-named")["allowed"].as_bool().unwrap()
-        );
-        assert_eq!(
-            result?,
-            case("visible-named")["visible_default"]
-                .as_str()
-                .map(str::to_owned)
-        );
+        account_reads.push(("visible-named", result.is_ok(), result.ok()));
         let stored = user_access
             .execute("{ Agent { agent_did display_name } }")
             .await?;
@@ -297,6 +262,39 @@ mod tests {
             .iter()
             .any(|row| row["agent_did"] == binding.agent_did
                 && row["display_name"] == "Agent-signed update"));
+        let batch_provider = "metadata-batch";
+        let mut expected_docs = Vec::new();
+        for index in 0..=query::owners::MAX_OWNER_OBSERVATIONS {
+            let mut row = credential.clone();
+            row.credential_id = format!("metadata-batch-{index}");
+            row.provider = batch_provider.into();
+            row.account_ref = Some(format!("batch-{index}"));
+            row.access_token = format!("batch-secret-{index}");
+            row.refresh_token = format!("batch-refresh-{index}");
+            expected_docs.push(
+                crate::auth::credential::upsert_oauth_credential_on(&user_access, &row).await?,
+            );
+        }
+        let batch_query = super::super::runtime_account_query(runtime.did(), batch_provider);
+        let batch = agent
+            .transact_readonly("test.default_account.metadata_batch", |txn| {
+                let query = &batch_query;
+                Box::pin(async move {
+                    txn.execute_runtime_account_metadata_query(runtime.did(), query)
+                        .await
+                })
+            })
+            .await?;
+        let mut actual_docs = batch.data.unwrap()["OAuthCredential"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["_docID"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        actual_docs.sort();
+        expected_docs.sort();
+        assert_eq!(actual_docs, expected_docs);
+
         let foreign = agent
             .transact_readonly("test.default_account.foreign", |txn| {
                 Box::pin(async move {
@@ -307,10 +305,7 @@ mod tests {
                 })
             })
             .await;
-        assert_eq!(
-            foreign.is_ok(),
-            case("foreign-node")["allowed"].as_bool().unwrap()
-        );
+        account_reads.push(("foreign-node", foreign.is_ok(), None));
 
         let admin = ConfigAccess::local_as(db.node.clone(), identity::Did::new(runtime.did())?);
         admin
@@ -328,13 +323,16 @@ mod tests {
         user_access
             .delete_actor_relationship("OAuthCredential", &doc, "runtime_writer", &runtime_did)
             .await?;
-        let visible = admin
-            .execute("{ OAuthCredential { _docID access_token } }")
-            .await?;
-        assert!(visible["data"]["OAuthCredential"]
-            .as_array()
-            .unwrap()
-            .is_empty());
+        let visible = gents_store::identity::observe_document_permissions(
+            &db.node,
+            runtime.did(),
+            &runtime_did,
+            Some(("OAuthCredential", &doc)),
+            &["read".to_owned()],
+        )
+        .await?
+        .unwrap();
+        assert_eq!(visible.held, [false]);
         let empty = agent
             .transact_readonly("test.default_account.hidden", |txn| {
                 Box::pin(async move {
@@ -345,11 +343,7 @@ mod tests {
                 })
             })
             .await;
-        assert_eq!(
-            empty.is_ok(),
-            case("visible-empty")["allowed"].as_bool().unwrap()
-        );
-        assert_eq!(empty?, None);
+        account_reads.push(("visible-empty", empty.is_ok(), empty.ok()));
         let unavailable = agent
             .transact_readonly("test.reset_account.revoked", |txn| {
                 Box::pin(async move {
@@ -367,6 +361,16 @@ mod tests {
             })
             .await?;
         assert!(!unavailable);
+        for case in gents_lean_vocab::families::household_runtime_default_account_read::cases() {
+            let (_, allowed, selected) = account_reads
+                .iter()
+                .find(|(name, _, _)| *name == case.input.name)
+                .unwrap_or_else(|| panic!("{} was not observed", case.input.name));
+            if let Some(selected) = selected {
+                assert_eq!(selected, &case.input.visible_default, "{}", case.input.name);
+            }
+            case.check(*allowed);
+        }
         Ok(())
     }
 }

@@ -48,7 +48,7 @@ pub async fn request_renewal_offer(
         matches!(network_admin_pins(&access, network_id).await?.as_slice(), [pin] if pin.admin_did == admin_did),
         "renewal owner is not pinned"
     );
-    let p2p = gents_store::identity::node_p2p(node).context("this node has no P2P transport")?;
+    let p2p = crate::node_access::operations(node).context("this node has no P2P transport")?;
     let (ticket_peer, _) = parse_public_peer_addr(server_ticket)?;
     anyhow::ensure!(
         ticket_peer.to_string() == server_peer,
@@ -90,7 +90,7 @@ pub async fn request_renewal_offer(
     let signature = bs58::encode(&intent.member_sig).into_string();
     let mutation = format!(
         r#"mutation {{ create_EnrollmentRenewalIntent(input: {{
-        intent_id: "{}", network_id: "{}", admin_did: "{}", server_peer: "{}",
+        initial_reader_did: "{reader}", intent_id: "{}", network_id: "{}", admin_did: "{}", server_peer: "{}",
         member_did: "{}", member_peer: "{}", predecessor_sequence: {},
         issued_at: "{}", expires_at: "{}", nonce: "{}", member_sig: "{}"
     }}) {{ _docID }} }}"#,
@@ -104,7 +104,8 @@ pub async fn request_renewal_offer(
         f(&intent.issued_at),
         f(&intent.expires_at),
         f(&intent.nonce),
-        f(&signature)
+        f(&signature),
+        reader = f(&intent.admin_did)
     );
     let doc_id = publish_candidate_document(
         node,
@@ -137,7 +138,7 @@ pub async fn request_enrollment(
     identity: &dyn NodeIdentity,
     offer_token: &str,
 ) -> Result<EnrollmentRequestRecord> {
-    let p2p = gents_store::identity::node_p2p(node).context("this node has no P2P transport")?;
+    let p2p = crate::node_access::operations(node).context("this node has no P2P transport")?;
     let offer = decode_offer(offer_token).context("decoding server enrollment offer")?;
     verify_enrollment_offer(&p2p, identity, &offer).await?;
     verify_offer_live_schema(node, &offer).await?;
@@ -566,7 +567,7 @@ pub async fn write_enrollment_request(
     node: &Arc<EmbeddedNode>,
     request: &EnrollmentRequestRecord,
 ) -> Result<String> {
-    let input = enrollment_request_input(request);
+    let input = enrollment_request_input(request, Some(&request.admin_did));
     let mutation =
         format!("mutation {{ create_NetworkEnrollmentRequest(input: {input}) {{ _docID }} }}");
     publish_candidate_document(
@@ -595,6 +596,7 @@ pub(super) async fn publish_candidate_document(
         node.node_identity_did() == Some(author_did),
         "enrollment document author must be the local peer identity"
     );
+    gents_store::local::document_acp::ensure_node_publication(node)?;
     let runtime = identity::Did::new(author_did)?;
     let reader = identity::Did::new(reader_did)?;
     let access = ConfigAccess::local_as(node.clone(), runtime.clone());
@@ -645,7 +647,13 @@ pub(super) async fn publish_candidate_document(
         .await
 }
 
-pub fn enrollment_request_input(request: &EnrollmentRequestRecord) -> String {
+pub fn enrollment_request_input(
+    request: &EnrollmentRequestRecord,
+    initial_reader: Option<&str>,
+) -> String {
+    let initial_reader = initial_reader
+        .map(|did| format!("initial_reader_did: \"{}\",", escape_graphql_string(did)))
+        .unwrap_or_default();
     let field = |value: &str| escape_graphql_string(value);
     let candidate_sig = bs58::encode(&request.candidate_sig).into_string();
     let candidate_name = request
@@ -655,6 +663,7 @@ pub fn enrollment_request_input(request: &EnrollmentRequestRecord) -> String {
         .unwrap_or_else(|| "null".to_owned());
     format!(
         r#"{{
+            {initial_reader}
             protocol_version: {},
             request_id: "{}",
             request_digest: "{}",

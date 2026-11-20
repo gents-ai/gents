@@ -107,7 +107,7 @@ async fn an_unpaired_application_event_source_stays_local() {
 
     for node in [&db_writer.node, &db_agent.node] {
         assert!(
-            !gents_store::identity::node_p2p(node)
+            !gents_p2p::node_access::operations(node)
                 .expect("P2P transport")
                 .get_collections()
                 .await

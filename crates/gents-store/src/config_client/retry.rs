@@ -315,6 +315,27 @@ mod tests {
     }
 
     #[test]
+    fn a_delegation_refused_for_its_window_inside_a_transaction_is_a_credential_answer() {
+        let refused = || {
+            super::super::graphql::validate_txn_response(serde_json::json!({
+                "errors": [{"message": "opaque", "extensions": {
+                    "code": gents_protocol::delegation_audience::DELEGATION_OUTSIDE_WINDOW_CODE
+                }}]
+            }))
+            .map_err(transaction_storage_failure)
+            .expect_err("refused")
+        };
+        for error in [refused(), access(refused())] {
+            assert!(error.is_storage_failure(), "{error:?}");
+            assert_eq!(
+                error.credential_answer(),
+                Some(gents_protocol::delegation_audience::CredentialAnswer::OutsideWindow),
+                "{error:?}"
+            );
+        }
+    }
+
+    #[test]
     fn database_conflicts_replay_on_every_access_path() {
         assert_eq!(
             gents_protocol::database_error::TXN_CONFLICT_CODE,

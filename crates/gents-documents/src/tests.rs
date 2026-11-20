@@ -474,6 +474,48 @@ fn tools_validation_reports_every_violation() {
 }
 
 #[test]
+fn host_limits_are_validated_between_one_and_their_ceiling() {
+    let violations = |host: serde_json::Value| {
+        serde_json::from_value::<Tools>(serde_json::json!({
+            "tools_id": "host-limits",
+            "node_did": "did:test:test",
+            "host": host
+        }))
+        .unwrap()
+        .validation_violations()
+    };
+    let background = gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT;
+    let instructions = crate::tool_limits::MAX_CONFIGURED_INSTRUCTION_CHARS;
+    assert!(violations(serde_json::json!({
+        "max_background_tool_calls": 1, "max_instruction_chars": 1
+    }))
+    .is_empty());
+    assert!(violations(serde_json::json!({
+        "max_background_tool_calls": background, "max_instruction_chars": instructions
+    }))
+    .is_empty());
+    assert_eq!(
+        violations(serde_json::json!({
+            "max_background_tool_calls": 0, "max_instruction_chars": 0
+        })),
+        [
+            "host.max_instruction_chars must be positive",
+            "host.max_background_tool_calls must be positive",
+        ]
+    );
+    assert_eq!(
+        violations(serde_json::json!({
+            "max_background_tool_calls": background + 1,
+            "max_instruction_chars": instructions + 1
+        })),
+        [
+            format!("host.max_instruction_chars must be at most {instructions}"),
+            format!("host.max_background_tool_calls must be at most {background}"),
+        ]
+    );
+}
+
+#[test]
 fn validate_rejects_undeclared_agent_target_reference() {
     let refs = ConfigReferences::from_documents(
         "did:test:test",
@@ -748,11 +790,6 @@ fn same_owner_delegation_requires_an_agent_but_foreign_admission_is_separate() {
 
 #[test]
 fn cached_datastore_tool_matches_modeled_selection_and_visibility() {
-    let model = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .unwrap();
-    assert_eq!(model.configuration_datastore_tool_use_cases.len(), 5);
     let expected = SurfaceToolDecl::Query(QueryToolDecl {
         tool_name: "find_entries".into(),
         collection: "Entry".into(),
@@ -760,8 +797,8 @@ fn cached_datastore_tool_matches_modeled_selection_and_visibility() {
         fields: vec!["name".into()],
         filter_fields: vec![],
     });
-    for case in &model.configuration_datastore_tool_use_cases {
-        let selected = case["selected"].as_bool().unwrap();
+    gents_lean_vocab::families::household_datastore_tool_selection::replay(|case| {
+        let selected = case.selected;
         let tools = Tools {
             tools_id: "tools".into(),
             node_did: "node".into(),
@@ -776,25 +813,18 @@ fn cached_datastore_tool_matches_modeled_selection_and_visibility() {
             ..Default::default()
         };
         let mut entry = expected.clone();
-        if !case["declaration_matches"].as_bool().unwrap() {
+        if !case.declaration_matches {
             if let SurfaceToolDecl::Query(query) = &mut entry {
                 query.fields = vec!["other".into()];
             }
         }
         let surface: DatastoreToolSurfaceDocument = serde_json::from_value(serde_json::json!({
-            "surface_id": "surface", "node_did": "node", "enabled": case["enabled"],
+            "surface_id": "surface", "node_did": "node", "enabled": case.enabled,
             "entries": [entry]
         }))
         .unwrap();
-        let visible = if case["visible"].as_bool().unwrap() {
-            vec![surface]
-        } else {
-            vec![]
-        };
-        let actual = super::surface_tool::confirm_cached_datastore_tool(
-            &tools, &visible, "surface", &expected,
-        )
-        .is_ok();
-        assert_eq!(actual, case["expected"].as_bool().unwrap(), "{case}");
-    }
+        let visible = if case.visible { vec![surface] } else { vec![] };
+        super::surface_tool::confirm_cached_datastore_tool(&tools, &visible, "surface", &expected)
+            .is_ok()
+    });
 }
