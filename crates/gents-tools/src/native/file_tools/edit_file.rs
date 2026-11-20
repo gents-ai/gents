@@ -104,18 +104,20 @@ impl Tool for EditFileTool {
     async fn call(
         &self,
         args: Self::Args,
-        _context: &gents_loop::tool::ToolCallEnvelope,
+        call: &gents_loop::tool::ToolCallEnvelope,
     ) -> Result<Self::Output, Self::Error> {
+        let context = self.context.for_call(call);
         if !args.dry_run {
-            deny_workspace_file_writes()?;
+            deny_workspace_file_writes(call)?;
         }
-        let path = self.context.resolve_existing_file(&args.path)?;
+        let path = context.resolve_existing_file(&args.path)?;
         let consent = if args.dry_run {
             None
         } else {
             crate::plugin::approval::workspace::authorize_file_mutation(
+                call,
                 Self::NAME,
-                &self.context.root(),
+                &context.root(),
                 &path,
                 &args,
             )
@@ -124,7 +126,7 @@ impl Tool for EditFileTool {
                 ToolError::reported_failure(FailureClass::PolicyDenied, format!("{error:#}"))
             })?
         };
-        let display = self.context.display_path(&path);
+        let display = context.display_path(&path);
         let lock = file_mutation_lock_for(&path);
         let _guard = lock.lock().await;
         if let Some(consent) = consent {
@@ -197,7 +199,7 @@ impl Tool for EditFileTool {
                 let mut edit_note = None;
                 if !args.dry_run {
                     let capture =
-                        change_capture::FileChangeCapture::start(&self.context.root(), &path).await;
+                        change_capture::FileChangeCapture::start(call, &context.root(), &path).await;
                     let mutation = async {
                         tokio::fs::write(&path, post_text.as_bytes()).await?;
                         let verify = tokio::fs::read(&path).await?;
@@ -209,8 +211,7 @@ impl Tool for EditFileTool {
                         }
                         if let Some(writethrough) = &self.writethrough {
                             edit_note = writethrough
-                                .after_mutation_under_lock(
-                                    &path,
+                                .after_mutation_under_lock(call, &path,
                                     crate::native::lsp::MutationKind::Edit,
                                 )
                                 .await;
@@ -225,8 +226,7 @@ impl Tool for EditFileTool {
                     drop(_guard);
                     if let Some(writethrough) = &self.writethrough {
                         let diag = writethrough
-                            .diagnostics_after_unlock(
-                                &path,
+                            .diagnostics_after_unlock(call, &path,
                                 crate::native::lsp::MutationKind::Edit,
                             )
                             .await;

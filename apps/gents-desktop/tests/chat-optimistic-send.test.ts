@@ -208,29 +208,6 @@ it("shows every window the same status and lets no window discard another window
   expect(loadChatDrafts().chatDrafts).toEqual([]);
 });
 
-it("reads a confirmed draft saved by the earlier client as confirmed and releases it", () => {
-  const request = {
-    clientDid: "client",
-    nodeDid: "node",
-    requestId: "legacy",
-    sessionId: "session",
-    content: "Original",
-  };
-  localStorage.setItem(
-    `gents.chat.sendDraft.v1:${JSON.stringify(["client", "node", "legacy"])}`,
-    JSON.stringify({
-      ...request,
-      selectedSessionId: "session",
-      queued: false,
-      requestJson: JSON.stringify(request),
-      result: acceptedChat(request),
-    }),
-  );
-  localStorage.setItem("gents.chat.unresolvedSubmissions.v1", "[]");
-  expect(loadChatDrafts()).toEqual({ chatDrafts: [], chatDraftError: null });
-  expect(localStorage.length).toBe(0);
-});
-
 it("clears the composer error about a hung send when its late confirmation arrives", async () => {
   vi.useFakeTimers();
   const f = fixture();

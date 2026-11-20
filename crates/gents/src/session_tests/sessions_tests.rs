@@ -5,7 +5,9 @@ use gents_session::session::*;
 async fn retry_frontier_matches_lean_admission() {
     use gents_protocol::tool_call::AwaitMode;
     use gents_store::identity::NodeIdentity;
-    use gents_toolcalls::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
+    use gents_toolcalls::call::lifecycle::admission_fixture::{
+        publish_accepted_on_claimed_request, AcceptedFixtureCall,
+    };
     let (db, user, client, binding) = gents_inference::test_support::signed_test_node(
         "retry-frontier",
         gents_automation::lifecycle_hooks::composition(),
@@ -51,12 +53,14 @@ async fn retry_frontier_matches_lean_admission() {
                 node.clone(),
                 &mut parent,
                 node_did,
-                0,
-                "fixture",
-                &format!("retry-tool-{index}"),
-                serde_json::json!({}),
-                mode,
-                true,
+                AcceptedFixtureCall {
+                    turn: 0,
+                    tool_name: "fixture",
+                    tool_call_id: &format!("retry-tool-{index}"),
+                    arguments: serde_json::json!({}),
+                    await_mode: mode,
+                    start_running: true,
+                },
             )
             .await
             .unwrap();

@@ -20,34 +20,35 @@ afterburner-wasi = { git = "https://github.com/afterburner-sh/afterburner.git", 
 ahash = { version = "0.8", features = ["serde"] }
 aho-corasick = { version = "1" }
 allocator-api2 = { version = "0.2" }
-anyhow = { version = "1" }
 axum = { version = "0.8", features = ["ws"] }
-base16ct = { version = "0.2", default-features = false, features = ["alloc"] }
 base64 = { version = "0.23" }
 base64ct = { version = "1", default-features = false, features = ["std"] }
 bit-set = { version = "0.8" }
 bit-vec = { version = "0.8" }
 bitflags = { version = "2", default-features = false, features = ["serde", "std"] }
 brotli-decompressor = { version = "5" }
+bytemuck = { version = "1", default-features = false, features = ["extern_crate_alloc"] }
 bytes = { version = "1", features = ["serde"] }
 cipher = { version = "0.4", default-features = false, features = ["block-padding", "std"] }
 clap = { version = "4", features = ["derive", "env"] }
 clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
 compact_str = { version = "0.9" }
+const-hex = { version = "1", default-features = false, features = ["core-error", "serde", "std"] }
 cranelift-bitset = { version = "0.137", default-features = false, features = ["enable-serde"] }
-crc32fast = { version = "1" }
 crossbeam-epoch = { version = "0.9" }
 crossbeam-utils = { version = "0.8" }
-crypto-common = { version = "0.1", default-features = false, features = ["getrandom", "std"] }
+crypto-common-6f8ce4dd05d13bba = { package = "crypto-common", version = "0.2", default-features = false, features = ["getrandom"] }
+crypto-common-c65f7effa3be6d31 = { package = "crypto-common", version = "0.1", default-features = false, features = ["getrandom", "std"] }
 curve25519-dalek = { version = "5", features = ["rand_core", "serde"] }
 data-encoding = { version = "2" }
-db = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "46ce911e53bd50c422d0d1e72469e19c17f7acf7", default-features = false, features = ["native", "wasmtime-runtime"] }
-defra-p2p-adapter = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "46ce911e53bd50c422d0d1e72469e19c17f7acf7", default-features = false, features = ["iroh", "kms", "native", "wasmtime-runtime"] }
+db = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f9903e129dfd398c01ea89b91204c56aee526554", default-features = false, features = ["native", "wasmtime-runtime"] }
+defra-p2p-adapter = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f9903e129dfd398c01ea89b91204c56aee526554", default-features = false, features = ["iroh", "kms", "native", "wasmtime-runtime"] }
 der = { version = "0.7", default-features = false, features = ["oid", "pem", "std"] }
 deranged = { version = "0.5", features = ["powerfmt", "serde"] }
-derive_more = { version = "2", features = ["add", "add_assign", "debug", "deref", "deref_mut", "display", "from", "from_str", "into", "into_iterator", "is_variant", "try_into"] }
+derive_more = { version = "2", features = ["add", "add_assign", "as_ref", "debug", "deref", "deref_mut", "display", "from", "from_str", "index", "index_mut", "into", "into_iterator", "is_variant", "not", "try_into"] }
 digest-93f6ce9d446188ac = { package = "digest", version = "0.10", features = ["mac", "oid", "std"] }
 digest-a6292c17cd707f01 = { package = "digest", version = "0.11", features = ["alloc", "mac", "oid", "rand_core"] }
+ecdsa = { version = "0.16", default-features = false, features = ["pem", "signing", "std", "verifying"] }
 ed25519 = { version = "3", default-features = false, features = ["pem", "serde"] }
 ed25519-dalek = { version = "3", features = ["pem", "rand_core", "serde"] }
 either = { version = "1", features = ["use_std"] }
@@ -72,31 +73,35 @@ hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
 hmac = { version = "0.12", default-features = false, features = ["reset"] }
 http = { version = "1" }
 httparse = { version = "1" }
+hybrid-array = { version = "0.4", default-features = false, features = ["alloc", "subtle", "zeroize"] }
 hyper = { version = "1", features = ["full"] }
 hyper-util = { version = "0.1", features = ["http1", "http2", "server", "service", "tokio"] }
 idna = { version = "1" }
 indexmap = { version = "2", features = ["serde"] }
 inout = { version = "0.1", default-features = false, features = ["std"] }
 ipnet = { version = "2", features = ["serde"] }
-itertools-582f2526e08bb6a0 = { package = "itertools", version = "0.14" }
+itertools = { version = "0.14" }
 lazy_static = { version = "1", default-features = false, features = ["spin_no_std"] }
-lens = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "46ce911e53bd50c422d0d1e72469e19c17f7acf7", default-features = false, features = ["wasmtime-runtime"] }
+lens = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f9903e129dfd398c01ea89b91204c56aee526554", default-features = false, features = ["wasmtime-runtime"] }
 libc = { version = "0.2", features = ["extra_traits"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
 memchr = { version = "2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
 num-bigint = { version = "0.4" }
+num-integer = { version = "0.1", features = ["i128"] }
 num-iter = { version = "0.1", default-features = false, features = ["i128", "std"] }
 num-traits = { version = "0.2", features = ["i128", "libm"] }
 object = { version = "0.40", default-features = false, features = ["read_core", "unaligned", "write"] }
 once_cell = { version = "1", features = ["critical-section"] }
 opentelemetry = { version = "0.31", default-features = false, features = ["metrics", "trace"] }
 oxc_data_structures = { version = "0.127", features = ["code_buffer", "fieldless_enum", "inline_string", "rope", "slice_iter", "stack"] }
-p2p = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "46ce911e53bd50c422d0d1e72469e19c17f7acf7", features = ["iroh-transport", "kms"] }
+p256 = { version = "0.13", features = ["ecdh"] }
+p2p = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f9903e129dfd398c01ea89b91204c56aee526554", features = ["iroh-transport", "kms"] }
 pbkdf2 = { version = "0.12" }
 percent-encoding = { version = "2" }
 phf = { version = "0.13", features = ["macros"] }
 phf_shared = { version = "0.11", default-features = false, features = ["std"] }
+pkcs8 = { version = "0.10", default-features = false, features = ["pem", "std"] }
 portable-atomic = { version = "1", features = ["require-cas", "serde"] }
 postcard = { version = "1", features = ["experimental-derive", "use-std"] }
 proc-macro2 = { version = "1", features = ["span-locations"] }
@@ -110,7 +115,6 @@ reqwest-594e8ee84c453af0 = { package = "reqwest", version = "0.13", default-feat
 reqwest-5ef9efb8ec2df382 = { package = "reqwest", version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 rig-core = { git = "https://github.com/jackzampolin/rig", rev = "b12a51c9c544e1b0f5b3961e0293cf8868868730" }
 rmcp = { version = "1", features = ["client", "reqwest", "transport-streamable-http-client-reqwest", "transport-streamable-http-server"] }
-rustc-hash = { version = "2" }
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "aws_lc_rs", "logging", "ring", "std", "tls12"] }
 rustls-webpki = { version = "0.103", default-features = false, features = ["aws-lc-rs", "ring", "std"] }
 schemars = { version = "1", features = ["chrono04"] }
@@ -127,6 +131,7 @@ slab = { version = "0.4" }
 smallvec = { version = "1", default-features = false, features = ["const_new", "serde", "union", "write"] }
 socket2 = { version = "0.6", default-features = false, features = ["all"] }
 spin = { version = "0.9", default-features = false, features = ["once", "spin_mutex"] }
+spki = { version = "0.7", default-features = false, features = ["pem", "std"] }
 strum = { version = "0.28", features = ["derive"] }
 subtle = { version = "2", features = ["const-generics"] }
 syn-f595c2ba2a3f28df = { package = "syn", version = "2", features = ["full", "visit", "visit-mut"] }
@@ -136,7 +141,9 @@ time = { version = "0.3", features = ["formatting", "macros", "parsing", "serde"
 tokio = { version = "1", features = ["full", "test-util"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc_rs", "logging", "ring", "tls12"] }
 tokio-util = { version = "0.7", features = ["codec", "io-util", "rt"] }
-toml_datetime = { version = "1", default-features = false, features = ["serde", "std"] }
+toml_datetime-3b31131e45eafb45 = { package = "toml_datetime", version = "0.6", default-features = false, features = ["serde"] }
+toml_datetime-dff4ba8e3ae991db = { package = "toml_datetime", version = "1", default-features = false, features = ["serde", "std"] }
+toml_edit = { version = "0.20", features = ["serde"] }
 toml_parser = { version = "1", default-features = false, features = ["std"] }
 tower = { version = "0.5", default-features = false, features = ["limit", "log", "make", "util"] }
 tracing = { version = "0.1", features = ["log"] }
@@ -159,16 +166,16 @@ zstd-sys = { version = "2", default-features = false, features = ["legacy", "std
 
 [build-dependencies]
 aho-corasick = { version = "1", default-features = false, features = ["perf-literal", "std"] }
-anyhow = { version = "1" }
 base64 = { version = "0.23", default-features = false, features = ["std"] }
 brotli-decompressor = { version = "5", default-features = false, features = ["std"] }
 bytes = { version = "1", features = ["serde"] }
 cc = { version = "1", default-features = false, features = ["parallel"] }
-crc32fast = { version = "1" }
-crypto-common = { version = "0.1", default-features = false, features = ["std"] }
+const-hex = { version = "1", default-features = false, features = ["alloc", "core-error"] }
+crypto-common-c65f7effa3be6d31 = { package = "crypto-common", version = "0.1", default-features = false, features = ["std"] }
 data-encoding = { version = "2", default-features = false, features = ["alloc"] }
-derive_more-impl = { version = "2", features = ["add", "add_assign", "debug", "deref", "deref_mut", "display", "from", "from_str", "into", "into_iterator", "is_variant", "try_into"] }
+derive_more-impl = { version = "2", features = ["add", "add_assign", "as_ref", "debug", "deref", "deref_mut", "display", "from", "from_str", "index", "index_mut", "into", "into_iterator", "is_variant", "not", "try_into"] }
 digest-93f6ce9d446188ac = { package = "digest", version = "0.10", features = ["std"] }
+digest-a6292c17cd707f01 = { package = "digest", version = "0.11" }
 either = { version = "1", default-features = false, features = ["use_std"] }
 flate2 = { version = "1" }
 form_urlencoded = { version = "1", default-features = false, features = ["std"] }
@@ -179,11 +186,13 @@ hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17", default-
 http = { version = "1" }
 idna = { version = "1", default-features = false, features = ["compiled_data", "std"] }
 indexmap = { version = "2", features = ["serde"] }
-itertools-594e8ee84c453af0 = { package = "itertools", version = "0.13" }
+itertools = { version = "0.14" }
 memchr = { version = "2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
+num-integer = { version = "0.1", default-features = false, features = ["i128"] }
+num-traits = { version = "0.2", default-features = false, features = ["i128"] }
 object = { version = "0.40", default-features = false, features = ["elf", "read_core"] }
-once_cell = { version = "1", default-features = false, features = ["std"] }
+once_cell = { version = "1" }
 percent-encoding = { version = "2" }
 phf = { version = "0.13" }
 phf_shared = { version = "0.11" }
@@ -194,7 +203,6 @@ quote = { version = "1" }
 regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 regex-syntax = { version = "0.8" }
-rustc-hash = { version = "2" }
 rustls = { version = "0.23", default-features = false, features = ["logging", "ring", "std", "tls12"] }
 rustls-webpki = { version = "0.103", default-features = false, features = ["ring", "std"] }
 semver = { version = "1", features = ["serde"] }
@@ -205,13 +213,15 @@ sha2-93f6ce9d446188ac = { package = "sha2", version = "0.10" }
 simd-adler32 = { version = "0.3" }
 smallvec = { version = "1", default-features = false, features = ["const_generics", "serde", "union"] }
 stable_deref_trait = { version = "1" }
-syn-7b89eefb6aaa9bf3 = { package = "syn", version = "3", features = ["extra-traits", "full", "visit-mut"] }
-syn-dff4ba8e3ae991db = { package = "syn", version = "1", features = ["extra-traits", "fold", "full"] }
+syn-7b89eefb6aaa9bf3 = { package = "syn", version = "3", features = ["extra-traits", "fold", "full", "visit-mut"] }
+syn-dff4ba8e3ae991db = { package = "syn", version = "1", features = ["extra-traits", "fold", "full", "visit"] }
 syn-f595c2ba2a3f28df = { package = "syn", version = "2", features = ["extra-traits", "fold", "full", "visit", "visit-mut"] }
 thiserror = { version = "2" }
 time-macros = { version = "0.2", default-features = false, features = ["formatting", "parsing", "serde"] }
-toml_datetime = { version = "1", features = ["serde"] }
+toml_datetime-dff4ba8e3ae991db = { package = "toml_datetime", version = "1", features = ["serde"] }
+toml_edit = { version = "0.20" }
 toml_parser = { version = "1" }
+typenum = { version = "1", default-features = false, features = ["const-generics"] }
 url = { version = "2", features = ["serde"] }
 uuid = { version = "1", features = ["serde", "v4"] }
 wasm-encoder = { version = "0.258", default-features = false, features = ["component-model", "std", "wasmparser"] }
@@ -238,7 +248,6 @@ rustix = { version = "1", features = ["event", "fs", "mm", "net", "param", "pipe
 security-framework = { version = "3", features = ["OSX_10_15"] }
 security-framework-sys = { version = "2", features = ["OSX_10_15"] }
 sha2-93f6ce9d446188ac = { package = "sha2", version = "0.10", default-features = false, features = ["asm"] }
-siphasher = { version = "1" }
 tokio-rustls = { version = "0.26", default-features = false, features = ["aws-lc-rs"] }
 tower = { version = "0.5", default-features = false, features = ["retry", "timeout"] }
 
@@ -249,7 +258,6 @@ deranged = { version = "0.5", features = ["powerfmt"] }
 errno = { version = "0.3", default-features = false, features = ["std"] }
 libc = { version = "0.2" }
 rustix = { version = "1", features = ["fs"] }
-siphasher = { version = "1" }
 time = { version = "0.3", features = ["formatting", "parsing"] }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
@@ -263,7 +271,6 @@ mimalloc = { version = "0.1" }
 mio = { version = "1", features = ["net", "os-ext"] }
 rustix = { version = "1", features = ["event", "mm", "net", "param", "pipe", "process", "pty", "stdio", "termios", "thread", "time"] }
 sha2-93f6ce9d446188ac = { package = "sha2", version = "0.10", default-features = false, features = ["asm"] }
-siphasher = { version = "1" }
 spin = { version = "0.9" }
 syn-f595c2ba2a3f28df = { package = "syn", version = "2", default-features = false, features = ["extra-traits"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["aws-lc-rs"] }
@@ -276,16 +283,9 @@ bitflags = { version = "2", default-features = false, features = ["std"] }
 libc = { version = "0.2" }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "ioctl", "no_std"] }
 rustix = { version = "1", features = ["fs"] }
-siphasher = { version = "1" }
 toml = { version = "0.8", default-features = false, features = ["parse"] }
+toml_datetime-3b31131e45eafb45 = { package = "toml_datetime", version = "0.6", default-features = false, features = ["serde"] }
+toml_edit = { version = "0.20", default-features = false, features = ["serde"] }
 winnow-ca01ad9e24f5d932 = { package = "winnow", version = "0.7" }
 
 ### END HAKARI SECTION
-
-# cargo hakari unifies over every feature of every workspace crate, which
-# would give defra-node `embedded-vera` and build the Vera node into every
-# test. `.config/hakari.toml` keeps defra-node out of the section above; its
-# default feature set is unified here by hand.
-[dependencies.defra-node]
-workspace = true
-features = ["http", "p2p", "wasmtime-runtime"]

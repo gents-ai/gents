@@ -1,5 +1,7 @@
 use super::*;
-use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
+use gents_protocol::request_admission::{
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestScope,
+};
 use gents_protocol::row::AgentRequestRow;
 use gents_protocol::tool_call::AwaitMode;
 use gents_session::request::lifecycle::{
@@ -255,10 +257,7 @@ async fn non_deadline_request_terminalization_does_not_timeout_running_wait() {
         let mut create = AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             request_id,
-            identity.did(),
-            identity.did(),
-            identity.did(),
-            request_id,
+            RequestScope::new(identity.did(), identity.did(), identity.did(), request_id),
             "Wait for the background process",
             "interactive",
             &created_at,
@@ -353,10 +352,7 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
         let mut root = AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             "output-root",
-            identity.did(),
-            agent.did(),
-            agent.did(),
-            "output-session",
+            RequestScope::new(identity.did(), agent.did(), agent.did(), "output-session"),
             "Write the result",
             if automated {
                 "scheduled"
@@ -391,8 +387,10 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
             agent.did().into(),
             "output-goal",
             "Finish missing writes",
-            1,
-            false,
+            gents_protocol::request_input::GoalContinuationInput {
+                sequence: 1,
+                wrapup: false,
+            },
             "2026-09-05T00:00:01Z",
             root_request.request_hop,
         )
@@ -416,10 +414,7 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
         let mut outsider = AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             "output-outsider",
-            identity.did(),
-            agent.did(),
-            agent.did(),
-            "output-session",
+            RequestScope::new(identity.did(), agent.did(), agent.did(), "output-session"),
             "Independent request",
             "interactive",
             "2026-09-05T00:00:02Z",
@@ -565,10 +560,12 @@ async fn dynamic_count_failures_are_observed_not_defaulted() {
         let mut create = AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             "request-count-fail-closed",
-            identity.did(),
-            identity.did(),
-            identity.did(),
-            "session-count-fail-closed",
+            RequestScope::new(
+                identity.did(),
+                identity.did(),
+                identity.did(),
+                "session-count-fail-closed",
+            ),
             "Count write",
             "interactive",
             "2026-09-05T00:00:00Z",
@@ -626,10 +623,12 @@ async fn same_tool_calls_with_conflicting_declared_counts_reject_the_gate() {
     let mut create = AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         "request-count-conflict",
-        identity.did(),
-        identity.did(),
-        identity.did(),
-        "session-count-conflict",
+        RequestScope::new(
+            identity.did(),
+            identity.did(),
+            identity.did(),
+            "session-count-conflict",
+        ),
         "Conflicting count writes",
         "interactive",
         "2026-09-05T00:00:00Z",

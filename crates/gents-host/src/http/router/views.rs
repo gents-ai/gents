@@ -10,7 +10,7 @@ use crate::http::fleet::load_fleet_snapshot;
 use crate::http::fleet_slots::load_fleet_slot_snapshot;
 use crate::http::healthz::render_healthz_payload;
 use crate::http::mcp_pool::load_mcp_pool_snapshot;
-use crate::http::prometheus::{
+use crate::http::prometheus::store::{
     load_metrics_query_data, with_local_native_executors, MetricsRuntimeRow,
 };
 use crate::http::self_view::{load_self_view, ContextBudget, SelfAgent};

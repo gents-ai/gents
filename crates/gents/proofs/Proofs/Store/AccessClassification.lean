@@ -280,7 +280,7 @@ inductive StoreWrapper where
   | agentProvisionErrorAccess
   | agentAdmissionObservationErrorAccess
   | remoteAgentProvisionErrorAuthorization
-  | runtimeMigrationErrorConfig
+  | runtimeSchemaErrorConfig
   | authoredDocumentCreateErrorPublication
   | authoredDocumentCreateErrorUnconfirmed
   | enrollmentApprovalErrorNodeRead
@@ -288,12 +288,19 @@ inductive StoreWrapper where
   | enrollmentGrantErrorObserve
   | enrollmentGrantErrorRecord
   | enrollmentGrantErrorIssue
+  | enrollmentGrantErrorIssueNotAbandoned
   | enrollmentGrantErrorRevoke
   | enrollmentGrantErrorRetire
   | grantSetErrorGrant
   | grantSetErrorRollback
   | grantSetErrorRevoke
   | legacyBackendPreflightErrorQuery
+  | journalSchemaErrorAccess
+  | outboxErrorAccess
+  | outboxErrorResponse
+  | clientAccessErrorAccess
+  | runtimeAccessErrorConfiguration
+  | ownGrantErrorUnanswered
   deriving DecidableEq, Repr
 
 def StoreWrapper.holding : StoreWrapper → Holding
@@ -363,9 +370,24 @@ def ToolsWrapper.wrap : ToolsWrapper → Failure → Error
   | .schemaIdentityErrorConfigClient, failure => .wrapper .sourced (.owner failure)
   | .queryCommandErrorAccess, failure => .wrapper .sourced (.owner failure)
 
+/-- `gents-automation`. -/
+inductive AutomationWrapper where
+  | goalApplicationErrorAccess
+  | goalApplicationErrorView
+  deriving DecidableEq, Repr
+
+def AutomationWrapper.holding (_ : AutomationWrapper) : Holding := .sourced
+
+/-- `gents-desktop-bridge`. -/
+inductive DesktopBridgeWrapper where
+  | localHomeAccessErrorSigning
+  deriving DecidableEq, Repr
+
+def DesktopBridgeWrapper.holding (_ : DesktopBridgeWrapper) : Holding := .sourced
+
 /-- `gents-desktop-core`. -/
 inductive DesktopCoreWrapper where
-  | localHomeAccessErrorSigning
+  | journalErrorAccess
   deriving DecidableEq, Repr
 
 def DesktopCoreWrapper.holding (_ : DesktopCoreWrapper) : Holding := .sourced
@@ -409,6 +431,14 @@ def serviceWrapped (wrapper : ServiceWrapper) (failure : Failure) (erasure : Era
 def toolsWrapped (wrapper : ToolsWrapper) (failure : Failure) (erasure : Erasure) :
     Classification :=
   (wrapper.wrap failure).classify erasure
+
+def automationWrapped (wrapper : AutomationWrapper) (failure : Failure) (erasure : Erasure) :
+    Classification :=
+  Error.held wrapper.holding failure erasure
+
+def desktopBridgeWrapped (wrapper : DesktopBridgeWrapper) (failure : Failure) (erasure : Erasure) :
+    Classification :=
+  Error.held wrapper.holding failure erasure
 
 def desktopCoreWrapped (wrapper : DesktopCoreWrapper) (failure : Failure) (erasure : Erasure) :
     Classification :=
@@ -455,6 +485,16 @@ theorem service_wrapping_preserves_classification (wrapper : ServiceWrapper) (fa
 theorem tools_wrapping_preserves_classification (wrapper : ToolsWrapper) (failure : Failure)
     (erasure : Erasure) : toolsWrapped wrapper failure erasure = failure.classification := by
   cases wrapper <;> cases erasure <;> cases failure <;> rfl
+
+theorem automation_wrapping_preserves_classification (wrapper : AutomationWrapper)
+    (failure : Failure) (erasure : Erasure) :
+    automationWrapped wrapper failure erasure = failure.classification :=
+  Error.held_preserves_classification wrapper.holding (by cases wrapper <;> decide) failure erasure
+
+theorem desktop_bridge_wrapping_preserves_classification (wrapper : DesktopBridgeWrapper)
+    (failure : Failure) (erasure : Erasure) :
+    desktopBridgeWrapped wrapper failure erasure = failure.classification :=
+  Error.held_preserves_classification wrapper.holding (by cases wrapper <;> decide) failure erasure
 
 theorem desktop_core_wrapping_preserves_classification (wrapper : DesktopCoreWrapper)
     (failure : Failure) (erasure : Erasure) :

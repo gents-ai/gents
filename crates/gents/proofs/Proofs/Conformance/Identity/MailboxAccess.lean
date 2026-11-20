@@ -12,7 +12,7 @@ structure SweepActorInput where
 @[conformance_family]
 def sweepActors : Family SweepActorInput Bool where
   inputs := ["agent", "other", "node"].map fun actor => { actor }
-  model := fun i => nativeSweepRead (i.actor == "node") i.actor "agent"
+  model := fun i => sweepVisible i.actor "agent"
 
 structure NativeInput where
   actors : List String
@@ -91,15 +91,13 @@ structure ClaimVisibilityInput where
   actor : String
   deriving ToJson
 
-/-- A delegated client claim routes both the item its mailbox tool creates and
-the claimed request's runtime notice to the immediate signer, so each item
-holds the `fixture` recipient relationship with that signer as "user"; an
-outsider and the session owner hold no relationship to either and stand as
+/-- A delegated client claim routes the item its mailbox tool creates to the
+immediate signer, so the item holds the `fixture` recipient relationship with
+that signer as "user"; an outsider holds no relationship to it and stands as
 "other". -/
 @[conformance_family]
 def claimVisibility : Family ClaimVisibilityInput Bool where
-  inputs := [{ item := "tool", actor := "user" }, { item := "tool", actor := "other" },
-    { item := "notice", actor := "other" }]
+  inputs := [{ item := "tool", actor := "user" }, { item := "tool", actor := "other" }]
   model := fun i => permitted fixture i.actor "read"
 
 /-- The delegated claim scenario binds its tool context to the admitted client
@@ -109,24 +107,5 @@ once the claim has committed. -/
 def claimToolContext : Family ClaimInput Bool where
   inputs := [{ present := true, committed := false }, { present := true, committed := true }]
   model := fun i => (claimedRecipient (admittedFixture i.present) i.committed).isSome
-
-structure NoticeOutput where
-  document : Bool
-  recipient : Bool
-  deferred : Bool
-  deriving ToJson
-
-structure NoticeInput where
-  present : Bool
-  claimed : Bool
-  deriving ToJson
-
-@[conformance_family]
-def noticePublication : Family NoticeInput NoticeOutput where
-  inputs := [{ present := true, claimed := false }, { present := true, claimed := true },
-    { present := false, claimed := true }]
-  model := fun i =>
-    let p := runtimeNotice (admittedFixture i.present) i.claimed true
-    { document := p.document, recipient := p.recipient, deferred := !p.document }
 
 end Conformance.MailboxAccess

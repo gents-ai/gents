@@ -3,7 +3,7 @@ use std::io;
 
 use ratatui::crossterm::event::Event;
 
-use crate::app::ChatLine;
+use crate::app::transcript::ChatLine;
 use crate::keys::KeySet;
 use crate::sample::{MenuId, Running, Tone};
 

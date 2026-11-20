@@ -123,13 +123,6 @@ def threadDropScenario : Family TraceInput (List StoreView) where
     let s := observedAt i.lane i.events index
     { claimHeld := claimHeld s, mutationGateHeld := s.mutationGateHeld }
 
-/-- The desktop client core's single-flight shutdown with a cancelled waiter;
-it observes the store lock only. -/
-@[conformance_family]
-def clientCoreScenario : Family TraceInput (List Bool) where
-  inputs := [traceOf "client_shutdown_cancel_retains_claim_until_return" [1, 2, 3]]
-  model := fun i => i.checkpoints.map fun index => claimHeld (observedAt i.lane i.events index)
-
 structure ExclusionView where
   claimHeld : Bool
   lifecycleGuardHeld : Bool

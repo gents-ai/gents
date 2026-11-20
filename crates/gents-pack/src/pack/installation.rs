@@ -20,7 +20,9 @@ mod documents;
 mod host_roots;
 mod hosted;
 pub use documents::declared_collections;
-pub(crate) use documents::{prepare_document_pack_archive_with_provisioner, sdl_paths};
+pub(crate) use documents::{
+    prepare_document_pack_archive_with_provisioner, sdl_paths, StageRecord,
+};
 mod removal;
 pub use catalog::{installed_catalog, InstalledCatalogEntry};
 pub use declared_access::declared_readers;
@@ -31,8 +33,8 @@ pub use documents::{
     plugin_data_unique_keys, prepare_document_pack_archive,
     prepare_document_pack_archive_with_runtime, prepare_document_pack_install,
     prepare_hosted_document_pack_archive, tools_taking_installer_root, DependencyVariableOverrides,
-    HostedDocumentGraph, HostedPackPreparation, InstallerRootAgent, PreparedDependency,
-    PreparedDocumentPackInstall,
+    DocumentGraphPolicy, HostedDocumentGraph, HostedPackPreparation, InstallTarget,
+    InstallerRootAgent, PackGraphInputs, PreparedDependency, PreparedDocumentPackInstall,
 };
 pub use hosted::{
     stage_hosted_pack, HostedHomePublication, HostedPackApproval, HostedPackStage,
@@ -689,21 +691,32 @@ fn select_install_source(
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the record, prior state, publication options, Node binding and source have distinct owners"
-)]
-async fn write_record_in_txn(
-    txn: &ConfigApplyTxn<'_>,
-    owner: &str,
-    pack: &PackIdentity,
-    prior: &Record,
+/// The installation record a write publishes over the prior one: the pack
+/// it records, the documents it installed, whether it was installed
+/// explicitly, whether the plugin store owns the record, and where the pack
+/// came from.
+struct RecordWrite<'a> {
+    pack: &'a PackIdentity,
     documents: Vec<RecordedDocument>,
     explicit: bool,
     plugin_store: bool,
+    source: Option<&'a PackSource>,
+}
+
+async fn write_record_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    owner: &str,
+    prior: &Record,
+    record: RecordWrite<'_>,
     node_binding: Option<&gents_documents::ConfigurationNodeBinding>,
-    source: Option<&PackSource>,
 ) -> Result<()> {
+    let RecordWrite {
+        pack,
+        documents,
+        explicit,
+        plugin_store,
+        source,
+    } = record;
     if let Some(source) = source {
         source.validate_for(&pack.coordinate, &pack.version)?;
     }
@@ -818,22 +831,22 @@ async fn write_record_in_txn(
     Ok(())
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the installation record inputs a graph stage carries"
-)]
 pub(crate) async fn install_in_txn(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
     pack: &PackIdentity,
     documents: Vec<DesiredStateApplyDocument>,
-    policy: DriftPolicy,
+    policy: DocumentGraphPolicy,
     node_binding: Option<&gents_documents::ConfigurationNodeBinding>,
-    source: Option<&PackSource>,
-    variables: Option<&BTreeMap<String, Option<String>>>,
-    profile_policy: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
-    installer_root_tools: &[String],
+    record: &StageRecord,
 ) -> Result<InstallReport, PackChangeError> {
+    let DocumentGraphPolicy {
+        drift: policy,
+        profiles: profile_policy,
+    } = policy;
+    let source = record.source.as_ref();
+    let variables = record.variables.as_ref();
+    let installer_root_tools = record.installer_root_tools.as_slice();
     let mut prior = read_record(txn, owner, &pack.coordinate).await?;
     if let Some(variables) = variables {
         prior.variables.clone_from(variables);
@@ -1061,13 +1074,15 @@ pub(crate) async fn install_in_txn(
     write_record_in_txn(
         txn,
         owner,
-        pack,
         &prior,
-        recorded.into_values().collect(),
-        pack.explicit,
-        false,
+        RecordWrite {
+            pack,
+            documents: recorded.into_values().collect(),
+            explicit: pack.explicit,
+            plugin_store: false,
+            source,
+        },
         node_binding,
-        source,
     )
     .await?;
     dependencies::claim_in_txn(
@@ -1468,13 +1483,15 @@ async fn write_installed_plugin_identity(
         write_record_in_txn(
             txn,
             owner,
-            pack,
             &prior,
-            documents,
-            false,
-            true,
+            RecordWrite {
+                pack,
+                documents,
+                explicit: false,
+                plugin_store: true,
+                source,
+            },
             node_binding,
-            source,
         )
         .await?;
     } else {
@@ -1496,13 +1513,15 @@ async fn write_installed_plugin_identity(
         write_record_in_txn(
             txn,
             owner,
-            &identity,
             &prior,
-            documents,
-            false,
-            prior.plugin_store,
+            RecordWrite {
+                pack: &identity,
+                documents,
+                explicit: false,
+                plugin_store: prior.plugin_store,
+                source: None,
+            },
             node_binding,
-            None,
         )
         .await?;
     }
@@ -1553,13 +1572,15 @@ async fn write_plugin_record(
             return write_record_in_txn(
                 txn,
                 owner,
-                pack,
                 &prior,
-                documents,
-                false,
-                true,
+                RecordWrite {
+                    pack,
+                    documents,
+                    explicit: false,
+                    plugin_store: true,
+                    source: current_source.as_ref(),
+                },
                 node_binding,
-                current_source.as_ref(),
             )
             .await
             .map_err(Into::into)
@@ -1599,13 +1620,15 @@ async fn write_plugin_record(
     write_record_in_txn(
         txn,
         owner,
-        &unchanged,
         &prior,
-        documents,
-        false,
-        plugin_store,
+        RecordWrite {
+            pack: &unchanged,
+            documents,
+            explicit: false,
+            plugin_store,
+            source: None,
+        },
         node_binding,
-        None,
     )
     .await
     .map_err(Into::into)
@@ -1831,11 +1854,21 @@ pub async fn installed_pack_documents(
     owner: &str,
     coordinate: &str,
 ) -> Result<Vec<(Collection, String)>> {
+    Ok(installed_pack_record(access, owner, coordinate).await?.1)
+}
+
+/// [`installed_pack_documents`] with the pack digest the record names.
+pub async fn installed_pack_record(
+    access: &ConfigAccess,
+    owner: &str,
+    coordinate: &str,
+) -> Result<(Option<String>, Vec<(Collection, String)>)> {
     use gents_protocol::document_query::{
         fields::pack_installation as fields, Filter, Query, Selection,
     };
     let query = Query::select(
         Selection::doc_id()
+            .field(fields::DIGEST)
             .field(fields::DOCUMENTS)
             .field(fields::PLUGIN_STORE),
     )
@@ -1852,14 +1885,15 @@ pub async fn installed_pack_documents(
         "{coordinate} has more than one installation record for {owner}"
     );
     let Some(row) = rows.first().filter(|row| !is_plugin_store_row(row)) else {
-        return Ok(Vec::new());
+        return Ok((None, Vec::new()));
     };
-    Ok(
+    Ok((
+        row["digest"].as_str().map(str::to_owned),
         decode_record_field::<Vec<RecordedDocument>>(row, "documents", owner, coordinate)?
             .into_iter()
             .filter_map(|document| Some((managed_collection(&document.collection)?, document.id)))
             .collect(),
-    )
+    ))
 }
 
 pub async fn installed_packs(

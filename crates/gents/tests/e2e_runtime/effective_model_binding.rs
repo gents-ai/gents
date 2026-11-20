@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents_store::collection::Collection;
@@ -8,9 +7,8 @@ use gents_store::identity::NodeIdentity;
 use serde_json::Value;
 
 use crate::support::accepted_turn::boot_prepared_accepted_turn;
-use crate::support::signed_mailbox::{
-    prepare_signed_mailbox_turn, wait_for_request_terminal_on, SignedMailboxTurn,
-};
+use crate::support::live_inference::wait_for_request_terminal;
+use crate::support::signed_mailbox::{prepare_signed_mailbox_turn, SignedMailboxTurn};
 use crate::support::streaming_backend::StreamChunk;
 use crate::support::test_db;
 
@@ -85,8 +83,6 @@ async fn a_claimed_request_records_the_settings_its_dispatch_bound() {
         session_id,
         prompt,
         vec![StreamChunk::text("bound")],
-        Vec::new(),
-        None,
     )
     .await
     .unwrap();
@@ -119,9 +115,7 @@ async fn a_claimed_request_records_the_settings_its_dispatch_bound() {
     .await
     .unwrap();
     let runtime = boot_prepared_accepted_turn(&db, prepared, agent).await;
-    let terminal = wait_for_request_terminal_on(&turn.client, request_id, Duration::from_secs(60))
-        .await
-        .unwrap();
+    let terminal = wait_for_request_terminal(&turn.client, request_id).await;
     assert_eq!(terminal, "completed");
 
     let claimed = request_row(&turn, request_id).await;

@@ -1,5 +1,6 @@
 use super::fixture::SelfConfigFixture;
 use super::*;
+use gents_loop::test_support::scripted_provider::{Reply, ScriptedProvider};
 use gents_protocol::tool_names::CONFIG_TOOL_NAME;
 use gents_toolcalls::test_support::self_config::{
     call_config_tool, config, node_identity, take_agent_tool,
@@ -8,75 +9,45 @@ use gents_tools::builtin::self_config::test_support::{
     agent_inspect, agent_request, backend_request, protect_working_agent, tools_request,
 };
 
-#[derive(Clone)]
-struct RootReadModel {
-    path: String,
-    turns: Arc<std::sync::atomic::AtomicUsize>,
-    provider_inputs: Arc<std::sync::Mutex<Vec<String>>>,
+fn offers_read_file(request: &rig::completion::CompletionRequest) -> bool {
+    request.tools.iter().any(|tool| tool.name == "read_file")
 }
 
-#[allow(refining_impl_trait)]
-impl rig::completion::CompletionModel for RootReadModel {
-    type Response = ();
-    type StreamingResponse = ();
-    type Client = ();
-
-    fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-        unreachable!("the acceptance test constructs its deterministic model directly")
-    }
-
-    async fn completion(
-        &self,
-        _request: rig::completion::CompletionRequest,
-    ) -> Result<rig::completion::CompletionResponse<()>, rig::completion::CompletionError> {
-        Err(rig::completion::CompletionError::ProviderError(
-            "non-streaming completion is unused".into(),
-        ))
-    }
-
-    async fn stream(
-        &self,
-        request: rig::completion::CompletionRequest,
-    ) -> Result<rig::streaming::StreamingCompletionResponse<()>, rig::completion::CompletionError>
-    {
-        use std::sync::atomic::Ordering;
-
-        gents_inference::test_support::capture_scripted_provider_request(&request, "scripted")
-            .await?;
-        if !request.tools.iter().any(|tool| tool.name == "read_file") {
-            let stream: rig::streaming::StreamingResult<()> = Box::pin(futures::stream::iter([
-                Ok(rig::streaming::RawStreamingChoice::Message(
-                    "workspace-root-check".into(),
-                )),
-                Ok(rig::streaming::RawStreamingChoice::FinalResponse(())),
-            ]));
-            return Ok(rig::streaming::StreamingCompletionResponse::stream(stream));
+/// Reads `path` on its first turn offered `read_file`, then finishes; a
+/// request offered no `read_file` (the workspace-root check) gets text.
+fn root_read_model(path: String) -> ScriptedProvider {
+    let read = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    ScriptedProvider::responding(move |dispatch| {
+        if !offers_read_file(&dispatch.request) {
+            return Reply::text("workspace-root-check");
         }
-        self.provider_inputs
-            .lock()
-            .expect("provider input capture")
-            .push(serde_json::to_string(&request.chat_history).expect("serialize provider input"));
-        let choices = if self.turns.fetch_add(1, Ordering::SeqCst) == 0 {
-            vec![
-                rig::streaming::RawStreamingChoice::ToolCall(
-                    rig::streaming::RawStreamingToolCall::new(
-                        "root-read".into(),
-                        "read_file".into(),
-                        json!({"path": self.path}),
-                    ),
+        if read.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return Reply::text("root check complete");
+        }
+        Reply::turn(vec![
+            rig::streaming::RawStreamingChoice::ToolCall(
+                rig::streaming::RawStreamingToolCall::new(
+                    "root-read".into(),
+                    "read_file".into(),
+                    json!({"path": path}),
                 ),
-                rig::streaming::RawStreamingChoice::FinalResponse(()),
-            ]
-        } else {
-            vec![
-                rig::streaming::RawStreamingChoice::Message("root check complete".into()),
-                rig::streaming::RawStreamingChoice::FinalResponse(()),
-            ]
-        };
-        let stream: rig::streaming::StreamingResult<()> =
-            Box::pin(futures::stream::iter(choices.into_iter().map(Ok)));
-        Ok(rig::streaming::StreamingCompletionResponse::stream(stream))
-    }
+            ),
+            rig::streaming::RawStreamingChoice::FinalResponse(()),
+        ])
+    })
+    .capturing_openai("scripted")
+}
+
+/// The chat histories of the turns offered `read_file`.
+fn read_file_inputs(model: &ScriptedProvider) -> Vec<String> {
+    model
+        .requests()
+        .iter()
+        .filter(|request| offers_read_file(request))
+        .map(|request| {
+            serde_json::to_string(&request.chat_history).expect("serialize provider input")
+        })
+        .collect()
 }
 
 #[tokio::test]
@@ -203,7 +174,7 @@ async fn agent_create_commits_and_resolves_after_restart() {
     let fixture = gents_automation::test_support::self_config_fixture("agent-create").await;
     fixture.grant_selected_configuration().await;
     fixture.grant_node_reader().await;
-    fixture.grant_agent_catalog().await;
+    fixture.grant_node_administration().await;
     let root = fixture.admitted_workspace_root().await;
     let node = fixture.db.node.clone();
     let node_did = fixture.node_did().to_owned();
@@ -300,7 +271,7 @@ async fn agent_create_commits_and_resolves_after_restart() {
     .to_string();
 
     let output = tool
-        .call(args, &gents_loop::tool::ToolCallEnvelope::ambient())
+        .call(args, &gents_loop::tool::ToolCallEnvelope::default())
         .await
         .expect("direct agent create commits");
     let agents = gents_documents::list_agents(&node, &node_did)
@@ -435,7 +406,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
         gents_automation::test_support::self_config_fixture("descendant-root-self-config").await;
     fixture.grant_selected_configuration().await;
     fixture.grant_node_reader().await;
-    fixture.grant_agent_catalog().await;
+    fixture.grant_node_administration().await;
     let node = fixture.db.node.clone();
     let identity = fixture.db.node_identity.clone();
     let owner = fixture.node_did().to_owned();
@@ -664,19 +635,14 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
         .await
         .expect("load the fresh request through the admission representation");
         assert_eq!(request.agent_did, created.agent_did);
-        let turns = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let provider_inputs = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let model = root_read_model(path);
 
         crate::runtime::agent::process_owned_request_with_model_for_test(
             node.clone(),
             runtime_agent.agent.clone(),
             surface.clone(),
             &runtime,
-            RootReadModel {
-                path,
-                turns: turns.clone(),
-                provider_inputs: provider_inputs.clone(),
-            },
+            model.clone(),
             request,
         )
         .await
@@ -689,28 +655,23 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
             .await;
         let data = &observed.expect("owned-loop observations")["data"];
         assert!(
-            turns.load(std::sync::atomic::Ordering::SeqCst) >= 2,
+            read_file_inputs(&model).len() >= 2,
             "{label}: provider did not receive the tool-result turn; request: {}",
             data["AgentRequest"][0]
         );
+        let provider_inputs = read_file_inputs(&model);
         assert!(
             provider_inputs
-                .lock()
-                .expect("provider inputs")
                 .iter()
                 .any(|input| input.contains(expected_result)),
-            "{label}: provider did not receive the expected tool result/denial: {:?}",
-            provider_inputs.lock().expect("provider inputs")
+            "{label}: provider did not receive the expected tool result/denial: {provider_inputs:?}"
         );
         if let Some(forbidden_content) = forbidden_content {
             assert!(
                 provider_inputs
-                    .lock()
-                    .expect("provider inputs")
                     .iter()
                     .all(|input| !input.contains(forbidden_content)),
-                "{label}: denied file contents reached provider input: {:?}",
-                provider_inputs.lock().expect("provider inputs")
+                "{label}: denied file contents reached provider input: {provider_inputs:?}"
             );
         }
 
@@ -984,7 +945,7 @@ async fn a_profile_edit_is_fenced_alike_through_its_agent_and_by_its_exact_id() 
         let text = tool
             .call(
                 json!({"argv": argv, "set": {"backend_id": backend}}).to_string(),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .unwrap_or_else(|error| panic!("{input}: {error:#}"));

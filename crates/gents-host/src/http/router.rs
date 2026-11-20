@@ -14,7 +14,7 @@ use serde_json::json;
 use tokio::sync::{watch, OnceCell};
 
 use crate::http::enrollment::{EnrollmentDecisionServiceHandle, EnrollmentOfferIssuerHandle};
-use crate::http::prometheus::{P2pMetricsSnapshot, StoreSizeCache};
+use crate::http::prometheus::{p2p::P2pMetricsSnapshot, StoreSizeCache};
 use crate::http::version::version_response;
 use accounts::{
     account_usage_read_handler, enrollment_decision_handler, enrollment_pending_handler,
@@ -55,6 +55,12 @@ pub struct RuntimeHttpState {
     pub activation_observation: watch::Receiver<RuntimeActivationObservation>,
     pub replicated_schema: Arc<OnceCell<gents_protocol::peer_schema::ReplicatedSchema>>,
     pub serve_lifecycle: ServeLifecycleHandle,
+    pub client_access_decisions: Arc<tokio::sync::Mutex<()>>,
+    pub document_acp: gents_store::local::document_acp::DocumentAcp,
+    /// The home's node key, which signs its status before the runtime that
+    /// holds it too has started.
+    pub node_identity: Option<Arc<dyn gents_store::identity::NodeIdentity>>,
+    pub pack_watch_slots: Arc<tokio::sync::Semaphore>,
 }
 
 impl RuntimeHttpState {
@@ -121,33 +127,76 @@ pub fn empty_activation_state() -> (
     (Arc::new(OnceCell::new()), receiver)
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "each argument is a separate shared handle owned by the router state"
-)]
+pub struct RouterIdentity {
+    pub graphql: String,
+    pub p2p_graphql: GraphqlEndpoint,
+    pub node_name: String,
+    pub node_did: String,
+    pub node_identity: Option<Arc<dyn gents_store::identity::NodeIdentity>>,
+    pub document_acp: gents_store::local::document_acp::DocumentAcp,
+}
+
+pub struct ToolSurface {
+    pub tool_ceiling: String,
+    pub tool_root: Result<Option<String>, String>,
+    pub cli_tools: Vec<String>,
+    pub home: Option<String>,
+    pub store_dir: Option<std::path::PathBuf>,
+    pub mcp: Option<crate::http::mcp_server::McpServiceOptions>,
+}
+
+pub struct EnrollmentHandles {
+    pub offer_issuer: EnrollmentOfferIssuerHandle,
+    pub decisions: EnrollmentDecisionServiceHandle,
+    pub p2p_admission: Option<P2pAdmissionState>,
+}
+
+pub struct RuntimeActivation {
+    pub runtime: Arc<OnceCell<gents::Gents>>,
+    pub observation: watch::Receiver<RuntimeActivationObservation>,
+    pub replicated_schema: Arc<OnceCell<gents_protocol::peer_schema::ReplicatedSchema>>,
+    pub serve_lifecycle: ServeLifecycleHandle,
+}
+
 pub fn runtime_contract_router(
-    graphql: String,
-    p2p_graphql: GraphqlEndpoint,
-    node_name: String,
-    node_did: String,
-    tool_ceiling: String,
-    tool_root: Result<Option<String>, String>,
-    cli_tools: Vec<String>,
-    home: Option<String>,
-    store_dir: Option<std::path::PathBuf>,
-    mcp: Option<crate::http::mcp_server::McpServiceOptions>,
+    identity: RouterIdentity,
+    tools: ToolSurface,
+    enrollment: EnrollmentHandles,
+    activation: RuntimeActivation,
     backend_health: Option<gents_inference::backends::health::BackendHealthMap>,
-    p2p_admission: Option<P2pAdmissionState>,
-    enrollment_offer_issuer: EnrollmentOfferIssuerHandle,
-    enrollment_decisions: EnrollmentDecisionServiceHandle,
-    activation_runtime: Arc<OnceCell<gents::Gents>>,
-    activation_observation: watch::Receiver<RuntimeActivationObservation>,
-    replicated_schema: Arc<OnceCell<gents_protocol::peer_schema::ReplicatedSchema>>,
-    serve_lifecycle: ServeLifecycleHandle,
+    pack_watch_limit: u32,
 ) -> RuntimeRouters {
+    let RouterIdentity {
+        graphql,
+        p2p_graphql,
+        node_name,
+        node_did,
+        node_identity,
+        document_acp,
+    } = identity;
+    let ToolSurface {
+        tool_ceiling,
+        tool_root,
+        cli_tools,
+        home,
+        store_dir,
+        mcp,
+    } = tools;
+    let EnrollmentHandles {
+        offer_issuer: enrollment_offer_issuer,
+        decisions: enrollment_decisions,
+        p2p_admission,
+    } = enrollment;
+    let RuntimeActivation {
+        runtime: activation_runtime,
+        observation: activation_observation,
+        replicated_schema,
+        serve_lifecycle,
+    } = activation;
     let operator_did = node_did.clone();
     let graphql_for_mcp = graphql.clone();
     let state = RuntimeHttpState {
+        client_access_decisions: Arc::new(tokio::sync::Mutex::new(())),
         p2p_graphql,
         graphql: GraphqlEndpoint::anonymous(graphql),
         node_name,
@@ -169,16 +218,13 @@ pub fn runtime_contract_router(
         activation_observation,
         replicated_schema,
         serve_lifecycle,
+        document_acp,
+        node_identity,
+        pack_watch_slots: Arc::new(tokio::sync::Semaphore::new(pack_watch_limit as usize)),
     };
 
     let operator_routes = Router::new()
         .route("/packs/ux/watch", post(crate::http::pack_watch::watch))
-        .route(
-            "/packs/wire",
-            post(crate::http::pack_wire::wire_handler).layer(axum::extract::DefaultBodyLimit::max(
-                crate::http::pack_wire::MAX_BODY,
-            )),
-        )
         .route("/metrics", get(metrics_handler))
         .route("/healthz", get(healthz_handler))
         .route("/activation", get(activation_handler))
@@ -207,6 +253,10 @@ pub fn runtime_contract_router(
         )
         .route("/version", get(version_handler))
         .route(
+            gents_pack::pack::plugin_wire::PLUGIN_RECORD_PATH,
+            get(crate::http::pack_record::plugin_record),
+        )
+        .route(
             gents_protocol::agent_identity::AGENT_IDENTITY_PATH,
             post(crate::http::agent_identity::provision),
         )
@@ -214,7 +264,31 @@ pub fn runtime_contract_router(
             gents_protocol::agent_identity::AGENT_ADMISSION_PATH,
             post(crate::http::agent_identity::admission),
         )
+        .route(
+            gents_protocol::goal_control::APPLY_GOAL_CONTROL_PATH,
+            post(crate::http::goal_control::apply),
+        )
+        .route(
+            gents_protocol::client_access::REQUEST_PATH,
+            post(crate::http::client_access::request),
+        )
+        .route(
+            gents_protocol::client_access::DECIDE_PATH,
+            post(crate::http::client_access::decide),
+        )
         .route("/status", get(status_route))
+        .route(
+            gents_protocol::owed_settlement::OWED_SETTLEMENT_PATH,
+            post(crate::http::owed_settlement::settle),
+        )
+        .route(
+            gents_protocol::owed_settlement::OWED_REMOVALS_PATH,
+            post(crate::http::owed_settlement::removals),
+        )
+        .route(
+            gents_protocol::owed_settlement::OWED_AWAIT_PATH,
+            post(crate::http::owed_settlement::await_owed),
+        )
         .route("/fleet/slots", get(fleet_slots_handler))
         .route(
             gents_protocol::serve_lifecycle::control::RUNTIME_CONTROL_PATH,
@@ -232,7 +306,7 @@ pub fn runtime_contract_router(
         .route("/enrollment/pending", post(enrollment_pending_handler))
         .route("/accounts/usage/read", post(account_usage_read_handler))
         .route(
-            gents_desktop_core::inference::INFERENCE_SETTINGS_PATH,
+            gents_observe::client_inference::INFERENCE_SETTINGS_PATH,
             get(crate::http::inference::inference_settings_handler),
         )
         .route(
@@ -358,4 +432,4 @@ async fn version_handler() -> impl IntoResponse {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

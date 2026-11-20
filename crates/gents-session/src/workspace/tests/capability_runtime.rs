@@ -252,10 +252,10 @@ async fn runtime_seal_case(unowned: bool) {
     action.path_capability = WorkspacePathCapability::exact_paths(vec!["patch.rs".into()]).unwrap();
     let created = {
         let mut ctx = fx.ctx(&mut memory, git_worktree_caps());
-        ctx.owner_node_did = did.to_owned();
+        ctx.provenance.owner_node_did = did.to_owned();
         ctx.repository.owner_node_did = did.to_owned();
-        ctx.writer_principal = agent.did().to_owned();
-        ctx.integrator_principal = agent.did().to_owned();
+        ctx.provenance.writer_principal = agent.did().to_owned();
+        ctx.provenance.integrator_principal = agent.did().to_owned();
         execute_create_workspace_plan(
             &emit_create_workspace_plan(action.clone()),
             &mut Vec::new(),
@@ -316,10 +316,12 @@ async fn runtime_seal_case(unowned: bool) {
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         "runtime-capability-writer",
-        did,
-        did,
-        agent.did(),
-        "runtime-capability-session",
+        gents_protocol::request_admission::RequestScope::new(
+            did,
+            did,
+            agent.did(),
+            "runtime-capability-session",
+        ),
         "Apply the owned patch",
         "interactive",
         &timestamp,

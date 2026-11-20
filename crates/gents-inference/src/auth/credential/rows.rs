@@ -23,7 +23,10 @@ pub(super) async fn lookup_oauth_credential_by_id_on(
     credential_id: &str,
 ) -> Result<Option<OAuthCredential>> {
     let response = access
-        .execute(&oauth_credential_by_id_query(credential_id))
+        .execute_for_use(
+            &oauth_credential_by_id_query(credential_id),
+            "OAuthCredential",
+        )
         .await?;
     oauth_credentials_from_response(&response)
         .into_iter()
@@ -44,7 +47,10 @@ pub async fn list_oauth_credentials_on(
     node_did: &str,
 ) -> Result<Vec<OAuthCredential>> {
     let response = access
-        .execute(&oauth_credentials_for_node_query(node_did))
+        .execute_for_use(
+            &oauth_credentials_for_node_query(node_did),
+            "OAuthCredential",
+        )
         .await?;
     let mut rows = oauth_credentials_from_response(&response)
         .into_iter()
@@ -62,7 +68,7 @@ pub async fn lookup_oauth_credential_by_doc_id(
         .context("credential lookup requires a runtime identity")?;
     let access = runtime_credential_access(node, node_did)?;
     let response = access
-        .execute(&oauth_credential_by_doc_id_query(doc_id))
+        .execute_for_use(&oauth_credential_by_doc_id_query(doc_id), "OAuthCredential")
         .await?;
     oauth_credentials_from_response(&response)
         .into_iter()

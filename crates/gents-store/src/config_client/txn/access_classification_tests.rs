@@ -12,7 +12,7 @@ use crate::identity::{
     AgentAdmissionObservationError, AgentProvisionError, EnrollmentApprovalError,
     EnrollmentGrantError, GrantSetError, RemoteAgentProvisionError,
 };
-use crate::schema::migration::RuntimeMigrationError;
+use crate::schema::catalog::RuntimeSchemaError;
 use crate::schema::LegacyBackendPreflightError;
 use crate::views::ViewError;
 
@@ -21,6 +21,26 @@ fn wrapped(wrapper: &str, failure: AccessFailure, erasure: Erasure) -> AccessCla
     let boxed = || Box::new(failure.error());
     let response = || GraphqlResponseError::Access(Box::new(failure.error()));
     match wrapper {
+        "journal_schema_error_access" => classify_erased(
+            erasure,
+            crate::schema::journal::JournalSchemaError::Access(access),
+        ),
+        "outbox_error_access" => classify_erased(
+            erasure,
+            crate::client_journal::outbox::OutboxError::Access(access),
+        ),
+        "outbox_error_response" => classify_erased(
+            erasure,
+            crate::client_journal::outbox::OutboxError::Response(response()),
+        ),
+        "client_access_error_access" => classify_erased(
+            erasure,
+            crate::identity::client_access::ClientAccessError::Access(access),
+        ),
+        "runtime_access_error_configuration" => classify_erased(
+            erasure,
+            crate::config_client::runtime_access::RuntimeAccessError::Configuration(access),
+        ),
         "view_error_execute" => classify_owner(erasure, ViewError::Execute(access)),
         "pack_evidence_error_config" => classify_owner(erasure, PackEvidenceError::Config(boxed())),
         "document_decide_error_authorize" => {
@@ -48,8 +68,8 @@ fn wrapped(wrapper: &str, failure: AccessFailure, erasure: Erasure) -> AccessCla
         "remote_agent_provision_error_authorization" => {
             classify_erased(erasure, RemoteAgentProvisionError::Authorization(access))
         }
-        "runtime_migration_error_config" => {
-            classify_erased(erasure, RuntimeMigrationError::Config(access))
+        "runtime_schema_error_config" => {
+            classify_erased(erasure, RuntimeSchemaError::Config(access))
         }
         "authored_document_create_error_publication" => classify_erased(
             erasure,
@@ -75,6 +95,14 @@ fn wrapped(wrapper: &str, failure: AccessFailure, erasure: Erasure) -> AccessCla
             erasure,
             EnrollmentGrantError::Issue {
                 tuple: "node admin",
+                source: access,
+            },
+        ),
+        "enrollment_grant_error_issue_not_abandoned" => classify_owner(
+            erasure,
+            EnrollmentGrantError::IssueNotAbandoned {
+                tuple: "node admin",
+                removing: "node admin",
                 source: access,
             },
         ),
@@ -116,6 +144,10 @@ fn wrapped(wrapper: &str, failure: AccessFailure, erasure: Erasure) -> AccessCla
         "legacy_backend_preflight_error_query" => {
             classify_erased(erasure, LegacyBackendPreflightError::Query(access))
         }
+        "own_grant_error_unanswered" => classify_erased(
+            erasure,
+            crate::config_client::owed::OwnGrantError::Unanswered(access),
+        ),
         other => panic!(
             "store owner variant {other} has no constructor here; add it with its \
              `AccessClassification.StoreWrapper` constructor"

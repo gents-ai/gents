@@ -10,9 +10,6 @@ use gents_store::identity::NodeIdentity;
 
 use super::EnrollmentProjection;
 
-#[cfg(test)]
-const OPERATOR_NONCE_RETENTION_SECONDS: i64 = 5 * 60;
-
 /// Consume one signed operator nonce before any protected read or decision.
 pub async fn consume_operator_nonce(
     node: &Arc<EmbeddedNode>,
@@ -60,6 +57,10 @@ pub async fn decide_operator_command(
     command: &EnrollmentOperatorDecisionCommand,
 ) -> Result<super::EnrollmentDecisionOutcome> {
     use gents_protocol::enrollment::{EnrollmentDecisionKind, EnrollmentOperatorAction};
+    gents_store::local::document_acp::ensure_enrollment(
+        node,
+        gents_store::local::document_acp::EnrollmentRequest::Decision,
+    )?;
     let now = Utc::now();
     authenticate_operator_command(identity, command, now).await?;
     consume_operator_nonce(node, &command.admin_did, &command.nonce, now).await?;
@@ -315,7 +316,7 @@ mod tests {
                 .await
                 .expect("nonce test node"),
         );
-        gents_store::schema::migration::ensure_all_runtime_migrations(node.clone())
+        gents_store::schema::catalog::ensure_runtime_owned(node.clone())
             .await
             .expect("nonce schema");
         node
@@ -361,7 +362,10 @@ mod tests {
             &node,
             "did:key:admin",
             "nonce-new",
-            first + chrono::Duration::seconds(OPERATOR_NONCE_RETENTION_SECONDS + 1),
+            first
+                + chrono::Duration::seconds(
+                    gents_store::config_client::NONCE_RETENTION_SECONDS + 1,
+                ),
         )
         .await
         .unwrap();

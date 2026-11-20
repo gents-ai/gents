@@ -606,4 +606,48 @@ theorem previews_and_callers_without_preferences_keep_their_existing_access
   · subst h
     cases saved <;> simp [fileToolRoute]
 
+/-- Where a consent check runs: on the task that serves the request, or on a
+blocking thread, as the recheck a plugin guest's bound directory makes before
+the guest reads it. -/
+inductive CheckSite where
+  | requestTask | blockingThread
+  deriving DecidableEq, Repr
+
+/-- The workspace settings a consent check validates a binding against: the
+settings the request's own approval context resolves (its workspace and
+session), or the entry stored under the binding's exact key. -/
+inductive GoverningSettings where
+  | request | storedEntry
+  deriving DecidableEq, Repr
+
+/-- Which settings govern a consent check, given whether the check carries the
+request's approval context (`requestContext`) and where it runs (`site`).
+
+Decision (maintainer, 2026-11-18): a consent check that belongs to a request
+reads the request's workspace settings wherever it runs, including the recheck
+a bound plugin directory makes on a blocking thread, which therefore holds the
+request's context instead of finding none. Only a check with no request
+context, the operator answering or listing questions outside any request,
+reads the binding's stored entry. The answer is a function of the check's
+context alone, never of the thread it happens to run on. -/
+def governingSettings (requestContext : Bool) (site : CheckSite) : GoverningSettings :=
+  match requestContext, site with
+  | true, _ => .request
+  | false, _ => .storedEntry
+
+theorem governing_settings_do_not_depend_on_the_check_site
+    (requestContext : Bool) (site site' : CheckSite) :
+    governingSettings requestContext site = governingSettings requestContext site' := by
+  cases requestContext <;> cases site <;> cases site' <;> rfl
+
+theorem a_request_check_reads_the_request_settings (site : CheckSite) :
+    governingSettings true site = .request := by
+  cases site <;> rfl
+
+theorem only_a_check_outside_any_request_reads_the_stored_entry
+    (requestContext : Bool) (site : CheckSite)
+    (h : governingSettings requestContext site = .storedEntry) :
+    requestContext = false := by
+  cases requestContext <;> cases site <;> simp_all [governingSettings]
+
 end ToolPolicy.WorkspacePermissions

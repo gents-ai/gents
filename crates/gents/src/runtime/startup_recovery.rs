@@ -21,7 +21,7 @@ pub async fn run_startup_recovery_with_identities(
         node,
         node_did,
         identities,
-        &gents_toolcalls::call::hook::BackgroundExecutionRegistry::default(),
+        &gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry::default(),
     )
     .await
 }
@@ -30,7 +30,7 @@ pub async fn run_startup_recovery_with_executions_and_identities(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     identities: &[std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
-    executions: &gents_toolcalls::call::hook::BackgroundExecutionRegistry,
+    executions: &gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry,
 ) -> StartupRecoveryOutcome {
     let tool_calls =
         ToolCallLifecycle::recover_all_with_executions(node, node_did, identities, executions)

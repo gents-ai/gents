@@ -66,7 +66,7 @@ async fn execute_graphql_async_with_tx_sets_header_when_id_provided() {
     });
     let endpoint = format!("http://{addr}/");
     let options = GraphqlRequestOptions {
-        timeout: std::time::Duration::from_secs(2),
+        timeout: Some(std::time::Duration::from_secs(2)),
         max_attempts: 1,
         retry_backoff: std::time::Duration::from_millis(50),
     };
@@ -98,14 +98,14 @@ async fn shared_graphql_client_preserves_per_request_timeouts() {
     );
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     let mut options = GraphqlRequestOptions {
-        timeout: Duration::from_millis(10),
+        timeout: Some(Duration::from_millis(10)),
         max_attempts: 1,
         retry_backoff: Duration::ZERO,
     };
     assert!(execute_graphql_async(&endpoint, None, "{ ok }", options)
         .await
         .is_err());
-    options.timeout = Duration::from_secs(2);
+    options.timeout = None;
     assert_eq!(
         execute_graphql_async(&endpoint, None, "{ ok }", options)
             .await
@@ -147,7 +147,7 @@ async fn execute_graphql_async_leaves_conflict_retry_to_the_server() {
     });
     let endpoint = format!("http://{addr}/");
     let options = GraphqlRequestOptions {
-        timeout: std::time::Duration::from_secs(2),
+        timeout: Some(std::time::Duration::from_secs(2)),
         max_attempts: 3,
         retry_backoff: std::time::Duration::from_millis(1),
     };
@@ -202,4 +202,112 @@ fn retryable_graphql_conflicts_are_the_responses_defradb_reports() {
         !graphql_error_is_retryable(&GraphqlError::Database(worded)),
         "conflict wording without DefraDB's code is not a retryable conflict"
     );
+}
+
+#[tokio::test]
+async fn http_authentication_refusals_preserve_endpoint_availability() {
+    for (status, available) in [
+        (axum::http::StatusCode::OK, true),
+        (axum::http::StatusCode::UNAUTHORIZED, true),
+        (axum::http::StatusCode::FORBIDDEN, true),
+        (axum::http::StatusCode::NOT_FOUND, false),
+        (axum::http::StatusCode::SERVICE_UNAVAILABLE, false),
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
+        let router = axum::Router::new().route(
+            "/api/v0/graphql",
+            axum::routing::post(move || async move { status }),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let options = super::GraphqlRequestOptions {
+            max_attempts: 1,
+            ..Default::default()
+        };
+        assert_eq!(
+            super::graphql_endpoint_available(&endpoint, options).await,
+            available,
+            "{status}"
+        );
+        if matches!(
+            status,
+            axum::http::StatusCode::UNAUTHORIZED | axum::http::StatusCode::FORBIDDEN
+        ) {
+            assert!(
+                super::execute_graphql_async(&endpoint, None, "{ __typename }", options)
+                    .await
+                    .is_err()
+            );
+        }
+        server.abort();
+        server.await.unwrap_err();
+    }
+}
+
+#[tokio::test]
+async fn a_refused_credential_keeps_the_delegation_audience_edge_code() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/", listener.local_addr().unwrap());
+    let app = Router::new()
+        .route(
+            "/",
+            post(|| async {
+                (
+                    axum::http::StatusCode::UNAUTHORIZED,
+                    Json(serde_json::json!({
+                        "code": crate::delegation_audience::DELEGATION_REQUIRED_CODE,
+                        "error": "refused",
+                    })),
+                )
+            }),
+        )
+        .route(
+            "/plain",
+            post(|| async { (axum::http::StatusCode::FORBIDDEN, "no") }),
+        )
+        .route(
+            "/long",
+            post(|| async {
+                (
+                    axum::http::StatusCode::UNAUTHORIZED,
+                    format!(
+                        r#"{{"code":"delegationRequired","pad":"{}"}}"#,
+                        "x".repeat(8192)
+                    ),
+                )
+            }),
+        );
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let options = GraphqlRequestOptions {
+        timeout: None,
+        max_attempts: 1,
+        retry_backoff: Duration::from_millis(10),
+    };
+    let refused = execute_graphql_async(&endpoint, Some("Bearer t"), "{ __typename }", options)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refused.refusal_code(),
+        Some((
+            reqwest::StatusCode::UNAUTHORIZED,
+            crate::delegation_audience::DELEGATION_REQUIRED_CODE
+        ))
+    );
+    assert_eq!(
+        refused.transport_error().and_then(reqwest::Error::status),
+        Some(reqwest::StatusCode::UNAUTHORIZED),
+        "the refusal keeps its status for every classifier that reads it"
+    );
+    for path in ["plain", "long"] {
+        let refused = execute_graphql_async(
+            &format!("{endpoint}{path}"),
+            Some("Bearer t"),
+            "{ __typename }",
+            options,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(refused.refusal_code(), None, "{path}");
+        assert!(refused.transport_error().is_some(), "{path}");
+    }
 }

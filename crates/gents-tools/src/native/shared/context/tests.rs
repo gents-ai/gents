@@ -141,31 +141,29 @@ async fn request_workspace_overlays_resolve_as_the_tool_root_model() {
         } else {
             input.target.join("/")
         };
-        let outcome = crate::runtime_context::scope_request_tool_execution_with_workspace_overlay(
-            None,
-            None,
-            tokio_util::sync::CancellationToken::new(),
+        let scope_call = crate::runtime_context::entered_with_workspace_overlay(
+            &gents_loop::tool::ToolCallEnvelope::default(),
             crate::runtime_context::ToolWorkspaceScope {
                 workspace_cwd: input.cwd.as_ref().map(|cwd| at(cwd)),
                 workspace_root: input.root.as_ref().map(|root| at(root)),
                 workspace_authority: Some(crate::native::WorkspaceAuthority::ReadWrite),
                 ..Default::default()
             },
-            None,
-            None,
-            None,
-            Default::default(),
-            false,
-            async {
-                context
-                    .resolve_existing_file(&target)
-                    .map(|resolved| {
-                        let display = context.display_path(&resolved);
-                        (resolved, display)
-                    })
-                    .map_err(|error| error.to_string())
-            },
-        )
+            gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
+                None,
+                tokio_util::sync::CancellationToken::new(),
+            ),
+        );
+        let context = context.for_call(&scope_call);
+        let outcome = async {
+            context
+                .resolve_existing_file(&target)
+                .map(|resolved| {
+                    let display = context.display_path(&resolved);
+                    (resolved, display)
+                })
+                .map_err(|error| error.to_string())
+        }
         .await;
         let (resolved, display) = match outcome {
             Ok((resolved, display)) => {

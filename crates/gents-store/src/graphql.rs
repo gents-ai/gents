@@ -43,6 +43,12 @@ pub enum GraphqlResponseError {
     MissingCreatedIdentity { collection: String },
     #[error("decode composite commit rows")]
     DecodeCompositeCommits(#[source] serde_json::Error),
+    #[error("composite commit {cid} names an unreadable signer")]
+    CommitSigner {
+        cid: String,
+        #[source]
+        source: Box<crate::identity::IdentityError>,
+    },
     #[error("{operation} returned no _version array")]
     MissingVersionArray { operation: String },
     #[error(
@@ -144,6 +150,16 @@ pub async fn graphql_response_with_transaction_retry(
     operation: &str,
 ) -> Result<QueryResponse, ConfigClientError> {
     crate::config_client::ConfigAccess::read_local_response(node, graphql, operation).await
+}
+
+/// [`graphql_with_transaction_retry`] for a read a decision is taken on
+/// ([`crate::config_client::ConfigAccess::read_for_decision`]).
+pub async fn graphql_for_decision(
+    node: &EmbeddedNode,
+    graphql: &str,
+    operation: &str,
+) -> Result<QueryResponse, ConfigClientError> {
+    graphql_with_transaction_retry(node, graphql, operation).await
 }
 
 pub async fn graphql_with_transaction_retry(
@@ -608,7 +624,15 @@ pub async fn composite_commits(
     doc_id: &str,
     operation: &str,
 ) -> Result<Vec<CompositeCommit>> {
-    let query = format!(
+    let response =
+        graphql_with_transaction_retry(node, &composite_commits_query(doc_id), operation).await?;
+    response_composite_commits(&response, "_commits")
+}
+
+/// Every commit of a document with its signature, decoded by
+/// [`composite_commits_at`] at `_commits`.
+pub fn composite_commits_query(doc_id: &str) -> String {
+    format!(
         r#"query {{
             _commits(docID: "{}") {{
                 cid
@@ -618,9 +642,7 @@ pub async fn composite_commits(
             }}
         }}"#,
         escape_graphql_string(doc_id),
-    );
-    let response = graphql_with_transaction_retry(node, &query, operation).await?;
-    response_composite_commits(&response, "_commits")
+    )
 }
 
 pub fn response_has_documents(value: &serde_json::Value) -> bool {

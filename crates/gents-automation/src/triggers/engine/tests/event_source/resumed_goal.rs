@@ -1,9 +1,12 @@
 use super::*;
 use gents_documents::{WriteToolDecl, WriteToolField, WriteToolFieldFill};
 use gents_loop::tool::Tool;
-use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
+use gents_protocol::request_admission::{
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestScope,
+};
 use gents_protocol::row::AgentRequestRow;
 use gents_store::identity::NodeIdentity;
+use gents_store::test_support::fixture_root;
 use gents_tools::builtin::defra_write::{BoundedWriteParams, BoundedWriteTool};
 
 #[tokio::test]
@@ -13,8 +16,8 @@ async fn resumed_goal_tool_output_reaches_correlation_keyed_event_trigger() {
     node.add_collection("type ResumedGoalOutput { run_id: String @index summary: String }")
         .await
         .unwrap();
-    let identity = crate::triggers::callback::test_root_identity();
-    let agent = crate::triggers::callback::test_agent_identity();
+    let identity = fixture_root();
+    let agent = fixture_agent(FIXTURE_AGENT_NONCE);
     let access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
         ::identity::Did::new(agent.did()).unwrap(),
@@ -42,10 +45,12 @@ async fn resumed_goal_tool_output_reaches_correlation_keyed_event_trigger() {
     let mut parent = AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         "resumed-event-parent",
-        identity.did(),
-        agent.did(),
-        agent.did(),
-        "resumed-event-session",
+        RequestScope::new(
+            identity.did(),
+            agent.did(),
+            agent.did(),
+            "resumed-event-session",
+        ),
         "Original correlated work",
         "interactive",
         "2020-01-01T00:00:00Z",
@@ -139,31 +144,29 @@ async fn resumed_goal_tool_output_reaches_correlation_keyed_event_trigger() {
             output_obligation: None,
         },
     );
-    gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
-        None,
-        None,
-        CancellationToken::new(),
-        None,
-        None,
-        Some(child.session_id.clone()),
-        child.caused_by_correlation.clone(),
-        Default::default(),
-        false,
-        async {
-            Tool::call(
-                &tool,
-                BoundedWriteParams(
-                    serde_json::json!({"summary": "remaining work complete"})
-                        .as_object()
-                        .unwrap()
-                        .clone(),
-                ),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
-            )
-            .await
-            .unwrap();
-        },
-    )
+    let scope_call = gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
+        session_id: Some(child.session_id.clone()),
+        correlation: child.caused_by_correlation.clone(),
+        ..gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
+            None,
+            CancellationToken::new(),
+        )
+    }
+    .call();
+    async {
+        Tool::call(
+            &tool,
+            BoundedWriteParams(
+                serde_json::json!({"summary": "remaining work complete"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+            &scope_call,
+        )
+        .await
+        .unwrap();
+    }
     .await;
     let response = node
         .execute("{ ResumedGoalOutput { _docID run_id summary } }")

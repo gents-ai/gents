@@ -1,0 +1,4 @@
+---- MODULE MCNativeWorkerRecordObservationSubscribeAfterRead ----
+EXTENDS NativeWorkerRecordObservation
+
+====

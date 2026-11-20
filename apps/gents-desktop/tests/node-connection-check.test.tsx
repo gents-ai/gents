@@ -16,7 +16,7 @@ const JUNO = "did:key:juno";
 const juno = node({
   nodeDid: JUNO,
   label: "Juno",
-  source: "enrollment",
+  local: false,
   node: { ...deployment.node, nodeDid: JUNO, displayName: "Juno" },
   agents: [],
   runtimeConnection: "disconnected",

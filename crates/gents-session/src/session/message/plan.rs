@@ -257,13 +257,14 @@ pub async fn plan_with_delivery(
         let create = crate::request::lifecycle::build_session_message_request(
             cause,
             target,
-            &rendered.content,
-            title,
-            &request_id,
-            Some(format!("session-message:{}", cause.tool_call_doc_id)),
-            hop,
-            None,
-            None,
+            crate::request::lifecycle::SessionMessageRequest {
+                content: &rendered.content,
+                title,
+                request_id: &request_id,
+                retry_key: Some(format!("session-message:{}", cause.tool_call_doc_id)),
+                hop,
+                input: gents_protocol::request_input::RequestInput::default(),
+            },
             signer,
         )
         .await?;
@@ -291,23 +292,24 @@ pub async fn plan_with_delivery(
                 background_completion_wake_version: None,
             });
         PlannedWrite::Request {
-            create:
-                crate::request::lifecycle::materialize::build_session_message_request_with_input(
-                    cause,
-                    target,
-                    &rendered.content,
+            create: crate::request::lifecycle::materialize::build_session_message_request(
+                cause,
+                target,
+                crate::request::lifecycle::materialize::SessionMessageRequest {
+                    content: &rendered.content,
                     title,
-                    &request_id,
-                    None,
+                    request_id: &request_id,
+                    retry_key: None,
                     hop,
-                    gents_protocol::request_input::RequestInput {
+                    input: gents_protocol::request_input::RequestInput {
                         queue,
                         goal_assignment: target_goal_assignment(node, goals, cause, target).await?,
                         ..Default::default()
                     },
-                    signer,
-                )
-                .await?,
+                },
+                signer,
+            )
+            .await?,
             delivery: match (&steering, delivery) {
                 (None, _) => Delivery::Request,
                 (Some(_), AgentMessageDelivery::Steer) => Delivery::Steering,

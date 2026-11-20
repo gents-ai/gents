@@ -1,7 +1,6 @@
 use super::*;
-use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
-use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use gents_loop::test_support::scripted_provider::{Reply, ScriptedProvider, Step};
+use rig::streaming::RawStreamingChoice;
 use std::time::Duration;
 
 async fn oneshot_fixture(
@@ -41,101 +40,31 @@ async fn oneshot_fixture(
     (db, user, user_access, agent_access, binding)
 }
 
-async fn capture_scripted_request(
-    request: CompletionRequest,
-) -> Result<serde_json::Value, CompletionError> {
-    use rig::http_client::HttpClientExt;
-    let dto = rig::providers::openai::completion::CompletionRequest::try_from((
-        "scripted".to_owned(),
-        request,
-    ))
-    .map_err(|error| CompletionError::ProviderError(error.to_string()))?;
-    let mut body = serde_json::to_value(dto)
-        .map_err(|error| CompletionError::ProviderError(error.to_string()))?;
-    body["stream"] = serde_json::Value::Bool(true);
-    body["stream_options"] = serde_json::json!({ "include_usage": true });
-    let inner = gents_inference::rendered_request::transport::CountingInner::default();
-    let transport =
-        gents_inference::rendered_request::transport::RenderedRequestCapturingHttpClient::new(
-            inner.clone(),
-        );
-    let outbound = rig::http_client::Request::builder()
-        .method("POST")
-        .uri("https://scripted-provider.invalid/v1/chat/completions")
-        .header("content-type", "application/json")
-        .body(bytes::Bytes::from(serde_json::to_vec(&body).map_err(
-            |error| CompletionError::ProviderError(error.to_string()),
-        )?))
-        .map_err(|error| CompletionError::ProviderError(error.to_string()))?;
-    let _response = transport
-        .send_streaming(outbound)
-        .await
-        .map_err(|error| CompletionError::ProviderError(error.to_string()))?;
-    assert_eq!(
-        inner.send_count(),
-        1,
-        "capture must authorize the scripted provider send"
-    );
-
-    Ok(body)
-}
-
 /// Streams one text chunk, then empty chunks until `eof` is cancelled, then
 /// ends without a terminal response.
-#[derive(Clone)]
-struct PartialThenEmptyProvider {
-    observations: Arc<AtomicUsize>,
-    eof: tokio_util::sync::CancellationToken,
+fn partial_then_empty_provider(eof: tokio_util::sync::CancellationToken) -> ScriptedProvider {
+    ScriptedProvider::responding(move |_| {
+        Reply::Stream(vec![
+            Step::Chunk(RawStreamingChoice::Message(
+                "durable one-shot partial".into(),
+            )),
+            Step::Repeat {
+                chunk: RawStreamingChoice::Message(String::new()),
+                every: Duration::from_millis(10),
+                until: Some(eof.clone()),
+            },
+        ])
+    })
+    .capturing_openai("scripted")
 }
 
-#[allow(refining_impl_trait)]
-impl CompletionModel for PartialThenEmptyProvider {
-    type Response = ();
-    type StreamingResponse = ();
-    type Client = ();
-
-    fn make(_: &(), _: impl Into<String>) -> Self {
-        Self {
-            observations: Arc::new(AtomicUsize::new(0)),
-            eof: tokio_util::sync::CancellationToken::new(),
-        }
-    }
-
-    async fn completion(
-        &self,
-        _: CompletionRequest,
-    ) -> Result<CompletionResponse<()>, CompletionError> {
-        Err(CompletionError::ProviderError("streaming only".into()))
-    }
-
-    async fn stream(
-        &self,
-        request: CompletionRequest,
-    ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        capture_scripted_request(request).await?;
-
-        let observations = self.observations.clone();
-        let eof = self.eof.clone();
-        let inner: rig::streaming::StreamingResult<()> =
-            Box::pin(futures::stream::unfold(false, move |started| {
-                let observations = observations.clone();
-                let eof = eof.clone();
-                async move {
-                    let text = if started {
-                        tokio::select! {
-                            () = eof.cancelled() => return None,
-                            () = tokio::time::sleep(Duration::from_millis(10)) => {}
-                        }
-                        observations.fetch_add(1, Ordering::SeqCst);
-                        String::new()
-                    } else {
-                        "durable one-shot partial".to_string()
-                    };
-                    Some((Ok(RawStreamingChoice::Message(text)), true))
-                }
-            }));
-        Ok(StreamingCompletionResponse::stream(inner))
-    }
+/// Empty chunks streamed after the partial text.
+fn silent_deltas(model: &ScriptedProvider) -> usize {
+    model
+        .records()
+        .iter()
+        .map(|record| record.yielded.saturating_sub(1))
+        .sum()
 }
 
 #[tokio::test]
@@ -164,8 +93,8 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
         0,
         gents_inference::rendered_request::CaptureScopeKind::OneShot,
     );
-    let observations = Arc::new(AtomicUsize::new(0));
     let eof = tokio_util::sync::CancellationToken::new();
+    let model = partial_then_empty_provider(eof.clone());
     let returned = tokio_util::sync::CancellationToken::new();
     let observe_renewal = async {
         let mut silent_lease = None;
@@ -174,7 +103,7 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
                 () = returned.cancelled() => return false,
                 () = tokio::time::sleep(Duration::from_millis(100)) => {}
             }
-            if observations.load(Ordering::SeqCst) == 0 {
+            if silent_deltas(&model) == 0 {
                 continue;
             }
             let snapshot = agent_access.execute("{ AgentRequest { lifecycle_state execution_generation execution_lease_expires_at } }").await.unwrap();
@@ -204,19 +133,18 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
         let result = run_oneshot_owned(
             node.clone(),
             &behavior.agent,
-            &behavior.tools,
-            None,
-            &prompt,
-            PartialThenEmptyProvider {
-                observations: observations.clone(),
-                eof: eof.clone(),
+            OneshotInputs {
+                tool_config: &behavior.tools,
+                provider_family: None,
+                prompt: "exercise explicit renewal during silence",
+                prompt_builder: prompt,
+                output_obligations: &[],
+                tools: Arc::new(Vec::new()),
+                background_tool_registry: BackgroundToolRegistry::default(),
+                lsp_pool: gents_tools::native::lsp::LspPool::new(),
             },
-            "exercise explicit renewal during silence",
-            Arc::new(Vec::new()),
+            model.clone(),
             config,
-            &[],
-            BackgroundToolRegistry::default(),
-            gents_tools::native::lsp::LspPool::new(),
         )
         .await;
         returned.cancel();
@@ -232,7 +160,7 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
         "a stream ending without an explicit terminal response cannot succeed"
     );
     assert!(
-        observations.load(Ordering::SeqCst) > 0,
+        silent_deltas(&model) > 0,
         "provider must send traffic after semantic progress stops; one-shot returned {result:?}"
     );
     let result = agent_access
@@ -305,73 +233,50 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
     node.shutdown().await.expect("node shutdown");
 }
 
-#[derive(Clone)]
-struct OutputObligationProvider {
-    calls: Arc<AtomicUsize>,
+/// Finishes prematurely, then, once told the configured output obligation is
+/// unmet while the request still processes, writes the one-shot result and
+/// completes.
+fn output_obligation_provider(
     access: gents_store::config_client::ConfigAccess,
-}
-
-#[allow(refining_impl_trait)]
-impl CompletionModel for OutputObligationProvider {
-    type Response = ();
-    type StreamingResponse = ();
-    type Client = ();
-
-    fn make(_: &(), _: impl Into<String>) -> Self {
-        panic!("construct scripted output-obligation provider with its fixture node")
-    }
-
-    async fn completion(
-        &self,
-        _: CompletionRequest,
-    ) -> Result<CompletionResponse<()>, CompletionError> {
-        Err(CompletionError::ProviderError("streaming only".into()))
-    }
-
-    async fn stream(
-        &self,
-        request: CompletionRequest,
-    ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        let body = capture_scripted_request(request).await?;
-
-        let turn = self.calls.fetch_add(1, Ordering::SeqCst);
-        let chunks = match turn {
-            0 => vec![
-                RawStreamingChoice::Message("premature final".into()),
-                RawStreamingChoice::FinalResponse(()),
-            ],
-            1 => {
-                assert!(body.to_string().contains("write_oneshot_result"));
-                assert!(body
-                    .to_string()
-                    .contains("configured output obligation is unmet"));
-                let state = self
-                    .access
-                    .execute("{ AgentRequest { lifecycle_state } OneshotOutput { message } }")
-                    .await
-                    .unwrap();
-                let state = state["data"].clone();
-                assert_eq!(state["AgentRequest"][0]["lifecycle_state"], "processing");
-                assert!(state["OneshotOutput"].as_array().unwrap().is_empty());
-                vec![
-                    RawStreamingChoice::ToolCall(rig::streaming::RawStreamingToolCall::new(
-                        "required-oneshot-write".into(),
-                        "write_oneshot_result".into(),
-                        serde_json::json!({"message": "durable output"}),
-                    )),
-                    RawStreamingChoice::FinalResponse(()),
-                ]
+) -> ScriptedProvider {
+    ScriptedProvider::new([])
+        .respond_async(move |dispatch| {
+            let access = access.clone();
+            async move {
+                match dispatch.index {
+                    0 => Reply::text("premature final"),
+                    1 => {
+                        let body = dispatch.body.expect("captured provider body");
+                        assert!(body.to_string().contains("write_oneshot_result"));
+                        assert!(body
+                            .to_string()
+                            .contains("configured output obligation is unmet"));
+                        let state = access
+                            .execute(
+                                "{ AgentRequest { lifecycle_state } OneshotOutput { message } }",
+                            )
+                            .await
+                            .unwrap();
+                        let state = state["data"].clone();
+                        assert_eq!(state["AgentRequest"][0]["lifecycle_state"], "processing");
+                        assert!(state["OneshotOutput"].as_array().unwrap().is_empty());
+                        Reply::turn(vec![
+                            RawStreamingChoice::ToolCall(
+                                rig::streaming::RawStreamingToolCall::new(
+                                    "required-oneshot-write".into(),
+                                    "write_oneshot_result".into(),
+                                    serde_json::json!({"message": "durable output"}),
+                                ),
+                            ),
+                            RawStreamingChoice::FinalResponse(()),
+                        ])
+                    }
+                    2 => Reply::text("output complete"),
+                    other => panic!("unexpected extra provider turn {other}"),
+                }
             }
-            2 => vec![
-                RawStreamingChoice::Message("output complete".into()),
-                RawStreamingChoice::FinalResponse(()),
-            ],
-            other => panic!("unexpected extra provider turn {other}"),
-        };
-        let stream: rig::streaming::StreamingResult<()> =
-            Box::pin(futures::stream::iter(chunks.into_iter().map(Ok)));
-        Ok(StreamingCompletionResponse::stream(stream))
-    }
+        })
+        .capturing_openai("scripted")
 }
 
 #[tokio::test]
@@ -497,30 +402,26 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
             gents_inference::rendered_request::CaptureScopeKind::OneShot,
         );
         config.max_turns = 4;
-        let calls = Arc::new(AtomicUsize::new(0));
+        let calls = output_obligation_provider(agent_access.clone());
         let result = run_oneshot_owned(
             node.clone(),
             &behavior.agent,
-            &behavior.tools,
-            None,
-            &prompt,
-            OutputObligationProvider {
-                calls: calls.clone(),
-                access: agent_access.clone(),
+            OneshotInputs {
+                tool_config: &behavior.tools,
+                provider_family: None,
+                prompt: "finish this request",
+                prompt_builder: prompt,
+                output_obligations: &obligations,
+                tools,
+                background_tool_registry: BackgroundToolRegistry::default(),
+                lsp_pool: runtime.lsp_pool.clone(),
             },
-            "finish this request",
-            tools,
+            calls.clone(),
             config,
-            &obligations,
-            BackgroundToolRegistry::default(),
-            runtime.lsp_pool.clone(),
         )
         .await
         .unwrap();
-        assert_eq!(
-            calls.load(Ordering::SeqCst),
-            if request_scoped { 3 } else { 1 }
-        );
+        assert_eq!(calls.calls(), if request_scoped { 3 } else { 1 });
         assert_eq!(
             result.response_text,
             if request_scoped {
@@ -548,7 +449,7 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
         );
         assert_eq!(
             data["RenderedRequest"].as_array().unwrap().len(),
-            calls.load(Ordering::SeqCst)
+            calls.calls()
         );
         if request_scoped {
             assert_eq!(data["OneshotOutput"][0]["message"], "durable output");
@@ -562,56 +463,29 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
     }
 }
 
-#[derive(Clone)]
-struct OneshotBashProvider(Arc<AtomicUsize>);
-
-#[allow(refining_impl_trait)]
-impl CompletionModel for OneshotBashProvider {
-    type Response = ();
-    type StreamingResponse = ();
-    type Client = ();
-
-    fn make(_: &(), _: impl Into<String>) -> Self {
-        Self(Arc::new(AtomicUsize::new(0)))
-    }
-
-    async fn completion(
-        &self,
-        _: CompletionRequest,
-    ) -> Result<CompletionResponse<()>, CompletionError> {
-        Err(CompletionError::ProviderError("streaming only".into()))
-    }
-
-    async fn stream(
-        &self,
-        request: CompletionRequest,
-    ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        let body = capture_scripted_request(request).await?;
-        let chunks = match self.0.fetch_add(1, Ordering::SeqCst) {
-            0 => vec![
-                RawStreamingChoice::ToolCall(rig::streaming::RawStreamingToolCall::new(
-                    "oneshot-bash".into(),
-                    "bash".into(),
-                    serde_json::json!({"command":"ls", "args":["."]}),
-                )),
-                RawStreamingChoice::FinalResponse(()),
-            ],
-            1 => {
-                assert!(
-                    body.to_string().contains("oneshot-visible.txt"),
-                    "one-shot provider must receive real bash output: {body}"
-                );
-                vec![
-                    RawStreamingChoice::Message("done".into()),
-                    RawStreamingChoice::FinalResponse(()),
-                ]
-            }
-            other => panic!("unexpected one-shot turn {other}"),
-        };
-        let stream: rig::streaming::StreamingResult<()> =
-            Box::pin(futures::stream::iter(chunks.into_iter().map(Ok)));
-        Ok(StreamingCompletionResponse::stream(stream))
-    }
+/// Runs `ls` through bash, then, once its real output reaches the provider,
+/// finishes.
+fn oneshot_bash_provider() -> ScriptedProvider {
+    ScriptedProvider::responding(|dispatch| match dispatch.index {
+        0 => Reply::turn(vec![
+            RawStreamingChoice::ToolCall(rig::streaming::RawStreamingToolCall::new(
+                "oneshot-bash".into(),
+                "bash".into(),
+                serde_json::json!({"command":"ls", "args":["."]}),
+            )),
+            RawStreamingChoice::FinalResponse(()),
+        ]),
+        1 => {
+            let body = dispatch.body.as_ref().expect("captured provider body");
+            assert!(
+                body.to_string().contains("oneshot-visible.txt"),
+                "one-shot provider must receive real bash output: {body}"
+            );
+            Reply::text("done")
+        }
+        other => panic!("unexpected one-shot turn {other}"),
+    })
+    .capturing_openai("scripted")
 }
 
 #[tokio::test]
@@ -651,25 +525,27 @@ async fn oneshot_bash_uses_owned_request_context() {
     );
     config.max_turns = 4;
     let runtime = ToolRuntimeContext::oneshot_with_node_did(node.clone(), agent.agent.node_did());
-    let calls = Arc::new(AtomicUsize::new(0));
+    let calls = oneshot_bash_provider();
     let result = run_oneshot_owned(
         node.clone(),
         &agent.agent,
-        &agent.tools,
-        None,
-        &prompt,
-        OneshotBashProvider(calls.clone()),
-        "inspect the directory",
-        tools,
+        OneshotInputs {
+            tool_config: &agent.tools,
+            provider_family: None,
+            prompt: "inspect the directory",
+            prompt_builder: prompt,
+            output_obligations: &[],
+            tools,
+            background_tool_registry: BackgroundToolRegistry::default(),
+            lsp_pool: runtime.lsp_pool.clone(),
+        },
+        calls.clone(),
         config,
-        &[],
-        BackgroundToolRegistry::default(),
-        runtime.lsp_pool.clone(),
     )
     .await
     .unwrap();
     assert_eq!(result.response_text, "done");
-    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert_eq!(calls.calls(), 2);
     let rows = agent_access
         .execute("{ AgentToolCall(filter: { tool_name: { _eq: \"bash\" } }) { lifecycle_state } }")
         .await

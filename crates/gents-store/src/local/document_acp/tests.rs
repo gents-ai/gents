@@ -160,3 +160,273 @@ fn the_choice_round_trips_through_the_init_config() {
     assert_eq!(config.document_acp, DocumentAcp::Vera);
     assert_eq!(serde_json::to_value(&config).unwrap(), recorded);
 }
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Reported {
+    Absent,
+    Named,
+    Unavailable,
+}
+
+#[test]
+fn the_reported_delegation_audience_matches_the_lean_model() {
+    use gents_protocol::delegation_audience::{DelegationAudience, ReportedDelegationAudience};
+    gents_lean_vocab::families::identity_user_delegation_status_reports::replay::<Provider, Reported>(
+        |input| {
+            let audience = input.node_reports_audience.then(|| DelegationAudience {
+                worker: "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".into(),
+                deployment: 7,
+                genesis_id: None,
+            });
+            match super::status_reports(document_acp(input.provider), audience.clone()) {
+                ReportedDelegationAudience::Absent => Reported::Absent,
+                ReportedDelegationAudience::Named(named) => {
+                    assert_eq!(Some(named), audience);
+                    Reported::Named
+                }
+                ReportedDelegationAudience::Unavailable => Reported::Unavailable,
+            }
+        },
+    );
+}
+
+#[test]
+fn signing_with_a_held_user_key_matches_the_lean_model() {
+    gents_lean_vocab::families::identity_user_delegation_runtime_signs_with_held_user_key::replay::<
+        Provider,
+    >(
+        |input| match super::runtime_signs_with_held_user_key(document_acp(input.provider)) {
+            Ok(()) => true,
+            Err(DocumentAcpError::HeldUserKey) => false,
+            Err(error) => panic!("{error}"),
+        },
+    );
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Author {
+    User,
+    Node,
+    Agent,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Presented {
+    IdentityToken,
+    Delegation,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Edge {
+    Unchanged,
+    DelegationRequired,
+}
+
+#[test]
+fn the_http_edge_matches_the_lean_model() {
+    use crate::config_client::user_write::Author as Caller;
+    gents_lean_vocab::families::identity_user_delegation_edge::replay::<
+        Author,
+        Edge,
+        Presented,
+        Provider,
+    >(|input| {
+        let caller = match input.author {
+            Author::User => Caller::User,
+            Author::Node => Caller::Node,
+            Author::Agent => Caller::Agent,
+        };
+        let presented = match input.presented {
+            Presented::IdentityToken => super::Presented::IdentityToken,
+            Presented::Delegation => super::Presented::Delegation,
+        };
+        match super::edge(document_acp(input.provider), caller, presented) {
+            Ok(()) => Edge::Unchanged,
+            Err(DocumentAcpError::DelegationRequired) => Edge::DelegationRequired,
+            Err(error) => panic!("{error}"),
+        }
+    });
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Publication {
+    Proceeds,
+    AwaitsTransportGrants,
+}
+
+#[test]
+fn node_publication_matches_the_lean_model() {
+    gents_lean_vocab::families::identity_node_publication_publication::replay::<
+        Provider,
+        Publication,
+    >(
+        |input| match super::publication(document_acp(input.provider)) {
+            super::Publication::Proceeds => Publication::Proceeds,
+            super::Publication::AwaitsTransportGrants => Publication::AwaitsTransportGrants,
+        },
+    );
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Route {
+    Direct,
+    OwnerStaged,
+}
+
+#[test]
+fn configuration_grant_route_matches_the_lean_model() {
+    gents_lean_vocab::families::identity_owner_staged_configuration_grant_route::replay::<
+        Provider,
+        Route,
+    >(|input| {
+        match super::configuration_grant_route(document_acp(input.provider), input.actor_owns) {
+            super::ConfigurationGrantRoute::Direct => Route::Direct,
+            super::ConfigurationGrantRoute::OwnerStaged => Route::OwnerStaged,
+        }
+    });
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Periodic {
+    RegistryHeartbeat,
+    EndpointHeartbeat,
+    Directory,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Loop {
+    Beats,
+    Idle,
+}
+
+#[test]
+fn periodic_publication_matches_the_lean_model() {
+    gents_lean_vocab::families::identity_node_publication_periodic::replay::<
+        Loop,
+        Periodic,
+        Provider,
+    >(|input| {
+        let periodic = match input.periodic {
+            Periodic::RegistryHeartbeat => super::Periodic::RegistryHeartbeat,
+            Periodic::EndpointHeartbeat => super::Periodic::EndpointHeartbeat,
+            Periodic::Directory => super::Periodic::Directory,
+        };
+        match super::periodic(document_acp(input.provider), periodic) {
+            super::PeriodicLoop::Beats => Loop::Beats,
+            super::PeriodicLoop::Idle => Loop::Idle,
+        }
+    });
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Root {
+    Created,
+    Absent,
+}
+
+#[test]
+fn enrollment_root_matches_the_lean_model() {
+    gents_lean_vocab::families::identity_node_publication_enrollment_root::replay::<Provider, Root>(
+        |input| match super::enrollment_root(document_acp(input.provider)) {
+            super::EnrollmentRoot::Created => Root::Created,
+            super::EnrollmentRoot::Absent => Root::Absent,
+        },
+    );
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum EnrollmentRequest {
+    Offer,
+    Decision,
+    Pending,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Answer {
+    Served,
+    PeerNetworkingUnavailable,
+}
+
+#[test]
+fn enrollment_matches_the_lean_model() {
+    gents_lean_vocab::families::identity_node_publication_enrollment::replay::<
+        Answer,
+        EnrollmentRequest,
+        Provider,
+    >(|input| {
+        let request = match input.enrollment_request {
+            EnrollmentRequest::Offer => super::EnrollmentRequest::Offer,
+            EnrollmentRequest::Decision => super::EnrollmentRequest::Decision,
+            EnrollmentRequest::Pending => super::EnrollmentRequest::Pending,
+        };
+        match super::enrollment(document_acp(input.provider), request) {
+            super::EnrollmentAnswer::Served => Answer::Served,
+            super::EnrollmentAnswer::PeerNetworkingUnavailable => Answer::PeerNetworkingUnavailable,
+        }
+    });
+}
+
+#[test]
+fn what_a_person_reads_names_no_internals() {
+    let path = std::path::PathBuf::from("/home/data/vera/node");
+    let refusals = [
+        DocumentAcpError::Switch {
+            recorded: DocumentAcp::Local,
+            requested: DocumentAcp::Vera,
+        },
+        DocumentAcpError::Unavailable,
+        DocumentAcpError::NodeKeyCannotSign {
+            node: "did:key:z6Mk".into(),
+        },
+        DocumentAcpError::NotYetUsable,
+        DocumentAcpError::HeldUserKey,
+        DocumentAcpError::DelegationRequired,
+        DocumentAcpError::TransportGrantsAwaitProvider,
+        DocumentAcpError::DeploymentDiffers {
+            what: "consensus key",
+        },
+        DocumentAcpError::DeploymentMissing { path: path.clone() },
+        DocumentAcpError::DeploymentReplaced { path },
+    ];
+    let delegation = [crate::config_client::DelegationError::AudienceUnavailable];
+    let read = refusals
+        .iter()
+        .map(ToString::to_string)
+        .chain(delegation.iter().map(ToString::to_string))
+        .chain([
+            crate::config_client::user_write::REFUSED_FOR_A_PERSON.to_owned(),
+            crate::config_client::owed::OWED_FAILED_FOR_A_PERSON.to_owned(),
+        ]);
+    for text in read {
+        let lowered = text.replace("/home/data/vera/node", "").to_lowercase();
+        let words: Vec<&str> = lowered
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|word| !word.is_empty())
+            .collect();
+        for internal in [
+            "vera",
+            "defradb",
+            "acp",
+            "delegation",
+            "audience",
+            "registration",
+            "deployment",
+            "credential",
+            "chain",
+        ] {
+            assert!(!words.contains(&internal), "{text:?} names {internal:?}");
+        }
+        assert!(!lowered.contains("access control"), "{text:?}");
+    }
+}

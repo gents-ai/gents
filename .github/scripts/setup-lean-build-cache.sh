@@ -20,6 +20,14 @@ runner_cache_key="$(printf '%s' "${RUNNER_NAME}" | tr -c 'A-Za-z0-9._-' '_')"
 cache_dir="${LEAN_CACHE_ROOT}/${runner_cache_key}"
 lake_link="${GITHUB_WORKSPACE}/crates/gents/proofs/.lake"
 
+# A cancelled Lake checkout can leave a Git lock in the persistent cache.
+# Leave locked checkouts to their owner and reuse a separate warm generation.
+generation=0
+while compgen -G "${cache_dir}/packages/*/.git/index.lock" > /dev/null; do
+  echo "Skipping Lean cache with a locked package checkout: ${cache_dir}"
+  generation=$((generation + 1))
+  cache_dir="${LEAN_CACHE_ROOT}/.generations/${runner_cache_key}/${generation}"
+done
 mkdir -p "${cache_dir}"
 if [[ -L "${lake_link}" && "$(readlink "${lake_link}")" == "${cache_dir}" ]]; then
   echo "Reusing Lean build cache ${cache_dir}"

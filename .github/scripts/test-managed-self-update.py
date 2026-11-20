@@ -200,18 +200,6 @@ def main():
     def read_receipt():
         return json.loads((home / "service-updates" / operation / "receipt.json").read_text())
 
-    def notice():
-        items = json.loads(cli("automation", "mailbox", "list", "--home", home, "--graphql", f"{endpoint}/api/v0/graphql", "--all").stdout)
-        matches = [item for item in items if item.get("source_kind") == "runtime" and item.get("source_id") == f"service-update:{operation}"]
-        assert len(matches) <= 1, matches
-        if not matches:
-            return None
-        item = matches[0]
-        saved = read_receipt()
-        assert item["session_id"] == saved["session_id"] and item["request_id"] == saved["request_id"], item
-        assert item["action"] == "ack" and item["kind"] == ("finished" if saved["phase"] == "healthy" else "failed"), item
-        return item
-
     def ready():
         with urllib.request.urlopen(f"{endpoint}/status", timeout=2) as response:
             value = json.load(response)
@@ -245,8 +233,7 @@ def main():
         assert (home / "service-updates" / operation / "receipt.json").is_file(), captured[-1].get("messages")
         receipt = read_receipt()
         assert receipt["phase"] == "accepted", receipt
-        assert receipt["request_id"] == request["request_id"], (receipt, request)
-        assert receipt["session_id"], receipt
+        assert "request_id" not in receipt and "session_id" not in receipt, receipt
         assert ready() and service_pid() == initial_pid, "updater retired a busy initiating turn"
         duplicate = json.loads(cli(*update_args).stdout)
         assert duplicate["operation_id"] == operation and duplicate["phase"] == "accepted"
@@ -264,7 +251,6 @@ def main():
             eventually(lambda: read_receipt()["phase"] == "failed", 20)
             assert ready() and service_pid() == initial_pid, "busy timeout disrupted the runtime"
             release.set()
-            eventually(notice)
             succeeded = True
             print("PASS: real busy drain timeout preserved the serving runtime")
             return
@@ -292,7 +278,6 @@ def main():
             assert (home / "network.json").read_bytes() == network_before
             assert str(binary) in definition.read_text(), "recovery changed the prior service executable"
             assert not (home / "service-updates" / operation / "startup-attempted.json").exists()
-            eventually(notice)
             succeeded = True
             print("PASS: real cold-backup failure restored the prior runtime without starting the candidate")
             return
@@ -302,7 +287,6 @@ def main():
             assert (home / "init.json").read_bytes() == init_before
             assert (home / "network.json").read_bytes() == network_before
             assert str(binary) in definition.read_text()
-            eventually(notice)
             succeeded = True
             print("PASS: failed same-build reconfiguration restored the original network and runtime")
             return
@@ -326,11 +310,9 @@ def main():
         assert not (directory / "backup/service-updates").exists()
         assert final["node_did"] == init["node_did"]
         status = json.loads(cli("runtime", "service", "update-status", "--home", home, operation).stdout)
-        assert status["phase"] == "healthy" and status["session_id"] == receipt["session_id"]
+        assert status["phase"] == "healthy", status
         stored = json.loads(cli("utils", "debug", "request", "show", "--home", home, "--graphql", f"{endpoint}/api/v0/graphql", "--output", "json", request["request_id"]).stdout)
         assert stored["request"]["lifecycle_state"] == "completed", stored
-        assert stored["request"]["session_id"] == receipt["session_id"], stored
-        item = eventually(notice)
         # Equivalent durable state to a helper killed after recording startup
         # intent but before loading the native job. Recovery must start forward.
         cli("runtime", "service", "stop", "--home", home)
@@ -344,12 +326,8 @@ def main():
         assert (directory / "health-resume-deadline.json").is_file()
         eventually(ready)
         eventually(lambda: service_pid(helper=True) is None, 20)
-        cli("automation", "mailbox", "dismiss", "--home", home, "--graphql", f"{endpoint}/api/v0/graphql", item["_docID"])
-        (directory / "notice-published.json").unlink(missing_ok=True)
         cli("runtime", "service", "restart", "--home", home)
         eventually(ready)
-        eventually(lambda: (directory / "notice-published.json").is_file())
-        assert notice()["status"] == "dismissed", "acknowledged outcome was published again"
         final_pid = service_pid()
         cli("service", "update-run", "--home", home, operation)
         assert service_pid() == final_pid, "terminal helper replay changed the running runtime"
@@ -376,6 +354,10 @@ def main():
             helper_log = home / "service-updates" / operation / "helper.log"
             if helper_log.exists():
                 print(helper_log.read_text()[-12000:], file=sys.stderr)
+            if system == "macos":
+                runtime_log = Path.home() / "Library/Logs/gents/runtime-errors.log"
+                if runtime_log.exists():
+                    print(runtime_log.read_text()[-12000:], file=sys.stderr)
             if system == "linux":
                 for unit in (metadata["systemd_unit"], f"{helper_label}.service"):
                     print(run(["journalctl", "--user", "-u", unit, "-n", "60", "--no-pager"], check=False).stdout, file=sys.stderr)

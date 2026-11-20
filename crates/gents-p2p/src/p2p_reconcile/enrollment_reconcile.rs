@@ -14,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 use gents_store::identity::NodeIdentity;
 
 use super::enrollment_store::{EnrollmentProjection, GraphqlEnrollmentStore};
+use super::intervals::P2pIntervals;
 use super::templates::{resolve_template, CLIENT_TEMPLATE};
 use super::{
     desired_route_is_applied, observe_owned_pairing_live_matches, EmbeddedRemoteP2pAdmin,
@@ -344,6 +345,7 @@ pub async fn run_enrollment_reconciler(
     node: Arc<EmbeddedNode>,
     identity: Arc<dyn NodeIdentity>,
     mut owner: EnrollmentAuthorityOwner,
+    intervals: P2pIntervals,
     cancel: CancellationToken,
 ) -> Result<()> {
     let store = GraphqlEnrollmentStore::new(node.clone(), identity.clone());
@@ -360,7 +362,7 @@ pub async fn run_enrollment_reconciler(
         ENROLLMENT_SWEEP_COLLECTIONS,
     )?;
     let mut subscription_open = true;
-    let mut interval = tokio::time::interval(super::intervals::sweep_interval());
+    let mut interval = tokio::time::interval(intervals.pairing_sweep);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
@@ -633,6 +635,12 @@ async fn sweep_enrollment(
         }
     };
     publish_ready(sender, projection.clone());
+    if let Err(error) = store
+        .withdraw_lapsed_memberships(|| Utc::now().timestamp())
+        .await
+    {
+        tracing::warn!(%error, "a lapsed enrollment grant was not withdrawn; will retry");
+    }
     if member_renewal.due() {
         if let Err(error) = super::enrollment_member_renewal::sweep_member_renewals(
             node,
@@ -1221,10 +1229,10 @@ mod tests {
     async fn signed_enrollment_reconciles_the_local_pairing_witness_without_replicating_it() {
         use crate::p2p_reconcile::embedded_impl::push_documents_to_peer;
         use crate::p2p_reconcile::embedded_impl::tests::fixtures::{
-            authorize_enrollment_peer, runtime_http_test_node, wait_for_active_peer,
-            wait_for_peer_info,
+            runtime_http_test_node, wait_for_active_peer, wait_for_peer_info,
         };
         use crate::p2p_reconcile::{PairingFilters, RemoteP2pAdmin};
+        use crate::test_support::enrollment::authorize_enrollment_peer;
         use defra_p2p_adapter::P2pDocumentRequest;
         use gents_store::config_client::ConfigAccess;
         use gents_store::graphql::escape_graphql_string;
@@ -1280,6 +1288,8 @@ mod tests {
         .unwrap();
         authorize_enrollment_peer(
             receiver.clone(),
+            &format!("network-{}", uuid::Uuid::new_v4()),
+            "final admission test",
             admin.clone(),
             member.clone(),
             &peer,
@@ -1393,6 +1403,32 @@ mod tests {
             after,
             "a repeated sweep preserves the witness"
         );
+        let runtime = ConfigAccess::local_as(receiver.clone(), admin.did().parse().unwrap());
+        let grant = serde_json::json!({
+            "request_id": projection.active[0].request.request_id,
+            "member_did": member.did(),
+            "tuples": ["node-administrator"],
+            "granted_at": chrono::Utc::now().to_rfc3339(),
+        });
+        runtime.write_with_variables(
+            "test.enrollment.sweep_receipt",
+            "mutation($input: NetworkEnrollmentGrantMutationInputArg!) { create_NetworkEnrollmentGrant(input: $input) { _docID } }",
+            &serde_json::json!({"input": grant}),
+        ).await.unwrap();
+        let expiry = chrono::DateTime::parse_from_rfc3339(&signed.authorization_expires_at)
+            .unwrap()
+            .timestamp();
+        for (wall, lapsed) in [(expiry - 1, false), (expiry, true)] {
+            store.withdraw_lapsed_memberships(|| wall).await.unwrap();
+            let receipts =
+                gents_store::identity::load_enrollment_grant_receipts(&runtime, member.did())
+                    .await
+                    .unwrap();
+            let [receipt] = receipts.as_slice() else {
+                panic!("expected one enrollment receipt")
+            };
+            assert_eq!((receipt.withdrawn, receipt.owed), (lapsed, lapsed));
+        }
         receiver.shutdown().await.expect("node shutdown");
     }
 

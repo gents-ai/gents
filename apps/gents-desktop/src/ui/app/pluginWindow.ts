@@ -2,12 +2,17 @@ import { useEffect, useRef, useState } from "react";
 import { uxPluginRecords, useUxPluginRecords } from "@/contrib/plugins-store";
 import { uxScanSettled } from "@/contrib/runtime-door";
 import {
+  inNativeShell,
   listenToWindow,
+  PLUGIN_NAVIGATE_EVENT,
   PLUGIN_WINDOW_EVENT,
   pluginWindowLabel,
+  windowLabel,
   windowOpen,
+  type PluginNavigation,
   type PluginWindowChange,
 } from "../../lib/nativeShell";
+import { navigate, parseRoute, type Route } from "../lib/router";
 
 /** A UX plugin's page in a window of its own opens on that page, with its
     data calls going to the node it was opened from. The shell opens the
@@ -81,4 +86,22 @@ export function usePluginWindowOpen(pluginId: string, follow: boolean): boolean 
     };
   }, [pluginId, follow]);
   return follow && open;
+}
+
+/** The main window goes where a plugin's page, in a window of its own, asked
+    to go: that window shows the page and nothing else, so the shell hands
+    the place over and brings the main window forward. The path is read as
+    any of the app's own; one that names nothing opens the default place. */
+export function useNavigationFromPluginWindows(go: (to: Route) => void = navigate) {
+  useEffect(() => {
+    if (!inNativeShell() || windowLabel() !== "main") return;
+    const stop = listenToWindow<PluginNavigation>(PLUGIN_NAVIGATE_EVENT, (asked) => {
+      if (typeof asked?.path === "string") go(parseRoute(asked.path));
+    });
+    return () =>
+      void stop.then(
+        (unlisten) => unlisten(),
+        () => {},
+      );
+  }, [go]);
 }

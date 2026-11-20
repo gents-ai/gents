@@ -114,14 +114,16 @@ async fn append_sequence_excludes_foreign_session_messages_and_reservations() {
     for (owner, sequence) in [(db.node_did(), 4), ("did:key:foreign", 700)] {
         crate::session::import_history_observation(
             &db.node,
-            &format!("observed-request-{sequence}"),
-            session,
-            owner,
-            None,
-            "input",
-            &format!("observed-input-{sequence}"),
-            sequence,
-            None,
+            crate::session::HistoryObservation {
+                request_id: &format!("observed-request-{sequence}"),
+                session_id: session,
+                node_did: owner,
+                requester_did: None,
+                text: "input",
+                message_key_suffix: &format!("observed-input-{sequence}"),
+                sequence,
+                tool_call: None,
+            },
         )
         .await;
     }

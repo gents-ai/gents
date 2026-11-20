@@ -3,7 +3,6 @@ import Proofs.Clients.ClientShell.SessionTurn
 import Proofs.Clients.ClientShell.Submission
 import Proofs.Clients.ClientShell.OptimisticSend
 import Proofs.Clients.ClientShell.ChatReadiness
-import Proofs.Clients.ClientShell.RoutePairing
 import Proofs.Clients.ClientShell.Transition
 import Proofs.Clients.ClientShell.Projection
 import Proofs.Clients.ClientShell.PresentationAgreement

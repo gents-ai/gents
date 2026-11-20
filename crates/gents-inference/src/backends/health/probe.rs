@@ -67,12 +67,13 @@ fn same_probe_inputs(previous: &InferenceBackend, current: &InferenceBackend) ->
         && previous.openai_wire_api == current.openai_wire_api
         && previous.endpoint == current.endpoint
         && previous.auth == current.auth
+        && previous.client_version == current.client_version
         && previous.connect_timeout_secs == current.connect_timeout_secs
         && previous.discovery_timeout_secs == current.discovery_timeout_secs
 }
 
 pub(super) fn probe_timeout(backend: &InferenceBackend) -> Duration {
-    Duration::from_secs(backend.discovery_timeout_secs.unwrap_or(10).max(1) as u64)
+    Duration::from_secs(backend.effective_discovery_timeout_secs().max(1) as u64)
 }
 
 async fn record_discovered_catalog(
@@ -177,6 +178,7 @@ pub(super) async fn probe_selected_backends(
                                 &backend.endpoint,
                                 None,
                                 Some(&credential),
+                                backend.client_version.as_deref(),
                             ),
                         ))
                         .await
@@ -268,6 +270,7 @@ pub(super) async fn probe_selected_backends(
                             &backend.endpoint,
                             api_key.as_deref(),
                             None,
+                            backend.client_version.as_deref(),
                         ),
                     ))
                     .await

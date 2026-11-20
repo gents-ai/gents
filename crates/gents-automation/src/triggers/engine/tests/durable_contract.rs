@@ -1,6 +1,9 @@
 use super::*;
 use crate::triggers::engine::durable;
 use gents_protocol::trigger_delivery::{FireIdentity, TriggerFire};
+use gents_store::test_support::{
+    fixture_agent, fixture_agent_access, fixture_agent_did, fixture_root, FIXTURE_AGENT_NONCE,
+};
 use serde::Deserialize;
 
 #[derive(Clone, Deserialize)]
@@ -505,10 +508,7 @@ async fn restart_outcome_recovery_matches_modeled_crash_boundaries() {
         };
         let directory = tempfile::tempdir().unwrap();
         let (root, key) = (
-            gents_store::identity::NodeIdentity::did(
-                &crate::triggers::callback::test_root_identity(),
-            )
-            .to_owned(),
+            gents_store::identity::NodeIdentity::did(&fixture_root()).to_owned(),
             directory.path().join("node.key"),
         );
         tokio::task::spawn_blocking(move || {
@@ -525,10 +525,10 @@ async fn restart_outcome_recovery_matches_modeled_crash_boundaries() {
         .unwrap();
         let node = db.node.clone();
         crate::triggers::callback::seed_test_agent(&node, &fire.identity.owner_did).await;
-        let agent = crate::triggers::callback::test_agent_identity();
+        let agent = fixture_agent(FIXTURE_AGENT_NONCE);
         let terminal = request.terminal;
         let state = if terminal { "completed" } else { "pending" };
-        let agent_did = crate::triggers::callback::test_agent_did();
+        let agent_did = fixture_agent_did(FIXTURE_AGENT_NONCE);
         let create_request = |request_id: &str, created_at: &str| {
             format!(
                 r#"mutation {{create_AgentRequest(input: {{
@@ -547,7 +547,7 @@ async fn restart_outcome_recovery_matches_modeled_crash_boundaries() {
         let goal_status = pre.goals.first().map(|goal| goal.status.clone());
         let replaced = request.assignment_replaced;
         let published = !pre.outcomes.is_empty();
-        let access = crate::triggers::callback::test_agent_access(&node);
+        let access = fixture_agent_access(&node, FIXTURE_AGENT_NONCE);
         access
             .transact_write("test.seed_terminal_outcome_boundary", |txn| {
                 let (fire, request_mutation, goal_status) =
@@ -636,7 +636,7 @@ async fn restart_outcome_recovery_matches_modeled_crash_boundaries() {
                 .await
                 .unwrap();
         let post = observed_delivery_state(
-            &crate::triggers::callback::test_agent_access(&node),
+            &fixture_agent_access(&node, FIXTURE_AGENT_NONCE),
             FireIdentity::clone,
         )
         .await;
@@ -693,10 +693,7 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
         let name = &case.input.name;
         let directory = tempfile::tempdir().unwrap();
         let (root, key) = (
-            gents_store::identity::NodeIdentity::did(
-                &crate::triggers::callback::test_root_identity(),
-            )
-            .to_owned(),
+            gents_store::identity::NodeIdentity::did(&fixture_root()).to_owned(),
             directory.path().join("node.key"),
         );
         tokio::task::spawn_blocking(move || {
@@ -712,8 +709,8 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
         .await
         .unwrap();
         let node = db.node.clone();
-        let agent = crate::triggers::callback::test_agent_identity();
-        let access = crate::triggers::callback::test_agent_access(&node);
+        let agent = fixture_agent(FIXTURE_AGENT_NONCE);
+        let access = fixture_agent_access(&node, FIXTURE_AGENT_NONCE);
         let owners: std::collections::BTreeSet<String> = case
             .input
             .actions
@@ -983,6 +980,7 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
         let access = ConfigAccess::local_as(node.clone(), ::identity::Did::new(owner).unwrap());
         for permission in [
             NodePermission::DocumentRead,
+            NodePermission::CollectionGet,
             NodePermission::DocumentUpdate,
             NodePermission::DacRelationAdd,
             NodePermission::DacRelationDelete,
@@ -1323,6 +1321,7 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
         let access = ConfigAccess::local_as(node.clone(), ::identity::Did::new(owner).unwrap());
         for permission in [
             NodePermission::DocumentRead,
+            NodePermission::CollectionGet,
             NodePermission::DocumentUpdate,
             NodePermission::DacRelationAdd,
             NodePermission::DacRelationDelete,
@@ -1691,20 +1690,20 @@ async fn generated_fire_budget_cases_stop_at_the_modeled_receipt_count() {
             max_fires_per_hour: budget,
         };
         let materialize = || {
-            materializer.materialize(
-                &task,
-                Some("handoff"),
-                TriggerKind::Schedule,
-                Some(&trigger_doc),
-                None,
-                None,
-                None,
-                "work",
-                None,
-                &prepared.receipt.fire_key,
-                Some(&prepared),
-                None,
-            )
+            materializer.materialize(FireMaterialization {
+                task: &task,
+                trigger_id: Some("handoff"),
+                trigger_kind: TriggerKind::Schedule,
+                trigger_doc_id: Some(&trigger_doc),
+                source_doc_id: None,
+                correlation: None,
+                trigger_context: None,
+                rendered_prompt: "work",
+                rendered_goal_objective: None,
+                durable_fire_key: &prepared.receipt.fire_key,
+                delivery: Some(&prepared),
+                prepared_ids: None,
+            })
         };
         if input.replay {
             materialize().await.unwrap();

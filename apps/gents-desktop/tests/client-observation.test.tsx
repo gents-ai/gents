@@ -17,7 +17,7 @@ import { liveAssistant, sessionSnapshot } from "./timeline-fixture";
 
 const NODE_DID = "did:key:here";
 const running = {
-  bootstrap: { clientStateExists: true, savedPeers: [] },
+  bootstrap: { clientStateExists: true, savedRuntimes: [] },
   client: {
     deployments: [
       node({

@@ -1,4 +1,0 @@
----- MODULE MCTestCacheStore ----
-EXTENDS TestCacheStore
-
-====

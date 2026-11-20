@@ -24,12 +24,12 @@ describeLive("Tauri app live fleet add flow", () => {
             (candidate) => candidate.nodeDid === runner.nodeDid,
           );
           expect(deployment).toBeDefined();
-          expect(deployment?.addr).toBe(firstDeployment.addr);
+          expect(deployment?.graphql).toBe(firstDeployment.graphql);
           expect(deployment?.label).toBe(firstDeployment.label);
           expect(
             screen.queryByTestId("fleet-add-server-address"),
           ).not.toBeInTheDocument();
-          const peerId = deployment?.peerId;
+          const peerId = deployment?.nodeDid;
           expect(peerId).toBeTruthy();
           expect(
             screen.getByRole("link", {

@@ -69,8 +69,11 @@ pub struct ContextBudgetScope {
 impl ContextBudgetScope {
     /// Resolve the scope from the in-flight tool call. Fails closed when the
     /// runtime did not install an agent or session identity.
-    fn from_tool_runtime(node_did: &str) -> Result<Self> {
-        let runtime = crate::runtime_context::current_tool_runtime_context();
+    fn from_tool_runtime(
+        call: &gents_loop::tool::ToolCallEnvelope,
+        node_did: &str,
+    ) -> Result<Self> {
+        let runtime = crate::runtime_context::tool_runtime_context(call);
         let agent_did = runtime
             .as_ref()
             .and_then(|runtime| runtime.agent_did.clone())
@@ -246,9 +249,9 @@ impl Tool for ContextBudgetTool {
     async fn call(
         &self,
         _args: Self::Args,
-        _context: &gents_loop::tool::ToolCallEnvelope,
+        context: &gents_loop::tool::ToolCallEnvelope,
     ) -> Result<Self::Output, Self::Error> {
-        let scope = ContextBudgetScope::from_tool_runtime(&self.node_did)?;
+        let scope = ContextBudgetScope::from_tool_runtime(context, &self.node_did)?;
         let snapshot = load_context_budget_snapshot(&self.node, &scope).await?;
         gents_session::session::output_render::render(
             &snapshot,
@@ -574,27 +577,22 @@ mod tests {
     use std::sync::Arc;
 
     use gents_loop::tool::Tool;
+    use gents_store::test_support::{
+        fixture_agent_access, fixture_agent_did, fixture_root, FIXTURE_AGENT_NONCE,
+    };
 
     use super::*;
 
     fn agent_context_did() -> String {
-        crate::test_support::test_agent_did()
+        fixture_agent_did(FIXTURE_AGENT_NONCE)
     }
 
-    fn agent_codex_identity() -> Arc<dyn gents_store::identity::NodeIdentity> {
-        let root = crate::test_support::test_root_identity();
-        let binding = gents_protocol::agent_identity::AgentIdentityBinding {
-            creation_nonce: "d".repeat(64),
-            agent_did: gents_store::identity::derive_agent_identity(&root, &"d".repeat(64))
-                .unwrap()
-                .did()
-                .to_owned(),
-        };
-        gents_store::identity::resolve_agent_identity(&root, &binding).unwrap()
+    fn agent_codex_nonce() -> String {
+        "d".repeat(64)
     }
 
     fn agent_codex_did() -> String {
-        agent_codex_identity().did().to_owned()
+        fixture_agent_did(&agent_codex_nonce())
     }
 
     /// Each Agent signs the rows it owns; the tool reads as that Agent.
@@ -603,16 +601,10 @@ mod tests {
         agent_did: &str,
     ) -> gents_store::config_client::ConfigAccess {
         if agent_did == agent_context_did() {
-            return crate::test_support::test_agent_access(node);
+            return fixture_agent_access(node, FIXTURE_AGENT_NONCE);
         }
         assert_eq!(agent_did, agent_codex_did());
-        let agent = agent_codex_identity();
-        gents_store::config_client::ConfigAccess::local_managed_agent(
-            node.clone(),
-            identity::Did::new(agent.did()).unwrap(),
-            agent.as_ref(),
-        )
-        .unwrap()
+        fixture_agent_access(node, &agent_codex_nonce())
     }
 
     async fn seed_as(node: &Arc<EmbeddedNode>, agent_did: &str, mutation: &str) {
@@ -633,7 +625,7 @@ mod tests {
 
     async fn seeded_node() -> Arc<EmbeddedNode> {
         // The runtime holds the root its fixture Agents derive from.
-        let root = crate::test_support::test_root_identity();
+        let root = fixture_root();
         let node = Arc::new(
             defra_node::Node::builder()
                 .with_node_identity_did(gents_store::identity::NodeIdentity::did(&root))
@@ -766,28 +758,25 @@ mod tests {
     }
 
     async fn call_as(tool: &ContextBudgetTool, agent_did: &str, session_id: &str) -> String {
-        crate::runtime_context::scope_request_tool_execution_with_session(
-            Some(crate::runtime_context::ToolRequestIdentity::new(
+        let scope_call = gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
+            identity: Some(crate::runtime_context::ToolRequestIdentity::new(
                 None,
                 Some("did:key:z-context".into()),
                 Some(agent_did.into()),
                 Some("caller-request".into()),
             )),
-            None,
-            tokio_util::sync::CancellationToken::new(),
-            None,
-            None,
-            Some(session_id.into()),
-            async {
-                Tool::call(
-                    tool,
-                    ContextBudgetParams {},
-                    &gents_loop::tool::ToolCallEnvelope::ambient(),
-                )
+            session_id: Some(session_id.into()),
+            ..gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
+                None,
+                tokio_util::sync::CancellationToken::new(),
+            )
+        }
+        .call();
+        async {
+            Tool::call(tool, ContextBudgetParams {}, &scope_call)
                 .await
                 .unwrap()
-            },
-        )
+        }
         .await
     }
 
@@ -976,7 +965,7 @@ mod tests {
         let error = Tool::call(
             &tool,
             ContextBudgetParams {},
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .expect_err("unscoped call must not fall back to a node-wide scan");

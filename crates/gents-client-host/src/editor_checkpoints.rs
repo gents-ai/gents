@@ -608,56 +608,20 @@ mod tests {
 
     #[test]
     fn checkpoint_model_ledgers_round_trip_through_actual_durable_owner() {
-        let proofs = Path::new(env!("CARGO_MANIFEST_DIR")).join("../gents/proofs");
-        let prepared = std::process::Command::new("lake")
-            .args(["build", "Proofs.Conformance.EditorUndoCheckpoint"])
-            .current_dir(&proofs)
-            .output()
-            .unwrap();
-        assert!(
-            prepared.status.success(),
-            "{}{}",
-            String::from_utf8_lossy(&prepared.stdout),
-            String::from_utf8_lossy(&prepared.stderr)
-        );
-        let output = std::process::Command::new("lake")
-            .args([
-                "env",
-                "lean",
-                "--run",
-                "Proofs/Conformance/EditorUndoCheckpoint.lean",
-            ])
-            .current_dir(proofs)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let cases: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        use gents_lean_vocab::families::editor_undo_checkpoint_round_trip as family;
+        use gents_lean_vocab::family::recode;
         let mut count = 0;
-        for case in cases.as_array().unwrap() {
-            for entry in case["trace"].as_array().unwrap() {
-                let stored = &entry["expected"]["stored"];
-                if stored["kind"] != "present" || stored["version"] != VERSION {
-                    continue;
-                }
-                let expected: Vec<Operation> =
-                    serde_json::from_value(stored["ledger"].clone()).unwrap();
-                let root = tempfile::tempdir().unwrap();
-                let directory = root.path().join("checkpoints");
-                let mut session = Session::open(&directory).unwrap().unwrap();
-                session.read().unwrap();
-                session
-                    .write(serde_json::from_value(stored["ledger"].clone()).unwrap())
-                    .unwrap();
-                drop(session);
-                let mut reopened = Session::open(&directory).unwrap().unwrap();
-                assert_eq!(reopened.read().unwrap().unwrap().ledger, expected);
-                count += 1;
-            }
+        for case in family::cases::<SaveState, Restore>() {
+            assert_eq!(case.input.version, u64::from(VERSION));
+            let root = tempfile::tempdir().unwrap();
+            let directory = root.path().join("checkpoints");
+            let mut session = Session::open(&directory).unwrap().unwrap();
+            session.read().unwrap();
+            session.write(recode(&case.input.ledger)).unwrap();
+            drop(session);
+            let mut reopened = Session::open(&directory).unwrap().unwrap();
+            case.check(recode(&reopened.read().unwrap().unwrap().ledger));
+            count += 1;
         }
         assert!(count > 0);
     }

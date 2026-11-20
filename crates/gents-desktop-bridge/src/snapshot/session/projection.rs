@@ -1,6 +1,6 @@
 use super::*;
-use gents_desktop_core::client::canonical_output::{
-    project_canonical_live, CanonicalMessageProjection,
+use gents_observe::client_projection::canonical_output::{
+    project_canonical_live, CanonicalMessageProjection, LiveEvidence, LiveReadScope, LiveStream,
 };
 
 #[cfg(test)]
@@ -24,8 +24,8 @@ fn project_message_with_dependencies(
     denied_headers: &[String],
     denied_segments: &[String],
     dependency_denials: &[gents_protocol::output::reconstruction::DependencyDenial],
-) -> gents_desktop_core::client::canonical_output::CanonicalMessageProjection {
-    use gents_desktop_core::client::canonical_output::{
+) -> gents_observe::client_projection::canonical_output::CanonicalMessageProjection {
+    use gents_observe::client_projection::canonical_output::{
         project_canonical_message, resolves_from_fork_copies, CanonicalMessageProjection,
     };
     let origin = gents_protocol::output::origin::resolve_origin(
@@ -232,7 +232,7 @@ fn canonical_tool_payload(
         }
     }
     if tool.spawned_by_tool_call_doc_id.is_some() || tool.plugin_parent_tool_call_doc_id.is_some() {
-        return match gents_desktop_core::client::canonical_output::terminal_tool_output(
+        return match gents_observe::client_projection::canonical_output::terminal_tool_output(
             tool,
             output_segments,
             denied_segments,
@@ -292,19 +292,24 @@ fn canonical_live_tool_output(
         .and_then(|row| row.lifecycle_state)
         .is_some_and(RequestLifecycleState::is_terminal);
     let view = project_canonical_live(
-        request_doc_id,
-        session_id,
-        request_doc_id,
-        &source,
-        &writer,
-        None,
-        node_did,
-        tool.requester_did.as_deref(),
-        &headers,
-        output_segments,
-        denied_headers,
-        denied_segments,
-        dependency_denials,
+        LiveReadScope {
+            request_doc_id,
+            session_id,
+            node_did,
+            requester_did: tool.requester_did.as_deref(),
+        },
+        LiveStream {
+            source: &source,
+            writer: &writer,
+            message_id: None,
+        },
+        LiveEvidence {
+            headers: &headers,
+            segments: output_segments,
+            denied_headers,
+            denied_segments,
+            dependency_denials,
+        },
         OwnerLiveness {
             current_request: None,
             live_tools: if tool.lifecycle_state.as_deref() == Some("running") {
@@ -336,25 +341,39 @@ fn canonical_live_tool_output(
     })
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "projection inputs come from separate stores and request options"
-)]
+pub(super) struct SessionProjection<'a> {
+    pub store: &'a ClientStore,
+    pub transcript_store: &'a ClientStore,
+    pub context_store: &'a ClientStore,
+    pub canonical_dependencies:
+        Option<&'a gents_observe::client_projection::query::CanonicalTranscriptDependencies>,
+    pub prompt_ownership:
+        Option<&'a gents_observe::client_projection::query::RequestPromptOwnership>,
+    pub request_projection: Option<&'a [AgentRequestRow]>,
+    pub transcript_is_bounded: bool,
+    pub context_totals_exact: bool,
+    pub pending_owner_known: bool,
+    pub include_live_tail: bool,
+}
+
 pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
-    store: &ClientStore,
-    transcript_store: &ClientStore,
-    context_store: &ClientStore,
-    canonical_dependencies: Option<&gents_desktop_core::client::CanonicalTranscriptDependencies>,
-    prompt_ownership: Option<&gents_desktop_core::client::RequestPromptOwnership>,
-    transcript_is_bounded: bool,
-    context_totals_exact: bool,
-    pending_owner_known: bool,
-    include_live_tail: bool,
+    projection: SessionProjection<'_>,
     node_did: Option<&str>,
     session_id: &str,
     preferred_request_id: Option<&str>,
-    request_projection: Option<&[AgentRequestRow]>,
 ) -> Option<DesktopSessionSnapshot> {
+    let SessionProjection {
+        store,
+        transcript_store,
+        context_store,
+        canonical_dependencies,
+        prompt_ownership,
+        request_projection,
+        transcript_is_bounded,
+        context_totals_exact,
+        pending_owner_known,
+        include_live_tail,
+    } = projection;
     let session_row = store.sessions.iter().find(|row| {
         row.session_id == session_id && node_did.is_none_or(|node_did| row.node_did == node_did)
     });
@@ -415,7 +434,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
                 .iter()
                 .find(|row| row.request_id == request_id)
                 .map_or(request_id, |row| {
-                    gents_desktop_core::client::session_display_request(&requests, row)
+                    gents_observe::client_projection::store::session_display_request(&requests, row)
                         .request_id
                         .clone()
                 })
@@ -574,7 +593,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
         session_row.is_none_or(|session| request.requester_did == session.requester_did)
     };
     let queued_requests = latest_request
-        .map(|turn| gents_desktop_core::client::queued_behind_turn(&requests, turn))
+        .map(|turn| gents_observe::client_projection::store::queued_behind_turn(&requests, turn))
         .unwrap_or_default();
     let queued_turns = queued_requests
         .iter()
@@ -583,7 +602,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
             project_pending_turn(store, context_store, node_did, session_id, request)
         })
         .collect::<Vec<_>>();
-    let folded_inputs = gents_desktop_core::client::folded_requests(
+    let folded_inputs = gents_observe::client_projection::store::folded_requests(
         &requests,
         session_row
             .map(|session| session.requester_did.as_deref())
@@ -671,13 +690,15 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
     let mut live_cursor = None;
     if include_live_tail {
         if let Some(request_id) = latest_request_id.as_deref() {
-            if let Some(live) = gents_desktop_core::client::canonical_output::canonical_live_text(
-                store,
-                context_store,
-                session_id,
-                node_did,
-                request_id,
-            ) {
+            if let Some(live) =
+                gents_observe::client_projection::canonical_output::canonical_live_text(
+                    store,
+                    context_store,
+                    session_id,
+                    node_did,
+                    request_id,
+                )
+            {
                 let content = normalize_optional(Some(&live.content));
                 let reasoning = normalize_optional(Some(&live.reasoning));
                 if content.is_some() || reasoning.is_some() {
@@ -1124,7 +1145,7 @@ mod canonical_projection_tests {
 
     #[test]
     fn a_fork_reads_its_own_copies_without_its_origin() {
-        use gents_desktop_core::client::canonical_output::CanonicalMessageProjection;
+        use gents_observe::client_projection::canonical_output::CanonicalMessageProjection;
 
         let child = fork_child("origin", Some("source-close"));
         let child_only = vec![child.clone()];
@@ -1173,7 +1194,7 @@ mod canonical_projection_tests {
 
     #[test]
     fn a_visible_fork_origin_must_still_agree_with_its_copies() {
-        use gents_desktop_core::client::canonical_output::CanonicalMessageProjection;
+        use gents_observe::client_projection::canonical_output::CanonicalMessageProjection;
 
         let child = fork_child("origin", None);
         let child_only = vec![child.clone()];
@@ -1192,7 +1213,7 @@ mod canonical_projection_tests {
 
     #[test]
     fn exact_origin_header_enables_fork_without_rendering_parent_membership() {
-        use gents_desktop_core::client::canonical_output::CanonicalMessageProjection;
+        use gents_observe::client_projection::canonical_output::CanonicalMessageProjection;
 
         let origin = header("origin", "parent");
         let mut child = header("child", "child-session");
@@ -1213,7 +1234,7 @@ mod tests {
     use super::*;
     use crate::snapshot::tests::push_canonical_text_message;
     use crate::types::RenderedTimelineItem;
-    use gents_desktop_core::client::ClientStoreRows;
+    use gents_observe::client_projection::store::ClientStoreRows;
     use gents_protocol::output::MessageRole;
 
     #[test]
@@ -1256,11 +1277,12 @@ mod tests {
             },
         ];
         let store = ClientStore::default();
-        let mut ownership = gents_desktop_core::client::RequestPromptOwnership::default();
+        let mut ownership =
+            gents_observe::client_projection::query::RequestPromptOwnership::default();
         for request in &requests {
             ownership.by_request_doc_id.insert(
                 request.doc_id.clone().unwrap(),
-                gents_desktop_core::client::RequestPromptFact {
+                gents_observe::client_projection::query::RequestPromptFact {
                     node_did: "did:test:amy".into(),
                     session_id: "session-1".into(),
                     requester_did: None,
@@ -1277,19 +1299,21 @@ mod tests {
         stale_store.requests[1].input = None;
         for store in [&store, &stale_store] {
             let snapshot = build_session_snapshot_from_store_for_node_with_transcript(
-                store,
-                store,
-                store,
-                None,
-                Some(&ownership),
-                true,
-                false,
-                false,
-                true,
+                SessionProjection {
+                    store,
+                    transcript_store: store,
+                    context_store: store,
+                    canonical_dependencies: None,
+                    prompt_ownership: Some(&ownership),
+                    request_projection: Some(&requests),
+                    transcript_is_bounded: true,
+                    context_totals_exact: false,
+                    pending_owner_known: false,
+                    include_live_tail: true,
+                },
                 Some("did:test:amy"),
                 "session-1",
                 Some("head"),
-                Some(&requests),
             )
             .expect("fresh request projection establishes the session");
             let inputs = snapshot
@@ -1395,11 +1419,12 @@ mod tests {
             );
         }
         let full = ClientStore::from_rows(rows.clone());
-        let mut ownership = gents_desktop_core::client::RequestPromptOwnership::default();
+        let mut ownership =
+            gents_observe::client_projection::query::RequestPromptOwnership::default();
         for (doc, first_sequence) in [("doc-head", 1), ("doc-folded", 2), ("doc-later", 4)] {
             ownership.by_request_doc_id.insert(
                 doc.into(),
-                gents_desktop_core::client::RequestPromptFact {
+                gents_observe::client_projection::query::RequestPromptFact {
                     node_did: "did:test:amy".into(),
                     session_id: "session-1".into(),
                     requester_did: None,
@@ -1417,18 +1442,20 @@ mod tests {
         };
         let snapshot_of = |page: &ClientStore, tip: bool| {
             build_session_snapshot_from_store_for_node_with_transcript(
-                &full,
-                page,
-                page,
-                None,
-                Some(&ownership),
-                true,
-                false,
-                false,
-                tip,
+                SessionProjection {
+                    store: &full,
+                    transcript_store: page,
+                    context_store: page,
+                    canonical_dependencies: None,
+                    prompt_ownership: Some(&ownership),
+                    request_projection: None,
+                    transcript_is_bounded: true,
+                    context_totals_exact: false,
+                    pending_owner_known: false,
+                    include_live_tail: tip,
+                },
                 Some("did:test:amy"),
                 "session-1",
-                None,
                 None,
             )
             .unwrap()
@@ -1535,11 +1562,12 @@ mod tests {
             );
         }
         let store = ClientStore::from_rows(rows);
-        let mut ownership = gents_desktop_core::client::RequestPromptOwnership::default();
+        let mut ownership =
+            gents_observe::client_projection::query::RequestPromptOwnership::default();
         for (doc, first_sequence) in [("doc-skilled", 1), ("doc-steered", 2), ("doc-plain", 4)] {
             ownership.by_request_doc_id.insert(
                 doc.into(),
-                gents_desktop_core::client::RequestPromptFact {
+                gents_observe::client_projection::query::RequestPromptFact {
                     node_did: "did:test:amy".into(),
                     session_id: "session-1".into(),
                     requester_did: None,
@@ -1549,18 +1577,20 @@ mod tests {
             );
         }
         let snapshot = build_session_snapshot_from_store_for_node_with_transcript(
-            &store,
-            &store,
-            &store,
-            None,
-            Some(&ownership),
-            true,
-            false,
-            false,
-            true,
+            SessionProjection {
+                store: &store,
+                transcript_store: &store,
+                context_store: &store,
+                canonical_dependencies: None,
+                prompt_ownership: Some(&ownership),
+                request_projection: None,
+                transcript_is_bounded: true,
+                context_totals_exact: false,
+                pending_owner_known: false,
+                include_live_tail: true,
+            },
             Some("did:test:amy"),
             "session-1",
-            None,
             None,
         )
         .unwrap();
@@ -1644,12 +1674,13 @@ mod tests {
             "later question",
         );
         let tip = ClientStore::from_rows(tip_rows);
-        let mut ownership = gents_desktop_core::client::RequestPromptOwnership::default();
+        let mut ownership =
+            gents_observe::client_projection::query::RequestPromptOwnership::default();
         for (id, materialized, first_sequence) in [("req-1", false, None), ("req-2", true, Some(1))]
         {
             ownership.by_request_doc_id.insert(
                 id.into(),
-                gents_desktop_core::client::RequestPromptFact {
+                gents_observe::client_projection::query::RequestPromptFact {
                     node_did: "did:test:amy".into(),
                     session_id: "session-1".into(),
                     requester_did: None,
@@ -1666,19 +1697,21 @@ mod tests {
             let page = ClientStore::from_rows(page_rows);
             let context = page.merge_snapshot(tip.clone());
             let snapshot = build_session_snapshot_from_store_for_node_with_transcript(
-                &bounded,
-                &page,
-                &context,
-                None,
-                Some(&ownership),
-                true,
-                false,
-                false,
-                sequence == 2,
+                SessionProjection {
+                    store: &bounded,
+                    transcript_store: &page,
+                    context_store: &context,
+                    canonical_dependencies: None,
+                    prompt_ownership: Some(&ownership),
+                    request_projection: Some(&full.requests),
+                    transcript_is_bounded: true,
+                    context_totals_exact: false,
+                    pending_owner_known: false,
+                    include_live_tail: sequence == 2,
+                },
                 Some("did:test:amy"),
                 "session-1",
                 None,
-                Some(&full.requests),
             )
             .unwrap();
             assert!(
@@ -1711,7 +1744,7 @@ mod tests {
         let control_store = ClientStore::from_rows(control_rows.clone());
         ownership.by_request_doc_id.insert(
             "control".into(),
-            gents_desktop_core::client::RequestPromptFact {
+            gents_observe::client_projection::query::RequestPromptFact {
                 node_did: "did:test:amy".into(),
                 session_id: "session-1".into(),
                 requester_did: None,
@@ -1725,18 +1758,20 @@ mod tests {
         let control_page = ClientStore::from_rows(control_rows);
         let control_context = control_page.merge_snapshot(tip.clone());
         let snapshot = build_session_snapshot_from_store_for_node_with_transcript(
-            &control_store,
-            &control_page,
-            &control_context,
-            None,
-            Some(&ownership),
-            true,
-            false,
-            false,
-            false,
+            SessionProjection {
+                store: &control_store,
+                transcript_store: &control_page,
+                context_store: &control_context,
+                canonical_dependencies: None,
+                prompt_ownership: Some(&ownership),
+                request_projection: None,
+                transcript_is_bounded: true,
+                context_totals_exact: false,
+                pending_owner_known: false,
+                include_live_tail: false,
+            },
             Some("did:test:amy"),
             "session-1",
-            None,
             None,
         )
         .unwrap();
@@ -1756,18 +1791,20 @@ mod tests {
             .retain(|row| row.message.sequence == 2);
         let page = ClientStore::from_rows(rows);
         let snapshot = build_session_snapshot_from_store_for_node_with_transcript(
-            &full,
-            &page,
-            &full,
-            None,
-            None,
-            true,
-            true,
-            true,
-            true,
+            SessionProjection {
+                store: &full,
+                transcript_store: &page,
+                context_store: &full,
+                canonical_dependencies: None,
+                prompt_ownership: None,
+                request_projection: None,
+                transcript_is_bounded: true,
+                context_totals_exact: true,
+                pending_owner_known: true,
+                include_live_tail: true,
+            },
             Some("did:test:amy"),
             "session-1",
-            None,
             None,
         )
         .unwrap();
@@ -1782,8 +1819,10 @@ mod tests {
 pub(super) fn project_transcript_rows(
     store: &ClientStore,
     question_store: &ClientStore,
-    transcript: &gents_desktop_core::client::TranscriptView<'_>,
-    canonical_dependencies: Option<&gents_desktop_core::client::CanonicalTranscriptDependencies>,
+    transcript: &gents_observe::client_projection::store::TranscriptView<'_>,
+    canonical_dependencies: Option<
+        &gents_observe::client_projection::query::CanonicalTranscriptDependencies,
+    >,
     requests: &[&AgentRequestRow],
     requests_by_doc_id: &RapidHashMap<&str, &AgentRequestRow>,
     result_messages: &[&gents_protocol::output::rows::TranscriptMessageRow],
@@ -2133,9 +2172,7 @@ pub(super) fn project_transcript_rows(
                     Some(pin.handle.clone()),
                     row.lifecycle_state
                         .as_deref()
-                        .and_then(
-                            gents_session::session::tool_call_state::ToolCallState::from_persisted,
-                        )
+                        .and_then(gents_protocol::tool_call::ToolCallState::from_persisted)
                         .map(|lifecycle| {
                             gents_toolcalls::plugin::job_calls::job_state(
                                 lifecycle,
@@ -2196,7 +2233,7 @@ pub(super) fn project_transcript_rows(
 /// session's own read.
 fn transcript_row_parts(
     store: &ClientStore,
-    page: &gents_desktop_core::client::SessionTranscriptQueryPage,
+    page: &gents_observe::client_projection::query::SessionTranscriptQueryPage,
     session_id: &str,
 ) -> (Vec<MessageView>, Vec<ToolCallView>) {
     let transcript = page.store.transcript(session_id);
@@ -2220,7 +2257,7 @@ fn transcript_row_parts(
 #[cfg(test)]
 pub(crate) fn render_transcript_rows(
     store: &ClientStore,
-    page: &gents_desktop_core::client::SessionTranscriptQueryPage,
+    page: &gents_observe::client_projection::query::SessionTranscriptQueryPage,
     session_id: &str,
 ) -> Vec<RenderedTimelineItem> {
     let (messages, tools) = transcript_row_parts(store, page, session_id);
@@ -2230,7 +2267,7 @@ pub(crate) fn render_transcript_rows(
 pub(crate) async fn render_transcript_rows_with_provenance(
     access: &dyn gents_store::config_client::ConfigRead,
     store: &ClientStore,
-    page: &gents_desktop_core::client::SessionTranscriptQueryPage,
+    page: &gents_observe::client_projection::query::SessionTranscriptQueryPage,
     node_did: &str,
     session_id: &str,
 ) -> anyhow::Result<Vec<RenderedTimelineItem>> {

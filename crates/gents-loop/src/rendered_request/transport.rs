@@ -1,12 +1,12 @@
 use std::fmt;
 use std::future::Future;
 
+use crate::provider_call::ProviderCall;
+use crate::rig_compat::http::{
+    self as http_client, LazyBody, MultipartForm, Request, Response, StreamingResponse, Transport,
+};
 use bytes::Bytes;
 use gents_protocol::error_chain::ErrorChain;
-use rig::http_client::{
-    self, HttpClientExt, LazyBody, MultipartForm, Request, Response, StreamingResponse,
-};
-use rig::wasm_compat::WasmCompatSend;
 use sha2::{Digest, Sha256};
 
 use super::scope::{self, CaptureClaim, PendingCapture, RequestCaptureScope};
@@ -117,7 +117,7 @@ fn route_identity_path(path: &str) -> std::borrow::Cow<'_, str> {
 
 pub fn replay_issuer_for_destination(
     family: &str,
-    destination: &rig::http_client::Uri,
+    destination: &http_client::Uri,
 ) -> Option<crate::claude_messages_body::ReplayIssuer> {
     replay_issuer_from_capture(
         family,
@@ -144,6 +144,7 @@ pub fn replay_issuer_from_capture(
 }
 
 fn decide(
+    call: &ProviderCall,
     path: &str,
     provider_endpoint: Option<String>,
     provider_route_path_sha256: Option<String>,
@@ -152,7 +153,7 @@ fn decide(
     let Some(source) = RenderedRequestSource::for_request_path(path) else {
         return CaptureDecision::Forward;
     };
-    let Some((scope, claim)) = scope::claim_pending() else {
+    let Some((scope, claim)) = scope::claim_pending(call.capture.as_ref()) else {
         return CaptureDecision::Forward;
     };
     match claim {
@@ -184,7 +185,11 @@ fn decide(
     }
 }
 
-async fn capture_or_refuse(decision: CaptureDecision, body: &Bytes) -> http_client::Result<()> {
+async fn capture_or_refuse(
+    call: &ProviderCall,
+    decision: CaptureDecision,
+    body: &Bytes,
+) -> http_client::Result<()> {
     let (
         scope,
         pending,
@@ -254,6 +259,7 @@ async fn capture_or_refuse(decision: CaptureDecision, body: &Bytes) -> http_clie
     let claimed = pending.clone();
     match scope::capture_body(
         scope.as_ref(),
+        call.admission.as_ref(),
         *pending,
         source,
         provider_endpoint,
@@ -291,27 +297,20 @@ async fn capture_or_refuse(decision: CaptureDecision, body: &Bytes) -> http_clie
     }
 }
 
-impl<H> HttpClientExt for RenderedRequestCapturingHttpClient<H>
+impl<H> Transport for RenderedRequestCapturingHttpClient<H>
 where
-    H: Clone + HttpClientExt + fmt::Debug + 'static,
+    H: Clone + Transport + fmt::Debug + 'static,
 {
-    fn send<T, U>(
+    fn send(
         &self,
-        req: Request<T>,
-    ) -> impl Future<Output = http_client::Result<Response<LazyBody<U>>>> + WasmCompatSend + 'static
-    where
-        T: Into<Bytes> + WasmCompatSend,
-        U: From<Bytes>,
-        U: WasmCompatSend + 'static,
-    {
+        call: &ProviderCall,
+        req: Request<Bytes>,
+    ) -> impl Future<Output = http_client::Result<Response<LazyBody<Bytes>>>> + Send + 'static {
         let inner = self.inner.clone();
+        let call = call.clone();
         let (parts, body) = req.into_parts();
-        let body: Bytes = body.into();
-        // The decision must happen here, in the caller's task: `HttpClientExt::
-        // send` returns a `'static` future the provider client may poll from
-        // anywhere, and a task-local is not visible from a task that did not
-        // install it.
         let decision = decide(
+            &call,
             parts.uri.path(),
             provider_endpoint_of(
                 parts.uri.scheme_str(),
@@ -324,38 +323,35 @@ where
             Sha256::digest(parts.uri.to_string().as_bytes()).into(),
         );
         async move {
-            capture_or_refuse(decision, &body).await?;
+            capture_or_refuse(&call, decision, &body).await?;
             let req = Request::from_parts(parts, body);
-            HttpClientExt::send::<Bytes, U>(&inner, req).await
+            Transport::send(&inner, &call, req).await
         }
     }
 
-    fn send_multipart<U>(
+    fn send_multipart(
         &self,
+        call: &ProviderCall,
         req: Request<MultipartForm>,
-    ) -> impl Future<Output = http_client::Result<Response<LazyBody<U>>>> + WasmCompatSend + 'static
-    where
-        U: From<Bytes>,
-        U: WasmCompatSend + 'static,
-    {
+    ) -> impl Future<Output = http_client::Result<Response<LazyBody<Bytes>>>> + Send + 'static {
         // No provider in this runtime posts a completion as multipart; do not
         // consume an armed capture.
         let inner = self.inner.clone();
-        async move { HttpClientExt::send_multipart(&inner, req).await }
+        let call = call.clone();
+        async move { Transport::send_multipart(&inner, &call, req).await }
     }
 
-    fn send_streaming<T>(
+    fn send_streaming(
         &self,
-        req: Request<T>,
-    ) -> impl Future<Output = http_client::Result<StreamingResponse>> + WasmCompatSend
-    where
-        T: Into<Bytes>,
-    {
+        call: &ProviderCall,
+        req: Request<Bytes>,
+    ) -> impl Future<Output = http_client::Result<StreamingResponse>> + Send {
         let inner = self.inner.clone();
+        let call = call.clone();
         let (parts, body) = req.into_parts();
-        let body: Bytes = body.into();
         let protocol = crate::provider_stream::ProviderStreamProtocol::for_path(parts.uri.path());
         let decision = decide(
+            &call,
             parts.uri.path(),
             provider_endpoint_of(
                 parts.uri.scheme_str(),
@@ -372,12 +368,12 @@ where
             CaptureDecision::Forward | CaptureDecision::Refuse { .. } => None,
         };
         async move {
-            capture_or_refuse(decision, &body).await?;
+            capture_or_refuse(&call, decision, &body).await?;
             if let Some(activity) = &activity {
                 activity.touch();
             }
             let req = Request::from_parts(parts, body);
-            let response = match HttpClientExt::send_streaming(&inner, req).await {
+            let response = match Transport::send_streaming(&inner, &call, req).await {
                 Ok(response) => response,
                 Err(error) => {
                     if let Some(activity) = &activity {
@@ -418,59 +414,54 @@ mod counting_inner_impl {
 
     use super::*;
 
-    impl HttpClientExt for CountingInner {
-        fn send<T, U>(
+    impl Transport for CountingInner {
+        fn send(
             &self,
-            req: Request<T>,
-        ) -> impl Future<Output = http_client::Result<Response<LazyBody<U>>>> + WasmCompatSend + 'static
-        where
-            T: Into<Bytes> + WasmCompatSend,
-            U: From<Bytes> + WasmCompatSend + 'static,
+            _call: &ProviderCall,
+            req: Request<Bytes>,
+        ) -> impl Future<Output = http_client::Result<Response<LazyBody<Bytes>>>> + Send + 'static
         {
             let sends = Arc::clone(&self.sends);
             let bodies = Arc::clone(&self.bodies);
-            let body: Bytes = req.into_body().into();
+            let body = req.into_body();
             async move {
                 sends.fetch_add(1, Ordering::SeqCst);
                 if let Ok(value) = serde_json::from_slice(&body) {
                     bodies.lock().expect("bodies").push(value);
                 }
-                let body: LazyBody<U> = Box::pin(async { Ok(U::from(Bytes::from_static(b"{}"))) });
+                let body: LazyBody<Bytes> = Box::pin(async { Ok(Bytes::from_static(b"{}")) });
                 Ok(Response::builder().status(200).body(body)?)
             }
         }
 
-        fn send_multipart<U>(
+        fn send_multipart(
             &self,
+            _call: &ProviderCall,
             _req: Request<MultipartForm>,
-        ) -> impl Future<Output = http_client::Result<Response<LazyBody<U>>>> + WasmCompatSend + 'static
-        where
-            U: From<Bytes> + WasmCompatSend + 'static,
+        ) -> impl Future<Output = http_client::Result<Response<LazyBody<Bytes>>>> + Send + 'static
         {
             let sends = Arc::clone(&self.sends);
             async move {
                 sends.fetch_add(1, Ordering::SeqCst);
-                let body: LazyBody<U> = Box::pin(async { Ok(U::from(Bytes::from_static(b"{}"))) });
+                let body: LazyBody<Bytes> = Box::pin(async { Ok(Bytes::from_static(b"{}")) });
                 Ok(Response::builder().status(200).body(body)?)
             }
         }
 
-        fn send_streaming<T>(
+        fn send_streaming(
             &self,
-            req: Request<T>,
-        ) -> impl Future<Output = http_client::Result<StreamingResponse>> + WasmCompatSend
-        where
-            T: Into<Bytes>,
-        {
+            _call: &ProviderCall,
+            req: Request<Bytes>,
+        ) -> impl Future<Output = http_client::Result<StreamingResponse>> + Send {
             let sends = Arc::clone(&self.sends);
             let bodies = Arc::clone(&self.bodies);
-            let body: Bytes = req.into_body().into();
+            let body = req.into_body();
             async move {
                 sends.fetch_add(1, Ordering::SeqCst);
                 if let Ok(value) = serde_json::from_slice(&body) {
                     bodies.lock().expect("bodies").push(value);
                 }
-                let stream: rig::http_client::sse::BoxedStream =
+                let stream: http_client::BoxedStream =
                     Box::pin(futures::stream::empty::<http_client::Result<Bytes>>());
                 Ok(Response::builder().status(200).body(stream)?)
             }
@@ -486,7 +477,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::rendered_request::scope::{arm, scope_request, test_scope, CaptureScopeKind};
+    use crate::rendered_request::scope::{arm, test_scope, CaptureScopeKind};
     use crate::rendered_request::{
         AssemblyBuildPath, AssemblyTrace, RenderedCompletionRequest, RenderedRequestCaptureSink,
         RenderedRequestContext, RenderedRequestError,
@@ -673,10 +664,22 @@ mod tests {
         let (sink, seen) = recording_sink();
         let scope = test_scope(context(), sink);
 
-        scope_request(scope, async {
-            arm(CaptureScopeKind::Inference, 3, 1, trace()).expect("armed");
-            let _ = HttpClientExt::send_streaming(
+        async {
+            let call = ProviderCall {
+                capture: Some(scope),
+                ..Default::default()
+            };
+            arm(
+                call.capture.as_ref(),
+                CaptureScopeKind::Inference,
+                3,
+                1,
+                trace(),
+            )
+            .expect("armed");
+            let _ = Transport::send_streaming(
                 &client,
+                &call,
                 responses_request(json!({
                     "model": "wire-model",
                     "instructions": "hoisted",
@@ -688,7 +691,7 @@ mod tests {
             )
             .await
             .expect("send");
-        })
+        }
         .await;
 
         let seen = seen.lock().expect("seen");
@@ -757,11 +760,11 @@ mod tests {
                     .unwrap()
                     .set_compaction_provider_family("XaiGrokOAuth".into());
             }
-            let observed = scope_request(scope, async {
+            let observed = async { let call = ProviderCall { capture: Some(scope), ..Default::default() };
                 let mut observed = Vec::new();
                 for send in &case.input.sends {
                     let kind = CaptureScopeKind::from_label(&send.kind).expect("scope kind");
-                    arm(kind, 0, 0, trace()).expect("armed");
+                    arm(call.capture.as_ref(), kind, 0, 0, trace()).expect("armed");
                     let path = match send.route.as_str() {
                         "responses" => "/v1/responses",
                         "chat_completions" => "/v1/chat/completions",
@@ -782,7 +785,7 @@ mod tests {
                         .uri(format!("https://example.test{path}"))
                         .body(body)
                         .expect("request");
-                    let refused_at = match HttpClientExt::send_streaming(&client, request).await {
+                    let refused_at = match Transport::send_streaming(&client, &call, request).await {
                         Ok(_) => None,
                         Err(http_client::Error::Instance(refusal)) => {
                             match refusal.downcast_ref::<TransportError>() {
@@ -837,7 +840,7 @@ mod tests {
                     });
                 }
                 observed
-            })
+            }
             .await;
             case.check(observed);
         }
@@ -849,13 +852,24 @@ mod tests {
         let client = RenderedRequestCapturingHttpClient::new(inner.clone());
         let scope = test_scope(context(), failing_sink());
 
-        let error = scope_request(scope, async {
-            arm(CaptureScopeKind::Inference, 0, 0, trace()).expect("armed");
-            HttpClientExt::send_streaming(&client, responses_request(json!({"input": []})))
+        let error = async {
+            let call = ProviderCall {
+                capture: Some(scope),
+                ..Default::default()
+            };
+            arm(
+                call.capture.as_ref(),
+                CaptureScopeKind::Inference,
+                0,
+                0,
+                trace(),
+            )
+            .expect("armed");
+            Transport::send_streaming(&client, &call, responses_request(json!({"input": []})))
                 .await
                 .err()
                 .expect("send must fail when capture fails")
-        })
+        }
         .await;
 
         assert!(
@@ -876,21 +890,32 @@ mod tests {
         let (sink, seen) = recording_sink();
         let scope = test_scope(context(), sink);
 
-        scope_request(scope, async {
-            arm(CaptureScopeKind::Inference, 0, 0, trace()).expect("armed");
+        async {
+            let call = ProviderCall {
+                capture: Some(scope),
+                ..Default::default()
+            };
+            arm(
+                call.capture.as_ref(),
+                CaptureScopeKind::Inference,
+                0,
+                0,
+                trace(),
+            )
+            .expect("armed");
             let req = Request::builder()
                 .method("GET")
                 .uri("https://example.test/v1/models")
                 .body(Bytes::from_static(b"{}"))
                 .expect("request");
-            let _ = HttpClientExt::send::<Bytes, Bytes>(&client, req)
+            let _ = Transport::send(&client, &call, req)
                 .await
                 .expect("models listing succeeds");
             assert!(
-                crate::rendered_request::scope::pending_is_armed(),
+                crate::rendered_request::scope::pending_is_armed(call.capture.as_ref()),
                 "a models listing must leave the completion's capture armed"
             );
-        })
+        }
         .await;
 
         assert_eq!(inner.sends.load(Ordering::SeqCst), 1);
@@ -904,15 +929,20 @@ mod tests {
         let (sink, seen) = recording_sink();
         let scope = test_scope(context(), sink);
 
-        let error = scope_request(scope, async {
-            HttpClientExt::send_streaming(
+        let error = async {
+            let call = ProviderCall {
+                capture: Some(scope),
+                ..Default::default()
+            };
+            Transport::send_streaming(
                 &client,
+                &call,
                 responses_request(json!({"input": [{"role": "user", "content": "hi"}]})),
             )
             .await
             .err()
             .expect("an unarmed completion inside a request must be refused")
-        })
+        }
         .await;
 
         assert!(
@@ -941,16 +971,27 @@ mod tests {
         let (sink, seen) = recording_sink();
         let scope = test_scope(context(), sink);
 
-        scope_request(scope, async {
-            arm(CaptureScopeKind::Inference, 2, 1, trace()).expect("armed");
+        async {
+            let call = ProviderCall {
+                capture: Some(scope),
+                ..Default::default()
+            };
+            arm(
+                call.capture.as_ref(),
+                CaptureScopeKind::Inference,
+                2,
+                1,
+                trace(),
+            )
+            .expect("armed");
             let body = json!({"model": "m", "input": [{"role": "user", "content": "hi"}]});
-            let _ = HttpClientExt::send_streaming(&client, responses_request(body.clone()))
+            let _ = Transport::send_streaming(&client, &call, responses_request(body.clone()))
                 .await
                 .expect("first send");
-            let _ = HttpClientExt::send_streaming(&client, responses_request(body))
+            let _ = Transport::send_streaming(&client, &call, responses_request(body))
                 .await
                 .expect("reconnect send");
-        })
+        }
         .await;
 
         let seen = seen.lock().expect("seen");
@@ -966,10 +1007,21 @@ mod tests {
         let (sink, seen) = recording_sink();
         let scope = test_scope(context(), sink);
 
-        scope_request(scope, async {
-            arm(CaptureScopeKind::Inference, 2, 1, trace()).expect("armed");
+        async {
+            let call = ProviderCall {
+                capture: Some(scope),
+                ..Default::default()
+            };
+            arm(
+                call.capture.as_ref(),
+                CaptureScopeKind::Inference,
+                2,
+                1,
+                trace(),
+            )
+            .expect("armed");
             let body = json!({"model": "m", "input": [{"role": "user", "content": "hi"}]});
-            HttpClientExt::send_streaming(&client, responses_request(body.clone()))
+            Transport::send_streaming(&client, &call, responses_request(body.clone()))
                 .await
                 .expect("first send");
             let changed = Request::builder()
@@ -977,10 +1029,10 @@ mod tests {
                 .uri("https://example.test/proxy/v1/responses")
                 .body(Bytes::from(serde_json::to_vec(&body).unwrap()))
                 .unwrap();
-            HttpClientExt::send_streaming(&client, changed)
+            Transport::send_streaming(&client, &call, changed)
                 .await
                 .expect("recording sink accepts changed test destination");
-        })
+        }
         .await;
 
         let seen = seen.lock().expect("seen");
@@ -996,8 +1048,19 @@ mod tests {
         let (sink, seen) = recording_sink();
         let scope = test_scope(context(), sink);
 
-        scope_request(scope, async {
-            arm(CaptureScopeKind::Inference, 0, 0, trace()).expect("armed");
+        async {
+            let call = ProviderCall {
+                capture: Some(scope),
+                ..Default::default()
+            };
+            arm(
+                call.capture.as_ref(),
+                CaptureScopeKind::Inference,
+                0,
+                0,
+                trace(),
+            )
+            .expect("armed");
             let req = Request::builder()
                 .method("POST")
                 .uri("https://example.test/v1/chat/completions")
@@ -1011,10 +1074,8 @@ mod tests {
                     .expect("body"),
                 ))
                 .expect("request");
-            let _ = HttpClientExt::send::<Bytes, Bytes>(&client, req)
-                .await
-                .expect("send");
-        })
+            let _ = Transport::send(&client, &call, req).await.expect("send");
+        }
         .await;
 
         let seen = seen.lock().expect("seen");

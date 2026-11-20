@@ -8,6 +8,9 @@ pub const MAX_DECLARED_MEMORY_MIB: u32 = 4096;
 pub const MAX_DECLARED_WALL_CLOCK_SECS: u32 = 900;
 /// The compiled WASI runner's stdout capture holds at most 4 MiB.
 pub const MAX_DECLARED_OUTPUT_MIB: u32 = 4;
+/// Bounds the host-serviced request rounds one guest invocation may take, at
+/// four times the unset default of 64.
+pub const MAX_DECLARED_ROUNDS: u32 = 256;
 
 /// Host-authored evidence for an installed plugin attempt. The enclosing tool
 /// record supplies request identity and generation; guests cannot supply it.

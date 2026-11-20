@@ -15,22 +15,31 @@ use crate::runtime_context::tool_execution_bounds;
 use gents_loop::tool_call_lifecycle::FailureClass;
 use gents_session::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "run_command_for_test is called by tests outside the toolset module"
-)]
+pub struct CommandRequest<'a> {
+    pub command_name: &'a str,
+    pub args: &'a [String],
+    pub cwd: Option<&'a str>,
+    pub timeout: Duration,
+    pub raw_json: bool,
+    pub max_output_chars: usize,
+}
+
 pub async fn run_command(
+    call: &gents_loop::tool::ToolCallEnvelope,
     context: &ToolContext,
     tool_name: &'static str,
-    command_name: &str,
-    args: &[String],
-    cwd: Option<&str>,
-    timeout: Duration,
+    request: CommandRequest<'_>,
     policy: &CommandExecutionPolicy,
-    raw_json: bool,
-    max_output_chars: usize,
 ) -> std::result::Result<String, ToolError> {
-    let policy = effective_command_policy(policy);
+    let CommandRequest {
+        command_name,
+        args,
+        cwd,
+        timeout,
+        raw_json,
+        max_output_chars,
+    } = request;
+    let policy = effective_command_policy(call, policy);
     validate_command_policy(command_name, args, &policy)?;
     let cwd = context.resolve_existing_dir(cwd)?;
     let argv = std::iter::once(command_name.to_string())
@@ -38,8 +47,9 @@ pub async fn run_command(
         .collect::<Vec<_>>();
     let command_line = shell_join(&argv);
     let root = context.root();
-    let launch = prepare_command_launch(&root, command_name, args, &policy).await?;
+    let launch = prepare_command_launch(call, &root, command_name, args, &policy).await?;
     crate::plugin::approval::workspace::authorize_command(
+        call,
         &argv,
         &cwd,
         &root,
@@ -51,8 +61,8 @@ pub async fn run_command(
         crate::native::command_observability::policy_denied();
         ToolError::reported_failure(FailureClass::PolicyDenied, format!("{error:#}"))
     })?;
-    launch.revalidate().await.map_err(command_guard_error)?;
-    let bounds = tool_execution_bounds(timeout);
+    launch.revalidate(call).await.map_err(command_guard_error)?;
+    let bounds = tool_execution_bounds(call, timeout);
     let live_output = bounds.live_output.clone();
     let request_deadline = bounds.request_deadline_at;
     let started = bounds.armed_at;
@@ -68,7 +78,7 @@ pub async fn run_command(
         environment: Some(launch.environment),
         tool_name: Some(tool_name.to_string()),
         live_output: live_output.clone(),
-        process_recorder: None,
+        process_recorder: gents_session::exec::ownership::process_recorder(call),
     })
     .await;
     let duration_ms = elapsed_ms(started);
@@ -153,7 +163,7 @@ pub async fn run_command(
         stdout_truncation: stdout.metadata,
         stderr_truncation: stderr.metadata,
         hint: (timed_out
-            && !crate::runtime_context::current_tool_runtime_context()
+            && !crate::runtime_context::tool_runtime_context(call)
                 .is_some_and(|context| context.background))
         .then(|| foreground_timeout_hint(duration_ms)),
     };

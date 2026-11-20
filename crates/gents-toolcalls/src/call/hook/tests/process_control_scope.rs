@@ -78,7 +78,7 @@ async fn invoke(hook: &DefraSessionHook, id: &str, name: &str, args: &str) -> se
             None,
             id,
             args,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
     else {
@@ -233,7 +233,7 @@ async fn observe_wait_boundary(boundary: &str) -> WaitObservation {
                 None,
                 wait_id,
                 &args,
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
     });
@@ -513,7 +513,7 @@ mod job_control {
     use crate::background::status::ProcessControlScope;
     use crate::call::control::{cancel_background_tool_call, CancelBackgroundToolCallOutcome};
     use crate::call::lifecycle::admission_fixture::{
-        fixture_job_pin, publish_accepted_on_claimed_request,
+        fixture_job_pin, publish_accepted_on_claimed_request, AcceptedFixtureCall,
     };
     use crate::call::lifecycle::ToolCallLifecycle;
     use gents_protocol::job::keys::job_spawn_key;
@@ -638,12 +638,14 @@ mod job_control {
                     hook.node.clone(),
                     &mut fixture.lifecycle,
                     &hook.node_did,
-                    turn,
-                    "workflow",
-                    tool_call_id,
-                    json!({"argv": ["run"]}),
-                    AwaitMode::Background,
-                    true,
+                    AcceptedFixtureCall {
+                        turn,
+                        tool_name: "workflow",
+                        tool_call_id,
+                        arguments: json!({"argv": ["run"]}),
+                        await_mode: AwaitMode::Background,
+                        start_running: true,
+                    },
                 )
                 .await
                 .unwrap()
@@ -804,12 +806,14 @@ mod job_control {
                     hook.node.clone(),
                     &mut fixture.lifecycle,
                     &hook.owner.node_did,
-                    turn,
-                    "bash",
-                    "unverified-native",
-                    json!({}),
-                    AwaitMode::Background,
-                    true,
+                    AcceptedFixtureCall {
+                        turn,
+                        tool_name: "bash",
+                        tool_call_id: "unverified-native",
+                        arguments: json!({}),
+                        await_mode: AwaitMode::Background,
+                        start_running: true,
+                    },
                 )
                 .await
                 .unwrap()

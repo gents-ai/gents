@@ -285,8 +285,9 @@ pub(super) async fn respond_to_renewal_intent(
                 gents_protocol::enrollment::decode_offer(&issued.offer_token)?.expires_at;
             let mutation = format!(
                 r#"mutation {{ create_EnrollmentRenewalOffer(input: {{
-                intent_id: "{}", member_did: "{}", offer_token: "{}", expires_at: "{}", admin_did: "{}", admin_sig: "{}"
+                initial_reader_did: "{}", intent_id: "{}", member_did: "{}", offer_token: "{}", expires_at: "{}", admin_did: "{}", admin_sig: "{}"
             }}) {{ _docID }} }}"#,
+                f(&issued.member_did),
                 f(&issued.intent_id),
                 f(&issued.member_did),
                 f(&issued.offer_token),
@@ -320,7 +321,7 @@ pub(super) async fn respond_to_renewal_intent(
     };
     let projection = store.load_projection().await?;
     let active = projection.current_for_renewal_intent(intent, Utc::now())?;
-    let p2p = gents_store::identity::node_p2p(node).context("runtime P2P is unavailable")?;
+    let p2p = crate::node_access::operations(node).context("runtime P2P is unavailable")?;
     push_enrollment_document(
         &p2p,
         &active.request.candidate_ticket,

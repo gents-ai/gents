@@ -137,7 +137,7 @@ async fn writes_one_bounded_doc() {
             "drift_sig": "abc", "summary": "stale host doc", "status": "open"
         }))
         .unwrap(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .unwrap();
@@ -181,7 +181,7 @@ async fn writes_native_measurements_without_string_coercion() {
     Tool::call(
         &tool,
         serde_json::from_value(json!({"disk":86,"healthy":false})).unwrap(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .unwrap();
@@ -200,7 +200,7 @@ async fn rejects_missing_required_and_undeclared_fields() {
     assert!(Tool::call(
         &tool,
         serde_json::from_value(json!({ "summary": "x" })).unwrap(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .is_err());
@@ -210,7 +210,7 @@ async fn rejects_missing_required_and_undeclared_fields() {
             "drift_sig": "a", "summary": "b", "evil": "1"
         }))
         .unwrap(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .is_err());
@@ -228,7 +228,7 @@ async fn empty_field_declaration_reports_the_surface_contract_without_writing() 
     let error = Tool::call(
         &tool,
         serde_json::from_value(json!({"summary":"queued"})).unwrap(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .unwrap_err()
@@ -284,7 +284,7 @@ async fn runtime_backstop_rejects_invalid_graphql_identifiers() {
         let result = Tool::call(
             &BoundedWriteTool::new(ConfigAccess::local(Arc::clone(&node)), declaration),
             serde_json::from_value(json!({ "drift_sig": "a", "summary": "b" })).unwrap(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await;
         assert!(result.is_err(), "runtime must reject invalid identifiers");
@@ -310,7 +310,7 @@ async fn rejects_decl_with_non_identifier_field_name() {
     assert!(Tool::call(
         &tool,
         serde_json::from_value(json!({})).unwrap(),
-        &gents_loop::tool::ToolCallEnvelope::ambient()
+        &gents_loop::tool::ToolCallEnvelope::default()
     )
     .await
     .is_err());
@@ -379,23 +379,16 @@ async fn bounded_writes_follow_the_datastore_write_model() {
             .iter()
             .map(|name| (name.clone(), format!("captured-{name}")))
             .collect();
-        let result = crate::runtime_context::scope_request_tool_execution_with_trigger_context(
-            None,
-            None,
-            tokio_util::sync::CancellationToken::new(),
-            None,
-            None,
-            None,
-            input.correlation.then(|| CORRELATION.to_string()),
-            captured,
-            false,
-            Tool::call(
-                &tool,
-                super::BoundedWriteParams(arguments),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
-            ),
-        )
-        .await;
+        let scope_call = gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
+            correlation: input.correlation.then(|| CORRELATION.to_string()),
+            source_fields: captured,
+            ..gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
+                None,
+                tokio_util::sync::CancellationToken::new(),
+            )
+        }
+        .call();
+        let result = Tool::call(&tool, super::BoundedWriteParams(arguments), &scope_call).await;
         let selection = format!(
             "{{ {} {{ _docID {} }} }}",
             input.collection,
@@ -536,7 +529,7 @@ async fn native_schema_and_receipts_preserve_lists_json_and_null() {
     let receipt = Tool::call(
         &tool,
         serde_json::from_value(args.clone()).unwrap(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .unwrap();
@@ -548,7 +541,7 @@ async fn native_schema_and_receipts_preserve_lists_json_and_null() {
     let receipt = Tool::call(
         &tool,
         serde_json::from_value(args).unwrap(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .unwrap();
@@ -699,7 +692,7 @@ async fn count_carriers_store_as_the_count_carrier_model() {
         Tool::call(
             &tool,
             serde_json::from_value(json!({"count": input})).unwrap(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap_or_else(|error| panic!("{schema}: {error:#}"));
@@ -734,19 +727,14 @@ async fn count_carriers_store_as_the_count_carrier_model() {
             gents_store::config_client::schema_introspection::can_hold_canonical_count(
                 field.named_type(),
             );
-        let decimal_admitted = if introspected {
-            None
-        } else {
-            Some(
-                Tool::call(
-                    &tool,
-                    serde_json::from_value(json!({"count":"10"})).unwrap(),
-                    &gents_loop::tool::ToolCallEnvelope::ambient(),
-                )
-                .await
-                .is_ok(),
+        let decimal_admitted = input == json!("10")
+            || Tool::call(
+                &tool,
+                serde_json::from_value(json!({"count":"10"})).unwrap(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
-        };
+            .await
+            .is_ok();
         case.check(
             gents_lean_vocab::families::count_carrier_storage::StorageOutput {
                 argument: gents_store::graphql::canonical_positive_count(&input, maximum)
@@ -757,6 +745,53 @@ async fn count_carriers_store_as_the_count_carrier_model() {
                 decimal_admitted,
             },
         );
+    }
+}
+
+#[tokio::test]
+async fn integer_fields_take_count_text_as_the_count_carrier_model() {
+    let node = Arc::new(
+        gents_store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
+    let mut tools = rapidhash::RapidHashMap::default();
+    for case in gents_lean_vocab::families::count_carrier_integer_text::cases() {
+        let schema = case.input.schema.clone();
+        if !tools.contains_key(&schema) {
+            let collection = format!("CountText{}", tools.len());
+            node.add_collection(&format!("type {collection} {{ count: {schema} }}"))
+                .await
+                .unwrap();
+            let tool = BoundedWriteTool::new(
+                ConfigAccess::local_as(
+                    node.clone(),
+                    identity::Did::new(node.node_identity_did().unwrap()).unwrap(),
+                ),
+                WriteToolDecl {
+                    notification: None,
+                    tool_name: format!("write_count_text_{}", tools.len()),
+                    collection,
+                    description: "Persist a count carrier".into(),
+                    fields: vec![WriteToolField {
+                        name: "count".into(),
+                        required: true,
+                        fill: None,
+                    }],
+                    output_obligation: None,
+                },
+            );
+            tools.insert(schema.clone(), tool);
+        }
+        let admitted = Tool::call(
+            &tools[&schema],
+            serde_json::from_value(json!({"count": case.input.text})).unwrap(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
+        )
+        .await
+        .is_ok();
+        case.check(admitted);
     }
 }
 

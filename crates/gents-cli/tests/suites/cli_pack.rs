@@ -1467,7 +1467,6 @@ fn wire_sources_lists_job_plugins_and_target_packs() -> Result<()> {
             "--nocapture",
         ])
         .env("HOME", fixture.tempdir.path())
-        .env_remove(gents_desktop_core::client::DESKTOP_HOME_ENV)
         .env(WIRE_SOURCES_HOME_ENV, &fixture.home)
         .output()?;
     anyhow::ensure!(
@@ -1625,7 +1624,6 @@ fn starter_step(fixture: &std::path::Path, home: &std::path::Path, step: &str) -
             "--nocapture",
         ])
         .env("HOME", fixture)
-        .env_remove(gents_desktop_core::client::DESKTOP_HOME_ENV)
         .env(STARTER_HOME_ENV, home)
         .env(STARTER_STEP_ENV, step)
         .env(STARTER_ARCHIVES_ENV, starter_archives(fixture))

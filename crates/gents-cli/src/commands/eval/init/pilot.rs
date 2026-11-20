@@ -44,9 +44,8 @@ pub(crate) async fn pilot(
     );
     install_definition(ctx, &written.out).await?;
 
-    let unix_ms = chrono::Utc::now().timestamp_millis();
     let mut run_ids = Vec::new();
-    let result = run_and_answer(ctx, deps, init, turn, drafted, unix_ms, &mut run_ids, out).await;
+    let result = run_and_answer(ctx, deps, init, turn, drafted, &mut run_ids, out).await;
     let revised = match result {
         Ok(revised) => revised,
         Err(error) if run_ids.is_empty() => return Err(error),
@@ -84,14 +83,12 @@ pub(crate) async fn pilot(
     Ok(PilotOutcome { run_ids, revised })
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn run_and_answer(
     ctx: &EvalContext,
     deps: &Deps<'_>,
     init: &InitContext<'_>,
     turn: &mut dyn Turn,
     drafted: &InitOutcome,
-    unix_ms: i64,
     run_ids: &mut Vec<String>,
     out: &mut dyn Write,
 ) -> Result<bool> {
@@ -100,6 +97,7 @@ async fn run_and_answer(
         .as_ref()
         .ok_or_else(|| anyhow!("nothing was written to pilot"))?;
     let definition = &assembled.definition;
+    let unix_ms = chrono::Utc::now().timestamp_millis();
     for split in [EvalSplit::Train, EvalSplit::Validation, EvalSplit::HeldOut] {
         if !definition.cases.iter().any(|case| case.split == split) {
             continue;

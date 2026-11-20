@@ -1,6 +1,6 @@
 use super::*;
 use anyhow::Context;
-use gents_session::session::tool_call_state::ToolCallState;
+use gents_protocol::tool_call::ToolCallState;
 
 mod observation;
 

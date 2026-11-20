@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
@@ -197,13 +195,6 @@ mod off_runtime_load_tests {
             "the load ran on the runtime thread it was awaited on"
         );
     }
-}
-
-fn lean_plugin_resource_group<T>(key: &str, cases: &serde_json::Value) -> Vec<T>
-where
-    T: serde::de::DeserializeOwned,
-{
-    serde_json::from_value(cases.clone()).unwrap_or_else(|error| panic!("{key}: {error}"))
 }
 
 #[derive(Debug, PartialEq, Eq)]

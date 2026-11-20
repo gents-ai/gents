@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn sessions_marks_only_the_callers_own_session_in_concurrent_tool_scopes() {
-    use crate::runtime_context::{scope_request_tool_execution_with_session, ToolRequestIdentity};
+    use crate::runtime_context::ToolRequestIdentity;
     use gents_store::config_client::ConfigAccess;
 
     let identities = tempfile::tempdir().unwrap();
@@ -39,10 +39,12 @@ async fn sessions_marks_only_the_callers_own_session_in_concurrent_tool_scopes()
         let mut request = gents_protocol::request_admission::AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             request_id,
-            identity.did(),
-            identity.did(),
-            "shared-agent",
-            session_id,
+            gents_protocol::request_admission::RequestScope::new(
+                identity.did(),
+                identity.did(),
+                "shared-agent",
+                session_id,
+            ),
             "sessions current caller fixture",
             "interactive",
             "2026-09-01T00:00:00Z",
@@ -66,21 +68,24 @@ async fn sessions_marks_only_the_callers_own_session_in_concurrent_tool_scopes()
         owner.did(),
         identity::Did::new((owner.did()).to_string()).unwrap(),
     );
-    let list = || async {
+    let tool = &tool;
+    let owner_did = owner.did().to_owned();
+    let owner_did = &owner_did;
+    let list = |call: gents_loop::tool::ToolCallEnvelope| async move {
         let output = Tool::call(
-            &tool,
+            tool,
             SessionHistoryParams {
                 action: Some("list".into()),
                 limit: Some(10),
                 session_id: None,
                 ..Default::default()
             },
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &call,
         )
         .await
         .unwrap();
         let snapshot: Value = serde_json::from_str(&output).unwrap();
-        assert_eq!(snapshot["scope"]["node_did"], owner.did());
+        assert_eq!(snapshot["scope"]["node_did"], owner_did.as_str());
         snapshot["sessions"]
             .as_array()
             .unwrap()
@@ -90,20 +95,21 @@ async fn sessions_marks_only_the_callers_own_session_in_concurrent_tool_scopes()
             .collect::<Vec<_>>()
     };
     let scoped_list = |node_did: String, session_id: &str| {
-        scope_request_tool_execution_with_session(
-            Some(ToolRequestIdentity::new(
+        let scope_call = gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
+            identity: Some(ToolRequestIdentity::new(
                 Some(node_did.clone()),
                 Some(node_did),
                 Some("shared-agent".into()),
                 Some("caller-request-not-the-latest-request".into()),
             )),
-            None,
-            tokio_util::sync::CancellationToken::new(),
-            None,
-            None,
-            Some(session_id.to_owned()),
-            list(),
-        )
+            session_id: Some(session_id.to_owned()),
+            ..gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
+                None,
+                tokio_util::sync::CancellationToken::new(),
+            )
+        }
+        .call();
+        list(scope_call)
     };
     let (a, b) = tokio::join!(
         scoped_list(owner.did().to_owned(), "session-a"),
@@ -111,28 +117,27 @@ async fn sessions_marks_only_the_callers_own_session_in_concurrent_tool_scopes()
     );
     assert_eq!(a, vec!["session-a"]);
     assert_eq!(b, vec!["session-b"]);
-    let unauthorized = scope_request_tool_execution_with_session(
-        Some(ToolRequestIdentity::new(
+    let scope_call = gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
+        identity: Some(ToolRequestIdentity::new(
             Some(other.did().to_owned()),
             Some(other.did().to_owned()),
             None,
             None,
         )),
-        None,
-        tokio_util::sync::CancellationToken::new(),
-        None,
-        None,
-        Some("session-a".to_owned()),
-        Tool::call(
-            &tool,
-            SessionHistoryParams::default(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
-        ),
-    )
-    .await
-    .unwrap_err();
+        session_id: Some("session-a".to_owned()),
+        ..gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
+            None,
+            tokio_util::sync::CancellationToken::new(),
+        )
+    }
+    .call();
+    let unauthorized = Tool::call(tool, SessionHistoryParams::default(), &scope_call)
+        .await
+        .unwrap_err();
     assert!(unauthorized.to_string().contains("running node"));
-    assert!(list().await.is_empty());
+    assert!(list(gents_loop::tool::ToolCallEnvelope::default())
+        .await
+        .is_empty());
 }
 
 #[tokio::test]
@@ -211,7 +216,7 @@ async fn session_history_snapshot_reports_recent_agent_sessions() {
             session_id: None,
             ..Default::default()
         },
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .unwrap_err();

@@ -7,7 +7,7 @@ use gents_loop::tool::ToolDefinition;
 use super::args::BashArgs;
 use super::shared::{
     resolve_command_timeout_in_scope, run_command, validate_command_policy, CommandExecutionMode,
-    CommandExecutionPolicy, ToolContext, ToolError,
+    CommandExecutionPolicy, CommandRequest, ToolContext, ToolError,
 };
 use super::BACKGROUND_COMMAND_TIMEOUT_SECS;
 
@@ -201,32 +201,41 @@ impl Tool for ReadOnlyBashTool {
         }
     }
 
-    fn admit(&self, args: &Self::Args) -> Result<(), Self::Error> {
-        let policy = crate::native::effective_command_policy(&self.policy);
+    fn admit(
+        &self,
+        args: &Self::Args,
+        call: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<(), Self::Error> {
+        let policy = crate::native::effective_command_policy(call, &self.policy);
         validate_read_only_bash_input(&args.command, &args.args, &policy)
     }
 
     async fn call(
         &self,
         args: Self::Args,
-        _context: &gents_loop::tool::ToolCallEnvelope,
+        call: &gents_loop::tool::ToolCallEnvelope,
     ) -> Result<Self::Output, Self::Error> {
-        Tool::admit(self, &args)?;
-        let policy = crate::native::effective_command_policy(&self.policy);
+        let context = self.context.for_call(call);
+        Tool::admit(self, &args, call)?;
+        let policy = crate::native::effective_command_policy(call, &self.policy);
         run_command(
-            &self.context,
+            call,
+            &context,
             Self::NAME,
-            &args.command,
-            &args.args,
-            args.cwd.as_deref(),
-            resolve_command_timeout_in_scope(
-                args.timeout_secs,
-                self.default_timeout,
-                self.max_timeout,
-            ),
+            CommandRequest {
+                command_name: &args.command,
+                args: &args.args,
+                cwd: args.cwd.as_deref(),
+                timeout: resolve_command_timeout_in_scope(
+                    call,
+                    args.timeout_secs,
+                    self.default_timeout,
+                    self.max_timeout,
+                ),
+                raw_json: args.raw_json,
+                max_output_chars: self.max_output_chars,
+            },
             &policy,
-            args.raw_json,
-            self.max_output_chars,
         )
         .await
     }
@@ -244,8 +253,17 @@ impl Tool for UnrestrictedBashTool {
     type Args = BashArgs;
     type Output = String;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        let policy = crate::native::effective_command_policy(&self.policy);
+    async fn definition(&self, prompt: String) -> ToolDefinition {
+        self.definition_for(prompt, &gents_loop::tool::ToolCallEnvelope::default())
+            .await
+    }
+
+    async fn definition_for(
+        &self,
+        _prompt: String,
+        call: &gents_loop::tool::ToolCallEnvelope,
+    ) -> ToolDefinition {
+        let policy = crate::native::effective_command_policy(call, &self.policy);
         let policy_description = match policy.mode {
             CommandExecutionMode::ReadOnly => "read-only policy",
             CommandExecutionMode::ArtifactWrite => {
@@ -307,34 +325,43 @@ impl Tool for UnrestrictedBashTool {
         }
     }
 
-    fn admit(&self, args: &Self::Args) -> Result<(), Self::Error> {
+    fn admit(
+        &self,
+        args: &Self::Args,
+        call: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<(), Self::Error> {
         let (command, command_args) = unrestricted_argv(args);
-        let policy = crate::native::effective_command_policy(&self.policy);
+        let policy = crate::native::effective_command_policy(call, &self.policy);
         validate_command_policy(command, &command_args, &policy)
     }
 
     async fn call(
         &self,
         args: Self::Args,
-        _context: &gents_loop::tool::ToolCallEnvelope,
+        call: &gents_loop::tool::ToolCallEnvelope,
     ) -> Result<Self::Output, Self::Error> {
-        Tool::admit(self, &args)?;
+        let context = self.context.for_call(call);
+        Tool::admit(self, &args, call)?;
         let (command, command_args) = unrestricted_argv(&args);
-        let policy = crate::native::effective_command_policy(&self.policy);
+        let policy = crate::native::effective_command_policy(call, &self.policy);
         run_command(
-            &self.context,
+            call,
+            &context,
             Self::NAME,
-            command,
-            &command_args,
-            args.cwd.as_deref(),
-            resolve_command_timeout_in_scope(
-                args.timeout_secs,
-                self.default_timeout,
-                self.max_timeout,
-            ),
+            CommandRequest {
+                command_name: command,
+                args: &command_args,
+                cwd: args.cwd.as_deref(),
+                timeout: resolve_command_timeout_in_scope(
+                    call,
+                    args.timeout_secs,
+                    self.default_timeout,
+                    self.max_timeout,
+                ),
+                raw_json: args.raw_json,
+                max_output_chars: self.max_output_chars,
+            },
             &policy,
-            args.raw_json,
-            self.max_output_chars,
         )
         .await
     }
@@ -365,7 +392,7 @@ mod input_tests {
                 timeout_secs: None,
                 raw_json: false,
             },
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap_err()

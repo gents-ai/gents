@@ -162,29 +162,35 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
     .await
     .unwrap()
     .unwrap();
-    let native =
-        gents_session::request::lifecycle::queue::persist_background_completion_with_message_waking_with_access(
-            &message.admission.tool.access().unwrap(),
-            &node,
-            &caller,
-            "process done",
-            "background-completion-notification:process:tool",
-            gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
-            gents_session::request::lifecycle::queue::RequestQueue {
+    use gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
+    use gents_session::request::lifecycle::queue::{
+        persist_background_completion_with_message_waking_with_access,
+        BackgroundCompletionNotification, QueuePolicy, QueueSource, RequestQueue,
+    };
+    let native = persist_background_completion_with_message_waking_with_access(
+        &message.admission.tool.access().unwrap(),
+        &node,
+        &caller,
+        BackgroundCompletionNotification {
+            content: "process done",
+            message_key: "background-completion-notification:process:tool",
+            wake_content: BACKGROUND_COMPLETION_WAKE_PROMPT,
+            queue: RequestQueue {
                 delivery: Default::default(),
                 position: None,
-                source: gents_session::request::lifecycle::queue::QueueSource::BackgroundCompletion,
-                policy: gents_session::request::lifecycle::queue::QueuePolicy::Coalesce,
+                source: QueueSource::BackgroundCompletion,
+                policy: QueuePolicy::Coalesce,
                 key: Some(format!("background_completion:{session_id}")),
                 queued_after_request_id: Some(caller.request_id.clone()),
                 interrupted_request_id: None,
                 background_completion_wake_version: None,
             },
-            None,
-            gents_protocol::request_lifecycle::RequestHopCause::Continuation,
-        )
-        .await
-        .unwrap();
+            existing_notification_doc_id: None,
+            wake: gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+        },
+    )
+    .await
+    .unwrap();
     assert!(!native.created_request);
     assert_eq!(
         pending_wakes(agent_access.clone(), session_id.clone()).await,

@@ -23,6 +23,8 @@ pub fn config(categories: &[&str]) -> SelfConfigToolConfig {
         process_ceiling: Default::default(),
         selected_plugins: Vec::new(),
         ceiling_plugins: None,
+        registry_url: None,
+        plugin_builder: None,
     }
 }
 
@@ -212,13 +214,14 @@ impl SelfConfigFixture {
     }
 
     /// Lean `SelfConfig.ActorGrants.catalog`: the Node's owner gives this
-    /// Agent `nodes#agent_manager`, which is `manage_agents` on the Node.
-    pub async fn grant_agent_catalog(&self) {
+    /// Agent `nodes#administrator`, the one grant of `manage_agents` on the
+    /// Node.
+    pub async fn grant_node_administration(&self) {
         self.user_access
             .add_actor_relationship(
                 "Node",
                 &self.node_binding.doc_id,
-                "agent_manager",
+                "administrator",
                 &identity::Did::new(&self.agent_did).unwrap(),
             )
             .await
@@ -589,14 +592,16 @@ impl SelfConfigFixture {
     ) -> Vec<Box<dyn ToolDyn>> {
         assert_eq!(grants.agent_did, self.agent_did);
         build_self_config_tools_with_runtime(
-            Arc::default(),
-            self.db.node.clone(),
-            self.db.node_identity.did().to_owned(),
-            Some(self.agent.clone()),
-            Some(self.db.node_identity.clone()),
+            SelfConfigRuntime {
+                usage_cache: Arc::default(),
+                node: self.db.node.clone(),
+                node_did: self.db.node_identity.did().to_owned(),
+                identity: Some(self.agent.clone()),
+                runtime_identity: Some(self.db.node_identity.clone()),
+                plugins,
+                tasks: Arc::new(gents_tools::task_run::NoTaskRunService),
+            },
             grants,
-            plugins,
-            Arc::new(gents_tools::task_run::NoTaskRunService),
             Some(self.node_binding.clone()),
         )
     }
@@ -615,7 +620,7 @@ pub async fn config_call(
         .expect("config registered")
         .call(
             json!({ "argv": argv }).to_string(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
 }
@@ -643,7 +648,7 @@ pub async fn call_config_tool(
         .expect("config registered");
     tool.call(
         json!({"argv": argv}).to_string(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .map_err(|error| format!("{error:#}"))

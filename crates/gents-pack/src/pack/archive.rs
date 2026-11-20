@@ -8,8 +8,9 @@ use crate::pack::{is_distributable_asset_path, PackManifest, PackPlugin};
 
 pub mod format;
 pub use format::{
-    digest_hex, pack_dir, peek_header, read_pack, write_pack, Bounds, PackHeader, VerifiedPack,
-    EXTENSION, FORMAT, FORMAT_VERSION, HEADER_ENTRY, MEDIA_TYPE,
+    digest_hex, pack_built_dir, pack_dir, peek_header, read_pack, write_built_pack, write_pack,
+    Bounds, OpenError, PackHeader, VerifiedPack, EXTENSION, FORMAT, FORMAT_VERSION, HEADER_ENTRY,
+    MEDIA_TYPE,
 };
 
 /// Caps compressed archive input before parsing it into retained assets.
@@ -55,11 +56,11 @@ impl std::fmt::Debug for PackArchive {
 }
 
 impl PackArchive {
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, OpenError> {
         Self::from_reader(bytes, Bounds::default())
     }
 
-    pub fn from_reader(input: impl Read, bounds: Bounds) -> Result<Self> {
+    pub fn from_reader(input: impl Read, bounds: Bounds) -> Result<Self, OpenError> {
         let mut assets = BTreeMap::new();
         let verified = read_pack(input, bounds, |path, content| {
             let mut data = Vec::new();
