@@ -1028,7 +1028,7 @@ const SERVICE_ISOLATION: (&str, &str) = ("gents-service", "test-home-guard");
 
 /// The features only test builds enable: `cfg_test` treats what they gate as
 /// test code, and `Workspace::production` turns them on only where a
-/// production member does.
+/// compiled member's dependency entry or enabled feature does.
 const TEST_FEATURES: [&str; 2] = [GENTS_TEST_FIXTURES, SERVICE_ISOLATION.1];
 
 struct Workspace {
@@ -1112,49 +1112,151 @@ impl Workspace {
             .collect()
     }
 
-    /// Whether enabling `features` of `package` enables the service isolation.
-    fn isolates(&self, package: &str, features: &[String]) -> bool {
-        self.isolates_from(package, features, &mut BTreeSet::new())
+    /// The `[dependencies]` and `[build-dependencies]` entries of `manifest`,
+    /// target-specific ones included: what a build of the member compiles.
+    fn build_entries(&self, manifest: &toml::Table) -> Vec<(String, String, Vec<String>, bool)> {
+        ["dependencies", "build-dependencies"]
+            .into_iter()
+            .flat_map(|kind| self.entries(manifest, kind))
+            .collect()
     }
 
-    fn isolates_from(
+    /// The features of `manifest` as Cargo defines them: each `[features]`
+    /// key, and the implicit feature `x = ["dep:x"]` of every optional
+    /// dependency `x` that no `dep:x` entry names.
+    fn features(&self, manifest: &toml::Table) -> BTreeMap<String, Vec<String>> {
+        let mut features = manifest
+            .get("features")
+            .and_then(toml::Value::as_table)
+            .into_iter()
+            .flatten()
+            .map(|(name, entries)| {
+                let entries = entries
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(toml::Value::as_str)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>();
+                (name.clone(), entries)
+            })
+            .collect::<BTreeMap<_, _>>();
+        let explicit = features
+            .values()
+            .flatten()
+            .filter_map(|entry| entry.strip_prefix("dep:"))
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>();
+        for (key, .., optional) in self.build_entries(manifest) {
+            if optional && !explicit.contains(&key) {
+                features
+                    .entry(key.clone())
+                    .or_insert_with(|| vec![format!("dep:{key}")]);
+            }
+        }
+        features
+    }
+
+    /// The members a build starting from `start` compiles, each with the path
+    /// that reaches it, and the (package, feature) pairs it enables. A
+    /// compiled member compiles every entry of `build_entries` that is not
+    /// optional, with the features the entry names; an enabled feature turns
+    /// on what it lists: another feature of the member (`f`), an optional
+    /// dependency (`dep:x`), or a dependency with one of its features (`x/f`,
+    /// and `x?/f`, counted as turning `x` on). With `every_feature`, every
+    /// feature of a compiled member except the test features counts as
+    /// enabled.
+    fn resolve(
         &self,
-        package: &str,
-        features: &[String],
-        seen: &mut BTreeSet<(String, String)>,
-    ) -> bool {
-        features.iter().any(|feature| {
-            if (package, feature.as_str()) == SERVICE_ISOLATION {
-                return true;
-            }
-            if !seen.insert((package.to_owned(), feature.clone())) {
-                return false;
-            }
-            let Some((_, manifest)) = self.members.get(package) else {
-                return false;
+        start: Vec<(String, Option<String>)>,
+        every_feature: bool,
+    ) -> (BTreeMap<String, String>, BTreeSet<(String, String)>) {
+        let mut pending = start
+            .into_iter()
+            .map(|(package, feature)| (package, feature, String::new()))
+            .collect::<Vec<_>>();
+        let compile = |pending: &mut Vec<_>, parent: &str, target: &str, features: Vec<String>| {
+            pending.push((target.to_owned(), None, parent.to_owned()));
+            pending.extend(
+                features
+                    .into_iter()
+                    .map(|feature| (target.to_owned(), Some(feature), parent.to_owned())),
+            );
+        };
+        let mut compiled = BTreeMap::new();
+        let mut enabled = BTreeSet::new();
+        while let Some((package, feature, parent)) = pending.pop() {
+            let newly_enabled = feature
+                .as_ref()
+                .is_some_and(|feature| enabled.insert((package.clone(), feature.clone())));
+            let fresh = !compiled.contains_key(&package);
+            let Some((_, manifest)) = self
+                .members
+                .get(&package)
+                .filter(|_| fresh || newly_enabled)
+            else {
+                continue;
             };
-            let dependencies = self.entries(manifest, "dependencies");
-            manifest
-                .get("features")
-                .and_then(|table| table.get(feature))
-                .and_then(toml::Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(toml::Value::as_str)
-                .any(|entry| match entry.split_once('/') {
-                    Some((dependency, enabled)) => {
-                        let dependency = dependency.trim_end_matches('?');
-                        dependencies
-                            .iter()
-                            .find(|(key, ..)| key == dependency)
-                            .is_some_and(|(_, target, ..)| {
-                                self.isolates_from(target, &[enabled.to_owned()], seen)
-                            })
+            let step = |label: &str| {
+                if parent.is_empty() {
+                    label.to_owned()
+                } else {
+                    format!("{parent} > {label}")
+                }
+            };
+            let features = self.features(manifest);
+            let dependencies = self.build_entries(manifest);
+            if fresh {
+                let path = step(&package);
+                if every_feature {
+                    for name in features.keys() {
+                        if !TEST_FEATURES.contains(&name.as_str()) {
+                            pending.push((package.clone(), Some(name.clone()), path.clone()));
+                        }
                     }
-                    None if entry.starts_with("dep:") => false,
-                    None => self.isolates_from(package, &[entry.to_owned()], seen),
-                })
-        })
+                }
+                for (_, target, with, optional) in &dependencies {
+                    if !optional {
+                        compile(&mut pending, &path, target, with.clone());
+                    }
+                }
+                compiled.insert(package.clone(), path);
+            }
+            let Some(feature) = feature.filter(|_| newly_enabled) else {
+                continue;
+            };
+            let path = step(&format!("{package}/{feature}"));
+            for entry in features.get(&feature).into_iter().flatten() {
+                let (key, sub) = match entry.split_once('/') {
+                    Some((key, sub)) => (key.trim_end_matches('?'), Some(sub.to_owned())),
+                    None => match entry.strip_prefix("dep:") {
+                        Some(key) => (key, None),
+                        None => {
+                            pending.push((package.clone(), Some(entry.clone()), path.clone()));
+                            continue;
+                        }
+                    },
+                };
+                for (_, target, with, _) in dependencies.iter().filter(|(name, ..)| name == key) {
+                    let with = with.iter().cloned().chain(sub.clone()).collect();
+                    compile(&mut pending, &path, target, with);
+                }
+            }
+        }
+        (compiled, enabled)
+    }
+
+    /// Whether a build of `package` with `features` enables the service
+    /// isolation (`resolve`).
+    fn isolates(&self, package: &str, features: &[String]) -> bool {
+        let start = std::iter::once(None)
+            .chain(features.iter().cloned().map(Some))
+            .map(|feature| (package.to_owned(), feature))
+            .collect();
+        self.resolve(start, false).1.contains(&(
+            SERVICE_ISOLATION.0.to_owned(),
+            SERVICE_ISOLATION.1.to_owned(),
+        ))
     }
 
     /// Workspace members `package` builds against, transitively.
@@ -1177,98 +1279,28 @@ impl Workspace {
 
     /// Members a production build compiles, each with the path that reaches
     /// it. A production build starts at a member no other member names (an
-    /// application, a binary, a plugin) and compiles what its `[dependencies]`
-    /// and `[build-dependencies]` reach: every entry that is not optional, and
-    /// an optional one once an enabled feature turns it on. Every feature of a
-    /// compiled member counts as enabled except the test features, which count
-    /// only where a compiled member's dependency entry or enabled feature
-    /// turns them on.
+    /// application, a binary, a plugin; naming itself, as a `[dev-dependencies]`
+    /// entry enabling its own test features does, does not count) and enables
+    /// every feature of what it compiles except the test features (`resolve`).
     fn production(&self) -> BTreeMap<String, String> {
         let named = self
             .members
-            .values()
-            .flat_map(|(_, manifest)| {
+            .iter()
+            .flat_map(|(name, (_, manifest))| {
                 ["dependencies", "build-dependencies", "dev-dependencies"]
                     .into_iter()
                     .flat_map(|kind| self.entries(manifest, kind))
+                    .map(|(_, package, ..)| package)
+                    .filter(move |package| package != name)
             })
-            .map(|(_, package, ..)| package)
             .collect::<BTreeSet<_>>();
-        let mut pending = self
+        let tops = self
             .members
             .keys()
             .filter(|name| !named.contains(*name))
-            .map(|name| (name.clone(), None, String::new()))
-            .collect::<Vec<(String, Option<String>, String)>>();
-        let compile = |pending: &mut Vec<_>, parent: &str, target: &str, features: Vec<String>| {
-            pending.push((target.to_owned(), None, parent.to_owned()));
-            pending.extend(
-                features
-                    .into_iter()
-                    .map(|feature| (target.to_owned(), Some(feature), parent.to_owned())),
-            );
-        };
-        let mut compiled = BTreeMap::new();
-        let mut enabled = BTreeSet::new();
-        while let Some((package, feature, parent)) = pending.pop() {
-            let Some((_, manifest)) = self.members.get(&package) else {
-                continue;
-            };
-            let step = |label: &str| {
-                if parent.is_empty() {
-                    label.to_owned()
-                } else {
-                    format!("{parent} > {label}")
-                }
-            };
-            let features = manifest.get("features").and_then(toml::Value::as_table);
-            let dependencies = ["dependencies", "build-dependencies"]
-                .into_iter()
-                .flat_map(|kind| self.entries(manifest, kind))
-                .collect::<Vec<_>>();
-            if !compiled.contains_key(&package) {
-                let path = step(&package);
-                for name in features.into_iter().flat_map(toml::Table::keys) {
-                    if !TEST_FEATURES.contains(&name.as_str()) {
-                        pending.push((package.clone(), Some(name.clone()), path.clone()));
-                    }
-                }
-                for (_, target, with, optional) in &dependencies {
-                    if !optional {
-                        compile(&mut pending, &path, target, with.clone());
-                    }
-                }
-                compiled.insert(package.clone(), path);
-            }
-            let Some(feature) = feature else {
-                continue;
-            };
-            if !enabled.insert((package.clone(), feature.clone())) {
-                continue;
-            }
-            let path = step(&format!("{package}/{feature}"));
-            for entry in features
-                .and_then(|table| table.get(&feature))
-                .and_then(toml::Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(toml::Value::as_str)
-            {
-                let (key, sub) = match entry.split_once('/') {
-                    Some((key, sub)) => (key.trim_end_matches('?'), Some(sub.to_owned())),
-                    None => (entry.strip_prefix("dep:").unwrap_or(entry), None),
-                };
-                if key == entry && features.is_some_and(|table| table.contains_key(key)) {
-                    pending.push((package.clone(), Some(key.to_owned()), path.clone()));
-                    continue;
-                }
-                for (_, target, with, _) in dependencies.iter().filter(|(name, ..)| name == key) {
-                    let with = with.iter().cloned().chain(sub.clone()).collect();
-                    compile(&mut pending, &path, target, with);
-                }
-            }
-        }
-        compiled
+            .map(|name| (name.clone(), None))
+            .collect();
+        self.resolve(tops, true).0
     }
 
     /// Members no production build compiles (`production`).
@@ -1418,9 +1450,18 @@ fn service_isolation_fence_flags_production_enablement() {
     assert!(fenced.reaches("cli", "gents-service"));
 }
 
-/// The ratchets that exempt a crate no production build compiles name the
-/// crates they exempt here, so that one becoming reachable from a production
-/// build, or a new one becoming test-only, is a visible change.
+/// The members no production build compiles (`Workspace::test_only`), whose
+/// sources `runtime_environment_reads_only_shrink` skips. Pinned so that one
+/// becoming reachable from a production build, or a new one becoming
+/// test-only, is a visible change.
+const TEST_ONLY_CRATES: &[&str] = &[
+    "gents-callback-fixture-create-workspace",
+    "gents-lean-contract",
+    "gents-lean-vocab",
+    "gents-lens-fixture-add-label",
+    "gents-workspace-hack",
+];
+
 #[test]
 fn test_only_crates_stay_off_production_builds() {
     let workspace = Workspace::load(&repo_root());
@@ -1470,17 +1511,29 @@ fn test_only_fence_follows_production_dependencies_and_features() {
         ])
         .test_only()
     };
-    assert_eq!(
-        test_only(APP, CORE),
-        BTreeSet::from(["decoder", "fixture", "helper"].map(str::to_owned))
-    );
+    for app in [APP.to_owned(), format!("{APP}\napp = {{ path = \".\" }}")] {
+        assert_eq!(
+            test_only(&app, CORE),
+            BTreeSet::from(["decoder", "fixture", "helper"].map(str::to_owned)),
+            "{app}"
+        );
+    }
+    let implicit = CORE.replace("dep:decoder", "decoder");
     for (app, core) in [
         (
             APP.to_owned(),
             format!("{CORE}\nlive = [\"test-fixtures\"]"),
         ),
         (APP.to_owned(), format!("{CORE}\nlive = [\"dep:decoder\"]")),
-        (APP.to_owned(), format!("{CORE}\nlive = [\"decoder\"]")),
+        (APP.to_owned(), implicit.clone()),
+        (
+            APP.replacen(
+                "{ path = \"c\" }",
+                "{ path = \"c\", features = [\"decoder\"] }",
+                1,
+            ),
+            implicit,
+        ),
         (APP.to_owned(), format!("{CORE}\nlive = [\"decoder/x\"]")),
         (
             APP.to_owned(),
@@ -5221,9 +5274,8 @@ fn error_text_fence_exempts_only_adapter_classifiers_that_name_their_premise() {
 /// below its own in `[dependencies]`, `[build-dependencies]` and
 /// `[dev-dependencies]`, so Cargo itself rejects an upward or peer reference in
 /// source; this test fixes the direction the manifests may declare. Two crates
-/// in one layer are peers and name neither. A lower crate may dev-depend on a
-/// test-only crate (`TEST_ONLY_CRATES`) although the Lean decoders among them
-/// name `gents-protocol`.
+/// in one layer are peers and name neither. The Lean decoders are test-only
+/// leaves that a lower crate may dev-depend on although they name `gents-protocol`.
 const CRATE_LAYERS: &[&[&str]] = &[
     &["gents-schemas"],
     &["gents-protocol"],
@@ -5241,15 +5293,7 @@ const CRATE_LAYERS: &[&[&str]] = &[
     &["gents"],
 ];
 
-/// The members no production build compiles (`Workspace::test_only`), held to
-/// the manifests by `test_only_crates_stay_off_production_builds`.
-const TEST_ONLY_CRATES: &[&str] = &[
-    "gents-callback-fixture-create-workspace",
-    "gents-lean-contract",
-    "gents-lean-vocab",
-    "gents-lens-fixture-add-label",
-    "gents-workspace-hack",
-];
+const TEST_ONLY_DECODERS: &[&str] = &["gents-lean-vocab", "gents-lean-contract"];
 
 /// Crates that operate or expose the runtime; no layered crate may name them.
 const CLIENT_CRATES: &[&str] = &[
@@ -5304,7 +5348,7 @@ fn crate_dependency_violations(
                     violations.push(format!("{name} [{kind}] names client crate {dependency}"));
                     continue;
                 }
-                if kind == "dev-dependencies" && TEST_ONLY_CRATES.contains(&dependency.as_str()) {
+                if kind == "dev-dependencies" && TEST_ONLY_DECODERS.contains(&dependency.as_str()) {
                     continue;
                 }
                 if let Some(theirs) = crate_layer(&dependency) {
