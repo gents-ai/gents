@@ -83,6 +83,11 @@ pub struct ServeArgs {
         help = "Fail instead of displaying macOS Keychain access dialogs"
     )]
     pub no_keychain_prompts: bool,
+    #[arg(
+        long,
+        help = "Send diagnostics to the system log (os_log or journald) instead of stderr, which then carries only the exit error. The native service definition sets it"
+    )]
+    pub system_log: bool,
     #[arg(skip)]
     pub keychain_startup_approval: bool,
     #[arg(long, hide = true)]

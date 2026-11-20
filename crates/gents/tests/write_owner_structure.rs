@@ -2557,7 +2557,6 @@ const ENVIRONMENT_READ_ALLOWLIST: &[(&str, usize, &str)] = &[
     ("crates/gents-tools/src/ux_preview/browser.rs", 1, "PATH: platform discovery of a system browser; legitimately external"),
     ("crates/gents/examples/serve_default_agent.rs", 1, "example program configured by its environment; not shipped"),
     ("crates/gents/src/client_runtime/mod.rs", 1, "HOME: platform discovery of the user home before configuration exists; legitimately external"),
-    ("crates/gents/src/runtime/native_logging.rs", 1, "GENTS_SYSTEM_LOG: marker the launchd and systemd units set for a supervised runtime; becomes a serve flag in the unit templates (#1764)"),
 ];
 
 const ENVIRONMENT_READS: &[&str] = &["var", "var_os", "vars", "vars_os"];
