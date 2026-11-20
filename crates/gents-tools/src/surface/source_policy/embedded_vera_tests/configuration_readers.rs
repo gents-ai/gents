@@ -345,9 +345,11 @@ async fn a_reader_change_on_another_agents_trigger_is_refused_naming_who_may_cha
             "{provider}: {refused:?}"
         );
         assert!(
-            refused
-                .to_string()
-                .contains("make this change as that identity"),
+            refused.to_string().contains(
+                "only the identity that created this document, or one that manages this \
+                     kind of access to it, can change who it is shared with; make this change \
+                     as one of those identities"
+            ),
             "{provider}: {refused}"
         );
         assert!(

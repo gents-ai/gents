@@ -226,8 +226,8 @@ pub enum ConfigClientError {
     /// A relationship change by an actor that neither owns the document nor
     /// holds a relation managing the changed one (`Identity.Household.mayManage`).
     #[error(
-        "only the identity that created this document can change who it is shared with; make \
-         this change as that identity"
+        "only the identity that created this document, or one that manages this kind of access \
+         to it, can change who it is shared with; make this change as one of those identities"
     )]
     RelationshipNotManaged(#[source] Box<defra_node::Error>),
     #[error("the requesting actor may not change relationships of {collection} {doc_id}")]
