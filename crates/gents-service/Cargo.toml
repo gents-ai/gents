@@ -23,7 +23,6 @@ thiserror.workspace = true
 chrono.workspace = true
 clap.workspace = true
 hostname.workspace = true
-identity.workspace = true
 notify = { version = "8.2", default-features = false, features = ["macos_kqueue"] }
 opentelemetry.workspace = true
 opentelemetry-otlp.workspace = true

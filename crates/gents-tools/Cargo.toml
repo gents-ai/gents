@@ -38,7 +38,6 @@ async-trait = "0.1"
 base64.workspace = true
 chrono.workspace = true
 defra-core.workspace = true
-defra-http.workspace = true
 defra-p2p-adapter.workspace = true
 gents-fs-runner = { path = "../gents-fs-runner" }
 gents-loop = { workspace = true, features = ["native"] }
@@ -68,7 +67,6 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-native-roots"] }
 uuid.workspace = true
-rig-core.workspace = true
 reqwest = { workspace = true, features = ["stream"] }
 rmcp = { version = "1.2.0", features = ["client", "transport-streamable-http-client-reqwest", "reqwest"] }
 tokio-util = "0.7"
