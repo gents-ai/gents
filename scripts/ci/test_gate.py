@@ -423,13 +423,13 @@ class VeraTests(unittest.TestCase):
         selection = with_event("push", lambda: select(everything=True))
         vera = {entry["job"]: entry["vera"] for entry in selection["matrix"]}
         self.assertEqual(vera.pop("test:store"), "gents-store")
-        self.assertEqual(vera.pop("test:session"), "gents-tools")
+        self.assertEqual(vera.pop("test:session"), "gents-tools gents-toolcalls")
         self.assertEqual(set(vera.values()), {""})
 
     def test_the_archive_runs_the_vera_tests_of_the_crates_it_holds(self):
         for count in (1, 3):
             selection = with_event("merge_group", lambda: sharded(count, everything=True))
-            self.assertEqual(selection["archives"][0]["vera"], "gents-store gents-tools")
+            self.assertEqual(selection["archives"][0]["vera"], "gents-store gents-tools gents-toolcalls")
         draft = with_event("push", lambda: sharded(1, "crates/gents-store/src/graphql.rs", tier="draft"))
         self.assertEqual(draft["archives"][0]["vera"], "gents-store")
         client = with_event("push", lambda: sharded(1, "crates/gents-cli/src/lib.rs"))
@@ -459,8 +459,9 @@ class VeraTests(unittest.TestCase):
         archive, vera = calls
         self.assertEqual(archive[0], "archive")
         self.assertNotIn("vera", " ".join(archive))
-        self.assertEqual(vera[:7], ["run", "-p", "gents-store", "-p", "gents-tools", "--lib", "--features"])
-        self.assertEqual(vera[7], "gents-store/vera,gents-tools/vera")
+        self.assertEqual(vera[:9], ["run", "-p", "gents-store", "-p", "gents-tools", "-p", "gents-toolcalls", "--lib",
+                                    "--features"])
+        self.assertEqual(vera[9], "gents-store/vera,gents-tools/vera,gents-toolcalls/vera")
         filterset = vera[vera.index("-E") + 1]
         for package in entry["vera"].split():
             self.assertIn(f"(binary_id(={package}) & test(~{gate.VERA_TESTS[package]}))", filterset)

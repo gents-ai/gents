@@ -193,8 +193,8 @@ make gate-run JOB=test:session  # one job
 ```
 
 A draft tests the crates it changes; a ready pull request and the merge queue
-add their dependents; a push to `main` runs everything, and main's runs are the
-measurement for flakes and speed. Native changes pass `make gate` before
+add their dependents; a push to `main` runs everything (a newer push cancels the run
+in progress), and main's completed runs are the measurement for flakes and speed. Native changes pass `make gate` before
 pushing: a lower crate is not verified until its consumers, clients included,
 pass.
 
