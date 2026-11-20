@@ -666,12 +666,13 @@ pub async fn activate_workspace_bound_request_with_identity(
     Ok(())
 }
 
-/// How a materialized request runs: its deadline, its origin and the backend
-/// it is bound to.
+/// How a materialized request runs: its deadline, its origin, the backend it
+/// is bound to and the operator tool root that bounds its working directory.
 pub struct ExecutionBinding {
     pub deadline_duration_secs: u64,
     pub execution_origin: ExecutionOrigin,
     pub backend_id: String,
+    pub operator_tool_root: Option<std::path::PathBuf>,
 }
 
 impl RequestLifecycle {
@@ -775,6 +776,7 @@ impl RequestLifecycle {
             deadline_duration_secs,
             execution_origin,
             backend_id,
+            operator_tool_root,
         } = binding;
         let node_did = identity.did().to_string();
         let agent_did = agent_did.to_string();
@@ -878,6 +880,7 @@ impl RequestLifecycle {
             identity.as_ref(),
             &queued_request,
             &agent_did,
+            operator_tool_root.as_deref(),
         )
         .await?;
         let mut lifecycle = Self::new_with_execution_binding(

@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
@@ -164,16 +164,6 @@ pub fn parse_batch(output: &Value) -> Result<Option<Batch>, String> {
     }))
 }
 
-static LIMITERS: LazyLock<kovan_map::HopscotchMap<String, Arc<Semaphore>>> =
-    LazyLock::new(kovan_map::HopscotchMap::new);
-
-fn limiter(endpoint: &ModelEndpoint) -> Arc<Semaphore> {
-    LIMITERS.get_or_insert(
-        format!("{}#{}", endpoint.backend_key, endpoint.max_concurrent),
-        Arc::new(Semaphore::new(endpoint.max_concurrent)),
-    )
-}
-
 fn token_limit(asked: Option<u64>, cap: Option<u64>) -> u64 {
     match (asked, cap) {
         (Some(asked), Some(cap)) => asked.min(cap),
@@ -221,7 +211,7 @@ impl Session {
             .build()
             .context("building the model client")?;
         Ok(Self {
-            limiter: limiter(&endpoint),
+            limiter: Arc::clone(&endpoint.limiter),
             endpoint,
             client,
             failed_rounds: 0,

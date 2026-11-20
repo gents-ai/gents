@@ -10,7 +10,8 @@ import { PacksScreen } from "../src/ui/screens/PacksScreen";
 import { StarterPacksCard } from "../src/ui/screens/packs/DefaultPacksReview";
 import { rememberPacksView, resetInstalledPacks } from "../src/ui/screens/packs/model";
 import { resetDefaultPacks } from "../src/ui/screens/packs/useDefaultPacks";
-import { renderIn, testApp } from "./app-fixture";
+import { TOPICS_TO_TRY } from "../src/ui/screens/topicsToTry";
+import { renderIn, testApp, withFlags } from "./app-fixture";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 
 vi.mock("sonner", () => ({
@@ -83,6 +84,81 @@ beforeEach(() => {
   resetDefaultPacks();
   resetInstalledPacks();
   resetPreferences();
+});
+
+describe("things to try, after the starter packs", () => {
+  const seen = () =>
+    JSON.parse(localStorage.getItem("gents-preferences")!).state.thingsToTrySeen;
+
+  it("stays shut where it is not turned on", async () => {
+    const { api } = harness([]);
+    renderIn(local(api), <StarterPacksCard />);
+    await waitFor(() => expect(api.listDefaultPacks).toHaveBeenCalled());
+    expect(screen.queryByTestId("things-to-try-card")).toBeNull();
+  });
+
+  it("follows the packs once they are put off, and a chosen message lands in the new chat unsent", async () => {
+    withFlags({ "get-started": true });
+    const { api } = harness(ALL);
+    const app = local(api);
+    renderIn(app, <StarterPacksCard />);
+    expect(screen.queryByTestId("things-to-try-card")).toBeNull();
+    await click(within(await card()).getByRole("button", { name: "Not now" }));
+    const tries = await screen.findByTestId("things-to-try-card");
+    const first = TOPICS_TO_TRY[0]!;
+    for (const topic of TOPICS_TO_TRY)
+      expect(within(tries).getByRole("button", { name: topic.title })).toBeVisible();
+    expect(within(tries).queryByText(first.prompts[0]!)).toBeNull();
+    await click(within(tries).getByRole("button", { name: first.title }));
+    await click(await within(tries).findByRole("button", { name: first.prompts[0]! }));
+    await waitFor(() => expect(screen.queryByTestId("things-to-try-card")).toBeNull());
+    expect(seen()).toEqual([deployment.nodeDid]);
+    await waitFor(() =>
+      expect(Object.values(app.drafts.getState().drafts)).toEqual([first.prompts[0]]),
+    );
+  });
+
+  it("opens by itself on a node with no pack to offer, once", async () => {
+    withFlags({ "get-started": true });
+    const { api } = harness([]);
+    const first = renderIn(local(api), <StarterPacksCard />);
+    const tries = await screen.findByTestId("things-to-try-card");
+    await click(within(tries).getByRole("button", { name: "Get started" }));
+    await waitFor(() => expect(screen.queryByTestId("things-to-try-card")).toBeNull());
+    expect(seen()).toEqual([deployment.nodeDid]);
+    first.unmount();
+    resetDefaultPacks();
+    renderIn(local(api), <StarterPacksCard />);
+    await waitFor(() => expect(api.listDefaultPacks).toHaveBeenCalledTimes(2));
+    expect(screen.queryByTestId("things-to-try-card")).toBeNull();
+  });
+
+  it.each([
+    ["missing", /starter pack, which isn’t installed on this node yet\./],
+    [
+      "not_enabled",
+      /starter pack, which is installed on this node but not turned on\./,
+    ],
+    ["unavailable", /starter pack, which can’t be installed by this build of Gents\./],
+    ["installed", null],
+  ] as const)(
+    "says what a topic's %s starter pack lacks, and nothing once it is installed and on",
+    async (state, note) => {
+      withFlags({ "get-started": true });
+      const topic = TOPICS_TO_TRY.find((one) => one.pack)!;
+      const name = topic.pack!.id.split("/")[1]!;
+      const { api } = harness([pack(name, { state })]);
+      renderIn(local(api), <StarterPacksCard />);
+      if (state === "missing")
+        await click(within(await card()).getByRole("button", { name: "Not now" }));
+      const tries = await screen.findByTestId("things-to-try-card");
+      await click(within(tries).getByRole("button", { name: topic.title }));
+      await within(tries).findByRole("button", { name: topic.prompts[0]! });
+      const said = new RegExp(`Works best with the ${topic.pack!.name} starter pack`);
+      if (note === null) expect(within(tries).queryByText(said)).toBeNull();
+      else expect(within(tries).getByText(said)).toHaveTextContent(note);
+    },
+  );
 });
 
 describe("the starter packs card", () => {

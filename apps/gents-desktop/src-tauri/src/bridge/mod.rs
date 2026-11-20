@@ -49,14 +49,9 @@ pub(crate) fn context() -> tauri::Context<tauri::Wry> {
 pub fn run() {
     install_tracing(TracingConfig {
         filter: None,
-        console: std::env::var("GENTS_DESKTOP_CONSOLE_LOG")
-            .ok()
-            .is_some_and(|v| {
-                matches!(
-                    v.trim().to_ascii_lowercase().as_str(),
-                    "1" | "true" | "yes" | "on"
-                )
-            }),
+        console: std::env::args_os()
+            .skip(1)
+            .any(|argument| argument == "--console-log"),
     });
     // Before anything spawns a helper: a packaged launch puts its own copies
     // of the host's tools first on PATH, and an older bundled `xdg-open` can
@@ -105,6 +100,7 @@ pub fn run() {
             #[cfg(desktop)]
             {
                 links::setup(app)?;
+                plugin_window::setup(app);
                 setup_tray(app)?;
                 #[cfg(target_os = "macos")]
                 windows::setup(app)?;
@@ -124,6 +120,8 @@ pub fn run() {
         swipe::swipe_scroll_edges,
         links::desktop_take_links,
         plugin_window::desktop_open_plugin_window,
+        plugin_window::desktop_plugin_window_navigate,
+        plugin_window::desktop_plugin_prompt_to_main,
         notifications::desktop_post_notification,
         browser::browser_open,
         browser::browser_select,
@@ -140,6 +138,8 @@ pub fn run() {
     let builder = builder.invoke_handler(tauri::generate_handler![
         links::desktop_take_links,
         plugin_window::desktop_open_plugin_window,
+        plugin_window::desktop_plugin_window_navigate,
+        plugin_window::desktop_plugin_prompt_to_main,
         product_telemetry::product_telemetry_app_opened,
         product_telemetry::product_telemetry_status,
         product_telemetry::product_telemetry_set_enabled
@@ -173,13 +173,11 @@ pub fn run() {
                 .any(|label| label != "main" && label != window.label());
             let main_hidden = main
                 .as_ref()
-                .is_some_and(|view| matches!(view.is_visible(), Ok(false)))
-                && app
-                    .try_state::<TrayRuntimeState>()
-                    .is_some_and(|state| state.main_hidden_by_close.load(Ordering::SeqCst));
+                .is_some_and(|view| main_closed_out_of_sight(app, view));
             let action = window_close::close_action(
                 cfg!(target_os = "macos"),
                 window.label() == "main",
+                plugin_window::is_page_window(window.label()),
                 active,
                 other_views,
                 main_hidden,
@@ -485,6 +483,17 @@ fn managed_agent_tooltip(state: Option<&str>) -> &'static str {
         Some("failed") | None => "Gents node service — status unavailable",
         Some(_) => "Gents node service — status unavailable",
     }
+}
+
+#[cfg(desktop)]
+fn main_closed_out_of_sight<R>(app: &tauri::AppHandle<R>, main: &tauri::WebviewWindow<R>) -> bool
+where
+    R: tauri::Runtime,
+{
+    matches!(main.is_visible(), Ok(false))
+        && app
+            .try_state::<TrayRuntimeState>()
+            .is_some_and(|state| state.main_hidden_by_close.load(Ordering::SeqCst))
 }
 
 #[cfg(desktop)]

@@ -107,6 +107,17 @@ export const FLAGS = [
     removeWhen: "Access decisions ship to everyone.",
     restart: false,
   },
+  {
+    id: "get-started",
+    name: "Get started",
+    description:
+      "Shows a short list of things to try in a new chat with the Engineer, each with example messages.",
+    default: false,
+    owner: "david-on-github",
+    removeBy: "2027-03-01",
+    removeWhen: "The list ships to everyone or is removed.",
+    restart: false,
+  },
 ] as const satisfies readonly Flag[];
 
 export type FlagId = (typeof FLAGS)[number]["id"];

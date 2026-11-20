@@ -93,9 +93,10 @@ fn production_sources(root: &Path) -> Vec<PathBuf> {
 }
 
 /// Whether an item compiles only into tests: a `#[cfg(..)]` that requires
-/// `test`, the `test-fixtures` feature or the `test-home-guard` feature, none
-/// of which reaches a shipped build (`gents_test_fixtures_stay_dev_only`,
-/// `service_isolation_stays_test_only`).
+/// `test`, the `test-fixtures` feature, the `test-home-guard` feature or the
+/// `native-e2e` feature, none of which reaches a shipped build
+/// (`gents_test_fixtures_stay_dev_only`, `service_isolation_stays_test_only`,
+/// `native_e2e_stays_test_only`).
 fn cfg_test(attributes: &[syn::Attribute]) -> bool {
     attributes.iter().any(|attribute| {
         attribute.path().is_ident("cfg")
@@ -117,7 +118,7 @@ fn predicate_requires_test(predicate: &syn::Meta) -> bool {
         syn::Meta::Path(path) => path.is_ident("test"),
         syn::Meta::NameValue(pair) => {
             pair.path.is_ident("feature")
-                && matches!(&pair.value, Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(name), .. }) if TEST_FEATURES.contains(&name.value().as_str()))
+                && matches!(&pair.value, Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(name), .. }) if TEST_FEATURES.contains(&name.value().as_str()) || name.value() == NATIVE_E2E)
         }
         syn::Meta::List(list) if list.path.is_ident("all") => {
             operands(list).iter().any(predicate_requires_test)
@@ -1019,6 +1020,123 @@ fn test_fixtures_fence_flags_production_and_default_enablement() {
     }
 }
 
+/// The feature end-to-end launchers pass on the command line to build the
+/// desktop, bridge and CLI with their native test harness hooks; release
+/// builds never pass it (`scripts/check-native-e2e-capabilities.sh` keeps its
+/// capability out of the shipped app).
+const NATIVE_E2E: &str = "native-e2e";
+
+/// `cfg_test` treats `native-e2e` items as test code, which holds only while
+/// no manifest enables the feature outside `[dev-dependencies]` except a
+/// crate's own `native-e2e` feature forwarding it to a dependency.
+fn native_e2e_leaks(manifest: &toml::Table) -> Vec<String> {
+    let mut tables = Vec::new();
+    for kind in ["dependencies", "build-dependencies"] {
+        tables.push((kind, manifest.get(kind)));
+        if let Some(targets) = manifest.get("target").and_then(toml::Value::as_table) {
+            tables.extend(targets.values().map(|target| (kind, target.get(kind))));
+        }
+    }
+    let mut leaks = Vec::new();
+    for (kind, table) in tables {
+        for (key, specification) in table.and_then(toml::Value::as_table).into_iter().flatten() {
+            if specification
+                .get("features")
+                .and_then(toml::Value::as_array)
+                .is_some_and(|features| {
+                    features
+                        .iter()
+                        .any(|feature| feature.as_str() == Some(NATIVE_E2E))
+                })
+            {
+                leaks.push(format!("[{kind}] {key}"));
+            }
+        }
+    }
+    for (feature, enabled) in manifest
+        .get("features")
+        .and_then(toml::Value::as_table)
+        .into_iter()
+        .flatten()
+    {
+        if feature != NATIVE_E2E
+            && enabled
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(toml::Value::as_str)
+                .any(|entry| entry.rsplit('/').next() == Some(NATIVE_E2E))
+        {
+            leaks.push(format!("[features] {feature}"));
+        }
+    }
+    leaks
+}
+
+#[test]
+fn native_e2e_stays_test_only() {
+    let root = repo_root();
+    let workspace = toml_file(&root.join("Cargo.toml"));
+    let mut leaks = Vec::new();
+    for member in workspace["workspace"]["members"]
+        .as_array()
+        .expect("workspace members")
+    {
+        let member = member.as_str().expect("member path");
+        let manifest = toml_file(&root.join(member).join("Cargo.toml"));
+        leaks.extend(
+            native_e2e_leaks(&manifest)
+                .into_iter()
+                .map(|site| format!("{member}/Cargo.toml {site}")),
+        );
+    }
+    assert!(
+        leaks.is_empty(),
+        "the `native-e2e` feature is enabled only from the command line, [dev-dependencies] or a crate's own `native-e2e` feature:\n{}",
+        leaks.join("\n")
+    );
+}
+
+#[test]
+fn native_e2e_fence_flags_production_and_default_enablement() {
+    let leaks = |manifest: &str| native_e2e_leaks(&manifest.parse().expect("parse manifest"));
+    for (manifest, expected) in [
+        (
+            r#"[dependencies]
+            bridge = { path = "../bridge", features = ["native-e2e"] }"#,
+            "[dependencies] bridge",
+        ),
+        (
+            r#"[target.'cfg(unix)'.dependencies]
+            bridge = { path = "../bridge", features = ["native-e2e"] }"#,
+            "[dependencies] bridge",
+        ),
+        (
+            r#"[features]
+            default = ["native-e2e"]
+            native-e2e = []"#,
+            "[features] default",
+        ),
+        (
+            r#"[features]
+            desktop = ["bridge?/native-e2e"]"#,
+            "[features] desktop",
+        ),
+    ] {
+        assert_eq!(leaks(manifest), [expected], "{manifest}");
+    }
+    for manifest in [
+        r#"[dev-dependencies]
+        bridge = { path = "../bridge", features = ["native-e2e"] }"#,
+        r#"[features]
+        native-e2e = ["tauri-host", "bridge/native-e2e"]"#,
+        r#"[dependencies]
+        bridge = { path = "../bridge", features = ["native-e2e-ui"] }"#,
+    ] {
+        assert!(leaks(manifest).is_empty(), "{manifest}");
+    }
+}
+
 /// The feature that cuts a test build off the machine's service manager
 /// (`gents_service::native_service::isolation`). The per-user service label
 /// is not per `HOME`, so a `gents` a test spawns with a temporary `HOME`
@@ -1839,13 +1957,18 @@ fn item_cfg_test_excludes_items_whose_cfg_requires_test() {
         #[cfg(any(feature = "test-fixtures", feature = "other"))] fn k() {}
         #[cfg(any(test, feature = "test-home-guard"))] fn l() {}
         fn m() {}
+        #[cfg(all(feature = "native-e2e", debug_assertions))] fn n() {}
+        #[cfg(any(feature = "native-e2e", feature = "other"))] fn o() {}
         "#,
     )
     .expect("parse snippet");
     let excluded = syntax.items.iter().map(item_cfg_test).collect::<Vec<_>>();
     assert_eq!(
         excluded,
-        [true, true, true, true, false, false, false, false, true, true, false, true, false]
+        [
+            true, true, true, true, false, false, false, false, true, true, false, true, false,
+            true, false
+        ]
     );
 }
 
@@ -2391,12 +2514,9 @@ fn ambient_request_context_only_shrinks() {
 /// shrinks.
 #[rustfmt::skip]
 const UNRECOVERED_AUTHORIZE_ALLOWLIST: &[(&str, usize, &str)] = &[
-    ("crates/gents-host/src/readiness.rs", 1, "sent as the runtime's Node, whose identity token the edge admits on every home and no change of audience refuses"),
-    ("crates/gents-service/src/runtime_control.rs", 1, "sent as the runtime's Node, whose identity token the edge admits on every home and no change of audience refuses"),
-    ("crates/gents-service/src/service_update/execute.rs", 2, "sent as the runtime's Node, whose identity token the edge admits on every home and no change of audience refuses"),
-    ("crates/gents-store/src/config_client/client_authentication.rs", 1, "authorize_runtime, an authorizer that reads the runtime's authentication first; its callers are counted"),
-    ("crates/gents-store/src/config_client/graphql.rs", 2, "a transaction's commit and discard: its transaction recovers as a unit (resendUnit) and a refused commit is told"),
-    ("crates/gents-store/src/config_client/mod.rs", 1, "authorize_in_transaction, the one authorizer of requests inside a transaction"),
+    ("crates/gents-store/src/config_client/client_authentication.rs", 1, "correct by design: the body of the authorizer authorize_runtime, whose callers are counted"),
+    ("crates/gents-store/src/config_client/graphql.rs", 2, "correct by design: a transaction's commit and discard are never sent alone again; the transaction reruns as a unit and a refused commit is told (Identity.HeldAudience.resendUnit, a_refused_commit_is_never_run_again)"),
+    ("crates/gents-store/src/config_client/mod.rs", 1, "correct by design: the body of the authorizer authorize_in_transaction, whose callers recover as a unit (resendUnit)"),
 ];
 
 /// What authorizes a request as the endpoint's principal.
@@ -2592,8 +2712,7 @@ fn credential_recovery_fence_counts_authorize_outside_send_resolving() {
 /// list only shrinks.
 #[rustfmt::skip]
 const STATUS_REPORT_READERS: &[(&str, usize, &str)] = &[
-    ("crates/gents-protocol/src/delegation_audience.rs", 1, "the status field's reader, called only by the signer"),
-    ("crates/gents-protocol/src/home_attestation.rs", 2, "what the home signs, and the report of a signed statement"),
+    ("crates/gents-protocol/src/home_attestation.rs", 2, "correct by design: the home reading its own status into the statement it signs (HomeStatement::of_status), and the report of a statement whose signature was checked (HomeStatement::reported)"),
 ];
 
 /// What reads a report from a status, and the report itself.
@@ -2761,16 +2880,10 @@ fn ambient_context_skips_only_named_documented_statics() {
 /// (#1764).
 #[rustfmt::skip]
 const ENVIRONMENT_READ_ALLOWLIST: &[(&str, usize, &str)] = &[
-    ("apps/fixture-host/src-tauri/src/lib.rs", 1, "FIXTURE_DOMAIN_HOME: the fixture-host test application's data directory; test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
-    ("apps/gents-desktop/src-tauri/src/bin/bridge_runner/http/routes.rs", 3, "GENTS_TAURI_LIVE gates live-fixture routes of the bridge test runner; test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
     ("apps/gents-desktop/src-tauri/src/bridge/browser.rs", 1, "HOME: expands a leading ~ in a user-typed path; legitimately external (platform discovery)"),
     ("apps/gents-desktop/src-tauri/src/bridge/links.rs", 1, "APPIMAGE: AppImage probe deciding how links open from a packaged Linux build; legitimately external"),
-    ("apps/gents-desktop/src-tauri/src/bridge/mod.rs", 7, "GENTS_DESKTOP_CONSOLE_LOG becomes a desktop launch flag; GENTS_NATIVE_E2E and GENTS_E2E_* select the native end-to-end harness: test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
     ("apps/gents-desktop/src-tauri/src/bridge/product_telemetry.rs", 2, "GENTS_UMAMI_ENDPOINT and GENTS_UMAMI_WEBSITE_ID: a fixed property of the release build; becomes option_env! or a desktop setting"),
-    ("apps/gents-desktop/src-tauri/src/browser_data.rs", 2, "GENTS_NATIVE_E2E and GENTS_E2E_WEBVIEW_STORE_ID isolate the e2e webview store; test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
-    ("apps/gents-desktop/src-tauri/src/runner/live_fixture.rs", 2, "GENTS_TAURI_LIVE_RETAIN_DATA and GENTS_DESKTOP_TEST_LOG configure the live-fixture runner; test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
-    ("apps/gents-desktop/src-tauri/src/runner/live_fixture/backend.rs", 4, "live-fixture backend selection and provider API keys; test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
-    ("apps/gents-desktop/src-tauri/src/runner/live_fixture/inference.rs", 1, "GENTS_DESKTOP_LIVE_INFERENCE selects live-fixture inference; test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
+    ("apps/gents-desktop/src-tauri/src/runner/live_fixture/backend.rs", 2, "the API key variable a live-fixture backend names: the runner checks it is set before seeding a backend the runtime will read it from by name; stays"),
     ("crates/gents-chatgpt-login/src/lib.rs", 1, "CODEX_CA_CERT and SSL_CERT_FILE: standard custom CA bundle convention; legitimately external"),
     ("crates/gents-cli/src/commands/chat/streaming.rs", 1, "NO_COLOR: standard convention disabling terminal colour; legitimately external"),
     ("crates/gents-cli/src/commands/eval/frame.rs", 1, "NO_COLOR: standard convention disabling terminal colour; legitimately external"),
@@ -2783,7 +2896,6 @@ const ENVIRONMENT_READ_ALLOWLIST: &[(&str, usize, &str)] = &[
     ("crates/gents-cli/src/desired_state/load.rs", 1, "desired-state ${VAR} interpolation: the manifest names operator-supplied variables; legitimately external"),
     ("crates/gents-desktop-bridge/src/host_browser.rs", 4, "BROWSER, PATH, APPDIR and APPIMAGE: platform browser discovery and the AppImage probe; legitimately external"),
     ("crates/gents-desktop-bridge/src/package_tools.rs", 6, "PATH, APPDIR, APPIMAGE and the launcher's variables: restores the host environment for host programs launched from an AppImage; legitimately external"),
-    ("crates/gents-desktop-bridge/src/tauri_commands/e2e.rs", 13, "GENTS_NATIVE_E2E and GENTS_E2E_* drive the native end-to-end command (native-e2e feature); test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
     ("crates/gents-desktop-bridge/src/tauri_commands/service_executable.rs", 4, "GENTS_BIN, PATH, APPDIR and APPIMAGE: discovery of the gents executable and the AppImage probe; GENTS_BIN becomes a desktop setting, the rest are legitimately external"),
     ("crates/gents-desktop/src/main.rs", 2, "GENTS_DESKTOP_TAURI_BIN and PATH: discovery of the desktop executable; GENTS_DESKTOP_TAURI_BIN becomes a flag"),
     ("crates/gents-documents/src/inference_backend.rs", 1, "the variable an InferenceBackend document names as its API key source (auth kind environment); the document decides, legitimately external"),
@@ -3009,24 +3121,16 @@ fn environment_reads_count_runtime_reads_outside_test_items() {
 const PROCESS_STATIC_ALLOWLIST: &[(&str, usize, &str)] = &[
     ("apps/gents-desktop/src-tauri/src/bridge/browser.rs", 2, "the desktop window's one embedded browser and its applied-generation counter: a process-global UI resource; stays"),
     ("apps/gents-desktop/src-tauri/src/bridge/notifications.rs", 1, "count of notification permission waits in the one desktop process; stays"),
-    ("apps/gents-desktop/src-tauri/src/bridge/plugin_window/placement.rs", 1, "plugin window placements of the one desktop process; moves onto the Tauri app state"),
-    ("apps/gents-desktop/src-tauri/src/bridge/swipe.rs", 1, "sideways scroll room per desktop view; moves onto the Tauri app state"),
     ("apps/gents-desktop/src-tauri/src/bridge/windows.rs", 1, "next window label of the one desktop process; stays"),
-    ("apps/gents-desktop/src-tauri/src/runner/live_fixture.rs", 1, "one-time tracing set-up of the bridge test runner binary; stays"),
     ("crates/gents-automation/src/lifecycle_hooks.rs", 2, "the bundled hook registry and composition built once: an immutable value built once on first use, the same for every node and Agent; stays"),
     ("crates/gents-desktop-bridge/src/runtime_setup.rs", 1, "the desktop's one Tokio runtime, built at its entry point; stays"),
-    ("crates/gents-desktop-bridge/src/snapshot/runtime.rs", 1, "starter cache shared by every snapshot read; moves onto the ClientRuntime it caches for"),
     ("crates/gents-desktop-bridge/src/tauri_commands/service_executable.rs", 2, "lock and attempt counter serialising installs of the one service executable a host has; process-global resource, stays"),
     ("crates/gents-eval/src/authoring/dossier.rs", 1, "runtime collection names derived from the schema: an immutable value built once on first use, the same for every node and Agent; stays"),
-    ("crates/gents-host/src/http/pack_watch.rs", 1, "16 pack-watch slots per process; becomes a serve flag"),
     ("crates/gents-host/src/http/version.rs", 1, "the build's version response: an immutable value built once on first use, the same for every node and Agent; stays"),
     ("crates/gents-host/src/p2p_status.rs", 1, "the shared reqwest client, a connection pool built once; stays"),
     ("crates/gents-inference/src/admission/config.rs", 1, "per-process HMAC key for credential fingerprints, never persisted by design; stays"),
-    ("crates/gents-inference/src/auth/credential/bearer.rs", 1, "weak registry of live OAuth bearers by credential, shared across nodes; moves onto the credential resolver's owner"),
-    ("crates/gents-inference/src/clients/claude_messages/bedrock.rs", 1, "Bedrock inference-profile cache; moves onto the InferenceBackend client"),
-    ("crates/gents-inference/src/clients/claude_messages/fixtures.rs", 2, "orphaned file that no module declares, a dead copy of mod.rs's test fixtures; delete it"),
-    ("crates/gents-inference/src/clients/claude_messages/google.rs", 1, "Google access-token cache; moves onto the InferenceBackend client"),
-    ("crates/gents-inference/src/clients/claude_messages/transport.rs", 2, "shared HTTP clients built from the proxy environment, and the gzip latch; the latch moves onto the InferenceBackend client"),
+    ("crates/gents-inference/src/auth/credential/bearer.rs", 1, "weak registry of live OAuth bearers by credential, reused only on the node holding it, so every in-process user of that node's credential (agent clients, usage polls, health probes, model discovery) shares one refresh; they share no owner but the DefraDB node, so it moves onto a per-node inference owner once one exists"),
+    ("crates/gents-inference/src/clients/claude_messages/transport.rs", 1, "shared HTTP clients built once from the proxy environment, one keep-alive pool per proxy decision; stays"),
     ("crates/gents-lean-contract/src/lib.rs", 2, "the Lean process output cache and load lock in a crate that links only into tests; stays"),
     ("crates/gents-lean-vocab/src/lib.rs", 1, "the Lean contract snapshot in a crate that links only into tests: an immutable value built once on first use, the same for every node and Agent; stays"),
     ("crates/gents-pack/src/pack/registry.rs", 1, "one registry download at a time per process, an external premise of the registry's throttle; stays"),
@@ -3039,25 +3143,19 @@ const PROCESS_STATIC_ALLOWLIST: &[(&str, usize, &str)] = &[
     ("crates/gents-protocol/src/graphql/transport.rs", 1, "the shared reqwest client, a connection pool built once; stays"),
     ("crates/gents-session/src/exec/process/registry.rs", 2, "registry and id counter of managed child processes, which belong to the process; stays"),
     ("crates/gents-session/src/request/admission.rs", 1, "the default request input: an immutable value built once on first use, the same for every node and Agent; stays"),
-    ("crates/gents-session/src/request/lifecycle/queue/atomic_inputs.rs", 1, "background completion gates keyed by node address; move onto the node's extensions"),
     ("crates/gents-session/src/session/output/replay_capture.rs", 1, "log rate limiter for replay capture; stays"),
-    ("crates/gents-session/src/workspace/overlay.rs", 1, "the process operator tool root installed at start-up and read by every node; becomes an argument on the session owner"),
     ("crates/gents-store/src/config_client/common.rs", 1, "monotonic recreate-identity clock, process-local by design; stays"),
     ("crates/gents-store/src/config_client/graphql.rs", 1, "the shared reqwest client, a connection pool built once; stays"),
     ("crates/gents-store/src/config_client/runtime_endpoints.rs", 1, "the shared reqwest client, a connection pool built once; stays"),
     ("crates/gents-store/src/config_client/subscription.rs", 1, "the shared reqwest client, a connection pool built once; stays"),
-    ("crates/gents-store/src/config_client/txn/gate.rs", 1, "mutation write gates keyed by node address; move onto the node's extensions"),
-    ("crates/gents-store/src/identity.rs", 1, "known public keys cache shared by every node; moves onto the identity owner"),
-    ("crates/gents-store/src/identity/enrollment_gate.rs", 1, "per-node enrollment decision gates keyed by node address; moves onto the node's extensions"),
     ("crates/gents-store/src/identity/request_receipt.rs", 1, "the default request input: an immutable value built once on first use, the same for every node and Agent; stays"),
-    ("crates/gents-store/src/node_extension.rs", 1, "the node extension table, the one owner of per-node attachments keyed by node address; stays"),
+    ("crates/gents-store/src/node_extension.rs", 1, "the node extension table, the one owner of per-node attachments and per-node state keyed by node address; stays"),
     ("crates/gents-store/src/schema/catalog.rs", 4, "baseline schemas and the runtime catalog: an immutable value built once on first use, the same for every node and Agent; stays"),
     ("crates/gents-store/src/schema/catalog/install.rs", 1, "lock serialising schema ensure across the desktop and runtime paths of one process; stays"),
     ("crates/gents-store/src/schema/journal.rs", 1, "journal baseline collections: an immutable value built once on first use, the same for every node and Agent; stays"),
     ("crates/gents-store/src/service.rs", 1, "the build identifier: an immutable value built once on first use, the same for every node and Agent; stays"),
     ("crates/gents-toolcalls/src/call/lifecycle/recovery.rs", 1, "rate limit of the unresolved-parent warning; stays"),
     ("crates/gents-toolcalls/src/plugin/executor.rs", 1, "a built-in plugin declaration: an immutable value built once on first use, the same for every node and Agent; stays"),
-    ("crates/gents-toolcalls/src/plugin/model_calls.rs", 1, "model-call concurrency limiters by key shared by every node; move onto the node's extensions"),
     ("crates/gents-tools/src/builtin/self_config/configuration_discovery/text.rs", 5, "secret redaction patterns: compiled regular expressions, immutable once built; stay"),
     ("crates/gents-tools/src/native/command_observability.rs", 2, "process-wide command policy counters for metrics; stay"),
     ("crates/gents/src/client_runtime/mod.rs", 1, "the shared reqwest client, a connection pool built once; stays"),

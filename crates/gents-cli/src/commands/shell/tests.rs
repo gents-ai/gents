@@ -10,7 +10,8 @@ use gents_pack::pack::PackChangeError;
 use gents_pack::plugin::authority::GrantError;
 use gents_protocol::output::MessageRole;
 use gents_protocol::row::AgentRequestRow;
-use gents_shell::app::{App, ChatLine};
+use gents_shell::app::transcript::ChatLine;
+use gents_shell::app::App;
 use gents_shell::keys::KeySet;
 use gents_shell::sample::{MenuId, Opens, RunState, Running, Tone, View};
 use gents_shell::source::{

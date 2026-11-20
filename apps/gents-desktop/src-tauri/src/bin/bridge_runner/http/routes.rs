@@ -28,7 +28,7 @@ use gents_desktop_bridge::commands::{
 };
 use gents_desktop_bridge::interrupt::interrupt_request;
 use gents_desktop_bridge::provenance::session_provenance_request;
-use gents_desktop_bridge::snapshot::{build_session_live_delta, LiveDeltaBase};
+use gents_desktop_bridge::snapshot::build_session_live_delta;
 use gents_desktop_bridge::tauri_commands::inference_setup::{
     discover_inference_models_for_core, inference_backend_recommendation,
     inference_model_recommendation, InferenceBackendRecommendationRequest,
@@ -45,10 +45,10 @@ use gents_desktop_bridge::types::{
     DesktopOperationsSnapshotRequest, DesktopProbeMcpServiceRequest,
     DesktopSessionProvenanceRequest, EventSourceDeleteRequest, EventSourceSaveRequest,
     InferenceProfileSaveRequest, NodeConfigSaveRequest, RuntimeAccessConnectRequest,
-    ScheduleDeleteRequest, ScheduleRunRequest, ScheduleSaveRequest, SessionRenameRequest,
-    SessionRowsWindow, TaskRunRequest, TaskSaveRequest, ToolServiceSaveRequest,
-    ToolServiceTestRequest, ToolsDeleteRequest, ToolsSaveRequest, TriggerDeleteRequest,
-    TriggerSaveRequest,
+    ScheduleDeleteRequest, ScheduleRunRequest, ScheduleSaveRequest, SessionLiveDeltaRequest,
+    SessionRenameRequest, SessionRowsWindow, TaskRunRequest, TaskSaveRequest,
+    ToolServiceSaveRequest, ToolServiceTestRequest, ToolsDeleteRequest, ToolsSaveRequest,
+    TriggerDeleteRequest, TriggerSaveRequest,
 };
 use gents_server::packs;
 
@@ -70,20 +70,6 @@ struct SessionRowsRequest {
     session_id: String,
     window: SessionRowsWindow,
     limit: Option<usize>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SessionLiveDeltaRequest {
-    #[serde(default)]
-    node_did: Option<String>,
-    session_id: String,
-    request_id: String,
-    base_live_cursor: String,
-    base_content_byte_len: usize,
-    base_content_hash: String,
-    base_reasoning_byte_len: usize,
-    base_reasoning_hash: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -134,6 +120,7 @@ pub(super) async fn handle_request(
     fixture: &Arc<LiveBridgeFixture>,
     request: HttpRequestData,
     runtime: &tokio::runtime::Handle,
+    live: bool,
 ) -> Result<HttpResponse> {
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/desktop/packs/plugin-slots") => {
@@ -389,7 +376,7 @@ pub(super) async fn handle_request(
             json(ClientAccessRequestView::from(receipt))
         }
         ("GET", "/desktop/test-fixture/remote-replicators") => {
-            require_live_fixture()?;
+            require_live_fixture(live)?;
             let replicators = fixture.runtime_p2p()?.get_replicators().await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&replicators)?))
         }
@@ -440,13 +427,7 @@ pub(super) async fn handle_request(
                 &request.session_id,
                 request.node_did.as_deref(),
                 &request.request_id,
-                LiveDeltaBase {
-                    cursor: &request.base_live_cursor,
-                    content_byte_len: request.base_content_byte_len,
-                    content_hash: &request.base_content_hash,
-                    reasoning_byte_len: request.base_reasoning_byte_len,
-                    reasoning_hash: &request.base_reasoning_hash,
-                },
+                request.base(),
             )
             .await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&delta)?))
@@ -634,10 +615,10 @@ pub(super) async fn handle_request(
         }
         // Test-only: write to the runtime as the desktop User for the propagation witness.
         ("POST", "/desktop/test-fixture/remote-save-agent") => {
-            if std::env::var("GENTS_TAURI_LIVE").as_deref() != Ok("1") {
+            if !live {
                 return Ok(HttpResponse::json_error(
                     "403 Forbidden",
-                    "remote-save-agent is only available in live test mode (GENTS_TAURI_LIVE=1)",
+                    "remote-save-agent is only available in live test mode (--live)",
                 ));
             }
             let req =
@@ -649,10 +630,10 @@ pub(super) async fn handle_request(
             ))
         }
         ("POST", "/desktop/test-fixture/clear-client-store") => {
-            if std::env::var("GENTS_TAURI_LIVE").as_deref() != Ok("1") {
+            if !live {
                 return Ok(HttpResponse::json_error(
                     "403 Forbidden",
-                    "clear-client-store is only available in live test mode (GENTS_TAURI_LIVE=1)",
+                    "clear-client-store is only available in live test mode (--live)",
                 ));
             }
             for node_did in fixture.desktop_core().stores().node_dids() {
@@ -667,17 +648,17 @@ pub(super) async fn handle_request(
         // Test-only projection of the remote node's P2P admin API; must keep
         // the same wire shapes as a deployed runtime's HTTP client.
         ("GET", "/p2p/info") => {
-            require_live_fixture()?;
+            require_live_fixture(live)?;
             let addresses = fixture.runtime_p2p()?.listen_addresses().await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&addresses)?))
         }
         ("GET", "/p2p/active-peers") => {
-            require_live_fixture()?;
+            require_live_fixture(live)?;
             let peers = fixture.runtime_p2p()?.connected_peers().await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&peers)?))
         }
         ("POST", "/p2p/connect") => {
-            require_live_fixture()?;
+            require_live_fixture(live)?;
             let addresses = decode::<Vec<String>>(&request.body, "decoding P2P connect")?;
             for address in addresses {
                 fixture.runtime_p2p()?.connect_peer(&address).await?;
@@ -685,12 +666,12 @@ pub(super) async fn handle_request(
             Ok(HttpResponse::json_ok("{}".to_string()))
         }
         ("GET", "/p2p/replicators") => {
-            require_live_fixture()?;
+            require_live_fixture(live)?;
             let replicators = fixture.runtime_p2p()?.get_replicators().await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&replicators)?))
         }
         ("POST", "/p2p/replicators") => {
-            require_live_fixture()?;
+            require_live_fixture(live)?;
             let request =
                 decode::<ReplicatorRequest>(&request.body, "decoding P2P replicator install")?;
             let filters = serde_json::from_value(request.filters)
@@ -708,7 +689,7 @@ pub(super) async fn handle_request(
             Ok(HttpResponse::json_ok("{}".to_string()))
         }
         ("DELETE", "/p2p/replicators") => {
-            require_live_fixture()?;
+            require_live_fixture(live)?;
             let request = decode::<DeleteReplicatorRequest>(
                 &request.body,
                 "decoding P2P replicator teardown",
@@ -720,19 +701,19 @@ pub(super) async fn handle_request(
             Ok(HttpResponse::json_ok("{}".to_string()))
         }
         ("GET", "/p2p/collections") => {
-            require_live_fixture()?;
+            require_live_fixture(live)?;
             let collections = fixture.runtime_p2p()?.get_collections().await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&collections)?))
         }
         ("POST", "/p2p/collections") => {
-            require_live_fixture()?;
+            require_live_fixture(live)?;
             let collections =
                 decode::<Vec<String>>(&request.body, "decoding P2P collection install")?;
             fixture.runtime_p2p()?.add_collections(collections).await?;
             Ok(HttpResponse::json_ok("{}".to_string()))
         }
         ("DELETE", "/p2p/collections") => {
-            require_live_fixture()?;
+            require_live_fixture(live)?;
             let collections =
                 decode::<Vec<String>>(&request.body, "decoding P2P collection teardown")?;
             fixture
@@ -905,10 +886,8 @@ where
     serde_json::from_str::<T>(body).context(context.to_string())
 }
 
-fn require_live_fixture() -> Result<()> {
-    if std::env::var("GENTS_TAURI_LIVE").as_deref() != Ok("1") {
-        anyhow::bail!("test fixture route requires GENTS_TAURI_LIVE=1");
-    }
+fn require_live_fixture(live: bool) -> Result<()> {
+    anyhow::ensure!(live, "test fixture route requires --live");
     Ok(())
 }
 

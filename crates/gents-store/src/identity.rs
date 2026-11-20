@@ -1,6 +1,5 @@
-use rapidhash::{HashMapExt, RapidHashMap};
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use defra_core::signing::{SigningConfig, SigningKeyType};
@@ -206,11 +205,6 @@ struct KnownPublicKey {
     bytes: Vec<u8>,
 }
 
-fn known_public_keys() -> &'static RwLock<RapidHashMap<String, KnownPublicKey>> {
-    static TYPED_KEYS: OnceLock<RwLock<RapidHashMap<String, KnownPublicKey>>> = OnceLock::new();
-    TYPED_KEYS.get_or_init(|| RwLock::new(RapidHashMap::new()))
-}
-
 #[derive(Debug)]
 pub struct KeyIdentity {
     did: String,
@@ -256,7 +250,6 @@ impl KeyIdentity {
         let identity = Arc::new(identity);
         let did = identity.did()?.to_string();
         let public_key_bytes = identity.public_key_bytes();
-        register_public_key(&did, identity.key_type(), public_key_bytes.clone());
         register_ed25519_signing_identity(&did, &identity.private_key_bytes(), &public_key_bytes)?;
         Ok(Self {
             did,
@@ -311,6 +304,35 @@ pub fn commit_signer_identity_for_did(did: &str) -> Result<String> {
             source,
         })?;
     Ok(lowercase_hex(&public_key_bytes))
+}
+
+/// The DID that signed a commit, from `_commits { signature { identity type } }`:
+/// the inverse of [`commit_signer_identity_for_did`]. DefraDB verifies the
+/// signature when the block arrives, so this names the node that wrote it.
+/// The DID is derived as DefraDB derives it at merge
+/// (`verified_signature_signer_did`), so a compressed secp256k1 or P-256
+/// header key names the same DID as its uncompressed form.
+pub fn commit_signer_did(identity: &str, signature_type: &str) -> Result<String> {
+    let parsed =
+        serde_json::from_value(serde_json::Value::from(signature_type)).map_err(|source| {
+            IdentityError::UnknownCommitSignatureType {
+                signature_type: signature_type.to_owned(),
+                source,
+            }
+        })?;
+    let key_type = match parsed {
+        defra_core::SignatureType::EdDSA => crypto::KeyType::Ed25519,
+        defra_core::SignatureType::ES256K => crypto::KeyType::Secp256k1,
+        defra_core::SignatureType::ES256 => crypto::KeyType::Secp256r1,
+        defra_core::SignatureType::BLSAugV1 => crypto::KeyType::Bls12381,
+    };
+    crypto::public_key_from_string(key_type, identity)
+        .and_then(|key| key.did())
+        .map_err(|source| IdentityError::UnreadableCommitSigner {
+            identity: identity.to_owned(),
+            signature_type: signature_type.to_owned(),
+            source,
+        })
 }
 
 /// DefraDB tolerates up to 60s of clock skew and its bearers carry no nonce,
@@ -428,19 +450,6 @@ impl NodeIdentity for KeyIdentity {
     }
 }
 
-fn register_public_key(did: &str, key_type: crypto::KeyType, public_key: Vec<u8>) {
-    known_public_keys()
-        .write()
-        .expect("known public keys lock poisoned")
-        .insert(
-            did.to_string(),
-            KnownPublicKey {
-                key_type,
-                bytes: public_key,
-            },
-        );
-}
-
 fn lowercase_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut output = String::with_capacity(bytes.len() * 2);
@@ -451,27 +460,15 @@ fn lowercase_hex(bytes: &[u8]) -> String {
     output
 }
 
+/// A `did:key` names its public key; every identity this runtime holds or
+/// registers is one, since each is checked against the DID its key derives.
 fn known_public_key_for_did(did: &str) -> Result<KnownPublicKey> {
-    if let Some(key) = known_public_keys()
-        .read()
-        .expect("known public keys lock poisoned")
-        .get(did)
-        .cloned()
-    {
-        return Ok(key);
-    }
-
     if did.starts_with("did:key:") {
         let (key_type, bytes) =
             crypto::parse_did_key(did).map_err(|source| IdentityError::ParseDidKey {
                 did: did.to_owned(),
                 source,
             })?;
-        tracing::trace!(
-            did,
-            ?key_type,
-            "resolved public key from did:key (not in local registry)"
-        );
         return Ok(KnownPublicKey { key_type, bytes });
     }
 

@@ -1370,7 +1370,7 @@ pub async fn set_state(
 mod lifecycle_tests {
     use super::*;
     use crate::call::lifecycle::FailureClass;
-    use gents_session::session::tool_call_state::CancelCause;
+    use gents_protocol::tool_call::CancelCause;
 
     /// Reads the admitted row through the owning Agent's access; ACP hides it from the node.
     async fn row(
