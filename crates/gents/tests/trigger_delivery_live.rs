@@ -4,6 +4,7 @@ use anyhow::{ensure, Context, Result};
 use gents_documents::apply_desired_state_plan;
 use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents_store::graphql::escape_graphql_string;
+use gents_store::test_support::snapshot_reader::SnapshotReader;
 use gents_store::{collection::Collection, config_client::ConfigAccess, identity::NodeIdentity};
 use serde_json::{json, Value};
 use std::{
@@ -14,7 +15,6 @@ use std::{
 use support::live_inference::{
     boot_live_agent, live_target, terminal_assistant_answer, InferenceTarget,
 };
-use support::snapshots::SnapshotReader;
 
 fn artifact_directory(label: &str) -> Result<std::path::PathBuf> {
     let root = std::env::var_os("GENTS_DELIVERY_ARTIFACT_DIR")
@@ -51,11 +51,11 @@ async fn delivery_lanes() -> Result<[InferenceTarget; 2]> {
 }
 
 struct DeliveryChanges {
-    requests: support::snapshots::SnapshotChanges,
-    calls: support::snapshots::SnapshotChanges,
-    fires: support::snapshots::SnapshotChanges,
-    outcomes: support::snapshots::SnapshotChanges,
-    goals: support::snapshots::SnapshotChanges,
+    requests: gents_store::test_support::snapshot_reader::SnapshotChanges,
+    calls: gents_store::test_support::snapshot_reader::SnapshotChanges,
+    fires: gents_store::test_support::snapshot_reader::SnapshotChanges,
+    outcomes: gents_store::test_support::snapshot_reader::SnapshotChanges,
+    goals: gents_store::test_support::snapshot_reader::SnapshotChanges,
 }
 
 impl DeliveryChanges {

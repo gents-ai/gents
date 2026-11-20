@@ -1,5 +1,5 @@
-use gents::support::snapshots::SnapshotReader;
 use gents_store::config_client::ConfigAccess;
+use gents_store::test_support::snapshot_reader::SnapshotReader;
 use std::path::Path;
 use std::time::Duration;
 use tokio::time::Instant;
@@ -57,7 +57,7 @@ pub async fn wait_for_runtime_ready(
         .map(|home| RuntimeStateChanges::watch([home.as_path()]))
         .transpose()?;
     let access = ConfigAccess::Graphql(super::graphql::served_endpoint(graphql));
-    let mut changes = None::<gents::support::snapshots::SnapshotChanges>;
+    let mut changes = None::<gents_store::test_support::snapshot_reader::SnapshotChanges>;
     loop {
         let response = graphql_query(
             graphql,

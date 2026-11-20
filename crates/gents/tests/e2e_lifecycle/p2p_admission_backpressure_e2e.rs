@@ -4,9 +4,9 @@ use tokio::time::Instant;
 use gents::defra_node::Node as EmbeddedNode;
 use gents_store::graphql::escape_graphql_string;
 
-use crate::support::snapshots::SnapshotReader;
 use crate::support::test_p2p_db_with_admission;
 use gents_p2p::test_support::transport::{wait_for_connected_peer, wait_for_listen_addr};
+use gents_store::test_support::snapshot_reader::SnapshotReader;
 
 const OWNER_DID: &str = "did:test:admission-p2p-owner";
 

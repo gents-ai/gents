@@ -37,9 +37,9 @@ use crate::support::interrupt::{
     BootedAgent,
 };
 use crate::support::live_inference::{bind_target, live_target, InferenceTarget};
-use crate::support::snapshots::SnapshotReader;
 use crate::support::test_db;
 use crate::support::TestDb;
+use gents_store::test_support::snapshot_reader::SnapshotReader;
 use gents_store::test_support::STALL_CEILING;
 
 const LIVE_SAMPLING_ID: &str = "live-interrupt:live-sampling";

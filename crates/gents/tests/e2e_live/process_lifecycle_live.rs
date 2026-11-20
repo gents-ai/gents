@@ -15,8 +15,8 @@ use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
 use crate::support::live_inference::{
     live_target, rows_when, wait_for_request_terminal, LiveAgentSpec, LiveUser,
 };
-use crate::support::snapshots::SnapshotReader;
 use crate::support::{test_db, TestDb};
+use gents_store::test_support::snapshot_reader::SnapshotReader;
 
 const WAIT: Duration = Duration::from_secs(240);
 

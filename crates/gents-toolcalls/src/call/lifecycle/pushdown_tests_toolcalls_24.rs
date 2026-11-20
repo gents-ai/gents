@@ -101,11 +101,14 @@ async fn request_deadline_presents_output_committed_before_the_cut() {
         outcome = &mut dispatch => panic!("the child ended before the cut: {outcome:?}"),
         raw = gents_store::test_support::read_when_changed(
             &node,
-            &["AgentOutputSegment"],
+            "AgentOutputSegment",
             "the child's output is committed before the cut",
             async || {
                 let raw = committed_output(&node, &tool).await;
-                (raw.contains("partial stdout") && raw.contains("partial stderr")).then_some(raw)
+                if raw.contains("partial stdout") && raw.contains("partial stderr") {
+                    return Ok(raw);
+                }
+                Err(raw)
             },
         ) => raw,
     };
@@ -182,11 +185,14 @@ async fn committed_output_reconstructs_completed_and_stopped_results() {
                 result = &mut call => panic!("{name}: the child ended before its stop: {result:?}"),
                 () = gents_store::test_support::read_when_changed(
                     &node,
-                    &["AgentOutputSegment"],
+                    "AgentOutputSegment",
                     "the stopped child's output is committed",
                     async || {
                         let raw = committed_output(&node, &tool).await;
-                        (raw.contains("last out") && raw.contains("last err")).then_some(())
+                        if raw.contains("last out") && raw.contains("last err") {
+                            return Ok(());
+                        }
+                        Err(raw)
                     },
                 ) => {}
             }

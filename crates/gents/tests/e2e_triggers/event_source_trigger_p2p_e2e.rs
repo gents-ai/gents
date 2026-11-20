@@ -13,9 +13,9 @@ use gents_p2p::p2p_reconcile::{EmbeddedRemoteP2pAdmin, RemoteP2pAdmin};
 use gents_store::graphql::escape_graphql_string;
 use serde_json::Value;
 
-use crate::support::snapshots::SnapshotReader;
 use crate::support::test_p2p_db;
 use gents_p2p::test_support::transport::{wait_for_connected_peer, wait_for_listen_addr};
+use gents_store::test_support::snapshot_reader::SnapshotReader;
 
 const EXTERNAL_ID: &str = "wh-p2p-1";
 

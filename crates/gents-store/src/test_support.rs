@@ -3,6 +3,7 @@ pub mod bounded_process;
 #[cfg(unix)]
 mod executable_script;
 pub mod relationships;
+pub mod snapshot_reader;
 pub mod wire_database;
 
 #[cfg(unix)]
@@ -28,31 +29,36 @@ pub fn unreached_deadline_at() -> chrono::DateTime<chrono::Utc> {
     chrono::Utc::now() + chrono::TimeDelta::from_std(UNREACHED_DEADLINE).expect("bounded")
 }
 
-/// Resolves with the first `Some` that `read` returns, re-running it after
-/// each committed change to `collections` and failing with `what` once none
-/// has changed for [`STALL_CEILING`]. The subscription opens before the first
-/// read, so a change committed between two reads is never missed; `read` must
-/// change its answer only together with a change to `collections`.
-pub async fn read_when_changed<T, F>(
-    node: &defra_node::Node,
-    collections: &[&str],
+/// Resolves with the first `Ok` that `read` returns, re-running it after each
+/// change to `collection` that `reader` observes, and fails with `what` and
+/// the last `Err` once `collection` has not changed for [`STALL_CEILING`].
+/// The subscription opens before the first read, so a change committed
+/// between two reads is never missed; `read` must change its answer only
+/// together with a change to `collection` that `reader` observes: a reader
+/// other than the rows' owner sees a child row when its session link is
+/// published, which is a later change to the child's own collection.
+pub async fn read_when_changed<R, T, L, F>(
+    reader: &R,
+    collection: &str,
     what: &str,
     mut read: F,
 ) -> T
 where
-    F: AsyncFnMut() -> Option<T>,
+    R: snapshot_reader::SnapshotReader + ?Sized,
+    F: AsyncFnMut() -> Result<T, L>,
+    L: std::fmt::Display,
 {
-    let mut changes =
-        crate::subscription_source::subscribe_collections(node, collections.iter().copied())
-            .expect("observe the awaited collections");
+    let mut changes = reader.subscribe_changes(collection).await;
     loop {
-        if let Some(value) = read().await {
-            return value;
-        }
-        match tokio::time::timeout(STALL_CEILING, changes.recv()).await {
-            Ok(Some(_)) => {}
-            Ok(None) => panic!("{what}: the change feed for {collections:?} closed"),
-            Err(_) => panic!("{what}: {collections:?} unchanged for {STALL_CEILING:?}"),
+        let last = match read().await {
+            Ok(value) => return value,
+            Err(last) => last,
+        };
+        if tokio::time::timeout(STALL_CEILING, changes.recv())
+            .await
+            .is_err()
+        {
+            panic!("{what}: {collection} unchanged for {STALL_CEILING:?}; last: {last}");
         }
     }
 }
