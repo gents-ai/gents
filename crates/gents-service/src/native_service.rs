@@ -26,6 +26,10 @@ pub const SERVICE_LABEL: &str = "ai.gents.runtime.native-e2e";
 pub const SYSTEMD_UNIT: &str = "gents-runtime.service";
 #[cfg(all(feature = "native-e2e", debug_assertions))]
 pub const SYSTEMD_UNIT: &str = "gents-runtime-native-e2e.service";
+/// The trailing `gents server` argument every definition renders, so the
+/// supervised runtime logs to the system log. A definition without it still
+/// parses, and its refresh or a managed update renders it.
+pub const SYSTEM_LOG_FLAG: &str = "--system-log";
 /// Exit status of `gents` when it refuses to open a store this build cannot
 /// read (`gents_protocol::operations::install_repair::IncompatibleStore`). Supervisors and the
 /// desktop read it from the exit record to tell that refusal apart from a
@@ -868,9 +872,10 @@ where
     /// Whether the owned definition already logs to this config's log path;
     /// true when nothing is installed.
     pub fn definition_log_current(&self) -> Result<bool> {
-        Ok(self
-            .refreshed_definition()?
-            .is_none_or(|(installed, contents)| contents.as_bytes() == installed))
+        match self.refreshed_definition()? {
+            None => Ok(true),
+            Some((installed, contents)) => definition_matches(self.platform, &installed, &contents),
+        }
     }
 
     /// Re-renders the owned definition with this config's log path, keeping the
@@ -880,7 +885,7 @@ where
         let Some((installed, contents)) = self.refreshed_definition()? else {
             return Ok(false);
         };
-        if contents.as_bytes() == installed {
+        if definition_matches(self.platform, &installed, &contents)? {
             return Ok(false);
         }
         let path = self.config.definition_path(self.platform);
@@ -1422,6 +1427,23 @@ where
     }
 }
 
+/// A managed update re-serializes a LaunchAgent through `plist`, so its bytes
+/// differ from the template render while its properties are the same; launchd
+/// reads the properties.
+fn definition_matches(
+    platform: NativeServicePlatform,
+    installed: &[u8],
+    rendered: &str,
+) -> Result<bool> {
+    Ok(match platform {
+        NativeServicePlatform::Macos => {
+            plist::Value::from_reader_xml(installed)?
+                == plist::Value::from_reader_xml(rendered.as_bytes())?
+        }
+        NativeServicePlatform::Linux => installed == rendered.as_bytes(),
+    })
+}
+
 fn render(platform: NativeServicePlatform, config: &NativeServiceConfig) -> Result<String> {
     match platform {
         NativeServicePlatform::Macos => render_launchd(config),
@@ -1533,7 +1555,7 @@ fn render_launchd(config: &NativeServiceConfig) -> Result<String> {
     // the installer's.
     let user_home = xml_path(&config.user_home, "user home")?;
     let environment = format!(
-        "\n  <key>EnvironmentVariables</key>\n  <dict><key>GENTS_SYSTEM_LOG</key><string>1</string><key>HOME</key><string>{user_home}</string>{search_path}</dict>"
+        "\n  <key>EnvironmentVariables</key>\n  <dict><key>HOME</key><string>{user_home}</string>{search_path}</dict>"
     );
     let stderr = config
         .stderr_path
@@ -1563,7 +1585,7 @@ fn render_launchd(config: &NativeServiceConfig) -> Result<String> {
 <plist version="1.0"><dict>
   <key>Label</key><string>{SERVICE_LABEL}</string>
   <key>ProgramArguments</key><array>
-    <string>{executable}</string><string>server</string><string>--home</string><string>{home}</string>
+    <string>{executable}</string><string>server</string><string>--home</string><string>{home}</string><string>{SYSTEM_LOG_FLAG}</string>
   </array>{environment}{associated_bundle}{stderr}
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
@@ -1591,7 +1613,6 @@ fn render_systemd(config: &NativeServiceConfig) -> Result<String> {
     // Set the installer-owned values in the executed process environment so
     // preserved operator directives cannot replace or remove them.
     let mut command = vec![systemd_arg("/usr/bin/env")?, "--".to_owned()];
-    command.push(systemd_arg("GENTS_SYSTEM_LOG=1")?);
     if let Some(path) = &config.search_path {
         command.push(systemd_arg(&format!("PATH={}", path.to_string_lossy()))?);
     }
@@ -1599,6 +1620,7 @@ fn render_systemd(config: &NativeServiceConfig) -> Result<String> {
     command.push(systemd_arg("server")?);
     command.push(systemd_arg("--home")?);
     command.push(home);
+    command.push(systemd_arg(SYSTEM_LOG_FLAG)?);
     let stderr = config
         .stderr_path
         .as_deref()
@@ -1714,7 +1736,7 @@ fn launchd_arguments(plist: &str) -> Result<Vec<String>> {
         .collect::<Result<Vec<_>>>()?;
     if values.get(1).copied() != Some("server")
         || values.get(2).copied() != Some("--home")
-        || values.len() != 4
+        || !matches!(&values[3..], [_] | [_, SYSTEM_LOG_FLAG])
     {
         bail!("launchd definition is not a Gents foreground server invocation");
     }
@@ -1805,7 +1827,15 @@ fn systemd_home(unit: &str) -> Result<String> {
     let (_, home) = exec
         .split_once(marker)
         .context("systemd definition is not a Gents foreground server invocation")?;
-    parse_systemd_quoted(home)
+    parse_systemd_quoted(without_system_log_flag(home))
+}
+
+/// The flag follows the quoted home; quoting escapes every quote inside the
+/// home, so no home ends in this suffix.
+fn without_system_log_flag(arguments: &str) -> &str {
+    arguments
+        .strip_suffix(&format!(" \"{SYSTEM_LOG_FLAG}\""))
+        .unwrap_or(arguments)
 }
 
 fn systemd_executable(unit: &str) -> Result<String> {

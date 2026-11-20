@@ -4,127 +4,90 @@ pub const DEFAULT_HEARTBEAT: Duration = Duration::from_secs(30);
 pub const DEFAULT_SWEEP: Duration = Duration::from_secs(30);
 pub const DEFAULT_STALE_MULTIPLE: u32 = 3;
 
-/// Non-positive or unparsable values are rejected: a zero interval would panic
-/// `tokio::time::interval`.
-fn parse_ms(raw: &str) -> Option<Duration> {
-    raw.trim()
-        .parse::<u64>()
-        .ok()
-        .filter(|ms| *ms > 0)
-        .map(Duration::from_millis)
+/// Cadences of the P2P reconcile loops, built by the server from its flags.
+/// Every interval is non-zero: a zero interval panics `tokio::time::interval`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct P2pIntervals {
+    pub registry_heartbeat: Duration,
+    pub pairing_sweep: Duration,
+    pub endpoint_heartbeat: Duration,
+    pub registry_stale_after: Duration,
 }
 
-fn env_ms(key: &str) -> Option<Duration> {
-    std::env::var(key).ok().and_then(|value| parse_ms(&value))
+impl Default for P2pIntervals {
+    fn default() -> Self {
+        Self::with_overrides(None, None, None, None)
+    }
 }
 
-pub fn heartbeat_interval() -> Duration {
-    env_ms("GENTS_REGISTRY_HEARTBEAT_MS").unwrap_or(DEFAULT_HEARTBEAT)
-}
+impl P2pIntervals {
+    /// An unset endpoint heartbeat follows the registry heartbeat, and an
+    /// unset stale threshold is `DEFAULT_STALE_MULTIPLE` registry heartbeats.
+    pub fn with_overrides(
+        registry_heartbeat: Option<Duration>,
+        pairing_sweep: Option<Duration>,
+        endpoint_heartbeat: Option<Duration>,
+        registry_stale_after: Option<Duration>,
+    ) -> Self {
+        let registry_heartbeat = registry_heartbeat.unwrap_or(DEFAULT_HEARTBEAT);
+        Self {
+            registry_heartbeat,
+            pairing_sweep: pairing_sweep.unwrap_or(DEFAULT_SWEEP),
+            endpoint_heartbeat: endpoint_heartbeat.unwrap_or(registry_heartbeat),
+            registry_stale_after: registry_stale_after
+                .unwrap_or(registry_heartbeat * DEFAULT_STALE_MULTIPLE),
+        }
+    }
 
-pub fn sweep_interval() -> Duration {
-    env_ms("GENTS_PAIRING_SWEEP_MS").unwrap_or(DEFAULT_SWEEP)
-}
-
-pub fn endpoint_interval() -> Duration {
-    env_ms("GENTS_ENDPOINT_HEARTBEAT_MS").unwrap_or_else(heartbeat_interval)
-}
-
-pub fn lease_renewal_interval() -> Duration {
-    (stale_after() / DEFAULT_STALE_MULTIPLE).max(Duration::from_millis(1))
-}
-
-pub fn stale_after() -> Duration {
-    env_ms("GENTS_REGISTRY_STALE_MS")
-        .unwrap_or_else(|| heartbeat_interval() * DEFAULT_STALE_MULTIPLE)
+    pub fn lease_renewal_interval(&self) -> Duration {
+        (self.registry_stale_after / DEFAULT_STALE_MULTIPLE).max(Duration::from_millis(1))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, MutexGuard, OnceLock};
 
-    const KEYS: &[&str] = &[
-        "GENTS_REGISTRY_HEARTBEAT_MS",
-        "GENTS_PAIRING_SWEEP_MS",
-        "GENTS_ENDPOINT_HEARTBEAT_MS",
-        "GENTS_REGISTRY_STALE_MS",
-    ];
-
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
-
-    struct EnvGuard {
-        _guard: MutexGuard<'static, ()>,
-        previous: Vec<(&'static str, Option<String>)>,
-    }
-
-    impl EnvGuard {
-        fn clear() -> Self {
-            let guard = env_lock().lock().expect("env lock poisoned");
-            let previous = KEYS
-                .iter()
-                .map(|&key| {
-                    let value = std::env::var(key).ok();
-                    std::env::remove_var(key);
-                    (key, value)
-                })
-                .collect();
-            Self {
-                _guard: guard,
-                previous,
-            }
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            for (key, value) in self.previous.drain(..) {
-                match value {
-                    Some(value) => std::env::set_var(key, value),
-                    None => std::env::remove_var(key),
-                }
-            }
-        }
+    #[test]
+    fn defaults_are_the_documented_cadences() {
+        let intervals = P2pIntervals::default();
+        assert_eq!(intervals.registry_heartbeat, Duration::from_secs(30));
+        assert_eq!(intervals.pairing_sweep, Duration::from_secs(30));
+        assert_eq!(intervals.endpoint_heartbeat, Duration::from_secs(30));
+        assert_eq!(intervals.lease_renewal_interval(), Duration::from_secs(30));
+        assert_eq!(intervals.registry_stale_after, Duration::from_secs(90));
     }
 
     #[test]
-    fn defaults_and_env_overrides_are_in_milliseconds() {
-        let _env = EnvGuard::clear();
-        assert_eq!(heartbeat_interval(), Duration::from_secs(30));
-        assert_eq!(sweep_interval(), Duration::from_secs(30));
-        assert_eq!(endpoint_interval(), Duration::from_secs(30));
-        assert_eq!(lease_renewal_interval(), Duration::from_secs(30));
-        assert_eq!(stale_after(), Duration::from_secs(90));
-
-        std::env::set_var("GENTS_REGISTRY_HEARTBEAT_MS", "1250");
-        std::env::set_var("GENTS_PAIRING_SWEEP_MS", "500");
-        std::env::set_var("GENTS_ENDPOINT_HEARTBEAT_MS", "750");
-        std::env::set_var("GENTS_REGISTRY_STALE_MS", "2500");
-
-        assert_eq!(heartbeat_interval(), Duration::from_millis(1250));
-        assert_eq!(sweep_interval(), Duration::from_millis(500));
-        assert_eq!(endpoint_interval(), Duration::from_millis(750));
+    fn unset_values_derive_from_the_registry_heartbeat() {
+        let intervals = P2pIntervals::with_overrides(
+            Some(Duration::from_millis(1250)),
+            Some(Duration::from_millis(500)),
+            None,
+            None,
+        );
+        assert_eq!(intervals.pairing_sweep, Duration::from_millis(500));
+        assert_eq!(intervals.endpoint_heartbeat, Duration::from_millis(1250));
+        assert_eq!(intervals.registry_stale_after, Duration::from_millis(3750));
         assert_eq!(
-            lease_renewal_interval(),
+            intervals.lease_renewal_interval(),
+            Duration::from_millis(1250)
+        );
+    }
+
+    #[test]
+    fn explicit_values_are_used_as_given() {
+        let intervals = P2pIntervals::with_overrides(
+            Some(Duration::from_millis(1250)),
+            Some(Duration::from_millis(500)),
+            Some(Duration::from_millis(750)),
+            Some(Duration::from_millis(2500)),
+        );
+        assert_eq!(intervals.endpoint_heartbeat, Duration::from_millis(750));
+        assert_eq!(intervals.registry_stale_after, Duration::from_millis(2500));
+        assert_eq!(
+            intervals.lease_renewal_interval(),
             Duration::from_millis(2500) / DEFAULT_STALE_MULTIPLE
         );
-        assert_eq!(stale_after(), Duration::from_millis(2500));
-    }
-
-    #[test]
-    fn zero_or_garbage_override_falls_back_to_default_not_panic() {
-        assert_eq!(parse_ms("0"), None);
-        assert_eq!(parse_ms("  0 "), None);
-        assert_eq!(parse_ms(""), None);
-        assert_eq!(parse_ms("nope"), None);
-        assert_eq!(parse_ms("-5"), None);
-        assert_eq!(parse_ms("250"), Some(Duration::from_millis(250)));
-
-        let _env = EnvGuard::clear();
-        std::env::set_var("GENTS_PAIRING_SWEEP_MS", "0");
-        assert_eq!(sweep_interval(), DEFAULT_SWEEP);
     }
 }

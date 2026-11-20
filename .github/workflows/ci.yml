@@ -48,13 +48,14 @@ on:
         type: string
         default: ""
 
-# A new push to a pull request cancels its run in progress. A run of main, a
-# merge queue entry or a dispatch finishes: main's post-merge run is the only
-# run of each merged commit. GitHub keeps the newest waiting run per group.
+# A new push to a pull request or to main cancels that ref's run in progress:
+# only the newest commit's run finishes, so a burst of merges does not queue a
+# full run per commit behind the portable runners. A merge queue entry or a
+# dispatch finishes. GitHub keeps the newest waiting run per group.
 concurrency:
   # The scheduled run queues apart from main's pushes so neither replaces the other.
   group: ci-${{ github.workflow }}-${{ github.event_name == 'schedule' && 'schedule' || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
 
 env:
   # Each 32-core Studio runs at most two gents jobs concurrently. Keep eight

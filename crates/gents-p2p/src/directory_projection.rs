@@ -199,6 +199,7 @@ const DIRECTORY_SOURCE_COLLECTIONS: [&str; 3] = ["Node", "NodeReadiness", "Agent
 pub async fn run_directory_projection(
     node: Arc<EmbeddedNode>,
     source_did: String,
+    intervals: crate::p2p_reconcile::intervals::P2pIntervals,
     cancel: CancellationToken,
 ) -> Result<()> {
     if crate::peer_publication::idles(
@@ -216,7 +217,7 @@ pub async fn run_directory_projection(
         DIRECTORY_SOURCE_COLLECTIONS,
     )?;
     let mut subscription_open = true;
-    let mut interval = tokio::time::interval(crate::p2p_reconcile::intervals::sweep_interval());
+    let mut interval = tokio::time::interval(intervals.pairing_sweep);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     sweep_directory(&store, &source_did).await;

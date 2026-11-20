@@ -50,6 +50,10 @@ impl EnrollmentDecisionService {
         &self,
         command: &EnrollmentOperatorQueryCommand,
     ) -> Result<serde_json::Value> {
+        gents_store::local::document_acp::ensure_enrollment(
+            &self.node,
+            gents_store::local::document_acp::EnrollmentRequest::Pending,
+        )?;
         let now = Utc::now();
         gents_p2p::p2p_reconcile::authenticate_operator_query(self.identity.as_ref(), command, now)
             .await?;
@@ -102,10 +106,63 @@ pub enum EnrollmentStatus {
     },
 }
 
+/// Why the status offers no enrollment while no offer issuer is installed: a
+/// home that serves without an enrollment root never installs one
+/// (`Identity.NodePublication.enrollment`).
+pub fn unavailable_reason(provider: gents_store::local::document_acp::DocumentAcp) -> &'static str {
+    use gents_store::local::document_acp::{enrollment, EnrollmentAnswer, EnrollmentRequest};
+    match enrollment(provider, EnrollmentRequest::Offer) {
+        EnrollmentAnswer::Served => "runtime_not_ready",
+        EnrollmentAnswer::PeerNetworkingUnavailable => "peer_networking_unavailable",
+    }
+}
+
+/// The HTTP status of a refused enrollment request: one a home cannot serve
+/// at all is not a malformed request.
+pub fn refusal_status(error: &anyhow::Error) -> axum::http::StatusCode {
+    use gents_store::local::document_acp::DocumentAcpError;
+    match DocumentAcpError::in_chain(error.as_ref()) {
+        Some(DocumentAcpError::TransportGrantsAwaitProvider) => {
+            axum::http::StatusCode::NOT_IMPLEMENTED
+        }
+        _ => axum::http::StatusCode::BAD_REQUEST,
+    }
+}
+
 pub fn empty_issuer_handle() -> EnrollmentOfferIssuerHandle {
     Arc::new(RwLock::new(None))
 }
 
 pub fn empty_decision_service_handle() -> EnrollmentDecisionServiceHandle {
     Arc::new(RwLock::new(None))
+}
+
+#[cfg(test)]
+mod tests {
+    use gents_store::local::document_acp::{DocumentAcp, DocumentAcpError};
+
+    /// Lean `Identity.NodePublication.a_vera_home_refuses_every_enrollment_request`
+    /// and `a_home_on_the_node_store_enrolls_as_before`, as the runtime's HTTP
+    /// surface reports them.
+    #[test]
+    fn a_vera_home_reports_enrollment_unavailable_and_a_local_home_as_before() {
+        assert_eq!(
+            super::unavailable_reason(DocumentAcp::Vera),
+            "peer_networking_unavailable"
+        );
+        assert_eq!(
+            super::unavailable_reason(DocumentAcp::Local),
+            "runtime_not_ready"
+        );
+        let refused = anyhow::Error::new(DocumentAcpError::TransportGrantsAwaitProvider)
+            .context("deciding an enrollment request");
+        assert_eq!(
+            super::refusal_status(&refused),
+            axum::http::StatusCode::NOT_IMPLEMENTED
+        );
+        assert_eq!(
+            super::refusal_status(&anyhow::anyhow!("operator command signature is invalid")),
+            axum::http::StatusCode::BAD_REQUEST
+        );
+    }
 }

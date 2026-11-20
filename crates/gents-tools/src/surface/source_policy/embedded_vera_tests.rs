@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::test_support::vera_test_home::{as_user, client_key, home, serve, Home};
 use gents_protocol::delegation_audience::{DelegationAudience, ReportedDelegationAudience};
 use gents_protocol::operations::install_repair::IncompatibleStoreKind;
 use gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID;
@@ -13,47 +14,11 @@ use gents_store::identity::{KeyIdentity, NodeIdentity};
 use gents_store::local::backend_protection::{
     BackendProtectionError, FreshBackendStore, ProtectedBackendStore,
 };
-use gents_store::local::document_acp::{DocumentAcp, DocumentAcpError, HttpEdge};
-use gents_store::local::home::{self, StoreLock};
-use gents_store::local::store_key::StoreKey;
+use gents_store::local::document_acp::{DocumentAcp, DocumentAcpError};
 
 const RESOURCE: &str = "secret_configuration";
 const DOCUMENT: &str = "bae-embedded-vera-owner-only";
 const AGENT_DOCUMENT: &str = "bae-embedded-vera-agent-owned";
-
-struct Home {
-    data: std::path::PathBuf,
-    lock: StoreLock,
-    key: StoreKey,
-    node: Arc<dyn NodeIdentity>,
-    /// The init User, who owns the home's node access control.
-    owner: identity::Did,
-}
-
-async fn home(root: &Path, name: &str) -> anyhow::Result<Home> {
-    let home = root.join(name);
-    let data = home.join("data");
-    let (lock_home, lock_data, key_path, owner_path) = (
-        home.clone(),
-        data.clone(),
-        home.join("node.key"),
-        home.join("owner.key"),
-    );
-    let (lock, node, owner) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-        std::fs::create_dir_all(&lock_data)?;
-        let node: Arc<dyn NodeIdentity> = Arc::new(KeyIdentity::load_or_create(key_path, None)?);
-        let owner = identity::Did::new(KeyIdentity::load_or_create(owner_path, None)?.did())?;
-        Ok((home::lock_store(&lock_home, &lock_data)?, node, owner))
-    })
-    .await??;
-    Ok(Home {
-        data,
-        lock,
-        key: StoreKey::from_host(&[7; 32])?,
-        node,
-        owner,
-    })
-}
 
 async fn start(
     home: &Home,
@@ -330,65 +295,6 @@ async fn an_opted_in_home_is_refused_under_another_deployment_identity() -> anyh
 }
 
 const TASK_RESOURCE: &str = "configuration";
-
-async fn serve(
-    home: &Home,
-    document_acp: DocumentAcp,
-) -> anyhow::Result<(Arc<defra_node::Node>, String)> {
-    let (listener, address) = tokio::task::spawn_blocking(|| -> std::io::Result<_> {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-        let address = listener.local_addr()?;
-        Ok((listener, address))
-    })
-    .await??;
-    let (node, _admission) = ProtectedBackendStore::open(&home.data, &home.key, &home.lock)
-        .await?
-        .preflight(&home.key, &home.node, document_acp)
-        .await?
-        .start_node_with_projection(
-            &home.key,
-            home.node.clone(),
-            {
-                let http = defra_node::HttpConfig::with_listener(listener)?.with_router_transform(
-                    Arc::new({
-                        let edge = HttpEdge::new(document_acp, home.node.did());
-                        move |router| edge.wrap(router)
-                    }),
-                );
-                move |builder: defra_node::NodeBuilder| builder.with_http(http)
-            },
-            Arc::new(crate::surface::ToolCeiling::meta_only()),
-            Vec::new(),
-            &gents_session::test_support::no_lifecycle_plugins(),
-        )
-        .await?;
-    Ok((node, format!("http://{address}/api/v0/graphql")))
-}
-
-/// A User whose key this process holds only in the capability: it is never
-/// registered where DefraDB could sign with it.
-async fn client_key(root: &Path, name: &str) -> anyhow::Result<ClientSigningCapability> {
-    let path = root.join(name);
-    let raw = tokio::task::spawn_blocking(move || {
-        gents_store::identity::load_or_create_file_identity(&path)
-    })
-    .await??;
-    Ok(ClientSigningCapability::from_ed25519_key(
-        &raw.private_key_bytes(),
-    )?)
-}
-
-fn as_user(
-    url: &str,
-    user: &ClientSigningCapability,
-    reported: ReportedDelegationAudience,
-) -> anyhow::Result<ConfigAccess> {
-    Ok(ConfigAccess::Graphql(
-        GraphqlEndpoint::as_principal(url, user.did())
-            .with_client_signing_capability(user.clone())?
-            .with_reported_delegation_audience(reported)?,
-    ))
-}
 
 async fn create_task(access: &ConfigAccess, task: &str) -> anyhow::Result<String> {
     let created = access
@@ -758,11 +664,21 @@ async fn a_client_signed_create_in_the_runtime_process_on_the_node_store_is_unch
     Ok(())
 }
 
+mod client_request;
 mod configuration_readers;
+mod enrollment_root;
 mod heartbeats;
+mod in_txn;
+mod latency;
 mod learned_audience;
+mod managers;
 mod owed;
+mod owner_staged;
+mod parallel_owed;
 mod publication;
+mod quickstart;
+mod rebinding;
 mod restart;
 mod stored_create;
 mod stored_edit;
+mod user_apply;

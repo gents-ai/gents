@@ -55,6 +55,7 @@ struct BackgroundToolRegistryInner {
     tools: RapidHashMap<String, Arc<dyn ToolDyn>>,
     allowlist: Vec<String>,
     timeouts: gents_tools::surface::BackgroundTimeouts,
+    limit: gents_protocol::job::BackgroundLimit,
 }
 
 impl BackgroundToolRegistry {
@@ -79,6 +80,7 @@ impl BackgroundToolRegistry {
                 tools: registry_tools,
                 allowlist,
                 timeouts: Default::default(),
+                limit: Default::default(),
             }),
         }
     }
@@ -93,6 +95,7 @@ impl BackgroundToolRegistry {
         Self {
             inner: Arc::new(BackgroundToolRegistryInner {
                 timeouts: config.timeouts.clone(),
+                limit: config.limit,
                 ..inner
             }),
         }
@@ -100,6 +103,11 @@ impl BackgroundToolRegistry {
 
     pub(crate) fn timeouts(&self) -> &gents_tools::surface::BackgroundTimeouts {
         &self.inner.timeouts
+    }
+
+    /// The Agent's resolved Tools `host.max_background_tool_calls`.
+    pub(crate) fn limit(&self) -> gents_protocol::job::BackgroundLimit {
+        self.inner.limit
     }
 
     pub(crate) fn get(&self, tool_name: &str) -> Option<Arc<dyn ToolDyn>> {
@@ -1494,7 +1502,7 @@ impl DefraSessionHook {
                     && recorded_arguments == args,
                 "plugin effect dispatch does not match its admitted input"
             );
-            return Ok(lifecycle);
+            return Ok(lifecycle.with_background_limit(self.background_tool_registry.limit()));
         }
         let registered = self
             .state
@@ -1556,7 +1564,8 @@ impl DefraSessionHook {
             deadline_at,
             await_mode,
         )?
-        .with_selected_tool_identity(selected))
+        .with_selected_tool_identity(selected)
+        .with_background_limit(self.background_tool_registry.limit()))
     }
 
     #[cfg(any(test, feature = "test-fixtures"))]

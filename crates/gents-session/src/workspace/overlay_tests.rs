@@ -336,7 +336,8 @@ fn empty_bound_overlay_does_not_live_walk_writer_tree() {
     assert!(crate::workspace::instruction_body_for_request(
         frozen,
         Some(&nested),
-        Some(&placement_path)
+        Some(&placement_path),
+        gents_documents::tool_limits::DEFAULT_MAX_INSTRUCTION_CHARS,
     )
     .is_none());
 
@@ -344,10 +345,22 @@ fn empty_bound_overlay_does_not_live_walk_writer_tree() {
         super::frozen_instruction_manifest_from_overlay(None),
         Some(&nested),
         Some(&placement_path),
+        gents_documents::tool_limits::DEFAULT_MAX_INSTRUCTION_CHARS,
     )
     .unwrap();
     assert!(live.contains("live-writer-instructions"));
     assert!(live.contains("nested-live-instructions"));
+
+    let bounded = crate::workspace::instruction_body_for_request(
+        None,
+        Some(&nested),
+        Some(&placement_path),
+        "live-writer".len(),
+    )
+    .unwrap();
+    assert!(bounded.contains("live-writer"));
+    assert!(!bounded.contains("live-writer-instructions"));
+    assert!(!bounded.contains("nested-live-instructions"));
 }
 
 #[test]

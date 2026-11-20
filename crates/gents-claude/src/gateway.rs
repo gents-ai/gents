@@ -30,8 +30,6 @@ pub const REQUEST_TIMEOUT_MS: u64 = 10_000;
 pub const DEFAULT_INTERVAL_SECS: u64 = 5;
 /// Seconds added to the interval after a `slow_down`.
 pub const SLOW_DOWN_SECS: u64 = 5;
-/// A token is refreshed once it is this close to expiry (`$K`).
-pub const REFRESH_LEAD_MS: u64 = 300_000;
 /// Longest email kept for display, in characters.
 pub const EMAIL_CAP: usize = 254;
 

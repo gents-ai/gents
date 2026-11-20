@@ -10,6 +10,7 @@ type InferenceExecution @policy(id: "d323c1bbd2491661b9fbe4667b64d6d7a596f4ddc57
     stream_batch_ms: Int
     stream_liveness_timeout_secs: Int
     provider_idle_timeout_secs: Int
+    title_timeout_secs: Int
     deadline_duration_secs: Int
     retry_policy_id: String @index
     tags: [String!]

@@ -37,6 +37,10 @@ stream_liveness_timeout_secs?: number | null,
  */
 provider_idle_timeout_secs?: number | null,
 /**
+ * Title-generation attempt timeout; default 10s.
+ */
+title_timeout_secs?: number | null,
+/**
  * Overall claimed-request duration, including tools; default 86,400s.
  */
 deadline_duration_secs?: number | null, retry_policy_id?: string | null, tags?: Array<string> | null, };

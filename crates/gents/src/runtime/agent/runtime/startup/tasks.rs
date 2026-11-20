@@ -368,12 +368,14 @@ pub(super) fn spawn_node_tasks(
     let enrollment_node = agent.node.clone();
     let enrollment_identity = agent.runtime_node_arc().identity.clone();
     let enrollment_cancel = cancel.child_token();
+    let enrollment_intervals = agent.p2p_intervals;
     background_tasks.spawn(async move {
         BackgroundTaskResult::EnrollmentReconcile(
             gents_p2p::p2p_reconcile::run_enrollment_reconciler(
                 enrollment_node,
                 enrollment_identity,
                 enrollment_owner,
+                enrollment_intervals,
                 enrollment_cancel,
             )
             .await,
@@ -384,12 +386,14 @@ pub(super) fn spawn_node_tasks(
     let pairing_identity = agent.runtime_node_arc().identity.clone();
     let pairing_enrollment = enrollment_handle.clone();
     let pairing_cancel = cancel.child_token();
+    let pairing_intervals = agent.p2p_intervals;
     background_tasks.spawn(async move {
         BackgroundTaskResult::PairingReconcile(
             gents_p2p::p2p_reconcile::run_pairing_reconciler(
                 pairing_node,
                 pairing_identity,
                 pairing_enrollment,
+                pairing_intervals,
                 pairing_cancel,
             )
             .await,
@@ -399,12 +403,15 @@ pub(super) fn spawn_node_tasks(
     let registry_node = agent.node.clone();
     let registry_node_did = agent.node_did().to_string();
     let registry_cancel = cancel.child_token();
+    let registry_network_id = agent.p2p_network_id.clone();
+    let registry_intervals = agent.p2p_intervals;
     background_tasks.spawn(async move {
         BackgroundTaskResult::RegistryHeartbeat(
             gents_p2p::p2p_reconcile::run_registry_heartbeat(
                 registry_node,
                 registry_node_did,
-                gents_p2p::p2p_reconcile::resolve_network_id(),
+                registry_network_id,
+                registry_intervals,
                 registry_cancel,
             )
             .await,
@@ -414,6 +421,7 @@ pub(super) fn spawn_node_tasks(
     let endpoint_node = agent.node.clone();
     let endpoint_identity = agent.runtime_node_arc().identity.clone();
     let endpoint_cancel = cancel.child_token();
+    let endpoint_intervals = agent.p2p_intervals;
     let advertised_graphql_url = agent.advertised_graphql_url.clone();
     background_tasks.spawn(async move {
         BackgroundTaskResult::EndpointHeartbeat(
@@ -421,6 +429,7 @@ pub(super) fn spawn_node_tasks(
                 endpoint_node,
                 endpoint_identity,
                 advertised_graphql_url,
+                endpoint_intervals,
                 endpoint_cancel,
             )
             .await,
@@ -431,12 +440,14 @@ pub(super) fn spawn_node_tasks(
     let session_command_identity = agent.runtime_node_arc().identity.clone();
     let session_command_agents = active_snapshot_rx.clone();
     let session_command_cancel = cancel.child_token();
+    let session_command_sweep = agent.p2p_intervals.pairing_sweep;
     background_tasks.spawn(async move {
         BackgroundTaskResult::SessionCommandReconcile(
             crate::runtime::agent::session_commands::run_session_command_reconciler_with_agents(
                 session_command_node,
                 session_command_identity,
                 Some(session_command_agents),
+                session_command_sweep,
                 session_command_cancel,
             )
             .await,
@@ -465,6 +476,7 @@ pub(super) fn spawn_request_tasks(
             active_snapshot_rx.clone(),
         );
     let control_cancel = cancel.child_token();
+    let control_sweep = agent.p2p_intervals.pairing_sweep;
     background_tasks.spawn(async move {
         BackgroundTaskResult::ToolControlReconcile(
             gents_toolcalls::call::control::client::run(
@@ -472,7 +484,7 @@ pub(super) fn spawn_request_tasks(
                 control_node_did,
                 control_executions,
                 control_agents,
-                gents_p2p::p2p_reconcile::intervals::sweep_interval(),
+                control_sweep,
                 control_cancel,
             )
             .await,
@@ -482,11 +494,13 @@ pub(super) fn spawn_request_tasks(
     let directory_node = agent.node.clone();
     let directory_source_did = agent.node_did().to_string();
     let directory_cancel = cancel.child_token();
+    let directory_intervals = agent.p2p_intervals;
     background_tasks.spawn(async move {
         BackgroundTaskResult::DirectoryProjection(
             gents_p2p::directory_projection::run_directory_projection(
                 directory_node,
                 directory_source_did,
+                directory_intervals,
                 directory_cancel,
             )
             .await,
@@ -557,6 +571,7 @@ pub(super) fn spawn_control_watcher(
             .expect("checked document runtime context");
         let control_tx = reconcile_tx.clone();
         let control_backend_admission = agent.backend_admission.clone();
+        let control_system_log = agent.system_log;
         let control_runtime_status = runtime_status.clone();
         let control_shutdown = shutdown.clone();
         background_tasks.spawn(async move {
@@ -569,6 +584,7 @@ pub(super) fn spawn_control_watcher(
                         node_did: control_node_did,
                         resolve_context: control_context,
                         tool_runtime: control_tool_runtime,
+                        system_log: control_system_log,
                         proposals_tx: control_tx,
                         runtime_status: control_runtime_status,
                         health_events_rx: backend_health_events_rx,
