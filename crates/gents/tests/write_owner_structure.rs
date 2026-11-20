@@ -1458,7 +1458,6 @@ const TEST_ONLY_CRATES: &[&str] = &[
     "gents-callback-fixture-create-workspace",
     "gents-lean-contract",
     "gents-lean-vocab",
-    "gents-lens-fixture-add-label",
     "gents-workspace-hack",
 ];
 
