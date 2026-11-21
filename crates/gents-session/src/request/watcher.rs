@@ -48,6 +48,9 @@ pub struct DefraWatcher {
     backend_observations: Option<tokio::sync::watch::Receiver<()>>,
     has_parked: std::sync::atomic::AtomicBool,
     parked_wait_ms: std::sync::atomic::AtomicU64,
+    fallback: Duration,
+    #[cfg(any(test, feature = "test-fixtures"))]
+    scans: tokio::sync::watch::Sender<u64>,
 }
 
 impl DefraWatcher {
@@ -76,6 +79,9 @@ impl DefraWatcher {
             parked_wait_ms: std::sync::atomic::AtomicU64::new(
                 GOSSIP_FALLBACK_POLL.as_millis() as u64
             ),
+            fallback: GOSSIP_FALLBACK_POLL,
+            #[cfg(any(test, feature = "test-fixtures"))]
+            scans: tokio::sync::watch::Sender::new(0),
         })
     }
 
@@ -87,6 +93,20 @@ impl DefraWatcher {
         let mut watcher = Self::new(node, node_did)?;
         watcher.set_agent_identities(agents)?;
         Ok(watcher)
+    }
+
+    /// A watcher whose fallback rescan is `fallback` apart, so a fixture can
+    /// put it out of reach and see what the change events alone deliver.
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn with_fallback(mut self, fallback: Duration) -> Self {
+        self.fallback = fallback;
+        self
+    }
+
+    /// How many scans the watcher has finished.
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn scans(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.scans.subscribe()
     }
 
     pub fn with_backend_health(
@@ -111,7 +131,14 @@ impl EventDeliveryRuntimeContract for DefraWatcher {
 pub(crate) async fn wait_for_request_change(
     subscription: &mut gents_store::subscription_source::ChangeSubscription,
 ) -> Result<Option<events::DocumentChangeBatch>, tokio::time::error::Elapsed> {
-    tokio::time::timeout(GOSSIP_FALLBACK_POLL, subscription.recv()).await
+    wait_for_change_within(subscription, GOSSIP_FALLBACK_POLL).await
+}
+
+async fn wait_for_change_within(
+    subscription: &mut gents_store::subscription_source::ChangeSubscription,
+    fallback: Duration,
+) -> Result<Option<events::DocumentChangeBatch>, tokio::time::error::Elapsed> {
+    tokio::time::timeout(fallback, subscription.recv()).await
 }
 
 pub(crate) async fn wait_for_change_or_resubscribe<F>(
@@ -162,7 +189,7 @@ impl Watcher for DefraWatcher {
     async fn next_request(&mut self) -> Option<Result<AgentRequest>> {
         loop {
             if self.scan_failed {
-                match wait_for_request_change(&mut self.subscription).await {
+                match wait_for_change_within(&mut self.subscription, self.fallback).await {
                     Ok(None) => return None,
                     Ok(Some(_)) | Err(_) => self.scan_failed = false,
                 }
@@ -170,7 +197,10 @@ impl Watcher for DefraWatcher {
             let now = Instant::now();
             prune_processed_requests(&mut self.processed_request_ids, now);
 
-            match self.scan_pending_requests().await {
+            let scan = self.scan_pending_requests().await;
+            #[cfg(any(test, feature = "test-fixtures"))]
+            self.scans.send_modify(|scans| *scans += 1);
+            match scan {
                 Ok(scan) => {
                     let needs_rescan = scan.needs_rescan();
                     let PendingRequestScan { requests, failures } = scan;
@@ -207,7 +237,7 @@ impl Watcher for DefraWatcher {
                     .load(std::sync::atomic::Ordering::Relaxed),
             );
             let batch = match tokio::select! {
-                result = wait_for_request_change(&mut self.subscription) => result,
+                result = wait_for_change_within(&mut self.subscription, self.fallback) => result,
                 _ = tokio::time::sleep(parked_wait), if watch_health => continue,
                 result = async {
                     match self.backend_observations.as_mut() {

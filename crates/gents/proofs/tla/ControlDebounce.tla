@@ -9,10 +9,14 @@ EXTENDS Naturals
 \* (access changes on a Vera home, unrelated to control documents). Each wake
 \* schedules the reconcile; the timer fires at its deadline.
 \*
-\* Safeguard, removed by one constant:
-\*   Uncapped  each wake schedules the reconcile `Delay` after itself alone.
+\* Wakes stop at `Horizon`; time goes on while a reconcile is pending.
+\*
+\* Safeguard and premise, each removed by one constant:
+\*   Uncapped      each wake schedules the reconcile `Delay` after itself alone;
+\*   TimerStalls   the runtime does not run the watcher once its timer is due
+\*                 (the timer premise: an expired tokio sleep is polled).
 
-CONSTANTS Delay, Ceiling, Horizon, Uncapped
+CONSTANTS Delay, Ceiling, Horizon, Uncapped, TimerStalls
 
 \* Lean `ControlDebounce.due`.
 Due(first, now) ==
@@ -38,7 +42,7 @@ Wake ==
 
 \* Time moves on only up to a pending deadline: the timer is not late.
 Tick ==
-  /\ clock < Horizon
+  /\ clock < Horizon \/ pending
   /\ ~pending \/ clock < due
   /\ clock' = clock + 1
   /\ UNCHANGED <<pending, first, due, reconciled>>
@@ -50,9 +54,13 @@ Fire ==
   /\ UNCHANGED <<clock, first, due>>
 
 Next == Wake \/ Tick \/ Fire
-Spec == Init /\ [][Next]_vars
+Spec == Init /\ [][Next]_vars /\ WF_vars(Tick)
+          /\ (IF TimerStalls THEN TRUE ELSE WF_vars(Fire))
 
 \* A pending change is reconciled within `Ceiling` of its first wake, however
 \* the wakes that follow it arrive.
 NeverStarved == pending => clock <= first + Ceiling
+
+\* Every pending change is reconciled.
+Reconciled == pending ~> ~pending
 ====
