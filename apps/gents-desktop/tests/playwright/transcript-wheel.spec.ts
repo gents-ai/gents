@@ -76,8 +76,69 @@ test("a command's long output scrolls inside its own box @own-viewport", async (
   await expect
     .poll(() => box.evaluate((el) => el.scrollHeight > el.clientHeight + 100))
     .toBe(true);
-  const rect = (await box.boundingBox())!;
-  await page.mouse.move(rect.x + rect.width / 2, rect.y + 20);
+  await box.evaluate((el) => {
+    window.addEventListener(
+      "wheel",
+      (event) => {
+        if (el.contains(event.target as Node)) {
+          el.dataset.wheelLanded = "inside";
+          return;
+        }
+        const target = event.target as HTMLElement;
+        const { top, bottom, left, right } = el.getBoundingClientRect();
+        el.dataset.wheelLanded = JSON.stringify({
+          x: event.clientX,
+          y: event.clientY,
+          box: { top, bottom, left, right },
+          target: `${target.tagName} ${target.dataset?.slot ?? ""}`.trim(),
+        });
+      },
+      /* not passive, so the target is read before the wheel scrolls anything */
+      { capture: true, once: true, passive: false },
+    );
+  });
+  /* the step's panel opens after the click and clips the box until it does,
+     so the point is taken once the box is under it for two frames. Nothing
+     here may scroll: a scroll the reader did not make is put back by the
+     transcript, which moves the box from under the point */
+  let measured = { x: 0, y: 0 };
+  await expect
+    .poll(
+      async () =>
+        (measured = await box.evaluate(async (el) => {
+          const read = async () => {
+            await new Promise((resolve) => requestAnimationFrame(resolve));
+            const { top, left, width } = el.getBoundingClientRect();
+            const x = left + width / 2;
+            const y = top + 20;
+            const hit = document.elementFromPoint(x, y);
+            return {
+              x,
+              y,
+              top,
+              left,
+              hit: hit
+                ? `${hit.tagName} ${(hit as HTMLElement).dataset?.slot ?? ""}`.trim()
+                : "none",
+              inside: !!hit && el.contains(hit),
+            };
+          };
+          const first = await read();
+          const second = await read();
+          return {
+            ...second,
+            held:
+              first.inside &&
+              second.inside &&
+              first.top === second.top &&
+              first.left === second.left,
+          };
+        })),
+      { timeout: 0 },
+    )
+    .toEqual(expect.objectContaining({ held: true }));
+  await page.mouse.move(measured.x, measured.y);
   await page.mouse.wheel(0, 200);
+  await expect(box).toHaveAttribute("data-wheel-landed", "inside");
   await expect.poll(() => box.evaluate((el) => el.scrollTop)).toBeGreaterThan(100);
 });

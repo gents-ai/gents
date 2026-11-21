@@ -1,0 +1,4 @@
+---- MODULE MCTranscriptScrollObservation ----
+EXTENDS TranscriptScrollObservation
+
+====
