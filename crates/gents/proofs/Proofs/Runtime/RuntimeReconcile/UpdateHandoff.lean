@@ -66,6 +66,42 @@ def statusTakesLock (phase : Phase) : Bool :=
   | .accepted | .retired | .released | .backedUp | .installed => true
   | _ => false
 
+/-- Whether a candidate's preflight may create a staged operation. `verified`
+is the digest, platform, handoff and schema checks the candidate reports.
+Keychain custody additionally needs the candidate to have read this home's
+store key with Keychain interaction disabled: a build the Keychain item does
+not trust would otherwise block on an approval dialog after the old runtime
+retired. Other custody keeps its existing preflight.
+External premise: the Keychain item's access list matches the candidate's code
+requirement, not its path, so the private staged copy decides as the file the
+service will run. -/
+def preflight (verified keychainCustody keyReadableWithoutInteraction : Bool) :
+    Option Phase :=
+  if verified && (!keychainCustody || keyReadableWithoutInteraction) then some .staged
+  else none
+
+theorem unreadable_keychain_never_staged (verified : Bool) :
+    preflight verified true false = none := by
+  simp [preflight]
+
+theorem other_custody_unchanged (verified readable : Bool) :
+    preflight verified false readable = (if verified then some .staged else none) := by
+  cases verified <;> simp [preflight]
+
+/-- Registration starts only from the phase preflight admitted: a refused
+candidate has no receipt and so no registration. -/
+def registerAfterPreflight (verified keychainCustody keyReadable : Bool) : Option Phase :=
+  (preflight verified keychainCustody keyReadable).bind fun phase => step phase (.register true)
+
+theorem rejected_preflight_cannot_register (verified keychain readable : Bool)
+    (h : preflight verified keychain readable = none) :
+    registerAfterPreflight verified keychain readable = none := by
+  simp [registerAfterPreflight, h]
+
+theorem unreadable_keychain_cannot_register (verified : Bool) :
+    registerAfterPreflight verified true false = none := by
+  simp [registerAfterPreflight, preflight]
+
 /-- A different executable may migrate before readiness; it is never rolled
 back after a startup attempt or publication of its service definition: a
 reboot/external start can open that definition after helper death. Reconfiguration of the identical digest may be
