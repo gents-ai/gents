@@ -470,28 +470,38 @@ def with_event(event, run):
 class VeraTests(unittest.TestCase):
     def test_each_named_crate_has_the_feature_and_the_tests_its_filter_names(self):
         metadata = gate.workspace_metadata()
-        for package, test_filter in gate.VERA_TESTS.items():
+        for package, (flags, test_filter) in gate.VERA_TESTS.items():
             info = next(entry for entry in metadata["packages"] if entry["name"] == package)
             self.assertIn("vera", info["features"], package)
-            lib = next(target for target in info["targets"] if "lib" in target["kind"])
-            module = Path(lib["src_path"]).parent.joinpath(*test_filter.strip(":").split("::"))
-            self.assertTrue(module.with_suffix(".rs").is_file() or module.is_dir(), test_filter)
+            if flags == ("--lib",):
+                lib = next(target for target in info["targets"] if "lib" in target["kind"])
+                module = Path(lib["src_path"]).parent.joinpath(*test_filter.strip(":").split("::"))
+                self.assertTrue(module.with_suffix(".rs").is_file() or module.is_dir(), test_filter)
+                continue
+            self.assertEqual(flags[0], "--test", package)
+            test = next(target for target in info["targets"]
+                        if "test" in target["kind"] and target["name"] == flags[1])
+            sources = "\n".join(path.read_text() for path in Path(test["src_path"]).parent.glob("*.rs"))
+            for module in test_filter.strip(":").split("::"):
+                self.assertRegex(sources, rf"\bmod {module};", test_filter)
 
     def test_the_groups_holding_the_crates_run_their_vera_tests(self):
         selection = with_event("push", lambda: select(everything=True))
         vera = {entry["job"]: entry["vera"] for entry in selection["matrix"]}
         self.assertEqual(vera.pop("test:store"), "gents-store")
         self.assertEqual(vera.pop("test:session"), "gents-tools gents-toolcalls")
+        self.assertEqual(vera.pop("test:cli"), "gents-cli")
         self.assertEqual(set(vera.values()), {""})
 
     def test_the_archive_runs_the_vera_tests_of_the_crates_it_holds(self):
         for count in (1, 3):
             selection = with_event("merge_group", lambda: sharded(count, everything=True))
-            self.assertEqual(selection["archives"][0]["vera"], "gents-store gents-tools gents-toolcalls")
+            self.assertEqual(selection["archives"][0]["vera"],
+                             "gents-store gents-tools gents-toolcalls gents-cli")
         draft = with_event("push", lambda: sharded(1, "crates/gents-store/src/graphql.rs", tier="draft"))
         self.assertEqual(draft["archives"][0]["vera"], "gents-store")
         client = with_event("push", lambda: sharded(1, "crates/gents-cli/src/lib.rs"))
-        self.assertEqual(client["archives"][0]["vera"], "")
+        self.assertEqual(client["archives"][0]["vera"], "gents-cli")
 
     def test_a_pull_request_leaves_them_to_the_merge_queue(self):
         self.assertEqual(with_event("pull_request", lambda: sharded(1, everything=True))["archives"][0]["vera"], "")
@@ -513,22 +523,25 @@ class VeraTests(unittest.TestCase):
                 mock.patch.object(gate, "results", []), contextlib.redirect_stdout(io.StringIO()):
             os.environ.pop("GITHUB_ACTIONS", None)
             gate.run_build(selection, "portable")
-        self.assertEqual(len(calls), 2)
-        archive, vera = calls
+        self.assertEqual(len(calls), 3)
+        archive, vera, cli = calls
         self.assertEqual(archive[0], "archive")
         self.assertNotIn("vera", " ".join(archive))
         self.assertEqual(vera[:9], ["run", "-p", "gents-store", "-p", "gents-tools", "-p", "gents-toolcalls", "--lib",
                                     "--features"])
         self.assertEqual(vera[9], "gents-store/vera,gents-tools/vera,gents-toolcalls/vera")
-        filterset = vera[vera.index("-E") + 1]
+        self.assertEqual(cli[:6], ["run", "-p", "gents-cli", "--test", "integration", "--features"])
+        self.assertEqual(cli[6], "gents-cli/vera")
+        filtersets = vera[vera.index("-E") + 1] + cli[cli.index("-E") + 1]
         for package in entry["vera"].split():
-            self.assertIn(f"(binary_id(={package}) & test(~{gate.VERA_TESTS[package]}))", filterset)
+            target, test_filter = gate.VERA_TESTS[package]
+            self.assertIn(f"(binary_id(={gate.binary_id(package, target)}) & test(~{test_filter}))", filtersets)
 
     def test_they_wait_for_the_lean_contract(self):
         selection = with_event("push", lambda: sharded(3, everything=True))
         tests = {package: (1, 0) for package in selection["archives"][0]["packages"].split()
                  if package not in gate.NO_TESTS}
-        for built, expected in ((True, ["archive", "run"]), (False, ["archive"])):
+        for built, expected in ((True, ["archive", "run", "run"]), (False, ["archive"])):
             contract = mock.Mock(**{"wait.return_value": built})
             calls = []
             with tempfile.TemporaryDirectory() as directory, \
