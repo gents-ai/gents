@@ -132,6 +132,7 @@ fn ensure_request_deadline_open(deadline: RequestDeadline, context: &str) -> Res
 
 pub(super) async fn render_request_context_message(
     access: &gents_store::config_client::ConfigAccess,
+    profile_model: Option<&str>,
     tool_config: &gents_tools::surface::AgentToolSurfaceConfig,
     request: &AgentRequest,
     frozen_instruction_manifest: Option<&str>,
@@ -145,7 +146,11 @@ pub(super) async fn render_request_context_message(
         tool_config.max_instruction_chars(),
     );
     Ok(
-        gents_session::request::context::request_context_body(instructions, creation)
+        gents_session::request::context::request_context_body(
+            instructions,
+            creation,
+            profile_model,
+        )
             .map(|body| Message::user(format!("<context>\n{body}\n</context>"))),
     )
 }

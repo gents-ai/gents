@@ -76,6 +76,7 @@ async fn only_a_verified_workflow_child_is_told_where_its_answer_returns() {
         rendered.push(
             super::inference::render_request_context_message(
                 &access,
+                None,
                 &tool_config,
                 &request(session_id),
                 None,
@@ -92,4 +93,20 @@ async fn only_a_verified_workflow_child_is_told_where_its_answer_returns() {
         "{rendered:?}"
     );
     assert_eq!(rendered[1..], [None, None]);
+    let with_model = super::inference::render_request_context_message(
+        &access,
+        Some("model-a"),
+        &tool_config,
+        &request("job-child"),
+        None,
+    )
+    .await
+    .expect("the context renders")
+    .map(|message| format!("{message:?}"))
+    .expect("a profile's model is named");
+    assert!(with_model.contains(WORKFLOW_RETURN), "{with_model}");
+    assert!(
+        with_model.contains("Your profile's model: model-a."),
+        "{with_model}"
+    );
 }

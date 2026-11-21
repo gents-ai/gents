@@ -198,6 +198,7 @@ where
                 .map(str::to_owned);
         let request_context_message = super::super::inference::render_request_context_message(
             &lifecycle.access()?,
+            self.agent_config.profile_model(),
             &self.tool_config,
             request,
             frozen_instruction_manifest.as_deref(),

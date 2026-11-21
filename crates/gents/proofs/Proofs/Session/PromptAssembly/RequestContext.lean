@@ -12,32 +12,48 @@ open Identity.AgentCreationReceipt (Cause)
 inductive Section where
   | instructions
   | workflowReturn
+  | profileModel
   deriving DecidableEq, Repr
 
 /-- `creation` is the cause named by the session's verified creation receipt,
-`none` when the session has none (a client opened it).
+`none` when the session has none (a client opened it). `profileModel` is
+whether the Agent runs an admitted inference profile, read per request.
 
 Decision (maintainer, 2026-11-16, gents#4067 C2): a plugin job collects its
 child's final reply itself, so a child that is not told so spends calls
 messaging a caller it may not reach. Only a verified plugin-job receipt adds
 the `workflowReturn` section; no user-authored text decides it, and
-`agent_message` keeps its reachability. -/
-def sections (instructions : Bool) (creation : Option Cause) : List Section :=
+`agent_message` keeps its reachability.
+
+Decision (maintainer, 2026-11-17, gents#4067 B4): every request names its
+profile's model. An Agent built without a profile has only a placeholder
+model, so it gets no line rather than a guess. -/
+def sections (instructions : Bool) (creation : Option Cause) (profileModel : Bool) :
+    List Section :=
   (if instructions then [.instructions] else []) ++
-    (if creation = some .pluginJob then [.workflowReturn] else [])
+    (if creation = some .pluginJob then [.workflowReturn] else []) ++
+    (if profileModel then [.profileModel] else [])
 
 theorem only_a_plugin_job_child_is_told_where_its_answer_returns
-    (instructions : Bool) (creation : Option Cause) :
-    Section.workflowReturn ∈ sections instructions creation ↔ creation = some .pluginJob := by
-  cases instructions <;> by_cases h : creation = some .pluginJob <;> simp [sections, h]
+    (instructions : Bool) (creation : Option Cause) (profileModel : Bool) :
+    Section.workflowReturn ∈ sections instructions creation profileModel ↔
+      creation = some .pluginJob := by
+  cases instructions <;> cases profileModel <;> by_cases h : creation = some .pluginJob <;>
+    simp [sections, h]
+
+theorem only_a_profile_names_a_model
+    (instructions : Bool) (creation : Option Cause) (profileModel : Bool) :
+    Section.profileModel ∈ sections instructions creation profileModel ↔ profileModel = true := by
+  cases instructions <;> cases profileModel <;> by_cases h : creation = some .pluginJob <;>
+    simp [sections, h]
 
 theorem other_sessions_keep_their_instructions_only
     (instructions : Bool) (creation : Option Cause) (h : creation ≠ some .pluginJob) :
-    sections instructions creation = if instructions then [.instructions] else [] := by
+    sections instructions creation false = if instructions then [.instructions] else [] := by
   simp [sections, h]
 
-theorem instructions_come_first (creation : Option Cause) :
-    (sections true creation).head? = some .instructions := by
+theorem instructions_come_first (creation : Option Cause) (profileModel : Bool) :
+    (sections true creation profileModel).head? = some .instructions := by
   simp [sections]
 
 /-- A plugin-job child session: created by the starting Agent `starter`,
