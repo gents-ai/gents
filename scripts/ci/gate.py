@@ -18,6 +18,7 @@ import importlib.util
 import json
 import os
 import re
+import selectors
 import shlex
 import shutil
 import signal
@@ -788,6 +789,56 @@ def sh(command, cwd=ROOT, env=None):
     return status == 0
 
 
+PIPE_DRAIN_IDLE = 3.0
+PIPE_DRAIN_CAP = 60.0
+
+
+def output_lines(process, state):
+    """`process`'s output by line until EOF. A descendant that outlives the
+    process can hold the pipe open forever, so once the process has exited the
+    read stops after PIPE_DRAIN_IDLE seconds without output, or PIPE_DRAIN_CAP
+    seconds in all, and sets state["pipe_held"]."""
+    selector = selectors.DefaultSelector()
+    selector.register(process.stdout, selectors.EVENT_READ)
+    pending = b""
+    exited_at = last_output = None
+    try:
+        while True:
+            if exited_at is None and process.poll() is not None:
+                exited_at = last_output = time.monotonic()
+            ready = selector.select(0.1)
+            now = time.monotonic()
+            chunk = os.read(process.stdout.fileno(), 65536) if ready else None
+            if chunk == b"":
+                break
+            if chunk:
+                last_output = now if exited_at is not None else None
+                pending += chunk
+                *lines, pending = pending.split(b"\n")
+                yield from (line + b"\n" for line in lines)
+            if exited_at is not None and (now - exited_at >= PIPE_DRAIN_CAP
+                                          or (not chunk and now - last_output >= PIPE_DRAIN_IDLE)):
+                state["pipe_held"] = True
+                break
+        if pending:
+            yield pending
+    finally:
+        selector.close()
+
+
+def pipe_held_verdict(process):
+    """Names and kills what still holds `process`'s output pipe."""
+    holders = subprocess.run(["ps", "-g", str(process.pid), "-o", "pid=,ppid=,command="],
+                             capture_output=True, text=True, check=False)
+    print(f"Leftover process group {process.pid}:\n{holders.stdout or '(none reported)'}", flush=True)
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    return (f"output pipe still held by a descendant after {process.pid} exited with code "
+            f"{process.returncode}")
+
+
 def cargo_test(label, arguments, harness=(), expect_tests=True, capture=True, isolate_target=False):
     """`cargo test` that fails when it runs no test or when a test hangs.
 
@@ -811,7 +862,7 @@ def cargo_test(label, arguments, harness=(), expect_tests=True, capture=True, is
              "testing": False}
 
     def read():
-        for raw in process.stdout:
+        for raw in output_lines(process, state):
             line = raw.decode("utf-8", "replace")
             sys.stdout.write(line)
             sys.stdout.flush()
@@ -849,10 +900,12 @@ def cargo_test(label, arguments, harness=(), expect_tests=True, capture=True, is
                 pass
             break
     process.wait()
-    reader.join(timeout=10)
+    reader.join()
     process.stdout.close()
     ran = state["passed"] + state["failed"]
-    if hung:
+    if state.get("pipe_held"):
+        verdict = pipe_held_verdict(process)
+    elif hung:
         verdict = f"hung after {TEST_TIMEOUT}s: {', '.join(hung)}"
     elif process.returncode != 0:
         verdict = f"exit {process.returncode}"
@@ -1181,16 +1234,22 @@ def nextest(arguments, cwd=ROOT, label=None, expect=None, extra_env=None, drop_e
     env.setdefault("RUST_MIN_STACK", "16777216")
     print(f"\n$ {shlex.join(command)}", flush=True)
     started = time.time()
-    process = subprocess.Popen(command, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    process = subprocess.Popen(command, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                               start_new_session=True)
     counts = ""
-    for raw in process.stdout:
+    state = {}
+    for raw in output_lines(process, state):
         line = raw.decode("utf-8", "replace")
         sys.stdout.write(line)
         sys.stdout.flush()
         if match := SUMMARY.match(line.rstrip()):
             counts = f"{match.group(2)} run: {match.group(3).strip()}"
     process.wait()
-    verdict = "ok" if process.returncode == 0 else f"exit {process.returncode}"
+    process.stdout.close()
+    if state.get("pipe_held"):
+        verdict = pipe_held_verdict(process)
+    else:
+        verdict = "ok" if process.returncode == 0 else f"exit {process.returncode}"
     results.append((label or shlex.join(command), verdict, counts, time.time() - started))
     if verdict != "ok":
         print(f"::error::{label}: {verdict} ({counts})", flush=True)
