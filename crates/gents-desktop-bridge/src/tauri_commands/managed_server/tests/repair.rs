@@ -31,6 +31,7 @@ fn a_reinstalled_service_runs_the_desktop_runtime_not_the_app() {
     let runtime = crate::tauri_commands::service_executable::resolve_service_executable(
         app.handle(),
         state.policy.desktop_paths.root(),
+        state.policy.service_executable.as_deref(),
     )
     .unwrap();
     let runtime = runtime.service_path();

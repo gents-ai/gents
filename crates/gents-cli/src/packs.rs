@@ -199,6 +199,7 @@ pub async fn promote(
         name,
         agent,
         registry: None,
+        javy: "javy".to_owned(),
         output: OutputFormat::Json,
     }))
     .await

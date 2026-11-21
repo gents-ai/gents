@@ -458,6 +458,7 @@ async fn next_turns_use_the_target_credentials() {
         .await
         .unwrap_or_else(|error| panic!("{agent_did}: {error:#}"));
         let bearer = crate::auth::credential::test_support::bound_bearer(
+            &fixture.node,
             &fixture.credentials["b"].credential_id,
         )
         .unwrap_or_else(|| panic!("{agent_did} did not bind B"));
@@ -465,6 +466,7 @@ async fn next_turns_use_the_target_credentials() {
     }
     assert!(
         crate::auth::credential::test_support::bound_bearer(
+            &fixture.node,
             &fixture.credentials["a"].credential_id
         )
         .is_none(),

@@ -1,16 +1,19 @@
 async fn create_user_message(
     db: &crate::support::TestDb,
-    author: (&gents_store::identity::KeyIdentity, &gents_store::config_client::ConfigAccess),
+    author: (
+        &gents_store::identity::KeyIdentity,
+        &gents_store::config_client::ConfigAccess,
+    ),
     agent_config: &ResolvedAgent,
     session_id: &str,
     content: &str,
     queued_after: Option<&str>,
     retry_parent: Option<&AgentRequest>,
 ) -> AgentRequest {
+    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
     use gents_session::request::lifecycle::{
         ExecutionOrigin, RequestIdentity, RequestSigner, RequestSpec, RetryLink,
     };
-    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
     let (user, client) = author;
     let request_id = uuid::Uuid::new_v4().to_string();
     let mut spec = RequestSpec::new(
@@ -191,16 +194,17 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
         }
         if persist_checkpoint {
             let commit_cid = first.request_commit_cid().unwrap().to_owned();
-            let boundary = gents_session::session::provider_context_reduction::capture_source_boundary(
-                &agent_access,
-                &session_id,
-                agent_config.node_did(),
-                Some(user.did()),
-                &head.doc_id,
-                &commit_cid,
-            )
-            .await
-            .unwrap();
+            let boundary =
+                gents_session::session::provider_context_reduction::capture_source_boundary(
+                    &agent_access,
+                    &session_id,
+                    agent_config.node_did(),
+                    Some(user.did()),
+                    &head.doc_id,
+                    &commit_cid,
+                )
+                .await
+                .unwrap();
             let prefix = vec![gents_inference::llm::message::Message::user(
                 "an earlier, larger history",
             )];
@@ -208,11 +212,12 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
                 gents_inference::llm::message::Message::user(head.content.clone()),
                 gents_inference::llm::message::Message::user(folded.content.clone()),
             ];
-            let row = |_| gents_session::session::provider_context_reduction::ReplayRowAssociation {
-                source: None,
-                physical_header: None,
-                block_indices: Vec::new(),
-            };
+            let row =
+                |_| gents_session::session::provider_context_reduction::ReplayRowAssociation {
+                    source: None,
+                    physical_header: None,
+                    block_indices: Vec::new(),
+                };
             let signer = agent_config.agent_identity.managed_agent_signer().unwrap();
             gents_session::session::provider_context_reduction::persist(
                 &node,
@@ -278,7 +283,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
             &[],
         );
         let preamble = prompt_builder.preamble().to_string();
-        let model = wake_input_model(None);
+        let model = wake_input_model(None, None);
         let request_identity = agent_config.node_identity().clone();
         let mut daemon = AgentDaemon::new(AgentDaemonInit {
             node: node.clone(),
@@ -414,9 +419,9 @@ async fn scripted_daemon(
 }
 
 /// Lean `SessionQueue.FoldCases.retrySelectionCases`: whether the retry
-/// resumes and answers the selected message comes from the Lean cases; a
-/// message the retry does not answer stays queued and runs exactly once on
-/// its own turn.
+/// resumes, answers the selected message and answers a steer arriving during
+/// its provider call comes from the Lean cases; input the retry does not
+/// answer is answered once, by the next turn.
 #[tokio::test]
 async fn generated_retry_selection_cases_bind_to_the_daemon() {
     for case in gents_lean_vocab::families::fold_queue_contracts_retry_selection::cases() {
@@ -427,6 +432,7 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
             "{}: one queued message",
             input.name
         );
+        assert_eq!(input.arrived.len(), 1, "{}: one arrival", input.name);
         let (db, user, client, agent_config) = held_daemon_fixture("daemon-retry-selection").await;
         let node = db.node.clone();
         let session_id = uuid::Uuid::new_v4().to_string();
@@ -503,13 +509,51 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
         )
         .await;
         let queued_key = gents_session::request::lifecycle::queue::folded_input_key(&queued.doc_id);
-        let model = wake_input_model(None);
+        let (entered, release) = (
+            Arc::new(tokio::sync::Notify::new()),
+            Arc::new(tokio::sync::Notify::new()),
+        );
+        let model = wake_input_model(None, Some((entered.clone(), release.clone())));
         let mut daemon = scripted_daemon(&node, &agent_config, &model).await;
         let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-        daemon
-            .process_request(retry.clone(), shutdown_rx.clone())
-            .await
-            .unwrap();
+        let (finished, finished_rx) = tokio::sync::oneshot::channel::<()>();
+        let (processed, arrival) = tokio::join!(
+            async {
+                let processed = daemon
+                    .process_request(retry.clone(), shutdown_rx.clone())
+                    .await;
+                drop(finished);
+                processed
+            },
+            async {
+                let reached =
+                    tokio::time::timeout(gents_store::test_support::STALL_CEILING, async {
+                        tokio::select! {
+                            () = entered.notified() => true,
+                            _ = finished_rx => false,
+                        }
+                    })
+                    .await
+                    .expect("the retry's provider call starts");
+                if !reached {
+                    return None;
+                }
+                let arrival = create_user_message(
+                    &db,
+                    (&user, &client),
+                    &agent_config,
+                    &session_id,
+                    "and add the release notes",
+                    Some(&retry.request_id),
+                    None,
+                )
+                .await;
+                release.notify_one();
+                Some(arrival)
+            }
+        );
+        processed.unwrap();
+        let arrival = arrival.expect("the retry reaches its provider call");
         let retry_diagnostic = client.execute(
             &format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state failure_reason }} }}"#,
                 gents_store::graphql::escape_graphql_string(&retry.doc_id)),
@@ -532,6 +576,31 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
             &retry.doc_id,
             &queued_key,
         ));
+        let answered_arrival =
+            retry_keys.contains(&gents_protocol::output::rows::authored_message_key(
+                &retry.doc_id,
+                &gents_session::request::lifecycle::queue::folded_input_key(&arrival.doc_id),
+            ));
+        case.check(
+            gents_lean_vocab::families::fold_queue_contracts_retry_selection::RetrySelectionOutput {
+                resume,
+                answered: if answered {
+                    input.selected.clone()
+                } else {
+                    Vec::new()
+                },
+                answered_arrival: if answered_arrival {
+                    input.arrived.clone()
+                } else {
+                    Vec::new()
+                },
+            },
+        );
+        assert!(
+            !retry_input.contains(&arrival.content),
+            "{}: the arrival was enqueued during the retry's first provider call",
+            input.name
+        );
         assert_eq!(
             retry_input.contains(&queued.content),
             answered,
@@ -545,12 +614,39 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
                 "{}",
                 input.name
             );
-            assert_eq!(wake_observations(&model).0.len(), 1, "{}", input.name);
+            assert_eq!(
+                persisted_request_state(&client, &arrival.doc_id).await,
+                gents_protocol::request_lifecycle::RequestLifecycleState::Superseded,
+                "{}",
+                input.name
+            );
+            assert_eq!(
+                persisted_request_by_doc_id(&client, &arrival.doc_id).await
+                    ["superseded_by_request_doc_id"],
+                retry.doc_id.as_str(),
+                "{}: the retry answers the arrival",
+                input.name
+            );
+            let inputs = wake_observations(&model).0;
+            assert_eq!(
+                inputs.len(),
+                2,
+                "{}: both inferences are the retry's",
+                input.name
+            );
+            assert!(inputs[1].contains(&arrival.content), "{}", input.name);
         } else {
             assert_eq!(
                 persisted_request_state(&client, &queued.doc_id).await,
                 gents_protocol::request_lifecycle::RequestLifecycleState::Pending,
                 "{}: the unanswered message stays queued",
+                input.name
+            );
+            assert_eq!(wake_observations(&model).0.len(), 1, "{}", input.name);
+            assert_eq!(
+                persisted_request_state(&client, &arrival.doc_id).await,
+                gents_protocol::request_lifecycle::RequestLifecycleState::Pending,
+                "{}: the unanswered arrival stays queued",
                 input.name
             );
             daemon
@@ -567,21 +663,25 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
             assert_eq!(
                 inputs.len(),
                 2,
-                "{}: it runs exactly once, on its own turn",
+                "{}: the next turn answers both in one inference",
                 input.name
             );
             assert!(inputs[1].contains(&queued.content), "{}", input.name);
+            assert!(inputs[1].contains(&arrival.content), "{}", input.name);
+            assert_eq!(
+                persisted_request_state(&client, &arrival.doc_id).await,
+                gents_protocol::request_lifecycle::RequestLifecycleState::Superseded,
+                "{}",
+                input.name
+            );
+            assert_eq!(
+                persisted_request_by_doc_id(&client, &arrival.doc_id).await
+                    ["superseded_by_request_doc_id"],
+                queued.doc_id.as_str(),
+                "{}: the next turn answers the arrival",
+                input.name
+            );
         }
         node.shutdown().await.expect("node shutdown");
-        case.check(
-            gents_lean_vocab::families::fold_queue_contracts_retry_selection::RetrySelectionOutput {
-                resume,
-                answered: if answered {
-                    input.selected.clone()
-                } else {
-                    Vec::new()
-                },
-            },
-        );
     }
 }

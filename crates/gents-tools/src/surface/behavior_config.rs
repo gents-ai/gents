@@ -396,6 +396,7 @@ impl AgentToolSurfaceConfig {
                 },
                 registry_url: None,
                 plugin_builder: None,
+                ux_preview_assets: None,
             },
             agent_policy,
             ceiling_policy,

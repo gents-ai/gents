@@ -559,6 +559,15 @@ See `../README.md` for how this fits the broader formal-verification model.
   the answer, a reset or a failed keepalive. `WedgedProgress` (a published
   commit step) and `DroppedAnswerQueried` (a transaction outcome query) are
   green designs DefraDB does not offer yet.
+- `RuntimeStatusLiveness` — `gents status` reporting a serving runtime's
+  liveness on a loaded host. The runtime's `/status` reads the store under
+  its probe budget and answers; the CLI composes the runtime's liveness, else
+  its own store read with the executors the runtime reported. Green waits for
+  the answer, and an answer whose store read missed the budget still reports
+  the in-memory native executors. RED: `ClientWindow` (the CI failure: a CLI
+  total timeout, even one longer than the budget, loses a live runtime's
+  answer to a slow host), `BudgetedExecutors` (executors reported only inside
+  the budgeted liveness are withheld when the store read is slow).
 - `OfflineAccessRouting` — a CLI command against a home another process
   holds: a server claims the store, binds its port and publishes
   `runtime.json` only once ready; the command routes to a published runtime
