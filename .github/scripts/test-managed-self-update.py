@@ -235,8 +235,10 @@ def main():
         assert receipt["phase"] == "accepted", receipt
         assert "request_id" not in receipt and "session_id" not in receipt, receipt
         assert ready() and service_pid() == initial_pid, "updater retired a busy initiating turn"
+        # The busy-timeout helper may already have failed and be retiring its unit.
         duplicate = json.loads(cli(*update_args).stdout)
-        assert duplicate["operation_id"] == operation and duplicate["phase"] == "accepted"
+        phases = ("accepted", "failed") if args.scenario == "busy-timeout" else ("accepted",)
+        assert duplicate["operation_id"] == operation and duplicate["phase"] in phases, duplicate
         if args.scenario != "busy-timeout":
             # A supervisor respawn must wait on the updater's reservation,
             # rather than trying to reopen the store and claim work.
@@ -249,6 +251,10 @@ def main():
                 contender.wait(timeout=10)
         if args.scenario == "busy-timeout":
             eventually(lambda: read_receipt()["phase"] == "failed", 20)
+            eventually(lambda: service_pid(helper=True) is None, 20)
+            duplicate = json.loads(cli(*update_args).stdout)
+            assert duplicate["operation_id"] == operation and duplicate["phase"] == "failed", duplicate
+            assert service_pid(helper=True) is None, "a duplicate of a failed update registered its helper"
             assert ready() and service_pid() == initial_pid, "busy timeout disrupted the runtime"
             release.set()
             succeeded = True

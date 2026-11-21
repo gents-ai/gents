@@ -166,8 +166,11 @@ where
             execute::validate_live(&plan).await?;
             let copy = plan.clone();
             tokio::task::spawn_blocking(move || {
-                NativeServiceManager::new(service_config(&copy)?)?
-                    .register_updater(&operation_dir(&copy.home, copy.id), copy.id)
+                let directory = operation_dir(&copy.home, copy.id);
+                register_unless_helper_runs(&directory, Registrant::Submitter, || {
+                    NativeServiceManager::new(service_config(&copy)?)?
+                        .register_updater(&directory, copy.id)
+                })
             })
             .await??;
             wait_for_helper(&plan, Duration::from_secs(20)).await?;
@@ -203,7 +206,7 @@ where
         let copy = plan.clone();
         tokio::task::spawn_blocking(move || {
             let directory = operation_dir(&copy.home, copy.id);
-            register_unless_helper_runs(&directory, || {
+            register_unless_helper_runs(&directory, Registrant::Submitter, || {
                 NativeServiceManager::new(service_config(&copy)?)?
                     .register_updater(&directory, copy.id)
             })
@@ -269,18 +272,68 @@ where
 
 /// A running helper holds its operation's lock from start through its terminal
 /// cleanup, and owns its registration until then: that cleanup removes the job
-/// definition, so re-registering beside it races the removal (`systemctl start`
-/// of a unit just deleted). Re-register only an operation whose helper is not
-/// running, holding the lock while doing so. Returns whether it registered.
+/// definition, so registering beside it races the removal (`systemctl start`
+/// of a unit just deleted). Every registrant decides under the lock on the
+/// receipt read under it (Lean `RuntimeReconcile.UpdateHandoff.helperRegistration`)
+/// and registers while holding it.
 fn register_unless_helper_runs(
     directory: &Path,
+    caller: Registrant,
     register: impl FnOnce() -> Result<()>,
-) -> Result<bool> {
-    let Ok(_helper) = files::lock(&directory.join("helper.lock")) else {
-        return Ok(false);
+) -> std::result::Result<HelperRegistration, HelperRegistrationError> {
+    let Some(_helper) =
+        files::try_lock(&directory.join("helper.lock")).map_err(HelperRegistrationError::Lock)?
+    else {
+        return Ok(HelperRegistration::HelperOwns);
     };
-    register()?;
-    Ok(true)
+    let receipt: Receipt = files::read_json(&directory.join("receipt.json"))
+        .map_err(HelperRegistrationError::Register)?;
+    let decision = helper_registration(caller, receipt.phase);
+    if decision == HelperRegistration::Register {
+        register().map_err(HelperRegistrationError::Register)?;
+    }
+    Ok(decision)
+}
+
+fn helper_registration(caller: Registrant, phase: Phase) -> HelperRegistration {
+    match (phase, caller) {
+        (Phase::Healthy | Phase::Failed, _) => HelperRegistration::Finished,
+        (Phase::Staged | Phase::Registered, Registrant::Status) => {
+            HelperRegistration::SubmitterOwns
+        }
+        _ => HelperRegistration::Register,
+    }
+}
+
+/// Before acknowledgement only the submitter and the helper contend for
+/// `helper.lock`, so a submitter that cannot take it knows the helper holds it
+/// (Lean `RuntimeReconcile.UpdateHandoff.statusTakesLock`).
+fn status_takes_lock(phase: Phase) -> bool {
+    helper_registration(Registrant::Status, phase) == HelperRegistration::Register
+}
+
+#[derive(Clone, Copy, Debug, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Registrant {
+    Submitter,
+    Status,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum HelperRegistration {
+    Register,
+    HelperOwns,
+    Finished,
+    SubmitterOwns,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum HelperRegistrationError {
+    #[error("could not open or take the update helper's lock")]
+    Lock(#[source] std::io::Error),
+    #[error("could not register the update helper")]
+    Register(#[source] anyhow::Error),
 }
 
 pub async fn status(home: Option<PathBuf>, id: uuid::Uuid) -> Result<()> {
@@ -288,16 +341,13 @@ pub async fn status(home: Option<PathBuf>, id: uuid::Uuid) -> Result<()> {
     let receipt = tokio::task::spawn_blocking(move || -> Result<Receipt> {
         let directory = operation_dir(&home, id);
         let receipt: Receipt = files::read_json(&directory.join("receipt.json"))?;
-        if matches!(
-            receipt.phase,
-            Phase::Accepted | Phase::Retired | Phase::Released | Phase::BackedUp | Phase::Installed
-        ) {
-            let plan: Plan = files::read_json(&directory.join("plan.json"))?;
-            anyhow::ensure!(
-                plan.id == id && plan.home == std::fs::canonicalize(&home)?,
-                "update plan does not match home"
-            );
-            register_unless_helper_runs(&directory, || {
+        if status_takes_lock(receipt.phase) {
+            register_unless_helper_runs(&directory, Registrant::Status, || {
+                let plan: Plan = files::read_json(&directory.join("plan.json"))?;
+                anyhow::ensure!(
+                    plan.id == id && plan.home == std::fs::canonicalize(&home)?,
+                    "update plan does not match home"
+                );
                 NativeServiceManager::new(service_config(&plan)?)?.register_updater(&directory, id)
             })?;
         }
