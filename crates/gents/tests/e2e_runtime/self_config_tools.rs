@@ -216,6 +216,7 @@ fn tool_config(
         ceiling_plugins: None,
         registry_url: None,
         plugin_builder: None,
+        ux_preview_assets: None,
     }
 }
 

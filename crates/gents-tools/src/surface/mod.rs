@@ -175,6 +175,9 @@ pub struct SelfConfigToolConfig {
     /// `None` is the public registry. Never taken from a tool call.
     pub registry_url: Option<String>,
     pub plugin_builder: Option<PathBuf>,
+    /// The built page `ux preview` renders in (`gents server
+    /// --ux-preview-assets`); `None` looks beside this build.
+    pub ux_preview_assets: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize)]
@@ -565,6 +568,7 @@ impl ToolSurface {
                     selected_plugins: self.plugin_tools.clone(),
                     registry_url: runtime.registry_url.clone(),
                     plugin_builder: runtime.native_executables.host.clone(),
+                    ux_preview_assets: runtime.native_executables.ux_preview_assets.clone(),
                     ..self.self_config.clone()
                 },
                 node_binding,

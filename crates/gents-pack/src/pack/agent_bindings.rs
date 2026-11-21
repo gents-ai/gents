@@ -452,6 +452,18 @@ pub(super) fn without_agent_bindings<'a>(
     }
 }
 
+/// `variables` as an installation records them: a binding is recorded in
+/// its `agent_bindings` alone. Only an install that binds its own slots
+/// looks a binding up, while a hosted runtime takes them from the client, so
+/// recording one in `variables` too would make the two sides of a hosted
+/// install record different installations.
+pub(super) fn recorded_variables(
+    mut variables: BTreeMap<String, Option<String>>,
+) -> BTreeMap<String, Option<String>> {
+    variables.retain(|name, _| !is_agent_binding_variable(name));
+    variables
+}
+
 /// The install variable that binds the agent slot `slot` to an existing Agent
 /// of the node, by DID: the slot upper-cased, every other character an
 /// underscore. It is an explicit argument of one install

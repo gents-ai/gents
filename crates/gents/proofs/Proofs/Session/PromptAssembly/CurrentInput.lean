@@ -63,7 +63,9 @@ theorem retry_does_not_republish_input : publishesAuthoredInput true = false := 
 
 
 
-
+/-- Queued input a turn answers: selected at its claim or arriving at a loop
+boundary. A resumed retry publishes no authored input, so it answers none and
+the input stays queued for a later turn. -/
 def answersSelection (resume : Bool) (selected : List α) : List α :=
   if publishesAuthoredInput resume then selected else []
 
@@ -72,6 +74,11 @@ theorem resumed_retry_answers_no_selection (selected : List α) :
 
 theorem fresh_turn_answers_its_selection (selected : List α) :
     answersSelection false selected = selected := rfl
+
+theorem queued_input_answered_iff_authored_input_published (resume : Bool) (queued : List α)
+    (nonempty : queued ≠ []) :
+    answersSelection resume queued ≠ [] ↔ publishesAuthoredInput resume = true := by
+  cases resume <;> simp [answersSelection, publishesAuthoredInput, nonempty]
 
 
 

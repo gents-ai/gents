@@ -159,6 +159,8 @@ where
     request_admission: gents_session::request::admission::AgentRequestAdmissionVerifier,
     auxiliary_tasks: auxiliary_tasks::AuxiliaryTasks,
     root_execution_guard: Option<gents_tools::surface::RootExecutionGuard>,
+    #[cfg(test)]
+    driven_deadline: Option<Arc<tokio::sync::Notify>>,
 }
 
 enum HandleRequestOutcome {

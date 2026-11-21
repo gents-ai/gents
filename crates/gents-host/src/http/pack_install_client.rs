@@ -488,6 +488,7 @@ pub async fn install_remote(
                 gents_pack::operations::pack::install_value(
                     gents_protocol::operations::pack::PackActor::User,
                     &supplied,
+                    &args.environment,
                     name,
                 )
             },
