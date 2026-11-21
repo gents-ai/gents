@@ -74,6 +74,14 @@ async fn observe(
     };
     let trigger: crate::Trigger = serde_json::from_value(value)?;
     let selected = match read_record(txn, Collection::Task, owner, &trigger.task_id).await? {
+        // A command Task has no Agent to read an event source as.
+        Some((_, task))
+            if task
+                .get("command")
+                .is_some_and(|command| !command.is_null()) =>
+        {
+            None
+        }
         Some((_, task)) => {
             let task: crate::Task = serde_json::from_value(task)?;
             let source = match trigger.source {
@@ -342,6 +350,15 @@ pub(crate) async fn grant_changes(txn: &ConfigApplyTxn<'_>, captured: Capture) -
         )
         .await?;
         let Some(selected) = current.selected.as_ref() else {
+            if let Some(before) = prior_selection {
+                txn.change_configuration_reader(
+                    gents_protocol::owner_staged::SelectedConfiguration::Trigger,
+                    &current.doc_id,
+                    &identity::Did::new(&before.agent)?,
+                    false,
+                )
+                .await?;
+            }
             continue;
         };
         let agent_changed = prior_selection.is_none_or(|before| before.agent != selected.agent);

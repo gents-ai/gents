@@ -648,6 +648,7 @@ mod tests {
                 goal_token_budget: None,
                 output_schema_ref: None,
                 hooks: Default::default(),
+                command: None,
             },
             source_collection: source.source_collection.clone(),
             event_kind: "created".into(),

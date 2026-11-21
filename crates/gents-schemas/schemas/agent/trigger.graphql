@@ -19,4 +19,5 @@ type Trigger @policy(id: "$household", resource: "configuration") @index(fields:
     fire_count: Int
     create_session: Boolean
     max_fires_per_hour: Int
+    last_run: JSON
 }

@@ -386,6 +386,7 @@ async fn modeled_cached_schedule_requires_runtime_visibility() -> anyhow::Result
         goal_token_budget: None,
         output_schema_ref: None,
         hooks: Vec::new(),
+        command: None,
     };
     let schedule = gents_documents::automation::ResolvedSchedule {
         session_id_template: None,

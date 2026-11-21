@@ -1510,11 +1510,12 @@ impl EventSource {
         tokio::spawn(async move {
             let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
             let (status, error_value, fire_delta) = match &result {
-                crate::triggers::engine::FireResult::Fired { request_id } => {
+                crate::triggers::engine::FireResult::Fired { request_id: id }
+                | crate::triggers::engine::FireResult::CommandStarted { run_id: id } => {
                     tracing::debug!(
                         trigger_id = %trigger_id,
-                        request_id = %request_id,
-                        "event trigger fire materialized request"
+                        fired = %id,
+                        "event trigger fire materialized"
                     );
                     ("fired", None, Some(1))
                 }

@@ -165,6 +165,10 @@ pub(super) fn spawn_trigger_engine(startup: StartupTasks<'_>) -> AbortOnDropHand
     let trigger_engine_node_did = agent.node_did().to_string();
     let trigger_engine_runtime_observer = agent.runtime_snapshot_observer.clone();
     let trigger_engine_runtime_status = runtime_status.clone();
+    let trigger_engine_tool_root = agent
+        .document_runtime_context()
+        .and_then(|context| context.tool_ceiling.root())
+        .map(std::path::Path::to_path_buf);
     let trigger_engine_handle = AbortOnDropHandle::new(tokio::spawn(async move {
         tokio::select! {
             _ = trigger_engine_cancel.cancelled() => return,
@@ -215,6 +219,7 @@ pub(super) fn spawn_trigger_engine(startup: StartupTasks<'_>) -> AbortOnDropHand
             trigger_engine_node,
             trigger_engine_materializer_snapshot_rx,
             sources,
+            trigger_engine_tool_root,
             trigger_engine_cancel,
         )
         .await;

@@ -6,6 +6,25 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- A Task can run a host command instead of an agent: `command: {argv,
+  timeout_secs}` in place of `agent_did` and `prompt_template` (a Task with
+  both, or neither, is refused). Each fire of its schedule Trigger runs the
+  command on the node, in the operator's tool root, through the task-hook
+  runner (120 s default timeout, capped output), with no AgentRequest and no
+  model turn. The fire budget holds as for an Agent's Task, and a command
+  Task's schedule Trigger may set `max_fires_per_hour`; the Trigger's
+  concurrency holds too: `serial` skips a fire while the command runs,
+  `latest_only` interrupts it.
+  Each run's state, exit status and output tail land in the Trigger's new
+  `last_run`, which `gents automation task show` lists. Event Triggers and
+  `gents automation task run` do not run command Tasks yet: an event source
+  reads documents as the Task's agent, and a manual run writes a request for
+  one. Publication refuses a command Task's Trigger with an event source or a
+  `session_id_template` (and so `queued_serial`). A pack that ships a command
+  Task, or changes one's command, installs only under the operator's grant:
+  `--grant-authority`, on the local and the hosted install alike, or the pack
+  authority an installing Agent holds, and an install preview lists those
+  Tasks under `command_tasks` (#3951).
 - Breaking: the last runtime environment switches are flags (#1764).
   `gents automation job promote --javy PATH` replaces `JAVY`;
   `gents server --ux-preview-assets PATH` and `gents config pack ux preview

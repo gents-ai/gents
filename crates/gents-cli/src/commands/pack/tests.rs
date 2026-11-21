@@ -1615,3 +1615,70 @@ async fn a_failed_reader_grant_keeps_the_install_receipt() {
         "the install committed"
     );
 }
+
+/// A command Task runs host code on each fire of its Trigger, so the pack that
+/// ships one installs only with the operator's `--grant-authority`.
+#[tokio::test]
+async fn a_pack_shipping_a_command_task_installs_only_with_grant_authority() {
+    let home = initialized_home().await;
+    let dir = documents_pack_dir("1.0.0");
+    let config_path = dir.path().join("pack_config.json");
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
+    config["tasks"] = json!([{ "task_id": "tick", "command": { "argv": ["true"] } }]);
+    std::fs::write(config_path, serde_json::to_vec(&config).unwrap()).unwrap();
+    let tasks = || async {
+        let (access, _) = crate::resolve_config_access(Some(home.path()), None)
+            .await
+            .unwrap();
+        let tasks = access
+            .execute("{ Task { task_id command } }")
+            .await
+            .unwrap()["data"]["Task"]
+            .clone();
+        access.local_node().unwrap().shutdown().await.unwrap();
+        tasks
+    };
+    let preview = || async {
+        let mut args = document_install_args(home.path(), dir.path(), Vec::new());
+        args.preview = true;
+        crate::request_helpers::capture_report(install(args))
+            .await
+            .expect("a preview needs no grant")
+    };
+
+    let previewed = preview().await;
+    assert_eq!(
+        previewed["command_tasks"],
+        json!({"tasks": ["tick"], "granted_with": "--grant-authority"}),
+        "the preview names what the install will need the grant for: {previewed}"
+    );
+    let refusal = install_from(home.path(), dir.path(), Vec::new())
+        .await
+        .unwrap_err();
+    let message = format!("{refusal:#}");
+    assert!(
+        message.contains("ships command Tasks (tick)") && message.contains("--grant-authority"),
+        "{message}"
+    );
+    assert_eq!(
+        tasks().await,
+        json!([]),
+        "the refused install wrote nothing"
+    );
+
+    let mut args = document_install_args(home.path(), dir.path(), Vec::new());
+    args.grant_authority = true;
+    crate::request_helpers::capture_report(install(args))
+        .await
+        .expect("the operator's grant installs the command Task");
+    assert_eq!(
+        tasks().await,
+        json!([{ "task_id": "tick", "command": { "argv": ["true"] } }])
+    );
+    let previewed = preview().await;
+    assert_eq!(previewed.get("command_tasks"), None, "{previewed}");
+    install_from(home.path(), dir.path(), Vec::new())
+        .await
+        .expect("reinstalling the same command needs no new grant");
+}

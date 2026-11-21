@@ -2,8 +2,9 @@ use serde::{Deserialize, Serialize};
 
 use super::WorkspaceReaderSelection;
 
-/// Reusable task definition; the trigger engine renders templates into an
-/// AgentRequest before the owned loop executes it.
+/// Reusable task definition: either an Agent's task, whose templates the
+/// trigger engine renders into an AgentRequest for the owned loop, or a
+/// command the Node runs on each fire with no Agent and no model turn.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -16,8 +17,28 @@ pub struct Task {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub description: Option<String>,
+    /// The Agent that answers each fire; empty for a command Task.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null",
+        skip_serializing_if = "String::is_empty"
+    )]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<String>", optional = nullable))]
+    #[schemars(transform = crate::accepts_null)]
     pub agent_did: String,
+    /// Rendered into each fire's AgentRequest; empty for a command Task.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null",
+        skip_serializing_if = "String::is_empty"
+    )]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<String>", optional = nullable))]
+    #[schemars(transform = crate::accepts_null)]
     pub prompt_template: String,
+    /// A host command the Node runs on each fire instead of an Agent turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub command: Option<TaskCommand>,
     /// Emit one durable FireOutcome at the terminal boundary.
     #[serde(
         default,
@@ -78,6 +99,21 @@ pub struct Task {
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
     #[schemars(transform = crate::accepts_null)]
     pub tags: Vec<String>,
+}
+
+/// The host command a command Task runs: under the operator's tool root (the
+/// runtime cwd when none is set), with the task-hook output cap.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct TaskCommand {
+    /// Executable followed by literal arguments; PATH lookup and relative
+    /// paths use ordinary host process semantics.
+    pub argv: Vec<String>,
+    /// Timeout in seconds; absent uses 120, explicit 1..=86400.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub timeout_secs: Option<i64>,
 }
 
 /// A task-owned host command, using the behavior's HostTools.root and inherited

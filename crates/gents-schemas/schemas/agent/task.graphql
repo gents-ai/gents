@@ -15,4 +15,5 @@ type Task @policy(id: "$household", resource: "configuration") @index(fields: ["
     updated_at: DateTime @index(direction: DESC)
     tags: [String]
     outcome_readers: JSON
+    command: JSON
 }

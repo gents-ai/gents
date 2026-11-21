@@ -2,6 +2,7 @@ import Proofs.Automation.Mailbox.Operations
 import Proofs.Automation.Mailbox.State
 import Proofs.Automation.RuntimeReconcile.State
 import Proofs.Automation.Triggers.ManualRun
+import Proofs.Automation.Triggers.CommandRun
 import Proofs.Automation.GoalAutomation.ReadinessGate
 import Proofs.Automation.GoalAutomation.Operations
 import Proofs.Automation.Triggers.MaterializedLineage
@@ -18,6 +19,10 @@ end Mailbox.Operations
 namespace Triggers.ManualRun
 deriving instance Lean.ToJson for Presence, RunDecision, Matches, ScheduleDecision, TitleKind
 end Triggers.ManualRun
+
+namespace Triggers.CommandRun
+deriving instance Lean.ToJson for Admission
+end Triggers.CommandRun
 
 namespace RuntimeState
 deriving instance Lean.ToJson for ConfigurationAdmission
@@ -54,6 +59,8 @@ attribute [conformance_function]
   Triggers.ManualRun.runDecision
   Triggers.ManualRun.scheduleDecision
   Triggers.ManualRun.sessionTitle
+  Triggers.CommandRun.admit
+  Triggers.CommandRun.deliveryAllowed
   GoalAutomation.ReadinessGate.publishes
   GoalAutomation.Operations.startDecision
   GoalAutomation.Operations.setDecision

@@ -920,6 +920,38 @@ async fn event_configuration_publication_rebinding_and_revocation_use_native_gra
         let input = &case.input;
         case.check(module_reads[&(input.role.as_str(), input.changed, input.revoked)]);
     }
+    let tick = |command: bool| {
+        if command {
+            json!({"node_did":root.did(),"task_id":"tick","command":{"argv":["true"]}})
+        } else {
+            json!({"node_did":root.did(),"task_id":"tick","agent_did":second.did(),"prompt_template":"tick"})
+        }
+    };
+    let tick_query = "{Trigger(filter:{trigger_id:{_eq:\"tick-trigger\"}}){_docID}}";
+    apply(
+        &user,
+        vec![
+            document(
+                Collection::Schedule,
+                json!({"node_did":root.did(),"schedule_id":"tick","cadence":{"kind":"interval","interval_secs":60}}),
+            ),
+            document(Collection::Task, tick(false)),
+            document(
+                Collection::Trigger,
+                json!({"node_did":root.did(),"trigger_id":"tick-trigger","task_id":"tick","source":{"kind":"schedule","schedule_id":"tick"}}),
+            ),
+        ],
+    )
+    .await?;
+    assert!(
+        visible(&second_access.execute(tick_query).await?, "Trigger"),
+        "the Task's Agent reads its Trigger"
+    );
+    apply(&user, vec![document(Collection::Task, tick(true))]).await?;
+    assert!(
+        !visible(&second_access.execute(tick_query).await?, "Trigger"),
+        "a Task that became a command Task leaves its former Agent no reader on its Trigger"
+    );
     node.shutdown().await?;
     Ok(())
 }

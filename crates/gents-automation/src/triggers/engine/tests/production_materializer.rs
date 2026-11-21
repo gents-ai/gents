@@ -568,6 +568,7 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
         goal_token_budget: Some(4_096),
         output_schema_ref: None,
         hooks: Vec::new(),
+        command: None,
     };
     let fire_key = "event:release-trigger:doc:release-42";
     let identity = crate::goal::task_goal_fire_identity(&node_did, &task.task_id, fire_key);
@@ -841,6 +842,7 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
             }),
             output_schema_ref: None,
             hooks: Vec::new(),
+            command: None,
         };
         let scheduled_identity =
             crate::goal::task_goal_fire_identity(&node_did, &scheduled.task_id, &modeled.fire_key);
@@ -1153,6 +1155,7 @@ fn recovery_task(agent_did: &str) -> ResolvedTask {
         goal_token_budget: None,
         output_schema_ref: None,
         hooks: Vec::new(),
+        command: None,
     }
 }
 
@@ -1824,6 +1827,7 @@ fn workspace_writer_task(agent_did: &str) -> ResolvedTask {
         goal_token_budget: None,
         output_schema_ref: None,
         hooks: Vec::new(),
+        command: None,
     }
 }
 

@@ -176,15 +176,15 @@ pub use skill::{SkillDocument, SKILL_FIELDS};
 #[cfg(test)]
 pub use event_trigger::count_trigger_cursor_batch_queries;
 pub use event_trigger::{
-    load_trigger_next_run_at_batch, stop_trigger_for_budget, update_trigger_runtime_fields,
-    TriggerRuntimeUpdate, TRIGGER_CURSOR_BATCH_SIZE,
+    load_trigger_next_run_at_batch, record_trigger_command_run, stop_trigger_for_budget,
+    update_trigger_runtime_fields, TriggerRuntimeUpdate, TRIGGER_CURSOR_BATCH_SIZE,
 };
 pub use event_trigger::{EventGroup, EventGroupCount, EventSource};
 pub use schedule::{Schedule, ScheduleCadence, ScheduleObservation};
-pub use task::{Task, TaskHook, TaskHookPhase};
+pub use task::{Task, TaskCommand, TaskHook, TaskHookPhase};
 pub use trigger::{
-    ConcurrencyMode, Trigger, TriggerObservation, TriggerSource, BUDGET_EXHAUSTED_STATUS,
-    DEFAULT_MAX_FIRES_PER_HOUR,
+    CommandRun, CommandRunState, ConcurrencyMode, Trigger, TriggerObservation, TriggerSource,
+    BUDGET_EXHAUSTED_STATUS, DEFAULT_MAX_FIRES_PER_HOUR,
 };
 pub mod trigger_explain;
 

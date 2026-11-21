@@ -97,9 +97,14 @@ impl TriggerSource for ScheduleSource {
                     .active_schedules()
                     .iter()
                     .filter_map(|(trigger_id, resolved)| {
-                        snapshot
-                            .agent(&resolved.task.agent_did)
-                            .map(|behavior| (trigger_id, resolved, behavior.node_did()))
+                        let node_did = if resolved.task.command.is_some() {
+                            Some(snapshot.local_did.as_str())
+                        } else {
+                            snapshot
+                                .agent(&resolved.task.agent_did)
+                                .map(|behavior| behavior.node_did())
+                        };
+                        node_did.map(|node_did| (trigger_id, resolved, node_did))
                     })
                     .collect::<Vec<_>>();
                 for schedule_chunk in schedules.chunks(TRIGGER_CURSOR_BATCH_SIZE) {
@@ -262,11 +267,12 @@ impl TriggerSource for ScheduleSource {
                             event_source_generation: None,
                             on_result: Box::new(move |result| {
                                 let updates = match &result {
-                                    FireResult::Fired { request_id } => {
+                                    FireResult::Fired { request_id: id }
+                                    | FireResult::CommandStarted { run_id: id } => {
                                         tracing::debug!(
                                             trigger_id = %trigger_id_for_callback,
-                                            request_id = %request_id,
-                                            "schedule fire materialized request"
+                                            fired = %id,
+                                            "schedule fire materialized"
                                         );
                                         TriggerRuntimeUpdate {
                                             last_fired_source_doc_id: None,

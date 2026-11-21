@@ -240,6 +240,7 @@ fn hooks_admitted(task_id: &str, hooks: &[TaskHook]) -> bool {
         goal_objective_template: None,
         goal_token_budget: None,
         hooks: hooks.to_vec(),
+        command: None,
         enabled: true,
         output_schema_ref: None,
         created_at: None,

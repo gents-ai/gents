@@ -445,6 +445,30 @@ pub async fn ensure_configured_root_published(
     configured_root_coverage(&policy, configured_root)
 }
 
+/// The folder a command Task runs in, checked at each launch: the operator's
+/// tool root while a WorkspaceRoot published for this Node still covers it,
+/// or the runtime cwd while no WorkspaceRoot policy is configured, as a task
+/// hook of an Agent without a root runs.
+pub async fn node_command_root(
+    node: &defra_node::Node,
+    ceiling_root: Option<&Path>,
+) -> Result<PathBuf> {
+    let policy = load_workspace_root_policy(node, ceiling_root).await?;
+    match ceiling_root {
+        Some(root) => {
+            configured_root_coverage(&policy, root)?;
+            resolve_configured_tool_root(root)
+        }
+        None => {
+            anyhow::ensure!(
+                !policy.configured,
+                "WorkspaceRoot policy is configured but this node has no operator tool root, so a command Task has nowhere admitted to run; start the node with a tool root"
+            );
+            std::env::current_dir().context("resolving the runtime cwd for a command Task")
+        }
+    }
+}
+
 /// [`ensure_configured_root_published`] through a running Node's
 /// configuration access, as `node_did`'s principal, for a caller that must
 /// refuse a root before it replaces that runtime.

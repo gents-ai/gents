@@ -1591,7 +1591,7 @@ fn generated_session_key_cases_match_admission_and_config() {
             true,
         );
         gents_lean_vocab::families::trigger_delivery_session_config::SessionConfigOutput {
-            allowed: trigger.validate_options().is_ok(),
+            allowed: trigger.validate_options(false).is_ok(),
         }
     });
 }

@@ -13,13 +13,14 @@ use gents_tools::task_run::{RunnableTask, TaskRunOptions, TaskRunOutput};
 type Result<T, E = TaskOperationError> = std::result::Result<T, E>;
 
 /// Lean `Triggers.ManualRun.runDecision`.
-pub fn run_decision(task: TaskPresence, agent: TaskPresence) -> TaskRunDecision {
-    match (task, agent) {
-        (TaskPresence::Missing, _) => TaskRunDecision::TaskMissing,
-        (TaskPresence::Disabled, _) => TaskRunDecision::TaskDisabled,
-        (TaskPresence::Enabled, TaskPresence::Missing) => TaskRunDecision::AgentMissing,
-        (TaskPresence::Enabled, TaskPresence::Disabled) => TaskRunDecision::AgentDisabled,
-        (TaskPresence::Enabled, TaskPresence::Enabled) => TaskRunDecision::Run,
+pub fn run_decision(task: TaskPresence, agent: TaskPresence, command: bool) -> TaskRunDecision {
+    match (task, command, agent) {
+        (TaskPresence::Missing, _, _) => TaskRunDecision::TaskMissing,
+        (TaskPresence::Disabled, _, _) => TaskRunDecision::TaskDisabled,
+        (TaskPresence::Enabled, true, _) => TaskRunDecision::CommandTask,
+        (TaskPresence::Enabled, false, TaskPresence::Missing) => TaskRunDecision::AgentMissing,
+        (TaskPresence::Enabled, false, TaskPresence::Disabled) => TaskRunDecision::AgentDisabled,
+        (TaskPresence::Enabled, false, TaskPresence::Enabled) => TaskRunDecision::Run,
     }
 }
 
@@ -65,6 +66,9 @@ pub async fn runnable(
                     return Ok::<_, anyhow::Error>((None, None));
                 };
                 let task: Task = serde_json::from_value(value)?;
+                if task.command.is_some() {
+                    return Ok((Some((doc_id, task)), None));
+                }
                 let agent = read_desired_state_record_in_txn(
                     txn,
                     Collection::Agent,
@@ -79,19 +83,19 @@ pub async fn runnable(
         })
         .await
         .map_err(passthrough)?;
-    let presence = |enabled: Option<bool>| match enabled {
-        None => TaskPresence::Missing,
-        Some(false) => TaskPresence::Disabled,
-        Some(true) => TaskPresence::Enabled,
-    };
     let decision = run_decision(
-        presence(task.as_ref().map(|(_, task)| task.enabled)),
-        presence(agent.as_ref().map(|agent| agent.enabled)),
+        TaskPresence::of(task.as_ref().map(|(_, task)| task.enabled)),
+        TaskPresence::of(agent.as_ref().map(|agent| agent.enabled)),
+        task.as_ref()
+            .is_some_and(|(_, task)| task.command.is_some()),
     );
     match (decision, task) {
         (TaskRunDecision::Run, Some((doc_id, task))) => Ok(RunnableTask { task, doc_id }),
         (TaskRunDecision::TaskDisabled, Some((_, task))) => {
             Err(TaskOperationError::TaskDisabled(task.task_id))
+        }
+        (TaskRunDecision::CommandTask, Some((_, task))) => {
+            Err(TaskOperationError::CommandTask(task.task_id))
         }
         (TaskRunDecision::AgentDisabled, Some((_, task))) => {
             Err(TaskOperationError::AgentDisabled(task.agent_did))
@@ -231,7 +235,7 @@ mod conformance {
     #[test]
     fn run_decision_matches_lean() {
         gents_lean_vocab::families::triggers_manual_run_run_decision::replay(|i| {
-            run_decision(i.task, i.agent)
+            run_decision(i.task, i.agent, i.command)
         });
     }
 

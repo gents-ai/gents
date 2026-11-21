@@ -109,6 +109,7 @@ fn modeled_event_source_generations_match_resolved_projection() {
                 goal_token_budget: None,
                 output_schema_ref: None,
                 hooks: Default::default(),
+                command: None,
             },
             source_collection: generation["collection"].as_str().unwrap().into(),
             event_kind: generation["event_kind"].as_str().unwrap().into(),

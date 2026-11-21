@@ -2091,6 +2091,87 @@ async fn documents_pack_shipping_workflows_is_materialized_with_no_plugin_instal
     assert!(root.join("workflows/hello.rhai").is_file());
 }
 
+/// An Agent's self-config install reaches the shared install owner, so a
+/// command Task needs the grant there as it does on the operator's routes.
+#[tokio::test]
+async fn a_prepared_install_ships_a_command_task_only_under_the_grant() {
+    let access = access().await;
+    let archive = documents_archive_shipping(&[]);
+    let mut prepared = prepared();
+    prepared.config.tasks = vec![serde_json::from_value(json!({
+        "node_did": OWNER, "task_id": "tick", "command": {"argv": ["true"]},
+        "tags": ["gents:pack:acme/demo"]
+    }))
+    .unwrap()];
+    let target = crate::pack::InstallTarget {
+        access: &access,
+        owner: OWNER,
+        plugin_home: None,
+    };
+    let install = |grant_authority: bool| {
+        install_prepared_document_pack(
+            &target,
+            &archive,
+            &[],
+            &prepared,
+            grant_authority,
+            InstalledVia::SelfConfig,
+            crate::pack::DocumentGraphPolicy {
+                drift: DriftPolicy::Refuse,
+                profiles: &gents_inference::resolved::ProviderProfilePolicy,
+            },
+        )
+    };
+    let tasks = || async {
+        access
+            .execute("{ Task { task_id command } }")
+            .await
+            .unwrap()["data"]["Task"]
+            .clone()
+    };
+    let refusal = format!("{:#}", install(false).await.unwrap_err());
+    assert!(refusal.contains("ships command Tasks (tick)"), "{refusal}");
+    assert_eq!(
+        tasks().await,
+        json!([]),
+        "the refused install wrote nothing"
+    );
+    install(true)
+        .await
+        .expect("the grant installs the command Task");
+    assert_eq!(
+        tasks().await,
+        json!([{"task_id": "tick", "command": {"argv": ["true"]}}])
+    );
+    install(false)
+        .await
+        .expect("reinstalling the same command needs no new grant");
+    prepared.config.tasks[0].command = serde_json::from_value(json!({"argv": ["false"]})).unwrap();
+    let refusal = format!(
+        "{:#}",
+        install_prepared_document_pack(
+            &target,
+            &archive,
+            &[],
+            &prepared,
+            false,
+            InstalledVia::SelfConfig,
+            crate::pack::DocumentGraphPolicy {
+                drift: DriftPolicy::Refuse,
+                profiles: &gents_inference::resolved::ProviderProfilePolicy,
+            },
+        )
+        .await
+        .unwrap_err()
+    );
+    assert!(refusal.contains("ships command Tasks (tick)"), "{refusal}");
+    assert_eq!(
+        tasks().await,
+        json!([{"task_id": "tick", "command": {"argv": ["true"]}}]),
+        "an upgrade changing the command needs the grant and writes nothing without it"
+    );
+}
+
 #[tokio::test]
 async fn pack_with_no_asset_class_is_not_materialized() {
     let home = tempfile::tempdir().unwrap();

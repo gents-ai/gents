@@ -453,6 +453,20 @@ pub async fn install_documents_pack_resolved_inner(
         Err(refusal) => return Err(refusal),
     };
     ResolvedPack::record_graph_sources(&mut prepared, pack, &dependencies);
+    if !args.preview {
+        crate::pack::command_authority::require_command_task_grant(
+            access,
+            owner,
+            &format!(
+                "{}/{}",
+                pack.manifest().metadata.namespace,
+                pack.manifest().name
+            ),
+            &prepared,
+            args.grant_authority,
+        )
+        .await?;
+    }
     let inference = prepared.inference.clone();
     let dependency_inference = prepared.dependency_inference.clone();
     // The agents this install runs under its installer's root, from its own
@@ -543,6 +557,15 @@ pub async fn install_documents_pack_resolved_inner(
                 review["granted_with"] = "--grant-authority".into();
             }
             preview["host_tool_roots"] = review;
+        }
+        let command_tasks =
+            crate::pack::command_authority::command_tasks_needing_grant(access, owner, &prepared)
+                .await?;
+        if !command_tasks.is_empty() {
+            preview["command_tasks"] = json!({
+                "tasks": command_tasks,
+                "granted_with": "--grant-authority",
+            });
         }
         return Ok(preview);
     }

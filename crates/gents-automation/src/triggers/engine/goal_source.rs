@@ -690,6 +690,7 @@ impl GoalSource {
             goal_token_budget: None,
             output_schema_ref: None,
             hooks: Vec::new(),
+            command: None,
         };
         let goal_id = goal.goal_id.clone();
         let parent_request_id = parent.request_id.clone();
@@ -716,7 +717,9 @@ impl GoalSource {
             pre_materialized_request_id: Some(child.request_id),
             event_source_generation: None,
             on_result: Box::new(move |result| match result {
-                FireResult::Fired { request_id } | FireResult::Duplicate { request_id } => {
+                FireResult::Fired { request_id }
+                | FireResult::Duplicate { request_id }
+                | FireResult::CommandStarted { run_id: request_id } => {
                     tracing::info!(
                         %request_id,
                         %goal_id,
