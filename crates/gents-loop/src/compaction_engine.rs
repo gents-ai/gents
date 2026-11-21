@@ -197,7 +197,8 @@ where
                 .estimate_message_request(&messages)
                 .map_err(CompactionError::ProjectOriginal)?;
 
-            let (stripped_messages, stripped_activity) = provider_view(counter.profile(), messages);
+            let (stripped_messages, stripped_activity, _) =
+                provider_view(counter.profile(), messages);
 
             let stripped_token_estimate = counter
                 .estimate_message_request(&stripped_messages)

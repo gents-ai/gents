@@ -1210,6 +1210,7 @@ mod paging_coverage_tests {
                 accounting: gents_protocol::rendered_request::ContextAccounting {
                     accounting_version:
                         gents_protocol::rendered_request::CONTEXT_ACCOUNTING_VERSION,
+                    history_stubbing: Default::default(),
                     turn_index: index as usize,
                     attempt: 0,
                     estimator: "test".into(),

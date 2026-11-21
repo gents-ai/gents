@@ -399,6 +399,7 @@ async fn capture_and_context_accounting_commit_together() {
         );
         rendered.assembly_trace.context_accounting = Some(ContextAccounting {
             accounting_version: CONTEXT_ACCOUNTING_VERSION,
+            history_stubbing: Default::default(),
             turn_index: turn,
             attempt: 0,
             estimator: "serialized_json_bytes_div_4_v1".into(),
