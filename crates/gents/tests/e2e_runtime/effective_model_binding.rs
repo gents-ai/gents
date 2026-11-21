@@ -189,8 +189,6 @@ async fn profile_model_line_changes_on_the_next_request_in_the_same_session() {
         session,
         "first-model",
         vec![StreamChunk::text("first")],
-        Vec::new(),
-        None,
     )
     .await
     .unwrap();

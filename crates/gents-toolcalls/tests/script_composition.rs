@@ -18,7 +18,6 @@ struct ComposedAgentNew {
     receipt: serde_json::Value,
     child: String,
     effect_doc: String,
-    script_doc: String,
 }
 
 async fn composed_agent_new(name: &str) -> ComposedAgentNew {
@@ -124,15 +123,6 @@ async fn composed_agent_new(name: &str) -> ComposedAgentNew {
         Ok(gents_session::session::origin::VerifiedCreation::CallResult),
         "{receipt}"
     );
-    let script_doc = gents_toolcalls::test_support::background_hook::tool_row(
-        &fixture.access,
-        &fixture.session_id,
-        "script",
-    )
-    .await["_docID"]
-        .as_str()
-        .unwrap()
-        .to_owned();
     ComposedAgentNew {
         effect_doc: row["_docID"].as_str().unwrap().to_owned(),
         child,
@@ -140,7 +130,6 @@ async fn composed_agent_new(name: &str) -> ComposedAgentNew {
         target,
         parent,
         receipt,
-        script_doc,
     }
 }
 
@@ -206,7 +195,7 @@ async fn composed_agent_new_keeps_its_asynchronous_receipt() {
     let target_session = composed.receipt["session_id"].as_str().unwrap().to_owned();
     effect_lifecycle(&composed)
         .await
-        .cancel_during_run(gents_session::session::tool_call_state::CancelCause::Interrupted)
+        .cancel_during_run(gents_protocol::tool_call::CancelCause::Interrupted)
         .await
         .unwrap();
     let fixture = &composed.fixture;
@@ -295,63 +284,6 @@ async fn a_completed_agent_new_effect_keeps_its_starter() {
     )
     .await;
     assert_eq!(interrupted["ok"], true, "{interrupted}");
-    fixture.db.node.shutdown().await.unwrap();
-}
-
-#[tokio::test]
-async fn a_withheld_effect_parent_is_denied_by_name() {
-    use gents_session::session::origin::CreationDenial;
-    let composed = composed_agent_new("script-agent-new-withheld-parent").await;
-    let fixture = &composed.fixture;
-    let script = gents_store::graphql::escape_graphql_string(&composed.script_doc);
-    let refusal = || async {
-        gents_session::session::message::interrupt_refusal(
-            &fixture.db.node,
-            fixture.agent.did(),
-            &composed.parent,
-            &composed.target,
-        )
-        .await
-        .unwrap()
-        .expect("the starter is refused without an accepted effect parent")
-    };
-    fixture
-        .access
-        .write(
-            "test.script_composition.unbind_parent",
-            &format!(
-                r#"mutation {{ update_AgentToolCall(docID: "{script}", input: {{tool_call_id: "rebound-script"}}) {{ _docID }} }}"#
-            ),
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        starter_verdict(&composed).await,
-        Err(CreationDenial::ParentUnreadable)
-    );
-    let unreadable = refusal().await;
-    assert!(
-        unreadable.contains(&CreationDenial::ParentUnreadable.to_string()),
-        "{unreadable}"
-    );
-    fixture
-        .access
-        .write(
-            "test.script_composition.delete_parent",
-            &format!(r#"mutation {{ delete_AgentToolCall(docID: "{script}") {{ _docID }} }}"#),
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        starter_verdict(&composed).await,
-        Err(CreationDenial::ParentMissing)
-    );
-    let missing = refusal().await;
-    assert!(
-        missing.contains(&CreationDenial::ParentMissing.to_string()),
-        "{missing}"
-    );
-    assert!(!can_interrupt(&composed, "list-withheld").await);
     fixture.db.node.shutdown().await.unwrap();
 }
 

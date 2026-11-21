@@ -7262,6 +7262,7 @@ dependencies = [
  "document",
  "events",
  "futures",
+ "gents-claude",
  "gents-documents",
  "gents-inference",
  "gents-lean-contract",

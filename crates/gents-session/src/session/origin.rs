@@ -1284,8 +1284,7 @@ async fn verified_agent_new_creation_matching(
         .context("the creation verdict is decided once every read is done")
 }
 
-/// Loading the cause call and its accepted ancestry (Lean
-/// `DurableLineage.CauseLoad`).
+/// Lean `DurableLineage.CauseLoad`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CauseLoad {
@@ -1300,8 +1299,8 @@ pub enum CauseLoad {
 }
 
 impl CauseLoad {
-    /// The observation a failed load is. A query the database could not answer
-    /// anywhere in the walk is `QueryFailed`, before any denial.
+    /// A query the database could not answer anywhere in the walk is
+    /// `QueryFailed`, before any denial.
     fn of(error: &crate::tool_call::query::result::ToolCallLoadError) -> Self {
         use crate::tool_call::query::result::ToolCallLoadError;
         if error.query_failed() {
@@ -1320,7 +1319,7 @@ impl CauseLoad {
     }
 }
 
-/// Reading the cause call's canonical result (Lean `DurableLineage.ResultRead`).
+/// Lean `DurableLineage.ResultRead`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ResultRead {
@@ -1340,8 +1339,7 @@ impl ResultRead {
     }
 }
 
-/// Reading a plugin effect's immutable acceptance receipt (Lean
-/// `DurableLineage.EffectRead`).
+/// Lean `DurableLineage.EffectRead`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EffectRead {
@@ -1362,7 +1360,7 @@ impl EffectRead {
     }
 }
 
-/// The cause call's verdict (Lean `DurableLineage.CreationOutcome`).
+/// Lean `DurableLineage.CreationOutcome`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CreationOutcome {
@@ -1380,10 +1378,7 @@ pub enum CreationOutcome {
     CauseReceiptMismatch,
 }
 
-/// Lean `DurableLineage.creationVerdict`: the cause call's verdict from what
-/// its reads observed so far. The call's own result wins over an effect's
-/// acceptance receipt; a query failure is `Retry`, never a denial; a verdict
-/// that still needs an unread input is `Pending`.
+/// Lean `DurableLineage.creationVerdict`.
 pub fn creation_verdict(
     binding: bool,
     load: CauseLoad,
@@ -1418,9 +1413,6 @@ pub fn creation_verdict(
     }
 }
 
-/// What a decided outcome returns: the verified creation, the denial, or, for
-/// `Retry`, the failed query as `CreationCheckUnavailable`. `None` while the
-/// outcome is `Pending`.
 fn outcome_verdict(
     outcome: CreationOutcome,
     failure: Option<anyhow::Error>,

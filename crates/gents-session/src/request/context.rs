@@ -75,8 +75,15 @@ mod tests {
 
     #[test]
     fn request_context_sections_match_lean() {
+        use gents_claude::origin::Cause;
         gents_lean_vocab::families::prompt_assembly_request_context_sections::replay(|i| {
-            request_context_sections(i.instructions, i.creation, i.profile_model)
+            let creation = match i.creation {
+                Cause::Client => None,
+                Cause::AgentNew => Some(SessionCreationCause::AgentNew),
+                Cause::TaskTrigger => Some(SessionCreationCause::TaskTrigger),
+                Cause::PluginJob => Some(SessionCreationCause::PluginJob),
+            };
+            request_context_sections(i.instructions, creation, i.profile_model)
         });
     }
 

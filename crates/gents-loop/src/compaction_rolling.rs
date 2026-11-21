@@ -124,6 +124,18 @@ where
     .into())
 }
 
+/// The messages of `chunk` the summarizer reads.
+pub(super) fn summary_chunk(chunk: &[Message], options: &ReductionOptions) -> Vec<Message> {
+    pretruncate_tool_results(
+        crate::loop_stream::stored_history(
+            crate::loop_stream::HistoryReader::Summarizer,
+            chunk.to_vec(),
+            |message| message,
+        ),
+        options.tool_result_max_chars,
+    )
+}
+
 async fn summary_candidate_tokens<M>(
     model: &M,
     chunk: &[Message],
@@ -134,7 +146,7 @@ async fn summary_candidate_tokens<M>(
 where
     M: ProviderModel,
 {
-    let prepared_chunk = pretruncate_tool_results(chunk.to_vec(), options.tool_result_max_chars);
+    let prepared_chunk = summary_chunk(chunk, options);
     let prior_checkpoint = prior_summary.and_then(|summary| {
         let summaries = [summary.to_string()];
         crate::prompt::compaction_summary_message(&summaries)

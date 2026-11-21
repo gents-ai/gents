@@ -317,16 +317,12 @@ pub async fn load_tool_call_read(
     .await
 }
 
-/// What reading a tool call's result or receipt failed on, told apart by its
-/// owner (`StoreRead::of`). The wrapped error stays on the `source()` chain, so
-/// a store conflict still reaches `TransactionFailure`.
+/// Each variant keeps the store error on its `source()` chain, so a conflict
+/// still reaches `TransactionFailure`.
 #[derive(Debug, thiserror::Error)]
 pub enum ReadFailure {
-    /// The database could not answer; retrying may succeed.
     #[error("the database could not answer the tool call read")]
     QueryFailed(#[source] anyhow::Error),
-    /// A row was read but could not be decoded or is invalid, or the reader
-    /// may not read it.
     #[error("the tool call's result or receipt could not be read")]
     Unreadable(#[source] anyhow::Error),
 }
@@ -340,16 +336,12 @@ impl ReadFailure {
     }
 }
 
-/// Whose error a failed read is, asked of the store's own classifier
-/// (`TransactionFailure`), never of the text.
+/// A permission denial is permanent, so it is a row the reader cannot read,
+/// never a retry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StoreRead {
-    /// The store could not answer; retrying may succeed.
     QueryFailed,
-    /// The store refused the reader. Permanent: a retry gets the same answer,
-    /// so it is a row the reader cannot read, not a retry.
     Denied,
-    /// Not a store error: the row was read and is corrupt or invalid.
     NotStore,
 }
 
@@ -381,8 +373,6 @@ pub(crate) async fn load_accepted_call(
 }
 
 impl AcceptedToolCall {
-    /// The request of a plugin effect, whose acceptance receipt is its own
-    /// source; `None` for any other call.
     pub(crate) fn plugin_effect_request(&self) -> Option<&str> {
         let call = &self.0 .0;
         call.plugin_parent_tool_call_doc_id
@@ -391,7 +381,6 @@ impl AcceptedToolCall {
     }
 }
 
-/// The canonical read of an accepted tool call, from its load.
 pub(crate) async fn read_accepted_call(
     access: &ConfigAccess,
     accepted: AcceptedToolCall,
@@ -877,9 +866,6 @@ pub async fn load_tool_call_arguments(
     Ok(read.arguments)
 }
 
-/// What an accepted tool call is loaded as: its identity, the session's
-/// canonical headers, the native call id its admission header bound, its
-/// accepted arguments and that header.
 type AcceptedParts = (
     ToolCallIdentityRow,
     Vec<gents_protocol::output::rows::TranscriptMessageRow>,
@@ -890,7 +876,6 @@ type AcceptedParts = (
 
 pub(crate) struct AcceptedToolCall(AcceptedParts);
 
-/// The caller scope a tool call is loaded in.
 #[derive(Clone, Copy)]
 pub(crate) struct ToolCallScope<'a> {
     pub node_did: &'a str,
@@ -898,35 +883,23 @@ pub(crate) struct ToolCallScope<'a> {
     pub requester_did: Option<&'a str>,
 }
 
-/// The tool calls already visited on one ancestry walk, so a cycle is refused.
 #[derive(Default)]
 struct ToolCallAncestry(rapidhash::RapidHashSet<String>);
 
-/// Why an accepted tool call could not be loaded, typed so a verifier tells a
-/// failed query from a missing, corrupt or invalid row, and its own call from
-/// a parent's, without reading error text.
 #[derive(Debug, thiserror::Error)]
 pub enum ToolCallLoadError {
-    /// No AgentToolCall row with this ID in the caller scope.
     #[error("no AgentToolCall document {0} in the caller scope")]
     Missing(String),
-    /// The database could not answer a query of the walk; retrying may
-    /// succeed.
     #[error("the database could not answer a tool call query")]
     QueryFailed(#[source] anyhow::Error),
-    /// The row was read but could not be decoded, or the reader may not read
-    /// it.
     #[error("the tool call row could not be read")]
     Unreadable(#[source] anyhow::Error),
-    /// The row was read but its identity, ancestry or admission is invalid.
     #[error("the tool call's identity, ancestry or admission is invalid")]
     Invalid(#[source] anyhow::Error),
-    /// The parent (plugin effect or spawn owner) of the call failed to load.
     #[error(transparent)]
     Parent(Box<ParentLoadError>),
 }
 
-/// A parent of the call that could not be loaded as an accepted call.
 #[derive(Debug, thiserror::Error)]
 #[error("loading parent tool call {doc_id}")]
 pub struct ParentLoadError {
@@ -936,9 +909,6 @@ pub struct ParentLoadError {
 }
 
 impl ToolCallLoadError {
-    /// A walk step's error: a query the database could not answer when the
-    /// store owns it, a row the reader cannot read when the store refused
-    /// it, otherwise an invalid row.
     fn of_step(error: anyhow::Error) -> Self {
         match StoreRead::of(&error) {
             StoreRead::QueryFailed => Self::QueryFailed(error),
@@ -957,7 +927,6 @@ impl ToolCallLoadError {
         }
     }
 
-    /// Whether a query failed anywhere in the walk, the parents' included.
     pub fn query_failed(&self) -> bool {
         match self {
             Self::QueryFailed(_) => true,

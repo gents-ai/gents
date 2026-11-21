@@ -1,10 +1,10 @@
 import Proofs.Session.PromptAssembly.RequestContext
-import Proofs.Conformance.Identity.AgentCreationReceipt
+import Proofs.Conformance.ClaudePromptAssembly
 
 namespace PromptAssembly.RequestContext
 
-deriving instance Lean.ToJson for Section
+deriving instance Lean.ToJson for Section, HistoryReader
 
-attribute [conformance_function] sections
+attribute [conformance_function] sections keepsStoredContext
 
 end PromptAssembly.RequestContext

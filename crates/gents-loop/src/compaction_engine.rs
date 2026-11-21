@@ -4,12 +4,12 @@ use futures::future::BoxFuture;
 use gents_protocol::message::Message;
 
 use super::history::{
-    self, extract_file_activity, pretruncate_tool_results,
-    split_messages_for_summary_with_counter_bounded,
+    self, extract_file_activity, split_messages_for_summary_with_counter_bounded,
 };
 use super::reduction::ReductionResultState;
 use super::rolling::{
-    deadline_elapsed, largest_fitting_summary_chunk, summarize_checkpoint, RollingSummaryWindow,
+    deadline_elapsed, largest_fitting_summary_chunk, summarize_checkpoint, summary_chunk,
+    RollingSummaryWindow,
 };
 use super::summary::{compaction_prompt, format_summary, ContinuationCheckpoint};
 use super::{
@@ -332,10 +332,7 @@ where
                         },
                     )
                     .await?;
-                    let chunk = pretruncate_tool_results(
-                        remaining[..chunk_len].to_vec(),
-                        options.tool_result_max_chars,
-                    );
+                    let chunk = summary_chunk(&remaining[..chunk_len], options);
                     let prior_checkpoint = rolling_summary.as_ref().and_then(|summary| {
                         crate::prompt::compaction_summary_message(std::slice::from_ref(summary))
                     });
