@@ -161,6 +161,7 @@ fn assemble_request_context_message(
 
 async fn await_with_request_deadline<F, T>(
     deadline: RequestDeadline,
+    driven: Option<&tokio::sync::Notify>,
     future: F,
     context: &str,
 ) -> Result<T>
@@ -168,6 +169,13 @@ where
     F: IntoFuture<Output = T>,
 {
     let future = future.into_future();
+    if let Some(cut) = driven {
+        return tokio::select! {
+            biased;
+            item = future => Ok(item),
+            () = cut.notified() => Err(request_deadline_error(deadline, context)),
+        };
+    }
     match request_deadline_remaining(deadline) {
         None => Ok(future.await),
         Some(remaining) if remaining.is_zero() => Err(request_deadline_error(deadline, context)),
@@ -401,6 +409,7 @@ where
                             request_id: &request_id,
                             session_id: &session_id,
                             request_deadline,
+                            driven_deadline: self.driven_deadline(),
                             terminal_failure_reason: &terminal_failure_reason,
                             max_turns_provenance,
                             capture,
