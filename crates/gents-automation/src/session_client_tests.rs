@@ -298,9 +298,12 @@ async fn http_client_creates_session_and_grants_only_its_selected_agent() {
         }
     }
     let schema = "type IdentitySchemaProbe { name: String }";
-    assert!(access.add_collection(schema).await.is_err());
+    assert!(access
+        .add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(schema))
+        .await
+        .is_err());
     ConfigAccess::Graphql(node_endpoint.clone())
-        .add_collection(schema)
+        .add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(schema))
         .await
         .unwrap();
     seed_owned_agent(&access, runtime.did(), &agent).await;

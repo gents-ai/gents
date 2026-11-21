@@ -1151,14 +1151,20 @@ async fn read_installed_pack_fails_loudly_on_more_than_one_record() {
     )
     .await
     .unwrap();
-    node.add_collection(gents_protocol::schemas::NODE)
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::NODE),
+    )
+    .await
+    .unwrap();
+    let schema = gents_protocol::schemas::HomePolicyIds::shared()
+        .render(gents_protocol::schemas::PACK_INSTALLATION)
+        .replace(
+            r#"@index(fields: ["node_did", "coordinate"], unique: true)"#,
+            "",
+        );
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&schema))
         .await
         .unwrap();
-    let schema = gents_protocol::schemas::PACK_INSTALLATION.replace(
-        r#"@index(fields: ["node_did", "coordinate"], unique: true)"#,
-        "",
-    );
-    node.add_collection(&schema).await.unwrap();
     let runtime_access =
         ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
     let user_did = identity::Did::new(user.did()).unwrap();
@@ -2644,6 +2650,39 @@ async fn dependee_names(access: &ConfigAccess) -> (Value, Value) {
         rows["data"]["Tools"][0]["display_name"].clone(),
         rows["data"]["AgentContext"][0]["display_name"].clone(),
     )
+}
+
+/// The root and a new dependency record their slots in `agent_bindings`
+/// alone: a hosted runtime looks a binding up and its client never does, so a
+/// binding in `variables` would make the two sides plan different graphs.
+#[tokio::test]
+async fn an_installation_records_agent_bindings_only_in_agent_bindings() {
+    let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
+    let owner = gents_store::identity::NodeIdentity::did(&runtime);
+    let (_guards, dependee, dependent) = documents_dependency_pair(false, false);
+    install_dependent_with_dependee(&access, &node, &runtime, &dependee, &dependent, None).await;
+    let records = access
+        .transact_readonly("test.pack.recorded_bindings", |txn| {
+            Box::pin(async move {
+                Ok::<_, anyhow::Error>([
+                    read_record(txn, owner, "fixture/dependent_fixture").await?,
+                    read_record(txn, owner, "fixture/dependee_fixture").await?,
+                ])
+            })
+        })
+        .await
+        .unwrap();
+    for record in records {
+        assert!(!record.agent_bindings.is_empty());
+        assert!(
+            !record
+                .variables
+                .keys()
+                .any(|name| crate::pack::is_agent_binding_variable(name)),
+            "{:?}",
+            record.variables
+        );
+    }
 }
 
 #[tokio::test]

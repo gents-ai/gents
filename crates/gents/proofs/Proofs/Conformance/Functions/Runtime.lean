@@ -22,7 +22,7 @@ deriving instance Lean.ToJson for Decision
 end RuntimeReconcile.MetricsScrapeAccess
 
 namespace RuntimeReconcile.UpdateHandoff
-deriving instance Lean.ToJson for Phase
+deriving instance Lean.ToJson for Phase, Registrant, HelperRegistration
 end RuntimeReconcile.UpdateHandoff
 
 namespace RouterDispatch
@@ -36,3 +36,5 @@ attribute [conformance_function]
   RuntimeReconcile.MetricsScrapeAccess.decide
   RuntimeReconcile.MetricsScrapeAccess.bindAllowed
   RuntimeReconcile.HttpAccess.mcpQueryReadsAs
+  RuntimeReconcile.UpdateHandoff.helperRegistration
+  RuntimeReconcile.UpdateHandoff.statusTakesLock

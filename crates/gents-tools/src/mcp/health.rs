@@ -1301,9 +1301,15 @@ mod tests {
             0,
         )
         .await?;
-        node.add_collection(gents_protocol::schemas::NODE).await?;
-        node.add_collection(gents_protocol::schemas::TOOL_SERVICE_HEALTH_STATE)
-            .await?;
+        node.add_collection(
+            &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::NODE),
+        )
+        .await?;
+        node.add_collection(
+            &gents_protocol::schemas::HomePolicyIds::shared()
+                .render(gents_protocol::schemas::TOOL_SERVICE_HEALTH_STATE),
+        )
+        .await?;
         let access = |actor: &gents_store::identity::KeyIdentity| -> anyhow::Result<ConfigAccess> {
             Ok(ConfigAccess::Graphql(
                 GraphqlEndpoint::as_principal(

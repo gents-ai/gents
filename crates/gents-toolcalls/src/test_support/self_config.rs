@@ -25,6 +25,7 @@ pub fn config(categories: &[&str]) -> SelfConfigToolConfig {
         ceiling_plugins: None,
         registry_url: None,
         plugin_builder: None,
+        ux_preview_assets: None,
     }
 }
 
@@ -569,7 +570,7 @@ impl SelfConfigFixture {
             self.db.node.clone(),
             identity::Did::new(self.db.node_identity.did()).unwrap(),
         )
-        .add_collection(sdl)
+        .add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(sdl))
         .await
         .unwrap();
     }

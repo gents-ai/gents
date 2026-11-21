@@ -53,7 +53,8 @@ impl ConfigApplyTxn<'_> {
         let owner = node
             .document_acp()
             .get_doc_owner(
-                gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
+                gents_protocol::schemas::HomePolicyIds::shared()
+                    .id(gents_protocol::schemas::BuiltInPolicy::Household),
                 "configuration",
                 doc_id,
             )

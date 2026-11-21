@@ -443,11 +443,11 @@ mod tests {
         crate::test_support::acp_policies::install_identity_acp_policies(&node)
             .await
             .unwrap();
-        node.add_collection(&format!(
+        node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&format!(
             r#"type {} @policy(id: "{}", resource: "secret_configuration") {{ backend_id: String }}"#,
             gents_protocol::schemas::INFERENCE_BACKEND_NAME,
-            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
-        ))
+            gents_protocol::schemas::HomePolicyIds::shared().id(gents_protocol::schemas::BuiltInPolicy::Household),
+        )))
         .await
         .unwrap();
         assert_eq!(incompatible_store_kind(&data).unwrap(), None);

@@ -1,0 +1,3 @@
+---- MODULE MCHeldAudienceReadsQueued ----
+EXTENDS HeldAudienceReads
+====

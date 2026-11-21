@@ -465,7 +465,7 @@ async fn run_inner(
             "hosted pack session cannot preview or wire plugins"
         );
         let node_did = state.node_did.clone();
-        let received =
+        let mut received =
             tokio::task::spawn_blocking(move || decode_install_request(request, &node_did))
                 .await??;
         let requested =
@@ -475,6 +475,9 @@ async fn run_inner(
             &received.request.bind_agents,
         )?;
         let overrides = gents_pack::operations::pack::dependency_overrides(&supplied);
+        let environment = gents_pack::operations::pack::InstallEnvironment::HostedRuntime(
+            std::mem::take(&mut received.request.installer_environment),
+        );
         let mut prepared = gents_pack::pack::prepare_document_pack_archive(
             &gents_pack::pack::InstallTarget {
                 access: &access,
@@ -493,6 +496,7 @@ async fn run_inner(
                     gents_pack::operations::pack::install_value(
                         gents_protocol::operations::pack::PackActor::User,
                         &supplied,
+                        &environment,
                         name,
                     )
                 },

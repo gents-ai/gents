@@ -241,7 +241,8 @@ pub(super) fn trusted_delete_schema(collection: &str) -> Option<&'static str> {
 /// The signing graph uses the version the exact SDL registers, which is the canonical
 /// version: every collection's fresh store registers its current SDL directly.
 pub(super) fn signing_schema(sdl: &str, collection: &str) -> Result<::schema::CollectionVersion> {
-    let mut schemas = query::parse_sdl(sdl)?;
+    let mut schemas =
+        query::parse_sdl(&gents_protocol::schemas::HomePolicyIds::shared().render(sdl))?;
     if schemas.len() != 1 || schemas[0].name != collection {
         return Err(ConfigClientError::ClientAgentTransportRequired);
     }

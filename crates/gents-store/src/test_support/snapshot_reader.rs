@@ -1,5 +1,5 @@
 pub enum SnapshotChanges {
-    Local(events::DocumentChangeSubscription),
+    Local(crate::subscription_source::ChangeSubscription),
     Remote {
         access: Box<crate::config_client::ConfigAccess>,
         query: String,

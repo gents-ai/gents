@@ -649,25 +649,56 @@ fn legacy_runtime_cannot_begin_an_unfenced_managed_handoff() {
     assert!(execute::require_startup_fence(&capabilities).is_err());
 }
 
+fn write_receipt(directory: &Path, phase: Phase) -> Receipt {
+    let receipt = Receipt {
+        operation_id: uuid::Uuid::new_v4(),
+        node_did: "node".into(),
+        phase,
+        message: String::new(),
+        updated_at: String::new(),
+        directory: directory.into(),
+    };
+    files::write_json(&directory.join("receipt.json"), &receipt).unwrap();
+    receipt
+}
+
 #[test]
-fn a_running_helper_keeps_its_registration_from_duplicate_submissions() {
+fn helper_registration_matches_lean() {
+    gents_lean_vocab::families::runtime_reconcile_update_handoff_helper_registration::replay(|i| {
+        let dir = tempfile::tempdir().unwrap();
+        write_receipt(dir.path(), i.phase);
+        let _running =
+            (!i.lock_taken).then(|| files::lock(&dir.path().join("helper.lock")).unwrap());
+        let mut registered = false;
+        let decision = register_unless_helper_runs(dir.path(), i.caller, || {
+            registered = true;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            registered,
+            decision == HelperRegistration::Register,
+            "{i:?}"
+        );
+        decision
+    });
+    gents_lean_vocab::families::runtime_reconcile_update_handoff_status_takes_lock::replay(|i| {
+        status_takes_lock(i.phase)
+    });
+}
+
+#[test]
+fn an_unopenable_helper_lock_is_an_error_not_a_running_helper() {
     let dir = tempfile::tempdir().unwrap();
-    let running = files::lock(&dir.path().join("helper.lock")).unwrap();
     let mut registered = false;
-    assert!(!register_unless_helper_runs(dir.path(), || {
-        registered = true;
-        Ok(())
-    })
-    .unwrap());
+    let result =
+        register_unless_helper_runs(&dir.path().join("missing"), Registrant::Status, || {
+            registered = true;
+            Ok(())
+        });
     assert!(
-        !registered,
-        "re-registered beside the running helper's cleanup"
+        matches!(result, Err(HelperRegistrationError::Lock(_))),
+        "{result:?}"
     );
-    drop(running);
-    assert!(register_unless_helper_runs(dir.path(), || {
-        registered = true;
-        Ok(())
-    })
-    .unwrap());
-    assert!(registered);
+    assert!(!registered);
 }

@@ -179,6 +179,7 @@ fn document_pack_preview_shows_the_install_variable_and_its_target() {
         &source,
         "did:key:node",
         &Default::default(),
+        &Default::default(),
     )
     .unwrap();
     assert_eq!(preview["kind"], "install_literal");

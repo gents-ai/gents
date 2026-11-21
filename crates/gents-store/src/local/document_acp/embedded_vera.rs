@@ -47,10 +47,10 @@ fn deployment(node_did: &str) -> EmbeddedVeraDeployment {
         created: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_secs()),
-        policies: crate::schema::catalog::NODE_POLICIES
+        policies: gents_protocol::schemas::BuiltInPolicy::ALL
             .iter()
             .map(|policy| EmbeddedVeraPolicy {
-                definition: policy.definition.to_owned(),
+                definition: policy.definition().to_owned(),
                 counter: 0,
                 owner: node_did.to_owned(),
             })

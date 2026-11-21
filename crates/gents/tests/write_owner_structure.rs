@@ -2882,13 +2882,11 @@ fn ambient_context_skips_only_named_documented_statics() {
 const ENVIRONMENT_READ_ALLOWLIST: &[(&str, usize, &str)] = &[
     ("apps/gents-desktop/src-tauri/src/bridge/browser.rs", 1, "HOME: expands a leading ~ in a user-typed path; legitimately external (platform discovery)"),
     ("apps/gents-desktop/src-tauri/src/bridge/links.rs", 1, "APPIMAGE: AppImage probe deciding how links open from a packaged Linux build; legitimately external"),
-    ("apps/gents-desktop/src-tauri/src/bridge/product_telemetry.rs", 2, "GENTS_UMAMI_ENDPOINT and GENTS_UMAMI_WEBSITE_ID: a fixed property of the release build; becomes option_env! or a desktop setting"),
-    ("apps/gents-desktop/src-tauri/src/runner/live_fixture/backend.rs", 2, "the API key variable a live-fixture backend names: the runner checks it is set before seeding a backend the runtime will read it from by name; stays"),
+    ("apps/gents-desktop/src-tauri/src/runner/live_fixture/backend.rs", 1, "the API key variable a live-fixture backend names: the runner checks it is set before seeding a backend the runtime will read it from by name; legitimately external"),
     ("crates/gents-chatgpt-login/src/lib.rs", 1, "CODEX_CA_CERT and SSL_CERT_FILE: standard custom CA bundle convention; legitimately external"),
     ("crates/gents-cli/src/commands/chat/streaming.rs", 1, "NO_COLOR: standard convention disabling terminal colour; legitimately external"),
     ("crates/gents-cli/src/commands/eval/frame.rs", 1, "NO_COLOR: standard convention disabling terminal colour; legitimately external"),
     ("crates/gents-cli/src/commands/init.rs", 1, "HOME: platform discovery for the default tool root before any configuration exists; legitimately external"),
-    ("crates/gents-cli/src/commands/job/promote.rs", 1, "JAVY: tool discovery for the javy compiler, like PATH; becomes a --javy flag"),
     ("crates/gents-cli/src/commands/pack/registry.rs", 1, "GENTS_REGISTRY_TOKEN: registry credential kept out of argv and shell history; legitimately external"),
     ("crates/gents-cli/src/commands/pack/scenario/load.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables; legitimately external"),
     ("crates/gents-cli/src/commands/pack/scenario/setup.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables; legitimately external"),
@@ -2896,24 +2894,22 @@ const ENVIRONMENT_READ_ALLOWLIST: &[(&str, usize, &str)] = &[
     ("crates/gents-cli/src/desired_state/load.rs", 1, "desired-state ${VAR} interpolation: the manifest names operator-supplied variables; legitimately external"),
     ("crates/gents-desktop-bridge/src/host_browser.rs", 4, "BROWSER, PATH, APPDIR and APPIMAGE: platform browser discovery and the AppImage probe; legitimately external"),
     ("crates/gents-desktop-bridge/src/package_tools.rs", 6, "PATH, APPDIR, APPIMAGE and the launcher's variables: restores the host environment for host programs launched from an AppImage; legitimately external"),
-    ("crates/gents-desktop-bridge/src/tauri_commands/service_executable.rs", 4, "GENTS_BIN, PATH, APPDIR and APPIMAGE: discovery of the gents executable and the AppImage probe; GENTS_BIN becomes a desktop setting, the rest are legitimately external"),
-    ("crates/gents-desktop/src/main.rs", 2, "GENTS_DESKTOP_TAURI_BIN and PATH: discovery of the desktop executable; GENTS_DESKTOP_TAURI_BIN becomes a flag"),
+    ("crates/gents-desktop-bridge/src/tauri_commands/service_executable.rs", 3, "PATH, APPDIR and APPIMAGE: discovery of the gents executable and the AppImage probe; legitimately external"),
+    ("crates/gents-desktop/src/main.rs", 1, "PATH: discovery of the desktop executable; legitimately external"),
     ("crates/gents-documents/src/inference_backend.rs", 1, "the variable an InferenceBackend document names as its API key source (auth kind environment); the document decides, legitimately external"),
     ("crates/gents-eval/src/optimization/driver.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables; legitimately external"),
     ("crates/gents-eval/src/runner/embedded/executor/install.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables; legitimately external"),
     ("crates/gents-eval/src/runner/freeze/pack.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables; legitimately external"),
     ("crates/gents-host/src/serve.rs", 2, "the secret named by the metrics token flag (legitimately external) and HOME for the default working root (platform discovery)"),
     ("crates/gents-inference/src/clients/claude_messages/transport.rs", 2, "HTTPS_PROXY/https_proxy and NO_PROXY: standard proxy convention; legitimately external"),
-    ("crates/gents-pack/src/operations/pack.rs", 2, "pack variables whose declared source is the operator's environment; legitimately external"),
-    ("crates/gents-pack/src/pack/install_flow.rs", 1, "pack variables whose declared source is the operator's environment; legitimately external"),
+    ("crates/gents-pack/src/operations/pack.rs", 1, "pack variables whose declared source is the installer's own environment (Lean Pack.Operations.planEnvironment); legitimately external"),
     ("crates/gents-pack/src/pack/interpolate.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables; legitimately external"),
     ("crates/gents-pack/src/plugin/host_imports.rs", 2, "passes the variables an installed plugin's consented env access names into its sandbox; the consent document decides, legitimately external"),
     ("crates/gents-service/src/native_service.rs", 7, "HOME, XDG_CONFIG_HOME, PATH, APPDIR and APPIMAGE: platform discovery of the service unit paths and the AppImage probe; legitimately external"),
     ("crates/gents-service/src/telemetry.rs", 1, "OTEL_EXPORTER_OTLP_* and OTEL_SERVICE_NAME: standard OpenTelemetry convention; legitimately external"),
     ("crates/gents-session/src/workspace/adapter.rs", 1, "inherits the process environment for a managed git child, minus the git variables it overrides; legitimately external"),
-    ("crates/gents-tools/src/ux_preview.rs", 1, "GENTS_UX_PREVIEW_ASSETS: preview renderer assets outside an installed layout; becomes a flag"),
     ("crates/gents-tools/src/ux_preview/browser.rs", 1, "PATH: platform discovery of a system browser; legitimately external"),
-    ("crates/gents/examples/serve_default_agent.rs", 1, "example program configured by its environment; not shipped"),
+    ("crates/gents/examples/serve_default_agent.rs", 1, "a developer example configured from the shell that runs it, never shipped; legitimately external"),
     ("crates/gents/src/client_runtime/mod.rs", 1, "HOME: platform discovery of the user home before configuration exists; legitimately external"),
 ];
 
@@ -3129,13 +3125,12 @@ const PROCESS_STATIC_ALLOWLIST: &[(&str, usize, &str)] = &[
     ("crates/gents-host/src/http/version.rs", 1, "the build's version response: an immutable value built once on first use, the same for every node and Agent; stays"),
     ("crates/gents-host/src/p2p_status.rs", 1, "the shared reqwest client, a connection pool built once; stays"),
     ("crates/gents-inference/src/admission/config.rs", 1, "per-process HMAC key for credential fingerprints, never persisted by design; stays"),
-    ("crates/gents-inference/src/auth/credential/bearer.rs", 1, "weak registry of live OAuth bearers by credential, reused only on the node holding it, so every in-process user of that node's credential (agent clients, usage polls, health probes, model discovery) shares one refresh; they share no owner but the DefraDB node, so it moves onto a per-node inference owner once one exists"),
     ("crates/gents-inference/src/clients/claude_messages/transport.rs", 1, "shared HTTP clients built once from the proxy environment, one keep-alive pool per proxy decision; stays"),
     ("crates/gents-lean-contract/src/lib.rs", 2, "the Lean process output cache and load lock in a crate that links only into tests; stays"),
     ("crates/gents-lean-vocab/src/lib.rs", 1, "the Lean contract snapshot in a crate that links only into tests: an immutable value built once on first use, the same for every node and Agent; stays"),
     ("crates/gents-pack/src/pack/registry.rs", 1, "one registry download at a time per process, an external premise of the registry's throttle; stays"),
     ("crates/gents-pack/src/plugin/allowed.rs", 1, "embedded release digests: an immutable value built once on first use, the same for every node and Agent; stays"),
-    ("crates/gents-pack/src/plugin/allowed/protected.rs", 1, "protected plugin paths shared by every home in the process; moves onto the home's owner"),
+    ("crates/gents-pack/src/plugin/allowed/protected.rs", 1, "the permission files of every home this process serves: a plugin of any node must mount none of them, so the guard is their union across the process, not one home's; stays"),
     ("crates/gents-pack/src/plugin/script_engine.rs", 1, "the script engine, compiled once: an immutable value built once on first use, the same for every node and Agent; stays"),
     ("crates/gents-pack/src/plugin/ux/lint.rs", 10, "UX lint rules: compiled regular expressions, immutable once built; stay"),
     ("crates/gents-pack/src/plugin/wasi_runtime.rs", 1, "the WASI async runtime, a process-global resource built once; stays"),
@@ -6997,7 +6992,7 @@ fn stores_claimed_before_the_choice(syntax: &syn::File) -> Vec<String> {
 
 /// A function that checks a home's document-ACP choice does so before it
 /// claims or opens the home's store, so a refused home is left untouched
-/// (Lean `DocumentAcpChoice.enter`). Syntactic: claims are matched by name,
+/// (Lean `DocumentAcpChoice.admit`). Syntactic: claims are matched by name,
 /// and a function that never checks the choice is not held to it.
 #[test]
 fn a_homes_choice_is_checked_before_its_store_is_claimed() {
@@ -7049,4 +7044,53 @@ fn home_choice_fence_flags_a_claim_before_the_check() {
         let syntax = syn::parse_file(source).expect("parse snippet");
         assert_eq!(stores_claimed_before_the_choice(&syntax), flagged, "{source}");
     }
+}
+
+/// The one owner of change subscriptions: a watcher subscribes through it, so
+/// on a home whose access settles after a row commits it is also woken when
+/// the access settles (Lean `AccessWake.listens`, TLA `AccessWake`).
+const CHANGE_SUBSCRIPTION_OWNER: &str = "crates/gents-store/src/subscription_source.rs";
+
+#[derive(Default)]
+struct ChangeSubscriptionSites(usize);
+
+impl<'ast> Visit<'ast> for ChangeSubscriptionSites {
+    fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+        if !cfg_test(&item.attrs) {
+            visit::visit_item_mod(self, item);
+        }
+    }
+
+    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+        if !cfg_test(&item.attrs) {
+            visit::visit_item_fn(self, item);
+        }
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        if call.method == "subscribe_collection_changes" {
+            self.0 += 1;
+        }
+        visit::visit_expr_method_call(self, call);
+    }
+}
+
+#[test]
+fn change_subscriptions_have_one_owner() {
+    let root = repo_root();
+    let violations = parse_production(&root, production_sources(&root))
+        .into_iter()
+        .filter(|(relative, _)| relative != CHANGE_SUBSCRIPTION_OWNER)
+        .filter(|(_, syntax)| {
+            let mut sites = ChangeSubscriptionSites::default();
+            sites.visit_file(syntax);
+            sites.0 > 0
+        })
+        .map(|(relative, _)| relative)
+        .collect::<Vec<_>>();
+    assert!(
+        violations.is_empty(),
+        "subscribe through `gents_store::subscription_source` instead of the node's \
+         `subscribe_collection_changes`, so access changes wake the watcher: {violations:?}"
+    );
 }

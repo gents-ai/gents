@@ -13,29 +13,18 @@ struct Config {
 }
 
 impl Config {
-    fn from_env() -> Option<Self> {
+    fn from_build() -> Option<Self> {
         if cfg!(debug_assertions) || cfg!(test) {
             return None;
         }
         Self::from_sources(
-            std::env::var("GENTS_UMAMI_ENDPOINT").ok().as_deref(),
-            std::env::var("GENTS_UMAMI_WEBSITE_ID").ok().as_deref(),
             option_env!("GENTS_UMAMI_ENDPOINT"),
             option_env!("GENTS_UMAMI_WEBSITE_ID"),
         )
     }
 
-    fn from_sources(
-        endpoint: Option<&str>,
-        website: Option<&str>,
-        built_endpoint: Option<&str>,
-        built_website: Option<&str>,
-    ) -> Option<Self> {
-        match (endpoint, website) {
-            (Some(endpoint), Some(website)) => Self::parse(endpoint, website),
-            (None, None) => Self::parse(built_endpoint?, built_website?),
-            _ => None,
-        }
+    fn from_sources(endpoint: Option<&str>, website: Option<&str>) -> Option<Self> {
+        Self::parse(endpoint?, website?)
     }
 
     fn parse(endpoint: &str, website: &str) -> Option<Self> {
@@ -85,7 +74,7 @@ pub struct ProductTelemetry {
 
 impl ProductTelemetry {
     pub fn new(path: PathBuf) -> Self {
-        Self::with_config(path, Config::from_env())
+        Self::with_config(path, Config::from_build())
     }
 
     fn with_config(path: PathBuf, config: Option<Config>) -> Self {
@@ -341,19 +330,13 @@ mod tests {
     }
 
     #[test]
-    fn release_configuration_uses_complete_sources_without_mixing_them() {
+    fn release_configuration_needs_both_build_values() {
         let website = "12345678-1234-1234-1234-123456789abc";
         let endpoint = "https://metrics.example/api/send";
-        assert!(Config::from_sources(None, None, Some(endpoint), Some(website)).is_some());
-        assert!(Config::from_sources(Some(endpoint), Some(website), None, None).is_some());
-        assert!(
-            Config::from_sources(Some(endpoint), None, Some(endpoint), Some(website)).is_none()
-        );
-        assert!(Config::from_sources(None, None, Some(endpoint), None).is_none());
-        assert!(
-            Config::from_sources(None, None, Some("http://invalid/api/send"), Some(website))
-                .is_none()
-        );
+        assert!(Config::from_sources(Some(endpoint), Some(website)).is_some());
+        assert!(Config::from_sources(Some(endpoint), None).is_none());
+        assert!(Config::from_sources(None, Some(website)).is_none());
+        assert!(Config::from_sources(Some("http://invalid/api/send"), Some(website)).is_none());
     }
 
     #[tokio::test]

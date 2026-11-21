@@ -10,7 +10,6 @@ use std::io::Write;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
-use clap::builder::FalseyValueParser;
 use clap::Parser;
 use serde::Serialize;
 use tokio::io::AsyncReadExt;
@@ -27,47 +26,37 @@ struct RunnerArgs {
     #[arg(long)]
     desktop_only: bool,
     /// Serves the test-fixture routes that write past the desktop's own surface.
-    #[arg(long, env = "GENTS_TAURI_LIVE", value_parser = FalseyValueParser::new())]
+    #[arg(long)]
     live: bool,
     /// Keeps the fixture's temporary data after shutdown.
-    #[arg(long, env = "GENTS_TAURI_LIVE_RETAIN_DATA", value_parser = FalseyValueParser::new())]
+    #[arg(long)]
     retain_data: bool,
-    #[arg(long, env = "GENTS_DESKTOP_TEST_LOG")]
+    #[arg(long)]
     log_filter: Option<String>,
     /// JSON object overriding the fixture's sampling, profile and execution limits.
-    #[arg(long, env = "GENTS_DESKTOP_LIVE_INFERENCE")]
+    #[arg(long)]
     inference_settings: Option<String>,
-    #[arg(long, env = "GENTS_DESKTOP_LIVE_BACKEND_ENDPOINT")]
+    #[arg(long)]
     inference_url: Option<String>,
-    #[arg(long, env = "GENTS_DESKTOP_LIVE_BACKEND_MODEL")]
+    #[arg(long)]
     model_name: Option<String>,
-    #[arg(long, env = "GENTS_TEST_OPENROUTER_MODEL")]
+    #[arg(long)]
     fallback_model_name: Option<String>,
-    #[arg(long, env = "GENTS_DESKTOP_LIVE_BACKEND_PROVIDER")]
+    #[arg(long)]
     provider: Option<String>,
-    #[arg(
-        long,
-        env = "GENTS_DESKTOP_LIVE_BACKEND_API_KEY",
-        hide_env_values = true
-    )]
+    #[arg(long)]
     api_key: Option<String>,
-    #[arg(long, env = "GENTS_DESKTOP_LIVE_BACKEND_API_KEY_ENV_VAR")]
+    #[arg(long)]
     api_key_env_var: Option<String>,
-    #[arg(long, env = "OPENROUTER_API_KEY", hide_env_values = true)]
-    openrouter_api_key: Option<String>,
-    #[arg(long, env = "GENTS_DESKTOP_LIVE_TARGET_BACKEND_ENDPOINT")]
+    #[arg(long)]
     agent_target_inference_url: Option<String>,
-    #[arg(long, env = "GENTS_DESKTOP_LIVE_TARGET_BACKEND_MODEL")]
+    #[arg(long)]
     agent_target_model_name: Option<String>,
-    #[arg(long, env = "GENTS_DESKTOP_LIVE_TARGET_BACKEND_PROVIDER")]
+    #[arg(long)]
     agent_target_provider: Option<String>,
-    #[arg(
-        long,
-        env = "GENTS_DESKTOP_LIVE_TARGET_BACKEND_API_KEY",
-        hide_env_values = true
-    )]
+    #[arg(long)]
     agent_target_api_key: Option<String>,
-    #[arg(long, env = "GENTS_DESKTOP_LIVE_TARGET_BACKEND_API_KEY_ENV_VAR")]
+    #[arg(long)]
     agent_target_api_key_env_var: Option<String>,
 }
 
@@ -100,7 +89,6 @@ async fn run(args: RunnerArgs, runtime: tokio::runtime::Handle) -> Result<()> {
             provider: args.provider,
             api_key: args.api_key,
             api_key_env_var: args.api_key_env_var,
-            openrouter_api_key: args.openrouter_api_key,
             inference_settings: args.inference_settings,
         };
         let agent_target_override = LiveTargetBackendOverride {

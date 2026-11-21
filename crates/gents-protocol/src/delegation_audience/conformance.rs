@@ -249,3 +249,49 @@ fn a_home_clock_moves_as_the_lean_model_says() {
         clock_moved(clock(&input.held).as_ref(), clock(&input.read).as_ref())
     });
 }
+
+fn record(known: bool, deployment: u64, provider_at_read: u64) -> super::HeldRecord {
+    super::HeldRecord {
+        audience: known.then(|| audience(deployment)),
+        clock: known.then_some(HomeClock {
+            provider_at_read,
+            clock_at_read: 900,
+        }),
+    }
+}
+
+#[test]
+fn a_record_changes_since_a_refused_credential_as_the_lean_model_says() {
+    gents_lean_vocab::families::identity_held_audience_record_change::replay::<Change, Held>(
+        |input| {
+            let before = record(matches!(input.before, Held::Known), 1, 1_000);
+            let after = record(
+                matches!(input.after, Held::Known),
+                if input.same_audience { 1 } else { 2 },
+                if input.same_clock { 1_000 } else { 2_000 },
+            );
+            token(&super::change_since(&before, &after))
+        },
+    );
+}
+
+#[test]
+fn a_kept_record_changes_since_the_presented_one_as_the_lean_model_says() {
+    use gents_lean_vocab::families::identity_held_audience_changes_since as family;
+    family::replay::<Change>(|input| {
+        let record = |case: &Option<family::RecordCase>| match case {
+            None => super::HeldRecord::default(),
+            Some(case) => super::HeldRecord {
+                audience: Some(audience(case.deployment)),
+                clock: case.clock.as_ref().map(|reading| HomeClock {
+                    provider_at_read: reading.provider_at_read,
+                    clock_at_read: reading.clock_at_read,
+                }),
+            },
+        };
+        token(&super::change_since(
+            &record(&input.presented),
+            &record(&input.kept),
+        ))
+    });
+}

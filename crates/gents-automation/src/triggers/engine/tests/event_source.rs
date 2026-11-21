@@ -105,9 +105,7 @@ async fn startup_seeding_covers_every_document_beyond_the_former_cap() {
     node.shutdown().await.expect("node shutdown");
 }
 
-use events::{
-    Bus, ChannelBus, DocumentChangeSubscription, EventName, Message, Subscription, Update,
-};
+use events::{Bus, ChannelBus, EventName, Message, Subscription, Update};
 
 #[derive(Clone)]
 struct FakeUpdateSubscriptionSource(Arc<ChannelBus>);
@@ -139,11 +137,11 @@ impl gents_store::subscription_source::UpdateSubscriptionSource for FakeUpdateSu
         self.0.subscribe(&[EventName::Update])
     }
 
-    fn subscribe_collection_changes(
+    fn subscribe_changes(
         &self,
         collection_ids: Vec<String>,
-    ) -> DocumentChangeSubscription {
-        self.0.subscribe_collection_changes(collection_ids)
+    ) -> gents_store::subscription_source::ChangeSubscription {
+        self.0.subscribe_collection_changes(collection_ids).into()
     }
 }
 
@@ -855,7 +853,7 @@ async fn event_source_next_fire_emits_intent_on_matching_real_event() {
             payload: String
         }
     "#;
-    node.add_collection(webhook_sdl)
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(webhook_sdl))
         .await
         .expect("add_collection for WebhookEvent");
     let task = ResolvedTask {
@@ -1695,7 +1693,7 @@ async fn event_source_filter_probe_gates_fire_on_operator_filter() {
             email: String
         }
     "#;
-    node.add_collection(webhook_sdl)
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(webhook_sdl))
         .await
         .expect("add_collection for WebhookEvent");
 
@@ -1794,7 +1792,7 @@ async fn event_source_hydrates_doc_vars_from_source_doc_fields() {
             email: String
         }
     "#;
-    node.add_collection(webhook_sdl)
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(webhook_sdl))
         .await
         .expect("add_collection for WebhookEvent");
 
@@ -1970,7 +1968,7 @@ async fn event_source_on_result_writes_runtime_fields_on_fired() {
             payload: String
         }
     "#;
-    node.add_collection(webhook_sdl)
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(webhook_sdl))
         .await
         .expect("add_collection for WebhookEvent");
 
@@ -2068,7 +2066,7 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
             payload: String
         }
     "#;
-    node.add_collection(webhook_sdl)
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(webhook_sdl))
         .await
         .expect("add_collection for WebhookEvent");
 
@@ -2214,7 +2212,7 @@ async fn event_source_fans_out_one_event_across_multiple_matching_triggers() {
             payload: String
         }
     "#;
-    node.add_collection(webhook_sdl)
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(webhook_sdl))
         .await
         .expect("add_collection for WebhookEvent");
     let task = resolved_task("ignored");
@@ -2284,7 +2282,7 @@ async fn event_source_tries_all_triggers_when_first_filter_misses() {
             kind: String @index
         }
     "#;
-    node.add_collection(webhook_sdl)
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(webhook_sdl))
         .await
         .expect("add_collection for WebhookEvent");
     let task = resolved_task("ignored");

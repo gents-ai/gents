@@ -50,9 +50,12 @@ fn current_sdl(name: &str) -> &'static str {
 #[tokio::test(flavor = "multi_thread")]
 async fn goal_controls_bind_agent_ownership_policy() {
     let node = fresh_node().await;
-    node.add_collection(gents_protocol::schemas::AGENT_SESSION_GOAL_CONTROL)
-        .await
-        .expect("goal control schema");
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared()
+            .render(gents_protocol::schemas::AGENT_SESSION_GOAL_CONTROL),
+    )
+    .await
+    .expect("goal control schema");
     let collection = node
         .get_collection(gents_protocol::schemas::AGENT_SESSION_GOAL_CONTROL_NAME)
         .expect("collection lookup")
@@ -60,7 +63,8 @@ async fn goal_controls_bind_agent_ownership_policy() {
     let policy = collection.policy.expect("goal control policy");
     assert_eq!(
         policy.id,
-        gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID
+        gents_protocol::schemas::HomePolicyIds::shared()
+            .id(gents_protocol::schemas::BuiltInPolicy::Household)
     );
     assert_eq!(policy.resource_name, "goal_controls");
     assert!(!collection.is_branchable);
@@ -114,7 +118,9 @@ async fn client_authored_collections_stay_fresh_apply_compatible() {
         let client = fresh_node().await;
         for &name in CLIENT_AUTHORED_COLLECTIONS {
             client
-                .add_collection(current_sdl(name))
+                .add_collection(
+                    &gents_protocol::schemas::HomePolicyIds::shared().render(current_sdl(name)),
+                )
                 .await
                 .unwrap_or_else(|error| panic!("client fresh-apply {name}: {error}"));
         }
@@ -150,7 +156,7 @@ async fn client_authored_collections_stay_fresh_apply_compatible() {
 #[tokio::test(flavor = "multi_thread")]
 async fn identity_policy_catalog_matches_applied_schemas() {
     use gents_protocol::schemas::{
-        AGENT_OWNERSHIP_POLICY_ID, ALL, ALL_COLLECTION_NAMES, IDENTITY_POLICY_BINDINGS,
+        BuiltInPolicy, HomePolicyIds, ALL, ALL_COLLECTION_NAMES, IDENTITY_POLICY_BINDINGS,
         RUNTIME_ALL, RUNTIME_COLLECTION_NAMES,
     };
 
@@ -170,17 +176,21 @@ async fn identity_policy_catalog_matches_applied_schemas() {
             .iter()
             .find(|(bound, _)| *bound == name);
         assert_eq!(
-            sdl.contains(AGENT_OWNERSHIP_POLICY_ID),
+            sdl.contains(BuiltInPolicy::Household.placeholder()),
             binding.is_some(),
             "{name} identity policy directive and startup catalog must agree"
         );
         if let Some((_, resource)) = binding {
-            node.add_collection(sdl)
+            node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(sdl))
                 .await
                 .expect("apply policy-bound schema");
             let collection = node.get_collection(name).unwrap().expect("collection");
             let policy = collection.policy.expect("native policy binding");
-            assert_eq!(policy.id, AGENT_OWNERSHIP_POLICY_ID, "{name}");
+            assert_eq!(
+                policy.id,
+                HomePolicyIds::shared().id(BuiltInPolicy::Household),
+                "{name}"
+            );
             assert_eq!(policy.resource_name, *resource, "{name}");
             // Identity-bound collections replicate only through the protocol allowlist.
             assert_eq!(
@@ -209,19 +219,24 @@ async fn identity_policy_catalog_matches_applied_schemas() {
 #[tokio::test(flavor = "multi_thread")]
 async fn client_journal_applies_private_policy() {
     use gents_protocol::schemas::{
-        CLIENT_JOURNAL_POLICY_ID, CLIENT_JOURNAL_POLICY_RESOURCE, PENDING_CHAT_SUBMISSION,
+        BuiltInPolicy, HomePolicyIds, CLIENT_JOURNAL_POLICY_RESOURCE, PENDING_CHAT_SUBMISSION,
         PENDING_CHAT_SUBMISSION_NAME,
     };
     let node = fresh_node().await;
-    node.add_collection(PENDING_CHAT_SUBMISSION)
-        .await
-        .expect("journal schema");
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared().render(PENDING_CHAT_SUBMISSION),
+    )
+    .await
+    .expect("journal schema");
     let collection = node
         .get_collection(PENDING_CHAT_SUBMISSION_NAME)
         .unwrap()
         .unwrap();
     let policy = collection.policy.expect("journal policy binding");
-    assert_eq!(policy.id, CLIENT_JOURNAL_POLICY_ID);
+    assert_eq!(
+        policy.id,
+        HomePolicyIds::shared().id(BuiltInPolicy::ClientJournal)
+    );
     assert_eq!(policy.resource_name, CLIENT_JOURNAL_POLICY_RESOURCE);
     assert!(!collection.is_branchable);
 }
@@ -229,15 +244,18 @@ async fn client_journal_applies_private_policy() {
 #[tokio::test(flavor = "multi_thread")]
 async fn mailbox_applies_recipient_policy() {
     use gents_protocol::schemas::{
-        MAILBOX_ITEM, MAILBOX_ITEM_NAME, MAILBOX_POLICY_ID, MAILBOX_POLICY_RESOURCE,
+        BuiltInPolicy, HomePolicyIds, MAILBOX_ITEM, MAILBOX_ITEM_NAME, MAILBOX_POLICY_RESOURCE,
     };
     let node = fresh_node().await;
-    node.add_collection(MAILBOX_ITEM)
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(MAILBOX_ITEM))
         .await
         .expect("mailbox schema");
     let collection = node.get_collection(MAILBOX_ITEM_NAME).unwrap().unwrap();
     let policy = collection.policy.expect("mailbox policy binding");
-    assert_eq!(policy.id, MAILBOX_POLICY_ID);
+    assert_eq!(
+        policy.id,
+        HomePolicyIds::shared().id(BuiltInPolicy::Mailbox)
+    );
     assert_eq!(policy.resource_name, MAILBOX_POLICY_RESOURCE);
     assert!(!collection.is_branchable);
     node.shutdown().await.unwrap();
@@ -246,16 +264,20 @@ async fn mailbox_applies_recipient_policy() {
 #[tokio::test(flavor = "multi_thread")]
 async fn unbound_pairing_overlay_is_rejected_without_data_changes() {
     use gents_protocol::schemas::{
-        identity_policy_resource, AGENT_OWNERSHIP_POLICY_ID, DATA_PLANE_PAIRING_DESIRED,
+        identity_policy_resource, BuiltInPolicy, DATA_PLANE_PAIRING_DESIRED,
         DATA_PLANE_PAIRING_DESIRED_NAME,
     };
     let node = fresh_node().await;
     let resource = identity_policy_resource(DATA_PLANE_PAIRING_DESIRED_NAME).unwrap();
-    let directive =
-        format!("@policy(id: \"{AGENT_OWNERSHIP_POLICY_ID}\", resource: \"{resource}\") ");
+    let directive = format!(
+        "@policy(id: \"{}\", resource: \"{resource}\") ",
+        BuiltInPolicy::Household.placeholder()
+    );
     let unbound = DATA_PLANE_PAIRING_DESIRED.replace(&directive, "");
     assert_ne!(unbound, DATA_PLANE_PAIRING_DESIRED);
-    node.add_collection(&unbound).await.unwrap();
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&unbound))
+        .await
+        .unwrap();
     let created = node.execute(r#"mutation { create_DataPlanePairingDesired(input: {peer_id:"retained", collections:["example"], replicator_addresses:["address"]}) {_docID} }"#).await;
     assert!(!created.has_errors(), "{:?}", created.errors);
     let query = "{ DataPlanePairingDesired {_docID peer_id} }";
@@ -269,7 +291,7 @@ async fn unbound_pairing_overlay_is_rejected_without_data_changes() {
 #[tokio::test(flavor = "multi_thread")]
 async fn unbound_identity_collections_are_rejected_without_data_changes() {
     use gents_protocol::schemas::{
-        AGENT_OWNERSHIP_POLICY_ID, AGENT_SESSION_INPUT_EDIT, AGENT_SESSION_INPUT_EDIT_NAME,
+        BuiltInPolicy, AGENT_SESSION_INPUT_EDIT, AGENT_SESSION_INPUT_EDIT_NAME,
         ENROLLMENT_OPERATOR_NONCE, ENROLLMENT_OPERATOR_NONCE_NAME, FILE_INVENTORY_REQUEST,
         FILE_INVENTORY_REQUEST_NAME, ISOLATED_WORKSPACE, ISOLATED_WORKSPACE_NAME,
         NETWORK_ADMIN_PIN, NETWORK_ADMIN_PIN_NAME, NODE_NAME, NODE_RUNTIME, NODE_RUNTIME_NAME,
@@ -374,14 +396,18 @@ async fn unbound_identity_collections_are_rejected_without_data_changes() {
         ),
     ] {
         let node = fresh_node().await;
-        let directive =
-            format!("@policy(id: \"{AGENT_OWNERSHIP_POLICY_ID}\", resource: \"{resource}\") ");
+        let directive = format!(
+            "@policy(id: \"{}\", resource: \"{resource}\") ",
+            BuiltInPolicy::Household.placeholder()
+        );
         let old = sdl.replace(&directive, "");
         assert_ne!(
             old, sdl,
             "{name}: expected policy directive was not removed"
         );
-        node.add_collection(&old).await.unwrap();
+        node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&old))
+            .await
+            .unwrap();
         let extra = if [
             ISOLATED_WORKSPACE_NAME,
             WORKSPACE_BINDING_NAME,

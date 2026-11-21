@@ -1,4 +1,5 @@
 use defra_node::{CollectionVersion, Node as EmbeddedNode};
+use gents_protocol::schemas::{BuiltInPolicy, HomePolicyIds};
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 
 use super::{
@@ -14,7 +15,7 @@ type Result<T, E = SchemaError> = std::result::Result<T, E>;
 pub async fn validate_existing_schema(node: &EmbeddedNode) -> Result<()> {
     let catalog = &*RUNTIME_CATALOG;
     validate_runtime_locality(node)?;
-    validate_bindings(node, catalog).await
+    validate_bindings(node, catalog, HomePolicyIds::shared()).await
 }
 
 /// Read-only preflight of the same lineages startup accepts. Callers may read
@@ -44,18 +45,23 @@ pub(super) fn validate_runtime_locality(node: &EmbeddedNode) -> Result<()> {
     Ok(())
 }
 
-pub(super) async fn validate_bindings(node: &EmbeddedNode, catalog: &Catalog<'_>) -> Result<()> {
-    validate_identity_bindings(node, catalog)?;
-    validate_legacy_backend_bindings(node, catalog).await?;
-    validate_client_journal_binding(node, catalog)?;
-    validate_mailbox_binding(node, catalog)
+pub(super) async fn validate_bindings(
+    node: &EmbeddedNode,
+    catalog: &Catalog<'_>,
+    ids: &HomePolicyIds,
+) -> Result<()> {
+    validate_identity_bindings(node, catalog, ids)?;
+    validate_legacy_backend_bindings(node, catalog, ids).await?;
+    validate_client_journal_binding(node, catalog, ids)?;
+    validate_mailbox_binding(node, catalog, ids)
 }
 
 async fn validate_legacy_backend_bindings(
     node: &EmbeddedNode,
     catalog: &Catalog<'_>,
+    ids: &HomePolicyIds,
 ) -> Result<()> {
-    use gents_protocol::schemas::{AGENT_OWNERSHIP_POLICY_ID, INFERENCE_BACKEND_NAME};
+    use gents_protocol::schemas::INFERENCE_BACKEND_NAME;
     if !catalog.manages(INFERENCE_BACKEND_NAME) {
         return Ok(());
     }
@@ -70,7 +76,7 @@ async fn validate_legacy_backend_bindings(
         if active.is_none()
             || version.is_branchable
             || !version.policy.as_ref().is_some_and(|policy| {
-                policy.id == AGENT_OWNERSHIP_POLICY_ID
+                policy.id == ids.id(BuiltInPolicy::Household)
                     && policy.resource_name == "secret_configuration"
             })
         {
@@ -82,8 +88,11 @@ async fn validate_legacy_backend_bindings(
     Ok(())
 }
 
-fn validate_identity_bindings(node: &EmbeddedNode, catalog: &Catalog<'_>) -> Result<()> {
-    use gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID;
+fn validate_identity_bindings(
+    node: &EmbeddedNode,
+    catalog: &Catalog<'_>,
+    ids: &HomePolicyIds,
+) -> Result<()> {
     for &(name, resource) in gents_protocol::schemas::IDENTITY_POLICY_BINDINGS {
         if !catalog.manages(name) {
             continue;
@@ -92,7 +101,8 @@ fn validate_identity_bindings(node: &EmbeddedNode, catalog: &Catalog<'_>) -> Res
             if collection.is_branchable
                 != gents_protocol::schemas::is_replicated_protocol_collection(name)
                 || !collection.policy.as_ref().is_some_and(|policy| {
-                    policy.id == AGENT_OWNERSHIP_POLICY_ID && policy.resource_name == resource
+                    policy.id == ids.id(BuiltInPolicy::Household)
+                        && policy.resource_name == resource
                 })
             {
                 return Err(SchemaError::IncompatibleIdentityPolicy {
@@ -104,13 +114,17 @@ fn validate_identity_bindings(node: &EmbeddedNode, catalog: &Catalog<'_>) -> Res
     Ok(())
 }
 
-fn validate_mailbox_binding(node: &EmbeddedNode, catalog: &Catalog<'_>) -> Result<()> {
-    use gents_protocol::schemas::{MAILBOX_ITEM_NAME, MAILBOX_POLICY_ID, MAILBOX_POLICY_RESOURCE};
+fn validate_mailbox_binding(
+    node: &EmbeddedNode,
+    catalog: &Catalog<'_>,
+    ids: &HomePolicyIds,
+) -> Result<()> {
+    use gents_protocol::schemas::{MAILBOX_ITEM_NAME, MAILBOX_POLICY_RESOURCE};
     if manages_mailbox(catalog) {
         if let Some(collection) = node.get_collection(MAILBOX_ITEM_NAME)? {
             if collection.is_branchable
                 || !collection.policy.as_ref().is_some_and(|policy| {
-                    policy.id == MAILBOX_POLICY_ID
+                    policy.id == ids.id(BuiltInPolicy::Mailbox)
                         && policy.resource_name == MAILBOX_POLICY_RESOURCE
                 })
             {
@@ -123,15 +137,17 @@ fn validate_mailbox_binding(node: &EmbeddedNode, catalog: &Catalog<'_>) -> Resul
     Ok(())
 }
 
-fn validate_client_journal_binding(node: &EmbeddedNode, catalog: &Catalog<'_>) -> Result<()> {
-    use gents_protocol::schemas::{
-        CLIENT_JOURNAL_POLICY_ID, CLIENT_JOURNAL_POLICY_RESOURCE, PENDING_CHAT_SUBMISSION_NAME,
-    };
+fn validate_client_journal_binding(
+    node: &EmbeddedNode,
+    catalog: &Catalog<'_>,
+    ids: &HomePolicyIds,
+) -> Result<()> {
+    use gents_protocol::schemas::{CLIENT_JOURNAL_POLICY_RESOURCE, PENDING_CHAT_SUBMISSION_NAME};
     if manages_client_journal(catalog) {
         if let Some(collection) = node.get_collection(PENDING_CHAT_SUBMISSION_NAME)? {
             if collection.is_branchable
                 || !collection.policy.as_ref().is_some_and(|policy| {
-                    policy.id == CLIENT_JOURNAL_POLICY_ID
+                    policy.id == ids.id(BuiltInPolicy::ClientJournal)
                         && policy.resource_name == CLIENT_JOURNAL_POLICY_RESOURCE
                 })
             {
@@ -147,13 +163,14 @@ fn validate_client_journal_binding(node: &EmbeddedNode, catalog: &Catalog<'_>) -
 pub(super) fn validate_file_image_bindings<'n>(
     node: &'n EmbeddedNode,
     catalog: &Catalog<'_>,
+    ids: &HomePolicyIds,
 ) -> Result<Option<&'n str>> {
     if !manages_file_images(catalog) {
         return Ok(None);
     }
     for (name, branchable) in FILE_COLLECTION_POLICIES {
         if let Some(collection) = node.get_collection(name)? {
-            validate_file_image_policy(&collection, *branchable)?;
+            validate_file_image_policy(&collection, *branchable, ids)?;
         }
     }
     Ok(Some(
@@ -167,10 +184,11 @@ pub(super) fn validate_file_image_bindings<'n>(
 pub(super) fn validate_file_image_policy(
     collection: &CollectionVersion,
     branchable: bool,
+    ids: &HomePolicyIds,
 ) -> Result<()> {
     if collection.is_branchable != branchable
         || !collection.policy.as_ref().is_some_and(|policy| {
-            policy.id == gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_ID
+            policy.id == ids.id(BuiltInPolicy::ToolFileChange)
                 && policy.resource_name == gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_RESOURCE
         })
     {

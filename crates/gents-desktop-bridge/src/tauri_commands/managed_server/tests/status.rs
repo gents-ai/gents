@@ -380,6 +380,7 @@ fn restart_command_validates_reviewed_authority_through_tauri_ipc() {
             managed_server: ManagedServerPolicy::Allowed,
             client_host: false,
             store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+            service_executable: None,
         },
         None,
     )

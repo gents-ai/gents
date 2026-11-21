@@ -15,7 +15,6 @@ pub use compatibility::{check_lineages, validate_existing_schema};
 pub use error::SchemaError;
 pub use indexes::ORDINARY_INDEXES;
 pub use install::{ensure, ensure_runtime, ensure_runtime_owned, RuntimeSchemaError};
-pub use node_policies::{NodePolicy, NODE_POLICIES};
 
 #[derive(Debug, Clone, Copy)]
 pub struct BaselineCollection<'a> {
@@ -82,7 +81,8 @@ static BASELINE_ROOTS: LazyLock<Vec<String>> = LazyLock::new(|| {
         .map(|(_, sdl)| *sdl)
         .collect::<Vec<_>>()
         .join("\n");
-    let parsed = query::parse_sdl(&sdl).expect("bundled baseline SDL must parse");
+    let parsed = query::parse_sdl(&gents_protocol::schemas::HomePolicyIds::shared().render(&sdl))
+        .expect("bundled baseline SDL must parse");
     assert_eq!(
         parsed.len(),
         BASELINE_SCHEMAS.len(),
