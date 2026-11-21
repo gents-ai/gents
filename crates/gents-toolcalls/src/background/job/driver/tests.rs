@@ -1046,6 +1046,12 @@ fn stored_receipt(row: &Value) -> PluginExecutionReceipt {
 struct LiveTools;
 
 impl gents_loop::tool_effects::ToolEffectDispatcher for LiveTools {
+    fn definitions<'a>(
+        &'a self,
+    ) -> gents_loop::tool::BoxFuture<'a, Vec<gents_loop::tool::ToolDefinition>> {
+        Box::pin(async { unreachable!("a job step described a tool dispatcher") })
+    }
+
     fn call<'a>(
         &'a self,
         _parent: &'a gents_loop::tool::ToolCallEnvelope,

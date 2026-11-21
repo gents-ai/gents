@@ -481,6 +481,9 @@ impl From<AgentReadinessUnavailableReason> for AgentUnavailableReasonView {
                 Self::ToolConfigurationInvalid
             }
             AgentReadinessUnavailableReason::ToolSurfaceUnavailable => Self::ToolSurfaceUnavailable,
+            AgentReadinessUnavailableReason::WorkspaceRootReaderMissing => {
+                Self::WorkspaceRootReaderMissing
+            }
             AgentReadinessUnavailableReason::ExecutorStartFailed => Self::ExecutorStartFailed,
         }
     }

@@ -39,6 +39,8 @@ attribute [conformance_function]
   ToolPolicy.OperatorPaths.commandGuardAllows
   ToolPolicy.PluginCalls.available
   ToolPolicy.CallEnvelope.derive
+  ToolPolicy.PluginCalls.describable
+  ToolPolicy.PluginCalls.structuredByDefault
   ToolPolicy.WorkspacePermissions.governingSettings
   Proofs.MCPHealth.healthProjection
 

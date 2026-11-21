@@ -674,6 +674,7 @@ async fn recovered_cleanup_outside_an_admitted_root_is_refused() {
                 agent_did: fixture.agent_identity.did().to_owned(),
                 selected_root: Some(dir.path().to_path_buf()),
                 ceiling_root: Some(ceiling.path().to_path_buf()),
+                node_home: None,
             }),
         ),
     ];

@@ -1,0 +1,52 @@
+{
+  "input": {
+    "script": "const values = await Promise.all([tools.read({path:'a'}), sleep(0), tools.read({path:'b'})]); return values;"
+  },
+  "tools": {
+    "definitions": [
+      {
+        "name": "read",
+        "description": "Reads a value.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "raw_json": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    ],
+    "calls": [
+      {
+        "tool_name": "read",
+        "arguments": {
+          "path": "a",
+          "raw_json": true
+        },
+        "result": {
+          "content": "a"
+        }
+      },
+      {
+        "tool_name": "read",
+        "arguments": {
+          "path": "b",
+          "raw_json": true
+        },
+        "result": {
+          "content": "b"
+        }
+      }
+    ]
+  },
+  "expect": [
+    {
+      "content": "a"
+    },
+    null,
+    {
+      "content": "b"
+    }
+  ]
+}
