@@ -990,11 +990,72 @@ fn creation_receipt_signer<'a>(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerifiedCreation {
+    CallResult,
+    EffectAcceptance,
+    PluginJob,
+}
+
+/// A denial names a row that was read and is missing, corrupt or not the
+/// caller's; a query the database could not answer is never a denial.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum CreationDenial {
+    #[error("the caller's session was not found")]
+    CallerSessionNotFound,
+    #[error("the target session was not found")]
+    TargetSessionNotFound,
+    #[error("the target has no verified agent_new creation receipt")]
+    NoVerifiedCreationReceipt,
+    #[error("the target's opening request was not found")]
+    OpeningRequestNotFound,
+    #[error("the target's opening request could not be read")]
+    OpeningRequestUnreadable,
+    #[error("the target's opening request was not admitted by the caller's agent")]
+    OpeningRequestMismatch,
+    #[error("the plugin job is not bound to the caller")]
+    PluginJobBindingMismatch,
+    #[error("the target's opening request names no starting call")]
+    OpeningWithoutCause,
+    #[error("the starting request was not found")]
+    ParentRequestNotFound,
+    #[error("the starting request could not be read")]
+    ParentRequestUnreadable,
+    #[error("the starting request is not the caller's")]
+    ParentRequestMismatch,
+    #[error("the starting call was not found")]
+    CauseCallNotFound,
+    #[error("the starting call is not the caller's agent_new call")]
+    CauseCallMismatch,
+    #[error("the creation receipt names another starting call")]
+    CauseBindingMismatch,
+    #[error("the starting call is missing from the caller's session")]
+    CauseCallMissing,
+    #[error("the starting call could not be read")]
+    CauseCallUnreadable,
+    #[error("the starting call's admission could not be verified")]
+    CauseCallInvalid,
+    #[error("the starting call's parent call is missing")]
+    ParentMissing,
+    #[error("the starting call's parent call could not be read")]
+    ParentUnreadable,
+    #[error("the starting call's receipt could not be read")]
+    CauseReceiptUnreadable,
+    #[error("the starting call's receipt is not this session's creation")]
+    CauseReceiptMismatch,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("could not verify which session started this one: a database read failed; retry")]
+pub struct CreationCheckUnavailable(#[source] Box<dyn std::error::Error + Send + Sync + 'static>);
+
+pub type CreationVerdict = std::result::Result<VerifiedCreation, CreationDenial>;
+
 pub async fn verified_agent_new_creation(
     access: &ConfigAccess,
     target: &SessionScope,
     caller: &SessionScope,
-) -> Result<bool> {
+) -> Result<CreationVerdict> {
     verified_agent_new_creation_matching(access, target, caller, None).await
 }
 
@@ -1003,7 +1064,7 @@ pub(crate) async fn verified_agent_new_creation_for_opening(
     target: &SessionScope,
     caller: &SessionScope,
     expected_opening: &str,
-) -> Result<bool> {
+) -> Result<CreationVerdict> {
     verified_agent_new_creation_matching(access, target, caller, Some(expected_opening)).await
 }
 
@@ -1012,8 +1073,9 @@ async fn verified_agent_new_creation_matching(
     target: &SessionScope,
     caller: &SessionScope,
     expected_opening: Option<&str>,
-) -> Result<bool> {
+) -> Result<CreationVerdict> {
     use gents_protocol::session::SessionCreationCause;
+    use CreationDenial as Denied;
     let callers = session_rows(
         access,
         &session_scope_filter(
@@ -1024,7 +1086,7 @@ async fn verified_agent_new_creation_matching(
     )
     .await?;
     let [caller_session] = callers.as_slice() else {
-        return Ok(false);
+        return Ok(Err(Denied::CallerSessionNotFound));
     };
     let caller_agent = caller_session.session.agent_did.as_str();
     let own = session_rows(
@@ -1037,12 +1099,12 @@ async fn verified_agent_new_creation_matching(
     )
     .await?;
     let [owner] = own.as_slice() else {
-        return Ok(false);
+        return Ok(Err(Denied::TargetSessionNotFound));
     };
     let session = &owner.session;
     let receipt = verified_agent_creation_receipt(session, &owner.doc_id, expected_opening);
     let Some(receipt) = receipt else {
-        return Ok(false);
+        return Ok(Err(Denied::NoVerifiedCreationReceipt));
     };
     let opening = collection(
         access,
@@ -1055,10 +1117,10 @@ async fn verified_agent_new_creation_matching(
     )
     .await?;
     let [row] = opening.as_slice() else {
-        return Ok(false);
+        return Ok(Err(Denied::OpeningRequestNotFound));
     };
     let Ok(request) = serde_json::from_value::<AgentRequestRow>(row.clone()) else {
-        return Ok(false);
+        return Ok(Err(Denied::OpeningRequestUnreadable));
     };
     if request.node_did.as_deref() != Some(target.node_did.as_str())
         || request.session_id.as_deref() != Some(target.session_id.as_str())
@@ -1069,7 +1131,7 @@ async fn verified_agent_new_creation_matching(
         || gents_store::identity::request_receipt::verify_request_receipt_signature(&request)
             .is_err()
     {
-        return Ok(false);
+        return Ok(Err(Denied::OpeningRequestMismatch));
     }
     if receipt.cause == SessionCreationCause::PluginJob {
         let source_bound = request
@@ -1088,19 +1150,24 @@ async fn verified_agent_new_creation_matching(
         } else {
             None
         };
-        return Ok(plugin_job_creation_binding(access, &request)
+        let bound = plugin_job_creation_binding(access, &request)
             .await?
             .is_some_and(|(legacy_binding, scope)| {
                 scope == *caller
                     && binding.as_deref().unwrap_or(&legacy_binding) == receipt.cause_binding
-            }));
+            });
+        return Ok(if bound {
+            Ok(VerifiedCreation::PluginJob)
+        } else {
+            Err(Denied::PluginJobBindingMismatch)
+        });
     }
     let (Some(parent_doc), Some(call_doc), Some(call_id)) = (
         request.caused_by_parent_request_doc_id.as_deref(),
         request.caused_by_parent_tool_call_doc_id.as_deref(),
         request.caused_by_parent_tool_call_id.as_deref(),
     ) else {
-        return Ok(false);
+        return Ok(Err(Denied::OpeningWithoutCause));
     };
     let parent = collection(
         access,
@@ -1113,10 +1180,10 @@ async fn verified_agent_new_creation_matching(
     )
     .await?;
     let [row] = parent.as_slice() else {
-        return Ok(false);
+        return Ok(Err(Denied::ParentRequestNotFound));
     };
     let Ok(parent) = serde_json::from_value::<AgentRequestRow>(row.clone()) else {
-        return Ok(false);
+        return Ok(Err(Denied::ParentRequestUnreadable));
     };
     if parent.node_did.as_deref() != Some(caller.node_did.as_str())
         || parent.session_id.as_deref() != Some(caller.session_id.as_str())
@@ -1125,14 +1192,14 @@ async fn verified_agent_new_creation_matching(
         || gents_store::identity::request_receipt::verify_request_receipt_signature(&parent)
             .is_err()
     {
-        return Ok(false);
+        return Ok(Err(Denied::ParentRequestMismatch));
     }
     let calls = collection(access, &format!(
         "{{AgentToolCall(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 2) {{request_doc_id node_did session_id requester_did tool_call_id tool_name}}}}",
         escape_graphql_string(call_doc),
     ), "AgentToolCall").await?;
     let [call] = calls.as_slice() else {
-        return Ok(false);
+        return Ok(Err(Denied::CauseCallNotFound));
     };
     if call["request_doc_id"].as_str() != Some(parent_doc)
         || call["node_did"].as_str() != Some(caller.node_did.as_str())
@@ -1141,28 +1208,242 @@ async fn verified_agent_new_creation_matching(
         || call["tool_call_id"].as_str() != Some(call_id)
         || call["tool_name"].as_str() != Some(gents_protocol::tool_names::AGENT_NEW_TOOL_NAME)
     {
-        return Ok(false);
+        return Ok(Err(Denied::CauseCallMismatch));
     }
-    if receipt.cause_binding != call_doc {
-        return Ok(false);
+    let scope = crate::tool_call::query::result::ToolCallScope {
+        node_did: &caller.node_did,
+        session_id: &caller.session_id,
+        requester_did: caller.requester_did.as_deref(),
+    };
+    // The cause call is read in order, and only as far as the Lean-modelled
+    // `creation_verdict` needs: each read's observation goes to it as read,
+    // and a decided verdict returns at once.
+    use {CauseLoad as Load, EffectRead as Effect, ResultRead as Read};
+    let binding = receipt.cause_binding == call_doc;
+    let verdict = |load, result, effect| creation_verdict(binding, load, result, effect);
+    let decided = outcome_verdict;
+    if let Some(decided) = decided(verdict(Load::NotRead, Read::NotRead, Effect::NotRead), None)? {
+        return Ok(decided);
     }
-    let Ok(read) = crate::tool_call::query::result::load_tool_call_read(
-        access,
-        call_doc,
-        &caller.node_did,
-        &caller.session_id,
-        caller.requester_did.as_deref(),
+    let (load, accepted, failure) =
+        match crate::tool_call::query::result::load_accepted_call(access, call_doc, scope)
+            .await
+        {
+            Ok(accepted) => (Load::Loaded, Some(accepted), None),
+            Err(error) => (Load::of(&error), None, Some(anyhow::Error::new(error))),
+        };
+    if let Some(decided) = decided(verdict(load, Read::NotRead, Effect::NotRead), failure)? {
+        return Ok(decided);
+    }
+    let accepted = accepted.context("a loaded cause call is kept")?;
+    let effect_request = accepted.plugin_effect_request().map(str::to_owned);
+    let (result, failure) = match crate::tool_call::query::result::read_accepted_call(
+        access, accepted, call_doc, scope,
     )
     .await
-    else {
-        return Ok(false);
+    {
+        Ok(read)
+            if agent_receipt_matches(&read, &request, &receipt.opening_request_doc_id, call_id) =>
+        {
+            (Read::Matches, None)
+        }
+        Ok(_) => (Read::Differs, None),
+        Err(error) => (Read::of(&error), Some(anyhow::Error::new(error))),
     };
-    Ok(deferred_creation_allowed(
-        true,
-        true,
-        true,
-        agent_receipt_matches(&read, &request, &receipt.opening_request_doc_id, call_id),
-    ))
+    if let Some(decided) = decided(verdict(load, result, Effect::NotRead), failure)? {
+        return Ok(decided);
+    }
+    let (effect, failure) = match effect_request {
+        None => (Effect::Absent, None),
+        Some(effect_request) => {
+            match crate::tool_call::query::result::read_effect_acceptance_receipt(
+                access,
+                &effect_request,
+                call_doc,
+                scope,
+            )
+            .await
+            {
+                Ok(Some(text))
+                    if agent_receipt_text_matches(
+                        &text,
+                        &request,
+                        &receipt.opening_request_doc_id,
+                        call_id,
+                    ) =>
+                {
+                    (Effect::Matches, None)
+                }
+                Ok(Some(_)) => (Effect::Differs, None),
+                Ok(None) => (Effect::Absent, None),
+                Err(error) => (Effect::of(&error), Some(anyhow::Error::new(error))),
+            }
+        }
+    };
+    decided(verdict(load, result, effect), failure)?
+        .context("the creation verdict is decided once every read is done")
+}
+
+/// Loading the cause call and its accepted ancestry (Lean
+/// `DurableLineage.CauseLoad`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CauseLoad {
+    NotRead,
+    Loaded,
+    QueryFailed,
+    Missing,
+    Unreadable,
+    Invalid,
+    ParentMissing,
+    ParentUnreadable,
+}
+
+impl CauseLoad {
+    /// The observation a failed load is. A query the database could not answer
+    /// anywhere in the walk is `QueryFailed`, before any denial.
+    fn of(error: &crate::tool_call::query::result::ToolCallLoadError) -> Self {
+        use crate::tool_call::query::result::ToolCallLoadError;
+        if error.query_failed() {
+            return Self::QueryFailed;
+        }
+        match error {
+            ToolCallLoadError::Missing(_) => Self::Missing,
+            ToolCallLoadError::QueryFailed(_) => Self::QueryFailed,
+            ToolCallLoadError::Unreadable(_) => Self::Unreadable,
+            ToolCallLoadError::Invalid(_) => Self::Invalid,
+            ToolCallLoadError::Parent(parent) => match parent.error {
+                ToolCallLoadError::Missing(_) => Self::ParentMissing,
+                _ => Self::ParentUnreadable,
+            },
+        }
+    }
+}
+
+/// Reading the cause call's canonical result (Lean `DurableLineage.ResultRead`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResultRead {
+    NotRead,
+    Matches,
+    Differs,
+    QueryFailed,
+    Unreadable,
+}
+
+impl ResultRead {
+    fn of(error: &crate::tool_call::query::result::ReadFailure) -> Self {
+        match error {
+            crate::tool_call::query::result::ReadFailure::QueryFailed(_) => Self::QueryFailed,
+            crate::tool_call::query::result::ReadFailure::Unreadable(_) => Self::Unreadable,
+        }
+    }
+}
+
+/// Reading a plugin effect's immutable acceptance receipt (Lean
+/// `DurableLineage.EffectRead`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EffectRead {
+    NotRead,
+    Matches,
+    Differs,
+    Absent,
+    QueryFailed,
+    Unreadable,
+}
+
+impl EffectRead {
+    fn of(error: &crate::tool_call::query::result::ReadFailure) -> Self {
+        match error {
+            crate::tool_call::query::result::ReadFailure::QueryFailed(_) => Self::QueryFailed,
+            crate::tool_call::query::result::ReadFailure::Unreadable(_) => Self::Unreadable,
+        }
+    }
+}
+
+/// The cause call's verdict (Lean `DurableLineage.CreationOutcome`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CreationOutcome {
+    Pending,
+    CallResult,
+    EffectAcceptance,
+    Retry,
+    CauseBindingMismatch,
+    CauseCallMissing,
+    CauseCallUnreadable,
+    CauseCallInvalid,
+    ParentMissing,
+    ParentUnreadable,
+    CauseReceiptUnreadable,
+    CauseReceiptMismatch,
+}
+
+/// Lean `DurableLineage.creationVerdict`: the cause call's verdict from what
+/// its reads observed so far. The call's own result wins over an effect's
+/// acceptance receipt; a query failure is `Retry`, never a denial; a verdict
+/// that still needs an unread input is `Pending`.
+pub fn creation_verdict(
+    binding: bool,
+    load: CauseLoad,
+    result: ResultRead,
+    effect: EffectRead,
+) -> CreationOutcome {
+    use CreationOutcome as Outcome;
+    if !binding {
+        return Outcome::CauseBindingMismatch;
+    }
+    match load {
+        CauseLoad::NotRead => Outcome::Pending,
+        CauseLoad::QueryFailed => Outcome::Retry,
+        CauseLoad::Missing => Outcome::CauseCallMissing,
+        CauseLoad::Unreadable => Outcome::CauseCallUnreadable,
+        CauseLoad::Invalid => Outcome::CauseCallInvalid,
+        CauseLoad::ParentMissing => Outcome::ParentMissing,
+        CauseLoad::ParentUnreadable => Outcome::ParentUnreadable,
+        CauseLoad::Loaded => match result {
+            ResultRead::NotRead => Outcome::Pending,
+            ResultRead::QueryFailed => Outcome::Retry,
+            ResultRead::Unreadable => Outcome::CauseReceiptUnreadable,
+            ResultRead::Matches => Outcome::CallResult,
+            ResultRead::Differs => match effect {
+                EffectRead::NotRead => Outcome::Pending,
+                EffectRead::QueryFailed => Outcome::Retry,
+                EffectRead::Unreadable => Outcome::CauseReceiptUnreadable,
+                EffectRead::Matches => Outcome::EffectAcceptance,
+                EffectRead::Differs | EffectRead::Absent => Outcome::CauseReceiptMismatch,
+            },
+        },
+    }
+}
+
+/// What a decided outcome returns: the verified creation, the denial, or, for
+/// `Retry`, the failed query as `CreationCheckUnavailable`. `None` while the
+/// outcome is `Pending`.
+fn outcome_verdict(
+    outcome: CreationOutcome,
+    failure: Option<anyhow::Error>,
+) -> Result<Option<CreationVerdict>> {
+    use CreationDenial as Denied;
+    use CreationOutcome as Outcome;
+    Ok(Some(match outcome {
+        Outcome::Pending => return Ok(None),
+        Outcome::CallResult => Ok(VerifiedCreation::CallResult),
+        Outcome::EffectAcceptance => Ok(VerifiedCreation::EffectAcceptance),
+        Outcome::Retry => {
+            let failure = failure.context("a retry outcome carries its failed query")?;
+            return Err(CreationCheckUnavailable(failure.into()).into());
+        }
+        Outcome::CauseBindingMismatch => Err(Denied::CauseBindingMismatch),
+        Outcome::CauseCallMissing => Err(Denied::CauseCallMissing),
+        Outcome::CauseCallUnreadable => Err(Denied::CauseCallUnreadable),
+        Outcome::CauseCallInvalid => Err(Denied::CauseCallInvalid),
+        Outcome::ParentMissing => Err(Denied::ParentMissing),
+        Outcome::ParentUnreadable => Err(Denied::ParentUnreadable),
+        Outcome::CauseReceiptUnreadable => Err(Denied::CauseReceiptUnreadable),
+        Outcome::CauseReceiptMismatch => Err(Denied::CauseReceiptMismatch),
+    }))
 }
 
 fn verified_agent_creation_receipt<'a>(
@@ -1181,10 +1462,6 @@ fn verified_agent_creation_receipt<'a>(
         return None;
     }
     Some(receipt)
-}
-
-fn deferred_creation_allowed(kind: bool, receipt: bool, opening: bool, cause: bool) -> bool {
-    kind && receipt && opening && cause
 }
 
 #[cfg(test)]
@@ -1211,7 +1488,16 @@ fn agent_receipt_matches(
     let Ok(text) = crate::tool_call::query::result::render_tool_result(result) else {
         return false;
     };
-    let Ok(receipt) = serde_json::from_str::<crate::session::message::SessionMessageReceipt>(&text)
+    agent_receipt_text_matches(&text, request, opening, call_id)
+}
+
+fn agent_receipt_text_matches(
+    text: &str,
+    request: &AgentRequestRow,
+    opening: &str,
+    call_id: &str,
+) -> bool {
+    let Ok(receipt) = serde_json::from_str::<crate::session::message::SessionMessageReceipt>(text)
     else {
         return false;
     };
@@ -1488,14 +1774,38 @@ mod conformance {
     use super::*;
 
     #[test]
-    fn deferred_creation_allowed_matches_lean() {
-        gents_lean_vocab::families::durable_lineage_deferred_creation_allowed::replay(|i| {
-            deferred_creation_allowed(
-                i.signed_kind,
-                i.target_receipt,
-                i.exact_opening,
-                i.cause_visible,
-            )
+    fn creation_verdict_matches_lean() {
+        gents_lean_vocab::families::durable_lineage_creation_verdict::replay(|i| {
+            creation_verdict(i.binding, i.load, i.result, i.effect)
         });
+    }
+
+    #[test]
+    fn a_failed_query_anywhere_in_the_walk_is_a_retry_and_a_parent_row_a_denial() {
+        use crate::tool_call::query::result::{ParentLoadError, ToolCallLoadError};
+        let parent = |error| {
+            ToolCallLoadError::Parent(Box::new(ParentLoadError {
+                doc_id: "parent".into(),
+                error,
+            }))
+        };
+        let failed = || ToolCallLoadError::QueryFailed(anyhow::anyhow!("no answer"));
+        let cases = [
+            (failed(), CauseLoad::QueryFailed),
+            (parent(parent(failed())), CauseLoad::QueryFailed),
+            (ToolCallLoadError::Missing("call".into()), CauseLoad::Missing),
+            (parent(ToolCallLoadError::Missing("parent".into())), CauseLoad::ParentMissing),
+            (
+                parent(ToolCallLoadError::Invalid(anyhow::anyhow!("rebound"))),
+                CauseLoad::ParentUnreadable,
+            ),
+            (
+                parent(ToolCallLoadError::Unreadable(anyhow::anyhow!("denied"))),
+                CauseLoad::ParentUnreadable,
+            ),
+        ];
+        for (error, load) in cases {
+            assert_eq!(CauseLoad::of(&error), load, "{error:#}");
+        }
     }
 }
