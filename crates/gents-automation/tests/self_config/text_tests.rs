@@ -1942,7 +1942,7 @@ async fn ux_preview_explains_itself_and_names_a_missing_plugin() {
 }
 
 #[tokio::test]
-#[ignore = "needs a system browser and GENTS_UX_PREVIEW_ASSETS at a built preview page"]
+#[ignore = "needs a system browser and a built preview page beside the test binary"]
 async fn ux_preview_reports_text_first_through_the_config_tool() {
     let home = tempfile::tempdir().unwrap();
     let dev = home

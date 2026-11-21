@@ -18,6 +18,12 @@ use tracing_subscriber::{prelude::*, EnvFilter};
     about = "Tauri desktop launcher for local and peered Gents runtimes"
 )]
 struct Cli {
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "The gents-desktop-tauri binary to launch. Defaults to the one beside this launcher, then PATH"
+    )]
+    tauri_bin: Option<PathBuf>,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -62,7 +68,7 @@ fn main() -> anyhow::Result<()> {
         return run_command(command);
     }
 
-    launch_desktop()
+    launch_desktop(cli.tauri_bin)
 }
 
 fn run_command(command: Command) -> anyhow::Result<()> {
@@ -94,8 +100,8 @@ fn run_command(command: Command) -> anyhow::Result<()> {
     }
 }
 
-fn launch_desktop() -> anyhow::Result<()> {
-    let tauri_binary = resolve_tauri_binary()?;
+fn launch_desktop(explicit: Option<PathBuf>) -> anyhow::Result<()> {
+    let tauri_binary = resolve_tauri_binary(explicit)?;
     tracing::info!(path = %tauri_binary.display(), "launching tauri desktop shell");
 
     if is_debug_build(&tauri_binary) && !dev_server_reachable() {
@@ -137,9 +143,8 @@ fn dev_server_reachable() -> bool {
     .is_ok()
 }
 
-fn resolve_tauri_binary() -> anyhow::Result<PathBuf> {
-    if let Ok(explicit) = std::env::var("GENTS_DESKTOP_TAURI_BIN") {
-        let explicit = PathBuf::from(explicit);
+fn resolve_tauri_binary(explicit: Option<PathBuf>) -> anyhow::Result<PathBuf> {
+    if let Some(explicit) = explicit {
         if explicit.is_file() {
             return Ok(explicit);
         }
@@ -160,7 +165,7 @@ fn resolve_tauri_binary() -> anyhow::Result<PathBuf> {
     }
 
     Err(anyhow::anyhow!(
-        "could not find the Tauri desktop binary `{}`. Install or build `gents-desktop-tauri`, or set GENTS_DESKTOP_TAURI_BIN.",
+        "could not find the Tauri desktop binary `{}`. Install or build `gents-desktop-tauri`, or pass --tauri-bin.",
         tauri_binary_name()
     ))
 }

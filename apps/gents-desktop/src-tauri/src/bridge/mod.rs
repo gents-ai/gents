@@ -269,16 +269,20 @@ where
     tauri_plugin_single_instance::init(|app, _args, _cwd| show_main_window(app))
 }
 
+/// The value after `flag` on the launch command line.
+fn launch_argument(flag: &str) -> Option<std::ffi::OsString> {
+    std::env::args_os()
+        .skip(1)
+        .skip_while(|arg| arg != flag)
+        .nth(1)
+}
+
 /// `--desktop-home <PATH>` keeps the desktop client state in PATH instead of
 /// the platform's application data folder.
 fn launch_home_policy() -> HomePolicy {
-    std::env::args_os()
-        .skip(1)
-        .skip_while(|arg| arg != "--desktop-home")
-        .nth(1)
-        .map_or(HomePolicy::Default, |root| {
-            HomePolicy::FixedRoot(root.into())
-        })
+    launch_argument("--desktop-home").map_or(HomePolicy::Default, |root| {
+        HomePolicy::FixedRoot(root.into())
+    })
 }
 
 fn platform_bridge_config() -> BridgeConfig {
@@ -293,6 +297,7 @@ fn platform_bridge_config() -> BridgeConfig {
         managed_server: platform_managed_server_policy(),
         client_host: cfg!(all(desktop, any(unix, windows))),
         store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::default(),
+        service_executable: launch_argument("--gents-bin").map(Into::into),
     };
     #[cfg(all(feature = "native-e2e", debug_assertions, desktop))]
     let config = native_local_e2e_config(config);

@@ -135,6 +135,7 @@ impl PolicyFixture {
             ceiling_plugins: None,
             registry_url: None,
             plugin_builder: None,
+            ux_preview_assets: None,
         };
         build_self_config_tools_with_runtime(
             SelfConfigRuntime {

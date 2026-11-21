@@ -2565,6 +2565,39 @@ async fn dependee_names(access: &ConfigAccess) -> (Value, Value) {
     )
 }
 
+/// The root and a new dependency record their slots in `agent_bindings`
+/// alone: a hosted runtime looks a binding up and its client never does, so a
+/// binding in `variables` would make the two sides plan different graphs.
+#[tokio::test]
+async fn an_installation_records_agent_bindings_only_in_agent_bindings() {
+    let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
+    let owner = gents_store::identity::NodeIdentity::did(&runtime);
+    let (_guards, dependee, dependent) = documents_dependency_pair(false, false);
+    install_dependent_with_dependee(&access, &node, &runtime, &dependee, &dependent, None).await;
+    let records = access
+        .transact_readonly("test.pack.recorded_bindings", |txn| {
+            Box::pin(async move {
+                Ok::<_, anyhow::Error>([
+                    read_record(txn, owner, "fixture/dependent_fixture").await?,
+                    read_record(txn, owner, "fixture/dependee_fixture").await?,
+                ])
+            })
+        })
+        .await
+        .unwrap();
+    for record in records {
+        assert!(!record.agent_bindings.is_empty());
+        assert!(
+            !record
+                .variables
+                .keys()
+                .any(|name| crate::pack::is_agent_binding_variable(name)),
+            "{:?}",
+            record.variables
+        );
+    }
+}
+
 #[tokio::test]
 async fn a_documents_dependency_installs_non_explicitly_before_its_dependent() {
     let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;

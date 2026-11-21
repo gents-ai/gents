@@ -1,7 +1,6 @@
 use rapidhash::RapidHashSet;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::ValueEnum;
@@ -32,11 +31,9 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let host = match &access {
         ConfigAccess::Graphql(endpoint) => {
-            let status = fetch_runtime_status(endpoint, Duration::from_secs(10))
-                .await
-                .context(
-                    "the GraphQL endpoint has no gents runtime status to read its tool ceiling",
-                )?;
+            let status = fetch_runtime_status(endpoint).await.context(
+                "the GraphQL endpoint has no gents runtime status to read its tool ceiling",
+            )?;
             let live = status
                 .get("node_did")
                 .and_then(Value::as_str)

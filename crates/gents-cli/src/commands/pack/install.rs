@@ -28,6 +28,7 @@ pub(crate) fn install_request(args: &PackInstallArgs) -> DocumentsInstallRequest
         edited: args.drift.edited(),
         grant_authority: args.grant_authority,
         wire: args.wire.clone(),
+        environment: Default::default(),
     }
 }
 
