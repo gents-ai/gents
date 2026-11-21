@@ -77,3 +77,30 @@ fn a_removed_home_reads_as_absent_and_is_not_recreated() {
     ));
     assert!(!home.exists());
 }
+
+#[test]
+fn a_pin_binds_the_home_it_was_captured_in_even_before_the_store_exists() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    std::fs::create_dir(&home).unwrap();
+    let pin = StoreReadPin::capture(&home);
+    assert!(matches!(
+        pin.try_shared(),
+        Err(PublishedPluginReadError::Absent(StoreAbsent::Missing))
+    ));
+    assert!(!pin.is_captured());
+    bootstrap_store(&home).unwrap();
+    drop(pin.try_shared().unwrap());
+    assert!(pin.is_captured());
+
+    let unbound = root.path().join("unbound");
+    std::fs::create_dir(&unbound).unwrap();
+    let early = StoreReadPin::capture(&unbound);
+    std::fs::rename(&unbound, root.path().join("moved")).unwrap();
+    std::fs::create_dir(&unbound).unwrap();
+    bootstrap_store(&unbound).unwrap();
+    assert!(matches!(
+        early.try_shared(),
+        Err(PublishedPluginReadError::Absent(StoreAbsent::Replaced))
+    ));
+}

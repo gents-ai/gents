@@ -2769,3 +2769,21 @@ async fn a_failed_plugin_attempt_names_its_cause_once() {
         gents_protocol::plugin::PluginExecutionVerdict::AdmissionRefused
     );
 }
+
+#[test]
+fn an_executor_never_reads_or_recreates_a_home_replaced_after_it_was_built() {
+    let (home, _) = installed_echo();
+    let executor = PluginExecutor::new(Some(home.path().to_owned()));
+    assert!(executor.resolve("team/plugin", None).is_ok());
+    let retired = tempfile::tempdir().unwrap();
+    std::fs::rename(home.path(), retired.path().join("home")).unwrap();
+    std::fs::create_dir(home.path()).unwrap();
+    store::bootstrap_store(home.path()).unwrap();
+    let error = executor.resolve("team/plugin", None).unwrap_err();
+    assert_eq!(error.store_absent(), Some(store::StoreAbsent::Replaced));
+    std::fs::remove_dir_all(home.path()).unwrap();
+    let error = executor.resolve("team/plugin", None).unwrap_err();
+    assert!(error.store_absent().is_some(), "{error:?}");
+    assert!(!home.path().exists());
+    std::fs::create_dir(home.path()).unwrap();
+}

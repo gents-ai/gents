@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use gents_documents::plugin_coordinate::checked_component;
 
 mod read;
-pub use read::{StoreAbsent, StoreReadIdentity};
+pub use read::{StoreAbsent, StoreReadIdentity, StoreReadPin};
 
 fn plugins_root(home: &Path) -> PathBuf {
     home.join(gents_store::local::home::PLUGINS_DIR_NAME)
@@ -412,6 +412,18 @@ pub fn read_published_record(
 ) -> std::result::Result<(InstalledPlugin, StoreGuard), PublishedPluginReadError> {
     let guard = try_lock_store_shared(home)?;
     let record = read_record(home, namespace, name).map_err(PublishedPluginReadError::Read)?;
+    Ok((record, guard))
+}
+
+/// [`read_published_record`] through a runtime's pinned store identity.
+pub fn read_pinned_record(
+    pin: &StoreReadPin,
+    namespace: &str,
+    name: &str,
+) -> std::result::Result<(InstalledPlugin, StoreGuard), PublishedPluginReadError> {
+    let guard = pin.try_shared()?;
+    let record =
+        read_record(guard.home(), namespace, name).map_err(PublishedPluginReadError::Read)?;
     Ok((record, guard))
 }
 

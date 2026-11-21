@@ -207,6 +207,98 @@ impl StoreReadIdentity {
     }
 }
 
+/// One runtime's read identity of its plugin store. The home is pinned when
+/// the runtime starts; the store is pinned by the first read that finds it in
+/// that same home, and never refreshed. A home removed or replaced later reads
+/// as [`StoreAbsent`] for the rest of the runtime's life, never as the new
+/// home at the same path.
+#[derive(Debug, Clone)]
+pub struct StoreReadPin(std::sync::Arc<std::sync::Mutex<PinState>>);
+
+#[derive(Debug)]
+struct PinState {
+    home: PathBuf,
+    home_identity: Option<std::sync::Arc<same_file::Handle>>,
+    store: Option<std::sync::Arc<StoreReadIdentity>>,
+}
+
+fn poisoned<T>(_: T) -> PublishedPluginReadError {
+    PublishedPluginReadError::Read(anyhow::anyhow!("the plugin store read pin was poisoned"))
+}
+
+impl StoreReadPin {
+    pub fn capture(home: &Path) -> Self {
+        let pin = Self(std::sync::Arc::new(std::sync::Mutex::new(PinState {
+            home: home.to_owned(),
+            home_identity: same_file::Handle::from_path(home)
+                .ok()
+                .map(std::sync::Arc::new),
+            store: None,
+        })));
+        let _ = pin.identity();
+        pin
+    }
+
+    pub fn home(&self) -> Result<PathBuf, PublishedPluginReadError> {
+        Ok(self.0.lock().map_err(poisoned)?.home.clone())
+    }
+
+    fn identity(&self) -> Result<std::sync::Arc<StoreReadIdentity>, PublishedPluginReadError> {
+        let (home, home_identity) = {
+            let state = self.0.lock().map_err(poisoned)?;
+            if let Some(identity) = &state.store {
+                return Ok(identity.clone());
+            }
+            (state.home.clone(), state.home_identity.clone())
+        };
+        let current =
+            std::sync::Arc::new(same_file::Handle::from_path(&home).map_err(absent_or_io)?);
+        if home_identity
+            .as_ref()
+            .is_some_and(|pinned| **pinned != *current)
+        {
+            return Err(StoreAbsent::Replaced.into());
+        }
+        let captured = StoreReadIdentity::capture(&home).and_then(|identity| {
+            let captured_home =
+                same_file::Handle::from_file(identity.home_dir.try_clone().map_err(absent_or_io)?)
+                    .map_err(absent_or_io)?;
+            if captured_home != *current {
+                return Err(StoreAbsent::Replaced.into());
+            }
+            Ok(std::sync::Arc::new(identity))
+        });
+        let mut state = self.0.lock().map_err(poisoned)?;
+        if let Some(identity) = &state.store {
+            return Ok(identity.clone());
+        }
+        if state
+            .home_identity
+            .as_ref()
+            .is_some_and(|pinned| **pinned != *current)
+        {
+            return Err(StoreAbsent::Replaced.into());
+        }
+        state.home_identity = Some(current);
+        let identity = captured?;
+        state.store = Some(identity.clone());
+        Ok(identity)
+    }
+
+    /// Whether a read has found this runtime's store yet.
+    pub fn is_captured(&self) -> bool {
+        self.0.lock().is_ok_and(|state| state.store.is_some())
+    }
+
+    pub fn validate(&self) -> Result<(), PublishedPluginReadError> {
+        self.identity()?.validate()
+    }
+
+    pub fn try_shared(&self) -> Result<StoreGuard, PublishedPluginReadError> {
+        self.identity()?.try_shared()
+    }
+}
+
 #[cfg(test)]
 #[path = "read_tests.rs"]
 mod tests;

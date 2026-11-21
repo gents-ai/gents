@@ -288,6 +288,7 @@ fn receipt_verdict(verdict: gents_pack::plugin::PluginVerdict) -> PluginExecutio
 
 pub struct PluginExecutor {
     home: Option<PathBuf>,
+    store: Option<store::StoreReadPin>,
     models: Option<Arc<dyn ModelResolver>>,
     admitted: kovan_map::HopscotchMap<String, Arc<Admitted>>,
     admitted_bytes: AtomicU64,
@@ -340,6 +341,7 @@ impl PluginExecutor {
             allowed::protect(home);
         }
         Self {
+            store: home.as_deref().map(store::StoreReadPin::capture),
             home,
             models: None,
             admitted: kovan_map::HopscotchMap::new(),
@@ -752,6 +754,21 @@ impl PluginExecutor {
         )
     }
 
+    /// A published record read through the store identity this executor
+    /// pinned when it was built: a home removed or replaced since reads as
+    /// absent, never as the new home at the same path.
+    pub fn read_published(
+        &self,
+        namespace: &str,
+        name: &str,
+    ) -> std::result::Result<(InstalledPlugin, store::StoreGuard), store::PublishedPluginReadError>
+    {
+        match &self.store {
+            Some(pin) => store::read_pinned_record(pin, namespace, name),
+            None => Err(store::StoreAbsent::Missing.into()),
+        }
+    }
+
     pub fn resolve(
         &self,
         coordinate: &str,
@@ -768,10 +785,10 @@ impl PluginExecutor {
                     })
                 }
             };
-        let Some(home) = self.home.as_deref() else {
+        if self.home.is_none() {
             return Err(PluginResolutionError::NoHome { coordinate });
-        };
-        let record = match store::read_published_record(home, namespace, name) {
+        }
+        let record = match self.read_published(namespace, name) {
             Ok((record, _store)) => record,
             Err(source) if source.is_busy() => {
                 return Err(PluginResolutionError::Busy { coordinate, source })
@@ -1100,6 +1117,10 @@ impl PluginExecutor {
 impl gents_tools::plugin_host::PluginHost for PluginExecutor {
     fn home(&self) -> Option<&Path> {
         PluginExecutor::home(self)
+    }
+
+    fn store_pin(&self) -> Option<&store::StoreReadPin> {
+        self.store.as_ref()
     }
 
     fn installed(&self) -> Result<Vec<InstalledPlugin>> {
