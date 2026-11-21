@@ -96,14 +96,12 @@ function snapshot(configured: boolean): DesktopClientSnapshot {
       ...bootstrap,
       initConfigStatus: configured ? "configured" : "absent",
       clientStateExists: configured,
-      savedPeers: configured
+      savedRuntimes: configured
         ? [
             {
-              peerId: deployment.peerId,
               label: deployment.label,
               nodeDid: deployment.nodeDid,
-              addr: deployment.addr,
-              source: deployment.source,
+
               graphql: deployment.graphql,
               local: false,
             },
@@ -164,7 +162,7 @@ describe("a home this version cannot open", () => {
 
     const panel = await screen.findByTestId("incompatible-home");
     expect(panel).toHaveTextContent(
-      "This home was created by an older Gents version (v1.0.0-rc1 or earlier). This release can't open or convert it. Back it up or delete it to start fresh; nothing is carried over.",
+      "This home was created by an older Gents version. This release can't open or convert it. Back it up or delete it to start fresh; nothing is carried over.",
     );
     expect(panel).toHaveTextContent(`${HOME}/data`);
     expect(screen.getByTestId("incompatible-home-retained")).toHaveTextContent(
@@ -269,7 +267,13 @@ describe("a home this version cannot open", () => {
       const outcome = setAside ? ("ready" as const) : ("needsSetup" as const);
       const repaired = setAside ? [] : [note];
       setAside = true;
-      return { repaired, outcome, blocker: null, savedPeers: [], localNodeLost: false };
+      return {
+        repaired,
+        outcome,
+        blocker: null,
+        savedRuntimes: [],
+        localNodeLost: false,
+      };
     });
     const resetManagedServer = vi.fn();
     const app = testApp({
@@ -296,7 +300,7 @@ describe("a home this version cannot open", () => {
         repaired: [],
         outcome: "ready" as const,
         blocker: null,
-        savedPeers: [],
+        savedRuntimes: [],
         localNodeLost: false,
       })),
       managedServerStatus: vi.fn(async () =>

@@ -1,7 +1,7 @@
 #[cfg(any(test, feature = "test-fixtures"))]
 use super::take_terminal_failure_for_test;
 use super::terminal_effects::{retain_file_changes, write_terminal_progress};
-use super::terminal_transaction::terminalize_transaction;
+use super::terminal_transaction::{terminalize_transaction, TerminalRow, TerminalWrite};
 use super::{
     plugin_writes_failed, RawPresentation, TerminalFields, TerminalJobProgress, TerminalWriteError,
     TerminalizeOptions,
@@ -10,7 +10,7 @@ use crate::call::lifecycle::{FailureClass, ToolCallLifecycle, ToolRowKind};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use gents_protocol::output::PayloadPresentation;
-use gents_session::session::tool_call_state::ToolCallState;
+use gents_protocol::tool_call::ToolCallState;
 use gents_store::config_client::{ConfigApplyTxn, IdempotentTransactionRetry};
 
 impl ToolCallLifecycle {
@@ -115,32 +115,36 @@ impl ToolCallLifecycle {
         let plugin_effect = self.plugin_effect_terminal()?;
         let published = terminalize_transaction(
             txn,
-            doc_id,
-            request_doc_id,
-            accepted_header,
-            &self.node_did,
-            self.requester_did.as_deref(),
-            &self.session_id,
-            &self.tool_call_id,
-            self.call_id.as_deref(),
-            self.message_sequence,
-            self.arguments.as_ref(),
-            self.spawned_by_tool_call_doc_id.as_deref(),
-            plugin_effect.as_ref(),
-            &self.tool_name,
-            self.deadline_at,
-            self.started_at,
-            Utc::now(),
-            ToolCallState::Running,
-            fields,
-            &self.terminal_persistence_status(fields.completion_reason),
-            plugin_receipt.as_ref(),
-            text,
-            None,
-            None,
-            output_budget,
-            true,
-            publish_native_result,
+            TerminalRow {
+                tool_doc_id: doc_id,
+                request_doc_id,
+                accepted_header_doc_id: accepted_header,
+                node_did: &self.node_did,
+                requester_did: self.requester_did.as_deref(),
+                session_id: &self.session_id,
+                tool_call_id: &self.tool_call_id,
+                call_id: self.call_id.as_deref(),
+                message_sequence: self.message_sequence,
+                arguments: self.arguments.as_ref(),
+                spawned_by_tool_call_doc_id: self.spawned_by_tool_call_doc_id.as_deref(),
+                plugin_effect: plugin_effect.as_ref(),
+                tool_name: &self.tool_name,
+                deadline_at: self.deadline_at,
+                started_at: self.started_at,
+            },
+            TerminalWrite {
+                now: Utc::now(),
+                expected: ToolCallState::Running,
+                fields,
+                terminal_status: &self.terminal_persistence_status(fields.completion_reason),
+                plugin_receipt: plugin_receipt.as_ref(),
+                text,
+                pending_raw: None,
+                presentation: None,
+                output_budget,
+                adopt_competing_terminal: true,
+                publish_native_result,
+            },
         )
         .await?;
         #[cfg(any(test, feature = "test-fixtures"))]
@@ -329,32 +333,36 @@ impl ToolCallLifecycle {
                     let now = fixture_now.unwrap_or_else(Utc::now);
                     let published = terminalize_transaction(
                         txn,
-                        &doc_id,
-                        &request_doc_id,
-                        &accepted_header,
-                        &node_did,
-                        requester_did.as_deref(),
-                        &session_id,
-                        &tool_call_id,
-                        call_id.as_deref(),
-                        message_sequence,
-                        arguments.as_ref(),
-                        spawned_by_tool_call_doc_id.as_deref(),
-                        plugin_effect.as_ref(),
-                        &tool_name,
-                        deadline_at,
-                        started_at,
-                        now,
-                        expected,
-                        fields,
-                        &terminal_status,
-                        plugin_receipt.as_ref(),
-                        text,
-                        pending_raw,
-                        presentation.as_ref(),
-                        output_budget,
-                        adopt_competing_terminal,
-                        publish_native_result,
+                        TerminalRow {
+                            tool_doc_id: &doc_id,
+                            request_doc_id: &request_doc_id,
+                            accepted_header_doc_id: &accepted_header,
+                            node_did: &node_did,
+                            requester_did: requester_did.as_deref(),
+                            session_id: &session_id,
+                            tool_call_id: &tool_call_id,
+                            call_id: call_id.as_deref(),
+                            message_sequence,
+                            arguments: arguments.as_ref(),
+                            spawned_by_tool_call_doc_id: spawned_by_tool_call_doc_id.as_deref(),
+                            plugin_effect: plugin_effect.as_ref(),
+                            tool_name: &tool_name,
+                            deadline_at,
+                            started_at,
+                        },
+                        TerminalWrite {
+                            now,
+                            expected,
+                            fields,
+                            terminal_status: &terminal_status,
+                            plugin_receipt: plugin_receipt.as_ref(),
+                            text,
+                            pending_raw,
+                            presentation: presentation.as_ref(),
+                            output_budget,
+                            adopt_competing_terminal,
+                            publish_native_result,
+                        },
                     )
                     .await?;
                     #[cfg(any(test, feature = "test-fixtures"))]

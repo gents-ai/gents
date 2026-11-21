@@ -92,16 +92,43 @@ fn production_sources(root: &Path) -> Vec<PathBuf> {
     sources
 }
 
+/// Whether an item compiles only into tests: a `#[cfg(..)]` that requires
+/// `test`, the `test-fixtures` feature, the `test-home-guard` feature or the
+/// `native-e2e` feature, none of which reaches a shipped build
+/// (`gents_test_fixtures_stay_dev_only`, `service_isolation_stays_test_only`,
+/// `native_e2e_stays_test_only`).
 fn cfg_test(attributes: &[syn::Attribute]) -> bool {
     attributes.iter().any(|attribute| {
         attribute.path().is_ident("cfg")
-            && attribute.meta.require_list().is_ok_and(|list| {
-                matches!(
-                    list.tokens.to_string().replace(' ', "").as_str(),
-                    "test" | "any(test,feature=\"test-fixtures\")"
-                )
-            })
+            && attribute
+                .parse_args::<syn::Meta>()
+                .is_ok_and(|predicate| predicate_requires_test(&predicate))
     })
+}
+
+fn predicate_requires_test(predicate: &syn::Meta) -> bool {
+    let operands = |list: &syn::MetaList| {
+        list.parse_args_with(
+            syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+        )
+        .map(|operands| operands.into_iter().collect::<Vec<_>>())
+        .unwrap_or_default()
+    };
+    match predicate {
+        syn::Meta::Path(path) => path.is_ident("test"),
+        syn::Meta::NameValue(pair) => {
+            pair.path.is_ident("feature")
+                && matches!(&pair.value, Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(name), .. }) if TEST_FEATURES.contains(&name.value().as_str()) || name.value() == NATIVE_E2E)
+        }
+        syn::Meta::List(list) if list.path.is_ident("all") => {
+            operands(list).iter().any(predicate_requires_test)
+        }
+        syn::Meta::List(list) if list.path.is_ident("any") => {
+            let operands = operands(list);
+            !operands.is_empty() && operands.iter().all(predicate_requires_test)
+        }
+        syn::Meta::List(_) => false,
+    }
 }
 
 fn path_name(call: &ExprCall) -> Option<String> {
@@ -993,12 +1020,134 @@ fn test_fixtures_fence_flags_production_and_default_enablement() {
     }
 }
 
+/// The feature end-to-end launchers pass on the command line to build the
+/// desktop, bridge and CLI with their native test harness hooks; release
+/// builds never pass it (`scripts/check-native-e2e-capabilities.sh` keeps its
+/// capability out of the shipped app).
+const NATIVE_E2E: &str = "native-e2e";
+
+/// `cfg_test` treats `native-e2e` items as test code, which holds only while
+/// no manifest enables the feature outside `[dev-dependencies]` except a
+/// crate's own `native-e2e` feature forwarding it to a dependency.
+fn native_e2e_leaks(manifest: &toml::Table) -> Vec<String> {
+    let mut tables = Vec::new();
+    for kind in ["dependencies", "build-dependencies"] {
+        tables.push((kind, manifest.get(kind)));
+        if let Some(targets) = manifest.get("target").and_then(toml::Value::as_table) {
+            tables.extend(targets.values().map(|target| (kind, target.get(kind))));
+        }
+    }
+    let mut leaks = Vec::new();
+    for (kind, table) in tables {
+        for (key, specification) in table.and_then(toml::Value::as_table).into_iter().flatten() {
+            if specification
+                .get("features")
+                .and_then(toml::Value::as_array)
+                .is_some_and(|features| {
+                    features
+                        .iter()
+                        .any(|feature| feature.as_str() == Some(NATIVE_E2E))
+                })
+            {
+                leaks.push(format!("[{kind}] {key}"));
+            }
+        }
+    }
+    for (feature, enabled) in manifest
+        .get("features")
+        .and_then(toml::Value::as_table)
+        .into_iter()
+        .flatten()
+    {
+        if feature != NATIVE_E2E
+            && enabled
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(toml::Value::as_str)
+                .any(|entry| entry.rsplit('/').next() == Some(NATIVE_E2E))
+        {
+            leaks.push(format!("[features] {feature}"));
+        }
+    }
+    leaks
+}
+
+#[test]
+fn native_e2e_stays_test_only() {
+    let root = repo_root();
+    let workspace = toml_file(&root.join("Cargo.toml"));
+    let mut leaks = Vec::new();
+    for member in workspace["workspace"]["members"]
+        .as_array()
+        .expect("workspace members")
+    {
+        let member = member.as_str().expect("member path");
+        let manifest = toml_file(&root.join(member).join("Cargo.toml"));
+        leaks.extend(
+            native_e2e_leaks(&manifest)
+                .into_iter()
+                .map(|site| format!("{member}/Cargo.toml {site}")),
+        );
+    }
+    assert!(
+        leaks.is_empty(),
+        "the `native-e2e` feature is enabled only from the command line, [dev-dependencies] or a crate's own `native-e2e` feature:\n{}",
+        leaks.join("\n")
+    );
+}
+
+#[test]
+fn native_e2e_fence_flags_production_and_default_enablement() {
+    let leaks = |manifest: &str| native_e2e_leaks(&manifest.parse().expect("parse manifest"));
+    for (manifest, expected) in [
+        (
+            r#"[dependencies]
+            bridge = { path = "../bridge", features = ["native-e2e"] }"#,
+            "[dependencies] bridge",
+        ),
+        (
+            r#"[target.'cfg(unix)'.dependencies]
+            bridge = { path = "../bridge", features = ["native-e2e"] }"#,
+            "[dependencies] bridge",
+        ),
+        (
+            r#"[features]
+            default = ["native-e2e"]
+            native-e2e = []"#,
+            "[features] default",
+        ),
+        (
+            r#"[features]
+            desktop = ["bridge?/native-e2e"]"#,
+            "[features] desktop",
+        ),
+    ] {
+        assert_eq!(leaks(manifest), [expected], "{manifest}");
+    }
+    for manifest in [
+        r#"[dev-dependencies]
+        bridge = { path = "../bridge", features = ["native-e2e"] }"#,
+        r#"[features]
+        native-e2e = ["tauri-host", "bridge/native-e2e"]"#,
+        r#"[dependencies]
+        bridge = { path = "../bridge", features = ["native-e2e-ui"] }"#,
+    ] {
+        assert!(leaks(manifest).is_empty(), "{manifest}");
+    }
+}
+
 /// The feature that cuts a test build off the machine's service manager
 /// (`gents_service::native_service::isolation`). The per-user service label
 /// is not per `HOME`, so a `gents` a test spawns with a temporary `HOME`
 /// otherwise addresses the user's own node: on 2026-11-13 test binaries
 /// stopped the maintainer's nodes through it.
 const SERVICE_ISOLATION: (&str, &str) = ("gents-service", "test-home-guard");
+
+/// The features only test builds enable: `cfg_test` treats what they gate as
+/// test code, and `Workspace::production` turns them on only where a
+/// compiled member's dependency entry or enabled feature does.
+const TEST_FEATURES: [&str; 2] = [GENTS_TEST_FIXTURES, SERVICE_ISOLATION.1];
 
 struct Workspace {
     inherited: toml::Table,
@@ -1031,8 +1180,13 @@ impl Workspace {
     }
 
     /// Every dependency entry of `manifest` in the tables of `kind`, with the
-    /// package it names and the features it enables (inherited ones included).
-    fn entries(&self, manifest: &toml::Table, kind: &str) -> Vec<(String, String, Vec<String>)> {
+    /// package it names, the features it enables (inherited ones included)
+    /// and whether it is optional.
+    fn entries(
+        &self,
+        manifest: &toml::Table,
+        kind: &str,
+    ) -> Vec<(String, String, Vec<String>, bool)> {
         let mut tables = vec![manifest.get(kind)];
         if let Some(targets) = manifest.get("target").and_then(toml::Value::as_table) {
             tables.extend(targets.values().map(|target| target.get(kind)));
@@ -1070,54 +1224,157 @@ impl Workspace {
                     key.clone(),
                     package_name(key, specification, &self.inherited),
                     enabled,
+                    specification.get("optional").and_then(toml::Value::as_bool) == Some(true),
                 )
             })
             .collect()
     }
 
-    /// Whether enabling `features` of `package` enables the service isolation.
-    fn isolates(&self, package: &str, features: &[String]) -> bool {
-        self.isolates_from(package, features, &mut BTreeSet::new())
+    /// The `[dependencies]` and `[build-dependencies]` entries of `manifest`,
+    /// target-specific ones included: what a build of the member compiles.
+    fn build_entries(&self, manifest: &toml::Table) -> Vec<(String, String, Vec<String>, bool)> {
+        ["dependencies", "build-dependencies"]
+            .into_iter()
+            .flat_map(|kind| self.entries(manifest, kind))
+            .collect()
     }
 
-    fn isolates_from(
+    /// The features of `manifest` as Cargo defines them: each `[features]`
+    /// key, and the implicit feature `x = ["dep:x"]` of every optional
+    /// dependency `x` that no `dep:x` entry names.
+    fn features(&self, manifest: &toml::Table) -> BTreeMap<String, Vec<String>> {
+        let mut features = manifest
+            .get("features")
+            .and_then(toml::Value::as_table)
+            .into_iter()
+            .flatten()
+            .map(|(name, entries)| {
+                let entries = entries
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(toml::Value::as_str)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>();
+                (name.clone(), entries)
+            })
+            .collect::<BTreeMap<_, _>>();
+        let explicit = features
+            .values()
+            .flatten()
+            .filter_map(|entry| entry.strip_prefix("dep:"))
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>();
+        for (key, .., optional) in self.build_entries(manifest) {
+            if optional && !explicit.contains(&key) {
+                features
+                    .entry(key.clone())
+                    .or_insert_with(|| vec![format!("dep:{key}")]);
+            }
+        }
+        features
+    }
+
+    /// The members a build starting from `start` compiles, each with the path
+    /// that reaches it, and the (package, feature) pairs it enables. A
+    /// compiled member compiles every entry of `build_entries` that is not
+    /// optional, with the features the entry names; an enabled feature turns
+    /// on what it lists: another feature of the member (`f`), an optional
+    /// dependency (`dep:x`), or a dependency with one of its features (`x/f`,
+    /// and `x?/f`, counted as turning `x` on). With `every_feature`, every
+    /// feature of a compiled member except the test features counts as
+    /// enabled.
+    fn resolve(
         &self,
-        package: &str,
-        features: &[String],
-        seen: &mut BTreeSet<(String, String)>,
-    ) -> bool {
-        features.iter().any(|feature| {
-            if (package, feature.as_str()) == SERVICE_ISOLATION {
-                return true;
-            }
-            if !seen.insert((package.to_owned(), feature.clone())) {
-                return false;
-            }
-            let Some((_, manifest)) = self.members.get(package) else {
-                return false;
+        start: Vec<(String, Option<String>)>,
+        every_feature: bool,
+    ) -> (BTreeMap<String, String>, BTreeSet<(String, String)>) {
+        let mut pending = start
+            .into_iter()
+            .map(|(package, feature)| (package, feature, String::new()))
+            .collect::<Vec<_>>();
+        let compile = |pending: &mut Vec<_>, parent: &str, target: &str, features: Vec<String>| {
+            pending.push((target.to_owned(), None, parent.to_owned()));
+            pending.extend(
+                features
+                    .into_iter()
+                    .map(|feature| (target.to_owned(), Some(feature), parent.to_owned())),
+            );
+        };
+        let mut compiled = BTreeMap::new();
+        let mut enabled = BTreeSet::new();
+        while let Some((package, feature, parent)) = pending.pop() {
+            let newly_enabled = feature
+                .as_ref()
+                .is_some_and(|feature| enabled.insert((package.clone(), feature.clone())));
+            let fresh = !compiled.contains_key(&package);
+            let Some((_, manifest)) = self
+                .members
+                .get(&package)
+                .filter(|_| fresh || newly_enabled)
+            else {
+                continue;
             };
-            let dependencies = self.entries(manifest, "dependencies");
-            manifest
-                .get("features")
-                .and_then(|table| table.get(feature))
-                .and_then(toml::Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(toml::Value::as_str)
-                .any(|entry| match entry.split_once('/') {
-                    Some((dependency, enabled)) => {
-                        let dependency = dependency.trim_end_matches('?');
-                        dependencies
-                            .iter()
-                            .find(|(key, _, _)| key == dependency)
-                            .is_some_and(|(_, target, _)| {
-                                self.isolates_from(target, &[enabled.to_owned()], seen)
-                            })
+            let step = |label: &str| {
+                if parent.is_empty() {
+                    label.to_owned()
+                } else {
+                    format!("{parent} > {label}")
+                }
+            };
+            let features = self.features(manifest);
+            let dependencies = self.build_entries(manifest);
+            if fresh {
+                let path = step(&package);
+                if every_feature {
+                    for name in features.keys() {
+                        if !TEST_FEATURES.contains(&name.as_str()) {
+                            pending.push((package.clone(), Some(name.clone()), path.clone()));
+                        }
                     }
-                    None if entry.starts_with("dep:") => false,
-                    None => self.isolates_from(package, &[entry.to_owned()], seen),
-                })
-        })
+                }
+                for (_, target, with, optional) in &dependencies {
+                    if !optional {
+                        compile(&mut pending, &path, target, with.clone());
+                    }
+                }
+                compiled.insert(package.clone(), path);
+            }
+            let Some(feature) = feature.filter(|_| newly_enabled) else {
+                continue;
+            };
+            let path = step(&format!("{package}/{feature}"));
+            for entry in features.get(&feature).into_iter().flatten() {
+                let (key, sub) = match entry.split_once('/') {
+                    Some((key, sub)) => (key.trim_end_matches('?'), Some(sub.to_owned())),
+                    None => match entry.strip_prefix("dep:") {
+                        Some(key) => (key, None),
+                        None => {
+                            pending.push((package.clone(), Some(entry.clone()), path.clone()));
+                            continue;
+                        }
+                    },
+                };
+                for (_, target, with, _) in dependencies.iter().filter(|(name, ..)| name == key) {
+                    let with = with.iter().cloned().chain(sub.clone()).collect();
+                    compile(&mut pending, &path, target, with);
+                }
+            }
+        }
+        (compiled, enabled)
+    }
+
+    /// Whether a build of `package` with `features` enables the service
+    /// isolation (`resolve`).
+    fn isolates(&self, package: &str, features: &[String]) -> bool {
+        let start = std::iter::once(None)
+            .chain(features.iter().cloned().map(Some))
+            .map(|feature| (package.to_owned(), feature))
+            .collect();
+        self.resolve(start, false).1.contains(&(
+            SERVICE_ISOLATION.0.to_owned(),
+            SERVICE_ISOLATION.1.to_owned(),
+        ))
     }
 
     /// Workspace members `package` builds against, transitively.
@@ -1137,6 +1394,42 @@ impl Workspace {
         }
         false
     }
+
+    /// Members a production build compiles, each with the path that reaches
+    /// it. A production build starts at a member no other member names (an
+    /// application, a binary, a plugin; naming itself, as a `[dev-dependencies]`
+    /// entry enabling its own test features does, does not count) and enables
+    /// every feature of what it compiles except the test features (`resolve`).
+    fn production(&self) -> BTreeMap<String, String> {
+        let named = self
+            .members
+            .iter()
+            .flat_map(|(name, (_, manifest))| {
+                ["dependencies", "build-dependencies", "dev-dependencies"]
+                    .into_iter()
+                    .flat_map(|kind| self.entries(manifest, kind))
+                    .map(|(_, package, ..)| package)
+                    .filter(move |package| package != name)
+            })
+            .collect::<BTreeSet<_>>();
+        let tops = self
+            .members
+            .keys()
+            .filter(|name| !named.contains(*name))
+            .map(|name| (name.clone(), None))
+            .collect();
+        self.resolve(tops, true).0
+    }
+
+    /// Members no production build compiles (`production`).
+    fn test_only(&self) -> BTreeSet<String> {
+        let production = self.production();
+        self.members
+            .keys()
+            .filter(|name| !production.contains_key(*name))
+            .cloned()
+            .collect()
+    }
 }
 
 /// Sites that would enable the service isolation in a production build: a
@@ -1150,7 +1443,7 @@ fn service_isolation_leaks(workspace: &Workspace) -> Vec<String> {
             "build-dependencies",
             "workspace.dependencies",
         ] {
-            for (key, package, features) in workspace.entries(manifest, kind) {
+            for (key, package, features, _) in workspace.entries(manifest, kind) {
                 if workspace.isolates(&package, &features) {
                     leaks.push(format!("{member}/Cargo.toml [{kind}] {key}"));
                 }
@@ -1162,7 +1455,7 @@ fn service_isolation_leaks(workspace: &Workspace) -> Vec<String> {
             .into_iter()
             .flat_map(|table| table.keys())
         {
-            let test_feature = matches!(feature.as_str(), "test-home-guard" | "test-fixtures");
+            let test_feature = TEST_FEATURES.contains(&feature.as_str());
             if !test_feature && workspace.isolates(name, std::slice::from_ref(feature)) {
                 leaks.push(format!("{member}/Cargo.toml [features] {feature}"));
             }
@@ -1212,7 +1505,7 @@ fn tests_reaching_the_service_manager_are_isolated() {
         let isolated = workspace
             .entries(manifest, "dev-dependencies")
             .iter()
-            .any(|(_, package, features)| workspace.isolates(package, features));
+            .any(|(_, package, features, _)| workspace.isolates(package, features));
         if !isolated {
             unisolated.push(format!(
                 "{member}: its tests reach the service manager; add `{} = {{ workspace = true, features = [\"{}\"] }}` (or a test feature enabling it) to its [dev-dependencies]",
@@ -1223,9 +1516,8 @@ fn tests_reaching_the_service_manager_are_isolated() {
     assert!(unisolated.is_empty(), "{}", unisolated.join("\n"));
 }
 
-#[test]
-fn service_isolation_fence_flags_production_enablement() {
-    let workspace = |manifests: &[(&str, &str)]| Workspace {
+fn snippet_workspace(manifests: &[(&str, &str)]) -> Workspace {
+    Workspace {
         inherited: toml::Table::new(),
         members: manifests
             .iter()
@@ -1236,9 +1528,13 @@ fn service_isolation_fence_flags_production_enablement() {
                 ((*name).to_owned(), ((*name).to_owned(), manifest))
             })
             .collect(),
-    };
+    }
+}
+
+#[test]
+fn service_isolation_fence_flags_production_enablement() {
     let service = ("gents-service", "[features]\ntest-home-guard = []");
-    let leaking = workspace(&[
+    let leaking = snippet_workspace(&[
         service,
         (
             "host",
@@ -1256,7 +1552,7 @@ fn service_isolation_fence_flags_production_enablement() {
             "host/Cargo.toml [features] fixtures"
         ]
     );
-    let fenced = workspace(&[
+    let fenced = snippet_workspace(&[
         service,
         (
             "host",
@@ -1270,6 +1566,118 @@ fn service_isolation_fence_flags_production_enablement() {
     assert!(service_isolation_leaks(&fenced).is_empty());
     assert!(fenced.isolates("host", &["test-fixtures".to_owned()]));
     assert!(fenced.reaches("cli", "gents-service"));
+}
+
+/// The members no production build compiles (`Workspace::test_only`), whose
+/// sources `runtime_environment_reads_only_shrink` skips. Pinned so that one
+/// becoming reachable from a production build, or a new one becoming
+/// test-only, is a visible change.
+const TEST_ONLY_CRATES: &[&str] = &[
+    "gents-callback-fixture-create-workspace",
+    "gents-lean-contract",
+    "gents-lean-vocab",
+    "gents-workspace-hack",
+];
+
+#[test]
+fn test_only_crates_stay_off_production_builds() {
+    let workspace = Workspace::load(&repo_root());
+    let production = workspace.production();
+    let mut violations = TEST_ONLY_CRATES
+        .iter()
+        .filter_map(|name| match production.get(*name) {
+            Some(path) => Some(format!(
+                "{name} is compiled into a production build ({path}); name it only from [dev-dependencies] or a test feature"
+            )),
+            None if !workspace.members.contains_key(*name) => Some(format!(
+                "{name} is not a workspace member; remove it from TEST_ONLY_CRATES"
+            )),
+            None => None,
+        })
+        .collect::<Vec<_>>();
+    violations.extend(
+        workspace
+            .test_only()
+            .into_iter()
+            .filter(|name| !TEST_ONLY_CRATES.contains(&name.as_str()))
+            .map(|name| {
+                format!("{name}: no production build compiles it; name it in TEST_ONLY_CRATES")
+            }),
+    );
+    assert!(
+        violations.is_empty(),
+        "test-only crates ratchet failed:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn test_only_fence_follows_production_dependencies_and_features() {
+    const APP: &str = "[dependencies]\ncore = { path = \"c\" }\n[dev-dependencies]\ncore = { path = \"c\", features = [\"test-fixtures\"] }";
+    const CORE: &str = "[dependencies]\ndecoder = { path = \"d\", optional = true }\n[features]\ndefault = []\ntest-fixtures = [\"dep:decoder\"]";
+    let test_only = |app: &str, core: &str| {
+        snippet_workspace(&[
+            ("app", app),
+            ("core", core),
+            (
+                "decoder",
+                "[dependencies]\nhelper = { path = \"h\" }\n[dev-dependencies]\nfixture = { path = \"f\" }",
+            ),
+            ("helper", ""),
+            ("fixture", ""),
+        ])
+        .test_only()
+    };
+    for app in [APP.to_owned(), format!("{APP}\napp = {{ path = \".\" }}")] {
+        assert_eq!(
+            test_only(&app, CORE),
+            BTreeSet::from(["decoder", "fixture", "helper"].map(str::to_owned)),
+            "{app}"
+        );
+    }
+    let implicit = CORE.replace("dep:decoder", "decoder");
+    for (app, core) in [
+        (
+            APP.to_owned(),
+            format!("{CORE}\nlive = [\"test-fixtures\"]"),
+        ),
+        (APP.to_owned(), format!("{CORE}\nlive = [\"dep:decoder\"]")),
+        (APP.to_owned(), implicit.clone()),
+        (
+            APP.replacen(
+                "{ path = \"c\" }",
+                "{ path = \"c\", features = [\"decoder\"] }",
+                1,
+            ),
+            implicit,
+        ),
+        (APP.to_owned(), format!("{CORE}\nlive = [\"decoder/x\"]")),
+        (
+            APP.to_owned(),
+            format!(
+                "{CORE}\n[target.'cfg(unix)'.build-dependencies]\ndecoder = {{ path = \"d\" }}"
+            ),
+        ),
+        (APP.to_owned(), CORE.replace(", optional = true", "")),
+        (
+            APP.replacen(
+                "{ path = \"c\" }",
+                "{ path = \"c\", features = [\"test-fixtures\"] }",
+                1,
+            ),
+            CORE.to_owned(),
+        ),
+        (
+            format!("{APP}\n[features]\nx = [\"core/test-fixtures\"]"),
+            CORE.to_owned(),
+        ),
+    ] {
+        assert_eq!(
+            test_only(&app, &core),
+            BTreeSet::from(["fixture".to_owned()]),
+            "{app}\n{core}"
+        );
+    }
 }
 
 const OAUTH_CREDENTIAL_OWNER: &str = "crates/gents-inference/src/auth/credential";
@@ -1445,7 +1853,7 @@ fn oauth_pick_fence_flags_pickers_raw_queries_and_reads() {
 }
 
 const RIG_OWNER_MODULES: &[&str] = &[
-    "crates/gents-loop/src/rig_compat.rs",
+    "crates/gents-loop/src/rig_compat",
     "crates/gents-loop/src/provider_input",
     "crates/gents-loop/src/loop_stream",
     "crates/gents-inference/src/llm/rig_compat.rs",
@@ -1453,24 +1861,11 @@ const RIG_OWNER_MODULES: &[&str] = &[
     "crates/gents/src/runtime/agent/loop_stream",
 ];
 
-/// Files that implement a Rig trait or build a Rig provider client, which no
-/// re-export through `rig_compat` can stand in for. The capture layer, the
-/// credential and limit-header clients, the Responses and session-tagging
-/// layers, the Codex policy and the Claude transport implement
-/// `HttpClientExt` or are generic over it; `claude_subscription` implements
-/// `CompletionModel` and `CompletionClient`. A row leaves when its owner
-/// exposes a native transport or model trait that one adapter in `rig_compat`
-/// lifts into Rig's.
-#[rustfmt::skip]
-const RIG_PATH_ALLOWLIST: &[&str] = &[
-    "crates/gents-loop/src/rendered_request/transport.rs",
-    "crates/gents-inference/src/clients/chatgpt_codex.rs",
-    "crates/gents-inference/src/clients/claude_messages/transport.rs",
-    "crates/gents-inference/src/clients/claude_subscription.rs",
-    "crates/gents-inference/src/clients/inference_http.rs",
-    "crates/gents-inference/src/auth/http.rs",
-    "crates/gents-inference/src/clients/provider_http.rs",
-];
+/// Files outside the owner modules that still name `rig`. A layer over the
+/// provider exchange implements `rig_compat::http::Transport`, and a model
+/// this workspace implements itself `rig_compat::model::Model`; `rig_compat`
+/// lifts both into Rig's traits. This list stays empty.
+const RIG_PATH_ALLOWLIST: &[&str] = &[];
 
 #[derive(Default)]
 struct RigPathVisitor {
@@ -1543,6 +1938,38 @@ fn item_cfg_test(item: &syn::Item) -> bool {
         _ => return false,
     };
     cfg_test(attributes)
+}
+
+#[test]
+fn item_cfg_test_excludes_items_whose_cfg_requires_test() {
+    let syntax = syn::parse_file(
+        r#"
+        #[cfg(test)] fn a() {}
+        #[cfg(any(test, feature = "test-fixtures"))] fn b() {}
+        #[cfg(all(test, unix))] mod c {}
+        #[cfg(all(unix, all(target_os = "macos", test)))] fn d() {}
+        #[cfg(unix)] fn e() {}
+        #[cfg(any(test, unix))] fn f() {}
+        #[cfg(not(test))] fn g() {}
+        #[cfg(all(unix, not(test)))] fn h() {}
+        #[cfg(feature = "test-fixtures")] fn i() {}
+        #[cfg(all(feature = "test-fixtures", unix))] fn j() {}
+        #[cfg(any(feature = "test-fixtures", feature = "other"))] fn k() {}
+        #[cfg(any(test, feature = "test-home-guard"))] fn l() {}
+        fn m() {}
+        #[cfg(all(feature = "native-e2e", debug_assertions))] fn n() {}
+        #[cfg(any(feature = "native-e2e", feature = "other"))] fn o() {}
+        "#,
+    )
+    .expect("parse snippet");
+    let excluded = syntax.items.iter().map(item_cfg_test).collect::<Vec<_>>();
+    assert_eq!(
+        excluded,
+        [
+            true, true, true, true, false, false, false, false, true, true, false, true, false,
+            true, false
+        ]
+    );
 }
 
 impl<'ast> Visit<'ast> for RigPathVisitor {
@@ -1897,25 +2324,6 @@ fn where_clause_fence_counts_inline_bounds_only() {
     }
 }
 
-/// Request context (identity, signing, ACP bypass, transaction handles, the
-/// requester or session, trace or request IDs) travels as explicit arguments
-/// or fields. `tokio::task_local!` loses it across `tokio::spawn`, and Clippy's
-/// `disallowed_macros` cannot be allowed at an item-position macro site, so
-/// this ratchet owns the ban. Entries name why each production site remains;
-/// the list only shrinks.
-#[rustfmt::skip]
-const AMBIENT_CONTEXT_ALLOWLIST: &[(&str, usize, &str)] = &[
-    ("crates/gents-loop/src/provider_input/routing_affinity.rs", 1, "request context read inside Rig's HTTP client; thread through a per-call provider client"),
-    ("crates/gents-loop/src/rendered_request/scope.rs", 1, "request context read inside Rig's HTTP client; thread through a per-call provider client"),
-    ("crates/gents-loop/src/tool_call_lifecycle/runtime.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
-    ("crates/gents-loop/src/tool_effects.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
-    ("crates/gents-inference/src/admission/client.rs", 1, "request context read inside Rig's CompletionModel and HTTP client; thread through a per-call provider client"),
-    ("crates/gents-session/src/exec/ownership.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
-    ("crates/gents-tools/src/plugin/approval.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
-    ("crates/gents-tools/src/plugin/approval/workspace/context.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
-    ("crates/gents-tools/src/runtime_context.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
-];
-
 /// Task-local statics that hold no request context, by file and name. The
 /// rule is about what a request carries, so these are not counted, provided
 /// the static's own docstring says what it holds instead.
@@ -1932,25 +2340,83 @@ struct AmbientStatic {
     documented: bool,
 }
 
-#[derive(Default)]
-struct AmbientContextVisitor {
-    statics: Vec<AmbientStatic>,
+/// Type names that make a `static` mutable or lazily initialised state
+/// shared by the whole process; any `Atomic*` name counts too.
+const PROCESS_STATE_TYPES: &[&str] = &[
+    "Mutex",
+    "RwLock",
+    "OnceLock",
+    "OnceCell",
+    "Once",
+    "LazyLock",
+    "LazyCell",
+    "Lazy",
+    "Cell",
+    "RefCell",
+    "UnsafeCell",
+    "Semaphore",
+    "Notify",
+    "ArcSwap",
+    "ArcSwapOption",
+    "DashMap",
+];
+
+fn names_process_state(ty: &syn::Type) -> bool {
+    struct TypeNames(bool);
+    impl<'ast> Visit<'ast> for TypeNames {
+        fn visit_path_segment(&mut self, segment: &'ast syn::PathSegment) {
+            let name = segment.ident.to_string();
+            self.0 |= PROCESS_STATE_TYPES.contains(&name.as_str()) || name.starts_with("Atomic");
+            visit::visit_path_segment(self, segment);
+        }
+    }
+    let mut names = TypeNames(false);
+    names.visit_type(ty);
+    names.0
 }
 
-impl<'ast> Visit<'ast> for AmbientContextVisitor {
+/// The production statics of one file: `thread_local!`/`task_local!` statics,
+/// which hold per-thread or per-task context, and process-wide statics (a
+/// `static` item whose type is interior-mutable or lazily initialised, every
+/// `static mut`, and every `lazy_static!` static).
+#[derive(Default)]
+struct StaticVisitor {
+    ambient: Vec<AmbientStatic>,
+    process_wide: Vec<String>,
+}
+
+impl<'ast> Visit<'ast> for StaticVisitor {
     fn visit_item(&mut self, item: &'ast syn::Item) {
         if !item_cfg_test(item) {
             visit::visit_item(self, item);
         }
     }
 
+    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+        if !cfg_test(&item.attrs) {
+            visit::visit_impl_item_fn(self, item);
+        }
+    }
+
+    fn visit_item_static(&mut self, item: &'ast syn::ItemStatic) {
+        if matches!(item.mutability, syn::StaticMutability::Mut(_)) || names_process_state(&item.ty)
+        {
+            self.process_wide.push(item.ident.to_string());
+        }
+        visit::visit_item_static(self, item);
+    }
+
     fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
-        if invocation
+        let Some(name) = invocation
             .path
             .segments
             .last()
-            .is_some_and(|segment| segment.ident == "thread_local" || segment.ident == "task_local")
-        {
+            .map(|segment| segment.ident.to_string())
+        else {
+            return;
+        };
+        let local = name == "thread_local" || name == "task_local";
+        if local || name == "lazy_static" {
             let tokens = invocation.tokens.clone().into_iter().collect::<Vec<_>>();
             let mut documented = false;
             for (index, token) in tokens.iter().enumerate() {
@@ -1968,14 +2434,18 @@ impl<'ast> Visit<'ast> for AmbientContextVisitor {
                         let lifetime = index.checked_sub(1).is_some_and(|previous| {
                             matches!(&tokens[previous], proc_macro2::TokenTree::Punct(punct) if punct.as_char() == '\'')
                         });
-                        if !lifetime {
-                            self.statics.push(AmbientStatic {
-                                name: tokens
-                                    .get(index + 1)
-                                    .map(ToString::to_string)
-                                    .unwrap_or_default(),
-                                documented,
-                            });
+                        if lifetime {
+                            continue;
+                        }
+                        let name = tokens[index + 1..]
+                            .iter()
+                            .map(ToString::to_string)
+                            .find(|word| word != "ref" && word != "mut")
+                            .unwrap_or_default();
+                        if local {
+                            self.ambient.push(AmbientStatic { name, documented });
+                        } else {
+                            self.process_wide.push(name);
                         }
                     }
                     _ => {}
@@ -1986,11 +2456,15 @@ impl<'ast> Visit<'ast> for AmbientContextVisitor {
     }
 }
 
-fn ambient_context_sites(relative: &str, syntax: &syn::File) -> usize {
-    let mut visitor = AmbientContextVisitor::default();
+fn production_statics(syntax: &syn::File) -> StaticVisitor {
+    let mut visitor = StaticVisitor::default();
     visitor.visit_file(syntax);
     visitor
-        .statics
+}
+
+fn ambient_context_sites(relative: &str, syntax: &syn::File) -> usize {
+    production_statics(syntax)
+        .ambient
         .iter()
         .filter(|found| {
             !(found.documented
@@ -2001,33 +2475,157 @@ fn ambient_context_sites(relative: &str, syntax: &syn::File) -> usize {
         .count()
 }
 
+fn process_static_sites(syntax: &syn::File) -> usize {
+    production_statics(syntax).process_wide.len()
+}
+
+/// Request context (identity, signing, ACP bypass, transaction handles, the
+/// requester or session, trace or request IDs) travels as explicit arguments
+/// or fields. `tokio::task_local!` loses it across `tokio::spawn`, and Clippy's
+/// `disallowed_macros` cannot be allowed at an item-position macro site, so
+/// this test owns the ban: no production site remains and none is admitted.
 #[test]
 fn ambient_request_context_only_shrinks() {
     let root = repo_root();
-    let actual = parse_production(&root, production_sources(&root))
+    let violations = parse_production(&root, production_sources(&root))
         .into_iter()
-        .map(|(relative, syntax)| {
+        .filter_map(|(relative, syntax)| {
             let sites = ambient_context_sites(&relative, &syntax);
-            (relative, sites)
+            (sites > 0).then(|| {
+                format!(
+                    "{relative}: {sites} thread_local!/task_local! static(s); pass request context as an argument or field"
+                )
+            })
         })
-        .filter(|(_, sites)| *sites > 0)
-        .collect::<BTreeMap<_, _>>();
-    let allowed = AMBIENT_CONTEXT_ALLOWLIST
-        .iter()
-        .map(|(path, count, _)| (path.to_string(), *count))
-        .collect::<BTreeMap<_, _>>();
+        .collect::<Vec<_>>();
+    assert!(
+        violations.is_empty(),
+        "ambient request context is banned:\n{}",
+        violations.join("\n")
+    );
+}
+
+/// A request a client endpoint authorizes is sent through
+/// `GraphqlEndpoint::send_resolving`, so a refusal of its credential reads the
+/// home's status again and is sent once more (`Identity.HeldAudience.resend`),
+/// or inside a transaction through `authorize_in_transaction`, whose
+/// transaction recovers as a unit (`Identity.HeldAudience.resendUnit`).
+/// Entries name why each remaining direct `authorize` stays; the list only
+/// shrinks.
+#[rustfmt::skip]
+const UNRECOVERED_AUTHORIZE_ALLOWLIST: &[(&str, usize, &str)] = &[
+    ("crates/gents-store/src/config_client/client_authentication.rs", 1, "correct by design: the body of the authorizer authorize_runtime, whose callers are counted"),
+    ("crates/gents-store/src/config_client/graphql.rs", 2, "correct by design: a transaction's commit and discard are never sent alone again; the transaction reruns as a unit and a refused commit is told (Identity.HeldAudience.resendUnit, a_refused_commit_is_never_run_again)"),
+    ("crates/gents-store/src/config_client/mod.rs", 1, "correct by design: the body of the authorizer authorize_in_transaction, whose callers recover as a unit (resendUnit)"),
+];
+
+/// What authorizes a request as the endpoint's principal.
+const AUTHORIZERS: &[&str] = &["authorize", "authorize_runtime"];
+
+/// What sends the request a closure builds through `send_resolving`.
+const RESOLVING_SENDERS: &[&str] = &[
+    "send_resolving",
+    "send_counting_resends",
+    "endpoint_get_json",
+    "endpoint_send",
+];
+
+#[derive(Default)]
+struct UnrecoveredAuthorizeVisitor {
+    resolving: usize,
+    sites: usize,
+}
+
+impl<'ast> Visit<'ast> for UnrecoveredAuthorizeVisitor {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if !item_cfg_test(item) {
+            visit::visit_item(self, item);
+        }
+    }
+
+    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+        if !cfg_test(&item.attrs) {
+            visit::visit_impl_item_fn(self, item);
+        }
+    }
+
+    fn visit_expr_call(&mut self, call: &'ast ExprCall) {
+        if !self.visit_resolving_call(call) {
+            visit::visit_expr_call(self, call);
+        }
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        if AUTHORIZERS.contains(&call.method.to_string().as_str())
+            && call.args.len() == 1
+            && self.resolving == 0
+        {
+            self.sites += 1;
+        }
+        if RESOLVING_SENDERS.contains(&call.method.to_string().as_str()) {
+            self.visit_expr(&call.receiver);
+            self.resolving += 1;
+            for argument in &call.args {
+                self.visit_expr(argument);
+            }
+            self.resolving -= 1;
+        } else {
+            visit::visit_expr_method_call(self, call);
+        }
+    }
+}
+
+impl UnrecoveredAuthorizeVisitor {
+    fn visit_resolving_call(&mut self, call: &ExprCall) -> bool {
+        if !path_name(call).is_some_and(|name| {
+            RESOLVING_SENDERS
+                .iter()
+                .any(|sender| name.ends_with(sender))
+        }) {
+            return false;
+        }
+        self.resolving += 1;
+        for argument in &call.args {
+            self.visit_expr(argument);
+        }
+        self.resolving -= 1;
+        true
+    }
+}
+
+fn unrecovered_authorize_sites(syntax: &syn::File) -> usize {
+    let mut visitor = UnrecoveredAuthorizeVisitor::default();
+    visitor.visit_file(syntax);
+    visitor.sites
+}
+
+/// Compares per-file site counts with a `(path, count, reason)` allowlist
+/// that only shrinks: a file missing from the list, a count above its entry
+/// and a count below it (a stale entry) each fail, and the failure lists the
+/// current sites to copy from.
+fn shrinking_allowlist(
+    ratchet: &str,
+    allowlist: &[(&str, usize, &str)],
+    actual: &BTreeMap<String, usize>,
+    sites: &str,
+    remedy: &str,
+) {
+    let mut allowed = BTreeMap::new();
     let mut violations = Vec::new();
+    for (path, count, _) in allowlist {
+        if allowed.insert(path.to_string(), *count).is_some() {
+            violations.push(format!("{path}: listed twice"));
+        }
+    }
     for path in allowed.keys().chain(actual.keys()).collect::<BTreeSet<_>>() {
         let found = actual.get(path).copied().unwrap_or_default();
         match allowed.get(path).copied() {
-            None => violations.push(format!(
-                "{path}: {found} new thread_local!/task_local! static(s); pass request context as an argument or field"
-            )),
+            None => violations.push(format!("{path}: {found} new {sites}; {remedy}")),
             Some(limit) if found > limit => violations.push(format!(
-                "{path}: {found} thread_local!/task_local! statics exceed the allowlisted {limit}"
+                "{path}: {found} {sites} exceed the allowlisted {limit}"
             )),
             Some(limit) if found < limit => violations.push(format!(
-                "{path}: {found} thread_local!/task_local! statics; lower the allowlist entry from {limit}"
+                "{path}: {found} {sites}; lower the allowlist entry from {limit}"
             )),
             Some(_) => {}
         }
@@ -2039,9 +2637,192 @@ fn ambient_request_context_only_shrinks() {
         .join("\n");
     assert!(
         violations.is_empty(),
-        "ambient request context ratchet failed:\n{}\n\ncurrent sites:\n{current}",
+        "{ratchet} ratchet failed:\n{}\n\ncurrent sites:\n{current}",
         violations.join("\n")
     );
+}
+
+fn production_site_counts(count: impl Fn(&str, &syn::File) -> usize) -> BTreeMap<String, usize> {
+    let root = repo_root();
+    parse_production(&root, production_sources(&root))
+        .into_iter()
+        .map(|(relative, syntax)| {
+            let sites = count(&relative, &syntax);
+            (relative, sites)
+        })
+        .filter(|(_, sites)| *sites > 0)
+        .collect()
+}
+
+#[test]
+fn client_requests_recover_a_refused_credential() {
+    shrinking_allowlist(
+        "refused credential recovery",
+        UNRECOVERED_AUTHORIZE_ALLOWLIST,
+        &production_site_counts(|_, syntax| unrecovered_authorize_sites(syntax)),
+        "request(s) authorized outside `send_resolving`",
+        "send through it so a refused credential recovers",
+    );
+}
+
+#[test]
+fn credential_recovery_fence_counts_authorize_outside_send_resolving() {
+    for (source, sites) in [
+        ("fn f() { e.authorize(c.get(u))?.send(); }", 1),
+        ("fn f() { e.send_resolving(|e| e.authorize(c.get(u))); }", 0),
+        (
+            "fn f() { e.send_resolving(|e| Ok(e.authorize(c.get(u))?.json(&b))); }",
+            0,
+        ),
+        ("fn f() { e.authorize_in_transaction(c.get(u), id); }", 0),
+        ("fn f() { e.authorize_runtime(c.get(u)).await?.send(); }", 1),
+        (
+            "fn f() { e.send_resolving(|e| e.authorize_runtime(c.get(u))); }",
+            0,
+        ),
+        (
+            "fn f() { http_client::endpoint_get_json(&e, |e| e.authorize(c.get(u))); }",
+            0,
+        ),
+        (
+            "fn f() { endpoint_send(&e, |e| e.authorize(c.post(u))); }",
+            0,
+        ),
+        ("fn f() { other(&e, |e| e.authorize(c.post(u))); }", 1),
+        (
+            "fn f() { e.authorize(c.get(u)).and(e.send_resolving(|e| e.authorize(r))); }",
+            1,
+        ),
+        ("#[cfg(test)] mod tests { fn f() { e.authorize(r); } }", 0),
+        (
+            "impl E { #[cfg(test)] fn f(&self) { self.authorize(r); } }",
+            0,
+        ),
+    ] {
+        let syntax = syn::parse_file(source).expect("parse snippet");
+        assert_eq!(unrecovered_authorize_sites(&syntax), sites, "{source}");
+    }
+}
+
+/// A client keeps a delegation audience or clock only from a status its
+/// home's node key signed for the read (`Identity.HeldAudience.reportedOfHome`):
+/// what a status's unsigned fields report is read into a report only where
+/// the home signs it, and a client takes a report only from the signed
+/// statement (`home_status::authenticate`). Entries name each reader; the
+/// list only shrinks.
+#[rustfmt::skip]
+const STATUS_REPORT_READERS: &[(&str, usize, &str)] = &[
+    ("crates/gents-protocol/src/home_attestation.rs", 2, "correct by design: the home reading its own status into the statement it signs (HomeStatement::of_status), and the report of a statement whose signature was checked (HomeStatement::reported)"),
+];
+
+/// What reads a report from a status, and the report itself.
+const STATUS_REPORT_CALLS: &[&str] = &[
+    "ReportedHome::observe",
+    "ReportedDelegationAudience::observe",
+];
+
+#[derive(Default)]
+struct StatusReportVisitor {
+    sites: usize,
+}
+
+impl<'ast> Visit<'ast> for StatusReportVisitor {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if !item_cfg_test(item) {
+            visit::visit_item(self, item);
+        }
+    }
+
+    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+        if !cfg_test(&item.attrs) {
+            visit::visit_impl_item_fn(self, item);
+        }
+    }
+
+    fn visit_expr_call(&mut self, call: &'ast ExprCall) {
+        if path_name(call).is_some_and(|name| {
+            STATUS_REPORT_CALLS
+                .iter()
+                .any(|reader| name.ends_with(reader))
+        }) {
+            self.sites += 1;
+        }
+        visit::visit_expr_call(self, call);
+    }
+
+    fn visit_expr_struct(&mut self, report: &'ast syn::ExprStruct) {
+        if report
+            .path
+            .segments
+            .last()
+            .is_some_and(|segment| segment.ident == "ReportedHome")
+        {
+            self.sites += 1;
+        }
+        visit::visit_expr_struct(self, report);
+    }
+}
+
+fn status_report_sites(syntax: &syn::File) -> usize {
+    let mut visitor = StatusReportVisitor::default();
+    visitor.visit_file(syntax);
+    visitor.sites
+}
+
+#[test]
+fn a_client_keeps_only_what_its_home_signed() {
+    let root = repo_root();
+    let actual = parse_production(&root, production_sources(&root))
+        .into_iter()
+        .map(|(relative, syntax)| (relative, status_report_sites(&syntax)))
+        .filter(|(_, sites)| *sites > 0)
+        .collect::<BTreeMap<_, _>>();
+    let allowed = STATUS_REPORT_READERS
+        .iter()
+        .map(|(path, count, _)| (path.to_string(), *count))
+        .collect::<BTreeMap<_, _>>();
+    let mut violations = Vec::new();
+    for path in allowed.keys().chain(actual.keys()).collect::<BTreeSet<_>>() {
+        let found = actual.get(path).copied().unwrap_or_default();
+        match allowed.get(path).copied() {
+            None => violations.push(format!(
+                "{path}: {found} new read(s) of a status's unsigned report; keep only what `home_status::authenticate` returns"
+            )),
+            Some(limit) if found > limit => violations.push(format!(
+                "{path}: {found} reads of a status's unsigned report exceed the allowlisted {limit}"
+            )),
+            Some(limit) if found < limit => violations.push(format!(
+                "{path}: {found} reads of a status's unsigned report; lower the allowlist entry from {limit}"
+            )),
+            Some(_) => {}
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "signed status ratchet failed:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn signed_status_fence_counts_unsigned_report_readers() {
+    for (source, sites) in [
+        ("fn f() { ReportedHome::observe(&status); }", 1),
+        (
+            "fn f() { gents_protocol::delegation_audience::ReportedDelegationAudience::observe(&s); }",
+            1,
+        ),
+        ("fn f() { ReportedHome { audience, provider_time }; }", 1),
+        ("fn f() { home_status::authenticate(&status, node, &nonce); }", 0),
+        ("#[cfg(test)] mod tests { fn f() { ReportedHome::observe(&s); } }", 0),
+        (
+            "impl E { #[cfg(test)] fn f(&self) { ReportedHome { audience, provider_time }; } }",
+            0,
+        ),
+    ] {
+        let syntax = syn::parse_file(source).expect("parse snippet");
+        assert_eq!(status_report_sites(&syntax), sites, "{source}");
+    }
 }
 
 #[test]
@@ -2083,24 +2864,370 @@ fn ambient_context_skips_only_named_documented_statics() {
     }
 }
 
-/// Functions that write a file with `fs::write` and then give that path an
-/// exec bit. Linux execve refuses a file any process holds open for writing
-/// (ETXTBSY), and a concurrent test's spawn copies this process's write
-/// descriptor into its child until that child execs, even with O_CLOEXEC
-/// (`tla/ScriptFixtureExec.tla`). A static script is checked in; a generated
-/// one goes through `gents_store::test_support::write_executable_script`.
-/// Entries name why each remaining site never executes the file; the list
-/// only shrinks.
+/// Behaviour comes from configuration documents and command-line flags, never
+/// from the process environment: a variable is invisible to the store, to
+/// other clients and to the model, and differs between the shell, the service
+/// unit and the desktop that start the same runtime. This counts each
+/// production `std::env::{var, var_os, vars, vars_os}` named as a path,
+/// called or passed as a function (also through `use std::env::var`, and
+/// inside macro arguments). It does not count `env!`/`option_env!`, which
+/// Cargo resolves at compile time into a fixed property of the build, nor the
+/// platform locators `home_dir`, `temp_dir`, `current_dir`, `current_exe` and
+/// `args`, nor build scripts, which Cargo runs with its own environment, nor a
+/// member no production build compiles (`Workspace::test_only`).
+/// Entries name what replaces each remaining read (a flag, a document field,
+/// a test fixture) or why it is legitimately external; the list only shrinks
+/// (#1764).
 #[rustfmt::skip]
-const EXECUTABLE_WRITE_ALLOWLIST: &[(&str, usize, &str)] = &[
-    ("crates/gents-tools/src/native/file_tools/change_capture/tests.rs", 1, "reads the mode back as an observation; never executes the file"),
+const ENVIRONMENT_READ_ALLOWLIST: &[(&str, usize, &str)] = &[
+    ("apps/gents-desktop/src-tauri/src/bridge/browser.rs", 1, "HOME: expands a leading ~ in a user-typed path; legitimately external (platform discovery)"),
+    ("apps/gents-desktop/src-tauri/src/bridge/links.rs", 1, "APPIMAGE: AppImage probe deciding how links open from a packaged Linux build; legitimately external"),
+    ("apps/gents-desktop/src-tauri/src/runner/live_fixture/backend.rs", 1, "the API key variable a live-fixture backend names: the runner checks it is set before seeding a backend the runtime will read it from by name; legitimately external"),
+    ("crates/gents-chatgpt-login/src/lib.rs", 1, "CODEX_CA_CERT and SSL_CERT_FILE: standard custom CA bundle convention; legitimately external"),
+    ("crates/gents-cli/src/commands/chat/streaming.rs", 1, "NO_COLOR: standard convention disabling terminal colour; legitimately external"),
+    ("crates/gents-cli/src/commands/eval/frame.rs", 1, "NO_COLOR: standard convention disabling terminal colour; legitimately external"),
+    ("crates/gents-cli/src/commands/init.rs", 1, "HOME: platform discovery for the default tool root before any configuration exists; legitimately external"),
+    ("crates/gents-cli/src/commands/pack/registry.rs", 1, "GENTS_REGISTRY_TOKEN: registry credential kept out of argv and shell history; legitimately external"),
+    ("crates/gents-cli/src/commands/pack/scenario/load.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables; legitimately external"),
+    ("crates/gents-cli/src/commands/pack/scenario/setup.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables; legitimately external"),
+    ("crates/gents-cli/src/commands/pack/wire.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables; legitimately external"),
+    ("crates/gents-cli/src/desired_state/load.rs", 1, "desired-state ${VAR} interpolation: the manifest names operator-supplied variables; legitimately external"),
+    ("crates/gents-desktop-bridge/src/host_browser.rs", 4, "BROWSER, PATH, APPDIR and APPIMAGE: platform browser discovery and the AppImage probe; legitimately external"),
+    ("crates/gents-desktop-bridge/src/package_tools.rs", 6, "PATH, APPDIR, APPIMAGE and the launcher's variables: restores the host environment for host programs launched from an AppImage; legitimately external"),
+    ("crates/gents-desktop-bridge/src/tauri_commands/service_executable.rs", 3, "PATH, APPDIR and APPIMAGE: discovery of the gents executable and the AppImage probe; legitimately external"),
+    ("crates/gents-desktop/src/main.rs", 1, "PATH: discovery of the desktop executable; legitimately external"),
+    ("crates/gents-documents/src/inference_backend.rs", 1, "the variable an InferenceBackend document names as its API key source (auth kind environment); the document decides, legitimately external"),
+    ("crates/gents-eval/src/optimization/driver.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables; legitimately external"),
+    ("crates/gents-eval/src/runner/embedded/executor/install.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables; legitimately external"),
+    ("crates/gents-eval/src/runner/freeze/pack.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables; legitimately external"),
+    ("crates/gents-host/src/serve.rs", 2, "the secret named by the metrics token flag (legitimately external) and HOME for the default working root (platform discovery)"),
+    ("crates/gents-inference/src/clients/claude_messages/transport.rs", 2, "HTTPS_PROXY/https_proxy and NO_PROXY: standard proxy convention; legitimately external"),
+    ("crates/gents-pack/src/operations/pack.rs", 1, "pack variables whose declared source is the installer's own environment (Lean Pack.Operations.planEnvironment); legitimately external"),
+    ("crates/gents-pack/src/pack/interpolate.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables; legitimately external"),
+    ("crates/gents-pack/src/plugin/host_imports.rs", 2, "passes the variables an installed plugin's consented env access names into its sandbox; the consent document decides, legitimately external"),
+    ("crates/gents-service/src/native_service.rs", 7, "HOME, XDG_CONFIG_HOME, PATH, APPDIR and APPIMAGE: platform discovery of the service unit paths and the AppImage probe; legitimately external"),
+    ("crates/gents-service/src/telemetry.rs", 1, "OTEL_EXPORTER_OTLP_* and OTEL_SERVICE_NAME: standard OpenTelemetry convention; legitimately external"),
+    ("crates/gents-session/src/workspace/adapter.rs", 1, "inherits the process environment for a managed git child, minus the git variables it overrides; legitimately external"),
+    ("crates/gents-tools/src/ux_preview/browser.rs", 1, "PATH: platform discovery of a system browser; legitimately external"),
+    ("crates/gents/examples/serve_default_agent.rs", 1, "a developer example configured from the shell that runs it, never shipped; legitimately external"),
+    ("crates/gents/src/client_runtime/mod.rs", 1, "HOME: platform discovery of the user home before configuration exists; legitimately external"),
 ];
 
+const ENVIRONMENT_READS: &[&str] = &["var", "var_os", "vars", "vars_os"];
+
+#[derive(Default)]
+struct EnvironmentReadVisitor {
+    qualified: usize,
+    bare: Vec<String>,
+    imported: BTreeSet<String>,
+}
+
+fn qualified_environment_read<'a>(mut segments: impl DoubleEndedIterator<Item = &'a str>) -> bool {
+    let function = segments.next_back().unwrap_or_default();
+    ENVIRONMENT_READS.contains(&function) && segments.next_back() == Some("env")
+}
+
+impl EnvironmentReadVisitor {
+    fn imports(&mut self, prefix: &mut Vec<String>, tree: &syn::UseTree) {
+        let from_env = prefix.last().is_some_and(|last| last == "env");
+        match tree {
+            syn::UseTree::Path(path) => {
+                prefix.push(path.ident.to_string());
+                self.imports(prefix, &path.tree);
+                prefix.pop();
+            }
+            syn::UseTree::Name(name) if from_env => {
+                let name = name.ident.to_string();
+                if ENVIRONMENT_READS.contains(&name.as_str()) {
+                    self.imported.insert(name);
+                }
+            }
+            syn::UseTree::Rename(rename)
+                if from_env && ENVIRONMENT_READS.contains(&rename.ident.to_string().as_str()) =>
+            {
+                self.imported.insert(rename.rename.to_string());
+            }
+            syn::UseTree::Glob(_) if from_env => {
+                self.imported
+                    .extend(ENVIRONMENT_READS.iter().map(ToString::to_string));
+            }
+            syn::UseTree::Group(group) => {
+                for tree in &group.items {
+                    self.imports(prefix, tree);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn macro_tokens(&mut self, stream: proc_macro2::TokenStream) {
+        let tokens = stream.into_iter().collect::<Vec<_>>();
+        for (index, token) in tokens.iter().enumerate() {
+            match token {
+                proc_macro2::TokenTree::Group(group) => self.macro_tokens(group.stream()),
+                proc_macro2::TokenTree::Ident(function)
+                    if ENVIRONMENT_READS.contains(&function.to_string().as_str())
+                        && index >= 3
+                        && matches!(&tokens[index - 1], proc_macro2::TokenTree::Punct(punct) if punct.as_char() == ':')
+                        && matches!(&tokens[index - 2], proc_macro2::TokenTree::Punct(punct) if punct.as_char() == ':')
+                        && matches!(&tokens[index - 3], proc_macro2::TokenTree::Ident(module) if module == "env") =>
+                {
+                    self.qualified += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for EnvironmentReadVisitor {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if !item_cfg_test(item) {
+            visit::visit_item(self, item);
+        }
+    }
+
+    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+        if !cfg_test(&item.attrs) {
+            visit::visit_impl_item_fn(self, item);
+        }
+    }
+
+    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
+        self.imports(&mut Vec::new(), &item.tree);
+    }
+
+    fn visit_expr_path(&mut self, expression: &'ast syn::ExprPath) {
+        let segments = expression
+            .path
+            .segments
+            .iter()
+            .map(|segment| segment.ident.to_string())
+            .collect::<Vec<_>>();
+        if qualified_environment_read(segments.iter().map(String::as_str)) {
+            self.qualified += 1;
+        } else if let [name] = segments.as_slice() {
+            self.bare.push(name.clone());
+        }
+        visit::visit_expr_path(self, expression);
+    }
+
+    fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
+        self.macro_tokens(invocation.tokens.clone());
+        visit::visit_macro(self, invocation);
+    }
+}
+
+fn environment_read_sites(syntax: &syn::File) -> usize {
+    let mut visitor = EnvironmentReadVisitor::default();
+    visitor.visit_file(syntax);
+    visitor.qualified
+        + visitor
+            .bare
+            .iter()
+            .filter(|name| visitor.imported.contains(*name))
+            .count()
+}
+
+#[test]
+fn runtime_environment_reads_only_shrink() {
+    let workspace = Workspace::load(&repo_root());
+    let test_only = workspace
+        .test_only()
+        .iter()
+        .map(|name| format!("{}/", workspace.members[name].0))
+        .collect::<Vec<_>>();
+    shrinking_allowlist(
+        "runtime environment read",
+        ENVIRONMENT_READ_ALLOWLIST,
+        &production_site_counts(|relative, syntax| {
+            if relative.ends_with("build.rs")
+                || test_only
+                    .iter()
+                    .any(|member| relative.starts_with(member.as_str()))
+            {
+                0
+            } else {
+                environment_read_sites(syntax)
+            }
+        }),
+        "environment read(s)",
+        "take the value from a flag or a configuration document",
+    );
+}
+
+#[test]
+fn environment_reads_count_runtime_reads_outside_test_items() {
+    for (source, sites) in [
+        ("fn f() { let _ = std::env::var(\"A\"); }", 1),
+        (
+            "fn f() { let _ = env::var_os(\"A\"); for _ in std::env::vars() {} }",
+            2,
+        ),
+        ("fn f() { let _ = ::std::env::vars_os(); }", 1),
+        ("fn f() { let _ = names.iter().map(std::env::var); }", 1),
+        ("use std::env::var; fn f() { let _ = var(\"A\"); }", 1),
+        (
+            "fn f() { let _ = var(\"A\"); } use std::env::{self, var_os as read};",
+            0,
+        ),
+        (
+            "fn f() { let _ = read(\"A\"); } use std::env::{self, var_os as read};",
+            1,
+        ),
+        (
+            "fn f() { tracing::info!(\"{:?}\", std::env::var(\"A\")); }",
+            1,
+        ),
+        ("fn f() { let _ = var(\"A\"); }", 0),
+        ("fn f() { let _ = (env!(\"A\"), option_env!(\"B\")); }", 0),
+        (
+            "fn f() { let _ = (std::env::home_dir(), std::env::temp_dir()); }",
+            0,
+        ),
+        ("fn f() { std::env::set_var(\"A\", \"1\"); }", 0),
+        ("#[cfg(test)] fn f() { let _ = std::env::var(\"A\"); }", 0),
+        (
+            "#[cfg(all(test, unix))] mod t { fn f() { let _ = std::env::var(\"A\"); } }",
+            0,
+        ),
+        (
+            "impl S { #[cfg(test)] fn f() { let _ = std::env::var(\"A\"); } }",
+            0,
+        ),
+    ] {
+        let syntax = syn::parse_file(source).expect("parse snippet");
+        assert_eq!(environment_read_sites(&syntax), sites, "{source}");
+    }
+}
+
+/// Configuration and request context travel as arguments or as fields on the
+/// owner that reaches the reader, never in process-wide mutable state: a
+/// static is shared by every node and Agent in the process, so the last
+/// writer wins for all of them, and a test that sets one leaks into every
+/// other test in its binary. This counts each production `static` item whose
+/// type is interior-mutable or lazily initialised (`PROCESS_STATE_TYPES`,
+/// `Atomic*`), every `static mut` and every `lazy_static!` static; a plain
+/// constant `static` is not counted. `thread_local!` and `task_local!` belong
+/// to `ambient_request_context_only_shrinks`, which admits none. Entries name
+/// why each remaining static is a genuine process singleton (an immutable
+/// value built once, a process-global resource) or what owner replaces it;
+/// the list only shrinks (#1764).
+#[rustfmt::skip]
+const PROCESS_STATIC_ALLOWLIST: &[(&str, usize, &str)] = &[
+    ("apps/gents-desktop/src-tauri/src/bridge/browser.rs", 2, "the desktop window's one embedded browser and its applied-generation counter: a process-global UI resource; stays"),
+    ("apps/gents-desktop/src-tauri/src/bridge/notifications.rs", 1, "count of notification permission waits in the one desktop process; stays"),
+    ("apps/gents-desktop/src-tauri/src/bridge/windows.rs", 1, "next window label of the one desktop process; stays"),
+    ("crates/gents-automation/src/lifecycle_hooks.rs", 2, "the bundled hook registry and composition built once: an immutable value built once on first use, the same for every node and Agent; stays"),
+    ("crates/gents-desktop-bridge/src/runtime_setup.rs", 1, "the desktop's one Tokio runtime, built at its entry point; stays"),
+    ("crates/gents-desktop-bridge/src/tauri_commands/service_executable.rs", 2, "lock and attempt counter serialising installs of the one service executable a host has; process-global resource, stays"),
+    ("crates/gents-eval/src/authoring/dossier.rs", 1, "runtime collection names derived from the schema: an immutable value built once on first use, the same for every node and Agent; stays"),
+    ("crates/gents-host/src/http/version.rs", 1, "the build's version response: an immutable value built once on first use, the same for every node and Agent; stays"),
+    ("crates/gents-host/src/p2p_status.rs", 1, "the shared reqwest client, a connection pool built once; stays"),
+    ("crates/gents-inference/src/admission/config.rs", 1, "per-process HMAC key for credential fingerprints, never persisted by design; stays"),
+    ("crates/gents-inference/src/clients/claude_messages/transport.rs", 1, "shared HTTP clients built once from the proxy environment, one keep-alive pool per proxy decision; stays"),
+    ("crates/gents-lean-contract/src/lib.rs", 2, "the Lean process output cache and load lock in a crate that links only into tests; stays"),
+    ("crates/gents-lean-vocab/src/lib.rs", 1, "the Lean contract snapshot in a crate that links only into tests: an immutable value built once on first use, the same for every node and Agent; stays"),
+    ("crates/gents-pack/src/pack/registry.rs", 1, "one registry download at a time per process, an external premise of the registry's throttle; stays"),
+    ("crates/gents-pack/src/plugin/allowed.rs", 1, "embedded release digests: an immutable value built once on first use, the same for every node and Agent; stays"),
+    ("crates/gents-pack/src/plugin/allowed/protected.rs", 1, "the permission files of every home this process serves: a plugin of any node must mount none of them, so the guard is their union across the process, not one home's; stays"),
+    ("crates/gents-pack/src/plugin/script_engine.rs", 1, "the script engine, compiled once: an immutable value built once on first use, the same for every node and Agent; stays"),
+    ("crates/gents-pack/src/plugin/ux/lint.rs", 10, "UX lint rules: compiled regular expressions, immutable once built; stay"),
+    ("crates/gents-pack/src/plugin/wasi_runtime.rs", 1, "the WASI async runtime, a process-global resource built once; stays"),
+    ("crates/gents-protocol/src/failure_text.rs", 5, "secret redaction patterns: compiled regular expressions, immutable once built; stay"),
+    ("crates/gents-protocol/src/graphql/transport.rs", 1, "the shared reqwest client, a connection pool built once; stays"),
+    ("crates/gents-session/src/exec/process/registry.rs", 2, "registry and id counter of managed child processes, which belong to the process; stays"),
+    ("crates/gents-session/src/request/admission.rs", 1, "the default request input: an immutable value built once on first use, the same for every node and Agent; stays"),
+    ("crates/gents-session/src/session/output/replay_capture.rs", 1, "log rate limiter for replay capture; stays"),
+    ("crates/gents-store/src/config_client/common.rs", 1, "monotonic recreate-identity clock, process-local by design; stays"),
+    ("crates/gents-store/src/config_client/graphql.rs", 1, "the shared reqwest client, a connection pool built once; stays"),
+    ("crates/gents-store/src/config_client/runtime_endpoints.rs", 1, "the shared reqwest client, a connection pool built once; stays"),
+    ("crates/gents-store/src/config_client/subscription.rs", 1, "the shared reqwest client, a connection pool built once; stays"),
+    ("crates/gents-store/src/identity/request_receipt.rs", 1, "the default request input: an immutable value built once on first use, the same for every node and Agent; stays"),
+    ("crates/gents-store/src/node_extension.rs", 1, "the node extension table, the one owner of per-node attachments and per-node state keyed by node address; stays"),
+    ("crates/gents-store/src/schema/catalog.rs", 4, "baseline schemas and the runtime catalog: an immutable value built once on first use, the same for every node and Agent; stays"),
+    ("crates/gents-store/src/schema/catalog/install.rs", 1, "lock serialising schema ensure across the desktop and runtime paths of one process; stays"),
+    ("crates/gents-store/src/schema/journal.rs", 1, "journal baseline collections: an immutable value built once on first use, the same for every node and Agent; stays"),
+    ("crates/gents-store/src/service.rs", 1, "the build identifier: an immutable value built once on first use, the same for every node and Agent; stays"),
+    ("crates/gents-toolcalls/src/call/lifecycle/recovery.rs", 1, "rate limit of the unresolved-parent warning; stays"),
+    ("crates/gents-toolcalls/src/plugin/executor.rs", 1, "a built-in plugin declaration: an immutable value built once on first use, the same for every node and Agent; stays"),
+    ("crates/gents-tools/src/builtin/self_config/configuration_discovery/text.rs", 5, "secret redaction patterns: compiled regular expressions, immutable once built; stay"),
+    ("crates/gents-tools/src/native/command_observability.rs", 2, "process-wide command policy counters for metrics; stay"),
+    ("crates/gents/src/client_runtime/mod.rs", 1, "the shared reqwest client, a connection pool built once; stays"),
+];
+
+#[test]
+fn process_wide_statics_only_shrink() {
+    shrinking_allowlist(
+        "process-wide static",
+        PROCESS_STATIC_ALLOWLIST,
+        &production_site_counts(|_, syntax| process_static_sites(syntax)),
+        "process-wide static(s)",
+        "pass the value as an argument or hold it on its owner",
+    );
+}
+
+#[test]
+fn process_statics_count_interior_mutable_statics_outside_test_items() {
+    let syntax = syn::parse_file(
+        r##"
+        static A: std::sync::Mutex<u8> = std::sync::Mutex::new(0);
+        static B: AtomicU64 = AtomicU64::new(0);
+        static mut C: u8 = 0;
+        fn f() { static D: OnceLock<Arc<u8>> = OnceLock::new(); }
+        static E: std::sync::LazyLock<Option<RwLock<u8>>> = std::sync::LazyLock::new(|| None);
+        lazy_static::lazy_static! { static ref F: u8 = 0; }
+        static G: &[&str] = &["Mutex"];
+        static H: u64 = 0;
+        const I: std::sync::Mutex<u8> = std::sync::Mutex::new(0);
+        fn g() { let _ = r#"static J: RwLock<u8> = RwLock::new(0);"#; }
+        thread_local! { static K: std::cell::Cell<u8> = const { std::cell::Cell::new(0) }; }
+        #[cfg(test)]
+        static L: OnceLock<u8> = OnceLock::new();
+        #[cfg(all(test, unix))]
+        mod tests { static M: AtomicBool = AtomicBool::new(false); }
+        impl S { #[cfg(test)] fn f() { static N: OnceLock<u8> = OnceLock::new(); } }
+        "##,
+    )
+    .expect("parse snippet");
+    assert_eq!(process_static_sites(&syntax), 6);
+    assert_eq!(ambient_context_sites("src/lib.rs", &syntax), 1);
+}
+
+/// Functions that create a file in-process (`fs::write`, `fs::copy`,
+/// `File::create`, an `OpenOptions` open with `create`) and then give that
+/// path an exec bit, or that `fs::copy` an executable (a source naming a
+/// binary, which the copy keeps executable). Linux execve refuses a file any
+/// process holds open for writing (ETXTBSY), and a concurrent spawn copies
+/// this process's write descriptor into its child until that child execs,
+/// even with O_CLOEXEC (`tla/ScriptFixtureExec.tla`). A static script is
+/// checked in; a generated one goes through
+/// `gents_store::test_support::write_executable_script` and a copied one
+/// through `gents_store::test_support::copy_executable`. No site
+/// remains and none is admitted.
 #[derive(Default)]
 struct ExecutableWriteScan {
     written: BTreeSet<String>,
     permitted: Vec<String>,
     executable_mode: bool,
+    executable_copy: bool,
+}
+
+/// A copy source that names a binary: Cargo's `CARGO_BIN_EXE_*`,
+/// `current_exe`, or a `*_bin`/`*_exe`/`executable*` binding or helper.
+static EXECUTABLE_SOURCE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"\b(CARGO_BIN_EXE\w*|current_exe|\w+_bin|\w+_exe|\w*executable\w*)\b")
+        .expect("executable source pattern")
+});
+
+fn method_chain_calls(expression: &Expr, names: &[&str]) -> bool {
+    match expression {
+        Expr::MethodCall(call) => {
+            names.iter().any(|name| call.method == name)
+                || method_chain_calls(&call.receiver, names)
+        }
+        _ => false,
+    }
 }
 
 fn path_argument_key(expression: &Expr) -> String {
@@ -2135,6 +3262,18 @@ impl<'ast> Visit<'ast> for ExecutableWriteScan {
                 [.., fs, write] if fs == "fs" && write == "write" => {
                     self.written.extend(first.map(path_argument_key));
                 }
+                [.., fs, copy] if fs == "fs" && copy == "copy" => {
+                    self.written
+                        .extend(call.args.iter().nth(1).map(path_argument_key));
+                    self.executable_copy |= first.is_some_and(|source| {
+                        EXECUTABLE_SOURCE.is_match(&path_argument_key(source))
+                    });
+                }
+                [.., file, create]
+                    if file == "File" && (create == "create" || create == "create_new") =>
+                {
+                    self.written.extend(first.map(path_argument_key));
+                }
                 [.., set] if set == "set_permissions" => {
                     self.permitted.extend(first.map(path_argument_key));
                 }
@@ -2151,6 +3290,10 @@ impl<'ast> Visit<'ast> for ExecutableWriteScan {
         if call.method == "set_mode" {
             self.executable_mode |= call.args.first().is_some_and(executable_literal);
         }
+        if call.method == "open" && method_chain_calls(&call.receiver, &["create", "create_new"]) {
+            self.written
+                .extend(call.args.first().map(path_argument_key));
+        }
         visit::visit_expr_method_call(self, call);
     }
 }
@@ -2164,11 +3307,12 @@ impl ExecutableWriteVisitor {
     fn scan(&mut self, block: &syn::Block) {
         let mut scan = ExecutableWriteScan::default();
         scan.visit_block(block);
-        if scan.executable_mode
-            && scan
-                .permitted
-                .iter()
-                .any(|path| scan.written.contains(path))
+        if scan.executable_copy
+            || scan.executable_mode
+                && scan
+                    .permitted
+                    .iter()
+                    .any(|path| scan.written.contains(path))
         {
             self.sites += 1;
         }
@@ -2200,7 +3344,7 @@ fn executables_are_never_written_in_process() {
     for directory in ["crates", "apps"] {
         all_rust_sources(&root.join(directory), &mut sources);
     }
-    let actual = sources
+    let violations = sources
         .into_iter()
         .filter_map(|path| {
             let source = std::fs::read_to_string(&path)
@@ -2214,30 +3358,12 @@ fn executables_are_never_written_in_process() {
                     .expect("source under repo root")
                     .to_string_lossy()
                     .into_owned();
-                (relative, sites)
+                format!(
+                    "{relative}: {sites} function(s) write a file and then make it executable; check in a static script or use gents_store::test_support::write_executable_script"
+                )
             })
         })
-        .collect::<BTreeMap<_, _>>();
-    let allowed = EXECUTABLE_WRITE_ALLOWLIST
-        .iter()
-        .map(|(path, count, _)| (path.to_string(), *count))
-        .collect::<BTreeMap<_, _>>();
-    let mut violations = Vec::new();
-    for path in allowed.keys().chain(actual.keys()).collect::<BTreeSet<_>>() {
-        let found = actual.get(path).copied().unwrap_or_default();
-        match allowed.get(path).copied() {
-            None => violations.push(format!(
-                "{path}: {found} function(s) write a file and then make it executable; check in a static script or use gents_store::test_support::write_executable_script"
-            )),
-            Some(limit) if found > limit => violations.push(format!(
-                "{path}: {found} in-process executable writes exceed the allowlisted {limit}"
-            )),
-            Some(limit) if found < limit => violations.push(format!(
-                "{path}: {found} in-process executable writes; lower the allowlist entry from {limit}"
-            )),
-            Some(_) => {}
-        }
-    }
+        .collect::<Vec<_>>();
     assert!(
         violations.is_empty(),
         "executable write ratchet failed:\n{}",
@@ -2276,6 +3402,25 @@ fn executable_write_fence_pairs_a_write_with_an_exec_bit_on_its_path() {
             "fn f() { write_executable_script(&p, \"#!/bin/sh\\n\").unwrap(); }",
             0,
         ),
+        (
+            "fn f() { fs::copy(source, target)?; fs::set_permissions(target, fs::Permissions::from_mode(0o700))?; }",
+            1,
+        ),
+        ("fn f() { fs::copy(cli_bin(), &copy)?; }", 1),
+        ("fn f() { std::fs::copy(std::env::current_exe()?, &copy)?; }", 1),
+        ("fn f() { std::fs::copy(entry.path(), &target)?; }", 0),
+        (
+            "fn f() { let f = File::create(&p)?; drop(f); fs::set_permissions(&p, Permissions::from_mode(0o755))?; }",
+            1,
+        ),
+        (
+            "fn f() { let f = OpenOptions::new().write(true).create(true).open(&p)?; fs::set_permissions(&p, Permissions::from_mode(0o755))?; }",
+            1,
+        ),
+        (
+            "fn f() { let f = OpenOptions::new().write(true).open(&p)?; fs::set_permissions(&p, Permissions::from_mode(0o755))?; }",
+            0,
+        ),
     ] {
         let syntax = syn::parse_file(source).expect("parse snippet");
         assert_eq!(executable_write_sites(&syntax), sites, "{source}");
@@ -2290,7 +3435,6 @@ const OWNER_MODULES: &[&str] = &[
     "crates/gents-claude/src",
     "crates/gents-protocol/src",
     "crates/gents-loop/src",
-    "crates/gents-migration/src",
     "crates/gents/src/operations",
     "crates/gents-store/src/config_client/common.rs",
     "crates/gents-store/src/config_client/error.rs",
@@ -2306,7 +3450,7 @@ const OWNER_MODULES: &[&str] = &[
     "crates/gents-store/src/graphql",
     "crates/gents-store/src/local/home",
     "crates/gents-store/src/identity",
-    "crates/gents-store/src/schema/migration",
+    "crates/gents-store/src/schema/catalog",
     "crates/gents-store/src/local/storage_backend",
     "crates/gents-store/src/local/store_key",
 ];
@@ -2481,7 +3625,8 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
 #[rustfmt::skip]
 const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-client-host/src/editor_store.rs", &["HistoryUnlockRequired::occurs_in"]),
-    ("crates/gents-desktop-core/src/error.rs", &["BridgeError::carried_by", "BridgeError::classify_transport_error"]),
+    ("crates/gents-desktop-bridge/src/client_runtime/authored_delivery.rs", &["SavedForDelivery::in_error"]),
+    ("crates/gents-store/src/client_error.rs", &["BridgeError::carried_by", "BridgeError::classify_transport_error"]),
     ("crates/gents-documents/src/desired_state/plan.rs", &["stale_expectation"]),
     ("crates/gents-documents/src/desired_state/validate.rs", &["OutcomeSourceSchemaError::in_error"]),
     ("crates/gents-documents/src/references.rs", &["MissingReference::in_error"]),
@@ -2495,10 +3640,8 @@ const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-inference/src/backends/registry.rs", &["ActorBackendDiscoveryError::unavailable_in"]),
     ("crates/gents-loop/src/loop_stream/aggregate_budget.rs", &["aggregate_token_budget_exhaustion_message"]),
     ("crates/gents-loop/src/loop_stream/contract.rs", &["ReplayEvidenceViolation::in_chain"]),
-    ("crates/gents-migration/src/error.rs", &["Error::in_chain"]),
     ("crates/gents-p2p/src/p2p_reconcile/enrollment_store.rs", &["EnrollmentDecisionRefusal::in_chain"]),
     ("crates/gents-p2p/src/p2p_reconcile/trait_def.rs", &["RemoteP2pAdminError::in_error"]),
-    ("crates/gents-pack/src/pack/core_packs.rs", &["plugin_interface_refusal"]),
     ("crates/gents-pack/src/pack/registry.rs", &["RegistryError::in_chain"]),
     ("crates/gents-pack/src/plugin.rs", &["GuestTrap::in_chain", "GuestTrap::raised_by"]),
     ("crates/gents-pack/src/plugin/http_calls.rs", &["InternalAddress::in_chain"]),
@@ -2521,16 +3664,21 @@ const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-session/src/session/output.rs", &["CanonicalOutputReadError::in_error"]),
     ("crates/gents-store/src/config_client/retry.rs", &["access_owner", "rerun_request_in"]),
     ("crates/gents-store/src/config_client/schema_install.rs", &["install_error_in", "schema_install_mismatch"]),
+    ("crates/gents-store/src/config_client/user_write.rs", &["UserWriteRefusal::in_chain"]),
     ("crates/gents-store/src/identity/error.rs", &["identity_key_unavailable"]),
     ("crates/gents-store/src/local/backend_protection.rs", &["BackendProtectionError::in_chain"]),
+    ("crates/gents-store/src/local/document_acp.rs", &["DocumentAcpError::in_chain"]),
     ("crates/gents-store/src/local/home.rs", &["store_lock_held"]),
     ("crates/gents-store/src/local/storage_backend.rs", &["find_incompatible", "find_insecure_key"]),
     ("crates/gents-store/src/local/store_key.rs", &["store_key_unavailable"]),
+    ("crates/gents-store/src/schema/catalog/error.rs", &["SchemaError::in_chain"]),
     ("crates/gents-toolcalls/src/background/job/records.rs", &["RecordError::in_error"]),
     ("crates/gents-toolcalls/src/call/hook/persistence/helpers.rs", &["BackgroundSlotRefusal::in_failure"]),
     ("crates/gents-tools/src/builtin/self_config/command.rs", &["CommandGuidance::in_error"]),
     ("crates/gents-tools/src/builtin/self_config/command/crud.rs", &["BatchFailure::in_error"]),
+    ("crates/gents-tools/src/builtin/self_config/command/guidance.rs", &["CatalogRefusal::in_error"]),
     ("crates/gents-tools/src/builtin/self_config/ops.rs", &["MissingAgent::in_error", "MissingConfigDocument::in_error"]),
+    ("crates/gents-tools/src/guided_failure.rs", &["GuidedFailure::or_help"]),
     ("crates/gents-tools/src/surface/root_admission.rs", &["tool_root_refusal"]),
     ("crates/gents-tools/src/mcp/pool/auth_refusal.rs", &["auth_refusal_of"]),
     ("crates/gents/src/eval/documents.rs", &["already_completed", "already_invalidated", "feedback_off_train"]),
@@ -2547,10 +3695,6 @@ const CHAIN_WALKER: &str = "crates/gents-protocol/src/error_chain.rs";
 /// docstring names the external premise. This list only shrinks.
 #[rustfmt::skip]
 const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
-    // in P2pTool::call
-    ("crates/gents-tools/src/builtin/p2p.rs", 1),
-    // in SessionHistoryTool::call
-    ("crates/gents-tools/src/native/session_history.rs", 1),
 ];
 
 /// Adapter-boundary classifiers: functions that decide on error text, or ask
@@ -2565,17 +3709,16 @@ const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
 const ADAPTER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-cli/src/commands/eval/watch.rs", &["store_locked"]),
     ("crates/gents-desktop-bridge/src/host/local/windows.rs", &["pipe_name_reserved"]),
-    ("crates/gents-desktop-core/src/inference.rs", &["classify_discovery_failure"]),
+    ("crates/gents-observe/src/client_inference.rs", &["classify_discovery_failure"]),
     ("crates/gents-eval/src/report/store.rs", &["unresolvable"]),
     ("crates/gents-eval/src/runner/embedded/executor/outcome.rs", &["provider_reason_from_failure"]),
     ("crates/gents-loop/src/error.rs", &["ProviderReport::classify_failure_text"]),
     ("crates/gents-loop/src/tool.rs", &["schema_args_error"]),
     ("crates/gents-loop/src/tool_call_lifecycle/runtime.rs", &["classify_error_text"]),
-    ("crates/gents-migration/src/engine.rs", &["collection_already_exists"]),
     ("crates/gents-observe/src/observe/trace_export.rs", &["looks_like_deadline_or_inference_failure"]),
     ("crates/gents-pack/src/plugin/store.rs", &["is_not_found"]),
     ("crates/gents-protocol/src/graphql/response.rs", &["is_collection_missing_error_message"]),
-    ("crates/gents-protocol/src/graphql/transport.rs", &["graphql_transport_error_in_chain"]),
+    ("crates/gents-protocol/src/graphql/transport.rs", &["graphql_transport_source"]),
     ("crates/gents-protocol/src/node_readiness.rs", &["is_behavior_unavailable_rejection", "unavailable_rejection_reason"]),
     ("crates/gents-service/src/native_service.rs", &["ensure_launchd_result"]),
     ("crates/gents-session/src/workspace/action_plan.rs", &["parse_action_plan_json"]),
@@ -4406,6 +5549,14 @@ const OWNERS_ASKED_FOR_WHAT_THEY_HOLD: &[(&str, &str)] = &[
 /// Each crate's `AccessClassification` family enumerating its variants that
 /// hold an access error or the store's `ViewError`.
 const ACCESS_HOLDER_FAMILIES: &[(&str, &str)] = &[
+    (
+        "gents-automation",
+        "access_classification_automation_wrapped",
+    ),
+    (
+        "gents-desktop-bridge",
+        "access_classification_desktop_bridge_wrapped",
+    ),
     ("gents-store", "access_classification_store_wrapped"),
     ("gents-inference", "access_classification_inference_wrapped"),
     ("gents-session", "access_classification_session_wrapped"),
@@ -4711,8 +5862,7 @@ fn error_holder_fence_reads_holdings_and_wire_names() {
 /// Every other integration test is a module of that binary: each extra target
 /// relinks the crate's whole dependency graph. This allowlist only shrinks.
 const SEPARATE_TEST_TARGETS: &[(&str, &str)] = &[
-    // Sets GENTS_PAIRING_SWEEP_MS for the process, changing the sweep cadence
-    // of every runtime started after it.
+    // Its scenarios serialise on the process-global embedded P2P transport.
     ("gents", "e2e_triggers"),
     // A source scanner that links no runtime crate; run alone while editing ratchets.
     ("gents", "write_owner_structure"),
@@ -5125,16 +6275,7 @@ const LEAN_GENERATOR_RUNS: &[&str] = &[
 /// `gents_lean_vocab::snapshot()`, which loads off the runtime, or runs the
 /// generator inside `spawn_blocking`. This allowlist only shrinks.
 #[rustfmt::skip]
-const LEAN_GENERATOR_ON_RUNTIME_ALLOWLIST: &[(&str, usize)] = &[
-    ("crates/gents-automation/src/goal/client_control/start_tests.rs", 1),
-    ("crates/gents-cli/tests/cli_enrollment/live_delegation.rs", 1),
-    ("crates/gents-cli/tests/cli_enrollment/live_two_agent.rs", 1),
-    ("crates/gents-desktop-bridge/src/snapshot/tests/goal_provenance.rs", 1),
-    ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/tests/readiness.rs", 1),
-    ("crates/gents-desktop-core/src/client/core/sync_state.rs", 1),
-    ("crates/gents-host/src/http/access_tests.rs", 1),
-    ("crates/gents-loop/src/end_to_end_test.rs", 1),
-];
+const LEAN_GENERATOR_ON_RUNTIME_ALLOWLIST: &[(&str, usize)] = &[];
 
 struct LeanGeneratorVisitor {
     imports_owner: bool,
@@ -5368,10 +6509,83 @@ const LEASE_STARTS: &[&str] = &[
 /// read the model before the lease.
 /// Such a read can be the process's first, which runs Lean on the runtime
 /// thread for minutes and starves the lease renewal (#3704, #3891, #3892).
-#[derive(Default)]
 struct LeanReadAfterLeaseVisitor {
+    starts: BTreeSet<String>,
     events: Vec<(usize, usize, LeanEvent)>,
     sites: usize,
+}
+
+/// The names of one file's calls that start a lease: [`LEASE_STARTS`] and,
+/// to a fixed point, every function of the file whose body calls one, so a
+/// file-local fixture that claims counts at its call site (`step0` over
+/// `job_chain` in `plugin_job_dispatch.rs`).
+fn lease_starts_in_file(syntax: &syn::File) -> BTreeSet<String> {
+    #[derive(Default)]
+    struct Callees {
+        current: Option<String>,
+        functions: Vec<(String, BTreeSet<String>)>,
+    }
+    impl Callees {
+        fn enter(&mut self, name: String) -> Option<String> {
+            self.functions.push((name.clone(), BTreeSet::new()));
+            self.current.replace(name)
+        }
+        fn called(&mut self, name: String) {
+            if self.current.is_some() {
+                if let Some((_, calls)) = self.functions.last_mut() {
+                    calls.insert(name);
+                }
+            }
+        }
+    }
+    impl<'ast> Visit<'ast> for Callees {
+        fn visit_item_fn(&mut self, item: &'ast ItemFn) {
+            let outer = self.enter(item.sig.ident.to_string());
+            visit::visit_item_fn(self, item);
+            self.current = outer;
+        }
+        fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+            let outer = self.enter(item.sig.ident.to_string());
+            visit::visit_impl_item_fn(self, item);
+            self.current = outer;
+        }
+        fn visit_expr_call(&mut self, call: &'ast ExprCall) {
+            if let Expr::Path(function) = call.func.as_ref() {
+                if let Some(last) = function.path.segments.last() {
+                    self.called(last.ident.to_string());
+                }
+            }
+            visit::visit_expr_call(self, call);
+        }
+        fn visit_expr_method_call(&mut self, call: &'ast ExprMethodCall) {
+            self.called(call.method.to_string());
+            visit::visit_expr_method_call(self, call);
+        }
+        fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
+            let (mut parsed, mut loose) = (Vec::new(), Vec::new());
+            macro_expressions(invocation.tokens.clone(), &mut parsed, &mut loose);
+            for argument in &parsed {
+                self.visit_expr(argument);
+            }
+        }
+    }
+    let mut callees = Callees::default();
+    callees.visit_file(syntax);
+    let mut starts = LEASE_STARTS
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect::<BTreeSet<_>>();
+    loop {
+        let before = starts.len();
+        for (name, calls) in &callees.functions {
+            if calls.iter().any(|call| starts.contains(call)) {
+                starts.insert(name.clone());
+            }
+        }
+        if starts.len() == before {
+            return starts;
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -5427,10 +6641,7 @@ impl<'ast> Visit<'ast> for LeanReadAfterLeaseVisitor {
                     LeanEvent::SyncRead
                 };
                 self.record(call.span(), event);
-            } else if last
-                .as_deref()
-                .is_some_and(|name| LEASE_STARTS.contains(&name))
-            {
+            } else if last.as_ref().is_some_and(|name| self.starts.contains(name)) {
                 self.record(call.span(), LeanEvent::LeaseStart);
             }
         }
@@ -5438,15 +6649,27 @@ impl<'ast> Visit<'ast> for LeanReadAfterLeaseVisitor {
     }
 
     fn visit_expr_method_call(&mut self, call: &'ast ExprMethodCall) {
-        if LEASE_STARTS.iter().any(|name| call.method == name) {
+        if self.starts.contains(&call.method.to_string()) {
             self.record(call.method.span(), LeanEvent::LeaseStart);
         }
         visit::visit_expr_method_call(self, call);
     }
+
+    fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
+        let (mut parsed, mut loose) = (Vec::new(), Vec::new());
+        macro_expressions(invocation.tokens.clone(), &mut parsed, &mut loose);
+        for argument in &parsed {
+            self.visit_expr(argument);
+        }
+    }
 }
 
 fn lean_reads_after_lease(syntax: &syn::File) -> usize {
-    let mut visitor = LeanReadAfterLeaseVisitor::default();
+    let mut visitor = LeanReadAfterLeaseVisitor {
+        starts: lease_starts_in_file(syntax),
+        events: Vec::new(),
+        sites: 0,
+    };
     visitor.visit_file(syntax);
     visitor.sites
 }
@@ -5454,8 +6677,9 @@ fn lean_reads_after_lease(syntax: &syn::File) -> usize {
 /// An async test that holds an execution lease awaits
 /// `gents_lean_vocab::snapshot()` before any synchronous model read, so the
 /// first load runs off its runtime (`LeaseRenewalStarvation.tla`,
-/// `OffRuntime`). Syntactic: fixtures are matched by name and macro arguments
-/// are not read.
+/// `OffRuntime`). Syntactic: fixtures are matched by name, a file's own
+/// functions that reach a lease start count as one, and macro input is read
+/// as [`macro_expressions`] reads it.
 #[test]
 fn lease_holders_await_the_lean_snapshot() {
     let root = repo_root();
@@ -5509,6 +6733,18 @@ fn lean_read_fence_counts_reads_after_a_lease_without_the_await() {
             0,
         ),
         (
+            "async fn chain() { l.claim_with_identity().await; }\nasync fn step0() { chain().await; }\nasync fn f() { step0().await; for c in gents_lean_vocab::families::k::cases() {} }",
+            1,
+        ),
+        (
+            "async fn step0() { l.claim_with_identity().await; }\nasync fn f() { gents_lean_vocab::snapshot().await; step0().await; gents_lean_vocab::families::k::cases(); }",
+            0,
+        ),
+        (
+            "async fn chain() { assert_eq!(l.claim_with_identity().await, Claimed); }\nasync fn f() { chain().await; assert!(gents_lean_vocab::families::k::cases().is_empty()); }",
+            1,
+        ),
+        (
             "async fn f() { gents_lean_vocab::lean_contract_snapshot(); l.claim_with_identity().await; gents_lean_vocab::lean_contract_snapshot(); }",
             0,
         ),
@@ -5516,4 +6752,346 @@ fn lean_read_fence_counts_reads_after_a_lease_without_the_await() {
         let syntax = syn::parse_file(source).expect("parse snippet");
         assert_eq!(lean_reads_after_lease(&syntax), sites, "{source}");
     }
+}
+
+const CLIENT_ENDPOINT_CRATES: &[&str] = &[
+    "crates/gents-desktop-",
+    "crates/gents-client-host/",
+    "apps/",
+];
+
+#[derive(Default)]
+struct EndpointConstructionVisitor {
+    sites: usize,
+}
+
+impl<'ast> Visit<'ast> for EndpointConstructionVisitor {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if !item_cfg_test(item) {
+            visit::visit_item(self, item);
+        }
+    }
+
+    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+        if !cfg_test(&item.attrs) {
+            visit::visit_impl_item_fn(self, item);
+        }
+    }
+
+    fn visit_expr_call(&mut self, call: &'ast ExprCall) {
+        if path_name(call).is_some_and(|name| {
+            [
+                "GraphqlEndpoint::as_principal",
+                "GraphqlEndpoint::anonymous",
+            ]
+            .iter()
+            .any(|constructor| name.ends_with(constructor))
+        }) {
+            self.sites += 1;
+        }
+        visit::visit_expr_call(self, call);
+    }
+}
+
+const HOME_CHOICE_CHECKS: &[&str] = &[
+    "document_acp::ensure_home_opens",
+    "document_acp::ensure_admissible",
+];
+
+const HOME_STORE_CLAIMS: &[&str] = &[
+    "lock_store",
+    "lock_store_at",
+    "lock_home_store",
+    "try_store",
+    "acquire_store",
+    "lock_init_store",
+    "reserve_runtime_startup",
+    "open_home_store_key",
+    "open_home_store_key_with_custody",
+    "ProtectedBackendStore::open",
+    "FreshBackendStore::observe",
+];
+
+#[derive(Clone, Copy, PartialEq)]
+enum HomeEvent {
+    Check,
+    Claim,
+}
+
+type HomeEvents = Vec<(usize, usize, HomeEvent)>;
+
+fn names_one_of(name: &str, entries: &[&str]) -> bool {
+    entries
+        .iter()
+        .any(|entry| name == *entry || name.ends_with(&format!("::{entry}")))
+}
+
+/// The production functions of one file with their choice checks and store
+/// claims in source order. A function of the same file that checks the
+/// choice counts as a check where it is called by its bare name.
+struct HomeChoiceVisitor<'a> {
+    wrappers: &'a BTreeSet<String>,
+    functions: Vec<(String, HomeEvents)>,
+    events: HomeEvents,
+}
+
+impl HomeChoiceVisitor<'_> {
+    fn function(
+        &mut self,
+        name: String,
+        attributes: &[syn::Attribute],
+        visit: impl FnOnce(&mut Self),
+    ) {
+        if cfg_test(attributes) {
+            return;
+        }
+        let outer = std::mem::take(&mut self.events);
+        visit(self);
+        let mut events = std::mem::replace(&mut self.events, outer);
+        events.sort_by_key(|(line, column, _)| (*line, *column));
+        self.functions.push((name, events));
+    }
+}
+
+impl<'ast> Visit<'ast> for HomeChoiceVisitor<'_> {
+    fn visit_item_mod(&mut self, item: &'ast ItemMod) {
+        if !cfg_test(&item.attrs) {
+            visit::visit_item_mod(self, item);
+        }
+    }
+
+    fn visit_item_fn(&mut self, item: &'ast ItemFn) {
+        self.function(item.sig.ident.to_string(), &item.attrs, |visitor| {
+            visit::visit_item_fn(visitor, item);
+        });
+    }
+
+    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+        self.function(item.sig.ident.to_string(), &item.attrs, |visitor| {
+            visit::visit_impl_item_fn(visitor, item);
+        });
+    }
+
+    fn visit_expr_call(&mut self, call: &'ast ExprCall) {
+        if let Some(name) = path_name(call) {
+            let event = if names_one_of(&name, HOME_CHOICE_CHECKS) || self.wrappers.contains(&name)
+            {
+                Some(HomeEvent::Check)
+            } else if names_one_of(&name, HOME_STORE_CLAIMS) {
+                Some(HomeEvent::Claim)
+            } else {
+                None
+            };
+            if let Some(event) = event {
+                let start = call.span().start();
+                self.events.push((start.line, start.column, event));
+            }
+        }
+        visit::visit_expr_call(self, call);
+    }
+}
+
+fn endpoint_construction_sites(syntax: &syn::File) -> usize {
+    let mut visitor = EndpointConstructionVisitor::default();
+    visitor.visit_file(syntax);
+    visitor.sites
+}
+
+/// A client builds every endpoint to a runtime through `RuntimeEndpoints`, so
+/// the audience the runtime reports reaches the one minting point
+/// (`Identity.HeldAudience.recordCredential`).
+#[test]
+fn client_endpoints_are_built_by_their_owner() {
+    let root = repo_root();
+    let violations = parse_production(&root, production_sources(&root))
+        .into_iter()
+        .filter(|(relative, _)| {
+            CLIENT_ENDPOINT_CRATES
+                .iter()
+                .any(|prefix| relative.starts_with(prefix))
+        })
+        .filter(|(_, syntax)| endpoint_construction_sites(syntax) > 0)
+        .map(|(relative, _)| {
+            format!("{relative}: builds a GraphqlEndpoint; use gents_store::config_client::runtime_endpoints::RuntimeEndpoints")
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        violations.is_empty(),
+        "client endpoint ratchet failed:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn client_endpoint_fence_counts_constructors_outside_tests() {
+    for (source, sites) in [
+        ("fn f() { GraphqlEndpoint::as_principal(u, d); }", 1),
+        (
+            "fn f() { gents_store::config_client::GraphqlEndpoint::anonymous(u); }",
+            1,
+        ),
+        ("fn f() { RuntimeEndpoints::new(c).endpoint(n, u); }", 0),
+        (
+            "#[cfg(test)] mod tests { fn f() { GraphqlEndpoint::anonymous(u); } }",
+            0,
+        ),
+        (
+            "impl S { #[cfg(test)] fn f() { GraphqlEndpoint::anonymous(u); } }",
+            0,
+        ),
+    ] {
+        let syntax = syn::parse_file(source).expect("parse snippet");
+        assert_eq!(endpoint_construction_sites(&syntax), sites, "{source}");
+    }
+}
+
+fn home_choice_functions(
+    syntax: &syn::File,
+    wrappers: &BTreeSet<String>,
+) -> Vec<(String, HomeEvents)> {
+    let mut visitor = HomeChoiceVisitor {
+        wrappers,
+        functions: Vec::new(),
+        events: Vec::new(),
+    };
+    visitor.visit_file(syntax);
+    visitor.functions
+}
+
+fn checks_the_choice(events: &[(usize, usize, HomeEvent)]) -> bool {
+    events
+        .iter()
+        .any(|(_, _, event)| *event == HomeEvent::Check)
+}
+
+fn stores_claimed_before_the_choice(syntax: &syn::File) -> Vec<String> {
+    let mut wrappers = BTreeSet::new();
+    let functions = loop {
+        let functions = home_choice_functions(syntax, &wrappers);
+        let checking = functions
+            .iter()
+            .filter(|(_, events)| checks_the_choice(events))
+            .map(|(name, _)| name.clone())
+            .collect::<BTreeSet<_>>();
+        if checking == wrappers {
+            break functions;
+        }
+        wrappers = checking;
+    };
+    functions
+        .into_iter()
+        .filter(|(_, events)| {
+            checks_the_choice(events)
+                && events
+                    .iter()
+                    .take_while(|(_, _, event)| *event != HomeEvent::Check)
+                    .any(|(_, _, event)| *event == HomeEvent::Claim)
+        })
+        .map(|(name, _)| name)
+        .collect()
+}
+
+/// A function that checks a home's document-ACP choice does so before it
+/// claims or opens the home's store, so a refused home is left untouched
+/// (Lean `DocumentAcpChoice.admit`). Syntactic: claims are matched by name,
+/// and a function that never checks the choice is not held to it.
+#[test]
+fn a_homes_choice_is_checked_before_its_store_is_claimed() {
+    let root = repo_root();
+    let violations = parse_production(&root, production_sources(&root))
+        .into_iter()
+        .flat_map(|(relative, syntax)| {
+            stores_claimed_before_the_choice(&syntax)
+                .into_iter()
+                .map(move |name| format!("{relative}: `{name}` claims the home's store before checking its document-ACP choice"))
+        })
+        .collect::<Vec<_>>();
+    assert!(violations.is_empty(), "{}", violations.join("\n"));
+}
+
+#[test]
+fn home_choice_fence_flags_a_claim_before_the_check() {
+    for (source, flagged) in [
+        (
+            "async fn f() { let k = store_key::open_home_store_key(h, d).await?; document_acp::ensure_home_opens(&c)?; }",
+            vec!["f"],
+        ),
+        (
+            "fn f() { let l = home::lock_store(h, d)?; gents_store::local::document_acp::ensure_admissible(r, q, s)?; }",
+            vec!["f"],
+        ),
+        (
+            "fn f() { document_acp::ensure_home_opens(&c)?; let l = home::lock_store(h, d)?; ProtectedBackendStore::open(d, k, l); }",
+            vec![],
+        ),
+        (
+            "fn admit() { document_acp::ensure_admissible(r, q, s)?; } fn f() { let l = home::acquire_store(h, d, w)?; admit()?; }",
+            vec!["f"],
+        ),
+        (
+            "fn admit() { document_acp::ensure_admissible(r, q, s)?; } fn f() { admit()?; let l = home::acquire_store(h, d, w)?; }",
+            vec![],
+        ),
+        ("fn f() { let l = home::lock_store(h, d)?; }", vec![]),
+        (
+            "#[cfg(test)] fn f() { let l = home::lock_store(h, d)?; document_acp::ensure_home_opens(&c)?; }",
+            vec![],
+        ),
+        (
+            "fn f() { patch::ensure_admissible(t, p)?; let l = home::lock_store(h, d)?; document_acp::ensure_home_opens(&c)?; }",
+            vec!["f"],
+        ),
+    ] {
+        let syntax = syn::parse_file(source).expect("parse snippet");
+        assert_eq!(stores_claimed_before_the_choice(&syntax), flagged, "{source}");
+    }
+}
+
+/// The one owner of change subscriptions: a watcher subscribes through it, so
+/// on a home whose access settles after a row commits it is also woken when
+/// the access settles (Lean `AccessWake.listens`, TLA `AccessWake`).
+const CHANGE_SUBSCRIPTION_OWNER: &str = "crates/gents-store/src/subscription_source.rs";
+
+#[derive(Default)]
+struct ChangeSubscriptionSites(usize);
+
+impl<'ast> Visit<'ast> for ChangeSubscriptionSites {
+    fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+        if !cfg_test(&item.attrs) {
+            visit::visit_item_mod(self, item);
+        }
+    }
+
+    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+        if !cfg_test(&item.attrs) {
+            visit::visit_item_fn(self, item);
+        }
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        if call.method == "subscribe_collection_changes" {
+            self.0 += 1;
+        }
+        visit::visit_expr_method_call(self, call);
+    }
+}
+
+#[test]
+fn change_subscriptions_have_one_owner() {
+    let root = repo_root();
+    let violations = parse_production(&root, production_sources(&root))
+        .into_iter()
+        .filter(|(relative, _)| relative != CHANGE_SUBSCRIPTION_OWNER)
+        .filter(|(_, syntax)| {
+            let mut sites = ChangeSubscriptionSites::default();
+            sites.visit_file(syntax);
+            sites.0 > 0
+        })
+        .map(|(relative, _)| relative)
+        .collect::<Vec<_>>();
+    assert!(
+        violations.is_empty(),
+        "subscribe through `gents_store::subscription_source` instead of the node's \
+         `subscribe_collection_changes`, so access changes wake the watcher: {violations:?}"
+    );
 }

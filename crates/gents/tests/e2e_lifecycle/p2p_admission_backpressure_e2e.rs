@@ -4,9 +4,9 @@ use tokio::time::Instant;
 use gents::defra_node::Node as EmbeddedNode;
 use gents_store::graphql::escape_graphql_string;
 
-use crate::support::snapshots::SnapshotReader;
 use crate::support::test_p2p_db_with_admission;
 use gents_p2p::test_support::transport::{wait_for_connected_peer, wait_for_listen_addr};
+use gents_store::test_support::snapshot_reader::SnapshotReader;
 
 const OWNER_DID: &str = "did:test:admission-p2p-owner";
 
@@ -18,8 +18,8 @@ async fn install_one_way_replicator(
     let sender_addr = wait_for_listen_addr(sender).await;
     let receiver_addr = wait_for_listen_addr(receiver).await;
     // Transport administration runs as each Node's own identity.
-    let sender_p2p = gents_store::identity::node_p2p(sender).expect("sender p2p");
-    let receiver_p2p = gents_store::identity::node_p2p(receiver).expect("receiver p2p");
+    let sender_p2p = gents_p2p::node_access::operations(sender).expect("sender p2p");
+    let receiver_p2p = gents_p2p::node_access::operations(receiver).expect("receiver p2p");
 
     sender_p2p
         .connect_peer(&receiver_addr)

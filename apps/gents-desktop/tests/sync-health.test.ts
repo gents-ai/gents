@@ -12,10 +12,10 @@ function health(overrides: Partial<SyncHealthView> = {}): SyncHealthView {
     state: "healthy",
     cause: null,
     nextAction: null,
-    lastError: null,
+
     runtimeCount: 1,
     connectedRuntimeCount: 1,
-    activationErrorCount: 0,
+
     ...overrides,
   };
 }
@@ -34,12 +34,13 @@ describe("projectSyncOperationalStatus", () => {
         state: "waiting",
         cause: "discovery_offline",
         nextAction: "wait",
-        lastError: "probe failed",
       }),
     );
     expect(offline.kind).toBe("waiting");
     expect(offline.reason).toBe("discovery_offline");
-    expect(offline.detail).toBe("probe failed");
+    expect(offline.detail).toBe(
+      "No configured peer can be reached for discovery; retrying.",
+    );
     expect(syncHealthState(null)).toBeNull();
     expect(syncHealthState(health({ state: "future-state" }))).toBeNull();
   });
@@ -53,17 +54,15 @@ describe("syncHealthDiagnostics", () => {
         cause: "enrollment_authentication",
         nextAction: "enroll_again",
         connectedRuntimeCount: 0,
-        activationErrorCount: 1,
       }),
     );
     expect(diagnostics).toEqual({
       state: "blocked",
       cause: "enrollment_authentication",
       nextAction: "enroll_again",
-      lastError: null,
+
       runtimeCount: 1,
       connectedRuntimeCount: 0,
-      activationErrorCount: 1,
     });
   });
 });

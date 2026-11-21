@@ -1,4 +1,5 @@
 use super::*;
+use crate::operations::goal::GoalStart;
 
 /// Stage the two native grants for a Goal or claim created by this transaction.
 pub(super) async fn stage_goal_relationships_in_txn(
@@ -283,47 +284,25 @@ pub fn replacement_goal_identity(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) async fn stage_goal_and_claim(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
-    node_did: &str,
-    session_id: &str,
-    objective: &str,
-    token_budget: Option<i64>,
-    initial_state: GoalState,
-    now: &str,
-    identity: Option<&GoalCreationIdentity>,
-    first_request_doc_id: Option<&str>,
+    staging: GoalStaging<'_>,
 ) -> Result<StagedGoal> {
-    stage_goal_and_claim_typed(
-        txn,
-        GoalStaging {
-            node_did,
-            session_id,
-            objective,
-            token_budget,
-            initial_state,
-            now,
-            identity,
-            first_request_doc_id,
-        },
-    )
-    .await
-    .map_err(|error| match error {
-        CreateGoalForSessionError::Storage(error) => error,
-        refusal => anyhow::Error::new(refusal),
-    })
+    stage_goal_and_claim_typed(txn, staging)
+        .await
+        .map_err(|error| match error {
+            CreateGoalForSessionError::Storage(error) => error,
+            refusal => anyhow::Error::new(refusal),
+        })
 }
 
-struct GoalStaging<'a> {
-    node_did: &'a str,
-    session_id: &'a str,
-    objective: &'a str,
-    token_budget: Option<i64>,
-    initial_state: GoalState,
-    now: &'a str,
-    identity: Option<&'a GoalCreationIdentity>,
-    first_request_doc_id: Option<&'a str>,
+/// A Goal row and its creation claim as one transaction stages them.
+pub(super) struct GoalStaging<'a> {
+    pub(super) start: GoalStart<'a>,
+    pub(super) initial_state: GoalState,
+    pub(super) now: &'a str,
+    pub(super) identity: Option<&'a GoalCreationIdentity>,
+    pub(super) first_request_doc_id: Option<&'a str>,
 }
 
 async fn stage_goal_and_claim_typed(
@@ -331,10 +310,13 @@ async fn stage_goal_and_claim_typed(
     staging: GoalStaging<'_>,
 ) -> std::result::Result<StagedGoal, CreateGoalForSessionError> {
     let GoalStaging {
-        node_did,
-        session_id,
-        objective,
-        token_budget,
+        start:
+            GoalStart {
+                node_did,
+                session_id,
+                objective,
+                token_budget,
+            },
         initial_state,
         now,
         identity,
@@ -638,7 +620,12 @@ async fn create_goal_for_session_inner(
         disposition => unreachable!("owned authorized create preflight returned {disposition:?}"),
     }
     let requested_fingerprint = goal_creation_fingerprint(&create_request);
-    let objective = requested_fingerprint.objective.as_str();
+    let start = GoalStart {
+        node_did,
+        session_id,
+        objective: requested_fingerprint.objective.as_str(),
+        token_budget,
+    };
 
     if access.actor_did().as_deref() != Some(actor_did) {
         return Err(CreateGoalForSessionError::Storage(anyhow::anyhow!(
@@ -674,7 +661,7 @@ async fn create_goal_for_session_inner(
                     .context("goal creation requires a visible physical session")?;
                 let actor = crate::operations::goal::acting_in_txn(txn, node_did, &session.session.agent_did).await?;
                 if let Err(refusal) = crate::operations::goal::admit_start_in_txn(
-                    txn, actor, node_did, session_id, objective, token_budget, None,
+                    txn, actor, start, None,
                     identity.as_ref().map(|identity| identity.creation_key.as_str()),
                 ).await? {
                     use gents_protocol::operations::goal::GoalOperationError;
@@ -688,10 +675,7 @@ async fn create_goal_for_session_inner(
                 let mut staged = stage_goal_and_claim_typed(
                     txn,
                     GoalStaging {
-                        node_did,
-                        session_id,
-                        objective,
-                        token_budget,
+                        start,
                         initial_state: GoalState {
                             status: GoalStatus::Active,
                             blocked_audits: 0,
@@ -747,7 +731,7 @@ async fn create_goal_for_session_inner(
                 .await
                 .map_err(CreateGoalForSessionError::Storage)?;
             if let Some(existing) = existing {
-                if existing.objective.trim() == objective
+                if existing.objective.trim() == start.objective
                     && existing.token_budget == token_budget
                     && claim == Some(requested_fingerprint.clone())
                 {

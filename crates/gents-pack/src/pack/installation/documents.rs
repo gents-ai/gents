@@ -495,23 +495,38 @@ pub(super) fn require_installed_dependency_ux(
     Ok(())
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "install inputs and policies supplied by each install entry point"
-)]
+/// The node a pack installs on: its configuration store `access`, its DID
+/// `owner`, and its local home `plugin_home`, absent when the install has
+/// none to read plugins from (a remote or hosted node).
+#[derive(Clone, Copy)]
+pub struct InstallTarget<'a> {
+    pub access: &'a ConfigAccess,
+    pub owner: &'a str,
+    pub plugin_home: Option<&'a Path>,
+}
+
+/// The pack graph an install prepares beside its root, and the installer's
+/// answers for it: the dependency archives, the inference profiles chosen
+/// for declared slots, the environment install variables resolve from, and
+/// the per-dependency variable overrides.
+#[derive(Clone, Copy)]
+pub struct PackGraphInputs<'a> {
+    pub dependencies: &'a [&'a PackArchive],
+    pub requested: &'a PackInferenceBindings,
+    pub environment: &'a (dyn Fn(&str) -> Option<String> + Sync),
+    pub overrides: &'a DependencyVariableOverrides,
+}
+
 pub async fn prepare_document_pack_install(
-    access: &ConfigAccess,
-    owner: &str,
+    target: &InstallTarget<'_>,
     manifest: &super::super::PackManifest,
     config: &PackConfig,
-    requested: &PackInferenceBindings,
-    dependencies: &[&PackArchive],
-    installed_via: InstalledVia,
-    plugin_home: Option<&Path>,
     root_archive: Option<&PackArchive>,
-    environment: &(dyn Fn(&str) -> Option<String> + Sync),
-    overrides: &DependencyVariableOverrides,
+    graph: &PackGraphInputs<'_>,
+    installed_via: InstalledVia,
 ) -> Result<PreparedDocumentPackInstall, PackChangeError> {
+    let InstallTarget { access, owner, .. } = *target;
+    let environment = graph.environment;
     // The caller renders `config`; this records the values it used, with an
     // installed root keeping its recorded values for omitted variables.
     let root = async {
@@ -536,55 +551,38 @@ pub async fn prepare_document_pack_install(
     }
     .await?;
     prepare_document_pack_install_inner(
-        None,
-        BTreeMap::new(),
-        BTreeMap::new(),
-        None,
-        access,
-        owner,
-        manifest,
-        config,
-        requested,
-        dependencies,
+        target,
+        graph,
+        LoadedGraph {
+            manifest,
+            config,
+            root_archive,
+            installation_doc_id: None,
+            agent_bindings: BTreeMap::new(),
+            root,
+            preloaded: BTreeMap::new(),
+            node_binding: None,
+        },
         installed_via,
         installed_via,
-        plugin_home,
-        root_archive,
-        environment,
         None,
-        root,
-        overrides,
     )
     .await
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "archive preparation shares the canonical install inputs"
-)]
 pub async fn prepare_document_pack_archive(
-    access: &ConfigAccess,
-    owner: &str,
+    target: &InstallTarget<'_>,
     archive: &PackArchive,
-    requested: &PackInferenceBindings,
-    dependencies: &[&PackArchive],
+    graph: &PackGraphInputs<'_>,
     installed_via: InstalledVia,
-    plugin_home: Option<&Path>,
-    environment: &(dyn Fn(&str) -> Option<String> + Sync),
-    overrides: &DependencyVariableOverrides,
 ) -> Result<PreparedDocumentPackInstall, PackChangeError> {
     prepare_document_pack_archive_with_provisioner(
-        access,
-        owner,
+        target,
         archive,
-        requested,
-        dependencies,
+        graph,
         installed_via,
         false,
-        plugin_home,
-        environment,
         None,
-        overrides,
     )
     .await
 }
@@ -607,22 +605,15 @@ fn require_documents_dependency(dependency: &super::super::PackManifest) -> Resu
     Ok(())
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "archive preparation shares canonical install inputs"
-)]
 pub async fn prepare_document_pack_archive_with_runtime(
-    access: &ConfigAccess,
-    owner: &str,
+    target: &InstallTarget<'_>,
     archive: &PackArchive,
-    requested: &PackInferenceBindings,
-    dependencies: &[&PackArchive],
-    plugin_home: Option<&Path>,
-    environment: &(dyn Fn(&str) -> Option<String> + Sync),
+    graph: &PackGraphInputs<'_>,
     runtime: &dyn gents_store::identity::NodeIdentity,
-    overrides: &DependencyVariableOverrides,
 ) -> Result<PreparedDocumentPackInstall, PackChangeError> {
-    let node = access
+    let owner = target.owner;
+    let node = target
+        .access
         .local_node()
         .context("local pack preparation requires an embedded Node")?;
     if runtime.did() != owner || node.node_identity_did() != Some(owner) {
@@ -638,72 +629,46 @@ pub async fn prepare_document_pack_archive_with_runtime(
         node_binding: None,
     };
     prepare_document_pack_archive_with_provisioner(
-        access,
-        owner,
+        target,
         archive,
-        requested,
-        dependencies,
+        graph,
         InstalledVia::Operator,
         false,
-        plugin_home,
-        environment,
         Some(&provisioner),
-        overrides,
     )
     .await
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "archive preparation includes an optional executing Agent provisioner"
-)]
 pub(crate) async fn prepare_document_pack_archive_with_provisioner(
-    access: &ConfigAccess,
-    owner: &str,
+    target: &InstallTarget<'_>,
     archive: &PackArchive,
-    requested: &PackInferenceBindings,
-    dependencies: &[&PackArchive],
+    graph: &PackGraphInputs<'_>,
     installed_via: InstalledVia,
     grant_authority: bool,
-    plugin_home: Option<&Path>,
-    environment: &(dyn Fn(&str) -> Option<String> + Sync),
     provisioner: Option<&super::super::agent_bindings::AgentProvisioner<'_>>,
-    overrides: &DependencyVariableOverrides,
 ) -> Result<PreparedDocumentPackInstall, PackChangeError> {
     prepare_document_pack_archive_inputs(
-        access,
-        owner,
+        target,
         archive,
-        requested,
-        dependencies,
+        graph,
         installed_via,
         grant_authority,
-        plugin_home,
-        environment,
         provisioner,
         None,
-        overrides,
     )
     .await
 }
 
 /// Rebuild the installation from locally reviewed archive bytes and staged host facts.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "hosted preparation shares canonical install inputs"
-)]
 pub async fn prepare_hosted_document_pack_archive(
     access: &ConfigAccess,
     owner: &str,
     archive: &PackArchive,
-    requested: &PackInferenceBindings,
-    dependencies: &[&PackArchive],
-    environment: &(dyn Fn(&str) -> Option<String> + Sync),
+    graph: &PackGraphInputs<'_>,
     hosted: &HostedPackPreparation,
-    overrides: &DependencyVariableOverrides,
 ) -> Result<PreparedDocumentPackInstall> {
     let expected = std::iter::once(archive)
-        .chain(dependencies.iter().copied())
+        .chain(graph.dependencies.iter().copied())
         .map(|archive| {
             format!(
                 "{}/{}",
@@ -722,41 +687,38 @@ pub async fn prepare_hosted_document_pack_archive(
         "hosted pack bindings do not match reviewed archives"
     );
     prepare_document_pack_archive_inputs(
-        access,
-        owner,
+        &InstallTarget {
+            access,
+            owner,
+            plugin_home: None,
+        },
         archive,
-        requested,
-        dependencies,
+        graph,
         InstalledVia::Operator,
         false,
         None,
-        environment,
-        None,
         Some(hosted),
-        overrides,
     )
     .await
     .map_err(PackChangeError::into_anyhow)
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "archive preparation shares canonical install inputs"
-)]
 async fn prepare_document_pack_archive_inputs(
-    access: &ConfigAccess,
-    owner: &str,
+    target: &InstallTarget<'_>,
     archive: &PackArchive,
-    requested: &PackInferenceBindings,
-    dependencies: &[&PackArchive],
+    graph: &PackGraphInputs<'_>,
     installed_via: InstalledVia,
     grant_authority: bool,
-    plugin_home: Option<&Path>,
-    environment: &(dyn Fn(&str) -> Option<String> + Sync),
     provisioner: Option<&super::super::agent_bindings::AgentProvisioner<'_>>,
     hosted: Option<&HostedPackPreparation>,
-    overrides: &DependencyVariableOverrides,
 ) -> Result<PreparedDocumentPackInstall, PackChangeError> {
+    let InstallTarget { access, owner, .. } = *target;
+    let PackGraphInputs {
+        dependencies,
+        environment,
+        overrides,
+        ..
+    } = *graph;
     for archive in std::iter::once(archive).chain(dependencies.iter().copied()) {
         refuse_authored_host_roots(archive)?;
     }
@@ -817,7 +779,9 @@ async fn prepare_document_pack_archive_inputs(
         },
     )
     .await?;
-    let mut root = root.with_variables(captured.into_inner().unwrap_or_else(|e| e.into_inner()));
+    let mut root = root.with_variables(super::super::agent_bindings::recorded_variables(
+        captured.into_inner().unwrap_or_else(|e| e.into_inner()),
+    ));
     let mut config = loaded.config;
     root.installer_root_tools = default_host_tool_roots(
         access,
@@ -828,24 +792,21 @@ async fn prepare_document_pack_archive_inputs(
     )
     .await?;
     prepare_document_pack_install_inner(
-        loaded.installation_doc_id,
-        loaded.agent_bindings,
-        preloaded,
-        provisioner.and_then(|context| context.node_binding),
-        access,
-        owner,
-        archive.manifest(),
-        &config,
-        requested,
-        dependencies,
+        target,
+        graph,
+        LoadedGraph {
+            manifest: archive.manifest(),
+            config: &config,
+            root_archive: Some(archive),
+            installation_doc_id: loaded.installation_doc_id,
+            agent_bindings: loaded.agent_bindings,
+            root,
+            preloaded,
+            node_binding: provisioner.and_then(|context| context.node_binding),
+        },
         installed_via,
         super::super::installer_provenance(installed_via, grant_authority),
-        plugin_home,
-        Some(archive),
-        environment,
         hosted,
-        root,
-        overrides,
     )
     .await
 }
@@ -1112,9 +1073,11 @@ async fn load_dependency(
         bindings,
     )
     .await;
-    let variables = resolver
-        .finish()
-        .with_context(|| format!("preparing dependency {coordinate}"))?;
+    let variables = super::super::agent_bindings::recorded_variables(
+        resolver
+            .finish()
+            .with_context(|| format!("preparing dependency {coordinate}"))?,
+    );
     let mut bound = bound?;
     let installer_root_tools = default_host_tool_roots(
         access,
@@ -1135,30 +1098,51 @@ async fn load_dependency(
 
 pub type DependencyVariableOverrides = BTreeMap<String, BTreeMap<String, Option<String>>>;
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "install inputs and policies supplied by each install entry point"
-)]
-async fn prepare_document_pack_install_inner(
+/// What loading a document-pack graph found before binding it: the root's
+/// manifest and rendered config, its archive when the caller holds one, the
+/// installation it updates with that installation's agent bindings and
+/// recorded variables, the dependencies already loaded, and the Node
+/// binding they were provisioned under.
+struct LoadedGraph<'a> {
+    manifest: &'a super::super::PackManifest,
+    config: &'a PackConfig,
+    root_archive: Option<&'a PackArchive>,
     installation_doc_id: Option<String>,
     agent_bindings: super::super::PackAgentBindings,
-    mut preloaded: BTreeMap<String, LoadedDependency>,
-    node_binding: Option<&gents_documents::ConfigurationNodeBinding>,
-    access: &ConfigAccess,
-    owner: &str,
-    manifest: &super::super::PackManifest,
-    config: &PackConfig,
-    requested: &PackInferenceBindings,
-    dependencies: &[&PackArchive],
+    root: RootInstallVariables,
+    preloaded: BTreeMap<String, LoadedDependency>,
+    node_binding: Option<&'a gents_documents::ConfigurationNodeBinding>,
+}
+
+async fn prepare_document_pack_install_inner(
+    target: &InstallTarget<'_>,
+    graph: &PackGraphInputs<'_>,
+    loaded: LoadedGraph<'_>,
     installed_via: InstalledVia,
     recorded_via: InstalledVia,
-    plugin_home: Option<&Path>,
-    root_archive: Option<&PackArchive>,
-    environment: &(dyn Fn(&str) -> Option<String> + Sync),
     hosted: Option<&HostedPackPreparation>,
-    root: RootInstallVariables,
-    overrides: &DependencyVariableOverrides,
 ) -> Result<PreparedDocumentPackInstall, PackChangeError> {
+    let InstallTarget {
+        access,
+        owner,
+        plugin_home,
+    } = *target;
+    let PackGraphInputs {
+        dependencies,
+        requested,
+        environment,
+        overrides,
+    } = *graph;
+    let LoadedGraph {
+        manifest,
+        config,
+        root_archive,
+        installation_doc_id,
+        agent_bindings,
+        root,
+        mut preloaded,
+        node_binding,
+    } = loaded;
     if let Some(archive) = root_archive {
         if serde_json::to_value(archive.manifest()).map_err(anyhow::Error::from)?
             != serde_json::to_value(manifest).map_err(anyhow::Error::from)?
@@ -1561,22 +1545,32 @@ fn ensure_plugin_references_resolve_with_inventory(
     Ok(())
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "install inputs and policies supplied by each install entry point"
-)]
 pub async fn install_prepared_document_pack(
-    access: &ConfigAccess,
-    owner: &str,
+    target: &InstallTarget<'_>,
     archive: &PackArchive,
     dependency_archives: &[&PackArchive],
     prepared: &PreparedDocumentPackInstall,
-    plugin_home: Option<&Path>,
     grant_authority: bool,
     installed_via: InstalledVia,
-    policy: DriftPolicy,
-    profile_policy: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
+    policy: DocumentGraphPolicy,
 ) -> Result<InstallReport> {
+    let InstallTarget {
+        access,
+        owner,
+        plugin_home,
+    } = *target;
+    crate::pack::command_authority::require_command_task_grant(
+        access,
+        owner,
+        &format!(
+            "{}/{}",
+            archive.manifest().metadata.namespace,
+            archive.manifest().name
+        ),
+        prepared,
+        grant_authority,
+    )
+    .await?;
     anyhow::ensure!(
         document_ux_install_allowed(
             !archive.manifest().metadata.ux.is_empty(),
@@ -1661,19 +1655,10 @@ pub async fn install_prepared_document_pack(
         .iter()
         .map(|dependency| dependency.coordinate.clone())
         .collect::<Vec<_>>();
-    let (report, plugins) = install_prepared_document_graph(
-        access,
-        owner,
-        archive,
-        prepared,
-        policy,
-        plugin_home,
-        grant_authority,
-        true,
-        profile_policy,
-    )
-    .await
-    .map_err(|error| error.into_anyhow())?;
+    let (report, plugins) =
+        install_prepared_document_graph(target, archive, prepared, policy, grant_authority, true)
+            .await
+            .map_err(|error| error.into_anyhow())?;
     let root_coordinate = format!(
         "{}/{}",
         archive.manifest().metadata.namespace,
@@ -1788,31 +1773,21 @@ pub async fn apply_prepared_dependency_schemas(
     Ok(())
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "prepared graph installation inputs"
-)]
 pub async fn install_prepared_document_graph(
-    access: &ConfigAccess,
-    owner: &str,
+    target: &InstallTarget<'_>,
     archive: &PackArchive,
     prepared: &PreparedDocumentPackInstall,
-    policy: DriftPolicy,
-    home: Option<&Path>,
+    policy: DocumentGraphPolicy,
     consent: bool,
     explicit: bool,
-    profile_policy: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
 ) -> Result<(InstallReport, Vec<crate::plugin::store::InstalledPlugin>), PackChangeError> {
     let stages = document_graph_stages(archive, prepared, explicit)?;
     let (reports, plugins) = install_document_graph(
-        access,
-        owner,
+        target.access,
+        target.owner,
         stages,
-        DocumentGraphPolicy {
-            drift: policy,
-            profiles: profile_policy,
-        },
-        home,
+        policy,
+        target.plugin_home,
         consent,
         prepared.node_binding.clone(),
     )
@@ -1929,15 +1904,15 @@ impl DocumentPackStage {
 /// What a stage's installation record keeps: its source, the installed
 /// configuration it was prepared against, and the variable values it records.
 /// A reused stage only verifies its snapshot; a reconfigured one also writes.
-#[derive(Clone)]
-pub(super) struct StageRecord {
-    source: Option<super::PackSource>,
+#[derive(Clone, Default)]
+pub(crate) struct StageRecord {
+    pub(super) source: Option<super::PackSource>,
     snapshot: Option<super::InstalledDependencySnapshot>,
-    variables: Option<BTreeMap<String, Option<String>>>,
+    pub(super) variables: Option<BTreeMap<String, Option<String>>>,
     reconfigure: bool,
     /// The stage's Tools this install gave its installer's root, which its
     /// record marks.
-    installer_root_tools: Vec<String>,
+    pub(super) installer_root_tools: Vec<String>,
 }
 
 /// The same document graph reconstructed by the host and the client.
@@ -2123,10 +2098,13 @@ pub(super) async fn stage_document_plugins(
     ))
 }
 
+/// How an install applies a pack graph's documents: what it does with
+/// documents edited since they were installed, and which inference profiles
+/// the node advertises.
 #[derive(Clone, Copy)]
-pub(super) struct DocumentGraphPolicy {
-    pub(super) drift: DriftPolicy,
-    pub(super) profiles: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
+pub struct DocumentGraphPolicy {
+    pub drift: DriftPolicy,
+    pub profiles: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
 }
 
 pub(super) async fn apply_document_graph_in_txn(
@@ -2169,12 +2147,9 @@ pub(super) async fn apply_document_graph_in_txn(
                 owner,
                 identity,
                 documents,
-                policy.drift,
+                policy,
                 node_binding,
-                record.source.as_ref(),
-                record.variables.as_ref(),
-                policy.profiles,
-                &record.installer_root_tools,
+                record,
             )
             .await?,
         );
@@ -2394,24 +2369,14 @@ pub(super) async fn install_document_graph(
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the document and plugin owners share an installation outcome"
-)]
 pub async fn install_documents_with_plugins(
-    access: &ConfigAccess,
-    owner: &str,
+    target: &InstallTarget<'_>,
     manifest: &super::super::PackManifest,
     digest: &str,
     config: &PackConfig,
     policy: DriftPolicy,
-    home: Option<&Path>,
     assets: BTreeMap<String, Vec<u8>>,
-    consent: bool,
     bindings: &PackInferenceBindings,
-    dependencies: Vec<String>,
-    explicit: bool,
-    profile_policy: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
 ) -> Result<(InstallReport, Vec<crate::plugin::store::InstalledPlugin>)> {
     let stage = DocumentPackStage {
         installation_doc_id: None,
@@ -2421,8 +2386,8 @@ pub async fn install_documents_with_plugins(
         config: config.clone(),
         assets,
         bindings: bindings.clone(),
-        dependencies,
-        explicit,
+        dependencies: Vec::new(),
+        explicit: true,
         source: None,
         snapshot: None,
         variables: None,
@@ -2431,15 +2396,15 @@ pub async fn install_documents_with_plugins(
         installer_root_tools: Vec::new(),
     };
     let (mut reports, plugins) = install_document_graph(
-        access,
-        owner,
+        target.access,
+        target.owner,
         vec![stage],
         DocumentGraphPolicy {
             drift: policy,
-            profiles: profile_policy,
+            profiles: &gents_inference::resolved::ProviderProfilePolicy,
         },
-        home,
-        consent,
+        target.plugin_home,
+        false,
         None,
     )
     .await?;

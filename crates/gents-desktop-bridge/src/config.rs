@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use gents_desktop_core::client::DesktopPaths;
+use gents_store::client_journal::paths::DesktopPaths;
 
 use crate::snapshot::projection::SnapshotGrants;
 
@@ -15,6 +15,10 @@ pub struct BridgeConfig {
     /// This is independent of the embedding webview's projection grants.
     pub client_host: bool,
     pub store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice,
+    /// The `gents` executable the desktop installs as its service, named at
+    /// launch; `None` discovers it beside the app, in its resources, then on
+    /// PATH.
+    pub service_executable: Option<PathBuf>,
 }
 
 impl Default for BridgeConfig {
@@ -32,6 +36,7 @@ impl Default for BridgeConfig {
             managed_server: ManagedServerPolicy::Disabled,
             client_host: false,
             store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::default(),
+            service_executable: None,
         }
     }
 }
@@ -83,4 +88,5 @@ pub struct ResolvedBridgePolicy {
     pub managed_server: ManagedServerPolicy,
     pub client_host: bool,
     pub store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice,
+    pub service_executable: Option<PathBuf>,
 }

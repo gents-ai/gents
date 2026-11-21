@@ -472,7 +472,9 @@ async fn staged_evidence_wins_over_the_persisted_one() {
     finish(admission).await;
 }
 
-use crate::background::job::input::tests::{live_settings, new_job, request_as, resume_block};
+use crate::background::job::input::tests::{
+    live_settings, new_job, request_as, resume_block, ChildRequest,
+};
 use crate::background::job::records::{write_progress_in_txn, HostProgressFacts};
 use gents_protocol::job::keys::{job_session_id, job_spawn_key};
 use gents_protocol::job::{JobBudget, JobPolicy};
@@ -514,15 +516,17 @@ async fn read_step_row_carries_the_pin_progress_and_derived_children() {
     job.write_progress(&row, JobState::Running, 1).await;
     request_as(
         &job.access,
-        &row,
-        "child-1",
-        &job_session_id(&row, "slot-a", 0),
-        &job_spawn_key(&row, "slot-a", 0),
-        "agent-a",
-        "processing",
-        Some("Alpha"),
-        "2026-01-01T00:00:00Z",
-        None,
+        &ChildRequest {
+            chain: &row,
+            request_id: "child-1",
+            session_id: &job_session_id(&row, "slot-a", 0),
+            retry_key: &job_spawn_key(&row, "slot-a", 0),
+            agent_did: "agent-a",
+            state: "processing",
+            title: Some("Alpha"),
+            created_at: "2026-01-01T00:00:00Z",
+            terminalized_at: None,
+        },
     )
     .await;
     let step = read_step_row(&job.access, &row).await.unwrap();
@@ -1024,7 +1028,7 @@ impl Stepper {
                 serde_json::to_value(input).unwrap(),
                 Some(data),
                 jobs,
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .1
@@ -1074,26 +1078,25 @@ async fn job_step_runs_without_a_tool_dispatcher() {
     // tools, so the step's `false` below is the job entry's, not an
     // absent dispatcher's.
     let (input, _) = step.input(&step.row).await;
-    let envelope = gents_loop::tool::ToolCallEnvelope::ambient();
-    let ordinary = gents_loop::tool_effects::scope(
-        live(),
-        step.job.runtime.plugins.call_data_bound_with_receipt(
+    let envelope = gents_loop::tool::ToolCallEnvelope::default().with_effects(live());
+    let ordinary = step
+        .job
+        .runtime
+        .plugins
+        .call_data_bound_with_receipt(
             &step.installed,
             serde_json::to_value(&input).unwrap(),
             crate::plugin::executor::ToolInvocation {
                 tool_root: None,
+                own_folder: None,
                 tool_calls: true,
                 context: &envelope,
             },
-        ),
-    )
-    .await
-    .1;
+        )
+        .await
+        .1;
     assert!(ordinary.authority.unwrap().host_tools);
-    assert_eq!(
-        gents_loop::tool_effects::scope(live(), step.run(&step.row)).await,
-        StepOutcome::Settled
-    );
+    assert_eq!(step.run(&step.row).await, StepOutcome::Settled);
     let evidence = step.state(&step.row).await.unwrap().evidence.unwrap();
     let authority = evidence.authority.unwrap();
     assert!(!authority.host_tools);
@@ -1106,15 +1109,17 @@ async fn failed_slot_shows_state_failed_while_the_row_keeps_running() {
     let step = stepper(json!({"effects": {}})).await;
     request_as(
         &step.job.access,
-        &step.row,
-        "child-1",
-        &job_session_id(&step.row, "slot-a", 0),
-        &job_spawn_key(&step.row, "slot-a", 0),
-        "a",
-        "failed",
-        Some("Alpha"),
-        "2026-01-01T00:00:00Z",
-        Some("2026-01-01T00:01:00Z"),
+        &ChildRequest {
+            chain: &step.row,
+            request_id: "child-1",
+            session_id: &job_session_id(&step.row, "slot-a", 0),
+            retry_key: &job_spawn_key(&step.row, "slot-a", 0),
+            agent_did: "a",
+            state: "failed",
+            title: Some("Alpha"),
+            created_at: "2026-01-01T00:00:00Z",
+            terminalized_at: Some("2026-01-01T00:01:00Z"),
+        },
     )
     .await;
     let (input, _) = step.input(&step.row).await;
@@ -1219,15 +1224,17 @@ async fn terminal_with_a_live_child_fails_closed() {
     let step = stepper(json!({"result": "done"})).await;
     request_as(
         &step.job.access,
-        &step.row,
-        "child-1",
-        &job_session_id(&step.row, "slot-a", 0),
-        &job_spawn_key(&step.row, "slot-a", 0),
-        "a",
-        "processing",
-        Some("Alpha"),
-        "2026-01-01T00:00:00Z",
-        None,
+        &ChildRequest {
+            chain: &step.row,
+            request_id: "child-1",
+            session_id: &job_session_id(&step.row, "slot-a", 0),
+            retry_key: &job_spawn_key(&step.row, "slot-a", 0),
+            agent_did: "a",
+            state: "processing",
+            title: Some("Alpha"),
+            created_at: "2026-01-01T00:00:00Z",
+            terminalized_at: None,
+        },
     )
     .await;
     assert_eq!(
@@ -1312,15 +1319,17 @@ async fn committed_step_persists_its_evidence_and_a_stale_step_does_not() {
     // One observed-but-unaccounted terminal child, so the no-op step is not a stall.
     request_as(
         &step.job.access,
-        &step.row,
-        "child-1",
-        &job_session_id(&step.row, "slot-a", 0),
-        &job_spawn_key(&step.row, "slot-a", 0),
-        "a",
-        "completed",
-        Some("Alpha"),
-        "2026-01-01T00:00:00Z",
-        Some("2026-01-01T00:01:00Z"),
+        &ChildRequest {
+            chain: &step.row,
+            request_id: "child-1",
+            session_id: &job_session_id(&step.row, "slot-a", 0),
+            retry_key: &job_spawn_key(&step.row, "slot-a", 0),
+            agent_did: "a",
+            state: "completed",
+            title: Some("Alpha"),
+            created_at: "2026-01-01T00:00:00Z",
+            terminalized_at: Some("2026-01-01T00:01:00Z"),
+        },
     )
     .await;
     let (input, _) = step.input(&step.row).await;

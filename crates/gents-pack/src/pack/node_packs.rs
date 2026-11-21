@@ -186,11 +186,13 @@ pub enum HomePackRemovalError {
 }
 
 /// An actor's pack operations on the node `node_did`, through its `access`.
-/// The node is always the install owner: no caller selects another DID,
-/// registry endpoint or control-plane endpoint.
+/// The node is always the install owner: no caller selects another DID or
+/// control-plane endpoint, and packs resolve from the registry the host
+/// serves with (`gents server --registry`), never one an actor names.
 pub struct NodePacks<'a> {
     pub access: &'a ConfigAccess,
     pub node_did: &'a str,
+    pub registry_url: &'a str,
     /// `None` resolves from the registry in memory and installs no plugins.
     pub home: Option<&'a Path>,
     /// Whether this actor's installs carry the operator's consent to what a
@@ -228,7 +230,7 @@ impl NodePacks<'_> {
             }
             None => {}
         }
-        let registry_url = registry::resolve_registry_url(None);
+        let registry_url = self.registry_url.to_owned();
         let spec = match gents_documents::pack_spec::parse_pack_spec(coordinate)? {
             parsed if operation == "update" && parsed.version.is_none() => {
                 let client = registry::RegistryClient::new(registry_url.clone());
@@ -485,23 +487,32 @@ impl NodePacks<'_> {
         provisioner: Option<&AgentProvisioner<'_>>,
     ) -> Result<PreparedDocumentPackInstall> {
         let environment = |name: &str| {
-            crate::operations::pack::install_value(PackActor::Agent, &change.variables, name)
+            crate::operations::pack::install_value(
+                PackActor::Agent,
+                &change.variables,
+                &crate::operations::pack::InstallEnvironment::Installer,
+                name,
+            )
         };
         let mut prepared = super::prepare_document_pack_archive_with_provisioner(
-            self.access,
-            self.node_did,
+            &crate::pack::InstallTarget {
+                access: self.access,
+                owner: self.node_did,
+                plugin_home: self.home,
+            },
             distribution.archive(),
-            &change.inference_slots,
-            &dependencies
-                .iter()
-                .map(Distribution::archive)
-                .collect::<Vec<_>>(),
+            &crate::pack::PackGraphInputs {
+                dependencies: &dependencies
+                    .iter()
+                    .map(Distribution::archive)
+                    .collect::<Vec<_>>(),
+                requested: &change.inference_slots,
+                environment: &environment,
+                overrides: &crate::operations::pack::dependency_overrides(&change.variables),
+            },
             InstalledVia::SelfConfig,
             self.grants_authority,
-            self.home,
-            &environment,
             provisioner,
-            &crate::operations::pack::dependency_overrides(&change.variables),
         )
         .await?;
         for source in std::iter::once(distribution).chain(dependencies) {
@@ -548,19 +559,23 @@ impl NodePacks<'_> {
         profile_policy: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
     ) -> Result<(InstallReport, Value)> {
         let receipt = super::install_prepared_document_pack(
-            self.access,
-            self.node_did,
+            &crate::pack::InstallTarget {
+                access: self.access,
+                owner: self.node_did,
+                plugin_home: self.home,
+            },
             distribution.archive(),
             &dependencies
                 .iter()
                 .map(Distribution::archive)
                 .collect::<Vec<_>>(),
             prepared,
-            self.home,
             self.grants_authority,
             InstalledVia::SelfConfig,
-            edited,
-            profile_policy,
+            crate::pack::DocumentGraphPolicy {
+                drift: edited,
+                profiles: profile_policy,
+            },
         )
         .await?;
         let effective = self
@@ -678,8 +693,10 @@ impl NodePacks<'_> {
             home,
             distribution.archive(),
             self.grants_authority,
-            Some(self.node_did),
-            bindings,
+            crate::pack::plugin_lifecycle::PluginSlotBindings {
+                owner: Some(self.node_did),
+                bindings,
+            },
             super::installer_provenance(InstalledVia::SelfConfig, self.grants_authority),
             distribution.source.clone(),
             move |identity, changes| async move {
@@ -785,13 +802,11 @@ impl NodePacks<'_> {
         })
     }
 
-    /// One page of the registry's answer to `query`, and the registry asked.
-    pub async fn search(query: &str, page: u32) -> Result<(String, Value)> {
-        let registry = registry::resolve_registry_url(None);
-        let response = registry::RegistryClient::new(registry.clone())
+    /// One page of the answer of the registry at `registry_url` to `query`.
+    pub async fn search(registry_url: &str, query: &str, page: u32) -> Result<Value> {
+        registry::RegistryClient::new(registry_url.to_owned())
             .search(query, page)
-            .await?;
-        Ok((registry, response))
+            .await
     }
 
     /// Removes an assets or plugins pack under the plugin store lock: its

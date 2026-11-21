@@ -642,7 +642,11 @@ mod tests {
                 0,
             )
             .await?;
-        assert_eq!(policy, gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID);
+        assert_eq!(
+            policy,
+            gents_protocol::schemas::HomePolicyIds::shared()
+                .id(gents_protocol::schemas::BuiltInPolicy::Household)
+        );
         for key in [
             &runtime as &dyn NodeIdentity,
             writer.as_ref(),
@@ -658,16 +662,28 @@ mod tests {
                     .await?;
             }
         }
-        node.add_collection_as(&context, gents_protocol::schemas::NODE)
-            .await?;
-        node.add_collection_as(&context, gents_protocol::schemas::AGENT)
-            .await?;
+        node.add_collection_as(
+            &context,
+            &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::NODE),
+        )
+        .await?;
+        node.add_collection_as(
+            &context,
+            &gents_protocol::schemas::HomePolicyIds::shared()
+                .render(gents_protocol::schemas::AGENT),
+        )
+        .await?;
         let binding = format!(
             "type WorkspaceRoot @policy(id: \"{policy}\", resource: \"workspace_roots\") {{"
         );
-        let schema =
-            gents_protocol::schemas::WORKSPACE_ROOT.replacen("type WorkspaceRoot {", &binding, 1);
-        node.add_collection_as(&context, &schema).await?;
+        let schema = gents_protocol::schemas::HomePolicyIds::shared()
+            .render(gents_protocol::schemas::WORKSPACE_ROOT)
+            .replacen("type WorkspaceRoot {", &binding, 1);
+        node.add_collection_as(
+            &context,
+            &gents_protocol::schemas::HomePolicyIds::shared().render(&schema),
+        )
+        .await?;
         let endpoint = format!("http://{address}/api/v0/graphql");
         let owner = client(&endpoint, &user)?;
         let node_doc = owner

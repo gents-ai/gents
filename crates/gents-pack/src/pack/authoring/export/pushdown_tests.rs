@@ -64,28 +64,36 @@ async fn install_in(
     let runtime = db.node_identity.clone();
     let local = ConfigAccess::local_as(db.node.clone(), identity::Did::new(user.did()).unwrap());
     let prepared = prepare_document_pack_archive_with_runtime(
-        &local,
-        runtime.did(),
+        &crate::pack::InstallTarget {
+            access: &local,
+            owner: runtime.did(),
+            plugin_home,
+        },
         archive,
-        bindings,
-        &[],
-        plugin_home,
-        &|name| variables.get(name).cloned(),
+        &crate::pack::PackGraphInputs {
+            dependencies: &[],
+            requested: bindings,
+            environment: &|name| variables.get(name).cloned(),
+            overrides: &Default::default(),
+        },
         runtime.as_ref(),
-        &Default::default(),
     )
     .await?;
     install_prepared_document_pack(
-        access,
-        runtime.did(),
+        &crate::pack::InstallTarget {
+            access,
+            owner: runtime.did(),
+            plugin_home,
+        },
         archive,
         &[],
         &prepared,
-        plugin_home,
         false,
         InstalledVia::Operator,
-        DriftPolicy::Refuse,
-        &gents_inference::resolved::ProviderProfilePolicy,
+        crate::pack::DocumentGraphPolicy {
+            drift: DriftPolicy::Refuse,
+            profiles: &gents_inference::resolved::ProviderProfilePolicy,
+        },
     )
     .await
 }
@@ -125,7 +133,10 @@ async fn a_live_app_exports_installs_on_a_second_node_and_is_adopted_where_it_ca
     let context_id = format!("{}:context", worker.agent_did);
     let tools_id = format!("{}:tools", worker.agent_did);
     grant_schema(&origin, &origin_user).await;
-    origin_access.add_collection(SDL).await.unwrap();
+    origin_access
+        .add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(SDL))
+        .await
+        .unwrap();
     apply(
         &origin_access,
         vec![
@@ -368,15 +379,19 @@ async fn a_live_app_exports_installs_on_a_second_node_and_is_adopted_where_it_ca
         identity::Did::new(origin_user.did()).unwrap(),
     );
     let unbound = prepare_document_pack_archive_with_runtime(
-        &local,
-        origin.node_identity.did(),
+        &crate::pack::InstallTarget {
+            access: &local,
+            owner: origin.node_identity.did(),
+            plugin_home: None,
+        },
         &archive,
-        &origin_binding,
-        &[],
-        None,
-        &|_| None,
+        &crate::pack::PackGraphInputs {
+            dependencies: &[],
+            requested: &origin_binding,
+            environment: &|_| None,
+            overrides: &Default::default(),
+        },
         origin.node_identity.as_ref(),
-        &Default::default(),
     )
     .await
     .unwrap();
@@ -512,7 +527,10 @@ async fn a_page_and_a_plugin_source_export_with_the_surface_the_page_is_granted(
     .await;
     let owner = origin.node_identity.did().to_owned();
     grant_schema(&origin, &user).await;
-    access.add_collection(SDL).await.unwrap();
+    access
+        .add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(SDL))
+        .await
+        .unwrap();
     access
         .add_collection("type DeskTicket { subject: String }")
         .await

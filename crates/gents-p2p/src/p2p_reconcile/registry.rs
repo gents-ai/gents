@@ -9,10 +9,10 @@ use tokio_util::sync::CancellationToken;
 use gents_store::graphql::escape_graphql_string;
 
 use super::graphql_helpers::graphql_nullable_string_literal;
+use super::intervals::P2pIntervals;
 use super::templates::resolve_template;
 use gents_store::graphql::graphql_string_list_literal;
 
-pub const REGISTRY_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 pub const REGISTRY_STALE_AFTER: Duration = Duration::from_secs(90);
 
 /// Resolve informational registry liveness without granting any pairing or
@@ -29,16 +29,6 @@ pub fn heartbeat_is_fresh(ts: DateTime<Utc>, now: DateTime<Utc>, stale_after: Du
 }
 
 pub const DEFAULT_NETWORK_ID: &str = "default";
-
-pub const NETWORK_ID_ENV: &str = "GENTS_NETWORK_ID";
-
-pub fn resolve_network_id() -> String {
-    std::env::var(NETWORK_ID_ENV)
-        .ok()
-        .map(|raw| raw.trim().to_string())
-        .filter(|raw| !raw.is_empty())
-        .unwrap_or_else(|| DEFAULT_NETWORK_ID.to_string())
-}
 
 pub const DEFAULT_OFFERED_TEMPLATES: &[&str] = &["machine", "client"];
 
@@ -186,26 +176,37 @@ pub async fn run_registry_heartbeat(
     node: Arc<EmbeddedNode>,
     node_did: String,
     network_id: String,
+    intervals: P2pIntervals,
     cancel: CancellationToken,
 ) -> Result<()> {
-    registry_heartbeat(node, node_did, network_id, cancel).await
+    registry_heartbeat(node, node_did, network_id, intervals, cancel).await
 }
 
 async fn registry_heartbeat(
     node: Arc<EmbeddedNode>,
     node_did: String,
     network_id: String,
+    intervals: P2pIntervals,
     cancel: CancellationToken,
 ) -> Result<()> {
-    let Some(p2p) = gents_store::identity::node_p2p(&node) else {
+    if crate::peer_publication::idles(
+        &node,
+        gents_store::local::document_acp::Periodic::RegistryHeartbeat,
+        &cancel,
+    )
+    .await
+    {
+        return Ok(());
+    }
+    let Some(p2p) = crate::node_access::operations(&node) else {
         tracing::debug!("registry heartbeat idle because embedded node has no P2P transport");
         cancel.cancelled().await;
         return Ok(());
     };
 
-    let mut interval = tokio::time::interval(super::intervals::heartbeat_interval());
+    let mut interval = tokio::time::interval(intervals.registry_heartbeat);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    let renewal_interval = super::intervals::lease_renewal_interval();
+    let renewal_interval = intervals.lease_renewal_interval();
     let mut published = None;
 
     if let Err(error) = tick_registry(

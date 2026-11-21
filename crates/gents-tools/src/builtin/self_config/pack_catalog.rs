@@ -20,7 +20,8 @@ impl PackInstaller {
     }
 
     pub(super) async fn search(&self, query: &str, page: u32) -> anyhow::Result<String> {
-        let (registry, response) = NodePacks::search(query, page).await?;
+        let registry = self.core.registry_url();
+        let response = NodePacks::search(registry, query, page).await?;
         let packs = response["packs"]
             .as_array()
             .context("registry search returned no packs array")?;

@@ -83,6 +83,7 @@ pub(crate) async fn request_maybe_retry(
     timeout: std::time::Duration,
     max_timeout: std::time::Duration,
     retry_empty: bool,
+    cancel: Option<&tokio_util::sync::CancellationToken>,
 ) -> Result<Value, String> {
     const MAX_EMPTY_ATTEMPTS: usize = 3;
     let deadline = std::time::Instant::now() + timeout;
@@ -93,7 +94,7 @@ pub(crate) async fn request_maybe_retry(
             return Ok(Value::Null);
         }
         let result = client
-            .request_with_timeout(method, params.clone(), remaining)
+            .request_with_timeout(method, params.clone(), remaining, cancel)
             .await?;
         if !retry_empty || !semantic_result_is_empty(&result) {
             return Ok(result);
@@ -124,6 +125,7 @@ pub(super) async fn resolve_code_action_edit(
     client: &LspClient,
     result: &Value,
     query: Option<&str>,
+    cancel: Option<&tokio_util::sync::CancellationToken>,
 ) -> Result<Value, ToolError> {
     let mut action = if let Some(arr) = result.as_array() {
         select_code_action(arr, query)?.clone()
@@ -132,7 +134,7 @@ pub(super) async fn resolve_code_action_edit(
     };
     if action.get("edit").is_none() && action.get("data").is_some() {
         action = client
-            .request("codeAction/resolve", action.clone())
+            .request("codeAction/resolve", action.clone(), cancel)
             .await
             .map_err(|err| arg_invalid(format!("code action resolve failed: {err}")))?;
     }

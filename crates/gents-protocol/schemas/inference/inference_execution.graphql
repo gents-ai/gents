@@ -1,12 +1,15 @@
-type InferenceExecution @policy(id: "fd59b3cc10193581adb497fd6d55c7e740f4866f720af6f18da780248ce26a5c", resource: "configuration") @index(fields: ["node_did", "execution_id"], unique: true) {
+type InferenceExecution @policy(id: "$household", resource: "configuration") @index(fields: ["node_did", "execution_id"], unique: true) {
     execution_id: String
     node_did: String @index
     display_name: String
     max_turns: Int
     max_total_tokens: Int
+    max_invalid_tool_calls: Int
+    repeated_tool_failure_limit: Int
     stream_batch_ms: Int
     stream_liveness_timeout_secs: Int
     provider_idle_timeout_secs: Int
+    title_timeout_secs: Int
     deadline_duration_secs: Int
     retry_policy_id: String @index
     tags: [String!]

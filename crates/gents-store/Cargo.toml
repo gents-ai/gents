@@ -7,14 +7,19 @@ repository.workspace = true
 description = "DefraDB access, identity and schema owners for Gents"
 
 [features]
-default = ["defra-node/http", "defra-node/p2p", "defra-node/wasmtime-runtime"]
+default = ["defra-node/native"]
 typescript = ["gents-loop/typescript", "gents-protocol/typescript"]
+# Carries the single-validator Vera node a home may decide document access
+# through. It runs on a runtime of its own; see AGENTS.md.
+vera = ["defra-node/embedded-vera", "dep:vera-embedded", "dep:vera-node"]
 live-e2e = []
 test-home-guard = []
 test-fixtures = ["test-home-guard", "axum/ws"]
 
 [dependencies]
+ts-rs = { version = "10.1", default-features = false, features = ["serde-compat", "no-serde-warnings"] }
 acp.workspace = true
+vera.workspace = true
 schema.workspace = true
 storage.workspace = true
 db.workspace = true
@@ -25,16 +30,15 @@ axum = "0.8"
 async-stream = "0.3"
 async-trait = "0.1"
 base64.workspace = true
+blake3 = "1"
 chrono.workspace = true
 crypto.workspace = true
 cursor.workspace = true
 defra-core.workspace = true
 defra-http.workspace = true
-defra-p2p-adapter.workspace = true
 gents-loop = { workspace = true, features = ["native"] }
 gents-protocol.workspace = true
 gents-schemas.workspace = true
-gents-migration = { path = "../gents-migration" }
 defra-node.workspace = true
 dirs.workspace = true
 events.workspace = true
@@ -46,7 +50,7 @@ k256 = { version = "0.13", default-features = false }
 libc = "0.2"
 query.workspace = true
 rand.workspace = true
-regolith = "0.2.4"
+regolith = "0.2.5"
 serde.workspace = true
 serde_json.workspace = true
 regex = "1"
@@ -58,8 +62,13 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-tokio-tungstenite = { version = "0.26.2", features = ["rustls-tls-native-roots"] }
+tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-native-roots"] }
 uuid.workspace = true
+vera-crypto.workspace = true
+vera-delegation.workspace = true
+hex = "0.4"
+vera-embedded = { workspace = true, optional = true, features = ["node"] }
+vera-node = { workspace = true, optional = true }
 reqwest = { workspace = true, features = ["stream"] }
 tempfile = "3"
 
@@ -67,6 +76,7 @@ tempfile = "3"
 security-framework = { version = "3.7.0", features = ["OSX_10_15"] }
 
 [dev-dependencies]
+defra-node = { workspace = true, features = ["embedded-vera", "http"] }
 gents-claude = { workspace = true, features = ["transport"] }
 gents-store = { path = ".", features = ["test-fixtures", "typescript"] }
 gents-workspace-hack = { workspace = true }

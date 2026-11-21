@@ -1,0 +1,9 @@
+type ClientRuntimeAccessRequest @policy(id: "$household", resource: "operations") {
+    request_id: String @index(unique: true) @immutable
+    node_did: String @index @immutable
+    client_did: String @index @immutable
+    intent_json: String @immutable
+    state: String
+    node_doc_id: String @immutable
+    parent_linked: Boolean
+}

@@ -356,33 +356,6 @@ fn ready_runtime_requires_live_status_to_carry_reviewed_authority() {
 }
 
 #[test]
-fn request_visibility_race_is_retriable() {
-    use gents_protocol::enrollment::EnrollmentDecisionRefusalCode;
-    let rejected = |status, code| {
-        anyhow::Error::new(
-            gents_service::enrollment_admin::EnrollmentDecisionRejected {
-                status,
-                message: "refused".into(),
-                code,
-            },
-        )
-        .context("approving desktop enrollment on managed runtime")
-    };
-    assert!(enrollment_request_is_not_visible_yet(&rejected(
-        reqwest::StatusCode::BAD_REQUEST,
-        Some(EnrollmentDecisionRefusalCode::NotPending),
-    )));
-    assert!(!enrollment_request_is_not_visible_yet(&rejected(
-        reqwest::StatusCode::BAD_REQUEST,
-        Some(EnrollmentDecisionRefusalCode::Conflicted),
-    )));
-    assert!(!enrollment_request_is_not_visible_yet(&rejected(
-        reqwest::StatusCode::FORBIDDEN,
-        None,
-    )));
-}
-
-#[test]
 fn restart_command_validates_reviewed_authority_through_tauri_ipc() {
     use crate::config::{
         AppMeta, BootstrapPolicy, BridgeConfig, HomePolicy, ManagedServerPolicy, NodeHomePolicy,
@@ -407,6 +380,7 @@ fn restart_command_validates_reviewed_authority_through_tauri_ipc() {
             managed_server: ManagedServerPolicy::Allowed,
             client_host: false,
             store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+            service_executable: None,
         },
         None,
     )

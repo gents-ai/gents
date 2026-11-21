@@ -6,6 +6,95 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- A Task can run a host command instead of an agent: `command: {argv,
+  timeout_secs}` in place of `agent_did` and `prompt_template` (a Task with
+  both, or neither, is refused). Each fire of its schedule Trigger runs the
+  command on the node, in the operator's tool root, through the task-hook
+  runner (120 s default timeout, capped output), with no AgentRequest and no
+  model turn. The fire budget holds as for an Agent's Task, and a command
+  Task's schedule Trigger may set `max_fires_per_hour`; the Trigger's
+  concurrency holds too: `serial` skips a fire while the command runs,
+  `latest_only` interrupts it.
+  Each run's state, exit status and output tail land in the Trigger's new
+  `last_run`, which `gents automation task show` lists. Event Triggers and
+  `gents automation task run` do not run command Tasks yet: an event source
+  reads documents as the Task's agent, and a manual run writes a request for
+  one. Publication refuses a command Task's Trigger with an event source or a
+  `session_id_template` (and so `queued_serial`). A pack that ships a command
+  Task, or changes one's command, installs only under the operator's grant:
+  `--grant-authority`, on the local and the hosted install alike, or the pack
+  authority an installing Agent holds, and an install preview lists those
+  Tasks under `command_tasks` (#3951).
+- Breaking: the last runtime environment switches are flags (#1764).
+  `gents automation job promote --javy PATH` replaces `JAVY`;
+  `gents server --ux-preview-assets PATH` and `gents config pack ux preview
+  --assets PATH` replace `GENTS_UX_PREVIEW_ASSETS`; the desktop app's
+  `--gents-bin PATH` launch argument replaces `GENTS_BIN`; `gents-desktop
+  --tauri-bin PATH` replaces `GENTS_DESKTOP_TAURI_BIN`. Release desktop builds
+  take product telemetry settings only at build time (`GENTS_UMAMI_*` while
+  compiling), never from the running app's environment. The desktop bridge
+  test runner takes only flags; its harness turns its variables into them.
+- Breaking: `GENTS_REGISTRY` is no longer read. `gents server --registry URL`
+  chooses the registry an Agent's `config pack` commands resolve and search
+  from; a tool call still names none. `gents init`, bare `gents` setup,
+  `gents config pack starter`, `pack prune` and `automation job promote` gain
+  `--registry`, as every other pack and plugin command has. Without the flag
+  the public registry is used (#1764).
+- Breaking: `GENTS_DESKTOP_HOME` is no longer read. The desktop app takes a
+  `--desktop-home PATH` launch argument, and `gents-desktop init`,
+  `gents-client-host --home` and `gents runtime desktop reset --desktop-home`
+  keep theirs; without one the platform's application data folder is used.
+  `gents init --desktop-home PATH` keeps the CLI client identity that
+  administers the new home in `PATH/cli` and records that folder in the home's
+  `init.json` (`client_identity`), so every later command given that home
+  signs with it on any platform. Desktop provisioning passes its own desktop
+  home this way instead of refusing a root the process did not resolve (#1764).
+- Breaking: `GENTS_HOME` is no longer read. `--home` is the only way to choose a
+  node home; without it commands use the folder chosen at setup, then `~/.gents`
+  (Lean `HomeResolution`). The macOS uninstall script takes `--home DIR` and
+  otherwise removes the folder chosen at setup (#1764).
+- Breaking: `gents runtime service install`, `stop`, `restart` and
+  `uninstall`, and a managed update's helper, refuse to run when the service's
+  running job is an ancestor of the calling process, which they observe from
+  the service manager and the operating system instead of
+  `GENTS_CALLER_RUNTIME_HOME`. Where that ancestry cannot be read (a sandboxed
+  command, a platform other than macOS or Linux) they refuse while the job
+  runs. Agent commands no longer receive `GENTS_CALLER_RUNTIME_HOME`,
+  `GENTS_CALLER_SESSION_ID` or `GENTS_CALLER_REQUEST_ID`, and a managed update
+  submitted from an Agent's shell no longer posts "Runtime update complete" or
+  "Runtime update failed" to the submitting session; read
+  `gents runtime service update-status` instead. Update plans and receipts no
+  longer carry `session_id` or `request_id` (#3922).
+- Breaking: no home is converted in place. A home from a development build
+  between v1.0.0-rc1 and v1.0.0-rc2 whose `Task`, `RepositoryPlacement`,
+  `ToolServiceRegistry`, `CallbackResult`, `IsolatedWorkspace`,
+  `WorkspaceReceipt`, `PackInstallation` or `Trigger` predates its current
+  fields, including one rc2 upgraded, is refused as an older home (exit code
+  65) and left unchanged; start a new home. The schema-migration engine
+  (`gents-migration`) is removed.
+- `gents server --pack-watch-limit` (default 16) bounds the pack UX
+  observation streams (`/packs/ux/watch`) one runtime serves at once; the
+  bound was a fixed count shared by every runtime in the process (#1764).
+- Tools `host.max_background_tool_calls` (1 to 8, unset 8) bounds the
+  background calls one request holds at once: Bash runs, remote service calls
+  and plugin jobs together. The refusal reports the configured limit.
+- Tools `host.max_instruction_chars` (1 to 262,144, unset 32 KiB) bounds the
+  AGENTS.md text an Agent places in its context, from live discovery and from a
+  workspace's frozen instructions alike. A workspace now freezes each
+  instruction file up to 256 KiB, and each reading Agent bounds it.
+- A pack plugin's `limits.max_rounds` (1 to 256) raises its request rounds per
+  invocation above the default of 64; like the other limits, a raise needs
+  consent at install (#1764).
+
+- InferenceBackend `client_version` sets the wire client version that ChatGPT Codex and
+  Grok OAuth backends advertise, replacing the `GENTS_CHATGPT_CODEX_CLIENT_VERSION` and
+  `GENTS_XAI_GROK_CLIENT_VERSION` environment overrides; unset, each client's built-in
+  version is used. InferenceBackend `request_timeout_secs` (default 120s) bounds one plugin
+  model call through that backend, and InferenceExecution `title_timeout_secs` (default
+  10s) bounds one title-generation attempt, replacing fixed timeouts. The OAuth token
+  endpoint overrides `GENTS_CLAUDE_OAUTH_TOKEN_URL`, `GENTS_XAI_OAUTH_TOKEN_URL`,
+  `CODEX_REFRESH_TOKEN_URL_OVERRIDE`, `GENTS_XAI_OAUTH_DEVICE_URL` are removed; refresh
+  takes its endpoint as an argument (#1764).
 - An application pairing no longer reinstalls its collections on authority
   read before its author lost the P2P mutation grant: each install re-reads
   the author's authority after the operations before it, and a change to the
@@ -27,6 +116,26 @@ source consistency checks, not a separate runtime compatibility version.
   change such a service, the command names the two calls that start a node
   beside it or move the service. Test builds no longer reach the machine's
   service manager at all.
+- Breaking: the runtime no longer reads its behaviour from environment
+  variables; each is a `gents server` flag (#1764). `--block-cache-mb`
+  replaces `GENTS_BLOCK_CACHE_MB` and refuses zero.
+  `--p2p-registry-heartbeat-ms`, `--p2p-pairing-sweep-ms`,
+  `--p2p-endpoint-heartbeat-ms` and `--p2p-registry-stale-ms` replace
+  `GENTS_REGISTRY_HEARTBEAT_MS`, `GENTS_PAIRING_SWEEP_MS`,
+  `GENTS_ENDPOINT_HEARTBEAT_MS` and `GENTS_REGISTRY_STALE_MS`, and
+  `--p2p-network-id` replaces `GENTS_NETWORK_ID`.
+- Breaking: `gents server --system-log` replaces `GENTS_SYSTEM_LOG=1`. The
+  installed launchd and systemd definitions pass the flag, and a definition
+  without it gains it from `gents service repair` or a managed update. On
+  macOS, setup and repair no longer report the service log as out of date
+  after a managed update re-serializes the LaunchAgent.
+- Breaking: `gents init` and the interactive backend setup take the inference
+  endpoint only from `--inference-url` (or a preset); `INFERENCE_ENDPOINT` is
+  no longer read.
+- Breaking: `gents server --fs-runner PATH` replaces `GENTS_FS_RUNNER` to run
+  the native filesystem tools through a standalone `gents-fs-runner`. Without
+  it the serving executable runs them, and builds plugin source, through its
+  own hidden commands (#1764).
 
 ## 1.0.0-rc2 - 2026-11-10
 

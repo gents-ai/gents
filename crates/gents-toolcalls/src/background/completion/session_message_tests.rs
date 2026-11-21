@@ -65,10 +65,12 @@ async fn folded_session_message_waits_for_exact_head_and_replays_once() {
     let mut head = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         &head_id,
-        did,
-        &caused_requester,
-        &caused_agent,
-        &session,
+        gents_protocol::request_admission::RequestScope::new(
+            did,
+            &caused_requester,
+            &caused_agent,
+            &session,
+        ),
         "head",
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -234,7 +236,7 @@ async fn folded_session_message_waits_for_exact_head_and_replays_once() {
 }
 
 #[tokio::test]
-async fn managed_parent_receives_child_completion_when_node_cannot_read_request() {
+async fn managed_parent_receives_child_completion_without_unrelated_reader_access() {
     let PublishedSessionMessage {
         admission,
         caused_request_id,
@@ -260,11 +262,14 @@ async fn managed_parent_receives_child_completion_when_node_cannot_read_request(
             .expect("the selected Agent can read its parent request");
     assert_eq!(parent.agent_did, access.actor_did().unwrap());
     assert!(
-        gents_session::request::binding::load_agent_request(node, &parent_id)
-            .await
-            .unwrap()
-            .is_none(),
-        "the Node cannot substitute for the held Agent"
+        gents_session::request::binding::load_agent_request_with_access(
+            &gents_store::test_support::unrelated_document_reader(node).await,
+            &parent_id
+        )
+        .await
+        .unwrap()
+        .is_none(),
+        "an unrelated reader cannot substitute for the held Agent"
     );
     let runtime = Arc::new(
         gents_store::identity::KeyIdentity::load_existing(admission.path.join("node.key"), None)

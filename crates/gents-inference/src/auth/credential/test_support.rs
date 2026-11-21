@@ -6,8 +6,38 @@ use defra_node::Node as EmbeddedNode;
 #[cfg(test)]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+/// Registers the live bearer that `bootstrap_oauth_client` adopts for this
+/// node's `provider` credential, refreshing against `token_url`. The bearer
+/// stays shared only while the caller holds the returned handle.
 #[cfg(test)]
-pub(crate) static TOKEN_URL_ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+pub(crate) fn bearer_refreshing_at(
+    node: &Arc<EmbeddedNode>,
+    node_did: &str,
+    provider: &str,
+    refresh_kind: super::OAuthRefreshKind,
+    product: super::OAuthProduct,
+    token_url: &str,
+) -> Arc<super::DbCredentialBearer> {
+    let credential_id = super::oauth_credential_id(node_did, provider);
+    let bearer = super::shared_bearer(node, &credential_id, || {
+        super::DbCredentialBearer::new(
+            node.clone(),
+            node_did,
+            provider,
+            credential_id.clone(),
+            true,
+            refresh_kind,
+            product,
+        )
+        .with_token_url(token_url)
+    });
+    assert_eq!(
+        bearer.token_url(),
+        Some(token_url),
+        "a live bearer for {credential_id} already exists; register the test bearer before any client bootstraps it"
+    );
+    bearer
+}
 
 pub async fn test_node() -> Arc<EmbeddedNode> {
     let node = Arc::new(
@@ -24,13 +54,10 @@ pub async fn test_node() -> Arc<EmbeddedNode> {
 
 #[cfg(test)]
 pub(crate) fn bound_bearer(
+    node: &Arc<EmbeddedNode>,
     credential_id: &str,
 ) -> Option<std::sync::Arc<super::DbCredentialBearer>> {
-    super::bearer::bearer_registry()
-        .lock()
-        .expect("bearer registry mutex poisoned")
-        .get(credential_id)
-        .and_then(std::sync::Weak::upgrade)
+    super::bearer::LiveBearers::of(node).live(credential_id)
 }
 
 #[cfg(test)]

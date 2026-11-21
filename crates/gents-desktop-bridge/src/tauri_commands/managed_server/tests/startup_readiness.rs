@@ -39,12 +39,12 @@ async fn managed_readiness_reads_status_as_the_user_and_never_the_node_key() {
     )
     .unwrap();
     let public = serde_json::json!({
-        "service":"gents", "version":env!("CARGO_PKG_VERSION"),
+        "client_authentication": {"kind":"local"}, "service":"gents", "version":env!("CARGO_PKG_VERSION"),
         "lifecycle":"ready", "node_did":did, "graphql":graphql,
     });
     Mock::given(method("GET"))
         .and(path("/status"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(public.clone()))
+        .respond_with(signed_public(public.clone(), &key_path))
         .with_priority(2)
         .mount(&server)
         .await;
@@ -68,7 +68,7 @@ async fn managed_readiness_reads_status_as_the_user_and_never_the_node_key() {
     };
     assert!(matches!(
         cause,
-        gents_desktop_core::local_runtime::HostedRuntimeStatusError::NoUserSigner
+        gents::client_runtime::HostedRuntimeStatusError::NoUserSigner
     ));
     assert!(validate_ready_runtime(&public, &authority, &home).is_err());
     assert!(server
@@ -132,22 +132,20 @@ async fn managed_readiness_reads_status_as_the_user_and_never_the_node_key() {
 
 #[tokio::test]
 async fn generated_fresh_startup_preserves_enrollment_authority() {
-    use gents_desktop_core::client::{ClientCoreOptions, DesktopPaths};
+    use gents_store::client_journal::paths::DesktopPaths;
 
     for case in gents_lean_vocab::families::enrollment_pending_requests_startup::cases() {
         let (temp, state) = orchestration_state();
         let core = Arc::new(
-            ClientCore::start_with_paths_and_options(
+            ClientRuntime::start_with_paths_and_options(
                 DesktopPaths::from_root(temp.path().join("client")),
-                ClientCoreOptions::local_only(),
+                crate::client_test_support::file_journal_options(),
             )
             .await
             .unwrap(),
         );
-        let access = gents_store::config_client::ConfigAccess::local_as(
-            core.node_arc(),
-            ::identity::Did::new(core.node_identity().did()).unwrap(),
-        );
+        let runtime = gents::client_test_support::ServedRuntimeHome::start().await;
+        let access = runtime.user_access();
         let query = "{ NetworkEnrollmentRequest { _docID } NetworkEnrollmentDecision { _docID } NetworkAuthorizationRevision { _docID } }";
         let before = access.execute(query).await.unwrap();
         for name in [
@@ -175,7 +173,9 @@ async fn generated_fresh_startup_preserves_enrollment_authority() {
 
 #[tokio::test]
 async fn managed_readiness_after_desktop_enrollment_reads_the_private_status() {
-    use gents_desktop_core::client::{DesktopPaths, PeerRecord, PrincipalIdentity};
+    use gents_protocol::runtime_connection::RuntimeConnection;
+    use gents_store::client_journal::paths::DesktopPaths;
+    use gents_store::client_journal::principal_identity::PrincipalIdentity;
     use gents_store::identity::NodeIdentity as _;
     use identity::Identity as _;
     use wiremock::matchers::{method, path};
@@ -202,7 +202,12 @@ async fn managed_readiness_after_desktop_enrollment_reads_the_private_status() {
         http_addr: "127.0.0.1".parse().unwrap(),
         http_port: endpoint.port().unwrap(),
     };
-    let did = "did:key:z6MkfLocalCoHostedNode".to_string();
+    let key_path = home.join("node.key");
+    let did = gents_store::identity::load_or_create_file_identity(&key_path)
+        .unwrap()
+        .did()
+        .unwrap()
+        .to_string();
     let graphql = format!("{}/api/v0/graphql", server.uri());
     std::fs::write(
         home.join("init.json"),
@@ -210,25 +215,27 @@ async fn managed_readiness_after_desktop_enrollment_reads_the_private_status() {
     )
     .unwrap();
 
-    let mut enrolled = PeerRecord::local_standard("Local", "", &did, &graphql);
-    enrolled.source = Some("enrollment".into());
-    enrolled.pairing_network_id = Some("network".into());
-    enrolled.enrollment_request_digest = Some("digest".into());
-    enrolled.enrollment_authorization_sequence = Some(1);
-    assert!(enrolled.records_completed_enrollment_into(&did));
+    let connection = RuntimeConnection {
+        node_did: did.clone(),
+        label: "Local".into(),
+        graphql: graphql.clone(),
+        local_node_home: Some(home.to_string_lossy().into_owned()),
+        access_request: None,
+        access_state: None,
+    };
     std::fs::write(
-        desktop.peer_directory_path(),
-        serde_json::json!({ "peers": [enrolled] }).to_string(),
+        desktop.runtime_directory_path(),
+        serde_json::to_vec(&serde_json::json!({"connections": [connection]})).unwrap(),
     )
     .unwrap();
 
     let public = serde_json::json!({
-        "service":"gents", "version":env!("CARGO_PKG_VERSION"),
+        "client_authentication": {"kind":"local"}, "service":"gents", "version":env!("CARGO_PKG_VERSION"),
         "lifecycle":"ready", "node_did":did, "graphql":graphql,
     });
     Mock::given(method("GET"))
         .and(path("/status"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(public.clone()))
+        .respond_with(signed_public(public.clone(), &key_path))
         .with_priority(2)
         .mount(&server)
         .await;
@@ -257,7 +264,7 @@ async fn managed_readiness_after_desktop_enrollment_reads_the_private_status() {
         tool_ceiling: ManagedServerToolCeiling::Readwrite,
         tool_root: Some(root.clone()),
     };
-    let user = user_status_signer(&state, &home)
+    let user = user_status_signer(&state)
         .await
         .expect("the provisioned admin signs the relaunch read");
     assert_eq!(user.did(), admin.did());
@@ -288,4 +295,25 @@ async fn managed_readiness_after_desktop_enrollment_reads_the_private_status() {
     assert_eq!(unauthorized.effective_tool_ceiling, None);
     assert_eq!(unauthorized.effective_tool_root, None);
     assert!(validate_ready_runtime(&unauthorized, &authority, &home).is_err());
+}
+
+fn signed_public(public: serde_json::Value, key_path: &std::path::Path) -> impl wiremock::Respond {
+    let key = gents_store::identity::load_file_identity(key_path).unwrap();
+    move |request: &wiremock::Request| {
+        use identity::FullIdentity as _;
+        let did = public["node_did"].as_str().unwrap_or_default().to_owned();
+        let mut status = gents_store::test_support::local_home_status_now(
+            &did,
+            &|payload| key.sign(payload).unwrap(),
+            request.url.query(),
+        );
+        for (field, value) in public.as_object().into_iter().flatten() {
+            status
+                .as_object_mut()
+                .unwrap()
+                .entry(field.clone())
+                .or_insert_with(|| value.clone());
+        }
+        wiremock::ResponseTemplate::new(200).set_body_json(status)
+    }
 }

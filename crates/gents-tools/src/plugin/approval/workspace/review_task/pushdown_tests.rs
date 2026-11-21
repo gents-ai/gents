@@ -17,6 +17,7 @@ fn document(input: &TaskInput) -> Task {
         goal_token_budget: document
             .goal_token_budget
             .map(|budget| i64::try_from(budget).unwrap()),
+        command: None,
         hooks: document
             .hooks
             .iter()

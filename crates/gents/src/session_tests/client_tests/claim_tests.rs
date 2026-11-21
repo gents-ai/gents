@@ -1,15 +1,15 @@
 use super::*;
-use gents_protocol::request_admission::AgentRequestCreate;
+use gents_protocol::request_admission::{AgentRequestCreate, RequestScope};
 use gents_protocol::row::AgentRequest;
 use gents_session::request::admission::AgentRequestAdmissionVerifier;
 use gents_session::request::lifecycle::{ClaimOutcome, ExecutionOrigin, RequestLifecycle};
-use gents_session::test_support::{grant_operator_user, seed_owned_agent, serve_client_node};
+use gents_session::test_support::{seed_owned_agent, serve_client_node};
 use gents_store::config_client::{ConfigAccess, NodePermission};
+use gents_store::test_support::grant_operator_user;
 
 #[tokio::test]
 async fn watcher_routes_native_private_requests_as_their_selected_agents() {
     use gents_session::request::watcher::{DefraWatcher, Watcher};
-    let snapshot = gents_lean_vocab::lean_contract_snapshot();
     let home = tempfile::tempdir().unwrap();
     let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
     let (db, runtime) = serve_client_node(
@@ -26,7 +26,6 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
         gents_store::identity::resolve_agent_identity(runtime.as_ref(), &first).unwrap();
     let second_signer =
         gents_store::identity::resolve_agent_identity(runtime.as_ref(), &second).unwrap();
-    let admin = ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
     let owner = db.client_access(&user);
     seed_owned_agent(&owner, runtime.did(), &first).await;
     let parent = owner.execute("{ Node { _docID } }").await.unwrap()["data"]["Node"][0]["_docID"]
@@ -132,7 +131,9 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
     .await
     .unwrap();
     assert_eq!(hook.session_id().await.as_deref(), Some("first-session"));
-    for actor in [runtime.did(), second.agent_did.as_str()] {
+    let reader = gents_store::test_support::unrelated_document_reader(&node).await;
+    let reader_did = reader.actor_did().unwrap();
+    for actor in [reader_did.as_str(), second.agent_did.as_str()] {
         assert!(
             gents_toolcalls::call::hook::DefraSessionHook::resume_with_actor_policy(
                 node.clone(),
@@ -147,14 +148,14 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
             "an unrelated actor cannot resume a private session"
         );
     }
-    let root_rows = admin
+    let root_rows = reader
         .execute("{ AgentRequest { request_id } }")
         .await
         .unwrap();
     assert_eq!(
         root_rows["data"]["AgentRequest"],
         serde_json::json!([]),
-        "runtime identity does not inherit private requests"
+        "unrelated reader does not inherit private requests"
     );
     let first_rows = ConfigAccess::local_as(node.clone(), first.agent_did.parse().unwrap())
         .execute("{ AgentRequest { request_id } }")
@@ -180,64 +181,7 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
             request_id
         );
     }
-    let household = gents_lean_vocab::lean_identity_household_cases()
-        .first()
-        .expect("modeled household");
-    let model_user = &household
-        .objects
-        .iter()
-        .find(|object| object.resource == "nodes" && object.id == "home")
-        .expect("modeled Node")
-        .owner;
-    let model_agent = &household
-        .objects
-        .iter()
-        .find(|object| object.resource == "sessions" && object.id == "automated-session")
-        .expect("modeled autonomous session")
-        .owner;
-    let model_sibling = household
-        .relations
-        .iter()
-        .find_map(|relation| {
-            if relation.resource != "agents"
-                || relation.id != "sibling"
-                || relation.relation != "executor"
-            {
-                return None;
-            }
-            match &relation.subject {
-                gents_lean_vocab::LeanIdentitySubject::Actor { actor } => Some(actor),
-                _ => None,
-            }
-        })
-        .expect("modeled sibling executor");
-    let expected_read = |actor: &str| {
-        household
-            .actions
-            .iter()
-            .find_map(|action| match action {
-                gents_lean_vocab::LeanIdentityAction::Check {
-                    actor: checked,
-                    resource,
-                    id,
-                    permission,
-                    expected,
-                } if checked == actor
-                    && resource == "sessions"
-                    && id == "automated-session"
-                    && permission == "read" =>
-                {
-                    Some(*expected)
-                }
-                _ => None,
-            })
-            .expect("modeled autonomous session read")
-    };
-    let reservation = snapshot
-        .goal_client_start_cases
-        .iter()
-        .find(|case| case["name"] == "reserved_session")
-        .expect("modeled autonomous reservation");
+    let mut session_reads: Vec<(&str, bool)> = Vec::new();
     for (binding, signer, other, session_id) in [
         (&first, &first_signer, &second, "first-autonomous-session"),
         (&second, &second_signer, &first, "second-autonomous-session"),
@@ -251,10 +195,12 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
         let mut request = AgentRequestCreate::base(
             RequestPurpose::Normal,
             format!("{session_id}-request"),
-            runtime.did(),
-            &binding.agent_did,
-            &binding.agent_did,
-            session_id,
+            RequestScope::new(
+                runtime.did(),
+                &binding.agent_did,
+                &binding.agent_did,
+                session_id,
+            ),
             "autonomous work",
             "interactive",
             "2026-11-04T00:00:00Z",
@@ -263,48 +209,32 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
         gents_session::request::admission::sign_agent_request_create(signer.as_ref(), &mut request)
             .await
             .unwrap();
-        let doc = reserve_goal_session(&access, &request).await.unwrap();
-        let owners = access
-            .transact_readonly("test.autonomous.session_owner", |txn| {
-                let doc = doc.clone();
-                Box::pin(async move { txn.document_owners("AgentSession", &[doc]).await })
-            })
-            .await
-            .unwrap();
-        assert_eq!(
-            owners[0]
-                .owner
-                .as_ref()
-                .is_some_and(|owner| owner.as_str() == binding.agent_did),
-            reservation["reservation"]["agent_is_owner"]
-                .as_bool()
-                .unwrap(),
-            "{session_id} native owner"
-        );
+        reserve_goal_session(&access, &request).await.unwrap();
         let query = format!(
             r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ session_id }} }}"#,
             gents_store::graphql::escape_graphql_string(session_id),
         );
-        for (observer, modeled_actor) in [
-            (&access, model_agent.as_str()),
-            (&owner, model_user.as_str()),
-        ] {
-            let rows = observer.execute(&query).await.unwrap();
-            let visible = !rows["data"]["AgentSession"].as_array().unwrap().is_empty();
-            assert_eq!(
-                visible,
-                expected_read(modeled_actor),
-                "{session_id} observer {modeled_actor}"
-            );
-        }
         let sibling = ConfigAccess::local_as(node.clone(), other.agent_did.parse().unwrap());
-        let rows = sibling.execute(&query).await.unwrap();
-        let visible = !rows["data"]["AgentSession"].as_array().unwrap().is_empty();
-        assert_eq!(
-            visible,
-            expected_read(model_sibling),
-            "{session_id} sibling observer"
+        for (observer, role) in [(&access, "agent"), (&owner, "user"), (&sibling, "sibling")] {
+            let rows = observer.execute(&query).await.unwrap();
+            session_reads.push((
+                role,
+                !rows["data"]["AgentSession"].as_array().unwrap().is_empty(),
+            ));
+        }
+    }
+    for case in gents_lean_vocab::families::household_automated_session_read::cases() {
+        let reads: Vec<bool> = session_reads
+            .iter()
+            .filter(|(role, _)| *role == case.input.role)
+            .map(|(_, visible)| *visible)
+            .collect();
+        assert!(
+            reads.len() == 2 && reads[0] == reads[1],
+            "both autonomous sessions observe {:?}: {reads:?}",
+            case.input
         );
+        case.check(Some(reads[0]));
     }
     watcher
         .set_agent_identities(vec![first_signer.clone()])
@@ -390,7 +320,9 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
         claim, claim_paused, claim_unavailable, execute_claimed, prepare, read_receipt,
         recover_claim, submit, ClaimPause,
     };
-    use gents_toolcalls::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
+    use gents_toolcalls::call::lifecycle::admission_fixture::{
+        publish_accepted_on_claimed_request, AcceptedFixtureCall,
+    };
 
     let grant_cases = gents_lean_vocab::families::native_refinement_grant_scenario::cases();
     let mut publications = Vec::new();
@@ -418,6 +350,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
         binding.agent_did.as_str(),
     ] {
         for permission in [
+            NodePermission::CollectionGet,
             NodePermission::DocumentRead,
             NodePermission::DocumentUpdate,
             NodePermission::DacRelationAdd,
@@ -434,10 +367,12 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "tool-control-request",
-        runtime.did(),
-        user.did(),
-        &binding.agent_did,
-        "tool-control-session",
+        RequestScope::new(
+            runtime.did(),
+            user.did(),
+            &binding.agent_did,
+            "tool-control-session",
+        ),
         "run",
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -515,12 +450,14 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
         node.clone(),
         &mut lifecycle,
         runtime.did(),
-        0,
-        "bash",
-        "control-call",
-        serde_json::json!({"command":"work"}),
-        AwaitMode::Background,
-        false,
+        AcceptedFixtureCall {
+            turn: 0,
+            tool_name: "bash",
+            tool_call_id: "control-call",
+            arguments: serde_json::json!({"command":"work"}),
+            await_mode: AwaitMode::Background,
+            start_running: false,
+        },
     )
     .await
     .unwrap();
@@ -898,7 +835,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
             execute_claimed(
                 &node,
                 &agent_access,
-                &gents_toolcalls::call::hook::BackgroundExecutionRegistry::default(),
+                &gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry::default(),
                 &agent,
                 failed_claim,
             ),
@@ -969,7 +906,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
         execute_claimed(
             &node,
             &agent_access,
-            &gents_toolcalls::call::hook::BackgroundExecutionRegistry::default(),
+            &gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry::default(),
             &agent,
             recovered
         )
@@ -1037,7 +974,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
         execute_claimed(
             &node,
             &agent_access,
-            &gents_toolcalls::call::hook::BackgroundExecutionRegistry::default(),
+            &gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry::default(),
             &agent,
             retained
         )

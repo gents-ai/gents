@@ -139,8 +139,12 @@ fn pack_directory(dir: &Path, manifest: &PackManifest, out: Option<&Path>) -> Re
         .with_context(|| format!("staging the pack in {}", out_dir.display()))?;
     let header = {
         let mut writer = std::io::BufWriter::new(staged.as_file_mut());
-        let header = crate::pack::archive::write_pack(dir, &mut writer)
-            .with_context(|| format!("packing {}", dir.display()))?;
+        let header = crate::pack::archive::write_built_pack(
+            dir,
+            &mut writer,
+            &crate::pack::core_packs::runtime_release(),
+        )
+        .with_context(|| format!("packing {}", dir.display()))?;
         std::io::Write::flush(&mut writer).context("writing the pack")?;
         header
     };
@@ -455,6 +459,11 @@ mod tests {
         let packed =
             crate::pack::archive::PackArchive::from_bytes(&std::fs::read(&out).unwrap()).unwrap();
         assert_eq!(packed.digest(), report.digest);
+        assert_eq!(
+            packed.manifest().gents_version,
+            Some(crate::pack::core_packs::runtime_release().to_string()),
+            "the build writes its own release into a manifest that declares none"
+        );
         let staging_left: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()
             .filter_map(Result::ok)

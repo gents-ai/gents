@@ -415,7 +415,9 @@ pub(super) async fn validate_live(plan: &Plan) -> Result<()> {
         .with_client_signing_capability(identity.client_signing_capability()?)?;
     let mut status = url;
     status.set_path("/self");
-    let response = authorization.authorize(client.get(status))?.send().await?;
+    let response = authorization
+        .send_resolving(|authorization| authorization.authorize(client.get(status.clone())))
+        .await??;
     anyhow::ensure!(
         response.status().is_success(),
         "runtime operator preflight was refused"
@@ -426,9 +428,8 @@ async fn active_peers(client: &reqwest::Client, endpoint: &GraphqlEndpoint) -> R
     let mut url = reqwest::Url::parse(endpoint.url())?;
     url.set_path("/api/v0/p2p/active-peers");
     let response = endpoint
-        .authorize(client.get(url))?
-        .send()
-        .await?
+        .send_resolving(|endpoint| endpoint.authorize(client.get(url.clone())))
+        .await??
         .error_for_status()?;
     Ok(response.json().await?)
 }

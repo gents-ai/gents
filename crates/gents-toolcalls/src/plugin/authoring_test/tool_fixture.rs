@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use gents_loop::tool::{BoxFuture, ToolDefinition};
 use gents_loop::tool_call_lifecycle::ToolOutcome;
-use gents_loop::tool_effects::{self, ToolEffectDispatcher, ToolEffectError};
+use gents_loop::tool_effects::{ToolEffectDispatcher, ToolEffectError};
 use gents_pack::plugin::{BoundDir, PluginBudget, PluginOutcome, PluginRunner};
 use serde::Deserialize;
 use serde_json::Value;
@@ -39,13 +39,9 @@ impl ToolFixture {
             "tools fixtures require host_call"
         );
         let fixture = Arc::new(self);
-        let tools = tool_effects::scope(Some(fixture.clone()), async {
-            super::super::tool_calls::Session::for_call(
-                true,
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
-            )
-        })
-        .await;
+        let parent = gents_loop::tool::ToolCallEnvelope::default()
+            .with_effects(Some(fixture.clone() as Arc<dyn ToolEffectDispatcher>));
+        let tools = super::super::tool_calls::Session::for_call(true, &parent);
         let outcome =
             super::super::host_calls::run(runner, bound, input, budget, budget.wall_clock, tools)
                 .await?;

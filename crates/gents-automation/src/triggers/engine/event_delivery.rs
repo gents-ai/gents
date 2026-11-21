@@ -638,7 +638,6 @@ mod tests {
             max_fires_per_hour: gents_documents::DEFAULT_MAX_FIRES_PER_HOUR,
             trigger_doc_id: "physical".into(),
             trigger_id: binding.binding_id.clone(),
-            task_id: "task".into(),
             task: gents_documents::automation::ResolvedTask {
                 emit_outcome: false,
                 task_id: "task".into(),
@@ -649,11 +648,11 @@ mod tests {
                 goal_token_budget: None,
                 output_schema_ref: None,
                 hooks: Default::default(),
+                command: None,
             },
             source_collection: source.source_collection.clone(),
             event_kind: "created".into(),
             filter: None,
-            enabled: true,
             concurrency: gents_documents::ConcurrencyMode::Parallel,
             fire_mode: gents_documents::automation::EventTriggerFireMode::PerGroup,
             correlation_field: source.correlation_field.clone(),
@@ -748,7 +747,10 @@ mod tests {
         .await
         .unwrap();
         owner_access
-            .add_collection(gents_protocol::schemas::AGENT)
+            .add_collection(
+                &gents_protocol::schemas::HomePolicyIds::shared()
+                    .render(gents_protocol::schemas::AGENT),
+            )
             .await
             .unwrap();
         for (owner, identity, nonce) in [
@@ -767,9 +769,12 @@ mod tests {
                 .await
                 .unwrap();
         }
-        node.add_collection(gents_protocol::schemas::EVENT_GROUP_STATE)
-            .await
-            .unwrap();
+        node.add_collection(
+            &gents_protocol::schemas::HomePolicyIds::shared()
+                .render(gents_protocol::schemas::EVENT_GROUP_STATE),
+        )
+        .await
+        .unwrap();
         node.add_collection("type GroupMember { batch:String expected:Int value:String }")
             .await
             .unwrap();

@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use super::single_flight::{start_inflight_is_pending, wait_for_start_inflight};
 use super::ClientLifecycleGuard;
-use crate::error::BridgeError;
 use crate::state::DesktopAppState;
+use gents_store::client_error::BridgeError;
 
 pub(in crate::tauri_commands) async fn exclude_client(
     state: &DesktopAppState,

@@ -1,4 +1,7 @@
 use super::*;
+use gents_store::test_support::{
+    fixture_agent, fixture_agent_access, fixture_agent_did, FIXTURE_AGENT_NONCE,
+};
 
 #[tokio::test]
 async fn event_source_reads_seed_and_group_as_selected_agent() {
@@ -11,7 +14,7 @@ async fn event_source_reads_seed_and_group_as_selected_agent() {
         .write("test.event_selection_probe", r#"mutation { create_SelectionProbe(input: {kind: "ready", message: "hello"}) { _docID } }"#)
         .await;
     let id = gents_store::graphql::created_doc_id(&response.unwrap(), "SelectionProbe").unwrap();
-    let agent_did = &crate::triggers::callback::test_agent_did();
+    let agent_did = &fixture_agent_did(FIXTURE_AGENT_NONCE);
     let task = ResolvedTask {
         agent_did: agent_did.to_owned(),
         ..resolved_task("handle")
@@ -102,9 +105,7 @@ async fn startup_seeding_covers_every_document_beyond_the_former_cap() {
     node.shutdown().await.expect("node shutdown");
 }
 
-use events::{
-    Bus, ChannelBus, DocumentChangeSubscription, EventName, Message, Subscription, Update,
-};
+use events::{Bus, ChannelBus, EventName, Message, Subscription, Update};
 
 #[derive(Clone)]
 struct FakeUpdateSubscriptionSource(Arc<ChannelBus>);
@@ -136,11 +137,11 @@ impl gents_store::subscription_source::UpdateSubscriptionSource for FakeUpdateSu
         self.0.subscribe(&[EventName::Update])
     }
 
-    fn subscribe_collection_changes(
+    fn subscribe_changes(
         &self,
         collection_ids: Vec<String>,
-    ) -> DocumentChangeSubscription {
-        self.0.subscribe_collection_changes(collection_ids)
+    ) -> gents_store::subscription_source::ChangeSubscription {
+        self.0.subscribe_collection_changes(collection_ids).into()
     }
 }
 
@@ -225,7 +226,7 @@ async fn an_event_source_on_a_branchable_runtime_collection_delivers_the_documen
     source.reconcile_subscriptions(snapshot.as_ref()).await;
 
     // Receipts are written by the Agent whose workspace produced them.
-    let response = crate::triggers::callback::test_agent_access(&node)
+    let response = fixture_agent_access(&node, FIXTURE_AGENT_NONCE)
         .write(
             "test.workspace_receipt",
             r#"mutation { add_WorkspaceReceipt(input: {
@@ -433,12 +434,10 @@ fn resolved_event_trigger(
         max_fires_per_hour: gents_documents::DEFAULT_MAX_FIRES_PER_HOUR,
         trigger_doc_id: format!("{trigger_id}-doc"),
         trigger_id: trigger_id.to_string(),
-        task_id: task.task_id.clone(),
         task,
         source_collection: source_collection.to_string(),
         event_kind: "created".to_string(),
         filter: None,
-        enabled: true,
         concurrency: ConcurrencyMode::Serial,
         fire_mode: gents_documents::automation::EventTriggerFireMode::PerDocument,
         correlation_field: None,
@@ -465,12 +464,10 @@ fn resolved_event_trigger_with_filter(
         max_fires_per_hour: gents_documents::DEFAULT_MAX_FIRES_PER_HOUR,
         trigger_doc_id: format!("{trigger_id}-doc"),
         trigger_id: trigger_id.to_string(),
-        task_id: task.task_id.clone(),
         task,
         source_collection: source_collection.to_string(),
         event_kind: "created".to_string(),
         filter: Some(filter.to_string()),
-        enabled: true,
         concurrency: ConcurrencyMode::Serial,
         fire_mode: gents_documents::automation::EventTriggerFireMode::PerDocument,
         correlation_field: None,
@@ -486,10 +483,10 @@ async fn hydrate_event_config_ids(
     node: &Arc<defra_node::Node>,
     trigger: &mut ResolvedEventTrigger,
 ) {
-    let response = crate::triggers::callback::test_agent_access(node).execute(&format!(
+    let response = fixture_agent_access(node, FIXTURE_AGENT_NONCE).execute(&format!(
         "{{Trigger(filter:{{trigger_id:{{_eq:\"{}\"}}}}){{_docID}} EventSource(filter:{{event_source_id:{{_eq:\"{}\"}}}}){{_docID}} Task(filter:{{task_id:{{_eq:\"{}\"}}}}){{_docID}}}}",
         escape_graphql_string(&trigger.trigger_id), escape_graphql_string(&trigger.event_source_id),
-        escape_graphql_string(&trigger.task_id))).await.unwrap();
+        escape_graphql_string(&trigger.task.task_id))).await.unwrap();
     trigger.trigger_doc_id = response["data"]["Trigger"][0]["_docID"]
         .as_str()
         .unwrap()
@@ -543,7 +540,7 @@ fn snapshot_with_event_triggers(
 /// seeds cursors through this Agent's signer, which must belong to that node.
 fn configured_event_agent(node_did: &str) -> Arc<ResolvedAgent> {
     let mut agent = event_test_behavior().as_ref().clone();
-    agent.agent_identity = crate::triggers::callback::test_agent_identity();
+    agent.agent_identity = fixture_agent(FIXTURE_AGENT_NONCE);
     agent.agent_did = agent.agent_identity.did().to_owned();
     agent.node = Arc::new(RuntimeNode {
         node_did: node_did.to_owned(),
@@ -603,7 +600,7 @@ async fn configured_event_snapshot(
             vec![
                 (
                     gents_store::collection::Collection::Task,
-                    serde_json::json!({"task_id": trigger.task_id,
+                    serde_json::json!({"task_id": trigger.task.task_id,
                         "agent_did": trigger.task.agent_did,
                         "prompt_template": trigger.task.prompt_template,
                         "emit_outcome": trigger.task.emit_outcome}),
@@ -620,8 +617,8 @@ async fn configured_event_snapshot(
                 (
                     gents_store::collection::Collection::Trigger,
                     serde_json::json!({"trigger_id": trigger.trigger_id,
-                        "task_id": trigger.task_id,
-                        "enabled": trigger.enabled,
+                        "task_id": trigger.task.task_id,
+                        "enabled": true,
                         "concurrency": trigger.concurrency,
                         "source": {"kind": "event", "event_source_id": trigger.event_source_id}}),
                 ),
@@ -708,8 +705,8 @@ async fn admit_selected_event(
     intent: &FireIntent,
     owner: &str,
 ) -> FireResult {
-    let agent = crate::triggers::callback::test_agent_identity();
-    let access = crate::triggers::callback::test_agent_access(node);
+    let agent = fixture_agent(FIXTURE_AGENT_NONCE);
+    let access = fixture_agent_access(node, FIXTURE_AGENT_NONCE);
     let identity = gents_protocol::trigger_delivery::FireIdentity {
         owner_did: owner.into(),
         trigger_id: intent.trigger_id.clone().unwrap(),
@@ -750,24 +747,26 @@ async fn admit_selected_event(
         .unwrap();
     let trigger_doc = response["data"]["Trigger"][0]["_docID"].as_str().unwrap();
     let spec = gents_session::request::lifecycle::materialize::pending_agent_request_spec(
-        owner,
-        agent.did(),
-        &intent.task.prompt_template,
-        gents_session::request::lifecycle::ExecutionOrigin::Scheduled,
-        gents_session::request::lifecycle::TriggerLineage {
-            trigger_id: intent.trigger_id.clone(),
-            trigger_kind: Some("event".into()),
-            source_doc_id: Some(fire.identity.source_doc_id.clone()),
-            correlation: intent.correlation.clone(),
-            trigger_context: None,
+        gents_session::request::lifecycle::materialize::PendingAgentRequest {
+            node_did: owner,
+            agent_did: agent.did(),
+            content: &intent.task.prompt_template,
+            execution_origin: gents_session::request::lifecycle::ExecutionOrigin::Scheduled,
+            trigger_lineage: gents_session::request::lifecycle::TriggerLineage {
+                trigger_id: intent.trigger_id.clone(),
+                trigger_kind: Some("event".into()),
+                source_doc_id: Some(fire.identity.source_doc_id.clone()),
+                correlation: intent.correlation.clone(),
+                trigger_context: None,
+            },
+            conversation_title: None,
+            workspace_lineage: None,
+            requester_did: None,
+            trigger_doc_id: Some(trigger_doc),
         },
-        None,
-        None,
         &fire.request_id,
         &fire.session_id,
         Some(&fire.fire_key),
-        None,
-        Some(trigger_doc),
     )
     .unwrap();
     let create = gents_session::request::lifecycle::build_signed_request(
@@ -854,7 +853,7 @@ async fn event_source_next_fire_emits_intent_on_matching_real_event() {
             payload: String
         }
     "#;
-    node.add_collection(webhook_sdl)
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(webhook_sdl))
         .await
         .expect("add_collection for WebhookEvent");
     let task = ResolvedTask {
@@ -946,7 +945,7 @@ async fn a_callback_result_fires_its_bindings_event_source_once() {
     let task = ResolvedTask {
         emit_outcome: false,
         task_id: "task-after-callback".to_string(),
-        agent_did: crate::triggers::callback::test_agent_did(),
+        agent_did: fixture_agent_did(FIXTURE_AGENT_NONCE),
         ..resolved_task("continue after the callback")
     };
     let mut trigger = resolved_event_trigger_with_filter(
@@ -957,7 +956,7 @@ async fn a_callback_result_fires_its_bindings_event_source_once() {
     );
     crate::triggers::callback::seed_test_configuration(&node, &owner, vec![
         (gents_store::collection::Collection::Task, serde_json::json!({"task_id":"task-after-callback",
-            "agent_did":crate::triggers::callback::test_agent_did(), "prompt_template":"continue after the callback"})),
+            "agent_did":fixture_agent_did(FIXTURE_AGENT_NONCE), "prompt_template":"continue after the callback"})),
         (gents_store::collection::Collection::EventSource, serde_json::json!({"event_source_id":"trigger-after-callback",
             "source_collection":"CallbackResult", "event_kind":"created",
             "filter":"{ binding_id: { _eq: \"maintenance-execute-workspace\" } }"})),
@@ -967,7 +966,7 @@ async fn a_callback_result_fires_its_bindings_event_source_once() {
     ]).await;
     hydrate_event_config_ids(&node, &mut trigger).await;
     let mut behavior = event_test_behavior().as_ref().clone();
-    behavior.agent_identity = crate::triggers::callback::test_agent_identity();
+    behavior.agent_identity = fixture_agent(FIXTURE_AGENT_NONCE);
     behavior.agent_did = behavior.agent_identity.did().to_owned();
     behavior.node = Arc::new(gents_store::identity::RuntimeNode {
         node_did: owner.clone(),
@@ -1005,12 +1004,12 @@ async fn a_callback_result_fires_its_bindings_event_source_once() {
         ] {
             crate::triggers::callback::create_callback_result(
                 &node_for_write,
-                &crate::triggers::callback::test_agent_access(&node_for_write),
+                &fixture_agent_access(&node_for_write, FIXTURE_AGENT_NONCE),
                 &crate::triggers::callback::CallbackResultDoc {
                     result_id: format!("res-{invocation_id}"),
                     invocation_id: invocation_id.to_string(),
                     binding_id: Some(binding_id.to_string()),
-                    agent_did: crate::triggers::callback::test_agent_did(),
+                    agent_did: fixture_agent_did(FIXTURE_AGENT_NONCE),
                     owner_node_did: owner_for_write.clone(),
                     workspace_id: None,
                     work_unit_id: None,
@@ -1176,7 +1175,7 @@ async fn per_group_timeout_uses_durable_first_seen_clock() {
     let agent_did = configured_event_agent(node_db.node_identity.did())
         .agent_did
         .clone();
-    crate::triggers::callback::test_agent_access(&node)
+    fixture_agent_access(&node, FIXTURE_AGENT_NONCE)
         .transact_write("test.durable_group_clock", |txn| {
             let (owner, state, agent_did) = (&owner, &state, &agent_did);
             Box::pin(async move {
@@ -1272,10 +1271,11 @@ async fn correlation_populated_after_create_remains_eligible_for_delivery() {
         crate::triggers::engine::deferred_delivery::DeferralWatch::new(Duration::ZERO);
 
     source.reconcile_subscriptions(snapshot.as_ref()).await;
+    // A completed pass, not a wall-clock window, establishes that the source
+    // observed the row: a timeout can cancel `next_fire` before its first
+    // durable pass reaches the arrival.
     assert!(
-        tokio::time::timeout(Duration::from_millis(500), source.next_fire())
-            .await
-            .is_err(),
+        source.conformance_rescan().await.is_none(),
         "a row without its correlation value must not fire"
     );
     assert_eq!(source.deferrals.stuck(), 1);
@@ -1693,7 +1693,7 @@ async fn event_source_filter_probe_gates_fire_on_operator_filter() {
             email: String
         }
     "#;
-    node.add_collection(webhook_sdl)
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(webhook_sdl))
         .await
         .expect("add_collection for WebhookEvent");
 
@@ -1792,7 +1792,7 @@ async fn event_source_hydrates_doc_vars_from_source_doc_fields() {
             email: String
         }
     "#;
-    node.add_collection(webhook_sdl)
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(webhook_sdl))
         .await
         .expect("add_collection for WebhookEvent");
 
@@ -1968,7 +1968,7 @@ async fn event_source_on_result_writes_runtime_fields_on_fired() {
             payload: String
         }
     "#;
-    node.add_collection(webhook_sdl)
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(webhook_sdl))
         .await
         .expect("add_collection for WebhookEvent");
 
@@ -2066,7 +2066,7 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
             payload: String
         }
     "#;
-    node.add_collection(webhook_sdl)
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(webhook_sdl))
         .await
         .expect("add_collection for WebhookEvent");
 
@@ -2212,7 +2212,7 @@ async fn event_source_fans_out_one_event_across_multiple_matching_triggers() {
             payload: String
         }
     "#;
-    node.add_collection(webhook_sdl)
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(webhook_sdl))
         .await
         .expect("add_collection for WebhookEvent");
     let task = resolved_task("ignored");
@@ -2282,7 +2282,7 @@ async fn event_source_tries_all_triggers_when_first_filter_misses() {
             kind: String @index
         }
     "#;
-    node.add_collection(webhook_sdl)
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(webhook_sdl))
         .await
         .expect("add_collection for WebhookEvent");
     let task = resolved_task("ignored");
@@ -2472,7 +2472,7 @@ async fn generated_event_source_convergence_reaches_fixed_point() {
         for action in &case.input.actions {
             match action.kind.as_str() {
                 "persist" => {
-                    let result = crate::triggers::callback::test_agent_access(&node)
+                    let result = fixture_agent_access(&node, FIXTURE_AGENT_NONCE)
                         .write("test.convergence.persist", &format!(
                             "mutation {{ create_ConvergenceDocument(input: {{ external_id: \"{}\" }}) {{ _docID }} }}",
                             escape_graphql_string(&action.document))).await.unwrap();
@@ -2521,7 +2521,7 @@ async fn generated_event_source_convergence_reaches_fixed_point() {
                         .find(|(_, name)| *name == &action.document)
                         .map(|(id, _)| id.clone())
                         .unwrap();
-                    crate::triggers::callback::test_agent_access(&node)
+                    fixture_agent_access(&node, FIXTURE_AGENT_NONCE)
                         .write("test.convergence.update", &format!(
                             "mutation {{ update_ConvergenceDocument(docID: \"{}\", input: {{ payload: \"updated\" }}) {{ _docID }} }}",
                             escape_graphql_string(&id))).await.unwrap();

@@ -18,7 +18,7 @@ struct Cursor {
 /// Pages follow the live runtime projection. Rows that move ahead of a saved
 /// cursor are visible after refreshing the history list.
 pub async fn session_history(
-    core: &gents_desktop_core::client::ClientCore,
+    core: &crate::client_runtime::ClientRuntime,
     request: SessionHistoryRequest,
 ) -> Result<SessionHistoryPage> {
     let snapshot = crate::snapshot::build_runtime_snapshot(core).await;

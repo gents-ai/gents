@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 
-use super::{push_metric_prelude, push_metric_sample};
+use super::exposition::{push_metric_prelude, push_metric_sample};
 
 /// A store walk touches every file, and stores with leaked compaction output
 /// hold hundreds of thousands of them; refresh at most this often.
@@ -77,10 +77,7 @@ fn platform_process_memory() -> ProcessMemory {
 }
 
 /// Reads the `kB` fields of Linux `/proc/<pid>/status`.
-#[cfg_attr(
-    not(any(target_os = "linux", test)),
-    expect(dead_code, reason = "only Linux exposes /proc/self/status")
-)]
+#[cfg(any(target_os = "linux", test))]
 fn parse_proc_status(status: &str) -> ProcessMemory {
     let mut memory = ProcessMemory::default();
     for line in status.lines() {

@@ -5,6 +5,8 @@ use defra_node::Node as EmbeddedNode;
 use gents_protocol::network_token::EndpointRecord;
 use tokio_util::sync::CancellationToken;
 
+use super::intervals::P2pIntervals;
+
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
 
@@ -146,21 +148,32 @@ pub async fn run_endpoint_heartbeat(
     node: Arc<EmbeddedNode>,
     identity: Arc<dyn NodeIdentity>,
     graphql_url: Option<String>,
+    intervals: P2pIntervals,
     cancel: CancellationToken,
 ) -> Result<()> {
     if let Some(url) = &graphql_url {
         validate_advertised_graphql_url(url)?;
     }
-    endpoint_heartbeat(node, identity, graphql_url, cancel).await
+    endpoint_heartbeat(node, identity, graphql_url, intervals, cancel).await
 }
 
 async fn endpoint_heartbeat(
     node: Arc<EmbeddedNode>,
     identity: Arc<dyn NodeIdentity>,
     graphql_url: Option<String>,
+    intervals: P2pIntervals,
     cancel: CancellationToken,
 ) -> Result<()> {
-    let Some(p2p) = gents_store::identity::node_p2p(&node) else {
+    if crate::peer_publication::idles(
+        &node,
+        gents_store::local::document_acp::Periodic::EndpointHeartbeat,
+        &cancel,
+    )
+    .await
+    {
+        return Ok(());
+    }
+    let Some(p2p) = crate::node_access::operations(&node) else {
         tracing::debug!(
             "PeerRegistry endpoint heartbeat idle because embedded node has no P2P transport"
         );
@@ -168,7 +181,7 @@ async fn endpoint_heartbeat(
         return Ok(());
     };
 
-    let mut interval = tokio::time::interval(super::intervals::endpoint_interval());
+    let mut interval = tokio::time::interval(intervals.endpoint_heartbeat);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut published = None;
 
@@ -465,7 +478,7 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(resolved.url(), record.graphql_url.as_deref().unwrap());
-            assert!(resolved.authorization().unwrap().is_some());
+            assert!(resolved.runtime_authorization().await.unwrap().is_some());
             let did_only =
                 gents_store::identity::RegisteredIdentity::from_registered_did(caller.did(), None)
                     .unwrap();
@@ -486,7 +499,11 @@ mod tests {
                     .as_deref(),
                 Some(agent.did())
             );
-            assert!(resolved_agent.authorization().unwrap().is_some());
+            assert!(resolved_agent
+                .runtime_authorization()
+                .await
+                .unwrap()
+                .is_some());
             assert_eq!(
                 ConfigAccess::Graphql(resolved).actor_did().as_deref(),
                 Some(caller.did())

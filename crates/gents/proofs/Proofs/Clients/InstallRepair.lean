@@ -820,10 +820,10 @@ theorem a_set_up_home_never_gets_a_new_identity (o : ClientIdentityObservation)
   unfold clientIdentityAction
   split <;> simp_all
 
-/-- How a command chose its home: `--home`, `GENTS_HOME`, the folder remembered at setup, or
-`~/.gents` when nothing is remembered. -/
+/-- How a command chose its home: `--home`, the folder remembered at setup, or `~/.gents` when
+nothing is remembered. -/
 inductive HomeSelection where
-  | flag | env | remembered | fallback
+  | flag | remembered | fallback
   deriving Repr, DecidableEq, Lean.ToJson
 
 structure HomeSetup where
@@ -846,10 +846,9 @@ structure ClientCommand where
 def commandIdentityAction (c : ClientCommand) : ClientIdentityAction :=
   clientIdentityAction ⟨c.keyPresent, c.selected.settingsPresent, c.selected.pending⟩
 
-/-- Only a command whose home comes from neither `--home` nor `GENTS_HOME` reads the remembered
-file. -/
+/-- Only a command whose home does not come from `--home` reads the remembered file. -/
 def readsRememberedFile : HomeSelection → Bool
-  | .flag | .env => false
+  | .flag => false
   | .remembered | .fallback => true
 
 theorem a_command_never_consults_another_home (c : ClientCommand) (other : HomeSetup) :

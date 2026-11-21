@@ -46,36 +46,47 @@ fn provider_account_key(kind: OAuthRefreshKind, credential: &OAuthCredential) ->
     }
 }
 
-/// Live bearers by credential id. Entries are weak: a bearer holds its node, so
-/// a strong entry would keep every node that ever bootstrapped OAuth alive for
-/// the rest of the process.
-pub(super) fn bearer_registry(
-) -> &'static std::sync::Mutex<rapidhash::RapidHashMap<String, std::sync::Weak<DbCredentialBearer>>>
-{
-    static REGISTRY: std::sync::OnceLock<
-        std::sync::Mutex<rapidhash::RapidHashMap<String, std::sync::Weak<DbCredentialBearer>>>,
-    > = std::sync::OnceLock::new();
-    REGISTRY.get_or_init(|| std::sync::Mutex::new(rapidhash::RapidHashMap::default()))
+/// A node's live bearers by credential id, attached to the node
+/// (`node_extension`). Entries are weak: a bearer holds its node, so a strong
+/// entry would keep the node alive through its own extension.
+#[derive(Default)]
+pub(super) struct LiveBearers(
+    std::sync::Mutex<rapidhash::RapidHashMap<String, std::sync::Weak<DbCredentialBearer>>>,
+);
+
+impl LiveBearers {
+    pub(super) fn of(node: &Arc<EmbeddedNode>) -> Arc<Self> {
+        gents_store::node_extension::attached_or_default::<Self>(node)
+    }
+
+    #[cfg(test)]
+    pub(super) fn live(&self, credential_id: &str) -> Option<Arc<DbCredentialBearer>> {
+        self.0
+            .lock()
+            .expect("bearer registry mutex poisoned")
+            .get(credential_id)
+            .and_then(std::sync::Weak::upgrade)
+    }
 }
 
-/// The live bearer for this credential on this node, or a new one. A credential
-/// id is shared only with the node that holds it, so the same id on another node
-/// never reuses a bearer bound to a different node.
+/// The live bearer for this credential on this node, or a new one. Every
+/// in-process user of the node's credential (agent clients, usage polls,
+/// health probes, model discovery) receives the same bearer, so they share
+/// its one refresh and never spend a single-use refresh token twice: the
+/// node holds one registry, and its lock is held from the lookup to the
+/// insertion. The same id on another node never reuses this node's bearer.
 pub fn shared_bearer(
     node: &Arc<EmbeddedNode>,
     credential_id: &str,
     make: impl FnOnce() -> DbCredentialBearer,
 ) -> Arc<DbCredentialBearer> {
-    let mut registry = bearer_registry()
-        .lock()
-        .expect("bearer registry mutex poisoned");
+    let bearers = LiveBearers::of(node);
+    let mut registry = bearers.0.lock().expect("bearer registry mutex poisoned");
     if let Some(bearer) = registry
         .get(credential_id)
         .and_then(std::sync::Weak::upgrade)
     {
-        if Arc::ptr_eq(&bearer.node, node) {
-            return bearer;
-        }
+        return bearer;
     }
     registry.retain(|_, bearer| bearer.strong_count() > 0);
     let bearer = Arc::new(make());
@@ -122,6 +133,8 @@ pub struct DbCredentialBearer {
     force_refresh: AtomicBool,
     refresh_kind: OAuthRefreshKind,
     product: OAuthProduct,
+    #[cfg(test)]
+    token_url: Option<String>,
 }
 
 impl DbCredentialBearer {
@@ -134,29 +147,6 @@ impl DbCredentialBearer {
         refresh_kind: OAuthRefreshKind,
         product: OAuthProduct,
     ) -> Self {
-        Self::with_cache(
-            node,
-            node_did,
-            provider,
-            credential_id,
-            is_owner,
-            None,
-            refresh_kind,
-            product,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn with_cache(
-        node: Arc<EmbeddedNode>,
-        node_did: impl Into<String>,
-        provider: impl Into<String>,
-        credential_id: impl Into<String>,
-        is_owner: bool,
-        cache_seed: Option<OAuthCredential>,
-        refresh_kind: OAuthRefreshKind,
-        product: OAuthProduct,
-    ) -> Self {
         Self {
             node,
             node_did: node_did.into(),
@@ -166,13 +156,41 @@ impl DbCredentialBearer {
                 .timeout(REFRESH_REQUEST_TIMEOUT)
                 .build()
                 .expect("reqwest client with a timeout builds like Client::new()"),
-            cache: Mutex::new(cache_seed),
+            cache: Mutex::new(None),
             refresh_lock: Mutex::new(None),
             is_owner,
             force_refresh: AtomicBool::new(false),
             refresh_kind,
             product,
+            #[cfg(test)]
+            token_url: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_cache_seed(mut self, seed: OAuthCredential) -> Self {
+        self.cache = Mutex::new(Some(seed));
+        self
+    }
+
+    /// Refreshes against `url` instead of the provider's token endpoint.
+    #[cfg(test)]
+    pub(crate) fn with_token_url(mut self, url: impl Into<String>) -> Self {
+        self.token_url = Some(url.into());
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn token_url(&self) -> Option<&str> {
+        self.token_url.as_deref()
+    }
+
+    fn refresh_endpoint(&self, provider_endpoint: impl FnOnce() -> String) -> String {
+        #[cfg(test)]
+        if let Some(url) = &self.token_url {
+            return url.clone();
+        }
+        provider_endpoint()
     }
 
     async fn load_credential(&self) -> std::result::Result<OAuthCredential, OAuthCredentialError> {
@@ -305,13 +323,32 @@ impl DbCredentialBearer {
         let refresh_token = credential.refresh_token.as_str();
         match self.refresh_kind {
             OAuthRefreshKind::ChatGpt => {
-                crate::auth::chatgpt_refresh::refresh_chatgpt_token(refresh_token, &self.http).await
+                let endpoint = self.refresh_endpoint(|| {
+                    gents_protocol::chatgpt_oauth::token_endpoint(
+                        gents_protocol::chatgpt_oauth::DEFAULT_ISSUER,
+                    )
+                });
+                crate::auth::chatgpt_refresh::refresh_chatgpt_token(
+                    &endpoint,
+                    refresh_token,
+                    &self.http,
+                )
+                .await
             }
             OAuthRefreshKind::Claude => {
-                crate::auth::claude_refresh::refresh_claude_token(refresh_token, &self.http).await
+                let endpoint = self.refresh_endpoint(|| gents_claude::oauth::TOKEN_URL.to_string());
+                crate::auth::claude_refresh::refresh_claude_token(
+                    &endpoint,
+                    refresh_token,
+                    &self.http,
+                )
+                .await
             }
             OAuthRefreshKind::Xai => {
-                crate::auth::xai_refresh::refresh_xai_token(refresh_token, &self.http).await
+                let endpoint =
+                    self.refresh_endpoint(|| crate::auth::xai_refresh::TOKEN_URL.to_string());
+                crate::auth::xai_refresh::refresh_xai_token(&endpoint, refresh_token, &self.http)
+                    .await
             }
             OAuthRefreshKind::Gateway => {
                 crate::claude_gateway_login::refresh_gateway_token(
@@ -479,10 +516,20 @@ mod native_access_tests {
             0,
         )
         .await?;
-        node.add_collection(gents_protocol::schemas::NODE).await?;
-        node.add_collection(gents_protocol::schemas::AGENT).await?;
-        node.add_collection(gents_protocol::schemas::OAUTH_CREDENTIAL)
-            .await?;
+        node.add_collection(
+            &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::NODE),
+        )
+        .await?;
+        node.add_collection(
+            &gents_protocol::schemas::HomePolicyIds::shared()
+                .render(gents_protocol::schemas::AGENT),
+        )
+        .await?;
+        node.add_collection(
+            &gents_protocol::schemas::HomePolicyIds::shared()
+                .render(gents_protocol::schemas::OAUTH_CREDENTIAL),
+        )
+        .await?;
         let access = |actor: &gents_store::identity::KeyIdentity| -> anyhow::Result<ConfigAccess> {
             Ok(ConfigAccess::Graphql(
                 GraphqlEndpoint::as_principal(

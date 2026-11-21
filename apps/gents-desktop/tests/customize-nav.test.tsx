@@ -63,10 +63,11 @@ describe("arranging the nav", () => {
     expect(ids({ order: [], shown: {} })).toEqual([
       "new-session",
       "mailbox",
+      "packs",
       "sessions",
     ]);
     expect(ids({ order: [], shown: { "config:tasks": true, mailbox: false } })).toEqual(
-      ["new-session", "sessions", "config:tasks"],
+      ["new-session", "packs", "sessions", "config:tasks"],
     );
   });
 
@@ -75,6 +76,7 @@ describe("arranging the nav", () => {
       "sessions",
       "new-session",
       "mailbox",
+      "packs",
     ]);
   });
 
@@ -139,7 +141,7 @@ function panel(sessions: SessionSummary[] = []) {
 }
 
 /* the nav's top items, in the order drawn */
-const TOP = ["New session", "Mailbox", "Sessions", "Tasks"];
+const TOP = ["New session", "Mailbox", "Packs", "Sessions", "Tasks"];
 const labels = () =>
   screen
     .getAllByRole("link", { hidden: true })
@@ -177,7 +179,7 @@ describe("customizing the nav", () => {
 
   it("draws the default items until the person customizes them", () => {
     panel();
-    expect(labels()).toEqual(["New session", "Mailbox", "Sessions"]);
+    expect(labels()).toEqual(["New session", "Mailbox", "Packs", "Sessions"]);
   });
 
   it("reorders, removes and adds items from the sheet, and restores the defaults", async () => {
@@ -194,14 +196,16 @@ describe("customizing the nav", () => {
     (await screen.findByRole("menuitem", { name: "Configuration" })).focus();
     await userEvent.setup({ pointerEventsCheck: 0 }).keyboard("{ArrowRight}");
     fireEvent.click(await screen.findByRole("menuitem", { name: "Tasks" }));
-    fireEvent.keyDown(sheet.getByRole("button", { name: "Move Sessions" }), {
-      key: "ArrowUp",
-    });
-    expect(labels()).toEqual(["Sessions", "New session", "Tasks"]);
+    /* past Packs, then past New session */
+    for (const _ of [1, 2])
+      fireEvent.keyDown(sheet.getByRole("button", { name: "Move Sessions" }), {
+        key: "ArrowUp",
+      });
+    expect(labels()).toEqual(["Sessions", "New session", "Packs", "Tasks"]);
     expect(sheet.queryByRole("button", { name: "Move Mailbox" })).toBeNull();
 
     fireEvent.click(sheet.getByRole("button", { name: "Restore defaults" }));
-    expect(labels()).toEqual(["New session", "Mailbox", "Sessions"]);
+    expect(labels()).toEqual(["New session", "Mailbox", "Packs", "Sessions"]);
     expect(sheet.getByRole("button", { name: "Restore defaults" })).toBeDisabled();
   });
 
@@ -551,7 +555,7 @@ describe("the expanded nav's Nodes section", () => {
   const amy = () =>
     node({
       nodeDid: "did:key:amy",
-      source: "peer",
+      local: false,
       node: { ...deployment.node, nodeDid: "did:key:amy", displayName: "Amy" },
     });
   const show = (deployments: ReturnType<typeof node>[]) =>

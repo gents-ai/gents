@@ -5,7 +5,7 @@ type Cost = {
   rects: number;
   rowRects: number;
   measuredRows: number;
-  writes: number;
+  writes: { target: number; top: number }[];
   /* rows drawn, and rows the transcript holds */
   rows: number;
   loaded: number;
@@ -21,7 +21,7 @@ function scroller(page: Page) {
 async function cost(
   page: Page,
   viewport: Locator,
-  act: "scroll" | "chunk" | "jump",
+  act: "scroll" | "chunk" | "unseen-chunk" | "jump",
 ): Promise<Cost> {
   await page.evaluate(() => window.__GENTS_MOBILE_PERFORMANCE__!.holdOlderPages());
   await page.clock.pauseAt(await page.evaluate(() => Date.now() + 60_000));
@@ -33,16 +33,29 @@ async function cost(
       const point = document.elementFromPoint;
       if (act === "scroll") document.elementFromPoint = () => null;
       const position = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
+      const harness = window.__GENTS_MOBILE_PERFORMANCE__!;
+      const recordCommit = harness.recordCommit;
+      const text =
+        "\n\nMore of the reply, long enough to wrap onto a second line in the column.";
       let rects = 0;
       let rowRects = 0;
       const measuredRows = new Set<Element>();
-      let writes = 0;
+      const writes: { target: number; top: number }[] = [];
       let scrolls = 0;
       const onScroll = () => {
         scrolls += 1;
       };
       scroller.addEventListener("scroll", onScroll);
       const height = scroller.scrollHeight;
+      let phase: "streamed" | "committed" | "acted" | undefined;
+      const publish = (next = phase) => {
+        phase = next;
+        scroller.dataset.measuringCost = JSON.stringify({
+          phase,
+          start: height,
+          writes,
+        });
+      };
       Element.prototype.getBoundingClientRect = function (this: Element) {
         rects += 1;
         if (this.matches("[data-row-key]")) {
@@ -55,12 +68,13 @@ async function cost(
         configurable: true,
         get: () => position.get!.call(scroller),
         set: (value: number) => {
-          writes += 1;
           position.set!.call(scroller, value);
+          writes.push({ target: value, top: position.get!.call(scroller) as number });
+          publish();
         },
       });
       try {
-        if (act !== "chunk") {
+        if (act === "scroll" || act === "jump") {
           const before = position.get!.call(scroller) as number;
           const delta =
             act === "jump" ? scroller.clientHeight * 2 : before >= 20 ? -20 : 20;
@@ -69,16 +83,40 @@ async function cost(
             scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: delta }));
             position.set!.call(scroller, before + delta);
           });
-          scroller.dataset.measuringCost = "acted";
         } else {
-          scroller.dataset.measuringCost = "acted";
-          window.__GENTS_MOBILE_PERFORMANCE__!.streamText(
-            "\n\nMore of the reply, long enough to wrap onto a second line in the column.",
-          );
-          const deadline = performance.now() + 3000;
-          while (scroller.scrollHeight <= height && performance.now() < deadline)
-            await new Promise((resolve) => requestAnimationFrame(resolve));
+          /* the session read the notify starts is recorded before its
+             caller sets the session, so the next commit renders the chunk */
+          const calls = harness.snapshot().bridgeCalls.length;
+          await new Promise<void>((resolve) => {
+            harness.recordCommit = (commit) => {
+              recordCommit(commit);
+              if (
+                harness
+                  .snapshot()
+                  .bridgeCalls.slice(calls)
+                  .some((call) => call.command === "fetchSessionLiveDelta")
+              )
+                resolve();
+            };
+            harness.streamText(text);
+            publish("streamed");
+          });
+          harness.recordCommit = recordCommit;
+          /* far up a long session the reply grows in a row that is not
+             drawn: its window closes on the commit */
+          if (act === "chunk") {
+            publish("committed");
+            await new Promise<void>((resolve) => {
+              const observer = new ResizeObserver(() => {
+                if (scroller.scrollHeight <= height) return;
+                observer.disconnect();
+                resolve();
+              });
+              observer.observe(scroller.querySelector("[data-transcript-list]")!);
+            });
+          }
         }
+        publish("acted");
         await new Promise((resolve) =>
           requestAnimationFrame(() => requestAnimationFrame(resolve)),
         );
@@ -97,6 +135,7 @@ async function cost(
           grew: scroller.scrollHeight > height,
         };
       } finally {
+        harness.recordCommit = recordCommit;
         document.elementFromPoint = point;
         scroller.removeEventListener("scroll", onScroll);
         Element.prototype.getBoundingClientRect = rect;
@@ -109,14 +148,30 @@ async function cost(
     });
   void measurement.catch(() => {});
   try {
-    /* the browser delivers the scroll in real time while the paused clock
-       only moves when told: frames advance once the scroll has landed, so
-       the measured frames never reach the rest that writes the carried
-       position and draws another stretch of rows */
-    await expect.poll(() => viewport.getAttribute("data-measuring-cost")).toBe("acted");
-    for (let frame = 0; frame < 200 && !finished; frame += 1)
-      await page.clock.runFor(16);
-    expect(finished).toBe(true);
+    /* the browser delivers the scroll and the chunk's commit in real time
+       while the paused clock only moves when told: one step fires the
+       harness notify's timer, and the reply is revealed on animation
+       frames, one per step until the list grows. The measured frames never
+       reach the rest that writes the carried position and draws another
+       stretch of rows: a scroll or a jump steps no frame before it lands,
+       and nothing in a chunk's window arms one, since the owner's own write
+       is not read as a scroll */
+    let steps = 0;
+    const drive = async () => {
+      const state = await viewport.evaluate((el) => ({
+        ...JSON.parse(el.dataset.measuringCost ?? "{}"),
+        height: el.scrollHeight,
+      }));
+      if (state.phase === "streamed" ? steps === 0 : state.phase === "committed") {
+        await page.clock.runFor(16);
+        steps += 1;
+      }
+      return { ...state, steps };
+    };
+    await expect
+      .poll(drive, { timeout: 0, intervals: [16] })
+      .toEqual(expect.objectContaining({ phase: "acted" }));
+    while (!finished) await page.clock.runFor(16);
     return await measurement;
   } finally {
     await page.clock.resume();
@@ -131,6 +186,14 @@ async function scrollCost(page: Page, viewport: Locator): Promise<Cost> {
   const costs: Cost[] = [];
   for (let n = 0; n < 5; n += 1) costs.push(await cost(page, viewport, "scroll"));
   return costs.sort((a, b) => a.rects - b.rects)[2]!;
+}
+
+async function atRest(page: Page) {
+  await expect(scroller(page)).not.toHaveAttribute("data-landing", "");
+  await expect(
+    page.getByTestId("transcript-older-status").filter({ hasText: "Loading older" }),
+  ).toHaveCount(0);
+  await scrollAtRest(scroller(page));
 }
 
 async function loadEveryPage(page: Page) {
@@ -149,7 +212,7 @@ async function loadEveryPage(page: Page) {
     await scrollAtRest(scroller(page));
   }
   expect(await loaded()).toBeGreaterThanOrEqual(expected);
-  await page.waitForTimeout(600);
+  await atRest(page);
   await expect
     .poll(() =>
       scroller(page)
@@ -221,7 +284,7 @@ test.describe("what a transcript scroll costs", () => {
     await loadEveryPage(page);
     const long = {
       scroll: await scrollCost(page, viewport),
-      chunk: await cost(page, viewport, "chunk"),
+      chunk: await cost(page, viewport, "unseen-chunk"),
     };
     testInfo.annotations.push({
       type: "cost",
@@ -240,7 +303,7 @@ test.describe("what a transcript scroll costs", () => {
     for (const at of [short, long]) {
       expect(at.scroll.rects).toBeLessThanOrEqual(16);
       expect(at.chunk.rects).toBeLessThanOrEqual(16);
-      expect(at.scroll.writes).toBe(0);
+      expect(at.scroll.writes).toHaveLength(0);
     }
     /* and none of it grows with the rows held: more rows drawn add a
        halving step, and a row drawn by the scroll is measured once */
@@ -279,7 +342,7 @@ test.describe("what a transcript scroll costs", () => {
   }, testInfo) => {
     const viewport = scroller(page);
     await expect(viewport).toHaveAttribute("data-following", "true");
-    await page.waitForTimeout(500);
+    await atRest(page);
     const short = await cost(page, viewport, "chunk");
     await loadEveryPage(page);
     await backToBottom(page);
@@ -292,7 +355,7 @@ test.describe("what a transcript scroll costs", () => {
       expect(at.grew).toBe(true);
 
       expect(at.rects).toBeLessThanOrEqual(8);
-      expect(at.writes).toBeLessThanOrEqual(2);
+      expect(at.writes.length).toBeLessThanOrEqual(2);
     }
     expect(long.rects).toBeLessThanOrEqual(short.rects + 2);
   });

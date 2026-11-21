@@ -37,7 +37,7 @@ async fn keyword_search_ranks_native_rows_and_preserves_query_boundaries() {
         &Tool::call(
             &tool,
             serde_json::from_value(base.clone()).unwrap(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap(),
@@ -57,7 +57,7 @@ async fn keyword_search_ranks_native_rows_and_preserves_query_boundaries() {
         &Tool::call(
             &tool,
             serde_json::from_value(filtered).unwrap(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap(),
@@ -94,7 +94,7 @@ async fn keyword_search_ranks_native_rows_and_preserves_query_boundaries() {
         let error = Tool::call(
             &tool,
             serde_json::from_value(args).unwrap(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap_err()
@@ -109,7 +109,7 @@ async fn keyword_search_ranks_native_rows_and_preserves_query_boundaries() {
         &Tool::call(
             &tool,
             serde_json::from_value(escaped).unwrap(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap(),
@@ -122,7 +122,7 @@ async fn keyword_search_ranks_native_rows_and_preserves_query_boundaries() {
         let error = Tool::call(
             &tool,
             serde_json::from_value(args).unwrap(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap_err()
@@ -206,7 +206,7 @@ async fn oversized_field_is_truncated_json_stays_valid() {
             limit: None,
         }
         .into(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .expect("query must succeed");
@@ -252,7 +252,7 @@ async fn returns_only_rows_matching_the_filter() {
             limit: None,
         }
         .into(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .expect("filtered query should succeed");
@@ -289,7 +289,7 @@ async fn rejects_query_against_collection_outside_scope() {
             limit: None,
         }
         .into(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .expect_err("querying outside the allowed scope must fail");
@@ -321,7 +321,7 @@ async fn protected_collections_are_refused_by_reads_and_discovery() {
                 limit: None,
             }
             .into(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .err()
@@ -335,7 +335,7 @@ async fn protected_collections_are_refused_by_reads_and_discovery() {
                 limit: None,
             }
             .into(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .err()
@@ -363,7 +363,7 @@ async fn invalid_tool_call_created_at_suggests_started_and_completed_at() {
             limit: None,
         }
         .into(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .expect_err("invalid field must fail");
@@ -390,7 +390,7 @@ async fn invalid_agent_request_fields_get_suggestions() {
             limit: None,
         }
         .into(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .expect_err("invalid field must fail");
@@ -408,7 +408,7 @@ async fn invalid_agent_request_fields_get_suggestions() {
             limit: None,
         }
         .into(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .expect_err("invalid field must fail");
@@ -431,7 +431,7 @@ async fn invalid_filter_key_gets_diagnostics() {
             limit: None,
         }
         .into(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .expect_err("invalid filter key must fail");
@@ -454,7 +454,7 @@ async fn wildcard_fields_returns_field_inventory() {
             limit: None,
         }
         .into(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .expect("discovery must succeed");
@@ -488,7 +488,7 @@ async fn discovery_lists_exactly_the_fields_the_model_leaves_visible() {
                 limit: None,
             }
             .into(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .expect("discovery must succeed");
@@ -521,7 +521,7 @@ async fn discovery_respects_collection_scope() {
             limit: None,
         }
         .into(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .expect_err("discovery outside scope must fail");
@@ -546,7 +546,7 @@ async fn unknown_collection_reports_does_not_exist() {
             limit: None,
         }
         .into(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .expect_err("unknown collection must fail");
@@ -561,7 +561,7 @@ async fn unknown_collection_reports_does_not_exist() {
                 collection: Some(collection.into()),
                 ..Default::default()
             },
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap_err();
@@ -591,7 +591,7 @@ async fn wildcard_mixed_with_fields_is_rejected_with_hint() {
             limit: None,
         }
         .into(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .expect_err("mixed wildcard must fail");
@@ -619,7 +619,7 @@ async fn count_is_filtered_total_and_find_is_a_stable_page() {
     );
     let count:QueryParams=serde_json::from_value(json!({"argv":["count"],"collection":"Ticket","options":{"filter":{"status":{"_eq":"open"}}}})).unwrap();
     let result: serde_json::Value = serde_json::from_str(
-        &Tool::call(&tool, count, &gents_loop::tool::ToolCallEnvelope::ambient())
+        &Tool::call(&tool, count, &gents_loop::tool::ToolCallEnvelope::default())
             .await
             .unwrap(),
     )
@@ -627,7 +627,7 @@ async fn count_is_filtered_total_and_find_is_a_stable_page() {
     assert_eq!(result["total_count"], 73);
     let find:QueryParams=serde_json::from_value(json!({"argv":["find"],"collection":"Ticket","options":{"fields":["name","priority"],"order":[{"priority":"ASC"}],"offset":5,"limit":5}})).unwrap();
     let result: serde_json::Value = serde_json::from_str(
-        &Tool::call(&tool, find, &gents_loop::tool::ToolCallEnvelope::ambient())
+        &Tool::call(&tool, find, &gents_loop::tool::ToolCallEnvelope::default())
             .await
             .unwrap(),
     )
@@ -672,10 +672,10 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
         )
         .await
         .unwrap();
-    node.add_collection(&format!(
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&format!(
         "type PrivateRecord @policy(id: \"{}\", resource: \"records\") {{ label: String @fulltext }}",
         gents_store::graphql::escape_graphql_string(&policy)
-    ))
+    )))
     .await
     .unwrap();
     for (agent, label) in [(&alice_agent, "Alice-only"), (&bob_agent, "Bob-only")] {
@@ -730,7 +730,7 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
         )
         .unwrap();
         let result: Value = serde_json::from_str(
-            &Tool::call(&tool, find, &gents_loop::tool::ToolCallEnvelope::ambient())
+            &Tool::call(&tool, find, &gents_loop::tool::ToolCallEnvelope::default())
                 .await
                 .unwrap(),
         )
@@ -742,7 +742,7 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
             let read = Tool::call(
                 &tool,
                 request,
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await;
             assert_eq!(read.is_ok(), permitted);
@@ -756,7 +756,7 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
             &Tool::call(
                 &tool,
                 search,
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .unwrap(),
@@ -782,7 +782,7 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
             &Tool::call(
                 &bounded,
                 super::bounded::BoundedQueryParams(serde_json::Map::new()),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .unwrap(),
@@ -793,7 +793,7 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
 
         let count: QueryParams = serde_json::from_value(json!({"argv":["count"],"collection":"PrivateRecord","options":{"filter":{"label":{"_eq":hidden}}}})).unwrap();
         let result: Value = serde_json::from_str(
-            &Tool::call(&tool, count, &gents_loop::tool::ToolCallEnvelope::ambient())
+            &Tool::call(&tool, count, &gents_loop::tool::ToolCallEnvelope::default())
                 .await
                 .unwrap(),
         )
@@ -904,7 +904,7 @@ async fn a_write_verb_is_sent_to_the_write_tool_and_its_grant() {
             let error = Tool::call(
                 &tool,
                 params,
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .expect_err("query has no write verb")
@@ -930,4 +930,147 @@ async fn a_write_verb_is_sent_to_the_write_tool_and_its_grant() {
             );
         }
     }
+}
+
+#[tokio::test]
+async fn find_signer_names_who_wrote_a_document_not_who_it_claims() {
+    let keys = tempfile::tempdir().unwrap();
+    let node_key =
+        gents_store::identity::KeyIdentity::load_or_create(keys.path().join("node.key"), None)
+            .unwrap();
+    let agent = || {
+        gents_store::identity::resolve_agent_identity(
+            &node_key,
+            &gents_store::identity::provision_agent_identity(&node_key).unwrap(),
+        )
+        .unwrap()
+    };
+    let (alice, bob) = (agent(), agent());
+    let did = |a: &dyn gents_store::identity::NodeIdentity| {
+        gents_store::identity::NodeIdentity::did(a).to_owned()
+    };
+    let (alice_did, bob_did) = (did(&*alice), did(&*bob));
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(gents_store::identity::NodeIdentity::did(&node_key).to_owned())
+            .build()
+            .await
+            .unwrap(),
+    );
+    node.add_collection("type Order { login: String }")
+        .await
+        .unwrap();
+    let write = |who: &std::sync::Arc<dyn gents_store::identity::NodeIdentity>,
+                 mutation: String| {
+        let access = gents_store::config_client::ConfigAccess::local_managed_agent(
+            node.clone(),
+            ::identity::Did::new(gents_store::identity::NodeIdentity::did(&**who)).unwrap(),
+            who.as_ref(),
+        )
+        .unwrap();
+        async move {
+            access
+                .transact_write("seed_signed_order", |txn| {
+                    let mutation = &mutation;
+                    Box::pin(async move { txn.execute(mutation).await })
+                })
+                .await
+                .unwrap()
+        }
+    };
+    // Alice writes an order that claims to be bob's.
+    let forged = write(
+        &alice,
+        r#"mutation { add_Order(input: {login: "bob"}) {_docID} }"#.into(),
+    )
+    .await;
+    let forged_id = forged["data"]["add_Order"][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // Bob writes his own, then edits alice's.
+    let own = write(
+        &bob,
+        r#"mutation { add_Order(input: {login: "bob"}) {_docID} }"#.into(),
+    )
+    .await;
+    let own_id = own["data"]["add_Order"][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let update = |id: &str, login: &str| {
+        format!(
+            r#"mutation {{ update_Order(docID: "{id}", input: {{login: "{login}"}}) {{_docID}} }}"#
+        )
+    };
+    write(&bob, update(&forged_id, "bob!")).await;
+    // Alice edits bob's order in between, then bob edits it again: created and
+    // latest both name bob, so only writers shows alice's edit.
+    write(&alice, update(&own_id, "alice")).await;
+    write(&bob, update(&own_id, "bob")).await;
+
+    let tool = DefraQueryTool::new(
+        node.clone(),
+        CollectionScope::restricted(vec!["Order".into()]),
+    );
+    let find: QueryParams = serde_json::from_value(
+        json!({"argv":["find"],"collection":"Order","options":{"fields":["login"],"signer":true}}),
+    )
+    .unwrap();
+    let result: Value = serde_json::from_str(
+        &Tool::call(&tool, find, &gents_loop::tool::ToolCallEnvelope::default())
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let mut signers = result["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| {
+            assert!(
+                row.get("_docID").is_none(),
+                "unselected _docID stays hidden"
+            );
+            assert_eq!(row["_signer"]["unsigned"], false);
+            let writers: std::collections::BTreeSet<String> =
+                serde_json::from_value(row["_signer"]["writers"].clone()).unwrap();
+            (
+                row["login"].as_str().unwrap().to_owned(),
+                row["_signer"]["created"].as_str().unwrap().to_owned(),
+                row["_signer"]["latest"].as_str().unwrap().to_owned(),
+                writers,
+            )
+        })
+        .collect::<Vec<_>>();
+    signers.sort();
+    let both = std::collections::BTreeSet::from([alice_did.clone(), bob_did.clone()]);
+    assert_eq!(
+        signers,
+        vec![
+            // Bob's own order, edited by alice in between.
+            ("bob".into(), bob_did.clone(), bob_did.clone(), both.clone()),
+            // Alice's forged order, edited by bob.
+            ("bob!".into(), alice_did.clone(), bob_did.clone(), both),
+        ]
+    );
+
+    let bad: QueryParams = serde_json::from_value(
+        json!({"argv":["find"],"collection":"Order","options":{"fields":["login"],"signer":"yes"}}),
+    )
+    .unwrap();
+    let error = Tool::call(&tool, bad, &gents_loop::tool::ToolCallEnvelope::default())
+        .await
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("signer must be true or false"));
+
+    let paged: QueryParams = serde_json::from_value(json!({"argv":["find"],"collection":"Order","options":{"fields":["login"],"signer":true,"field_page":{"doc_id":own_id,"field":"login","offset_bytes":0}}}))
+    .unwrap();
+    let error = Tool::call(&tool, paged, &gents_loop::tool::ToolCallEnvelope::default())
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{error:#}").contains("field_page cannot combine with signer"),
+        "a field page never silently drops the requested _signer: {error:#}"
+    );
 }

@@ -1,0 +1,4 @@
+---- MODULE MCCommitResponseWaitNoKeepalive ----
+EXTENDS CommitResponseWait
+
+====

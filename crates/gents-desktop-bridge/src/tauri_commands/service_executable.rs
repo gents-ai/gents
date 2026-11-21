@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 
 use tauri::{AppHandle, Manager, Runtime};
 
-use crate::error::{BridgeError, BridgeErrorCode};
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 const RUNTIME_DIR: &str = "runtime";
 
@@ -57,6 +58,7 @@ impl ServiceExecutable {
 pub(crate) fn resolve_service_executable<R>(
     app: &AppHandle<R>,
     desktop_home: &Path,
+    explicit: Option<&Path>,
 ) -> Result<ServiceExecutable, BridgeError>
 where
     R: Runtime,
@@ -68,21 +70,20 @@ where
         ));
     }
     let mut candidates = Vec::new();
-    if let Some(path) = std::env::var_os("GENTS_BIN").filter(|value| !value.is_empty()) {
-        let path = PathBuf::from(path);
+    if let Some(path) = explicit {
         if !path.is_absolute() {
             return Err(BridgeError::new(
                 BridgeErrorCode::InvalidArgument,
-                "GENTS_BIN must be an absolute path",
+                "--gents-bin must be an absolute path",
             ));
         }
-        let executable = executable_file(&path)
+        let executable = executable_file(path)
             .then(|| std::fs::canonicalize(path).ok())
             .flatten()
             .ok_or_else(|| {
                 BridgeError::new(
                     BridgeErrorCode::InvalidArgument,
-                    "GENTS_BIN must name an existing executable file",
+                    "--gents-bin must name an existing executable file",
                 )
             })?;
         return Ok(classify(executable, desktop_home));
@@ -108,7 +109,7 @@ where
         .ok_or_else(|| {
             BridgeError::new(
                 BridgeErrorCode::Unsupported,
-                "Could not find the Gents runtime executable. Reinstall Gents or set GENTS_BIN to its absolute path.",
+                "Could not find the Gents runtime executable. Reinstall Gents or launch it with --gents-bin and the executable's absolute path.",
             )
         })?;
     Ok(classify(executable, desktop_home))

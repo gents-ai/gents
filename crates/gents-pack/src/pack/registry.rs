@@ -9,7 +9,6 @@ use crate::pack::store::PackStore;
 use crate::pack::PackManifest;
 
 pub const DEFAULT_REGISTRY_URL: &str = "https://registry.dev.gents.xyz";
-pub const REGISTRY_ENV_VAR: &str = "GENTS_REGISTRY";
 
 const DOWNLOAD_HEADER_BOUND: Duration = Duration::from_secs(20);
 
@@ -41,15 +40,10 @@ pub fn split_pack_coordinate(name: &str) -> (&str, &str) {
 }
 
 pub fn resolve_registry_url(explicit: Option<&str>) -> String {
-    for candidate in [
-        explicit.map(str::to_owned),
-        std::env::var(REGISTRY_ENV_VAR).ok(),
-    ] {
-        if let Some(url) = candidate.filter(|value| !value.trim().is_empty()) {
-            return url.trim_end_matches('/').to_owned();
-        }
+    match explicit.filter(|value| !value.trim().is_empty()) {
+        Some(url) => url.trim_end_matches('/').to_owned(),
+        None => DEFAULT_REGISTRY_URL.to_owned(),
     }
-    DEFAULT_REGISTRY_URL.to_owned()
 }
 
 pub struct RegistryClient {
@@ -413,6 +407,45 @@ pub async fn download_verified_pack(
         ),
     )?;
     Ok(bytes)
+}
+
+/// The Gents release a registry version entry says the pack was built for,
+/// its `gents_version` (gents-ai/packs#63); `None` when the entry does not
+/// say.
+pub fn advertised_release(
+    version: &Value,
+) -> Option<Result<crate::pack::core_packs::Release, crate::pack::core_packs::ReleaseParseError>> {
+    version
+        .get("gents_version")
+        .and_then(Value::as_str)
+        .map(crate::pack::core_packs::Release::parse)
+}
+
+/// Why a registry candidate did not open: the archive's own refusal, or the
+/// lookup or download before it.
+#[derive(Debug, thiserror::Error)]
+pub enum CandidateError {
+    #[error(transparent)]
+    Open(#[from] crate::pack::archive::OpenError),
+    #[error(fmt = gents_protocol::error_chain::held)]
+    Fetch(#[source] anyhow::Error),
+}
+
+/// Downloads `namespace/name@version` and opens it without storing it, so a
+/// caller can decide on the archive before an install takes it.
+pub async fn open_candidate(
+    client: &RegistryClient,
+    namespace: &str,
+    name: &str,
+    version: &str,
+) -> Result<PackArchive, CandidateError> {
+    let coordinate = resolve_pack_coordinate(client, namespace, name, Some(version))
+        .await
+        .map_err(CandidateError::Fetch)?;
+    let bytes = download_verified_pack(client, &coordinate)
+        .await
+        .map_err(CandidateError::Fetch)?;
+    Ok(PackArchive::from_bytes(&bytes)?)
 }
 
 pub async fn fetch_pack(

@@ -6,10 +6,9 @@ use gents_protocol::job::{JobControlKind, JobControlOutcome, JobReadError};
 
 use crate::background::job::control::control_by_doc_id;
 use crate::background::status::ProcessControlScope;
-use crate::call::hook::BackgroundExecutionRegistry;
+use crate::call::hook::background_executions::BackgroundExecutionRegistry;
 use crate::call::lifecycle::{ToolCallLifecycle, ToolRowKind};
-use gents_protocol::tool_call::AwaitMode;
-use gents_session::session::tool_call_state::CancelCause;
+use gents_protocol::tool_call::{AwaitMode, CancelCause};
 use gents_store::config_client::{ConfigAccess, ConfigClientError};
 
 pub mod client;
@@ -168,7 +167,7 @@ pub(crate) async fn cancel_loaded_background_tool_call(
 
     // Lean `Background.ProcessControl.stopAction`: an undispatched invocation
     // has no process, so the stop races dispatch on the durable pending row.
-    if lifecycle.state() == gents_session::session::tool_call_state::ToolCallState::Pending {
+    if lifecycle.state() == gents_protocol::tool_call::ToolCallState::Pending {
         if lifecycle
             .cancel_before_dispatch_owned(CancelCause::UserCancelled)
             .await?
@@ -497,7 +496,7 @@ mod tests {
     /// Adapted from Ivan's #3264 stop races onto the owning cancellation path.
     #[tokio::test]
     async fn generated_stop_actions_select_the_durable_transition() {
-        use gents_session::session::tool_call_state::ToolCallState;
+        use gents_protocol::tool_call::ToolCallState;
         for case in gents_lean_vocab::families::native_refinement_stop_action::cases::<
             String,
             ToolCallState,
@@ -594,7 +593,7 @@ mod tests {
 
     #[tokio::test]
     async fn stops_after_a_pending_observation_match_the_lean_model() {
-        use gents_session::session::tool_call_state::ToolCallState;
+        use gents_protocol::tool_call::ToolCallState;
         for case in gents_lean_vocab::families::background_stop_after_pending_observation::cases::<
             String,
             ToolCallState,
@@ -898,80 +897,95 @@ mod tests {
         use crate::call::lifecycle::admission_fixture::{
             published_admission, PublishedAdmissionOptions,
         };
-        let modeled = gents_lean_vocab::lean_process_stop_cases()
-            .iter()
-            .find(|case| case.before == "unowned" && case.after == "unowned")
-            .expect("modeled unowned process");
+        use gents_session::exec::CancelProcessReply;
         let records = tempfile::tempdir().unwrap();
         let registry =
             BackgroundExecutionRegistry::default().with_process_records(records.path().into());
-        for (name, recorded) in [("cancel-unrecorded", false), ("cancel-recorded", true)] {
-            let admission = published_admission(PublishedAdmissionOptions {
-                name: name.into(),
-                real_identity: true,
-                await_mode: AwaitMode::Background,
-                ..Default::default()
-            })
-            .await
-            .unwrap();
-            let tool_doc = admission.tool.doc_id().unwrap().to_owned();
-            let process = if recorded {
-                crate::call::hook::tests::process_records::process_for_generated_outcome(
+        for case in gents_lean_vocab::families::process_stop_unrecorded_cancel::cases::<
+            CancelProcessReply,
+            String,
+            String,
+            String,
+        >() {
+            for (name, recorded) in [("cancel-unrecorded", false), ("cancel-recorded", true)] {
+                let admission = published_admission(PublishedAdmissionOptions {
+                    name: name.into(),
+                    real_identity: true,
+                    await_mode: AwaitMode::Background,
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+                let tool_doc = admission.tool.doc_id().unwrap().to_owned();
+                let process = if recorded {
+                    crate::call::hook::tests::process_records::process_for_generated_outcome(
+                        &registry,
+                        admission.tool.tool_call_id(),
+                        &tool_doc,
+                        "stopped",
+                    )
+                    .await
+                } else {
+                    None
+                };
+                let outcome = cancel_background_tool_call(
+                    &admission.tool.access().unwrap(),
                     &registry,
+                    &gents_session::session::message::NoSessionMessageGoals,
+                    admission.tool.session_id(),
                     admission.tool.tool_call_id(),
-                    &tool_doc,
-                    "stopped",
                 )
                 .await
-            } else {
-                None
-            };
-            let outcome = cancel_background_tool_call(
-                &admission.tool.access().unwrap(),
-                &registry,
-                &gents_session::session::message::NoSessionMessageGoals,
-                admission.tool.session_id(),
-                admission.tool.tool_call_id(),
-            )
-            .await
-            .unwrap();
-            let row = ToolCallLifecycle::load_as(
-                admission.node.clone(),
-                admission.tool.actor().clone(),
-                admission.tool.session_id(),
-                admission.tool.tool_call_id(),
-            )
-            .await
-            .unwrap()
-            .expect("tool row");
-            match process {
-                Some(process) => {
-                    assert_eq!(
-                        outcome,
-                        CancelBackgroundToolCallOutcome::Cancelled {
-                            live_execution_cancelled: false
-                        }
-                    );
-                    assert!(row.is_cancelled());
-                    assert_ne!(
-                        process.identity.observe(),
-                        gents_session::exec::ownership::ProcessObservation::Running
-                    );
-                    process.finish().await;
-                }
-                None => {
-                    assert_eq!(modeled.cancel_reply, "lost");
-                    assert_eq!(outcome, CancelBackgroundToolCallOutcome::Lost);
-                    assert_eq!(row.state().as_str(), modeled.durable_state);
-                }
-            }
-            assert!(registry.process_record_list().is_empty(), "{name}");
-            admission
-                .node
-                .shutdown()
+                .unwrap();
+                let row = ToolCallLifecycle::load_as(
+                    admission.node.clone(),
+                    admission.tool.actor().clone(),
+                    admission.tool.session_id(),
+                    admission.tool.tool_call_id(),
+                )
                 .await
-                .expect("shut down test node");
-            let _ = std::fs::remove_dir_all(admission.path);
+                .unwrap()
+                .expect("tool row");
+                match process {
+                    Some(process) => {
+                        assert_eq!(
+                            outcome,
+                            CancelBackgroundToolCallOutcome::Cancelled {
+                                live_execution_cancelled: false
+                            }
+                        );
+                        assert!(row.is_cancelled());
+                        assert_ne!(
+                            process.identity.observe(),
+                            gents_session::exec::ownership::ProcessObservation::Running
+                        );
+                        process.finish().await;
+                    }
+                    None => {
+                        let cancel_reply = match outcome {
+                            CancelBackgroundToolCallOutcome::Cancelled { .. } => {
+                                CancelProcessReply::Cancelled
+                            }
+                            CancelBackgroundToolCallOutcome::Lost => CancelProcessReply::Lost,
+                            CancelBackgroundToolCallOutcome::Unverified => {
+                                CancelProcessReply::Unverified
+                            }
+                            other => panic!("an unrecorded stop returned {other:?}"),
+                        };
+                        case.check(gents_lean_vocab::families::process_stop_unrecorded_cancel::ReplyOutput {
+                            cancel_reply,
+                            durable_state: row.state().as_str().to_owned(),
+                        });
+                    }
+                }
+                assert!(registry.process_record_list().is_empty(), "{name}");
+                admission
+                    .node
+                    .shutdown()
+                    .await
+                    .expect("shut down test node");
+                let _ = std::fs::remove_dir_all(admission.path);
+            }
         }
     }
 

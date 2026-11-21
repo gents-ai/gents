@@ -43,7 +43,7 @@ struct CaptureFixture {
 impl CaptureFixture {
     async fn new() -> Self {
         use gents_protocol::request_admission::{
-            AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+            AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
         };
         let (db, user, client, binding) = gents_inference::test_support::signed_test_node(
             "rendered-capture",
@@ -56,10 +56,7 @@ impl CaptureFixture {
         let create = AgentRequestCreate::base(
             RequestPurpose::Normal,
             "request",
-            db.node_identity.did(),
-            user.did(),
-            agent.did(),
-            "session",
+            RequestScope::new(db.node_identity.did(), user.did(), agent.did(), "session"),
             "capture",
             "interactive",
             chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -183,7 +180,9 @@ async fn failed_capture_publication_rolls_back_bound_blocks_and_record() {
                 1,
             )
         };
-        node.add_collection(&bound).await.unwrap();
+        node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&bound))
+            .await
+            .unwrap();
     }
     gents_store::schema::ensure_runtime_schemas(node.as_ref())
         .await
@@ -209,13 +208,15 @@ async fn failed_capture_publication_rolls_back_bound_blocks_and_record() {
             Box::pin(async move {
                 gents_session::session::ensure_session_in_txn(
                     txn,
-                    "session",
-                    root.did(),
-                    agent.did(),
-                    None,
-                    None,
-                    None,
-                    "2026-01-01T00:00:00Z",
+                    gents_session::session::NewAgentSession {
+                        session_id: "session",
+                        node_did: root.did(),
+                        agent_did: agent.did(),
+                        requester_did: None,
+                        title: None,
+                        provenance: None,
+                        created_at: "2026-01-01T00:00:00Z",
+                    },
                 )
                 .await?;
                 Ok::<_, anyhow::Error>(())

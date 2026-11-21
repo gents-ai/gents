@@ -76,91 +76,38 @@ where
             self.composed
                 .store(true, std::sync::atomic::Ordering::Release);
             let result = async {
-                let scope = current_tool_runtime_context().ok_or_else(|| {
+                let child = child_envelope(parent).ok_or_else(|| {
                     Unavailable("tool effects require a request execution scope".to_owned())
                 })?;
-                parent.debug_assert_ambient_runtime();
-                let child =
-                    child_envelope(parent).unwrap_or_else(|| parent.clone().with_effects(None));
                 let child = &child;
-                scope_request_tool_execution_with_session(
-                    None,
-                    scope.deadline_at,
-                    scope.cancellation_token,
-                    scope.workspace_cwd,
-                    None,
-                    scope.session_id,
-                    async {
-                        let internal_id = self
-                            .hook
-                            .admit_tool_effect(
-                                &self.parent_internal_id,
-                                ordinal,
-                                name,
-                                arguments,
-                                child,
-                            )
-                            .await
-                            .map_err(Unavailable)?;
-                        if let Some(outcome) =
-                            admit_tool_effect(self.tools.as_slice(), name, arguments)
-                        {
-                            let result = match self
-                                .hook
-                                .on_tool_admission_rejected(
-                                    name,
-                                    None,
-                                    &internal_id,
-                                    arguments,
-                                    &outcome,
-                                )
-                                .await
-                            {
-                                HookAction::Continue => Ok(outcome),
-                                HookAction::Terminate { reason } => Err(Fatal(reason)),
-                            };
-                            let cancelled = ToolOutcome::Cancelled;
-                            self.hook
-                                .finish_tool_effect(
-                                    &internal_id,
-                                    result.as_ref().err().map(|_| &cancelled),
-                                )
-                                .await
-                                .map_err(Fatal)?;
-                            return result;
-                        }
+                async {
+                    let internal_id = self
+                        .hook
+                        .admit_tool_effect(
+                            &self.parent_internal_id,
+                            ordinal,
+                            name,
+                            arguments,
+                            child,
+                        )
+                        .await
+                        .map_err(Unavailable)?;
+                    if let Some(outcome) =
+                        admit_tool_effect(self.tools.as_slice(), name, arguments, child)
+                    {
                         let result = match self
                             .hook
-                            .on_tool_call(name, None, &internal_id, arguments, child)
+                            .on_tool_admission_rejected(
+                                name,
+                                None,
+                                &internal_id,
+                                arguments,
+                                &outcome,
+                            )
                             .await
                         {
-                            ToolCallHookAction::Terminate { reason } => Err(Fatal(reason)),
-                            ToolCallHookAction::Skip { reason } => {
-                                Ok(ToolOutcome::Completed(reason))
-                            }
-                            ToolCallHookAction::Continue => {
-                                // Once the before hook commits, await the effect to preserve ordering.
-                                let writer =
-                                    self.hook.foreground_live_output_writer(&internal_id).await;
-                                let session = self.hook.session_id().await;
-                                let outcome = dispatch_tool(
-                                    self.tools.as_slice(),
-                                    name,
-                                    arguments.to_owned(),
-                                    Some(writer),
-                                    session,
-                                    child,
-                                )
-                                .await;
-                                match self
-                                    .hook
-                                    .on_tool_result(name, None, &internal_id, arguments, &outcome)
-                                    .await
-                                {
-                                    HookAction::Continue => Ok(outcome),
-                                    HookAction::Terminate { reason } => Err(Fatal(reason)),
-                                }
-                            }
+                            HookAction::Continue => Ok(outcome),
+                            HookAction::Terminate { reason } => Err(Fatal(reason)),
                         };
                         let cancelled = ToolOutcome::Cancelled;
                         self.hook
@@ -170,9 +117,46 @@ where
                             )
                             .await
                             .map_err(Fatal)?;
-                        result
-                    },
-                )
+                        return result;
+                    }
+                    let result = match self
+                        .hook
+                        .on_tool_call(name, None, &internal_id, arguments, child)
+                        .await
+                    {
+                        ToolCallHookAction::Terminate { reason } => Err(Fatal(reason)),
+                        ToolCallHookAction::Skip { reason } => Ok(ToolOutcome::Completed(reason)),
+                        ToolCallHookAction::Continue => {
+                            // Once the before hook commits, await the effect to preserve ordering.
+                            let writer =
+                                self.hook.foreground_live_output_writer(&internal_id).await;
+                            let session = self.hook.session_id().await;
+                            let outcome = dispatch_tool(
+                                self.tools.as_slice(),
+                                name,
+                                arguments.to_owned(),
+                                Some(writer),
+                                session,
+                                child,
+                            )
+                            .await;
+                            match self
+                                .hook
+                                .on_tool_result(name, None, &internal_id, arguments, &outcome)
+                                .await
+                            {
+                                HookAction::Continue => Ok(outcome),
+                                HookAction::Terminate { reason } => Err(Fatal(reason)),
+                            }
+                        }
+                    };
+                    let cancelled = ToolOutcome::Cancelled;
+                    self.hook
+                        .finish_tool_effect(&internal_id, result.as_ref().err().map(|_| &cancelled))
+                        .await
+                        .map_err(Fatal)?;
+                    result
+                }
                 .await
             }
             .await;
@@ -222,14 +206,20 @@ pub(super) fn admit_tool(
     tools: &[Box<dyn ToolDyn>],
     name: &str,
     args: &str,
+    context: &ToolCallEnvelope,
 ) -> Option<ToolOutcome> {
     let tool = tools.iter().find(|tool| tool.name() == name)?;
-    tool.admit(args)
+    tool.admit(args, context)
         .err()
         .map(|error| ToolOutcome::from_dispatch(name, Err(error)))
 }
 
-fn admit_tool_effect(tools: &[Box<dyn ToolDyn>], name: &str, args: &str) -> Option<ToolOutcome> {
+fn admit_tool_effect(
+    tools: &[Box<dyn ToolDyn>],
+    name: &str,
+    args: &str,
+    context: &ToolCallEnvelope,
+) -> Option<ToolOutcome> {
     if !tools.iter().any(|tool| tool.name() == name) {
         return Some(ToolOutcome::from_dispatch(
             name,
@@ -239,7 +229,7 @@ fn admit_tool_effect(tools: &[Box<dyn ToolDyn>], name: &str, args: &str) -> Opti
             }),
         ));
     }
-    admit_tool(tools, name, args)
+    admit_tool(tools, name, args, context)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -273,7 +263,7 @@ pub(super) fn settle_ready(
 /// `CallEnvelope.child_has_no_dispatcher`). `None` when the parent has no
 /// request execution scope.
 pub fn child_envelope(parent: &ToolCallEnvelope) -> Option<ToolCallEnvelope> {
-    let scope = parent.runtime_unchecked()?;
+    let scope = parent.runtime()?;
     let runtime = CurrentToolRuntimeContext::entered_with_session(
         Some(&scope),
         None,
@@ -321,7 +311,7 @@ pub fn foreground_envelope(
     effects: Option<Arc<dyn crate::tool_effects::ToolEffectDispatcher>>,
 ) -> (ToolCallEnvelope, tokio_util::sync::CancellationToken) {
     let hook_token = hook
-        .runtime_unchecked()
+        .runtime()
         .map(|scope| scope.cancellation_token)
         .unwrap_or_default();
     let token = hook_token.child_token();
@@ -329,7 +319,7 @@ pub fn foreground_envelope(
         Some(scope) => hook
             .clone()
             .with_runtime(Some(CurrentToolRuntimeContext::entered(
-                hook.runtime_unchecked().as_ref(),
+                hook.runtime().as_ref(),
                 ToolScopeEntry {
                     identity: Some(ToolRequestIdentity::new(
                         scope.requester_did,
@@ -407,7 +397,7 @@ pub(super) async fn dispatch_provider_tool(
         )
     };
 
-    let Some(scope) = current_tool_runtime_context() else {
+    let Some(scope) = context.runtime() else {
         return outcome(
             crate::tool_call_lifecycle::runtime::dispatch_with_receipt(
                 tool.as_ref(),
@@ -418,12 +408,7 @@ pub(super) async fn dispatch_provider_tool(
             .await,
         );
     };
-    let tool_call = match context.runtime() {
-        Some(explicit) => {
-            dispatch_envelope(context, &explicit, live_output.clone(), session_id.clone())
-        }
-        None => context.clone(),
-    };
+    let tool_call = dispatch_envelope(context, &scope, live_output.clone(), session_id.clone());
 
     if deadline_remaining(scope.deadline_at).is_some_and(|remaining| remaining.is_zero()) {
         let decided = ToolOutcome::TimedOut {
@@ -443,19 +428,8 @@ pub(super) async fn dispatch_provider_tool(
         }
     });
 
-    let receipt_writer = live_output.clone();
-    let mut call = Box::pin(scope_request_tool_execution_with_session(
-        None,
-        scope.deadline_at,
-        scope.cancellation_token.clone(),
-        scope.workspace_cwd.clone(),
-        live_output,
-        session_id.or(scope.session_id.clone()),
-        async {
-            tool_call.debug_assert_ambient();
-            tool.call_with_receipt(args, &tool_call).await
-        },
-    ));
+    let receipt_writer = live_output;
+    let mut call = tool.call_with_receipt(args, &tool_call);
     tokio::select! {
         biased;
         _ = scope.cancellation_token.cancelled() => {
@@ -531,8 +505,8 @@ where
             } = input;
             let effects =
                 effects.map(|value| value as Arc<dyn crate::tool_effects::ToolEffectDispatcher>);
-            let (call, token) = foreground_envelope(&hook, scope.clone(), effects.clone());
-            let execute = crate::tool_effects::scope(effects, async move {
+            let (call, token) = foreground_envelope(&hook, scope.clone(), effects);
+            let execute = async move {
                 dispatch_provider_tool(
                     tools.as_slice(),
                     &name,
@@ -546,20 +520,16 @@ where
                     &call,
                 )
                 .await
-            });
+            };
             let scoped = async {
                 match scope {
-                Some(scope) => crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
-                        Some(crate::tool_call_lifecycle::runtime::ToolRequestIdentity::new(scope.requester_did, scope.node_did, scope.agent_did, scope.request_id)),
-                        scope.deadline_at, token.clone(), scope.workspace_cwd, scope.live_output,
-                        scope.session_id, scope.correlation, scope.source_fields, scope.background, execute,
-                    ).await,
-                None => tokio::select! {
-                    biased;
-                    _ = token.cancelled() => ToolOutcome::Cancelled,
-                    outcome = execute => outcome,
-                },
-            }
+                    Some(_) => execute.await,
+                    None => tokio::select! {
+                        biased;
+                        _ = token.cancelled() => ToolOutcome::Cancelled,
+                        outcome = execute => outcome,
+                    },
+                }
             };
             match batch_token {
                 Some(batch) => {
@@ -605,7 +575,6 @@ where
 mod tests {
     use super::*;
     use crate::tool::{BoxFuture, ToolDefinition, ToolError};
-    use crate::tool_call_lifecycle::runtime::scope_request_tool_execution;
     use std::sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
@@ -614,9 +583,7 @@ mod tests {
     #[derive(Debug, serde::Deserialize)]
     #[serde(deny_unknown_fields)]
     struct ArgumentFixture {
-        #[allow(dead_code)]
         text: String,
-        #[allow(dead_code)]
         mode: Option<ArgumentMode>,
     }
 
@@ -643,10 +610,13 @@ mod tests {
 
         async fn call(
             &self,
-            _: Self::Args,
+            args: Self::Args,
             _context: &crate::tool::ToolCallEnvelope,
         ) -> Result<String, Self::Error> {
-            panic!("invalid arguments must never execute")
+            panic!(
+                "invalid arguments must never execute; parsed text {:?} in mode {:?}",
+                args.text, args.mode
+            )
         }
     }
 
@@ -699,8 +669,16 @@ mod tests {
                 let actual: Vec<u8> = chunks.into_iter().flat_map(Result::unwrap).collect();
                 assert_eq!(actual, payload.as_bytes());
                 for scoped in [false, true] {
-                    let context = crate::tool::ToolCallEnvelope::ambient();
-                    let call = dispatch_provider_tool(
+                    let context = if scoped {
+                        crate::tool_call_lifecycle::runtime::ToolScopeEntry::new(
+                            None,
+                            tokio_util::sync::CancellationToken::new(),
+                        )
+                        .call()
+                    } else {
+                        crate::tool::ToolCallEnvelope::default()
+                    };
+                    let outcome = dispatch_provider_tool(
                         &tools,
                         "parse",
                         case.arguments.clone(),
@@ -711,17 +689,8 @@ mod tests {
                             cleanup: None,
                         },
                         &context,
-                    );
-                    let outcome = if scoped {
-                        scope_request_tool_execution(
-                            None,
-                            tokio_util::sync::CancellationToken::new(),
-                            call,
-                        )
-                        .await
-                    } else {
-                        call.await
-                    };
+                    )
+                    .await;
                     let ToolOutcome::Failed { class, text, .. } = outcome else {
                         panic!("invalid arguments executed")
                     };
@@ -877,16 +846,30 @@ mod tests {
             ("ready_after_wall_deadline", "{}"),
         ] {
             assert!(names.contains(&name));
-            assert!(admit_tool_effect(dispatcher.tools.as_slice(), name, args).is_none());
+            assert!(admit_tool_effect(
+                dispatcher.tools.as_slice(),
+                name,
+                args,
+                &ToolCallEnvelope::default()
+            )
+            .is_none());
         }
-        assert!(admit_tool_effect(dispatcher.tools.as_slice(), "unlisted", "{}").is_some());
-        let outcome = scope_request_tool_execution(
+        assert!(admit_tool_effect(
+            dispatcher.tools.as_slice(),
+            "unlisted",
+            "{}",
+            &ToolCallEnvelope::default()
+        )
+        .is_some());
+        let scope_call = crate::tool_call_lifecycle::runtime::ToolScopeEntry::new(
             None,
             tokio_util::sync::CancellationToken::new(),
-            dispatcher.call(&ToolCallEnvelope::ambient(), 1, "unlisted", "{}"),
         )
-        .await
-        .unwrap();
+        .call();
+        let outcome = dispatcher
+            .call(&scope_call, 1, "unlisted", "{}")
+            .await
+            .unwrap();
         assert!(matches!(outcome, ToolOutcome::Failed { .. }));
         assert!(hook.rejected.load(Ordering::SeqCst));
         assert!(!hook.invoked.load(Ordering::SeqCst));
@@ -911,18 +894,15 @@ mod tests {
             fatal: tokio::sync::Mutex::new(None),
             composed: Default::default(),
         };
-        let outcome = scope_request_tool_execution(
+        let scope_call = crate::tool_call_lifecycle::runtime::ToolScopeEntry::new(
             None,
             tokio_util::sync::CancellationToken::new(),
-            dispatcher.call(
-                &crate::tool::ToolCallEnvelope::ambient(),
-                1,
-                "agent_interrupt",
-                "{}",
-            ),
         )
-        .await
-        .unwrap();
+        .call();
+        let outcome = dispatcher
+            .call(&scope_call, 1, "agent_interrupt", "{}")
+            .await
+            .unwrap();
         assert!(matches!(outcome, ToolOutcome::Failed { .. }));
         assert!(hook.rejected.load(Ordering::SeqCst));
         assert!(!hook.invoked.load(Ordering::SeqCst));
@@ -951,18 +931,15 @@ mod tests {
             fatal: tokio::sync::Mutex::new(None),
             composed: Default::default(),
         };
-        let outcome = scope_request_tool_execution(
+        let scope_call = crate::tool_call_lifecycle::runtime::ToolScopeEntry::new(
             Some(Utc::now() + chrono::Duration::milliseconds(10)),
             tokio_util::sync::CancellationToken::new(),
-            dispatcher.call(
-                &crate::tool::ToolCallEnvelope::ambient(),
-                1,
-                "ready_after_wall_deadline",
-                "{}",
-            ),
         )
-        .await
-        .unwrap();
+        .call();
+        let outcome = dispatcher
+            .call(&scope_call, 1, "ready_after_wall_deadline", "{}")
+            .await
+            .unwrap();
         assert_eq!(
             outcome,
             ToolOutcome::Completed("specialized side effect".into())
@@ -994,25 +971,21 @@ mod tests {
                 fatal: tokio::sync::Mutex::new(None),
                 composed: Default::default(),
             });
-            let outcome = scope_request_tool_execution(
+            let scope_call = crate::tool_call_lifecycle::runtime::ToolScopeEntry::new(
                 None,
                 tokio_util::sync::CancellationToken::new(),
-                crate::tool_effects::scope(Some(dispatcher.clone()), async {
-                    let result = dispatcher
-                        .call(
-                            &crate::tool::ToolCallEnvelope::ambient(),
-                            1,
-                            "ready_after_wall_deadline",
-                            "{}",
-                        )
-                        .await;
-                    assert!(matches!(
-                        result,
-                        Err(crate::tool_effects::ToolEffectError::Fatal(_))
-                    ));
-                    ToolOutcome::Completed("guest swallowed the error".into())
-                }),
             )
+            .call();
+            let outcome = async {
+                let result = dispatcher
+                    .call(&scope_call, 1, "ready_after_wall_deadline", "{}")
+                    .await;
+                assert!(matches!(
+                    result,
+                    Err(crate::tool_effects::ToolEffectError::Fatal(_))
+                ));
+                ToolOutcome::Completed("guest swallowed the error".into())
+            }
             .await;
             let action = dispatcher
                 .settle_parent_result("plugin", None, "{}", &outcome)
@@ -1106,7 +1079,7 @@ mod tests {
             Box::pin(async { Ok(String::new()) })
         }
 
-        fn admit(&self, _args: &str) -> Result<(), ToolError> {
+        fn admit(&self, _args: &str, _context: &ToolCallEnvelope) -> Result<(), ToolError> {
             if self.admitted {
                 Ok(())
             } else {
@@ -1131,7 +1104,7 @@ mod tests {
                 name: surface,
                 admitted: i.admitted,
             })];
-            admit_tool_effect(&tools, name, "{}").is_none()
+            admit_tool_effect(&tools, name, "{}", &ToolCallEnvelope::default()).is_none()
         });
     }
 
@@ -1165,17 +1138,18 @@ mod tests {
                 called: Arc::clone(&called),
                 fails: case.input.fails,
             })];
-            let outcome = scope_request_tool_execution(
+            let scope_call = crate::tool_call_lifecycle::runtime::ToolScopeEntry::new(
                 Some(deadline_at),
                 tokio_util::sync::CancellationToken::new(),
-                dispatch_tool(
-                    &tools,
-                    "ready_after_wall_deadline",
-                    "{}".into(),
-                    None,
-                    None,
-                    &crate::tool::ToolCallEnvelope::ambient(),
-                ),
+            )
+            .call();
+            let outcome = dispatch_tool(
+                &tools,
+                "ready_after_wall_deadline",
+                "{}".into(),
+                None,
+                None,
+                &scope_call,
             )
             .await;
             let settlement = match outcome {
@@ -1209,7 +1183,6 @@ mod tests {
         struct StrictToolError;
         #[derive(serde::Deserialize)]
         struct StrictArgs {
-            #[allow(dead_code)]
             text: String,
         }
         impl Tool for StrictArgsTool {
@@ -1226,11 +1199,11 @@ mod tests {
             }
             async fn call(
                 &self,
-                _args: Self::Args,
+                args: Self::Args,
                 _context: &crate::tool::ToolCallEnvelope,
             ) -> Result<Self::Output, Self::Error> {
                 self.calls.fetch_add(1, Ordering::SeqCst);
-                Ok("ran".to_string())
+                Ok(format!("ran with {}", args.text))
             }
         }
 
@@ -1260,7 +1233,7 @@ mod tests {
                 case.arguments,
                 None,
                 None,
-                &crate::tool::ToolCallEnvelope::ambient(),
+                &crate::tool::ToolCallEnvelope::default(),
             )
             .await;
             match &result {

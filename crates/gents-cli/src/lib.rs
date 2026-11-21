@@ -108,7 +108,7 @@ Examples:
   gents init --backend-preset claude-cli-subscription   # then: gents accounts login claude
   gents init --write
   gents init --yolo
-  gents init --inference-url $INFERENCE_ENDPOINT --model-name MODEL --write
+  gents init --inference-url http://HOST:PORT/v1 --model-name MODEL --write
   gents init --defra-query-collection AgentRequest
   gents init --identity-only
   gents init --identity-only --identity-backend macos-keychain --keychain-label LABEL
@@ -338,6 +338,7 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
                 commands::start::StartArgs {
                     home: cli.home,
                     store_key_custody: cli.store_key_custody,
+                    registry: cli.registry,
                     agent: cli.agent,
                     print: cli.print,
                     steer: cli.steer,
@@ -359,7 +360,6 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         Some(Command::Shell(args)) => return commands::start::shell(args, runtime).await,
         Some(command) => command,
     };
-    gents_tools::native::enable_self_runner();
     if let Command::Utils {
         command: UtilsCommand::Eval { command },
     } = &command
@@ -390,7 +390,15 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
     if let Some(home) = read_only_home {
         gents_service::repair::home::refuse_older_home(&resolve_home_dir(home.as_deref())).await?;
     }
-    let telemetry = gents_service::telemetry::init(DEFAULT_LOG_FILTER)?;
+    let system_log = match &command {
+        Command::Server(args) => args.system_log,
+        Command::Runtime {
+            command: RuntimeCommand::Server(args),
+        } => args.system_log,
+        Command::PrepareRuntime(args) => args.serve.system_log,
+        _ => false,
+    };
+    let telemetry = gents_service::telemetry::init(DEFAULT_LOG_FILTER, system_log)?;
     let result = match command {
         Command::Init(args) => commands::init::init(args).await,
         Command::Server(args) => {
@@ -552,6 +560,20 @@ fn absolutize(path: PathBuf) -> Result<PathBuf> {
     }
 }
 
+pub(crate) fn host_executable() -> Option<PathBuf> {
+    std::env::current_exe().ok()
+}
+
+pub(crate) fn embedded_runtime_options() -> gents::DocumentRuntimeOptions {
+    gents::DocumentRuntimeOptions {
+        native_executables: gents_tools::native::NativeExecutables {
+            host: host_executable(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
 /// A path as one shell word, for a command printed for a person to paste. Only an
 /// interior NUL cannot be quoted, and no path has one.
 pub(crate) fn shell_word(path: &Path) -> String {
@@ -621,6 +643,11 @@ async fn resolve_config_access_inner(
     if let Some(runtime_state) = read_runtime_state(&home_dir)? {
         if graphql_endpoint_available(&runtime_state.graphql).await {
             let endpoint = home_graphql_endpoint(&home_dir, runtime_state.graphql).await?;
+            gents_store::config_client::owed::spawn_settlement(
+                endpoint.clone(),
+                runtime_state.node_did,
+                |failed| tracing::warn!("{failed}"),
+            );
             return Ok((
                 ConfigAccess::Graphql(endpoint.with_client_signed_agent_creates()),
                 home_dir,
@@ -629,6 +656,8 @@ async fn resolve_config_access_inner(
         }
     }
 
+    let config = read_init_config(&home_dir)?.context("home is not initialized")?;
+    gents_store::local::document_acp::ensure_home_opens(&config)?;
     let data_dir = default_data_dir(&home_dir);
     anyhow::ensure!(
         tokio::fs::metadata(&data_dir)
@@ -637,7 +666,14 @@ async fn resolve_config_access_inner(
         "the initialized data directory {} is unavailable",
         data_dir.display()
     );
-    let claim = gents_store::local::home::lock_store(&home_dir, &data_dir).map_err(|error| {
+    gents_store::local::backend_protection::refuse_earlier_lineage(&data_dir)?;
+    let claim = gents_store::local::home::acquire_store(
+        &home_dir,
+        &data_dir,
+        gents_store::local::home::STORE_RELEASE_WAIT,
+    )
+    .await
+    .map_err(|error| {
         let held = error.lock_held().is_some();
         let error = anyhow::Error::from(error);
         if held {
@@ -654,10 +690,9 @@ async fn resolve_config_access_inner(
         &data_dir, &store_key, &claim,
     )
     .await?;
-    let config = read_init_config(&home_dir)?.context("home is not initialized")?;
     let runtime_identity = load_initialized_home_identity(&home_dir, &config)?;
     let protected = protected
-        .preflight(&store_key, Some(runtime_identity.did()))
+        .preflight(&store_key, &runtime_identity, config.document_acp)
         .await?;
     // Offline client writes are signed by the client key and travel through
     // this owned node's loopback endpoint, as `gents init` publishes them.
@@ -706,6 +741,12 @@ async fn resolve_config_access_inner(
             .await?
         }
     };
+    let endpoint = endpoint.with_reported_delegation_audience(
+        gents_store::local::document_acp::status_reports(
+            config.document_acp,
+            gents_store::local::document_acp::node_delegation_audience(&node),
+        ),
+    )?;
     let migration_node = node.clone();
     let access = ConfigAccess::claimed_local_as(
         node.clone(),
@@ -714,7 +755,7 @@ async fn resolve_config_access_inner(
     )?
     .with_client_signed_writes_through(endpoint.clone())?;
     let local_endpoint = local_http.then_some(endpoint);
-    gents_store::schema::migration::ensure_all_runtime_migrations(migration_node)
+    gents_store::schema::catalog::ensure_runtime_owned(migration_node)
         .await
         .map_err(|error| {
             gents_store::local::storage_backend::classify_store_error(error, &data_dir)
@@ -732,7 +773,9 @@ pub(crate) async fn persistent_node_builder(
     gents_store::local::storage_backend::reject_legacy_store(data_dir)?;
     let key = gents_store::local::store_key::open_home_store_key(home_dir, data_dir).await?;
     Ok(gents_store::local::store_key::persistent_builder(
-        data_dir, &key,
+        data_dir,
+        &key,
+        gents_store::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
     )?)
 }
 
@@ -851,6 +894,8 @@ mod tests {
     use gents_service::home_state::write_init_config;
     use gents_service::state::StoredInitConfig;
     use gents_store::identity::NodeIdentity as _;
+    #[cfg(not(feature = "vera"))]
+    use std::collections::BTreeMap;
 
     #[tokio::test]
     async fn initialized_offline_node_reuses_the_home_signer() {
@@ -882,6 +927,8 @@ mod tests {
                     )
                     .unwrap(),
                 ),
+                document_acp: Default::default(),
+                client_identity: None,
             },
         )
         .unwrap();
@@ -941,6 +988,8 @@ mod tests {
                     )
                     .unwrap(),
                 ),
+                document_acp: Default::default(),
+                client_identity: None,
             },
         )
         .unwrap();
@@ -957,9 +1006,15 @@ mod tests {
         home
     }
 
-    /// A home as `gents init` leaves it: its config, store key and a fresh
-    /// protected store whose provenance names the runtime.
+    /// A home as `gents init` leaves it: this machine's CLI client identity,
+    /// its config, store key and a fresh protected store whose provenance
+    /// names the runtime.
     async fn initialized_home_with_store(temp: &Path) -> PathBuf {
+        let client = gents_service::home_state::client_identity_for_new_node(
+            &gents_service::home_state::default_cli_identity_paths().unwrap(),
+        )
+        .await
+        .unwrap();
         let home = initialized_home(temp);
         let config = read_init_config(&home).unwrap().unwrap();
         let identity = load_initialized_home_identity(&home, &config).unwrap();
@@ -972,7 +1027,12 @@ mod tests {
         gents_store::local::backend_protection::FreshBackendStore::observe(&data, &lock)
             .await
             .unwrap()
-            .initialize(&key, Some(identity.did()))
+            .initialize(
+                &key,
+                &identity,
+                &identity::Did::new(client.did()).unwrap(),
+                gents_store::local::document_acp::DocumentAcp::Local,
+            )
             .await
             .unwrap();
         drop(lock);
@@ -1033,6 +1093,59 @@ mod tests {
             gents_store::local::home::store_lock_held(error.as_ref()).is_some(),
             "{error:#}"
         );
+    }
+
+    #[cfg(not(feature = "vera"))]
+    fn home_contents(dir: &Path, contents: &mut BTreeMap<PathBuf, Option<Vec<u8>>>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                contents.insert(path.clone(), None);
+                home_contents(&path, contents);
+            } else {
+                let bytes = std::fs::read(&path).unwrap();
+                contents.insert(path, Some(bytes));
+            }
+        }
+    }
+
+    #[cfg(not(feature = "vera"))]
+    #[tokio::test]
+    async fn a_build_without_the_vera_node_refuses_an_offline_vera_home_without_writing_to_it() {
+        gents_service::home_state::client_identity_for_new_node(
+            &gents_service::home_state::default_cli_identity_paths().unwrap(),
+        )
+        .await
+        .unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let home = initialized_home(temp.path());
+        let mut config = read_init_config(&home).unwrap().unwrap();
+        config.store_encryption = None;
+        config.document_acp = gents_store::local::document_acp::DocumentAcp::Vera;
+        write_init_config(&home, &config).unwrap();
+        std::fs::remove_file(gents_store::local::store_key::home_key_file(&home)).unwrap();
+        std::fs::create_dir_all(default_data_dir(&home)).unwrap();
+        let mut before = BTreeMap::new();
+        home_contents(temp.path(), &mut before);
+
+        let error = match resolve_config_access(Some(&home), None).await {
+            Ok(_) => panic!("this build cannot open an embedded Vera home"),
+            Err(error) => error,
+        };
+
+        let refusal = error
+            .downcast_ref::<gents_store::local::document_acp::DocumentAcpError>()
+            .unwrap_or_else(|| panic!("not a document access refusal: {error:#}"));
+        assert!(
+            matches!(
+                refusal,
+                gents_store::local::document_acp::DocumentAcpError::Unavailable
+            ),
+            "{error:#}"
+        );
+        let mut after = BTreeMap::new();
+        home_contents(temp.path(), &mut after);
+        assert_eq!(after, before);
     }
 
     #[tokio::test]

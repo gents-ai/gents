@@ -374,6 +374,7 @@ async fn schedule_source_next_fire_emits_intent_when_schedule_is_due() {
         goal_token_budget: None,
         output_schema_ref: None,
         hooks: Vec::new(),
+        command: None,
     };
     let schedule = ResolvedSchedule {
         session_id_template: None,
@@ -382,10 +383,8 @@ async fn schedule_source_next_fire_emits_intent_when_schedule_is_due() {
         trigger_doc_id,
         schedule_doc_id: schedule_doc_id(&node, &owner_did, "sched-1").await,
         schedule_id: "sched-1".to_string(),
-        task_id: task.task_id.clone(),
         task,
         cadence: ScheduleCadence::Interval { interval_secs: 60 },
-        enabled: true,
         concurrency: ConcurrencyMode::Serial,
     };
     let snapshot = snapshot_with_agent_and_schedules(
@@ -468,6 +467,7 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
         goal_token_budget: None,
         output_schema_ref: None,
         hooks: Vec::new(),
+        command: None,
     };
     let schedule = ResolvedSchedule {
         session_id_template: None,
@@ -476,10 +476,8 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
         trigger_doc_id,
         schedule_doc_id: schedule_doc_id(&node, &owner_did, "sched-1").await,
         schedule_id: "sched-1".to_string(),
-        task_id: task.task_id.clone(),
         task,
         cadence: ScheduleCadence::Interval { interval_secs: 60 },
-        enabled: true,
         concurrency: ConcurrencyMode::Serial,
     };
     let interval_secs = match schedule.cadence {
@@ -768,6 +766,7 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
         goal_token_budget: None,
         output_schema_ref: None,
         hooks: Vec::new(),
+        command: None,
     };
     let schedule = ResolvedSchedule {
         session_id_template: None,
@@ -776,10 +775,8 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
         trigger_doc_id,
         schedule_doc_id: schedule_doc_id(&node, &owner_did, "sched-e2e").await,
         schedule_id: "sched-e2e".to_string(),
-        task_id: task.task_id.clone(),
         task,
         cadence: ScheduleCadence::Interval { interval_secs: 60 },
-        enabled: true,
         concurrency: ConcurrencyMode::Serial,
     };
     let agent_access = gents_store::config_client::ConfigAccess::local_as(
@@ -949,6 +946,7 @@ async fn schedule_source_seeds_null_next_run_at_and_fires_on_first_tick() {
         goal_token_budget: None,
         output_schema_ref: None,
         hooks: Vec::new(),
+        command: None,
     };
     let schedule = ResolvedSchedule {
         session_id_template: None,
@@ -957,10 +955,8 @@ async fn schedule_source_seeds_null_next_run_at_and_fires_on_first_tick() {
         trigger_doc_id,
         schedule_doc_id: schedule_doc_id(&node, &owner_did, "sched-null").await,
         schedule_id: "sched-null".to_string(),
-        task_id: task.task_id.clone(),
         task,
         cadence: ScheduleCadence::Interval { interval_secs: 60 },
-        enabled: true,
         concurrency: ConcurrencyMode::Serial,
     };
     let snapshot = snapshot_with_agent_and_schedules(
@@ -1036,6 +1032,7 @@ async fn schedule_source_seeds_cron_next_run_at_without_immediate_fire() {
         goal_token_budget: None,
         output_schema_ref: None,
         hooks: Vec::new(),
+        command: None,
     };
     let schedule = ResolvedSchedule {
         session_id_template: None,
@@ -1044,7 +1041,6 @@ async fn schedule_source_seeds_cron_next_run_at_without_immediate_fire() {
         trigger_doc_id,
         schedule_doc_id: schedule_doc_id(&node, &owner_did, "sched-cron-null").await,
         schedule_id: "sched-cron-null".to_string(),
-        task_id: task.task_id.clone(),
         task,
         cadence: ScheduleCadence::Cron {
             expression: "30 0 * * *".to_string(),
@@ -1053,7 +1049,6 @@ async fn schedule_source_seeds_cron_next_run_at_without_immediate_fire() {
                 gents_documents::schedule_cron::CronMissedRunPolicy::LatestOnly,
             ),
         },
-        enabled: true,
         concurrency: ConcurrencyMode::Serial,
     };
     let snapshot = snapshot_with_agent_and_schedules(

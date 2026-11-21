@@ -48,7 +48,8 @@ export const LIVE_RUNNER_BINARY_ENV = "GENTS_TAURI_LIVE_RUNNER_BINARY";
 
 /**
  * Resolve the live runner process. A prebuilt override avoids Cargo's build
- * lock; its caller owns ensuring that the binary is fresh.
+ * lock; its caller owns ensuring that the binary is fresh. The runner takes
+ * only flags; the harness's environment variables become flags here.
  */
 export function createLiveBridgeRunnerInvocation(
   options: LiveBridgeRunnerOptions = {},
@@ -80,29 +81,72 @@ export function createLiveBridgeRunnerInvocation(
     command = configuredBinary;
     runnerArgs = [];
   }
-  appendRunnerArg(runnerArgs, "--inference-url", options.inferenceUrl);
-  appendRunnerArg(runnerArgs, "--model-name", options.modelName);
-  appendRunnerArg(runnerArgs, "--provider", options.provider);
-  appendRunnerArg(runnerArgs, "--api-key", options.apiKey);
-  appendRunnerArg(runnerArgs, "--api-key-env-var", options.apiKeyEnvVar);
+  if (enabled(env.GENTS_TAURI_LIVE)) runnerArgs.push("--live");
+  if (enabled(env.GENTS_TAURI_LIVE_RETAIN_DATA)) runnerArgs.push("--retain-data");
+  appendRunnerArg(runnerArgs, "--log-filter", env.GENTS_DESKTOP_TEST_LOG);
+  appendRunnerArg(runnerArgs, "--inference-settings", env.GENTS_DESKTOP_LIVE_INFERENCE);
+  appendRunnerArg(
+    runnerArgs,
+    "--inference-url",
+    options.inferenceUrl ?? env.GENTS_DESKTOP_LIVE_BACKEND_ENDPOINT,
+  );
+  appendRunnerArg(
+    runnerArgs,
+    "--model-name",
+    options.modelName ?? env.GENTS_DESKTOP_LIVE_BACKEND_MODEL,
+  );
+  appendRunnerArg(runnerArgs, "--fallback-model-name", env.GENTS_TEST_OPENROUTER_MODEL);
+  appendRunnerArg(
+    runnerArgs,
+    "--provider",
+    options.provider ?? env.GENTS_DESKTOP_LIVE_BACKEND_PROVIDER,
+  );
+  appendRunnerArg(
+    runnerArgs,
+    "--api-key",
+    options.apiKey ?? env.GENTS_DESKTOP_LIVE_BACKEND_API_KEY,
+  );
+  appendRunnerArg(
+    runnerArgs,
+    "--api-key-env-var",
+    options.apiKeyEnvVar ?? env.GENTS_DESKTOP_LIVE_BACKEND_API_KEY_ENV_VAR,
+  );
   appendRunnerArg(
     runnerArgs,
     "--agent-target-inference-url",
-    options.agentTargetInferenceUrl,
+    options.agentTargetInferenceUrl ?? env.GENTS_DESKTOP_LIVE_TARGET_BACKEND_ENDPOINT,
   );
   appendRunnerArg(
     runnerArgs,
     "--agent-target-model-name",
-    options.agentTargetModelName,
+    options.agentTargetModelName ?? env.GENTS_DESKTOP_LIVE_TARGET_BACKEND_MODEL,
   );
-  appendRunnerArg(runnerArgs, "--agent-target-provider", options.agentTargetProvider);
-  appendRunnerArg(runnerArgs, "--agent-target-api-key", options.agentTargetApiKey);
+  appendRunnerArg(
+    runnerArgs,
+    "--agent-target-provider",
+    options.agentTargetProvider ?? env.GENTS_DESKTOP_LIVE_TARGET_BACKEND_PROVIDER,
+  );
+  appendRunnerArg(
+    runnerArgs,
+    "--agent-target-api-key",
+    options.agentTargetApiKey ?? env.GENTS_DESKTOP_LIVE_TARGET_BACKEND_API_KEY,
+  );
   appendRunnerArg(
     runnerArgs,
     "--agent-target-api-key-env-var",
-    options.agentTargetApiKeyEnvVar,
+    options.agentTargetApiKeyEnvVar ??
+      env.GENTS_DESKTOP_LIVE_TARGET_BACKEND_API_KEY_ENV_VAR,
   );
   return { command, runnerArgs };
+}
+
+/** The harness's switch variables, read with the falsey rule the runner's
+ *  flags once used: unset, empty, 0, false, no, off, n and f are off. */
+function enabled(value: string | undefined) {
+  if (value === undefined) return false;
+  return !["", "0", "false", "no", "off", "n", "f"].includes(
+    value.trim().toLowerCase(),
+  );
 }
 
 export class LiveBridgeRunner implements TauriDriverBridge {

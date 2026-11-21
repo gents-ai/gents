@@ -68,56 +68,44 @@ fn validate_trigger_provenance(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
+/// A pending request's target, prompt and provenance; the caller supplies
+/// its request, session and retry identities alongside.
+pub struct PendingAgentRequest<'a> {
+    pub node_did: &'a str,
+    pub agent_did: &'a str,
+    pub content: &'a str,
+    pub execution_origin: ExecutionOrigin,
+    pub trigger_lineage: TriggerLineage,
+    pub conversation_title: Option<&'a str>,
+    pub workspace_lineage: Option<&'a WorkspaceLineage>,
+    pub requester_did: Option<&'a str>,
+    pub trigger_doc_id: Option<&'a str>,
+}
+
 pub async fn write_pending_agent_request_with_lineage_workspace_and_conversation_title(
     node: &std::sync::Arc<EmbeddedNode>,
     actor: ::identity::Did,
-    node_did: &str,
-    agent_did: &str,
-    content: &str,
-    execution_origin: ExecutionOrigin,
-    trigger_lineage: TriggerLineage,
-    conversation_title: Option<&str>,
-    workspace_lineage: Option<&WorkspaceLineage>,
+    pending: PendingAgentRequest<'_>,
     request_id: Option<&str>,
-    requester_did: Option<&str>,
-    trigger_doc_id: Option<&str>,
     session_id: Option<&str>,
     identity: &dyn gents_store::identity::NodeIdentity,
 ) -> Result<EnqueuedAgentRequest> {
     write_pending_agent_request_with_identity(
         node,
         actor,
-        node_did,
-        agent_did,
-        content,
-        execution_origin,
-        trigger_lineage,
-        conversation_title,
-        workspace_lineage,
+        pending,
         request_id,
-        requester_did,
-        trigger_doc_id,
         session_id,
         Some(identity),
     )
     .await
 }
 
-#[allow(clippy::too_many_arguments)]
 pub async fn write_pending_agent_request_with_identity(
     node: &std::sync::Arc<EmbeddedNode>,
     actor: ::identity::Did,
-    node_did: &str,
-    agent_did: &str,
-    content: &str,
-    execution_origin: ExecutionOrigin,
-    trigger_lineage: TriggerLineage,
-    conversation_title: Option<&str>,
-    workspace_lineage: Option<&WorkspaceLineage>,
+    pending: PendingAgentRequest<'_>,
     request_id: Option<&str>,
-    requester_did: Option<&str>,
-    trigger_doc_id: Option<&str>,
     session_id: Option<&str>,
     identity: Option<&dyn gents_store::identity::NodeIdentity>,
 ) -> Result<EnqueuedAgentRequest> {
@@ -131,20 +119,7 @@ pub async fn write_pending_agent_request_with_identity(
         .filter(|value| !value.is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let spec = pending_agent_request_spec(
-        node_did,
-        agent_did,
-        content,
-        execution_origin,
-        trigger_lineage,
-        conversation_title,
-        workspace_lineage,
-        &request_id,
-        &session_id,
-        None,
-        requester_did,
-        trigger_doc_id,
-    )?;
+    let spec = pending_agent_request_spec(pending, &request_id, &session_id, None)?;
     let identity = identity.context("request materialization requires a managed Agent identity")?;
     let access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
@@ -171,22 +146,13 @@ pub async fn write_pending_agent_request_with_identity(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-pub async fn build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title(
-    node_did: &str,
-    agent_did: &str,
-    content: &str,
-    execution_origin: ExecutionOrigin,
-    trigger_lineage: TriggerLineage,
-    conversation_title: Option<&str>,
-    workspace_lineage: Option<&WorkspaceLineage>,
+pub fn pending_agent_request_spec(
+    pending: PendingAgentRequest<'_>,
     request_id: &str,
     session_id: &str,
     retry_key: Option<&str>,
-    requester_did: Option<&str>,
-    trigger_doc_id: Option<&str>,
-) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
-    let spec = pending_agent_request_spec(
+) -> Result<RequestSpec> {
+    let PendingAgentRequest {
         node_did,
         agent_did,
         content,
@@ -194,30 +160,9 @@ pub async fn build_signed_pending_agent_request_with_lineage_workspace_and_conve
         trigger_lineage,
         conversation_title,
         workspace_lineage,
-        request_id,
-        session_id,
-        retry_key,
         requester_did,
         trigger_doc_id,
-    )?;
-    build_signed_request(spec, RequestSigner::RegisteredTarget).await
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn pending_agent_request_spec(
-    node_did: &str,
-    agent_did: &str,
-    content: &str,
-    execution_origin: ExecutionOrigin,
-    trigger_lineage: TriggerLineage,
-    conversation_title: Option<&str>,
-    workspace_lineage: Option<&WorkspaceLineage>,
-    request_id: &str,
-    session_id: &str,
-    retry_key: Option<&str>,
-    requester_did: Option<&str>,
-    trigger_doc_id: Option<&str>,
-) -> Result<RequestSpec> {
+    } = pending;
     validate_trigger_lineage(&trigger_lineage, trigger_doc_id)?;
     if trigger_lineage.trigger_kind.as_deref() == Some("manual")
         && trigger_lineage.trigger_id.is_some()
@@ -392,10 +337,12 @@ pub fn build_request(
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         purpose,
         identity.request_id,
-        identity.node_did,
-        identity.requester_did.unwrap_or(acting_agent),
-        identity.agent_did,
-        identity.session_id,
+        gents_protocol::request_admission::RequestScope::new(
+            identity.node_did,
+            identity.requester_did.unwrap_or(acting_agent),
+            identity.agent_did,
+            identity.session_id,
+        ),
         identity.content,
         identity.execution_origin.as_str(),
         identity.created_at,
@@ -563,55 +510,30 @@ pub fn session_message_sender_header(cause: &SessionMessageCause, at: &str) -> S
     )
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "called from session_message with this shape"
-)]
+/// The request a session message opens in its target session.
+pub struct SessionMessageRequest<'a> {
+    pub content: &'a str,
+    pub title: Option<&'a str>,
+    pub request_id: &'a str,
+    pub retry_key: Option<String>,
+    pub hop: u32,
+    pub input: gents_protocol::request_input::RequestInput,
+}
+
 pub async fn build_session_message_request(
     cause: &SessionMessageCause,
     target: &SessionMessageTarget,
-    content: &str,
-    title: Option<&str>,
-    request_id: &str,
-    retry_key: Option<String>,
-    hop: u32,
-    queue: Option<gents_protocol::request_input::RequestQueue>,
-    cwd: Option<String>,
+    message: SessionMessageRequest<'_>,
     signer: &gents_store::identity::ManagedAgentSigner,
 ) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
-    build_session_message_request_with_input(
-        cause,
-        target,
+    let SessionMessageRequest {
         content,
         title,
         request_id,
         retry_key,
         hop,
-        gents_protocol::request_input::RequestInput {
-            queue,
-            cwd,
-            ..Default::default()
-        },
-        signer,
-    )
-    .await
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "called from session_message and plugin_job effects with this shape"
-)]
-pub async fn build_session_message_request_with_input(
-    cause: &SessionMessageCause,
-    target: &SessionMessageTarget,
-    content: &str,
-    title: Option<&str>,
-    request_id: &str,
-    retry_key: Option<String>,
-    hop: u32,
-    mut input: gents_protocol::request_input::RequestInput,
-    signer: &gents_store::identity::ManagedAgentSigner,
-) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
+        mut input,
+    } = message;
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
     anyhow::ensure!(
         !cause.caller_request_id.trim().is_empty()
@@ -744,6 +666,15 @@ pub async fn activate_workspace_bound_request_with_identity(
     Ok(())
 }
 
+/// How a materialized request runs: its deadline, its origin, the backend it
+/// is bound to and the operator tool root that bounds its working directory.
+pub struct ExecutionBinding {
+    pub deadline_duration_secs: u64,
+    pub execution_origin: ExecutionOrigin,
+    pub backend_id: String,
+    pub operator_tool_root: Option<std::path::PathBuf>,
+}
+
 impl RequestLifecycle {
     pub fn set_execution_lease_duration(&mut self, duration: std::time::Duration) {
         assert_eq!(
@@ -805,16 +736,13 @@ impl RequestLifecycle {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub async fn materialize_claimed_with_execution_binding(
         node: Arc<EmbeddedNode>,
         agent_did: &str,
         identity: Arc<dyn gents_store::identity::NodeIdentity>,
         agent_identity: Arc<dyn gents_store::identity::NodeIdentity>,
         content: &str,
-        deadline_duration_secs: u64,
-        execution_origin: ExecutionOrigin,
-        backend_id: impl Into<String>,
+        binding: ExecutionBinding,
         trigger_lineage: TriggerLineage,
     ) -> Result<Self> {
         let mut lifecycle = Self::materialize_pending_with_execution_binding(
@@ -822,9 +750,7 @@ impl RequestLifecycle {
             agent_did,
             identity,
             content,
-            deadline_duration_secs,
-            execution_origin,
-            backend_id,
+            binding,
             trigger_lineage,
             Some(agent_identity),
         )
@@ -837,20 +763,22 @@ impl RequestLifecycle {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub async fn materialize_pending_with_execution_binding(
         node: Arc<EmbeddedNode>,
         agent_did: &str,
         identity: Arc<dyn gents_store::identity::NodeIdentity>,
         content: &str,
-        deadline_duration_secs: u64,
-        execution_origin: ExecutionOrigin,
-        backend_id: impl Into<String>,
+        binding: ExecutionBinding,
         trigger_lineage: TriggerLineage,
         managed_identity: Option<Arc<dyn gents_store::identity::NodeIdentity>>,
     ) -> Result<Self> {
+        let ExecutionBinding {
+            deadline_duration_secs,
+            execution_origin,
+            backend_id,
+            operator_tool_root,
+        } = binding;
         let node_did = identity.did().to_string();
-        let backend_id = backend_id.into();
         let agent_did = agent_did.to_string();
         let request_id = uuid::Uuid::new_v4().to_string();
         let session_id = uuid::Uuid::new_v4().to_string();
@@ -952,6 +880,7 @@ impl RequestLifecycle {
             identity.as_ref(),
             &queued_request,
             &agent_did,
+            operator_tool_root.as_deref(),
         )
         .await?;
         let mut lifecycle = Self::new_with_execution_binding(
@@ -1232,13 +1161,15 @@ pub async fn apply_request_session_projection(
     };
     session::ensure_session_in_txn(
         txn,
-        &request.session_id,
-        &request.node_did,
-        &request.agent_did,
-        request.requester_did.as_deref(),
-        request.input.initial_title.clone(),
-        provenance,
-        now,
+        crate::session::NewAgentSession {
+            session_id: &request.session_id,
+            node_did: &request.node_did,
+            agent_did: &request.agent_did,
+            requester_did: request.requester_did.as_deref(),
+            title: request.input.initial_title.clone(),
+            provenance,
+            created_at: now,
+        },
     )
     .await?;
     let reopened = session::reopen_session_in_txn(
@@ -1325,13 +1256,15 @@ async fn project_refused_request_onto_session_in_txn(
     };
     session::ensure_session_in_txn(
         txn,
-        &request.session_id,
-        &request.node_did,
-        &request.agent_did,
-        request.requester_did.as_deref(),
-        request.input.initial_title.clone(),
-        provenance,
-        now,
+        crate::session::NewAgentSession {
+            session_id: &request.session_id,
+            node_did: &request.node_did,
+            agent_did: &request.agent_did,
+            requester_did: request.requester_did.as_deref(),
+            title: request.input.initial_title.clone(),
+            provenance,
+            created_at: now,
+        },
     )
     .await?;
     let owner = gents_store::config_client::agent_session::load_agent_session_row_in_txn(
@@ -1377,7 +1310,7 @@ async fn project_refused_request_onto_session_in_txn(
 #[cfg(test)]
 mod session_message_tests {
     use super::*;
-    use crate::request::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
+    use gents_store::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
 
     #[tokio::test]
     async fn session_message_request_carries_the_cwd() {
@@ -1405,7 +1338,20 @@ mod session_message_tests {
         };
         let build = |cwd: Option<String>| {
             build_session_message_request(
-                &cause, &target, "hello", None, "req-cwd", None, 1, None, cwd, &signer,
+                &cause,
+                &target,
+                SessionMessageRequest {
+                    content: "hello",
+                    title: None,
+                    request_id: "req-cwd",
+                    retry_key: None,
+                    hop: 1,
+                    input: gents_protocol::request_input::RequestInput {
+                        cwd,
+                        ..Default::default()
+                    },
+                },
+                &signer,
             )
         };
         let carried = build(Some("/work/tree".to_owned())).await.unwrap();
@@ -1450,13 +1396,14 @@ mod session_message_tests {
         let create = build_session_message_request(
             &cause,
             &target,
-            "/triage\nlook at it",
-            None,
-            "req-sender",
-            None,
-            1,
-            None,
-            None,
+            SessionMessageRequest {
+                content: "/triage\nlook at it",
+                title: None,
+                request_id: "req-sender",
+                retry_key: None,
+                hop: 1,
+                input: gents_protocol::request_input::RequestInput::default(),
+            },
             &signer,
         )
         .await

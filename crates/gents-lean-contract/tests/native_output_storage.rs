@@ -26,7 +26,8 @@ fn node_identity() -> String {
             remote_signer: None,
             signing_authorization: None,
         },
-    );
+    )
+    .expect("the signing identity registers");
     did
 }
 
@@ -46,10 +47,15 @@ async fn canonical_segment_create_returns_physical_identity_and_exact_json() {
         .add_dac_policy_with_counter_as(&context, gents_schemas::AGENT_OWNERSHIP_POLICY, 0)
         .await
         .unwrap();
-    assert_eq!(policy, gents_schemas::AGENT_OWNERSHIP_POLICY_ID);
-    node.add_collection(gents_schemas::AGENT_OUTPUT_SEGMENT)
-        .await
-        .unwrap();
+    assert_eq!(
+        policy,
+        gents_schemas::HomePolicyIds::shared().id(gents_schemas::BuiltInPolicy::Household)
+    );
+    node.add_collection(
+        &gents_schemas::HomePolicyIds::shared().render(gents_schemas::AGENT_OUTPUT_SEGMENT),
+    )
+    .await
+    .unwrap();
     let segment = OutputSegment {
         node_did: "did:test:storage".into(),
         requester_did: None,

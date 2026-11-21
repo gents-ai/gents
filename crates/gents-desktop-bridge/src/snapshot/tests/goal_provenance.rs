@@ -1,6 +1,6 @@
 use super::*;
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_protocol::request_input::GoalAssignmentInput;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -10,7 +10,7 @@ use gents_store::identity::NodeIdentity as _;
 /// A served runtime after every modeled opening-provenance case has been
 /// checked before transcript publication and after reload.
 struct GoalProvenance {
-    runtime: gents_desktop_core::test_fixtures::ServedRuntimeHome,
+    runtime: gents::client_test_support::ServedRuntimeHome,
     access: ConfigAccess,
     opening_doc: String,
     observed: Vec<AgentRequestRow>,
@@ -20,7 +20,7 @@ struct GoalProvenance {
 async fn goal_provenance_cases() -> GoalProvenance {
     // A served runtime whose User published a real provisioned Agent; a
     // guest may write the Agent's sessions.
-    let runtime = gents_desktop_core::test_fixtures::ServedRuntimeHome::start().await;
+    let runtime = gents::client_test_support::ServedRuntimeHome::start().await;
     let binding = runtime.publish_chat_agent().await;
     let identity = runtime.runtime().clone();
     let user = runtime.user().clone();
@@ -54,10 +54,7 @@ async fn goal_provenance_cases() -> GoalProvenance {
     let reservation = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "reservation",
-        identity.did(),
-        user.did(),
-        &binding.agent_did,
-        "session",
+        RequestScope::new(identity.did(), user.did(), &binding.agent_did, "session"),
         "reserve",
         "interactive",
         "2026-10-25T00:00:00Z",
@@ -68,13 +65,8 @@ async fn goal_provenance_cases() -> GoalProvenance {
             .await
             .unwrap();
     let agent_access = runtime.agent_access(&binding).await;
-    let contract: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let modeled = contract["goal_client_start_cases"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|case| case["name"] == "reserved_session")
-        .expect("goal provenance model");
+    let mut delegated_author = None;
+    let mut substituted_requester = None;
     let mut observed = Vec::new();
     let mut opening_doc = None;
     // Every request the model accepts as an applied opening, by document.
@@ -113,10 +105,12 @@ async fn goal_provenance_cases() -> GoalProvenance {
         let mut create = AgentRequestCreate::base(
             RequestPurpose::Normal,
             format!("request-{index}"),
-            identity.did(),
-            if index == 12 { guest.did() } else { user.did() },
-            &binding.agent_did,
-            "session",
+            RequestScope::new(
+                identity.did(),
+                if index == 12 { guest.did() } else { user.did() },
+                &binding.agent_did,
+                "session",
+            ),
             "Review the changes",
             "interactive",
             "2026-10-25T00:00:00Z",
@@ -312,7 +306,7 @@ async fn goal_provenance_cases() -> GoalProvenance {
             .unwrap();
         if !omit_receipt {
             // The receipt's links are staged with it, as its owner publishes
-            // them; an Agent holds no `get-collection` outside a transaction.
+            // them.
             agent_access.transact_write("goal_provenance.receipt", |txn| Box::pin(async {
                 let result = txn.execute_with_variables(
                     "mutation($input: AgentSessionGoalReceiptMutationInputArg!) { create_AgentSessionGoalReceipt(input: $input) { _docID } }",
@@ -398,27 +392,25 @@ async fn goal_provenance_cases() -> GoalProvenance {
             .pending_turn
             .as_ref()
             .expect("pending opening input");
-        let expected = if index == 11 {
-            modeled["opening_provenance"]["delegated_author"]
-                .as_bool()
-                .unwrap()
-                .then_some("goal-11")
-        } else if index == 12 {
-            modeled["opening_provenance"]["substituted_requester"]
-                .as_bool()
-                .unwrap()
-                .then_some("goal-12")
+        let expected = if matches!(index, 11 | 12) {
+            let started = pending.started_goal_id.clone();
+            assert!(
+                started.is_none() || started.as_deref() == Some(goal_id.as_str()),
+                "case {index} pending"
+            );
+            if index == 11 {
+                delegated_author = Some(started.is_some());
+            } else {
+                substituted_requester = Some(started.is_some());
+            }
+            started
         } else {
-            expected
+            expected.map(str::to_owned)
         };
-        if let Some(goal) = expected {
-            applied.insert(doc.clone(), goal.to_owned());
+        if let Some(goal) = &expected {
+            applied.insert(doc.clone(), goal.clone());
         }
-        assert_eq!(
-            pending.started_goal_id.as_deref(),
-            expected,
-            "case {index} pending"
-        );
+        assert_eq!(pending.started_goal_id, expected, "case {index} pending");
         rows.requests[0].lifecycle_state = Some(RequestLifecycleState::Completed);
         for (suffix, sequence, role) in [
             ("context", 1, MessageRole::User),
@@ -427,12 +419,14 @@ async fn goal_provenance_cases() -> GoalProvenance {
         ] {
             push_canonical_text_message_for_node(
                 &mut rows,
-                &format!("authored:{doc}:{suffix}"),
-                "session",
-                Some(&doc),
-                sequence,
-                role,
-                "Review the changes",
+                CanonicalText {
+                    doc_id: &format!("authored:{doc}:{suffix}"),
+                    session_id: "session",
+                    request_doc_id: Some(&doc),
+                    sequence,
+                    role,
+                    text: "Review the changes",
+                },
                 identity.did(),
                 Some(if index == 12 { guest.did() } else { user.did() }),
             );
@@ -483,10 +477,20 @@ async fn goal_provenance_cases() -> GoalProvenance {
                 .collect::<Vec<_>>();
             assert_eq!(
                 markers,
-                expected.into_iter().collect::<Vec<_>>(),
+                expected.as_deref().into_iter().collect::<Vec<_>>(),
                 "case {index} reload {reload}"
             );
         }
+    }
+    for modeled in
+        gents_lean_vocab::families::goal_client_start_contracts_opening_provenance::cases()
+    {
+        modeled.check(
+            gents_lean_vocab::families::goal_client_start_contracts_opening_provenance::OpeningProvenanceOutput {
+                delegated_author: delegated_author.expect("delegated author case ran"),
+                substituted_requester: substituted_requester.expect("substituted requester case ran"),
+            },
+        );
     }
     GoalProvenance {
         runtime,
@@ -535,8 +539,8 @@ async fn goal_provenance_agrees_before_transcript_publication_and_after_reload()
 /// still names its origin, so the marker follows it.
 #[tokio::test]
 async fn paged_native_forks_follow_goal_provenance() {
-    use crate::tests::streaming_backend::{StreamPlan, StreamResponse, StreamScript};
     use crate::types::{GoalControlAction, GoalControlRequest};
+    use gents::support::streaming_backend::{StreamPlan, StreamResponse, StreamScript};
 
     let desktop = crate::tests::support::RunningDesktop::start(vec![
         StreamPlan::current_authored_user(

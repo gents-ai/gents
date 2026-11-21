@@ -3,7 +3,6 @@ use std::collections::BTreeSet;
 use crate::background::job::origin::call_origin;
 use crate::background::status::ProcessControlScope;
 use gents_protocol::job::keys::job_spawn_key;
-use gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT;
 use gents_protocol::job::{
     DynamicMode, JobCeiling, JobChildState, JobControlRequest, JobEffects, JobGuestPin,
     JobInterrupt, JobMessage, JobOrigin, JobPin, JobPolicy, JobResume, JobResumeEngine, JobSpawn,
@@ -101,6 +100,9 @@ pub struct StepContext {
     /// `dynamic_targets` name targets by these ids.
     pub target_ids: Vec<(String, (String, String))>,
     pub live_background: u32,
+    /// Lean `backgroundLimit`: the caller Agent's resolved Tools
+    /// `host.max_background_tool_calls`.
+    pub background_limit: gents_protocol::job::BackgroundLimit,
     pub started_by_job: bool,
     pub cwd_allowed: Vec<String>,
     pub within: Vec<(String, String)>,
@@ -369,7 +371,7 @@ fn admit(
         if ctx.live == empty_ceiling() {
             return Err(Refusal::NotAvailable.into());
         }
-        if ctx.live_background as usize >= MAX_BACKGROUNDED_TOOLS_PER_PARENT {
+        if ctx.live_background as usize >= ctx.background_limit.get() {
             return Err(Refusal::BackgroundBudgetExceeded.into());
         }
         if ctx.started_by_job {
@@ -1042,6 +1044,7 @@ mod tests {
             target_hops: vec![(pair("a"), 0), (pair("b"), 0)],
             target_ids: vec![("a".to_owned(), pair("a")), ("b".to_owned(), pair("b"))],
             live_background: 0,
+            background_limit: Default::default(),
             started_by_job: false,
             cwd_allowed: Vec::new(),
             within: Vec::new(),

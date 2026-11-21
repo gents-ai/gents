@@ -1,9 +1,9 @@
 use futures::StreamExt;
 
 use super::sse_state::MessagesSseState;
-use crate::clients::claude_subscription::ClaudeStreamResponse;
 use crate::llm::rig_compat::completion::{CompletionError, RawStreamingChoice};
 use crate::llm::rig_compat::http as http_client;
+use crate::llm::rig_compat::model::StreamEnd;
 use gents_loop::provider_audit::ProviderAuditSender;
 
 /// Incremental line-splitter over a response body.
@@ -11,8 +11,7 @@ use gents_loop::provider_audit::ProviderAuditSender;
 pub(crate) fn stream_sse_body(
     body: http_client::BoxedStream,
     state: MessagesSseState,
-) -> impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>
-{
+) -> impl futures::Stream<Item = Result<RawStreamingChoice<StreamEnd>, CompletionError>> {
     stream_sse_body_observed(body, state, None)
 }
 
@@ -20,8 +19,7 @@ pub(super) fn stream_sse_body_observed(
     body: http_client::BoxedStream,
     state: MessagesSseState,
     audit_sender: Option<ProviderAuditSender>,
-) -> impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>
-{
+) -> impl futures::Stream<Item = Result<RawStreamingChoice<StreamEnd>, CompletionError>> {
     async_stream::stream! {
         let mut body = body;
         let mut state = state;
@@ -121,7 +119,7 @@ async fn push_line_observed(
     state: &mut MessagesSseState,
     line: &str,
     audit_sender: Option<&ProviderAuditSender>,
-) -> Result<Vec<RawStreamingChoice<ClaudeStreamResponse>>, CompletionError> {
+) -> Result<Vec<RawStreamingChoice<StreamEnd>>, CompletionError> {
     let dispatches = line.strip_suffix('\r').unwrap_or(line).is_empty();
     let mut reservation = match (dispatches, audit_sender) {
         (true, Some(sender)) => Some(sender.reserve().await.map_err(|_| audit_queue_closed())?),

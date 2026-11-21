@@ -52,6 +52,7 @@ pub struct LeanPluginJobContext {
     pub max_hop: Option<u32>,
     pub target_hops: Vec<LeanPluginJobTargetHop>,
     pub live_background: u32,
+    pub background_limit: u32,
     pub started_by_job: bool,
     pub cwd_allowed: Vec<String>,
     pub within: Vec<LeanPluginJobWithin>,

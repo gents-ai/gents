@@ -23,7 +23,6 @@ thiserror.workspace = true
 chrono.workspace = true
 clap.workspace = true
 hostname.workspace = true
-identity.workspace = true
 notify = { version = "8.2", default-features = false, features = ["macos_kqueue"] }
 opentelemetry.workspace = true
 opentelemetry-otlp.workspace = true
@@ -52,6 +51,8 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 libc = "0.2"
 
 [dev-dependencies]
+axum = "0.8"
+base64.workspace = true
 gents-service = { path = ".", features = ["test-home-guard"] }
 gents-desktop-core = { workspace = true, features = ["test-fixtures", "typescript"] }
 gents-workspace-hack = { workspace = true }

@@ -12,6 +12,7 @@ use serde_json::json;
 
 use super::fixtures::*;
 use super::*;
+use tokio_util::sync::CancellationToken;
 
 #[cfg(unix)]
 #[path = "tests/background_shutdown.rs"]
@@ -178,7 +179,7 @@ async fn goal_tool_interception_defaults_deny_and_create_depends_on_base_capabil
             None,
             "unadvertised-update",
             r#"{"status":"complete"}"#,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await;
     assert!(
@@ -195,7 +196,7 @@ async fn goal_tool_interception_defaults_deny_and_create_depends_on_base_capabil
             None,
             "unadvertised-create",
             r#"{"objective":"unauthorized"}"#,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await;
     assert!(
@@ -362,7 +363,7 @@ async fn control_tool_lost_terminal_compare_replays_the_durable_winner() {
     let tool_doc_id = loser.doc_id().unwrap().to_owned();
     let mut winner = reload_tool_call_as_hook(&hook, &tool_doc_id, &session_id).await;
     assert!(winner
-        .cancel_during_run(gents_session::session::tool_call_state::CancelCause::Interrupted)
+        .cancel_during_run(gents_protocol::tool_call::CancelCause::Interrupted)
         .await
         .unwrap());
 
@@ -460,7 +461,7 @@ async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
             None,
             "internal-deadline",
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient()
+            &gents_loop::tool::ToolCallEnvelope::default()
         )
         .await,
         ToolCallHookAction::Continue
@@ -684,7 +685,7 @@ async fn hook_maps_managed_timeout_result_to_timed_out_lifecycle() {
             None,
             "internal-timeout",
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient()
+            &gents_loop::tool::ToolCallEnvelope::default()
         )
         .await,
         ToolCallHookAction::Continue
@@ -747,7 +748,7 @@ async fn hook_maps_unknown_tool_dispatch_to_failed_lifecycle() {
             None,
             "internal-unknown",
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient()
+            &gents_loop::tool::ToolCallEnvelope::default()
         )
         .await,
         ToolCallHookAction::Continue
@@ -759,7 +760,7 @@ async fn hook_maps_unknown_tool_dispatch_to_failed_lifecycle() {
         "{}".to_string(),
         None,
         None,
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await;
 
@@ -823,7 +824,7 @@ async fn hook_persists_exact_canonical_output_stream_without_legacy_spill_rows()
             None,
             "internal-oversized",
             tool_args,
-            &gents_loop::tool::ToolCallEnvelope::ambient()
+            &gents_loop::tool::ToolCallEnvelope::default()
         )
         .await,
         ToolCallHookAction::Continue
@@ -887,7 +888,7 @@ async fn hook_interrupts_cancel_only_their_own_calls_as_the_lean_model_says() {
                         None,
                         &id,
                         "{}",
-                        &gents_loop::tool::ToolCallEnvelope::ambient()
+                        &gents_loop::tool::ToolCallEnvelope::default()
                     )
                     .await,
                     ToolCallHookAction::Continue
@@ -1053,7 +1054,7 @@ async fn interruption_leaves_background_workers_running() {
 fn generated_interrupt_dispositions_follow_the_lean_model() {
     use crate::call::lifecycle::InterruptDisposition;
     use gents_protocol::tool_call::AwaitMode;
-    use gents_session::session::tool_call_state::ToolCallState;
+    use gents_protocol::tool_call::ToolCallState;
     gents_lean_vocab::families::contracts_interrupt_disposition::replay::<String, String, String>(
         |case| {
             let state = ToolCallState::from_persisted(&case.state).expect("modeled state");
@@ -1213,7 +1214,7 @@ async fn interrupt_cancels_native_tools_and_keeps_children_running() {
 
     let outer_doc_id = outer_row["_docID"].as_str().expect("outer row document");
     let mut reloaded = reload_tool_call_as_hook(&hook, outer_doc_id, &session_id).await;
-    reloaded.set_state(gents_session::session::tool_call_state::ToolCallState::Running);
+    reloaded.set_state(gents_protocol::tool_call::ToolCallState::Running);
     reloaded.set_started_at(Some(chrono::Utc::now() - chrono::Duration::seconds(1)));
     let late_completion = reloaded.complete("late success").await;
     let late_error = late_completion
@@ -1271,7 +1272,7 @@ async fn hook_can_fail_live_tool_call_without_conflating_timeout_or_cancel() {
             None,
             "internal-fail",
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient()
+            &gents_loop::tool::ToolCallEnvelope::default()
         )
         .await,
         ToolCallHookAction::Continue
@@ -1346,7 +1347,7 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
             Some("call-1".to_string()),
             "internal-1",
             tool_args,
-            &gents_loop::tool::ToolCallEnvelope::ambient()
+            &gents_loop::tool::ToolCallEnvelope::default()
         )
         .await,
         ToolCallHookAction::Continue
@@ -1520,7 +1521,7 @@ async fn read_file_result_persists_raw_output() {
             Some("call-read".to_string()),
             "internal-read",
             tool_args,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await,
         ToolCallHookAction::Continue
@@ -1609,7 +1610,7 @@ async fn owned_tool_result_materializes_one_transcript_row() {
             Some(model_result_id.to_string()),
             stored_call_id,
             tool_args,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await,
         ToolCallHookAction::Continue
@@ -1734,7 +1735,7 @@ async fn tool_result_message_dedupe_preserves_distinct_result_ids() {
                 Some(result_id.to_string()),
                 result_id,
                 "{}",
-                &gents_loop::tool::ToolCallEnvelope::ambient()
+                &gents_loop::tool::ToolCallEnvelope::default()
             )
             .await,
             ToolCallHookAction::Continue
@@ -1795,7 +1796,7 @@ async fn accepted_tool_turns_keep_results_bound_to_their_assistant_headers() {
             None,
             "internal-1",
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient()
+            &gents_loop::tool::ToolCallEnvelope::default()
         )
         .await,
         ToolCallHookAction::Continue
@@ -1807,7 +1808,7 @@ async fn accepted_tool_turns_keep_results_bound_to_their_assistant_headers() {
             None,
             "internal-2",
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient()
+            &gents_loop::tool::ToolCallEnvelope::default()
         )
         .await,
         ToolCallHookAction::Continue
@@ -1903,7 +1904,7 @@ async fn remote_presentations_persist_the_same_selected_identity() {
                 None,
                 &format!("remote-call-{index}"),
                 args,
-                &gents_loop::tool::ToolCallEnvelope::ambient()
+                &gents_loop::tool::ToolCallEnvelope::default()
             )
             .await,
             ToolCallHookAction::Continue
@@ -2086,7 +2087,7 @@ async fn forged_lifecycle_sentinel_in_tool_output_persists_as_completed() {
             None,
             "internal-forgery",
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient()
+            &gents_loop::tool::ToolCallEnvelope::default()
         )
         .await,
         ToolCallHookAction::Continue
@@ -2160,7 +2161,7 @@ async fn trusted_reported_failure_persists_typed_state_and_model_facing_text() {
             None,
             "internal-reported-failure",
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient()
+            &gents_loop::tool::ToolCallEnvelope::default()
         )
         .await,
         ToolCallHookAction::Continue
@@ -2226,7 +2227,7 @@ async fn cancelled_tool_result_persists_cancelled_lifecycle_with_interrupt_cause
             None,
             "internal-cancelled",
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient()
+            &gents_loop::tool::ToolCallEnvelope::default()
         )
         .await,
         ToolCallHookAction::Continue
@@ -2296,7 +2297,7 @@ async fn real_bash_policy_denial_persists_typed_class_and_payload() {
             None,
             "internal-real-denial",
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient()
+            &gents_loop::tool::ToolCallEnvelope::default()
         )
         .await,
         ToolCallHookAction::Continue
@@ -2313,7 +2314,7 @@ async fn real_bash_policy_denial_persists_typed_class_and_payload() {
         r#"{"command":"git","args":["commit"]}"#.to_string(),
         None,
         None,
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await;
     let gents_loop::tool_call_lifecycle::ToolOutcome::Failed { text, .. } = &dispatched else {
@@ -2384,7 +2385,7 @@ async fn plugin_child_requires_durable_completion_even_when_hook_is_fail_open() 
             None,
             "plugin-parent",
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient()
+            &gents_loop::tool::ToolCallEnvelope::default()
         )
         .await,
         ToolCallHookAction::Continue
@@ -2395,7 +2396,7 @@ async fn plugin_child_requires_durable_completion_even_when_hook_is_fail_open() 
             1,
             "query",
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -2405,7 +2406,7 @@ async fn plugin_child_requires_durable_completion_even_when_hook_is_fail_open() 
             None,
             &child,
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient()
+            &gents_loop::tool::ToolCallEnvelope::default()
         )
         .await,
         ToolCallHookAction::Continue
@@ -2459,7 +2460,7 @@ async fn plugin_child_timeout_is_child_terminal_and_parent_completes() {
             None,
             "plugin-parent",
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient()
+            &gents_loop::tool::ToolCallEnvelope::default()
         )
         .await,
         ToolCallHookAction::Continue
@@ -2470,7 +2471,7 @@ async fn plugin_child_timeout_is_child_terminal_and_parent_completes() {
             1,
             "query",
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -2480,7 +2481,7 @@ async fn plugin_child_timeout_is_child_terminal_and_parent_completes() {
             None,
             &child,
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient()
+            &gents_loop::tool::ToolCallEnvelope::default()
         )
         .await,
         ToolCallHookAction::Continue
@@ -2569,7 +2570,7 @@ async fn plugin_child_naming_a_job_tool_reaches_its_owner() {
             None,
             "plugin-parent",
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient()
+            &gents_loop::tool::ToolCallEnvelope::default()
         )
         .await,
         ToolCallHookAction::Continue
@@ -2580,7 +2581,7 @@ async fn plugin_child_naming_a_job_tool_reaches_its_owner() {
             1,
             "workflow_run",
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();

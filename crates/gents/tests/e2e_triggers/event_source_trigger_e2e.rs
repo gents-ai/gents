@@ -9,11 +9,9 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::support::live_inference::{bind_target, live_target, wait_for_request_terminal};
-use crate::support::snapshots::SnapshotReader;
-use crate::support::snapshots::{
-    fetch_runtime_snapshot_as, is_routed_ready_after, RuntimeSnapshot,
-};
+use crate::support::snapshots::{is_routed_ready_after, wait_for_runtime_snapshot_as};
 use crate::support::test_db;
+use gents_store::test_support::snapshot_reader::SnapshotReader;
 
 const TRIGGER_ID: &str = "trigger-e2e-signup";
 const TASK_ID: &str = "task-e2e-signup";
@@ -113,34 +111,6 @@ async fn create_event_trigger_with_filter(
             "enabled": true, "concurrency": "serial",
         })),
     ]).await;
-}
-
-async fn wait_for_runtime_snapshot<F>(
-    access: &ConfigAccess,
-    node_did: &str,
-    predicate: F,
-) -> RuntimeSnapshot
-where
-    F: Fn(&RuntimeSnapshot) -> bool,
-{
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    let mut last = None;
-    let mut changes = access.subscribe_changes("NodeRuntime").await;
-    loop {
-        if let Some(snapshot) = fetch_runtime_snapshot_as(access, node_did).await {
-            if predicate(&snapshot) {
-                return snapshot;
-            }
-            last = Some(snapshot);
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for runtime snapshot for {node_did}; last seen: {last:?}"
-        );
-        tokio::time::timeout_at(deadline, changes.recv())
-            .await
-            .expect("runtime snapshot deadline");
-    }
 }
 
 async fn query_agent_requests_for_trigger(
@@ -279,7 +249,7 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
-    let startup = wait_for_runtime_snapshot(&fixture.access, &node_did, |snapshot| {
+    let startup = wait_for_runtime_snapshot_as(&fixture.access, &node_did, |snapshot| {
         is_routed_ready_after(snapshot, 0) && snapshot.default_agent_did == default_agent_did
     })
     .await;
@@ -309,7 +279,7 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
     )
     .await;
 
-    let reconciled = wait_for_runtime_snapshot(&fixture.access, &node_did, |snapshot| {
+    let reconciled = wait_for_runtime_snapshot_as(&fixture.access, &node_did, |snapshot| {
         is_routed_ready_after(snapshot, initial_generation)
             && snapshot.default_agent_did == default_agent_did
     })
@@ -394,12 +364,7 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
     );
     assert!(request.content.as_deref().unwrap().contains(EXTERNAL_ID));
     assert_eq!(
-        wait_for_request_terminal(
-            &fixture.access,
-            &request.request_id,
-            Duration::from_secs(120)
-        )
-        .await,
+        wait_for_request_terminal(&fixture.access, &request.request_id).await,
         "completed"
     );
     assert!(

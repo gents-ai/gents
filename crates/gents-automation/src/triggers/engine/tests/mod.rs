@@ -233,18 +233,7 @@ impl SpyMaterializer {
 impl MaterializerHandle for SpyMaterializer {
     fn materialize(
         &self,
-        task: &ResolvedTask,
-        trigger_id: Option<&str>,
-        trigger_kind: TriggerKind,
-        _trigger_doc_id: Option<&str>,
-        source_doc_id: Option<&str>,
-        _correlation: Option<&str>,
-        _trigger_context: Option<&str>,
-        rendered_prompt: &str,
-        rendered_goal_objective: Option<&str>,
-        durable_fire_key: &str,
-        delivery: Option<&crate::triggers::engine::durable::PreparedFire>,
-        _prepared_ids: Option<(&str, &str)>,
+        fire: FireMaterialization<'_>,
     ) -> Pin<
         Box<
             dyn Future<Output = Result<String, crate::triggers::engine::MaterializeError>>
@@ -252,6 +241,17 @@ impl MaterializerHandle for SpyMaterializer {
                 + '_,
         >,
     > {
+        let FireMaterialization {
+            task,
+            trigger_id,
+            trigger_kind,
+            source_doc_id,
+            rendered_prompt,
+            rendered_goal_objective,
+            durable_fire_key,
+            delivery,
+            ..
+        } = fire;
         let entry = (
             trigger_id.map(str::to_owned),
             trigger_kind,
@@ -444,6 +444,7 @@ fn resolved_task(prompt_template: &str) -> ResolvedTask {
         goal_token_budget: None,
         output_schema_ref: None,
         hooks: Vec::new(),
+        command: None,
     }
 }
 
@@ -455,10 +456,8 @@ fn resolved_schedule(schedule_id: &str, task: ResolvedTask) -> ResolvedSchedule 
         trigger_doc_id: format!("{schedule_id}-doc"),
         schedule_doc_id: format!("{schedule_id}-schedule-doc"),
         schedule_id: schedule_id.to_string(),
-        task_id: task.task_id.clone(),
         task,
         cadence: ScheduleCadence::Interval { interval_secs: 60 },
-        enabled: true,
         concurrency: ConcurrencyMode::Serial,
     }
 }
@@ -475,10 +474,8 @@ fn resolved_schedule_with_concurrency(
         trigger_doc_id: format!("{schedule_id}-doc"),
         schedule_doc_id: format!("{schedule_id}-schedule-doc"),
         schedule_id: schedule_id.to_string(),
-        task_id: task.task_id.clone(),
         task,
         cadence: ScheduleCadence::Interval { interval_secs: 60 },
-        enabled: true,
         concurrency,
     }
 }
@@ -497,12 +494,10 @@ fn resolved_event_trigger_with_concurrency(
         max_fires_per_hour: gents_documents::DEFAULT_MAX_FIRES_PER_HOUR,
         trigger_doc_id: format!("{trigger_id}-doc"),
         trigger_id: trigger_id.to_string(),
-        task_id: task.task_id.clone(),
         task,
         source_collection: "WebhookEvent".to_string(),
         event_kind: "created".to_string(),
         filter: None,
-        enabled: true,
         concurrency,
         fire_mode: gents_documents::automation::EventTriggerFireMode::PerDocument,
         correlation_field: None,
@@ -614,6 +609,7 @@ pub(super) fn integration_test_agent(behavior_name: &str) -> Arc<ResolvedAgent> 
         openai_wire_api: gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
         backend_endpoint: "http://localhost:0/v1".to_string(),
         claude_platform: None,
+        client_version: None,
         backend_auth: gents_documents::BackendAuth::Unauthenticated,
         model_name: gents_inference::resolved::DEFAULT_MODEL_NAME.to_string(),
         service_tier: None,
@@ -626,6 +622,8 @@ pub(super) fn integration_test_agent(behavior_name: &str) -> Arc<ResolvedAgent> 
         compaction: None,
         compaction_inference: None,
         max_total_tokens: None,
+        max_invalid_tool_calls: gents_loop::loop_stream::DEFAULT_MAX_INVALID_TOOL_CALLS,
+        repeated_tool_failure_limit: gents_loop::loop_stream::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
         stream_batch_ms: gents_inference::resolved::DEFAULT_STREAM_BATCH_MS,
         stream_liveness_timeout: Duration::from_secs(
             gents_documents::inference_defaults::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
@@ -633,6 +631,7 @@ pub(super) fn integration_test_agent(behavior_name: &str) -> Arc<ResolvedAgent> 
         deadline_duration: Duration::from_secs(
             gents_documents::inference_defaults::DEFAULT_DEADLINE_DURATION_SECS,
         ),
+        title_timeout: Duration::from_secs(gents_inference::resolved::DEFAULT_TITLE_TIMEOUT_SECS),
         provider_idle_timeout: Duration::from_secs(
             gents_inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
         ),
@@ -741,6 +740,7 @@ pub(super) fn snapshot_with_agent_and_schedules(
     Arc::new(resolved.activate(1, RapidHashMap::new()))
 }
 
+mod command_task;
 mod dispatch;
 mod dispatch_contract;
 mod event_source;

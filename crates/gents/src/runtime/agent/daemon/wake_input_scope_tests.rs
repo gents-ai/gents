@@ -3,7 +3,7 @@ use gents_lean_vocab::families::goal_wake_receipt_contracts_receipt::{
     NotificationWire, ReceiptOutput, ScopeWire,
 };
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_protocol::request_input::{GoalAssignmentInput, QueuePolicy, QueueSource, RequestQueue};
 use gents_protocol::row::AgentRequestRow;
@@ -198,10 +198,12 @@ async fn wake(
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         format!("wake-{wake}"),
-        fixture.db.node_identity.did(),
-        fixture.user.did(),
-        fixture.agent.did(),
-        session,
+        RequestScope::new(
+            fixture.db.node_identity.did(),
+            fixture.user.did(),
+            fixture.agent.did(),
+            session,
+        ),
         "Review background completion results",
         "scheduled",
         "2026-10-21T00:00:00Z",
@@ -451,10 +453,12 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
             AgentRequestCreate::base(
                 RequestPurpose::Normal,
                 id,
-                fixture.db.node_identity.did(),
-                fixture.user.did(),
-                fixture.agent.did(),
-                &session,
+                RequestScope::new(
+                    fixture.db.node_identity.did(),
+                    fixture.user.did(),
+                    fixture.agent.did(),
+                    &session,
+                ),
                 "Source work",
                 "interactive",
                 "2026-10-21T00:00:00Z",
@@ -775,21 +779,23 @@ async fn claimed_background_wake_reads_user_session_as_selected_agent() {
         &agent_access,
         &node,
         &original,
-        "background result",
-        "background-completion-notification:agent-observation:tool",
-        "Review background completion results",
-        RequestQueue {
-            delivery: Default::default(),
-            position: None,
-            source: QueueSource::BackgroundCompletion,
-            policy: QueuePolicy::Coalesce,
-            key: Some("background_completion:agent-observation".into()),
-            queued_after_request_id: Some(original.request_id.clone()),
-            interrupted_request_id: None,
-            background_completion_wake_version: None,
+        gents_session::request::lifecycle::queue::BackgroundCompletionNotification {
+            content: "background result",
+            message_key: "background-completion-notification:agent-observation:tool",
+            wake_content: "Review background completion results",
+            queue: RequestQueue {
+                delivery: Default::default(),
+                position: None,
+                source: QueueSource::BackgroundCompletion,
+                policy: QueuePolicy::Coalesce,
+                key: Some("background_completion:agent-observation".into()),
+                queued_after_request_id: Some(original.request_id.clone()),
+                interrupted_request_id: None,
+                background_completion_wake_version: None,
+            },
+            existing_notification_doc_id: None,
+            wake: RequestHopCause::Continuation,
         },
-        None,
-        RequestHopCause::Continuation,
     )
     .await
     .unwrap()
@@ -859,19 +865,16 @@ async fn claimed_background_wake_reads_user_session_as_selected_agent() {
         "claim must capture the wake notification cutoff"
     );
     let request = lifecycle.request();
-    let runtime_access = ConfigAccess::local_as(
-        node.clone(),
-        identity::Did::new(fixture.runtime.did()).unwrap(),
-    );
-    let visible = runtime_access.execute(&query).await.unwrap();
+    let reader = gents_store::test_support::unrelated_document_reader(&node).await;
+    let visible = reader.execute(&query).await.unwrap();
     assert!(
         visible["data"]["AgentRequest"]
             .as_array()
             .unwrap()
             .is_empty(),
-        "the runtime must not inherit the User's session read authority"
+        "an unrelated reader must not inherit the User's session read authority"
     );
-    assert!(load(&runtime_access, request, cutoff).await.is_err());
+    assert!(load(&reader, request, cutoff).await.is_err());
     let actual = load(&agent_access, request, cutoff).await.unwrap();
     assert_eq!(actual.len(), 1);
     assert_eq!(

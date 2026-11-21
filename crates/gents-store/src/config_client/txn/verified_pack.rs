@@ -93,7 +93,9 @@ impl VerifiedPackTxn<'_, '_> {
         if super::super::client_signed_agent::trusted_delete_schema(&relationship.collection)
             .is_none()
         {
-            return Err(PackEvidenceError::UnsupportedCollection);
+            return Err(PackEvidenceError::UnsupportedCollection(
+                relationship.collection.clone(),
+            ));
         }
         let target = match &relationship.target {
             PackRelationshipTarget::Actor { did } => identity::Did::new(did)
@@ -207,6 +209,7 @@ impl ConfigAccess {
                 unconfirmed: false,
             });
         }
+        let presented = local.presented_delegation();
         let unconfirmed = Arc::new(AtomicBool::new(false));
         let mode = if approval.is_some() {
             TransactionMode::SingleAttempt
@@ -221,6 +224,7 @@ impl ConfigAccess {
             move |operation, rollback| {
                 let actor = actor.clone();
                 let approval = approval.clone();
+                let presented = presented.clone();
                 Box::pin(async move {
                     let mut txn = ConfigApplyTxn::begin_local_owned(
                         local.node(),
@@ -231,6 +235,7 @@ impl ConfigAccess {
                     )
                     .await?;
                     txn.pack_approval = approval;
+                    txn.presented_delegation = presented.clone();
                     Ok(txn)
                 })
             },

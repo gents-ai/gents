@@ -123,6 +123,8 @@ pub(super) fn backend_value(row: InventoryRow) -> Result<Value> {
         "claude_platform": metadata.claude_platform,
         "connect_timeout_secs": metadata.connect_timeout_secs,
         "discovery_timeout_secs": metadata.discovery_timeout_secs,
+        "request_timeout_secs": metadata.request_timeout_secs,
+        "client_version": metadata.client_version,
         "max_concurrent": metadata.max_concurrent,
         "max_queue_depth": metadata.max_queue_depth,
         "enabled": metadata.enabled,

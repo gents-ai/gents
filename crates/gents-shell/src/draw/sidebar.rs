@@ -3,7 +3,8 @@ use ratatui::layout::{Margin, Rect};
 
 use super::{agent, draw_row, draw_rows, pane_box, theme};
 use crate::app::changes::rail_rows;
-use crate::app::{App, Pane, Tab};
+use crate::app::transcript::Tab;
+use crate::app::{App, Pane};
 use crate::layout::sidebar_rows_area;
 use crate::sample::{Scope, SidebarRow, View};
 

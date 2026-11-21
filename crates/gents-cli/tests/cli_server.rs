@@ -586,7 +586,7 @@ async fn served_home_admits_only_its_principal_over_http() -> Result<()> {
             .await
             .expect_err("anonymous HTTP writes must be refused");
         assert!(
-            refused.to_string().contains("not authorized"),
+            refused.is_permission_denied(),
             "{phase}: unexpected refusal: {refused:#}"
         );
         gents_store::config_client::ConfigAccess::Graphql(support::graphql::served_endpoint(
@@ -601,17 +601,11 @@ async fn served_home_admits_only_its_principal_over_http() -> Result<()> {
         )
         .with_context(|| format!("{phase}: CLI P2P administration over HTTP"))?;
         assert_eq!(replicators["status"], "ok", "{phase}: {replicators}");
-        let anonymous_rows = gents_store::config_client::ConfigAccess::graphql(graphql.clone())
+        let anonymous = gents_store::config_client::ConfigAccess::graphql(graphql.clone())
             .execute(r#"{ CompactionEntry(filter: { node_did: { _eq: "did:test:nac" } }) { compaction_key } }"#)
             .await
-            .with_context(|| format!("{phase}: anonymous HTTP read"))?;
-        assert!(
-            anonymous_rows
-                .pointer("/data/CompactionEntry")
-                .and_then(Value::as_array)
-                .is_none_or(Vec::is_empty),
-            "{phase}: anonymous HTTP read exposed the owner's row: {anonymous_rows}"
-        );
+            .expect_err("anonymous HTTP read must be refused");
+        assert!(anonymous.is_permission_denied(), "{phase}: {anonymous:#}");
         let owner_rows = gents_store::config_client::ConfigAccess::Graphql(
             support::graphql::served_endpoint(&graphql),
         )
@@ -627,7 +621,8 @@ async fn served_home_admits_only_its_principal_over_http() -> Result<()> {
             "{phase}: principal could not read its row: {owner_rows}"
         );
         let operator_authorization = support::graphql::node_principal_endpoint(&graphql)
-            .authorization()?
+            .runtime_authorization()
+            .await?
             .context("served principal authorization")?;
         for surface in ["self", "sessions"] {
             let anonymous = reqwest::Client::new()
@@ -719,7 +714,8 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
     let authorization = support::graphql::node_principal_endpoint(&graphql)
-        .authorization()?
+        .runtime_authorization()
+        .await?
         .context("fixture operator is missing")?;
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(reqwest::header::AUTHORIZATION, authorization.parse()?);
@@ -758,10 +754,9 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         "expected build metadata in /version body: {version}"
     );
 
-    let bootstrap = gents_desktop_core::local_runtime::fetch_runtime_connection_payload(
-        &format!("http://127.0.0.1:{port}"),
-        None,
-    )
+    let bootstrap = gents::client_runtime::fetch_runtime_connection_payload(&format!(
+        "http://127.0.0.1:{port}"
+    ))
     .await?;
     assert_eq!(bootstrap["node_did"], node_did);
     assert!(bootstrap.get("enrollment").is_some());
@@ -839,7 +834,8 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         .header(
             reqwest::header::AUTHORIZATION,
             support::graphql::node_principal_endpoint(&graphql)
-                .authorization()?
+                .runtime_authorization()
+                .await?
                 .context("fixture operator is missing")?,
         )
         .send()
@@ -1056,7 +1052,8 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         .header(
             reqwest::header::AUTHORIZATION,
             support::graphql::node_principal_endpoint(&graphql)
-                .authorization()?
+                .runtime_authorization()
+                .await?
                 .context("fixture operator is missing")?,
         )
         .send()
@@ -1485,7 +1482,8 @@ async fn server_exposes_fleet_slot_snapshot_endpoint() -> Result<()> {
     // The client key, as the node's native admin, reads the slot snapshot as
     // itself and so sees the Agent-owned inference calls.
     let authorization = support::graphql::served_endpoint(&graphql)
-        .authorization()?
+        .runtime_authorization()
+        .await?
         .context("fixture client key is missing")?;
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(reqwest::header::AUTHORIZATION, authorization.parse()?);
@@ -1810,7 +1808,6 @@ async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<(
 
     let port = allocate_port()?;
     let agent_name = format!("cli-p2p-ready-{}", Uuid::new_v4().simple());
-    let graphql = graphql_url(port);
 
     let init = run_init_json(
         &home_dir,
@@ -1825,7 +1822,7 @@ async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<(
     )?;
     let node_did = node_did_from_init(&init)?;
     let default_agent_did = agent_did_from_init(&init)?;
-    let (mut serve, readiness) = p2p_bind::spawn_observed_server(
+    let (mut serve, port, readiness) = p2p_bind::spawn_observed_server(
         &home_dir,
         port,
         &[
@@ -1841,6 +1838,7 @@ async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<(
         "127.0.0.1:0".parse()?,
     )
     .await?;
+    let graphql = graphql_url(port);
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
@@ -1874,7 +1872,8 @@ async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<(
         .header(
             reqwest::header::AUTHORIZATION,
             support::graphql::node_principal_endpoint(&graphql)
-                .authorization()?
+                .runtime_authorization()
+                .await?
                 .context("fixture operator is missing")?,
         )
         .send()
@@ -1990,7 +1989,7 @@ async fn server_listens_where_the_homes_network_settings_say() -> Result<()> {
         }))?,
     )?;
 
-    let (mut serve, readiness) = p2p_bind::spawn_observed_server(
+    let (mut serve, port, readiness) = p2p_bind::spawn_observed_server(
         &home_dir,
         port,
         &[],
@@ -2078,10 +2077,7 @@ async fn server_starts_in_degraded_mode_when_backend_is_unavailable() -> Result<
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("mock-degraded-model-{}", Uuid::new_v4().simple());
-    let warm_port = allocate_port()?;
-    let port = allocate_port()?;
     let agent_name = format!("cli-degraded-{}", Uuid::new_v4().simple());
-    let graphql = graphql_url(port);
 
     let init = run_init_json(
         &home_dir,
@@ -2101,8 +2097,8 @@ async fn server_starts_in_degraded_mode_when_backend_is_unavailable() -> Result<
         .ok_or_else(|| anyhow!("init output missing backend_id: {init}"))?
         .to_string();
 
-    let mut warm_server = spawn_server(&home_dir, warm_port)?;
-    wait_for_port(warm_port, &mut warm_server)?;
+    let (mut warm_server, warm_port, _) =
+        spawn_server_with_ready_json_recovering(&home_dir, allocate_port()?, &[], &[])?;
     wait_for_runtime_ready(&graphql_url(warm_port), &node_did, Duration::from_secs(30)).await?;
     graphql_query(
         &graphql_url(warm_port),
@@ -2131,8 +2127,9 @@ async fn server_starts_in_degraded_mode_when_backend_is_unavailable() -> Result<
         .wait()
         .context("waiting for warm server shutdown")?;
 
-    let (mut serve, readiness) = spawn_server_with_ready_json(&home_dir, port, &[], &[])?;
-    wait_for_port(port, &mut serve)?;
+    let (_serve, port, readiness) =
+        spawn_server_with_ready_json_recovering(&home_dir, allocate_port()?, &[], &[])?;
+    let graphql = graphql_url(port);
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
     assert_eq!(
@@ -2218,7 +2215,6 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
 
     let port = allocate_port()?;
     let agent_name = format!("cli-auth-{}", Uuid::new_v4().simple());
-    let graphql = graphql_url(port);
 
     let init = run_init_json(
         &home_dir,
@@ -2246,12 +2242,13 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
         .to_string();
     let tools_id = generated_tools_id_for_agent(&agent_did_from_init(&init)?);
 
-    let (_serve, readiness) = spawn_server_with_ready_json(
+    let (_serve, port, readiness) = spawn_server_with_ready_json_recovering(
         &home_dir,
         port,
         &[],
         &[("GENTS_TEST_CLI_BACKEND_KEY", "backend-key")],
     )?;
+    let graphql = graphql_url(port);
     assert_eq!(
         readiness.get("graphql").and_then(Value::as_str),
         Some(graphql.as_str()),
@@ -2262,15 +2259,19 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
         &graphql,
         &node_did,
         &backend_id,
-        mock_endpoint.endpoint(),
-        "OpenAiCompatible",
-        None,
-        Some("GENTS_TEST_CLI_BACKEND_KEY"),
-        &model_name,
         &tools_id,
-        "ReadOnly",
-        "ReadOnly",
-        "read-only operating mode",
+        ExpectedBackend {
+            provider_kind: "OpenAiCompatible",
+            endpoint: mock_endpoint.endpoint(),
+            api_key: None,
+            api_key_env_var: Some("GENTS_TEST_CLI_BACKEND_KEY"),
+            model_name: &model_name,
+        },
+        ExpectedModes {
+            file_tools_mode: "ReadOnly",
+            bash_mode: "ReadOnly",
+            prompt_snippet: "read-only operating mode",
+        },
     )
     .await?;
 
@@ -2736,9 +2737,10 @@ async fn trace_of_a_served_home_reads_only_as_its_user() -> Result<()> {
 
     let trace = ["utils", "debug", "trace", "timeline", "--graphql", &graphql];
     let request = ["--request-id", "home-trace-req"];
-    // Every CLI caller holds its own User key: another User sees no such row.
+    // Every CLI caller holds its own User key: the served node admits only its own.
     let foreign = run_cli_failure_stderr(&caller_dir, &[&trace[..], &request[..]].concat())?;
-    assert!(foreign.contains("home-trace-req not found"), "{foreign}");
+    assert!(foreign.contains("401 Unauthorized"), "{foreign}");
+    assert!(!foreign.contains("gents init"), "{foreign}");
 
     let served_home = home_dir.join(".gents");
     let served_home = served_home.to_str().context("home path is not UTF-8")?;
@@ -2747,7 +2749,8 @@ async fn trace_of_a_served_home_reads_only_as_its_user() -> Result<()> {
         &caller_dir,
         &[&trace[..], &["--home", served_home], &request[..]].concat(),
     )?;
-    assert!(named.contains("home-trace-req not found"), "{named}");
+    assert!(named.contains("401 Unauthorized"), "{named}");
+    assert!(!named.contains("gents init"), "{named}");
     let timeline = run_cli_json(
         &home_dir,
         &[&trace[..], &["--home", served_home], &request[..]].concat(),
@@ -2772,9 +2775,7 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
 
     let model_name = format!("mock-mcp-model-{}", Uuid::new_v4().simple());
     let mock_endpoint = MockModelEndpoint::start(&model_name)?;
-    let port = allocate_port()?;
     let agent_name = format!("cli-mcp-{}", Uuid::new_v4().simple());
-    let graphql = graphql_url(port);
 
     let init = run_init_json(
         &home_dir,
@@ -2789,13 +2790,13 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
     )?;
     let node_did = node_did_from_init(&init)?;
 
-    let mut serve = spawn_server_with_env(
+    let (_serve, port, _) = spawn_server_with_ready_json_recovering(
         &home_dir,
-        port,
+        allocate_port()?,
         &["--enable-mcp", "--mcp-write-collection", "McpParcel"],
         &[],
     )?;
-    wait_for_port(port, &mut serve)?;
+    let graphql = graphql_url(port);
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
     for mutation in [
@@ -2814,6 +2815,20 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
     let transport = rmcp::transport::StreamableHttpClientTransport::from_config(config);
     let mcp = ().serve(transport).await.context("MCP client handshake with /mcp")?;
 
+    let _identity = identity_from_init(&init)?;
+    let bearer = gents_store::identity::defradb_bearer_authorization(
+        &node_did,
+        &format!("127.0.0.1:{port}"),
+    )?;
+    let config =
+        StreamableHttpClientTransportConfig::with_uri(format!("http://127.0.0.1:{port}/mcp"))
+            .auth_header(bearer.strip_prefix("Bearer ").unwrap());
+    let authenticated = ()
+        .serve(rmcp::transport::StreamableHttpClientTransport::from_config(
+            config,
+        ))
+        .await?;
+
     let tools = mcp.peer().list_tools(None).await.context("list_tools")?;
     assert!(
         tools.tools.iter().any(|tool| tool.name.as_ref() == "query"),
@@ -2825,29 +2840,21 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
             .collect::<Vec<_>>()
     );
 
-    let args = serde_json::json!({
+    let fields = serde_json::json!({
         "argv": ["fields"], "collection": "AgentToolCall"
     });
-    let params =
-        CallToolRequestParams::new("query").with_arguments(args.as_object().unwrap().clone());
-    let result = mcp
+    let unsigned_fields = mcp
         .peer()
-        .call_tool(params)
-        .await
-        .context("call_tool defra_query fields")?;
-    let text = result
-        .content
-        .iter()
-        .filter_map(|content| content.raw.as_text().map(|t| t.text.clone()))
-        .collect::<Vec<_>>()
-        .join("");
-    let payload: Value = serde_json::from_str(&text).context("MCP field inventory is JSON")?;
-    assert_eq!(payload["discovery"], true, "{payload}");
+        .call_tool(
+            CallToolRequestParams::new("query").with_arguments(fields.as_object().unwrap().clone()),
+        )
+        .await;
     assert!(
-        payload["fields"]
-            .as_array()
-            .is_some_and(|fields| fields.iter().any(|field| field["name"] == "tool_name")),
-        "public schema introspection should list AgentToolCall fields: {payload}"
+        match unsigned_fields {
+            Err(_) => true,
+            Ok(result) => result.is_error == Some(true),
+        },
+        "anonymous MCP query must fail"
     );
 
     let protected_args = serde_json::json!({
@@ -2872,10 +2879,36 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
         "anonymous MCP query exposed a protected AgentToolCall row: {protected_text}"
     );
 
+    let user_bearer = support::graphql::served_endpoint(&graphql)
+        .runtime_authorization()
+        .await?
+        .context("served user authorization")?;
+    let user_config =
+        StreamableHttpClientTransportConfig::with_uri(format!("http://127.0.0.1:{port}/mcp"))
+            .auth_header(user_bearer.strip_prefix("Bearer ").unwrap());
+    let user_mcp = ()
+        .serve(rmcp::transport::StreamableHttpClientTransport::from_config(
+            user_config,
+        ))
+        .await?;
+    let allowed = user_mcp
+        .peer()
+        .call_tool(
+            CallToolRequestParams::new("query")
+                .with_arguments(protected_args.as_object().unwrap().clone()),
+        )
+        .await?;
+    let allowed_text = allowed
+        .content
+        .iter()
+        .filter_map(|content| content.raw.as_text().map(|text| text.text.as_str()))
+        .collect::<String>();
+    assert!(allowed_text.contains("mcp-req"), "{allowed_text}");
+
     let denied_args = serde_json::json!({"argv":["find"], "collection": "InferenceBackend", "options":{"fields": ["auth"]} });
     let denied_params = CallToolRequestParams::new("query")
         .with_arguments(denied_args.as_object().unwrap().clone());
-    let denied = mcp.peer().call_tool(denied_params).await;
+    let denied = authenticated.peer().call_tool(denied_params).await;
     let blocked = match denied {
         Err(_) => true,
         Ok(result) => {
@@ -2910,7 +2943,6 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
         },
         "anonymous MCP write must fail"
     );
-    let _identity = identity_from_init(&init)?;
     let access = gents_store::config_client::ConfigAccess::Graphql(
         support::graphql::node_principal_endpoint(&graphql),
     );
@@ -2929,6 +2961,27 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
             config,
         ))
         .await?;
+    let result = authenticated
+        .peer()
+        .call_tool(
+            CallToolRequestParams::new("query").with_arguments(fields.as_object().unwrap().clone()),
+        )
+        .await
+        .context("call_tool defra_query fields")?;
+    let text = result
+        .content
+        .iter()
+        .filter_map(|content| content.raw.as_text().map(|t| t.text.clone()))
+        .collect::<Vec<_>>()
+        .join("");
+    let payload: Value = serde_json::from_str(&text).context("MCP field inventory is JSON")?;
+    assert_eq!(payload["discovery"], true, "{payload}");
+    assert!(
+        payload["fields"]
+            .as_array()
+            .is_some_and(|fields| fields.iter().any(|field| field["name"] == "tool_name")),
+        "a signed caller's schema introspection should list AgentToolCall fields: {payload}"
+    );
     for command in [
         preview,
         serde_json::json!({"argv":["preview","update"],"collection":"McpParcel","options":{"filter":{"reference":{"_eq":"MCP-7"}},"max_targets":1,"input":{"status":"delivered"}}}),
@@ -3214,11 +3267,11 @@ async fn restarted_server_never_reports_the_killed_process_ready() -> Result<()>
             let mut serve = spawn_server_with_env(
                 &home_dir,
                 port,
-                &[],
-                &[(
-                    "GENTS_TEST_STALL_AFTER_CLIENT_ACCESS",
+                &[
+                    "--stall-after-client-access",
                     stall.to_str().context("stall path is not UTF-8")?,
-                )],
+                ],
+                &[],
             )?;
             wait_for_port(port, &mut serve)?;
             Ok((port, serve))
@@ -3227,7 +3280,8 @@ async fn restarted_server_never_reports_the_killed_process_ready() -> Result<()>
     .await??;
 
     let authorization = support::graphql::node_principal_endpoint(&graphql_url(port))
-        .authorization()?
+        .runtime_authorization()
+        .await?
         .context("served home has no node principal")?;
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(reqwest::header::AUTHORIZATION, authorization.parse()?);

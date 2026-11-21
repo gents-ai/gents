@@ -1,5 +1,4 @@
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use gents::runtime::embedded::EmbeddedHome;
 use gents::{DocumentRuntimeOptions, Gents};
@@ -27,6 +26,7 @@ use crate::support::fixtures::{
 };
 use crate::support::streaming_backend::{MockStreamingBackend, StreamChunk, StreamPlan};
 use crate::support::{managed_agent_fixture, test_db_from_home, ManagedAgentFixture, TestDb};
+use gents_store::test_support::STALL_CEILING;
 
 pub(crate) const PARENT: &str = "plugin-job-parent";
 pub(crate) const CHILD: &str = "plugin-job-child";
@@ -194,31 +194,39 @@ pub(crate) async fn install_job_fixture(
     .expect("load the job fixture pack config");
     let access = &fixture.access;
     let prepared = prepare_document_pack_install(
-        access,
-        &did,
+        &gents_pack::pack::InstallTarget {
+            access,
+            owner: &did,
+            plugin_home: Some(plugin_home),
+        },
         archive.manifest(),
         &config,
-        &PackInferenceBindings::new(),
-        &[],
-        InstalledVia::Operator,
-        Some(plugin_home),
         Some(&archive),
-        &|_| None,
-        &Default::default(),
+        &gents_pack::pack::PackGraphInputs {
+            dependencies: &[],
+            requested: &PackInferenceBindings::new(),
+            environment: &|_| None,
+            overrides: &Default::default(),
+        },
+        InstalledVia::Operator,
     )
     .await
     .expect("prepare the job fixture install");
     install_prepared_document_pack(
-        access,
-        &did,
+        &gents_pack::pack::InstallTarget {
+            access,
+            owner: &did,
+            plugin_home: Some(plugin_home),
+        },
         &archive,
         &[],
         &prepared,
-        Some(plugin_home),
         false,
         InstalledVia::Operator,
-        DriftPolicy::Refuse,
-        &gents_inference::resolved::ProviderProfilePolicy,
+        gents_pack::pack::DocumentGraphPolicy {
+            drift: DriftPolicy::Refuse,
+            profiles: &gents_inference::resolved::ProviderProfilePolicy,
+        },
     )
     .await
     .expect("install the job fixture pack");
@@ -450,15 +458,14 @@ pub(crate) async fn job_row(h: &JobHarness, tool_call_id: &str) -> String {
         .row_doc_id
 }
 
+/// Fails once `AgentToolCall` has not changed for [`STALL_CEILING`].
 pub(crate) async fn wait_job(
     h: &JobHarness,
     tool_call_id: &str,
     until: impl Fn(&JobView) -> bool,
-    timeout: Duration,
 ) -> JobView {
     let access = h.actors.fixture.access.clone();
-    use crate::support::snapshots::SnapshotReader;
-    let deadline = tokio::time::Instant::now() + timeout;
+    use gents_store::test_support::snapshot_reader::SnapshotReader;
     let mut changes = access.subscribe_changes("AgentToolCall").await;
     loop {
         let last = load_job_view(&access, None, address(h, tool_call_id)).await;
@@ -467,13 +474,10 @@ pub(crate) async fn wait_job(
             Ok(_) | Err(JobReadError::NotYetObservable | JobReadError::NotAJob) => {}
             Err(error) => panic!("job {tool_call_id} is unreadable: {error:?}"),
         }
-        if tokio::time::Instant::now() >= deadline {
-            panic!("job {tool_call_id} did not reach the awaited state; last read: {last:?}");
-        }
-        tokio::time::timeout_at(deadline, changes.recv())
+        tokio::time::timeout(STALL_CEILING, changes.recv())
             .await
             .unwrap_or_else(|_| {
-                panic!("job {tool_call_id} did not reach the awaited state; last read: {last:?}")
+                panic!("job {tool_call_id} made no progress for {STALL_CEILING:?}; last read: {last:?}")
             });
     }
 }

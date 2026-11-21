@@ -199,6 +199,10 @@ pub struct PluginLimits {
     pub wall_clock_secs: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_mib: Option<u32>,
+    /// Host-serviced request rounds (model, HTTP, tool, data and job calls)
+    /// one invocation may take. Raises the default of 64, up to 256.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_rounds: Option<u32>,
 }
 
 /// Bounds model-facing instructions loaded from a pack so one document cannot

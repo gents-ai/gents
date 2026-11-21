@@ -61,6 +61,21 @@ pub(crate) struct ProvisionArgs {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum DocumentAcpArg {
+    Local,
+    Vera,
+}
+
+impl From<DocumentAcpArg> for gents_store::local::document_acp::DocumentAcp {
+    fn from(arg: DocumentAcpArg) -> Self {
+        match arg {
+            DocumentAcpArg::Local => Self::Local,
+            DocumentAcpArg::Vera => Self::Vera,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub(crate) enum IdentityBackendArg {
     File,
     MacosKeychain,
@@ -122,10 +137,12 @@ pub(crate) struct InitArgs {
 
     #[arg(long, value_enum, hide = true)]
     pub(crate) store_key_custody: Option<StoreKeyCustodyArg>,
+    #[arg(long, value_enum, hide = true, conflicts_with = "identity_only")]
+    pub(crate) document_acp: Option<DocumentAcpArg>,
     #[arg(
         long = "inference-url",
         value_name = "INFERENCE_URL",
-        help = "Inference backend base URL, usually including /v1. Falls back to INFERENCE_ENDPOINT, then the local llama-server default."
+        help = "Inference backend base URL, usually including /v1. Defaults to the local llama-server endpoint."
     )]
     pub(crate) inference_endpoint: Option<String>,
     #[arg(
@@ -222,6 +239,16 @@ pub(crate) struct InitArgs {
         help = "With --engineer: do not install the Engineer's core packs (install them later with `gents config pack starter --enable <pack>`)"
     )]
     pub(crate) no_default_packs: bool,
+    #[arg(
+        long,
+        help = "Pack registry base URL, used by the Engineer's core pack installs. Defaults to the public registry"
+    )]
+    pub(crate) registry: Option<String>,
+    #[arg(
+        long,
+        help = "Desktop client state whose cli folder holds the client identity that administers this home; recorded in the home. Defaults to the platform's app data folder"
+    )]
+    pub(crate) desktop_home: Option<PathBuf>,
 }
 
 impl InitArgs {

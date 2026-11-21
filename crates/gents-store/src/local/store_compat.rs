@@ -9,7 +9,7 @@ use crate::local::storage_backend::{incompatible_store, incompatible_store_kind}
 use crate::local::store_key::{home_key_file, StoreKeyError};
 
 /// Written by a node that opened and validated its store with this build's
-/// collections, policies and migrations. Its content is [`fingerprint`]; a
+/// collections and policies. Its content is [`fingerprint`]; a
 /// store whose stamp matches is not checked again.
 pub const COMPATIBILITY_STAMP: &str = ".gents-store-compatibility";
 
@@ -48,35 +48,27 @@ pub enum StoreCompatibilityError {
     },
 }
 
-/// The collections, migrations and access policies this build serves. Any
-/// change to them changes the fingerprint, and the next start checks the
-/// store again.
+/// The collections and access policies this build serves. Any change to them
+/// changes the fingerprint, and the next start checks the store again.
 pub fn fingerprint() -> String {
-    use gents_protocol::schemas::{
-        AGENT_OWNERSHIP_POLICY_ID, CLIENT_JOURNAL_POLICY_ID, MAILBOX_POLICY_ID,
-        TOOL_FILE_CHANGE_POLICY_ID,
-    };
-    let registry = &*gents_migration::DEFAULT_REGISTRY;
+    use gents_protocol::schemas::{BuiltInPolicy, HomePolicyIds};
+    let ids = HomePolicyIds::shared();
     let mut digest = Sha256::new();
     for policy in [
-        AGENT_OWNERSHIP_POLICY_ID,
-        CLIENT_JOURNAL_POLICY_ID,
-        MAILBOX_POLICY_ID,
-        TOOL_FILE_CHANGE_POLICY_ID,
+        BuiltInPolicy::Household,
+        BuiltInPolicy::ClientJournal,
+        BuiltInPolicy::Mailbox,
+        BuiltInPolicy::ToolFileChange,
     ] {
-        digest.update(policy.as_bytes());
+        digest.update(ids.id(policy).as_bytes());
         digest.update([0]);
     }
-    for collection in registry.baseline {
+    for collection in crate::schema::catalog::BASELINE.iter() {
         digest.update(collection.name.as_bytes());
         digest.update([0]);
-        digest.update(collection.sdl.as_bytes());
+        digest.update(ids.render(collection.sdl).as_bytes());
         digest.update([0]);
         digest.update(collection.expected_version.unwrap_or_default().as_bytes());
-        digest.update([0]);
-    }
-    for step in registry.steps {
-        digest.update(step.id().as_bytes());
         digest.update([0]);
     }
     digest
@@ -185,7 +177,8 @@ pub(crate) async fn check_copy(
         .map_err(io(&std::env::temp_dir()))?;
     let copied = copy.path().join("data");
     let (from, to) = (data.clone(), copied.clone());
-    tokio::task::spawn_blocking(move || copy_tree(&from, &to))
+    let skipped = crate::local::document_acp::vera_dir(&data);
+    tokio::task::spawn_blocking(move || copy_tree(&from, &to, &skipped))
         .await
         .map_err(|source| StoreCompatibilityError::Check {
             path: data.clone(),
@@ -196,10 +189,14 @@ pub(crate) async fn check_copy(
         path: data.clone(),
         source: Box::new(source),
     };
-    let node = crate::local::store_key::persistent_builder(&copied, key)?
-        .build()
-        .await
-        .map_err(opened)?;
+    let node = crate::local::store_key::persistent_builder(
+        &copied,
+        key,
+        crate::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+    )?
+    .build()
+    .await
+    .map_err(opened)?;
     let verdict = match crate::local::backend_protection::validate_policy_binding(&node).await {
         Err(BackendProtectionError::InvalidBinding) => {
             Ok(Some(IncompatibleStoreKind::OtherVersionSchema))
@@ -208,7 +205,7 @@ pub(crate) async fn check_copy(
             path: data.clone(),
             source: Box::new(error),
         }),
-        Ok(()) => match gents_migration::validate_existing_schema(&node).await {
+        Ok(()) => match crate::schema::catalog::validate_existing_schema(&node).await {
             Ok(()) => Ok(None),
             Err(source) => match incompatible_store(&source, &data) {
                 Some(store) => Ok(Some(store.kind)),
@@ -264,14 +261,19 @@ fn insecure_key_file(home: &Path) -> Result<Option<PathBuf>, StoreCompatibilityE
     }
 }
 
-fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
+/// `skipped` is the embedded Vera node's directory: the copy is opened to
+/// read collection bindings and schema only, which never reach it.
+fn copy_tree(from: &Path, to: &Path, skipped: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(to)?;
     for entry in std::fs::read_dir(from)? {
         let entry = entry?;
+        if entry.path() == skipped {
+            continue;
+        }
         let kind = entry.file_type()?;
         let target = to.join(entry.file_name());
         if kind.is_dir() {
-            copy_tree(&entry.path(), &target)?;
+            copy_tree(&entry.path(), &target, skipped)?;
         } else if kind.is_file() {
             std::fs::copy(entry.path(), &target)?;
         }

@@ -16,10 +16,10 @@ use gents_store::graphql::{created_doc_id, escape_graphql_string};
 
 use super::ToolCallLifecycle;
 use gents_protocol::plugin_tool_call_limits::{MAX_EFFECTS, MAX_PAYLOAD_BYTES};
+use gents_protocol::tool_call::ToolCallState;
 use gents_session::session::plugin_effect_rows::{
-    arguments_from_rows, receipt_from_rows, receipt_source, PluginEffectBinding,
+    arguments_from_rows, receipt_from_rows, receipt_source, PluginEffectBinding, PluginEffectCall,
 };
-use gents_session::session::tool_call_state::ToolCallState;
 
 #[derive(Clone)]
 pub(super) struct PluginEffectTerminal {
@@ -58,16 +58,20 @@ impl ToolCallLifecycle {
             name,
             arguments,
             gents_protocol::tool_call::AwaitMode::Foreground,
+            None,
         )
         .await
     }
 
+    /// `call_deadline` is the deadline of the call the child serves, if any;
+    /// the child's deadline is the earlier of it and the parent's.
     pub(crate) async fn admit_plugin_effect_with_mode(
         &self,
         ordinal: u32,
         name: &str,
         arguments: &str,
         mode: gents_protocol::tool_call::AwaitMode,
+        call_deadline: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<Self> {
         anyhow::ensure!(
             self.state == ToolCallState::Running && self.plugin_effect.is_none(),
@@ -93,9 +97,8 @@ impl ToolCallLifecycle {
         let name = name.to_owned();
         let arguments = arguments.to_owned();
         let sequence = self.message_sequence;
-        let deadline = gents_loop::tool_call_lifecycle::runtime::current_tool_runtime_context()
-            .and_then(|context| context.deadline_at)
-            .map_or(self.deadline_at, |deadline| deadline.min(self.deadline_at));
+        let deadline =
+            call_deadline.map_or(self.deadline_at, |deadline| deadline.min(self.deadline_at));
         let key = PluginEffectBinding::internal_id(&binding.tool_call_doc_id, ordinal);
         let internal_id = key.clone();
         let mode = mode.as_str();
@@ -238,12 +241,12 @@ impl ToolCallLifecycle {
     /// its own terminal write.
     pub(crate) async fn settle_interrupted_plugin_effect(
         &mut self,
-        cause: gents_session::session::tool_call_state::CancelCause,
+        cause: gents_protocol::tool_call::CancelCause,
     ) -> Result<()> {
         match self.state {
             ToolCallState::Pending => self.cancel_before_dispatch(cause).await?,
             ToolCallState::Running
-                if cause == gents_session::session::tool_call_state::CancelCause::Deadline
+                if cause == gents_protocol::tool_call::CancelCause::Deadline
                     || self.is_deadline_expired(Utc::now()) =>
             {
                 self.timeout().await?;
@@ -264,7 +267,7 @@ impl ToolCallLifecycle {
     /// receipt, an adopted job) keeps its own owner.
     pub(crate) async fn settle_unfinished_plugin_effects(
         &self,
-        cause: gents_session::session::tool_call_state::CancelCause,
+        cause: gents_protocol::tool_call::CancelCause,
     ) -> Result<Vec<String>> {
         let parent = self
             .doc_id()
@@ -278,12 +281,13 @@ impl ToolCallLifecycle {
             &self.session_id,
             self.requester_did.as_deref(),
         );
+        let nonterminal = ToolCallState::nonterminal_graphql_list();
         let rows = self
             .access()?
             .execute(&format!(
                 r#"{{ AgentToolCall(filter: {{ {scope}, request_doc_id: {{ _eq: "{}" }},
                     plugin_parent_tool_call_doc_id: {{ _eq: "{}" }},
-                    lifecycle_state: {{ _in: ["pending", "running"] }},
+                    lifecycle_state: {{ _in: {nonterminal} }},
                     await_mode: {{ _eq: "foreground" }} }}) {{ _docID }} }}"#,
                 escape_graphql_string(request),
                 escape_graphql_string(parent)
@@ -472,10 +476,12 @@ pub(super) async fn arguments_in_txn(
         &binding.session_id,
         binding.requester_did.as_deref(),
         &binding.request_doc_id,
-        child,
-        generation,
-        internal_id,
-        name,
+        PluginEffectCall {
+            tool_call_doc_id: child,
+            tool_call_id: internal_id,
+            tool_name: name,
+            execution_generation: generation,
+        },
     )
 }
 
@@ -690,6 +696,7 @@ mod tests {
                     &payload(&input.arguments),
                     gents_protocol::tool_call::AwaitMode::from_persisted(&input.child.await_mode)
                         .unwrap(),
+                    None,
                 )
                 .await;
             if let Ok(child) = &result {
@@ -733,6 +740,7 @@ mod tests {
                     "query",
                     "{}",
                     gents_protocol::tool_call::AwaitMode::Background,
+                    None,
                 )
                 .await
                 .unwrap();

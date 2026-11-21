@@ -1,6 +1,6 @@
 use super::*;
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_protocol::request_input::{QueueDelivery, QueuePolicy, QueueSource, RequestQueue};
 use gents_protocol::session_input_edit::{PendingMessageEdit, PendingQueueEdit};
@@ -43,23 +43,10 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
             .grant(&admin, &::identity::Did::new(user.did())?)
             .await?;
         for did in [collaborator.did(), binding.agent_did.as_str()] {
-            for permission in [
-                NodePermission::DocumentRead,
-                NodePermission::DocumentUpdate,
-                NodePermission::DacRelationAdd,
-                NodePermission::DacRelationDelete,
-            ] {
-                admin
-                    .grant_node_permission(&::identity::Did::new(did)?, permission)
-                    .await?;
-            }
+            gents_store::identity::GrantSet::AgentBaseline
+                .grant(&admin, &::identity::Did::new(did)?)
+                .await?;
         }
-        admin
-            .grant_node_permission(
-                &::identity::Did::new(user.did())?,
-                NodePermission::CollectionGet,
-            )
-            .await?;
         let access = db.client_access(&user);
         let (node_doc, agent_doc) = access.transact_write("test.edit.seed", |txn| {
             let root = &root;
@@ -108,10 +95,7 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
         let mut original = AgentRequestCreate::base(
             RequestPurpose::Normal,
             "original",
-            root.did(),
-            user.did(),
-            &binding.agent_did,
-            "session",
+            RequestScope::new(root.did(), user.did(), &binding.agent_did, "session"),
             "before",
             "interactive",
             "2026-10-10T00:00:00Z",
@@ -207,6 +191,7 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
             edit,
             replacements,
             replacement_evidence,
+            replacement_credentials: Vec::new(),
             signature: vec![],
         };
         command.signature = author.sign(&command.signing_payload()).await?;
@@ -448,6 +433,7 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
             },
             replacements: vec![],
             replacement_evidence: vec![],
+            replacement_credentials: Vec::new(),
             signature: vec![],
         };
         removal.signature = user.sign(&removal.signing_payload()).await?;

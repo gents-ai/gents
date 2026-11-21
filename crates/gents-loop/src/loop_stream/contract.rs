@@ -155,6 +155,7 @@ impl Drop for EstimateSeedGuard {
 
 pub type RenderedRequestSink = Arc<
     dyn Fn(
+            &crate::provider_call::ProviderCall,
             usize,
             u32,
             CompletionRequest,
@@ -186,6 +187,9 @@ pub struct TurnCompactionRequest {
     pub admission: crate::compaction::ReductionAdmission,
     pub turn_index: usize,
     pub prior_reduction_keys: Vec<String>,
+    /// What the compacting loop's provider calls carry, from which the
+    /// reduction's own calls derive.
+    pub provider_call: crate::provider_call::ProviderCall,
 }
 
 #[derive(Debug)]
@@ -314,7 +318,6 @@ fn bounded_structured_output_preview(raw: &str) -> String {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum LoopStreamItem {
     Text(String),
     Reasoning(gents_protocol::message::Reasoning),
@@ -356,6 +359,10 @@ pub enum LoopStreamItem {
         will_retry: bool,
         backoff: std::time::Duration,
     },
+    /// A retry's backoff ended. The consumer authorizes the retry's dispatch
+    /// against the execution lease before it polls the stream again (Lean
+    /// `RequestExecutionLease.retryWakeDispatches`).
+    RetryWake,
     OutputObligationPending {
         reminder: Message,
     },
@@ -402,12 +409,21 @@ pub struct LoopConfig {
     pub provider_idle_timeout: Option<std::time::Duration>,
     pub deadline: Option<DateTime<Utc>>,
     pub max_turns: usize,
+    /// Invalid-argument, unknown-tool and policy-denied calls this execution
+    /// may make before it stops.
+    pub max_invalid_tool_calls: usize,
+    /// Identical failing dispatches of one call before further repeats are
+    /// intercepted.
+    pub repeated_tool_failure_limit: usize,
     pub output_obligation_gate: Option<Arc<dyn OutputObligationCheck>>,
     pub folded_prompts: Vec<FoldedPrompt>,
     pub authored_input: Option<AuthoredInput>,
     /// The envelope of the request this loop runs for: the context its
     /// foreground tool calls are derived from.
     pub tool_context: crate::tool::ToolCallEnvelope,
+    /// What this loop's provider calls carry; each dispatch adds its routing
+    /// affinity.
+    pub provider_call: crate::provider_call::ProviderCall,
 }
 
 #[derive(Clone, Debug)]

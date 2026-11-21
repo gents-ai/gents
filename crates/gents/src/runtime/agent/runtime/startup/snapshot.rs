@@ -30,6 +30,7 @@ pub(super) fn is_degraded_startup_unavailable_reason(
 /// on every resolved snapshot, so a reconcile cannot bring such an agent back
 /// runnable while its tools still fail to build.
 pub(in crate::runtime::agent::runtime) async fn demote_unbuildable_agents(
+    system_log: bool,
     tool_runtime: &ToolRuntimeContext,
     snapshot: &mut ResolvedRuntimeSnapshot,
 ) -> Result<()> {
@@ -77,10 +78,13 @@ pub(in crate::runtime::agent::runtime) async fn demote_unbuildable_agents(
                 diagnostic = %reason.diagnostic,
                 "agent_config tool surface unavailable; running without it"
             );
-            crate::runtime::native_logging::mirror_service_diagnostic(&format!(
-                "gents runtime: agent_config {agent_did} unavailable: {}",
-                reason.diagnostic
-            ));
+            crate::runtime::native_logging::mirror_service_diagnostic(
+                system_log,
+                &format!(
+                    "gents runtime: agent_config {agent_did} unavailable: {}",
+                    reason.diagnostic
+                ),
+            );
             snapshot.demote_agent(&agent_did, reason);
         }
     }
@@ -99,7 +103,7 @@ pub(in crate::runtime::agent::runtime) async fn validate_startup_snapshot(
         )
     })?;
 
-    demote_unbuildable_agents(tool_runtime, snapshot).await?;
+    demote_unbuildable_agents(agent.system_log, tool_runtime, snapshot).await?;
 
     if snapshot.agents.is_empty() {
         let mut unavailable = snapshot
@@ -129,10 +133,13 @@ pub(in crate::runtime::agent::runtime) async fn validate_startup_snapshot(
                     diagnostic = %reason.diagnostic,
                     "agent_config unavailable at startup blocks the agent from starting"
                 );
-                crate::runtime::native_logging::mirror_service_diagnostic(&format!(
-                    "gents runtime: agent_config {agent_did} unavailable at startup: {}",
-                    reason.diagnostic
-                ));
+                crate::runtime::native_logging::mirror_service_diagnostic(
+                    agent.system_log,
+                    &format!(
+                        "gents runtime: agent_config {agent_did} unavailable at startup: {}",
+                        reason.diagnostic
+                    ),
+                );
             }
             let blocking = blocking
                 .iter()

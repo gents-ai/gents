@@ -283,7 +283,7 @@ def loosely_equal(left, right):
 
 def evaluate(expression, context):
     """Evaluate the subset of GitHub expression syntax the trust condition and
-    the gate's job conditions use: comparisons, &&, ||, contains and fromJSON."""
+    the gate's job conditions use: comparisons, &&, ||, contains, startsWith and fromJSON."""
     tokens = re.findall(r"\(|\)|,|&&|\|\||==|!=|'[^']*'|\.?[A-Za-z_][A-Za-z0-9_.-]*", expression)
     if "".join(tokens) != re.sub(r"\s+", "", expression):
         raise ValueError(f"unsupported expression syntax: {expression}")
@@ -361,14 +361,18 @@ def contains(haystack, needle):
     return str(needle).lower() in str(haystack or "").lower()
 
 
-FUNCTIONS = {"contains": contains, "fromJSON": json.loads, "always": lambda: True}
+def starts_with(text, prefix):
+    return str(text or "").lower().startswith(str(prefix or "").lower())
 
 
-def keep_condition():
-    text = WORKFLOW.read_text()
+FUNCTIONS = {"contains": contains, "startsWith": starts_with, "fromJSON": json.loads, "always": lambda: True}
+
+
+def keep_condition(workflow=WORKFLOW):
+    text = workflow.read_text()
     match = re.search(r"^  GENTS_CI_KEEP_TARGET_TREE: >-\n((?:    .*\n)+)", text, re.MULTILINE)
     if match is None:
-        raise AssertionError("ci.yml must set GENTS_CI_KEEP_TARGET_TREE at workflow level")
+        raise AssertionError(f"{workflow.name} must set GENTS_CI_KEEP_TARGET_TREE at workflow level")
     folded = " ".join(line.strip() for line in match.group(1).splitlines())
     inner = re.fullmatch(r"\$\{\{(.*)\}\}", folded)
     if inner is None:
@@ -565,6 +569,12 @@ class KeptTreeTrustTests(unittest.TestCase):
     def test_push_to_main_keeps_the_tree(self):
         self.assertTrue(self.keeps("push"))
 
+    def test_main_merge_queue_keeps_the_tree(self):
+        self.assertTrue(self.keeps("merge_group", "refs/heads/gh-readonly-queue/main/pr-1-abc"))
+
+    def test_scheduled_run_of_main_keeps_the_tree(self):
+        self.assertTrue(self.keeps("schedule"))
+
     def test_pull_request_from_this_repository_keeps_the_tree(self):
         self.assertTrue(self.keeps("pull_request", "refs/pull/1/merge", self.REPOSITORY))
         self.assertTrue(self.keeps("pull_request", "refs/pull/1/merge", "Gents-AI/Gents"))
@@ -579,16 +589,22 @@ class KeptTreeTrustTests(unittest.TestCase):
     def test_other_events_and_refs_build_in_a_job_tree(self):
         self.assertFalse(self.keeps("push", "refs/heads/feature"))
         self.assertFalse(self.keeps("push", "refs/tags/v1.0.0"))
-        self.assertFalse(self.keeps("merge_group", "refs/heads/gh-readonly-queue/main/pr-1"))
+        self.assertFalse(self.keeps("merge_group", "refs/heads/gh-readonly-queue/release/pr-1"))
+        self.assertFalse(self.keeps("schedule", "refs/heads/feature"))
         self.assertFalse(self.keeps("workflow_dispatch"))
         self.assertFalse(self.keeps("pull_request_target", "refs/heads/main", self.REPOSITORY))
 
     def test_only_the_workflow_condition_selects_a_kept_tree(self):
         script = (Path(__file__).with_name("setup-rust-build-cache.sh")).read_text()
         self.assertIn('"${GENTS_CI_KEEP_TARGET_TREE:-}" == "true"', script)
-        workflow = WORKFLOW.read_text()
-        self.assertEqual(workflow.count("GENTS_CI_KEEP_TARGET_TREE"), 1,
-                         "no job or step may override the workflow-level condition")
+        for path in sorted(WORKFLOW.parent.glob("*.yml")):
+            text = path.read_text()
+            if "GENTS_CI_KEEP_TARGET_TREE" not in text:
+                continue
+            with self.subTest(workflow=path.name):
+                self.assertEqual(text.count("GENTS_CI_KEEP_TARGET_TREE"), 1,
+                                 "no job or step may override the workflow-level condition")
+                self.assertEqual(keep_condition(path), keep_condition())
 
 
 if __name__ == "__main__":

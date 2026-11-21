@@ -1197,6 +1197,41 @@ def settlement (s : State) (read : Read) : LoadResult → Settlement
   | .transportFailed => .transportFailed
   | .refused => .refused
 
+/-- What a change delivered on a node's subscription is, by its collection. A
+`collection` is a configuration collection whose snapshot root is one
+self-contained view: its rows depend on no other root and no other root's
+follow-up reads depend on them. `node` is every other observed collection: the
+Node root, whose absence is a refusal, and the requests, sessions and triggers,
+from which the snapshot derives request closure, session heads and trigger
+candidates together. -/
+inductive Change where
+  | toolControl | transcript | toolCall | collection | node
+  deriving DecidableEq, Repr
+
+/-- What the observer does with a delivered change. -/
+inductive Delivery where
+  /-- `ClientDataPublication.transcriptInvalidation`; consumers re-read the
+  bounded transcript of the selected session. -/
+  | invalidateTranscript
+  /-- `ClientDataPublication.provenanceInvalidation`. -/
+  | invalidateProvenance
+  /-- A request event, and the collection is queued for its own reload. -/
+  | reloadCollection
+  /-- A request event, and the node is queued for a full load. -/
+  | resync
+  deriving DecidableEq, Repr
+
+/-- A collection change re-reads that collection's root, not the node. A full
+load per change re-reads every session, agent and request the node holds:
+a runtime whose backend probe rewrites each backend observation's catalog
+freshness every minute made every connected client read hundreds of kilobytes
+a minute to show a few changed rows. -/
+def deliver : Change → Delivery
+  | .toolControl | .transcript => .invalidateTranscript
+  | .toolCall => .invalidateProvenance
+  | .collection => .reloadCollection
+  | .node => .resync
+
 structure Slot where
   pending : Bool
   /-- The retry timer must fire before the next load (transport back-off). -/
@@ -1208,15 +1243,21 @@ structure Slot where
   premise is outside the model). -/
   armed : Bool
   status : Status
+  /-- Collections are queued for their own reload (`Delivery.reloadCollection`). -/
+  collections : Bool := false
+  /-- A collection reload is in flight. It and the full load never overlap:
+  one read per node is in flight. -/
+  reloadingCollections : Bool := false
   deriving DecidableEq, Repr
 
 def initial : Slot :=
   { pending := false, waiting := false, loading := false, armed := false, status := .connecting }
 
 /-- `SourceStarted`: a new source for the node, configured, replaced or
-reconnected. The previous source's load is aborted. -/
+reconnected. The previous source's read is aborted. -/
 def sourceStarted (n : Slot) : Slot :=
-  { n with loading := false, armed := false, status := .connecting }
+  { n with loading := false, reloadingCollections := false, armed := false,
+           status := .connecting }
 
 /-- `SubscriptionsReady`: every root is armed, so the snapshot may start. A
 refused slot stays refused until a read is accepted
@@ -1229,19 +1270,64 @@ def armed (n : Slot) : Slot :=
 resync request queues the node; queued requests coalesce into one load. -/
 def queue (n : Slot) : Slot := { n with pending := true }
 
-/-- A load starts only on an armed source. A refused slot is unarmed until its
-reconnect arms it. -/
-def startable (n : Slot) : Bool := n.pending && !n.waiting && !n.loading && n.armed
+/-- A load starts only on an armed source with no other read of the node in
+flight. A refused slot is unarmed until its reconnect arms it. -/
+def startable (n : Slot) : Bool :=
+  n.pending && !n.waiting && !n.loading && !n.reloadingCollections && n.armed
 
+/-- A full load reads every collection after the events that queued them, so
+it takes the queued collections with it. -/
 def start (n : Slot) : Slot :=
-  if startable n then { n with pending := false, loading := true } else n
+  if startable n then { n with pending := false, loading := true, collections := false } else n
+
+/-- A delivered collection change queues the collection; queued collections
+coalesce into one collection reload. -/
+def queueCollection (n : Slot) : Slot := { n with collections := true }
+
+/-- A collection reload waits for a queued or running full load, which reads
+the collection too, and for the back-off. Full loads go first: a collection
+publication would supersede a full load in flight, so collection changes on
+every load would keep the node's other rows from ever catching up. -/
+def collectionStartable (n : Slot) : Bool :=
+  n.collections && !n.pending && !n.waiting && !n.loading && !n.reloadingCollections && n.armed
+
+/-- A collection reload takes every queued collection: one read of their roots. -/
+def startCollections (n : Slot) : Slot :=
+  if collectionStartable n then { n with collections := false, reloadingCollections := true }
+  else n
+
+/-- How a finished collection reload settles. -/
+inductive CollectionSettlement where
+  | published
+  /-- A publication into the node's store since the capture rejected it. -/
+  | superseded
+  /-- The read failed; the full load owns the status, back-off and refusal. -/
+  | failed
+  deriving DecidableEq, Repr
+
+/-- A collection reload replaces only its collections' rows, through the reload
+fence (`ClientDataPublication.acceptsReload`): a request event since its capture
+leaves it publishable, a publication rejects it. -/
+def collectionSettlement (s : State) (read : Read) : LoadResult → CollectionSettlement
+  | .rows => if acceptsReload s read then .published else .superseded
+  | .transportFailed | .refused => .failed
+
+/-- A superseded collection reload queues its collections again; a failed one
+queues the node's full load, which reports the failure (`settle`). Neither
+changes the shown status: only a full load shows a node connected. -/
+def settleCollections (n : Slot) : CollectionSettlement → Slot
+  | .published => { n with reloadingCollections := false }
+  | .superseded => { n with reloadingCollections := false, collections := true }
+  | .failed => { n with reloadingCollections := false, pending := true }
 
 def timer (n : Slot) : Slot := { n with waiting := false }
 
-/-- A dropped stream aborts the node's load and disarms the source. A queued
-load stays queued; it starts once the transport task re-arms the source. -/
+/-- A dropped stream aborts the node's read and disarms the source. A queued
+load stays queued; it starts once the transport task re-arms the source, and
+that load reads every collection whose reload the drop aborted. -/
 def streamFailed (n : Slot) : Slot :=
-  { n with loading := false, armed := false, status := .disconnected }
+  { n with loading := false, reloadingCollections := false, armed := false,
+           status := .disconnected }
 
 def settle (n : Slot) : Settlement → Slot
   | .published => { n with loading := false, status := .connected }
@@ -1250,7 +1336,7 @@ def settle (n : Slot) : Settlement → Slot
       { n with loading := false, pending := true, waiting := true, status := .disconnected }
   | .refused =>
       { n with loading := false, pending := false, waiting := false, armed := false,
-               status := .refused }
+               collections := false, reloadingCollections := false, status := .refused }
 
 /-- A refusal the stream reports settles the slot as a refused load does. -/
 def streamRefused (n : Slot) : Slot := settle n .refused
@@ -1270,7 +1356,8 @@ and the shown status is kept (an outage stays `disconnected` until the runtime
 answers). The retry timer is cleared, so the re-arm's load starts at once. A
 connected node is left as it is (`retryNowRestarts`). -/
 def retryNow (n : Slot) : Slot :=
-  if retryNowRestarts n then { n with waiting := false, loading := false, armed := false }
+  if retryNowRestarts n then
+    { n with waiting := false, loading := false, reloadingCollections := false, armed := false }
   else n
 
 /-- What the user sees for a node, and why it is not stuck. -/
@@ -1314,21 +1401,22 @@ def Owned (n : Slot) : Prop :=
 theorem owned_never_stalls (n : Slot) (h : Owned n) : present n ≠ .stalled := by
   obtain ⟨_, hConnecting, hDisconnected, hRefused⟩ := h
   cases n with
-  | mk pending waiting loading armed status =>
+  | mk pending waiting loading armed status collections reloading =>
     cases status <;> cases pending <;> cases waiting <;> cases loading <;> cases armed <;>
       simp_all [present]
 
 /-- An owned connecting or disconnected slot names its next step: a load can
-start now, the retry timer is due, a load is running, or the source is
-arming. -/
+start now, the retry timer is due, a load or a collection reload is running,
+or the source is arming. -/
 theorem owned_names_next_step (n : Slot) (h : Owned n)
     (hs : n.status = .connecting ∨ n.status = .disconnected ∨ n.status = .refused) :
-    startable n = true ∨ n.waiting = true ∨ n.loading = true ∨ n.armed = false := by
+    startable n = true ∨ n.waiting = true ∨ n.loading = true ∨
+      n.reloadingCollections = true ∨ n.armed = false := by
   obtain ⟨hWaiting, hConnecting, hDisconnected, hRefused⟩ := h
   cases n with
-  | mk pending waiting loading armed status =>
+  | mk pending waiting loading armed status collections reloading =>
     rcases hs with hs | hs | hs <;> subst hs <;>
-      cases pending <;> cases waiting <;> cases loading <;> cases armed <;>
+      cases pending <;> cases waiting <;> cases loading <;> cases armed <;> cases reloading <;>
       simp_all [startable]
 
 theorem initial_owned : Owned initial := by
@@ -1444,11 +1532,90 @@ theorem queued_requests_coalesce (n : Slot) (k : Nat) :
   | zero => rfl
   | succ k ih => simp [queueAll] at ih ⊢; rw [ih]; simp [queue]
 
+theorem start_of_not_startable (n : Slot) (h : startable n = false) : start n = n := by
+  simp [start, h]
+
 theorem one_load_per_start (n : Slot) :
     start (start n) = start n := by
-  unfold start startable
-  by_cases h : n.pending && !n.waiting && !n.loading && n.armed
-  · simp [h]
-  · simp [h]
+  by_cases h : startable n = true
+  · exact start_of_not_startable _ (by simp only [start, h, ↓reduceIte]; simp [startable])
+  · rw [start_of_not_startable n (by simpa using h)]
+    exact start_of_not_startable n (by simpa using h)
+
+theorem queue_collection_owned (n : Slot) (h : Owned n) : Owned (queueCollection n) := by
+  cases n; simp_all [Owned, queueCollection]
+
+theorem start_collections_owned (n : Slot) (h : Owned n) : Owned (startCollections n) := by
+  unfold startCollections
+  split
+  · cases n; simp_all [Owned]
+  · exact h
+
+theorem settle_collections_owned (n : Slot) (h : Owned n) (outcome : CollectionSettlement) :
+    Owned (settleCollections n outcome) := by
+  cases n; cases outcome <;> simp_all [Owned, settleCollections]
+
+/-- One read per node: a full load and a collection reload never start beside
+each other. -/
+theorem one_read_in_flight (n : Slot) :
+    (startable n = true → n.reloadingCollections = false) ∧
+      (collectionStartable n = true → n.loading = false) ∧
+      startable (startCollections n) = (startable n && !collectionStartable n) ∧
+      collectionStartable (start n) = (collectionStartable n && !startable n) := by
+  cases n with
+  | mk pending waiting loading armed status collections reloading =>
+    cases pending <;> cases waiting <;> cases loading <;> cases armed <;> cases collections <;>
+      cases reloading <;> simp [startable, collectionStartable, start, startCollections]
+
+/-- A full load takes the queued collections: its read starts after every
+event that queued them. -/
+theorem full_load_takes_queued_collections (n : Slot) (h : startable n = true) :
+    (start n).collections = false := by
+  simp [start, h]
+
+/-- A queued full load goes before any queued collection. -/
+theorem queued_load_goes_first (n : Slot) (h : n.pending = true) :
+    collectionStartable n = false := by
+  simp [collectionStartable, h]
+
+/-- A collection reload starts once nothing else is queued or running for an
+armed node. -/
+theorem queued_collection_starts (n : Slot) (hc : n.collections = true) (hp : n.pending = false)
+    (hw : n.waiting = false) (hl : n.loading = false) (hr : n.reloadingCollections = false)
+    (ha : n.armed = true) : (startCollections n).reloadingCollections = true := by
+  simp [startCollections, collectionStartable, hc, hp, hw, hl, hr, ha]
+
+/-- However many request events arrive while a collection reload runs, it
+publishes (the safety half of the TLA model's EventualPublication). -/
+theorem request_events_never_supersede_collections (s : State) (events : Nat) :
+    collectionSettlement (requestEvents s events) (beginRead s) .rows = .published := by
+  have h := arbitrarily_many_request_events_preserve_reload s events
+  simp [collectionSettlement, h]
+
+/-- NoStaleCommit for collection reloads: a publication since capture
+supersedes the reload, and its collections are queued for a fresh read. -/
+theorem publication_supersedes_collections_and_requeues (s : State) (n : Slot) :
+    collectionSettlement (dataChange s) (beginRead s) .rows = .superseded ∧
+      (settleCollections n
+        (collectionSettlement (dataChange s) (beginRead s) .rows)).collections = true := by
+  have h := publication_rejects_reload s
+  simp [collectionSettlement, h, settleCollections]
+
+/-- A failed collection read is not lost: the node's full load is queued. -/
+theorem failed_collections_queue_full_load (n : Slot) (result : LoadResult)
+    (h : result ≠ .rows) (s : State) (read : Read) :
+    (settleCollections n (collectionSettlement s read result)).pending = true := by
+  cases result <;> simp_all [collectionSettlement, settleCollections]
+
+/-- A collection reload never changes the shown status. -/
+theorem collection_reload_keeps_status (n : Slot) (outcome : CollectionSettlement) :
+    (settleCollections n outcome).status = n.status := by
+  cases outcome <;> rfl
+
+/-- Only a collection change reloads a collection; a node change still loads
+the whole node. -/
+theorem only_collections_reload_alone (change : Change) :
+    deliver change = .reloadCollection ↔ change = .collection := by
+  cases change <;> simp [deliver]
 
 end ObserverResync

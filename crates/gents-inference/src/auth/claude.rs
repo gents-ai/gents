@@ -7,7 +7,6 @@ use crate::auth::credential::{
 };
 
 pub const CLAUDE_OAUTH_PROVIDER: &str = "claude-subscription";
-pub const CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV: &str = "GENTS_CLAUDE_OAUTH_TOKEN_URL";
 
 pub const CLAUDE_OAUTH_PRODUCT: OAuthProduct = OAuthProduct {
     name: "Claude",

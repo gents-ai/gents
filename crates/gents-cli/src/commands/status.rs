@@ -28,7 +28,17 @@ pub(crate) async fn status(args: StatusArgs) -> Result<()> {
         None if std::io::stdout().is_terminal() => OutputFormat::Text,
         None => OutputFormat::Json,
     };
-    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref()).await?;
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())
+        .await
+        .map_err(|error| {
+            if gents_store::client_error::BridgeError::carried_by(&error).is_some_and(|cause| {
+                cause.code == gents_store::client_error::BridgeErrorCode::EndpointUnreachable
+            }) {
+                error.context("check the runtime address or run `gents` to set up this home and start its runtime, then retry `gents status`")
+            } else {
+                error
+            }
+        })?;
     let node_did = resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
     let output = load_runtime_status_output(args.home.as_deref(), &graphql, &node_did).await?;
     if format == OutputFormat::Json {
@@ -174,9 +184,7 @@ pub(crate) async fn load_runtime_status_output(
         .map(serde_json::to_value)
         .transpose()?
         .unwrap_or(Value::Null);
-    let runtime_status = fetch_runtime_status(graphql, RUNTIME_STATUS_TIMEOUT)
-        .await
-        .ok();
+    let runtime_status = fetch_runtime_status(graphql).await.ok();
     let liveness_value = liveness_value(runtime_status.as_ref(), graphql, node_did).await;
     let backend_probes = runtime_status
         .as_ref()
@@ -274,15 +282,14 @@ pub(crate) async fn load_runtime_status_output(
     Ok(output)
 }
 
-const RUNTIME_STATUS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
-
 pub(crate) async fn load_liveness_value(graphql: &GraphqlEndpoint, node_did: &str) -> Value {
-    let runtime_status = fetch_runtime_status(graphql, RUNTIME_STATUS_TIMEOUT)
-        .await
-        .ok();
+    let runtime_status = fetch_runtime_status(graphql).await.ok();
     liveness_value(runtime_status.as_ref(), graphql, node_did).await
 }
 
+/// The runtime's liveness when its answer carries one; otherwise the store's,
+/// with the native executors the runtime reported beside it when it answered
+/// (`tla/RuntimeStatusLiveness.tla`).
 async fn liveness_value(
     runtime_status: Option<&Value>,
     graphql: &GraphqlEndpoint,
@@ -291,10 +298,21 @@ async fn liveness_value(
     if let Some(liveness) = runtime_status.and_then(|status| status.get("liveness")) {
         return liveness.clone();
     }
-    match gents_host::http::prometheus::load_metrics_query_data(graphql, node_did).await {
-        Ok(data) => serde_json::to_value(&data.liveness).unwrap_or(Value::Null),
-        Err(_) => Value::Null,
-    }
+    let Ok(data) =
+        gents_host::http::prometheus::store::load_metrics_query_data(graphql, node_did).await
+    else {
+        return Value::Null;
+    };
+    let executors = runtime_status
+        .and_then(|status| status.get(gents_host::http::router::NATIVE_EXECUTORS_STATUS_FIELD))
+        .and_then(|executors| serde_json::from_value(executors.clone()).ok());
+    let liveness = match executors {
+        Some(executors) => {
+            gents_host::http::liveness::with_active_native_executors(data.liveness, executors)
+        }
+        None => data.liveness,
+    };
+    serde_json::to_value(&liveness).unwrap_or(Value::Null)
 }
 
 /// The runtime's measured backend probes keyed by backend ID, only when the
@@ -303,7 +321,7 @@ pub(crate) async fn load_runtime_backend_probes(
     graphql: &GraphqlEndpoint,
     node_did: &str,
 ) -> BTreeMap<String, Value> {
-    match fetch_runtime_status(graphql, RUNTIME_STATUS_TIMEOUT).await {
+    match fetch_runtime_status(graphql).await {
         Ok(status) => runtime_backend_probes(&status, node_did),
         Err(_) => BTreeMap::new(),
     }
@@ -325,19 +343,17 @@ fn runtime_backend_probes(status: &Value, node_did: &str) -> BTreeMap<String, Va
         .collect()
 }
 
-pub(crate) async fn fetch_runtime_status(
-    graphql: &GraphqlEndpoint,
-    timeout: std::time::Duration,
-) -> Result<Value> {
+/// Waits for the runtime's answer, which the runtime bounds by its own
+/// budgets; a total timeout here dropped a live runtime's answer on a loaded
+/// host (`tla/RuntimeStatusLiveness.tla`, `ClientWindow`).
+pub(crate) async fn fetch_runtime_status(graphql: &GraphqlEndpoint) -> Result<Value> {
     let status_url = gents_host::readiness::runtime_status_url(graphql)?;
-    let client = reqwest::Client::builder()
-        .timeout(timeout)
+    let client = gents_protocol::graphql::store_http_client_builder()
         .build()
         .context("building runtime status client")?;
     graphql
-        .authorize(client.get(&status_url))?
-        .send()
-        .await
+        .send_resolving(|graphql| graphql.authorize(client.get(&status_url)))
+        .await?
         .and_then(reqwest::Response::error_for_status)
         .with_context(|| format!("reading runtime status from {status_url}"))?
         .json()

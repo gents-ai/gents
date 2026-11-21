@@ -94,7 +94,11 @@ impl ToolDyn for FlatRemoteTool {
         })
     }
 
-    fn admit(&self, args: &str) -> Result<(), ToolError> {
+    fn admit(
+        &self,
+        args: &str,
+        context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<(), ToolError> {
         let Ok(arguments) = gents_loop::tool::parse_tool_args::<serde_json::Value>(args) else {
             return Ok(());
         };
@@ -105,6 +109,7 @@ impl ToolDyn for FlatRemoteTool {
                 tool_name: self.tool_name.clone(),
                 arguments,
             },
+            context,
         )
         .map_err(CallToolTool::into_dyn_error)
     }

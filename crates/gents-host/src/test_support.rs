@@ -58,7 +58,8 @@ pub async fn served_config(mut config: Value) -> Served {
     let policy = node.add_dac_policy_with_counter_as(&as_runtime, mailbox, 0);
     assert_eq!(
         policy.await.unwrap(),
-        gents_protocol::schemas::MAILBOX_POLICY_ID
+        gents_protocol::schemas::HomePolicyIds::shared()
+            .id(gents_protocol::schemas::BuiltInPolicy::Mailbox)
     );
     gents_store::schema::ensure_runtime_schemas(&node)
         .await
@@ -99,9 +100,11 @@ pub async fn served_config(mut config: Value) -> Served {
 }
 
 /// The CLI's User, made once per test process: concurrent first makes race on its metadata file.
-pub async fn cli_user() -> &'static gents_desktop_core::client::PrincipalIdentity {
-    static USER: tokio::sync::OnceCell<gents_desktop_core::client::PrincipalIdentity> =
-        tokio::sync::OnceCell::const_new();
+pub async fn cli_user(
+) -> &'static gents_store::client_journal::principal_identity::PrincipalIdentity {
+    static USER: tokio::sync::OnceCell<
+        gents_store::client_journal::principal_identity::PrincipalIdentity,
+    > = tokio::sync::OnceCell::const_new();
     USER.get_or_init(|| async {
         gents_service::home_state::client_identity_for(
             &gents_service::home_state::resolve_home_dir(None),
@@ -178,44 +181,12 @@ pub async fn publish_test_node(node: &std::sync::Arc<defra_node::Node>) -> Strin
 /// [`publish_test_node`] for a fixture that names its Node's DID; the DID
 /// must be the node's runtime.
 pub async fn publish_test_node_as(node: &std::sync::Arc<defra_node::Node>, node_did: &str) {
-    use gents_documents::apply_desired_state_plan;
-    use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-    use gents_store::config_client::ConfigAccess;
-
     assert_eq!(
         node.node_identity_did(),
         Some(node_did),
         "the fixture Node is published by its own runtime"
     );
-    if gents_documents::load_node(node, node_did)
-        .await
-        .unwrap()
-        .is_some()
-    {
-        return;
-    }
-    let value = serde_json::json!({"node_did": node_did});
-    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: gents_store::collection::Collection::Node,
-        add: value.clone(),
-        update: value,
-    }])
-    .unwrap();
-    ConfigAccess::local_as(node.clone(), ::identity::Did::new(node_did).unwrap())
-        .transact_write("test.publish_node", |txn| {
-            let plan = &plan;
-            Box::pin(async move {
-                apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &gents_inference::resolved::ProviderProfilePolicy,
-                )
-                .await
-                .map(|_| ())
-            })
-        })
-        .await
-        .unwrap();
+    gents_documents::test_support::ensure_test_node(node, node_did).await;
 }
 
 /// A fixture node served over its own DefraDB HTTP endpoint with node ACP, so
@@ -246,7 +217,7 @@ async fn serve(
     let mut http = gents::defra_node::HttpConfig::with_listener(listener).unwrap();
     let served = gents::runtime::embedded::ServedNode::default();
     if runtime.is_some() {
-        http = http.with_extra_routes(gents::runtime::embedded::agent_identity_routes(
+        http = http.with_authenticated_routes(gents::runtime::embedded::agent_identity_routes(
             served.clone(),
         ));
     }
@@ -377,51 +348,48 @@ pub struct ClientHome {
 
 impl ClientHome {
     pub async fn new() -> Self {
-        use gents_documents::apply_desired_state_plan;
-        use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-        use gents_store::identity::NodeIdentity as _;
-
-        let home = gents::runtime::embedded::EmbeddedHome::create_temp("cli-client-home")
-            .await
+        let directory = tempfile::Builder::new()
+            .prefix("gents-cli-client-home-")
+            .tempdir()
             .unwrap();
+        Self::in_directory(directory, false).await
+    }
+
+    /// A home whose User is the init User that owns its node access control,
+    /// as `gents init` provisions it: a native administrator.
+    pub async fn owned_by_user() -> Self {
+        let directory = tempfile::Builder::new()
+            .prefix("gents-cli-client-home-")
+            .tempdir()
+            .unwrap();
+        Self::in_directory(directory, true).await
+    }
+
+    async fn in_directory(directory: tempfile::TempDir, user_owns_nac: bool) -> Self {
         let user_dir = tempfile::tempdir().unwrap();
         let user = gents_store::identity::KeyIdentity::load_or_create(
             user_dir.path().join("user.key"),
             None,
         )
         .unwrap();
-        gents_store::identity::GrantSet::OperatorUser
-            .grant(
-                &gents_store::config_client::ConfigAccess::local_as(
-                    home.node.clone(),
-                    ::identity::Did::new(home.did()).unwrap(),
-                ),
-                &::identity::Did::new(user.did()).unwrap(),
+        if user_owns_nac {
+            std::fs::copy(
+                user_dir.path().join("user.key"),
+                directory.path().join("owner.key"),
             )
+            .unwrap();
+        }
+        let home = gents::runtime::embedded::EmbeddedHome::in_tempdir(directory, None)
             .await
             .unwrap();
         let access = user_access(home.graphql_endpoint().unwrap(), &user);
-        let node = serde_json::json!({"node_did": home.did()});
-        let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-            collection: gents_store::collection::Collection::Node,
-            add: node.clone(),
-            update: node,
-        }])
-        .unwrap();
-        access
-            .transact_write("test.client_home.node", |txn| {
-                let plan = &plan;
-                Box::pin(async move {
-                    apply_desired_state_plan(
-                        txn,
-                        plan,
-                        &gents_inference::resolved::ProviderProfilePolicy,
-                    )
-                    .await
-                })
-            })
-            .await
-            .unwrap();
+        gents_documents::test_support::enroll_test_user(
+            &home.node,
+            home.identity.as_ref(),
+            &user,
+            &access,
+        )
+        .await;
         Self {
             home,
             user,
@@ -864,6 +832,10 @@ impl crate::serve::ServeClient for TestServeClient {
 
     fn version(&self) -> crate::http::version::VersionResponse {
         crate::http::version::version_response()
+    }
+
+    fn host_executable(&self) -> Option<std::path::PathBuf> {
+        None
     }
 
     async fn bound_root_agents(

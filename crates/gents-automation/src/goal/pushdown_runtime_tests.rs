@@ -12,9 +12,7 @@ use crate::{
     triggers::engine::TriggerSource, triggers::runtime_snapshot::ActiveRuntimeSnapshot,
 };
 use defra_node::Node as EmbeddedNode;
-use events::{
-    Bus, ChannelBus, DocumentChangeSubscription, EventName, Message, Subscription, Update,
-};
+use events::{Bus, ChannelBus, EventName, Message, Subscription, Update};
 use gents_inference::backends::provider::BackendProviderKind;
 use gents_inference::resolved::ResolvedAgent;
 use gents_inference::test_support::TestDb;
@@ -220,6 +218,7 @@ fn test_agent_with_identity(
         openai_wire_api: gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
         backend_endpoint: "http://localhost:8000/v1".to_string(),
         claude_platform: None,
+        client_version: None,
         backend_auth: gents_documents::BackendAuth::Unauthenticated,
         model_name: gents_inference::resolved::DEFAULT_MODEL_NAME.to_string(),
         service_tier: None,
@@ -232,6 +231,8 @@ fn test_agent_with_identity(
         compaction: None,
         compaction_inference: None,
         max_total_tokens: None,
+        max_invalid_tool_calls: gents_loop::loop_stream::DEFAULT_MAX_INVALID_TOOL_CALLS,
+        repeated_tool_failure_limit: gents_loop::loop_stream::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
         stream_batch_ms: gents_inference::resolved::DEFAULT_STREAM_BATCH_MS,
         stream_liveness_timeout: Duration::from_secs(
             gents_documents::inference_defaults::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
@@ -239,6 +240,7 @@ fn test_agent_with_identity(
         deadline_duration: Duration::from_secs(
             gents_documents::inference_defaults::DEFAULT_DEADLINE_DURATION_SECS,
         ),
+        title_timeout: Duration::from_secs(gents_inference::resolved::DEFAULT_TITLE_TIMEOUT_SECS),
         provider_idle_timeout: Duration::from_secs(
             gents_inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
         ),
@@ -307,14 +309,14 @@ impl UpdateSubscriptionSource for MockUpdateSubscriptionSource {
         subscription
     }
 
-    fn subscribe_collection_changes(
+    fn subscribe_changes(
         &self,
         collection_ids: Vec<String>,
-    ) -> DocumentChangeSubscription {
+    ) -> gents_store::subscription_source::ChangeSubscription {
         let subscription = self.bus.subscribe_collection_changes(collection_ids);
         self.subscriber_count.fetch_add(1, Ordering::SeqCst);
         self.subscriber_notify.notify_waiters();
-        subscription
+        subscription.into()
     }
 }
 
@@ -366,29 +368,43 @@ async fn goal_fixture_usage(
         db.node_identity.did(),
         SESSION,
         agent,
-        request_id,
-        request_doc,
-        call_id,
-        prompt_tokens,
-        completion_tokens,
-        0,
+        FixtureUsage {
+            request_id,
+            request_doc,
+            call_id,
+            prompt_tokens,
+            completion_tokens,
+            cached_input_tokens: 0,
+        },
     )
     .await;
 }
 
-#[allow(clippy::too_many_arguments)]
+/// One completed inference call and the tokens it used.
+struct FixtureUsage<'a> {
+    request_id: &'a str,
+    request_doc: &'a str,
+    call_id: &'a str,
+    prompt_tokens: i64,
+    completion_tokens: i64,
+    cached_input_tokens: i64,
+}
+
 async fn goal_fixture_usage_for_node(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
     session_id: &str,
     agent: &Arc<dyn NodeIdentity>,
-    request_id: &str,
-    request_doc: &str,
-    call_id: &str,
-    prompt_tokens: i64,
-    completion_tokens: i64,
-    cached_input_tokens: i64,
+    usage: FixtureUsage<'_>,
 ) {
+    let FixtureUsage {
+        request_id,
+        request_doc,
+        call_id,
+        prompt_tokens,
+        completion_tokens,
+        cached_input_tokens,
+    } = usage;
     let access = ConfigAccess::local_managed_agent(
         node.clone(),
         agent.did().parse().unwrap(),
@@ -699,10 +715,12 @@ async fn signed_goal_backed_request(
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         request_id,
-        did,
-        agent.did(),
-        agent.did(),
-        SESSION,
+        gents_protocol::request_admission::RequestScope::new(
+            did,
+            agent.did(),
+            agent.did(),
+            SESSION,
+        ),
         "Begin durable work",
         "interactive",
         "2026-07-15T00:00:00Z",
@@ -807,11 +825,13 @@ async fn seed_a_passed_reset(
         db.node_identity.did(),
         parent["_docID"].as_str().unwrap(),
         parent["session_doc_id"].as_str().unwrap(),
-        "limited-call",
-        "inference",
-        1,
-        "2026-07-15T00:00:10Z",
-        RENDERED_LIMIT,
+        FailedInferenceCall {
+            call_id: "limited-call",
+            call_kind: "inference",
+            attempt: 1,
+            ended_at: "2026-07-15T00:00:10Z",
+            failure_reason: RENDERED_LIMIT,
+        },
     )
     .await;
     seed_goal_from_access(
@@ -1340,22 +1360,31 @@ async fn assert_settles_without_fire(source: &mut GoalSource, description: &str)
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "fixture binds the failed call to its Agent and physical request"
-)]
+/// One failed inference call: which attempt of which kind, when it ended
+/// and why.
+struct FailedInferenceCall<'a> {
+    call_id: &'a str,
+    call_kind: &'a str,
+    attempt: i64,
+    ended_at: &'a str,
+    failure_reason: &'a str,
+}
+
 async fn seed_failed_call_from_access(
     access: &ConfigAccess,
     agent: &Arc<dyn NodeIdentity>,
     node_did: &str,
     request_doc: &str,
     session_doc: &str,
-    call_id: &str,
-    call_kind: &str,
-    attempt: i64,
-    ended_at: &str,
-    failure_reason: &str,
+    call: FailedInferenceCall<'_>,
 ) {
+    let FailedInferenceCall {
+        call_id,
+        call_kind,
+        attempt,
+        ended_at,
+        failure_reason,
+    } = call;
     access.transact_write("test.goal_failed_call", |txn| {
         Box::pin(async move {
             let response = txn.execute_with_variables(
@@ -1647,20 +1676,21 @@ async fn seed_lineage_tool(
     }).await.unwrap()
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "fixture binds workspace lineage to physical requests and tool calls"
-)]
 async fn seed_lineage_parent(
     db: &TestDb,
     user: &gents_store::identity::KeyIdentity,
     agent: &Arc<dyn NodeIdentity>,
-    access: &ConfigAccess,
     request_id: &str,
     terminal: &str,
     workspace_id: &str,
     seal_hash: &str,
 ) -> (String, String) {
+    let access = &ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        agent.did().parse().unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
     use gents_session::request::lifecycle::{
         build_signed_client_request, submit_client_request, ExecutionOrigin, RequestIdentity,
@@ -1772,7 +1802,6 @@ async fn goal_continuation_preserves_nested_workspace_lineage() {
         &db,
         &user,
         &agent_identity,
-        &access,
         "parent-nested-workspace",
         "completed",
         "workspace-goal",
@@ -2614,12 +2643,14 @@ async fn set_goal_over_http_transactions_computes_the_same_baseline() {
         did,
         SESSION,
         &agent,
-        "http-baseline-request",
-        &request_doc,
-        "http-baseline-call",
-        1000,
-        50,
-        0,
+        FixtureUsage {
+            request_id: "http-baseline-request",
+            request_doc: &request_doc,
+            call_id: "http-baseline-call",
+            prompt_tokens: 1000,
+            completion_tokens: 50,
+            cached_input_tokens: 0,
+        },
     )
     .await;
     let request = access.execute("{AgentRequest(filter: {request_id: {_eq: \"http-baseline-request\"}}) {session_doc_id}}").await.unwrap();
@@ -3153,12 +3184,14 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
         db.node_identity.did(),
         SESSION,
         &agent_identity,
-        "parent-budget",
-        parent_doc_id,
-        "goal-budget-call",
-        100,
-        5,
-        90,
+        FixtureUsage {
+            request_id: "parent-budget",
+            request_doc: parent_doc_id,
+            call_id: "goal-budget-call",
+            prompt_tokens: 100,
+            completion_tokens: 5,
+            cached_input_tokens: 90,
+        },
     )
     .await;
     let foreign_dir = tempfile::tempdir().unwrap();
@@ -3317,12 +3350,14 @@ async fn session_token_usage_charges_cached_input_as_part_of_the_total() {
         db.node_identity.did(),
         SESSION,
         &agent,
-        "parent-cached",
-        &doc,
-        "goal-cached-call",
-        1000,
-        50,
-        800,
+        FixtureUsage {
+            request_id: "parent-cached",
+            request_doc: &doc,
+            call_id: "goal-cached-call",
+            prompt_tokens: 1000,
+            completion_tokens: 50,
+            cached_input_tokens: 800,
+        },
     )
     .await;
     let tokens = session_token_usage(
@@ -3348,11 +3383,13 @@ async fn provider_usage_limit_moves_active_goal_to_usage_limited() {
         db.node_identity.did(),
         parent["_docID"].as_str().unwrap(),
         parent["session_doc_id"].as_str().unwrap(),
-        "usage-limited-call",
-        "inference",
-        1,
-        "2026-07-15T00:00:01Z",
-        "provider insufficient_quota: credit balance exhausted",
+        FailedInferenceCall {
+            call_id: "usage-limited-call",
+            call_kind: "inference",
+            attempt: 1,
+            ended_at: "2026-07-15T00:00:01Z",
+            failure_reason: "provider insufficient_quota: credit balance exhausted",
+        },
     )
     .await;
     seed_goal_from_access(
@@ -3396,11 +3433,13 @@ async fn compaction_usage_limit_moves_goal_to_usage_limited() {
         db.node_identity.did(),
         request_doc,
         session_doc,
-        "compaction-call",
-        "compaction",
-        1,
-        "2026-07-15T00:00:10Z",
-        RENDERED_LIMIT,
+        FailedInferenceCall {
+            call_id: "compaction-call",
+            call_kind: "compaction",
+            attempt: 1,
+            ended_at: "2026-07-15T00:00:10Z",
+            failure_reason: RENDERED_LIMIT,
+        },
     )
     .await;
     let last_failure = usage_limited_goal_after_failed_request(&db, &agent, &access).await;
@@ -3426,11 +3465,13 @@ async fn a_later_limited_call_wins_over_an_earlier_retry() {
         db.node_identity.did(),
         request_doc,
         session_doc,
-        "earlier-retry",
-        "inference",
-        2,
-        "2026-07-15T00:00:05Z",
-        "HttpError: Invalid status code 500",
+        FailedInferenceCall {
+            call_id: "earlier-retry",
+            call_kind: "inference",
+            attempt: 2,
+            ended_at: "2026-07-15T00:00:05Z",
+            failure_reason: "HttpError: Invalid status code 500",
+        },
     )
     .await;
     seed_failed_call_from_access(
@@ -3439,11 +3480,13 @@ async fn a_later_limited_call_wins_over_an_earlier_retry() {
         db.node_identity.did(),
         request_doc,
         session_doc,
-        "later-compaction",
-        "compaction",
-        1,
-        "2026-07-15T00:00:10Z",
-        RENDERED_LIMIT,
+        FailedInferenceCall {
+            call_id: "later-compaction",
+            call_kind: "compaction",
+            attempt: 1,
+            ended_at: "2026-07-15T00:00:10Z",
+            failure_reason: RENDERED_LIMIT,
+        },
     )
     .await;
     let last_failure = usage_limited_goal_after_failed_request(&db, &agent, &access).await;
@@ -3529,11 +3572,13 @@ async fn openrouter_credits_402_moves_active_goal_to_usage_limited() {
         db.node_identity.did(),
         parent["_docID"].as_str().unwrap(),
         parent["session_doc_id"].as_str().unwrap(),
-        "openrouter-credits-call",
-        "inference",
-        1,
-        "2026-07-15T00:00:01Z",
-        &reason,
+        FailedInferenceCall {
+            call_id: "openrouter-credits-call",
+            call_kind: "inference",
+            attempt: 1,
+            ended_at: "2026-07-15T00:00:01Z",
+            failure_reason: &reason,
+        },
     )
     .await;
     seed_goal_from_access(
@@ -3801,17 +3846,10 @@ async fn operator_resume_publishes_one_lineage_child_and_fences_old_pause() {
     let did = db.node_identity.did();
     let (user, agent) = goal_creation_actors(&db).await;
     let client = db.client_access(&user);
-    let access = ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        agent.did().parse().unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
     let (parent_doc, source_doc) = seed_lineage_parent(
         &db,
         &user,
         &agent,
-        &access,
         "resume-parent",
         "interrupted",
         "resume-workspace",

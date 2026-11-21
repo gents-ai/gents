@@ -123,15 +123,19 @@ async fn init_bootstraps_backend_default_agent_and_tools_idempotently() -> Resul
         &graphql,
         &node_did,
         &backend_id,
-        mock_endpoint.endpoint(),
-        "OpenAiCompatible",
-        None,
-        None,
-        &model_name,
         &tools_id,
-        "ReadOnly",
-        "ReadOnly",
-        "read-only operating mode",
+        ExpectedBackend {
+            provider_kind: "OpenAiCompatible",
+            endpoint: mock_endpoint.endpoint(),
+            api_key: None,
+            api_key_env_var: None,
+            model_name: &model_name,
+        },
+        ExpectedModes {
+            file_tools_mode: "ReadOnly",
+            bash_mode: "ReadOnly",
+            prompt_snippet: "read-only operating mode",
+        },
     )
     .await?;
 
@@ -163,15 +167,19 @@ async fn init_bootstraps_backend_default_agent_and_tools_idempotently() -> Resul
         &graphql,
         &node_did,
         &backend_id,
-        mock_endpoint.endpoint(),
-        "OpenAiCompatible",
-        None,
-        None,
-        &model_name,
         &tools_id,
-        "ReadOnly",
-        "ReadOnly",
-        "read-only operating mode",
+        ExpectedBackend {
+            provider_kind: "OpenAiCompatible",
+            endpoint: mock_endpoint.endpoint(),
+            api_key: None,
+            api_key_env_var: None,
+            model_name: &model_name,
+        },
+        ExpectedModes {
+            file_tools_mode: "ReadOnly",
+            bash_mode: "ReadOnly",
+            prompt_snippet: "read-only operating mode",
+        },
     )
     .await?;
 
@@ -533,15 +541,19 @@ async fn init_supports_provider_auth_backend_fields() -> Result<()> {
         &graphql,
         &node_did,
         &backend_id,
-        mock_endpoint.endpoint(),
-        "OpenRouter",
-        Some(raw_api_key),
-        None,
-        &model_name,
         &tools_id,
-        "ReadOnly",
-        "ReadOnly",
-        "read-only operating mode",
+        ExpectedBackend {
+            provider_kind: "OpenRouter",
+            endpoint: mock_endpoint.endpoint(),
+            api_key: Some(raw_api_key),
+            api_key_env_var: None,
+            model_name: &model_name,
+        },
+        ExpectedModes {
+            file_tools_mode: "ReadOnly",
+            bash_mode: "ReadOnly",
+            prompt_snippet: "read-only operating mode",
+        },
     )
     .await?;
 
@@ -839,15 +851,19 @@ async fn init_accepts_explicit_backend_and_model_together() -> Result<()> {
         &graphql,
         &node_did,
         &backend_id,
-        mock_endpoint.endpoint(),
-        "OpenAiCompatible",
-        None,
-        None,
-        &model_name,
         &tools_id,
-        "ReadOnly",
-        "ReadOnly",
-        "read-only operating mode",
+        ExpectedBackend {
+            provider_kind: "OpenAiCompatible",
+            endpoint: mock_endpoint.endpoint(),
+            api_key: None,
+            api_key_env_var: None,
+            model_name: &model_name,
+        },
+        ExpectedModes {
+            file_tools_mode: "ReadOnly",
+            bash_mode: "ReadOnly",
+            prompt_snippet: "read-only operating mode",
+        },
     )
     .await?;
 
@@ -1081,7 +1097,7 @@ async fn serve_service_mode_writes_the_startup_diagnostic_to_stderr() -> Result<
     .await?;
 
     let port = allocate_port()?;
-    let stderr = run_cli_failure_stderr_with_env(
+    let stderr = run_cli_failure_stderr(
         &home_dir,
         &[
             "server",
@@ -1089,8 +1105,8 @@ async fn serve_service_mode_writes_the_startup_diagnostic_to_stderr() -> Result<
             &port.to_string(),
             "--tool-root",
             explicit_root,
+            "--system-log",
         ],
-        &[("GENTS_SYSTEM_LOG", "1")],
     )?;
 
     assert!(
@@ -1345,15 +1361,19 @@ async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
         &graphql,
         &node_did,
         &backend_id,
-        mock_endpoint.endpoint(),
-        "OpenAiCompatible",
-        None,
-        None,
-        &model_name,
         &tools_id,
-        "ReadWrite",
-        "Unrestricted",
-        "write-capable local tools",
+        ExpectedBackend {
+            provider_kind: "OpenAiCompatible",
+            endpoint: mock_endpoint.endpoint(),
+            api_key: None,
+            api_key_env_var: None,
+            model_name: &model_name,
+        },
+        ExpectedModes {
+            file_tools_mode: "ReadWrite",
+            bash_mode: "Unrestricted",
+            prompt_snippet: "write-capable local tools",
+        },
     )
     .await?;
     let response = graphql_query(
@@ -1573,19 +1593,8 @@ async fn a_deleted_home_stops_its_server_without_writing_into_the_new_one() -> R
             mock_endpoint.endpoint(),
         ],
     )?;
+    // The ready report follows the server's last startup write into the home.
     let (mut serve, _) = spawn_server_with_ready_json(temp.path(), allocate_port()?, &[], &[])?;
-    // `service-updates` is the server's last startup write into the home.
-    let started_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while !home
-        .join(gents_store::local::home::SERVICE_UPDATES_DIR_NAME)
-        .is_dir()
-    {
-        anyhow::ensure!(
-            tokio::time::Instant::now() < started_deadline,
-            "the server never created its service-updates directory"
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
     // The server writes into the home until it notices, so a removal can
     // race a new file; repeat it as a user repeats `rm -rf`.
     let removal_deadline = tokio::time::Instant::now() + Duration::from_secs(5);

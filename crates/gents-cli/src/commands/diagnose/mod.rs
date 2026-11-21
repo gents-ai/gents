@@ -58,8 +58,35 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         Some(endpoint) => graphql_endpoint_available(endpoint).await,
         None => false,
     };
+    let access = match resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await {
+        Ok((access, _)) => access,
+        Err(error)
+            if args.graphql.is_some()
+                && gents_store::client_error::BridgeError::carried_by(&error).is_some_and(
+                    |cause| {
+                        cause.code
+                            == gents_store::client_error::BridgeErrorCode::EndpointUnreachable
+                    },
+                ) =>
+        {
+            let matching = runtime_state
+                .as_ref()
+                .filter(|state| Some(&state.graphql) == graphql.as_ref());
+            let p2p = gents_host::p2p_status::persisted_p2p_status(matching);
+            let mut report = json!({
+                "status": "degraded", "access_mode": "graphql", "graphql": graphql, "graphql_reachable": false,
+                "error": error.to_string(), "p2p": p2p, "checks": {
+                    "p2p": { "transport": p2p["p2p_transport"], "peer_id": p2p["p2p_peer_id"] }
+                }
+            });
+            if let Some(map) = report.as_object_mut() {
+                gents_host::p2p_status::flatten_p2p_fields(map, &p2p);
+            }
+            return print_json(&report);
+        }
+        Err(error) => return Err(error),
+    };
     let node_did = resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
-    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
 
     let (schema_checks, bundle_result, runtime_row, readiness_row, accounts) = tokio::join!(
         diagnose_schema_presence(&access),

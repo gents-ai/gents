@@ -3,8 +3,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
-use gents_desktop_bridge::{BridgeError, BridgeErrorCode};
-use gents_desktop_core::client::{ClientStoreKeyProvider, DesktopPaths};
+use gents_desktop_core::client::journal::ClientStoreKeyProvider;
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
+use gents_store::client_journal::paths::DesktopPaths;
 use gents_store::local::store_key::{StoreEncryption, StoreKey, StoreKeyCustody};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -82,7 +84,7 @@ impl HistoryUnlockRequired {
     /// The marker reaches `Provider::failed` through the store-open path as an
     /// erased error, so it is asked for there rather than matched.
     pub(crate) fn occurs_in(error: &anyhow::Error) -> bool {
-        error.is::<Self>()
+        gents_protocol::error_chain::find_source::<Self>(error.as_ref()).is_some()
     }
 }
 

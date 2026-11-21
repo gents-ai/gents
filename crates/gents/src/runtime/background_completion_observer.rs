@@ -12,7 +12,7 @@ const AGENT_REQUEST_COLLECTION: &str = "AgentRequest";
 pub(crate) async fn run_background_completion_observer(
     node: Arc<EmbeddedNode>,
     local_did: String,
-    background_executions: gents_toolcalls::call::hook::BackgroundExecutionRegistry,
+    background_executions: gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry,
     job_driver: Arc<gents_toolcalls::background::job::driver::JobDriver>,
     agents: Box<dyn AgentIdentityWatch>,
     cancel: CancellationToken,
@@ -31,11 +31,12 @@ pub(crate) async fn run_background_completion_observer(
 struct BackgroundCompletionObserver {
     node: Arc<EmbeddedNode>,
     local_did: String,
-    background_executions: gents_toolcalls::call::hook::BackgroundExecutionRegistry,
+    background_executions:
+        gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry,
     job_driver: Arc<gents_toolcalls::background::job::driver::JobDriver>,
     agents: Box<dyn AgentIdentityWatch>,
     cancel: CancellationToken,
-    subscription: events::DocumentChangeSubscription,
+    subscription: gents_store::subscription_source::ChangeSubscription,
     mailbox_cursor: Option<String>,
 }
 
@@ -43,7 +44,7 @@ impl BackgroundCompletionObserver {
     fn new(
         node: Arc<EmbeddedNode>,
         local_did: String,
-        background_executions: gents_toolcalls::call::hook::BackgroundExecutionRegistry,
+        background_executions: gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry,
         job_driver: Arc<gents_toolcalls::background::job::driver::JobDriver>,
         agents: Box<dyn AgentIdentityWatch>,
         cancel: CancellationToken,
@@ -88,10 +89,12 @@ impl BackgroundCompletionObserver {
             };
 
             if batch.resync_required {
-                tracing::warn!(
-                    updates = batch.updates,
-                    "background completion observer change capacity exceeded; running the recovery sweeps"
-                );
+                if gents_store::subscription_source::overflowed(&batch) {
+                    tracing::warn!(
+                        updates = batch.updates,
+                        "background completion observer change capacity exceeded; running the recovery sweeps"
+                    );
+                }
                 self.run_reconcilers().await?;
                 reconciler_tick.reset();
                 continue;

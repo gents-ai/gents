@@ -1,24 +1,19 @@
 /// The data-plane pairing overlay is an Agent-owned document parented by the
-/// runtime Node: its native ACP follows the Lean `pairing_overlay_cases` for
+/// runtime Node: its native ACP follows the Lean `household_pairing_overlay` cases for
 /// every actor, before and after the parent relationship is revoked, and the
 /// revocation survives a restart.
 #[tokio::test]
 async fn data_plane_overlay_acp_follows_the_configuration_model() -> anyhow::Result<()> {
-    use gents_lean_vocab::lean_identity_household_cases;
     use gents_store::config_client::{ConfigAccess, GraphqlEndpoint, NodePermission};
     use gents_store::identity::NodeIdentity as _;
     use gents_store::graphql::escape_graphql_string;
-    use anyhow::Context as _;
 
-    let model = lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .context("missing configuration model")?;
     let directory = tempfile::tempdir()?;
     let runtime_path = directory.path().join("runtime");
     let runtime = Arc::new(gents_store::identity::KeyIdentity::load_or_create(&runtime_path, None)?);
     let runtime_key =
         gents_store::identity::load_file_identity(&runtime_path)?.private_key_bytes();
+    let operator = Arc::new(gents_store::identity::KeyIdentity::load_or_create(directory.path().join("operator"), None)?);
     let user = gents_store::identity::KeyIdentity::load_or_create(directory.path().join("user"), None)?;
     let outsider = gents_store::identity::KeyIdentity::load_or_create(directory.path().join("outsider"), None)?;
     let binding = gents_store::identity::provision_agent_identity(runtime.as_ref())?;
@@ -28,6 +23,7 @@ async fn data_plane_overlay_acp_follows_the_configuration_model() -> anyhow::Res
         gents_store::identity::resolve_agent_identity(runtime.as_ref(), &sibling_binding)?;
     let open = |key: Vec<u8>| {
         let runtime = runtime.clone();
+        let operator = operator.clone();
         let data_path = directory.path().join("database");
         async move {
             let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
@@ -36,7 +32,7 @@ async fn data_plane_overlay_acp_follows_the_configuration_model() -> anyhow::Res
                 EmbeddedNode::builder()
                     .with_node_identity_did(runtime.did())
                     .with_signing_key(defra_node::SigningKey::Ed25519(key))
-                    .with_node_acp_enabled()
+                    .with_node_acp_owner(operator.did())
                     .with_http(defra_node::HttpConfig::with_listener(listener)?)
                     .with_storage_backend(defra_node::StorageBackend::Regolith)
                     .data_path(data_path)
@@ -47,14 +43,24 @@ async fn data_plane_overlay_acp_follows_the_configuration_model() -> anyhow::Res
         }
     };
     let (node, address) = open(runtime_key.clone()).await?;
+    let setup = defra_core::RequestContext::default().with_identity(Some(operator.did().to_owned()));
+    for permission in [
+        NodePermission::CollectionPatch, NodePermission::CollectionGet,
+        NodePermission::DacPolicyAdd, NodePermission::NacRelationAdd,
+        NodePermission::DocumentRead, NodePermission::DocumentUpdate,
+        NodePermission::DacRelationAdd, NodePermission::DacRelationDelete,
+    ] {
+        node.add_nac_actor_relationship_as(&setup, permission.as_str(), runtime.did()).await?;
+    }
+
     node.add_dac_policy_with_counter_as(
         &defra_core::RequestContext::default().with_identity(Some(runtime.did().to_owned())),
         gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
         0,
     )
     .await?;
-    node.add_collection(gents_protocol::schemas::NODE).await?;
-    node.add_collection(gents_protocol::schemas::DATA_PLANE_PAIRING_DESIRED)
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::NODE)).await?;
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::DATA_PLANE_PAIRING_DESIRED))
         .await?;
     let runtime_access = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
     for actor in [user.did(), agent.did(), sibling.did(), outsider.did()] {
@@ -136,8 +142,10 @@ async fn data_plane_overlay_acp_follows_the_configuration_model() -> anyhow::Res
         r#"{{ DataPlanePairingDesired(filter: {{_docID: {{_eq:"{}"}}}}) {{_docID template}} }}"#,
         escape_graphql_string(&doc)
     );
-    for revoked in [false, true] {
-        if revoked {
+    let mut parent_revoked = false;
+    for case in gents_lean_vocab::families::household_pairing_overlay::cases() {
+        let revoked = case.input.revoked;
+        if revoked && !parent_revoked {
             agent_access
                 .delete_resource_relationship(
                     "DataPlanePairingDesired",
@@ -147,55 +155,47 @@ async fn data_plane_overlay_acp_follows_the_configuration_model() -> anyhow::Res
                     &parent,
                 )
                 .await?;
+            parent_revoked = true;
         }
-        for case in model
-            .pairing_overlay_cases
-            .iter()
-            .filter(|case| case["revoked"] == revoked)
-        {
-            let access = match case["actor"].as_str().unwrap() {
-                "user" => &user_access,
-                "runtime" => &runtime_access,
-                "agent" => &agent_access,
-                "sibling" => &sibling_access,
-                "outsider" => &outsider_access,
-                _ => unreachable!(),
-            };
-            let expected = case["expected"].as_bool().unwrap();
-            let actual = if case["permission"] == "read" {
-                !gents_protocol::graphql::graphql_rows_from_response(
-                    &access.execute(&query).await?,
-                    "DataPlanePairingDesired",
+        assert_eq!(revoked, parent_revoked, "{:?}", case.input);
+        let access = match case.input.actor.as_str() {
+            "user" => &user_access,
+            "runtime" => &runtime_access,
+            "agent" => &agent_access,
+            "sibling" => &sibling_access,
+            "outsider" => &outsider_access,
+            other => panic!("unmodeled overlay actor {other}"),
+        };
+        let actual = if case.input.permission == "read" {
+            !gents_protocol::graphql::graphql_rows_from_response(
+                &access.execute(&query).await?,
+                "DataPlanePairingDesired",
+            )
+            .is_empty()
+        } else {
+            let before = agent_access.execute(&query).await?;
+            let mutation = format!(
+                r#"mutation {{ update_DataPlanePairingDesired(docID:"{}", input: {{template:"{}"}}) {{_docID}} }}"#,
+                escape_graphql_string(&doc),
+                escape_graphql_string(&format!("{}-{revoked}", case.input.actor))
+            );
+            let updated = match access.write("test.overlay.update", &mutation).await {
+                Ok(value) => !gents_protocol::graphql::graphql_rows_from_response(
+                    &value,
+                    "update_DataPlanePairingDesired",
                 )
-                .is_empty()
-            } else {
-                let before = agent_access.execute(&query).await?;
-                let mutation = format!(
-                    r#"mutation {{ update_DataPlanePairingDesired(docID:"{}", input: {{template:"{}"}}) {{_docID}} }}"#,
-                    escape_graphql_string(&doc),
-                    escape_graphql_string(&format!(
-                        "{}-{revoked}",
-                        case["actor"].as_str().unwrap()
-                    ))
-                );
-                let updated = match access.write("test.overlay.update", &mutation).await {
-                    Ok(value) => !gents_protocol::graphql::graphql_rows_from_response(
-                        &value,
-                        "update_DataPlanePairingDesired",
-                    )
-                    .is_empty(),
-                    Err(error) if error.is_permission_denied() || error.is_graphql_rejection() => {
-                        false
-                    }
-                    Err(error) => return Err(error.into()),
-                };
-                if !expected {
-                    assert_eq!(agent_access.execute(&query).await?, before);
+                .is_empty(),
+                Err(error) if error.is_permission_denied() || error.is_graphql_rejection() => {
+                    false
                 }
-                updated
+                Err(error) => return Err(error.into()),
             };
-            assert_eq!(actual, expected, "{case}");
-        }
+            if !updated {
+                assert_eq!(agent_access.execute(&query).await?, before);
+            }
+            updated
+        };
+        case.check(actual);
     }
     drop(agent_access);
     drop(sibling_access);

@@ -7,21 +7,11 @@ use gents_toolcalls::call::lifecycle::admission_fixture::{
 
 #[tokio::test]
 async fn generated_session_message_recovery_cases_use_accepted_call() {
-    let cases = gents_lean_vocab::lean_recovery_sweep_cases()
-        .iter()
-        .filter(|case| case.sweep_id == "tool_call_lifecycle_recover_session_message_rows")
-        .collect::<Vec<_>>();
-    assert!(
-        !cases.is_empty(),
-        "Lean emitted no session-message recovery rows"
-    );
-    for case in cases {
-        let name = case.name.as_str();
-        assert_eq!(case.pre_state, "running", "{name}");
-        let cause = case
-            .recovery_cause
-            .as_deref()
-            .unwrap_or_else(|| panic!("{name}: session-message row carries its observed cause"));
+    for case in gents_lean_vocab::families::recovery_sweeps_session_message::cases() {
+        let input = &case.input;
+        let name = input.name.as_str();
+        let cause = input.recovery_cause.as_str();
+        let assignment = input.assignment.as_str();
         if cause == "causedRequestUnbound" {
             let admission = published_admission(PublishedAdmissionOptions {
                 name: format!("recovery-closeout-{name}"),
@@ -36,8 +26,12 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
             .expect("publish a running session-message row without a receipt");
             let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
             let session_id = admission.tool.session_id().to_owned();
-            let settled = settle_with(&admission, &SessionGoals).await;
-            assert_eq!(settled, case.measure_before - case.measure_after, "{name}");
+            assert_eq!(
+                lifecycle_state(&admission, &tool_doc_id).await,
+                input.pre_state,
+                "{name}"
+            );
+            let first = settle_with(&admission, &SessionGoals).await;
             let escaped = gents_store::graphql::escape_graphql_string(&tool_doc_id);
             let response = admission
                 .tool
@@ -49,11 +43,6 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                 .await
                 .unwrap();
             let row = &response["data"]["AgentToolCall"][0];
-            assert_eq!(
-                row["lifecycle_state"],
-                case.terminal_state.as_str(),
-                "{name}"
-            );
             assert_eq!(row["tool_failure_class"], "external", "{name}");
             let (notifications, _) = completion_obligations(
                 &admission.tool.access().unwrap(),
@@ -67,18 +56,15 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                 1,
                 "{name}: fails closed with a notification"
             );
-            assert_notification_reason(&notifications[0], case);
-            assert_eq!(
-                settle_with(&admission, &SessionGoals).await,
-                0,
-                "{name}: fails closed once"
-            );
+            let second = settle_with(&admission, &SessionGoals).await;
+            let observed = settled(row, first, second, &notifications);
             admission
                 .node
                 .shutdown()
                 .await
                 .expect("shut down test node");
             std::fs::remove_dir_all(admission.path).expect("remove exact recovery fixture");
+            case.check(observed);
             continue;
         }
         let message = published_session_message(PublishedAdmissionOptions {
@@ -92,15 +78,13 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
         .expect("publish accepted session message and materialize its request");
         let admission = &message.admission;
         let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
+        assert_eq!(
+            lifecycle_state(admission, &tool_doc_id).await,
+            input.pre_state,
+            "{name}"
+        );
         let caused_state = match cause {
             "requestCompleted" => {
-                // Each Lean sessionMessageRecoveryCase handoff binds a real
-                // Goal observation in the receipt-named caused session:
-                // complete (reasonless success form), absent (no Goal at
-                // all), unknown (a Goal whose persisted status is malformed,
-                // so parsed_status cannot resolve it), and live
-                // observations. The fixture states must be distinct or the
-                // generated witnesses do not exercise the vocabulary.
                 let caused_session_id = {
                     let doc_id =
                         gents_store::graphql::escape_graphql_string(&message.caused_request_doc_id);
@@ -118,7 +102,7 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                         .expect("the caused request names its session")
                         .to_owned()
                 };
-                if name != "session_message_request_completed_no_goal_to_completed" {
+                if assignment != "absent" {
                     let access = admission.tool.access().unwrap();
                     let response = access
                         .execute(&format!(
@@ -174,11 +158,11 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                         Some(selected)
                     );
                 }
-                match name {
+                match assignment {
                     // The reasonless success form must be produced by an
                     // actually-complete assignment, not by a missing Goal:
                     // those are different production paths.
-                    "session_message_request_completed_to_completed" => {
+                    "complete" => {
                         crate::goal::seed_goal_from_access(
                             &admission.tool.access().unwrap(),
                             &admission.node_did,
@@ -192,11 +176,11 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                         .expect("persist a complete Goal in the caused session");
                     }
                     // Absent: the caused session carries no Goal document.
-                    "session_message_request_completed_no_goal_to_completed" => {}
+                    "absent" => {}
                     // Unknown: a Goal whose persisted status is malformed, so
                     // the canonical read resolves the document but cannot
                     // parse its status into the vocabulary.
-                    "session_message_request_completed_unknown_goal_to_completed" => {
+                    "unknown" => {
                         let goal = crate::goal::seed_goal_from_access(
                             &admission.tool.access().unwrap(),
                             &admission.node_did,
@@ -215,7 +199,7 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                         )
                         .await;
                     }
-                    "session_message_request_completed_live_goal_to_completed" => {
+                    "active" => {
                         crate::goal::seed_goal_from_access(
                             &admission.tool.access().unwrap(),
                             &admission.node_did,
@@ -228,29 +212,24 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                         .await
                         .expect("persist an active Goal in the caused session");
                     }
-                    "session_message_request_completed_blocked_goal_to_completed"
-                    | "session_message_request_completed_stopped_goal_to_completed" => {
+                    "blocked" | "stopped" => {
                         crate::goal::seed_goal_from_access(
                             &admission.tool.access().unwrap(),
                             &admission.node_did,
                             &caused_session_id,
                             Some("hold"),
-                            Some(
-                                if name
-                                    == "session_message_request_completed_stopped_goal_to_completed"
-                                {
-                                    gents_protocol::goal_status::GoalStatus::Stopped
-                                } else {
-                                    gents_protocol::goal_status::GoalStatus::Blocked
-                                },
-                            ),
+                            Some(if assignment == "stopped" {
+                                gents_protocol::goal_status::GoalStatus::Stopped
+                            } else {
+                                gents_protocol::goal_status::GoalStatus::Blocked
+                            }),
                             None,
                             None,
                         )
                         .await
                         .expect("persist a blocked Goal in the caused session");
                     }
-                    other => panic!("{other}: unhandled completed session-message case"),
+                    other => panic!("{name}: no fixture binds assignment {other}"),
                 }
                 complete_child_managed_verified(
                     &admission.node,
@@ -281,8 +260,7 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
             )
             .await;
         }
-        let settled = settle_with(admission, &SessionGoals).await;
-        assert_eq!(settled, case.measure_before - case.measure_after, "{name}");
+        let first = settle_with(admission, &SessionGoals).await;
         let escaped = gents_store::graphql::escape_graphql_string(&tool_doc_id);
         let response = admission
             .tool
@@ -294,13 +272,8 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
             .await
             .unwrap();
         let row = &response["data"]["AgentToolCall"][0];
-        assert_eq!(
-            row["lifecycle_state"],
-            case.terminal_state.as_str(),
-            "{name}"
-        );
         assert_eq!(row["status"], "completed", "{name}");
-        if case.terminal_state == "cancelled" {
+        if row["lifecycle_state"] == "cancelled" {
             assert_eq!(row["cancel_cause"], "interrupted", "{name}");
         }
         // After settle() the row has converged: settlement persists
@@ -319,18 +292,8 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
         )
         .await;
         assert_eq!(notifications.len(), 1, "{name}");
-        // F3: the notification reason must be validated against the modeled
-        // handoff for the case, not only against the raw suffix: each
-        // generated case pins its own assignment_* vocabulary (or the
-        // reasonless success form).
-        let expected_reason = handoff_reason_for_case(name);
-        assert_eq!(
-            case.notification_reason.as_deref(),
-            expected_reason,
-            "{name}: the Lean contract's notificationReason must match the case's modeled handoff"
-        );
-        assert_notification_reason(&notifications[0], case);
-        assert_eq!(settle_with(admission, &SessionGoals).await, 0, "{name}");
+        let second = settle_with(admission, &SessionGoals).await;
+        let observed = settled(row, first, second, &notifications);
         message
             .admission
             .node
@@ -338,17 +301,50 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
             .await
             .expect("shut down test node");
         std::fs::remove_dir_all(&message.admission.path).expect("remove exact recovery fixture");
+        case.check(observed);
     }
 }
 
-fn assert_notification_reason(notification: &str, case: &gents_lean_vocab::LeanRecoverySweepCase) {
-    match case.notification_reason.as_deref() {
-        Some(reason) => assert!(
-            notification.contains(&format!("<reason>{reason}</reason>")),
-            "{}: {notification}",
-            case.name
-        ),
-        None => assert!(!notification.contains("<reason>"), "{}", case.name),
+async fn lifecycle_state(
+    admission: &gents_toolcalls::call::lifecycle::admission_fixture::PublishedAdmission,
+    tool_doc_id: &str,
+) -> String {
+    let escaped = gents_store::graphql::escape_graphql_string(tool_doc_id);
+    let response = admission
+        .tool
+        .access()
+        .unwrap()
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 1) {{ lifecycle_state }} }}"#
+        ))
+        .await
+        .unwrap();
+    response["data"]["AgentToolCall"][0]["lifecycle_state"]
+        .as_str()
+        .expect("the tool row has a lifecycle state")
+        .to_owned()
+}
+
+fn settled(
+    row: &serde_json::Value,
+    first: usize,
+    second: usize,
+    notifications: &[String],
+) -> gents_lean_vocab::families::recovery_sweeps_session_message::SessionMessageSettled {
+    let [notice] = notifications else {
+        panic!("one completion notice per settled row: {notifications:?}");
+    };
+    gents_lean_vocab::families::recovery_sweeps_session_message::SessionMessageSettled {
+        terminal_state: row["lifecycle_state"]
+            .as_str()
+            .expect("the tool row has a lifecycle state")
+            .to_owned(),
+        measure_before: u64::try_from(first).expect("a settlement count fits u64"),
+        measure_after: u64::try_from(second).expect("a settlement count fits u64"),
+        notification_reason: notice
+            .split_once("<reason>")
+            .and_then(|(_, rest)| rest.split_once("</reason>"))
+            .map(|(reason, _)| reason.to_owned()),
     }
 }
 
@@ -376,20 +372,4 @@ async fn seed_goal_status(
         Some(1),
         "seed Goal status must change the Agent's Goal: {response}"
     );
-}
-
-fn handoff_reason_for_case(name: &str) -> Option<&'static str> {
-    match name {
-        "session_message_request_failed_to_failed" => Some("request_failed"),
-        "session_message_request_interrupted_to_cancelled" => Some("request_interrupted"),
-        "session_message_request_dead_to_failed" => Some("request_dead"),
-        "session_message_request_superseded_to_failed" => Some("request_superseded"),
-        "session_message_request_completed_to_completed" => None,
-        "session_message_request_completed_no_goal_to_completed" => Some("assignment_absent"),
-        "session_message_request_completed_unknown_goal_to_completed" => Some("assignment_unknown"),
-        "session_message_request_completed_live_goal_to_completed" => Some("assignment_active"),
-        "session_message_request_completed_blocked_goal_to_completed" => Some("assignment_blocked"),
-        "session_message_request_completed_stopped_goal_to_completed" => Some("assignment_stopped"),
-        other => panic!("{other}: unhandled session-message case"),
-    }
 }

@@ -15,9 +15,6 @@ mod installation;
 #[cfg(any(unix, windows))]
 #[path = "installation_capacity.rs"]
 mod installation_capacity;
-#[cfg(any(unix, windows))]
-#[path = "installation_handoff.rs"]
-mod installation_handoff;
 #[path = "metadata.rs"]
 mod metadata;
 #[cfg(all(any(unix, windows), feature = "runtime-e2e"))]

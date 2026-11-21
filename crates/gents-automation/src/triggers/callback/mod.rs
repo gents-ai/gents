@@ -168,58 +168,24 @@ pub async fn run_callback_engine(
     result
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
-pub fn test_root_identity() -> gents_store::identity::KeyIdentity {
-    let home = tempfile::tempdir().unwrap();
-    gents_store::test_support::pin_fixed_signing_identity(home.path())
-}
-
 /// Starts a callback test node through the protected start as
-/// `test_root_identity()`.
+/// [`gents_store::test_support::fixture_root`].
 #[cfg(any(test, feature = "test-fixtures"))]
 pub async fn test_node_builder(name: &str) -> gents_inference::test_support::TestDb {
     use gents_store::identity::NodeIdentity as _;
     gents_inference::test_support::test_db_as(
         name,
-        test_root_identity().did(),
+        gents_store::test_support::fixture_root().did(),
         crate::lifecycle_hooks::composition(),
     )
     .await
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
-pub fn test_agent_identity() -> Arc<dyn gents_store::identity::NodeIdentity> {
-    let root = test_root_identity();
-    let binding = gents_protocol::agent_identity::AgentIdentityBinding {
-        creation_nonce: "c".repeat(64),
-        agent_did: gents_store::identity::derive_agent_identity(&root, &"c".repeat(64))
-            .unwrap()
-            .did()
-            .to_owned(),
-    };
-    gents_store::identity::resolve_agent_identity(&root, &binding).unwrap()
-}
-
-#[cfg(any(test, feature = "test-fixtures"))]
-pub fn test_agent_did() -> String {
-    test_agent_identity().did().to_owned()
-}
-
-#[cfg(any(test, feature = "test-fixtures"))]
-pub fn test_agent_access(node: &Arc<defra_node::Node>) -> gents_store::config_client::ConfigAccess {
-    let agent = test_agent_identity();
-    gents_store::config_client::ConfigAccess::local_managed_agent(
-        node.clone(),
-        identity::Did::new(agent.did()).unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap()
-}
-
 #[cfg(test)]
 pub(crate) fn test_snapshot(
 ) -> tokio::sync::watch::Receiver<Arc<crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot>> {
-    let agent = test_agent_identity();
+    let agent =
+        gents_store::test_support::fixture_agent(gents_store::test_support::FIXTURE_AGENT_NONCE);
     let mut unavailable_agents = rapidhash::RapidHashMap::default();
     unavailable_agents.insert(agent.did().to_owned(), crate::triggers::runtime_snapshot::UnavailableAgent::new(
         gents_protocol::node_readiness::AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
@@ -249,7 +215,8 @@ pub(crate) fn test_snapshot(
 
 #[cfg(any(test, feature = "test-fixtures"))]
 pub async fn seed_test_agent(node: &std::sync::Arc<defra_node::Node>, owner: &str) {
-    let agent = test_agent_did();
+    use gents_store::test_support::{fixture_agent_did, FIXTURE_AGENT_NONCE};
+    let agent = fixture_agent_did(FIXTURE_AGENT_NONCE);
     let local = node
         .node_identity_did()
         .expect("test node runtime identity");
@@ -257,17 +224,10 @@ pub async fn seed_test_agent(node: &std::sync::Arc<defra_node::Node>, owner: &st
         node.clone(),
         identity::Did::new(local).unwrap(),
     );
-    for permission in [
-        gents_store::config_client::NodePermission::DocumentRead,
-        gents_store::config_client::NodePermission::DocumentUpdate,
-        gents_store::config_client::NodePermission::DacRelationAdd,
-        gents_store::config_client::NodePermission::DacRelationDelete,
-    ] {
-        access
-            .grant_node_permission(&identity::Did::new(&agent).unwrap(), permission)
-            .await
-            .unwrap();
-    }
+    gents_store::identity::GrantSet::AgentBaseline
+        .grant(&access, &identity::Did::new(&agent).unwrap())
+        .await
+        .unwrap();
     access.transact_write("test.callback.seed_agent", |txn| {
         let agent = &agent;
         let runtime = node.node_identity_did();
@@ -279,7 +239,7 @@ pub async fn seed_test_agent(node: &std::sync::Arc<defra_node::Node>, owner: &st
             let node_doc = gents_store::graphql::created_doc_id(&created, "Node")?;
             let created = txn.execute(&format!(
                 "mutation {{ create_Agent(input: {{node_did: \"{owner}\", agent_did: \"{}\", creation_nonce: \"{}\", inference_profile_id: \"fixture-profile\", enabled: true}}) {{ _docID }} }}",
-                gents_store::graphql::escape_graphql_string(agent), "c".repeat(64),
+                gents_store::graphql::escape_graphql_string(agent), FIXTURE_AGENT_NONCE,
             )).await?;
             let agent_doc = gents_store::graphql::created_doc_id(&created, "Agent")?;
             txn.add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node_doc).await?;

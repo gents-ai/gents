@@ -70,6 +70,17 @@ See `../README.md` for how this fits the broader formal-verification model.
   order and breaks `OwnerPublishes`; `MarginSpent` spends half a lease and
   breaks `LeaseHeld`; `Unfenced` drops the deadline check and breaks
   `SingleWriter`.
+- `RetryBackoffLease` — one request's execution lease while its owner backs
+  off a failed provider call, beside the drive's lease poll, the renewal task,
+  recovery and the e2e fixture that expires the lease. The wake decision is
+  Lean `RequestExecutionLease.retryWakeDispatches`. `DispatchOnlyLive` holds
+  only when the wake is authorized against the lease (`Fenced`); `Unfenced`
+  is the product before the fix, where an expiry after the drive's last poll
+  and before the wake dispatches the retry under an expired lease. The
+  fixture's observations hold with an unreached backoff and a
+  generation-only expiry write (green); `WallClock` (a backoff shorter than a
+  slow fixture) and `DeadlineCas` (a renewal between the fixture's read and
+  write) are the test's accidents.
 - `ClientSubmissionContention` — a User's optimistic chat send (Lean
   `ClientOptimisticSend`) racing writes to the documents it reads. The client
   picks the request identity, shows the message pending, keeps its payload
@@ -169,6 +180,19 @@ See `../README.md` for how this fits the broader formal-verification model.
   driven by the test after the steps it must follow (`Driven`), passes under
   every schedule and still fails an owner that never commits
   (`StalledOwner`); `SlowHost` is the ceiling's premise.
+- `NativeWorkerRecordObservation` — a test waiting until two background
+  native workers run and have recorded their process ownership. Each
+  `spawn_process` handler commits its spawned row running and then the
+  worker's task spawns the child and renames its record into the runtime's
+  record directory, a host file no document commit follows. Green subscribes
+  to `AgentToolCall` and watches the record directory before the request
+  exists, re-reads after each notification and fails only at the stall
+  ceiling. RED: `FixedWindow` (the CI failure: a 20 s timeout fails a
+  progressing owner on a loaded host), `DocumentsOnly` (the last record lands
+  after the last commit and the waiter fails a finished owner),
+  `SubscribeAfterRead` (a change between a short read and the subscription
+  is never signalled); `StalledOwner` shows the waiter still fails an owner
+  that never records.
 - `ToolDeadlineInheritance` — where an accepted tool call's deadline comes
   from. The claim fixes the request's one deadline; the provider-turn
   publication writes it on the `AgentToolCall` row and the session hook's
@@ -255,6 +279,25 @@ See `../README.md` for how this fits the broader formal-verification model.
   the fix without renewals as a regression guard for arm-then-snapshot.
   `NodeScopeOnly`, `NoPublicationFence`, `NoEventQueue` and
   `SnapshotBeforeArm` each break one remaining guard.
+- `ObserverCollectionReload` — the observer's collection reloads beside its
+  full node reloads (Lean `ObserverResync.deliver`, `collectionStartable`,
+  `startCollections`, `settleCollections`). A change to a collection whose
+  snapshot root is self-contained queues that collection's own reload; any
+  other change queues the node's full reload. One read per node is in flight,
+  full reloads first, and a full reload takes the queued collections with it.
+  A collection reload publishes only its collection through the reload fence
+  (the generated table of `ClientDataPublication.reloadAcceptedSince`); a
+  rejected one queues its collections again and a failed one queues the full
+  reload. `NoLostWrite`, `NoStaleCommit`, `EventualPublication` and
+  `Convergence` hold with a touch (the per-minute observation rewrite) and a
+  lease renewal during every full load, a stream drop, a direct refresh and a
+  failed collection read (GREEN `MCObserverCollectionReload`). RED:
+  `IgnoreFence` (a collection reload publishes through a moved fence) breaks
+  `NoStaleCommit`; `DropRejected` (a rejected collection reload drops its
+  collections) and `DropFailure` (a failed collection read queues nothing)
+  break `NoLostWrite`; `ConcurrentReads` (a collection reload may run beside a
+  full reload) breaks `EventualPublication`: every touch rejects the full
+  reload in flight.
 - `DesktopUpdateListener` — the last leg of the desktop's event path: the
   bridge emitter (`spawn_client_update_task`: coalesced watch wakes, one
   `desktop://client-updated` event each), Tauri delivery (an event with no
@@ -276,6 +319,32 @@ See `../README.md` for how this fits the broader formal-verification model.
   the read without a listener and registration is dropped and the view stays a version
   behind); `ListenFailure`, `PendingNoEvent` and `SupersededMismatch` each
   drop one remaining guard.
+- `TranscriptScrollObservation` — what two desktop Playwright tests observe
+  of the transcript. Chunk side: the driver steps a paused fake clock; the
+  harness notify is a fake timer its first step fires, and the delivery, the
+  session read and the React commit interleave with any number of steps.
+  The reply is then revealed on animation frames, which the paused clock
+  fires only on a driver step, and the list heights the revealed text
+  commits and the reconciles from size changes interleave with those steps.
+  The owner writes the foot unless `scrollTop` is within 1 px of it. Wheel
+  side: the click opens the step's collapsible panel in its starting style,
+  which clips the output box at its own rect until the opening passes the
+  pointer; a Playwright action that scrolls is not a legal step before the
+  wheel, since the owner writes back a scroll the reader did not make.
+  `ChunkCounted` (a window closes only after it saw the chunk grow),
+  `OneWritePerFoot` (each foot is written at most once) and `WheelInBox` (the
+  wheel's hit target is the box) hold when the driver waits for the growth,
+  the wheel waits until the box is the hit target, and the owner keeps its
+  1 px guard. Under `FairSpec`, which makes the drivers', the page's and the
+  panel's steps weakly fair, `WindowCloses` and `WheelHappens` show neither
+  wait hangs. `FrameBudget` closes the window after K steps (the fake-time
+  deadline and frame cap before the fix), `MeasureWhileOpening` reads the rect
+  and wheels while the panel may still clip the box, `NoFootGuard` drops the
+  1 px guard, `NoNotifyStep` waits for the growth without the one step that
+  fires the notify, and `NoStepAfterCommit` waits for it without stepping
+  the frames the reveal runs on. The first test's unseen chunk, a reply growing in a
+  row that is not drawn whose window closes on its commit, is outside the
+  model.
 - `NativeCompletionHandshake` — the scheduling handshake around the embedded
   transaction owner's caller-timeout step (Lean `NativeCompletion`
   `callerTimedOut`), which fixes the event order but not which party may act
@@ -401,6 +470,20 @@ See `../README.md` for how this fits the broader formal-verification model.
   each tool's output observed at the wall clock and was refused by the claim
   deadline before any notification ran; `NoGate` loses a notifier to aborted
   attempts; `NoGateNoConflict` creates two wakes.
+- `BackgroundEnvelopeProjection` — a session transcript where two background
+  completions, their coalesced wake request and a person's look-alike inputs
+  (the wake text and a quoted envelope) arrive in any order
+  (`live_background_completions_project_as_tool_attributed_activity`). The
+  worker claims in arrival order and publishes each input with its claim or
+  fold; the projection classifies by Lean
+  `TranscriptInputOrigin.classification` over the authoring request's facts.
+  The observer stops once the notifications and every input, the wake's and
+  each submitted one, are published; then `TestPasses` (the person's inputs
+  render as a person's, the wake as a wake, the notifications as results)
+  holds. `NoInputWait` is the observer before the fix: jobs that finish
+  before the quote is submitted put the wake ahead of it, and the observer
+  stops with the quote still pending. `ByText` classifies by the input's
+  text and fails even the waiting observer.
 - `StreamDelivery` — streamed provider text reaching a subscribed client
   while the provider pauses (#2131, #3803): the provider's chunks and its
   gated completion, the owned drive loop and stream writer (flush on the
@@ -437,6 +520,132 @@ See `../README.md` for how this fits the broader formal-verification model.
   reaps before its exec (`write_executable_script`), and its RED
   `ChildWriterUnwaited` drops the reap. `Darwin` (no such execve check) and
   `Alone` (no sibling) explain why the old order passed on macOS and alone.
+- `TestPortReservation` — two gents-cli integration tests on one host, each
+  in its own nextest process, reserving a port with `allocate_port`,
+  starting a server on it and waiting with `wait_for_port`, which accepts any
+  listener. `NoCrossTalk`: the server answering on a test's port is its own.
+  RED: `PerRunner` locks reservations where each CI runner has its own
+  view (TMPDIR, or `/tmp` under the runners' `PrivateTmp=yes`), so two jobs on one machine reserve the same port and one test talks
+  to the other's server (the subscription EOFs and foreign-node errors on
+  the shared Linux runners); `EphemeralOverlap` lets an outbound connection
+  take the reserved port, which fails the server's bind. Green reserves with an
+  abstract Unix socket, in the network namespace the ports share, below
+  every ephemeral range; `PerRunnerSpread` shows
+  why separate directories rarely collided while one process per binary
+  spread its cursor.
+- `UpdateHelperRegistration` — registering a managed update's helper job
+  beside the helper's own retirement of it. A submitter (a duplicate or
+  resumed `service update`) and a status reader each read the receipt, take
+  the operation's `helper.lock` and ask Lean
+  `RuntimeReconcile.UpdateHandoff.helperRegistration`, then write the job
+  definition, reload and start it; a status reader takes the lock only for a
+  phase Lean `statusTakesLock` admits. The helper holds the lock while it
+  serves, then removes its definition, reloads and stops; it may crash (the
+  kernel drops its lock) and systemd respawns it. `start` fails exactly when
+  the definition was absent at the last reload and is still absent (systemd
+  v255). launchd's steps are not modelled, although the same job runs on
+  macOS. `StartFindsUnit`, `NoRegistrationAfterRetirement` and
+  `StagedSubmitterYieldsOnlyToHelper` hold in the green model. RED:
+  `Unlocked` is the re-registration before 2855a05b05 and breaks
+  `StartFindsUnit` (run 42840804695); `StaleRead` decides on the receipt read
+  before the lock and breaks `NoRegistrationAfterRetirement`;
+  `FirstRegistration` registers a Staged resubmission without the lock and
+  breaks `StartFindsUnit`; `UngatedStatus` lets a status reader lock in every
+  phase and breaks `StagedSubmitterYieldsOnlyToHelper`, a Staged update that
+  nobody registers; `DuplicatePhase` breaks `DuplicateReportsAccepted`, the
+  script's assertion that a duplicate submission reports accepted.
+- `ExecutableStaging` — the service updater stages an executable that is
+  exec'd afterwards (`copy_executable`), while other threads spawn. A
+  sibling's spawn copies the updater's descriptors until that child execs,
+  and Linux execve refuses a file open for writing (ETXTBSY); a later exec by
+  the service manager is not ordered after the siblings' execs. RED:
+  `InProcessCopy` (`fs::copy` in the updater), `TempHandle` (a
+  `NamedTempFile` held open until persist), `Unwaited` (the copy child not
+  reaped). Green copies with a reaped `/bin/cp` child into a file the updater
+  never opens for writing.
+- `UsageRecordObservation` — a provider response's usage headers reach the
+  runtime's `UsageCache` through a detached writer (`UsageReporter::observe`
+  spawns credential resolution and the record), while the caller backfills
+  the credential's `provider_account_key` between two responses and then
+  reads the backend's usage. The binding is the row's stable `_docID`, so the
+  backfill strands no observation; the reader is the side that can be wrong.
+  Green subscribes to the cache's record count before checking and reads once
+  both writers have recorded. RED: `ReadOnce` (the 2026-11-19 CI failure: the
+  read is ordered after neither write and finds nothing), `SubscribeAfterRead`
+  (a record landing between a short check and the subscription is never
+  signalled).
+- `CommitResponseWait` — a client's wait for a store request's answer over
+  the runtime's HTTP endpoint on a loaded host (`txn_commit`, e.g. the pack
+  document install; auto-commit mutations and reads are the same wait).
+  RED: `ClientWindow`, a total or read-idle timeout, reports a live server's
+  commit as unconfirmed (the change-unit CI failure); `NoKeepalive` waits
+  forever on a connection whose host vanished; `Wedged` drops the premise
+  that the server answers every commit it works on; `DroppedAnswer` reports a
+  live server's outcome unknown after a broken connection. Green waits for
+  the answer, a reset or a failed keepalive. `WedgedProgress` (a published
+  commit step) and `DroppedAnswerQueried` (a transaction outcome query) are
+  green designs DefraDB does not offer yet.
+- `RuntimeStatusLiveness` — `gents status` reporting a serving runtime's
+  liveness on a loaded host. The runtime's `/status` reads the store under
+  its probe budget and answers; the CLI composes the runtime's liveness, else
+  its own store read with the executors the runtime reported. Green waits for
+  the answer, and an answer whose store read missed the budget still reports
+  the in-memory native executors. RED: `ClientWindow` (the CI failure: a CLI
+  total timeout, even one longer than the budget, loses a live runtime's
+  answer to a slow host), `BudgetedExecutors` (executors reported only inside
+  the budgeted liveness are withheld when the store read is slow).
+- `OfflineAccessRouting` — a CLI command against a home another process
+  holds: a server claims the store, binds its port and publishes
+  `runtime.json` only once ready; the command routes to a published runtime
+  and otherwise tries the store lock, which `StoreHandoff.decide` refuses
+  while the holder serves. `AssertionHolds`: the outcome is the one the test
+  expects. Green waits for the publication and expects the server's answer,
+  or holds the store itself and expects the refusal. RED: `PortWait` and
+  `PortWaitAnswered` wait only for the port, where both outcomes are
+  reachable (the `cli_session` fork test on CI).
+- `ScheduleDisableFence` — a User disabling a schedule Trigger while the
+  sequential schedule source fires it. Dispatch re-borrows the active
+  snapshot and admits only an enabled Trigger; the router acknowledges only
+  a generation it borrowed from the watch. `AdmissionFence` and `NoDueFire`
+  hold: nothing admits the Trigger once its disabling generation is
+  acknowledged, and a cursor written after that never fires. A fire admitted
+  under the old generation can still commit after the acknowledgement.
+  `OldObserver` is the CI failure: the test disabled while the interval
+  cadence's seeded fire was in flight and counted its commit. Green waits for
+  the seeded fire before disabling and judges once a witness Trigger, due
+  after the disabled one, fires (`Settled`). RED: `NoSeedWait`, `NoWitness`
+  (observer), `NoRecheck`, `AckBeforeWatch` (product).
+- `HeldAudienceReads` — concurrent reads of a home's signed status by the
+  clones of one endpoint, which share one held audience, clock and client
+  authentication (#3963). Each reader is a request minted from the record the
+  cell held, refused, which reads the status, keeps it and decides whether to
+  send again (Lean `HeldAudience.recovery` over `HeldAudience.recordChange`);
+  the home restarts and its clock moves between reads and a reader may be
+  dropped mid-read. Green holds the cell's status lock from the read's nonce
+  until what it read is kept, reports how the record kept differs from the one
+  the request presented (`changeSince`) and mints from the cell:
+  `AudienceNeverOlder`, `ClockNeverOlder`, `MintsNewest`, `ReadsDoNotOverlap`,
+  `ResendsExactlyWhenStale` and `EveryReaderSettles` hold. RED: `Unordered`
+  (the code before #3963: an earlier read replaces a later deployment),
+  `Clock` (the same with no restart, regressing the clock and
+  authentication), `Overlap` (two recoveries read and keep at once), `OwnRead`
+  (ordered reads, but a request mints from its own read's answer after a newer
+  one was kept) and `Queued` (ordered reads, but a request reports only what
+  its own read changed, so one queued behind a peer that kept the newer
+  audience is told instead of sent again).
+- `CallerAncestry` — a `gents runtime service stop` caller walking its parent
+  chain to decide whether the service's job is its ancestor while processes
+  exit, orphans are adopted and freed process IDs are reused. The caller asks
+  the service manager for the job's pid, reads its own parent, then one
+  parent per step; Lean `ServiceLifecycle.CallerObservation.callerRunsOnTarget`
+  and `admission` decide. `NoSelfStop` (no admitted stop ends the job the
+  caller runs under), `QuietOutsiderIsAdmitted` (an outside caller whose
+  readable chain holds still is admitted) and `Terminates` hold. RED:
+  `UnreadableAsRoot` ends the walk at an unreadable link as if at the root;
+  `Subreaper` lets the job adopt orphans of its tree, which the Lean premise
+  excludes, and a parent read through a reused pid misses the job;
+  `ShortBound` gives up before the root of a real chain; `Unbounded` walks
+  forever through reused pids.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## Checking
@@ -488,7 +697,11 @@ header, a TLC error or a timeout (`--timeout`, seconds per config) fails it.
 `--spec`, `--config`, `--crate`, `--lean` and `--files` narrow the run. The
 pull request gate runs the specs whose headers name a changed crate or Lean
 owner, declaration or path, or whose own files or generated imports changed; main
-and the nightly `TLA+ nightly` workflow run every config.
+and the nightly `TLA+ nightly` workflow run every config. TLC's outcome is
+recorded under a digest of the script, the pinned tools, the config and every
+module it reads, in `~/.cache/gents-tla/results`; a run reuses a recorded
+outcome for the same digest and judges it against the header again. The
+nightly passes `--fresh`, which runs TLC on every config regardless.
 `scripts/tla_check.py install` installs the pinned JDK and `tla2tools.jar`
 (version and SHA-256 in the script) under `~/.cache/gents-tla`.
 `scripts/run-tlc.sh <MC config>` runs TLC with them and prints its full
@@ -647,6 +860,23 @@ and `NodeScopeOnly` violate `EventualPublication` and `Convergence`;
 ./scripts/run-tlc.sh MCObserverResyncStaleCommit
 ```
 
+For ObserverCollectionReload — the green model (a write per collection, a
+touch and a renewal during every full load, a drop, a direct refresh and a
+failed collection read) checks clean:
+```bash
+./scripts/run-tlc.sh MCObserverCollectionReload
+```
+
+Its four diagnostics are EXPECTED to report violations: `IgnoreFence`
+violates `NoStaleCommit`; `DropRejected` and `DropFailure` violate
+`NoLostWrite`; `ConcurrentReads` violates `EventualPublication`:
+```bash
+./scripts/run-tlc.sh MCObserverCollectionReloadIgnoreFence
+./scripts/run-tlc.sh MCObserverCollectionReloadDropRejected
+./scripts/run-tlc.sh MCObserverCollectionReloadDropFailure
+./scripts/run-tlc.sh MCObserverCollectionReloadConcurrentReads
+```
+
 For DesktopUpdateListener — the green model (every guard on, one rejected
 registration, one bridge mismatch, one selection change, silent and noticed
 arrival) checks clean, including both liveness properties, and so does
@@ -665,6 +895,25 @@ and `ListenFailure` violate `ViewConverges`; `NoInitialRead`,
 ./scripts/run-tlc.sh MCDesktopUpdateListenerListenFailure
 ./scripts/run-tlc.sh MCDesktopUpdateListenerPendingNoEvent
 ./scripts/run-tlc.sh MCDesktopUpdateListenerSupersededMismatch
+```
+
+For TranscriptScrollObservation — the green model (one chunk committing two
+list heights, two extra reconciles, the panel opening before or after the
+rect read) checks clean, including both liveness properties:
+```bash
+./scripts/run-tlc.sh MCTranscriptScrollObservation
+```
+
+Its five diagnostics are EXPECTED to report violations. `FrameBudget`
+violates `ChunkCounted`, `MeasureWhileOpening` violates `WheelInBox`,
+`NoFootGuard` violates `OneWritePerFoot`, and `NoNotifyStep` and
+`NoStepAfterCommit` violate `WindowCloses`:
+```bash
+./scripts/run-tlc.sh MCTranscriptScrollObservationFrameBudget
+./scripts/run-tlc.sh MCTranscriptScrollObservationMeasureWhileOpening
+./scripts/run-tlc.sh MCTranscriptScrollObservationNoFootGuard
+./scripts/run-tlc.sh MCTranscriptScrollObservationNoNotifyStep
+./scripts/run-tlc.sh MCTranscriptScrollObservationNoStepAfterCommit
 ```
 
 For PackUxWatch — the green model checks clean; the nine diagnostics are
@@ -701,6 +950,17 @@ EXPECTED to report the violation named in its file:
 for m in MCDroppedPermitCleanup*.cfg MCClientIdentityMetadata*.cfg; do
   ./scripts/run-tlc.sh "${m%.cfg}"
 done
+```
+
+For UpdateHelperRegistration — the green model checks clean; the five
+diagnostics are EXPECTED to report the violation named in their config:
+```bash
+./scripts/run-tlc.sh MCUpdateHelperRegistration
+./scripts/run-tlc.sh MCUpdateHelperRegistrationUnlocked
+./scripts/run-tlc.sh MCUpdateHelperRegistrationStaleRead
+./scripts/run-tlc.sh MCUpdateHelperRegistrationFirstRegistration
+./scripts/run-tlc.sh MCUpdateHelperRegistrationUngatedStatus
+./scripts/run-tlc.sh MCUpdateHelperRegistrationDuplicatePhase
 ```
 
 Each run directly, from this directory, is:
@@ -860,6 +1120,12 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 | `MCDesktopUpdateListenerListenFailure.cfg` | as green, `Relisten = FALSE` | `ViewConverges` intentionally VIOLATED: the read without a listener settles the session, registration rejects and is never retried, and the next commit is never read | 6,073 distinct states; 25,790 generated | 16 | <1s |
 | `MCDesktopUpdateListenerPendingNoEvent.cfg` | as green, `PendingReread = FALSE` | `NoStuckPending` intentionally VIOLATED: a read answers a waiting phase (`accepted` in the trace), then a silent arrival; the waiting status stays with no action | 5,093 distinct states; 18,904 generated | 15 | <1s |
 | `MCDesktopUpdateListenerSupersededMismatch.cfg` | as green, `MismatchExit = FALSE` | `NoStuckPending` intentionally VIOLATED: a reply for another session (FinishMismatch) is dropped and the load stays `loading` with no read behind it | 10,903 distinct states; 46,605 generated | 17 | <1s |
+| `MCTranscriptScrollObservation.cfg` | `Heights = 2` (the test's at most two writes), `Extra = 2`, `K = 2`, every guard on, `FairSpec` | Passes `TypeOK`, `ChunkCounted`, `OneWritePerFoot`, `WheelInBox`, `WindowCloses`, `WheelHappens` | 230 distinct states; 745 generated | 16 | <1s |
+| `MCTranscriptScrollObservationFrameBudget.cfg` | as green, `WaitForGrowth = FALSE` | `ChunkCounted` intentionally VIOLATED: Stream, DriverStep fires the notify, DriverStep, BudgetSpent closes the window before the commit | 16 distinct states before counterexample; 21 generated | 5 | <1s |
+| `MCTranscriptScrollObservationMeasureWhileOpening.cfg` | as green, `WaitForHitTarget = FALSE` | `WheelInBox` intentionally VIOLATED: PanelStarts, Measure, Wheel while the panel still clips the box | 17 distinct states before counterexample; 24 generated | 4 | <1s |
+| `MCTranscriptScrollObservationNoFootGuard.cfg` | as green, `FootGuard = FALSE` | `OneWritePerFoot` intentionally VIOLATED: Stream, ExtraReconcile, ExtraReconcile writes foot 0 twice | 11 distinct states before counterexample; 13 generated | 4 | <1s |
+| `MCTranscriptScrollObservationNoNotifyStep.cfg` | as green, `NotifyStep = FALSE` | `WindowCloses` intentionally VIOLATED: Stream, then the window stutters at `streamed` with the notify still queued while every fair step has run | 20 distinct states; 32 generated | 8 | <1s |
+| `MCTranscriptScrollObservationNoStepAfterCommit.cfg` | as green, `StepAfterCommit = FALSE` | `WindowCloses` intentionally VIOLATED: Stream, DriverStep fires the notify, Commit, then the window stutters at `streamed` with nothing revealed while every fair step has run | 50 distinct states; 106 generated | 10 | <1s |
 | `MCPackUxWatch.cfg` | all guards, all four hazards, `RetryBudget = 4`, `OutageAttempts = MaxRestarts = MaxFaults = MaxRev = 1`, `MaxSelects = 2` | Passes `TypeOK`, `NoCrossNodeDelivery`, `RegistryReleased`, `NotSilent`, `TerminalNamed`, `EventualResume`, `NoLeakedWatch`, `EntryReleased` | 380,360 distinct states; 1,781,565 generated | 34 | 29s (OpenJDK 25, 4 workers) |
 | `MCPackUxWatchTransient.cfg` | `RetryTransient = FALSE`, no hazards, `MaxRestarts = MaxSelects = 0` | `EventualResume` intentionally VIOLATED: Start, Connect, Write, SendAtomic, ReadTimeout, Notify, Release ends a healthy runtime's watch | 139 distinct states; 311 generated | 10 | <1s |
 | `MCPackUxWatchStaleEndpoint.cfg` | `Reacquire = FALSE`, no hazards, `MaxSelects = 0` | `EventualResume` intentionally VIOLATED: after Restart every Connect uses the old endpoint until the budget ends the watch | 2,487 distinct states; 6,550 generated | 23 | <1s |
@@ -887,6 +1153,12 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 | `MCClientIdentityMetadataRemoveThenRename.cfg`, `RemoveThenRenameReread.cfg` | as green, `RemoveBeforeRename = TRUE` | `NeverUninstalled` and `NoMissingFileError` intentionally VIOLATED: w2 removes the file w1 installed | 52 and 55 distinct states | 12 | <1s |
 | `MCClientIdentityMetadataNoReread.cfg` | `SingleWinnerKey = FALSE`, `Reread = FALSE` | `OkSawOwnMetadata` intentionally VIOLATED | 46 distinct states | 11 | <1s |
 | `MCClientIdentityMetadataDivergentKey.cfg` | `SingleWinnerKey = FALSE` | `AgreedInstall` intentionally VIOLATED: w1 accepts, w2 renames over it | 42 distinct states | 11 | <1s |
+| `MCUpdateHelperRegistration.cfg` | `Submitters = {s}`, `Readers = {q}`, `InitialPhases = {"staged", "accepted"}`, every safeguard on | Passes `TypeOK`, `StartFindsUnit`, `NoRegistrationAfterRetirement`, `StagedSubmitterYieldsOnlyToHelper` | 1,495 distinct states; 3,937 generated | 17 | <1s |
+| `MCUpdateHelperRegistrationUnlocked.cfg` | as green, `LockedReregistration = FALSE` | `StartFindsUnit` intentionally VIOLATED: Read(s) at accepted, HelperFinish, Write(s), HelperRemove, Reload(s), Start(s) finds no unit | 479 distinct states before counterexample; 968 generated | 7 | <1s |
+| `MCUpdateHelperRegistrationStaleRead.cfg` | as green, `ReadUnderLock = FALSE`, `InitialPhases = {"accepted"}` | `NoRegistrationAfterRetirement` intentionally VIOLATED: Read(s) at accepted, HelperFinish, HelperRemove, HelperCrash frees the lock, TryLock(s), Decide(s) on the stale read, Write(s) | 507 distinct states before counterexample; 1,095 generated | 8 | <1s |
+| `MCUpdateHelperRegistrationFirstRegistration.cfg` | as green, `LockedFirstRegistration = FALSE` | `StartFindsUnit` intentionally VIOLATED: Read(s) at staged, HelperFinish to failed, Write(s), HelperRemove, Reload(s), Start(s) finds no unit | 418 distinct states before counterexample; 814 generated | 7 | <1s |
+| `MCUpdateHelperRegistrationUngatedStatus.cfg` | as green, `StatusGate = FALSE` | `StagedSubmitterYieldsOnlyToHelper` intentionally VIOLATED: HelperCrash, Read(s) and Read(q) at staged, TryLock(q) takes the lock, TryLock(s) finds it held by the status reader | 273 distinct states before counterexample; 482 generated | 6 | <1s |
+| `MCUpdateHelperRegistrationDuplicatePhase.cfg` | as green, `InitialPhases = {"accepted"}` | `DuplicateReportsAccepted` intentionally VIOLATED: HelperFinish, Read(s) reads a finished receipt | 9 distinct states before counterexample; 9 generated | 3 | <1s |
 
 The nine BackgroundAdmissionContention rows used TLC2 `2026.11.06.222357`
 (rev `d8fb231`) with Homebrew OpenJDK 25.0.2 on macOS arm64 and
@@ -909,6 +1181,17 @@ rows checked their temporal properties over the complete state space.
 The seven DesktopUpdateListener rows used TLC2 `2026.11.06.222357` (rev
 `d8fb231`) with Homebrew OpenJDK 25.0.2 on macOS arm64 and `-workers 2`; the
 green runs checked their temporal properties over the complete state space.
+
+The six TranscriptScrollObservation rows used TLC2 2.19 (rev `5a47802`, the
+pinned tla2tools v1.7.4) with Eclipse Adoptium 17.0.21 on macOS arm64 and
+`-workers 1 -fp 1`, the mode `tla_check.py` runs; the green run checked both
+liveness properties over the complete state space. With `-workers auto` the
+green count is the same and the diagnostics may stop at a longer
+counterexample.
+
+The six UpdateHelperRegistration rows used the pinned TLC 1.7.4 with
+Temurin 17.0.21 on macOS arm64 and `-workers 1 -fp 1`, as
+`tla_check.py run` does.
 
 ## PairingTransport derived requirements
 

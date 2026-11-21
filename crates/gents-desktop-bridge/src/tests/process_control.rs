@@ -1,7 +1,7 @@
-use gents_desktop_core::error::BridgeErrorCode;
 use gents_protocol::process_control::{
     OperatorProcessControlRequest, ProcessControlOutcome, ToolControlReceiptOutcome,
 };
+use gents_store::client_error::BridgeErrorCode;
 
 use super::operations_job_control::{assert_client_signed_intent, control_runtime};
 

@@ -1,0 +1,5 @@
+type ClientOutboxSequence @policy(id: "$client_journal", resource: "journals") @index(fields: ["client_did", "node_did"], unique: true) {
+    client_did: String @immutable
+    node_did: String @immutable
+    next_ordinal: Int
+}

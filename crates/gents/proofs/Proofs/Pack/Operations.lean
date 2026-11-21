@@ -86,6 +86,65 @@ theorem supplied_value_wins_over_environment (actor : Actor) (forPack forInstall
     variableSource actor forPack forInstall true ≠ .environment := by
   cases forPack <;> cases forInstall <;> simp_all [variableSource]
 
+/-- The process planning an install. The `installer` is the process asked to
+install, planning against its own environment: a terminal or desktop install,
+or the runtime serving an Agent's tool call. A `hostedRuntime` plans a
+User's install that a client sent it, and its plan must equal the one the
+client made before sending. -/
+inductive Planner | installer | hostedRuntime
+  deriving DecidableEq, Repr
+
+/-- The environment a plan's `.environment` source reads: the planner's own
+process environment, or the installer's values sent with the request. -/
+inductive PlanEnvironment | own | sent
+  deriving DecidableEq, Repr
+
+/-- A hosted install is planned twice, by the client and by the runtime, and
+the runtime commits only a graph equal to the client's plan. So the runtime
+reads the installer's environment as sent and never its own.
+
+External premise: a runtime's service environment (launchd, systemd, the
+desktop's spawn) differs from the installing shell's; equal plans cannot
+follow from two process environments. -/
+def planEnvironment : Planner → PlanEnvironment
+  | .installer => .own
+  | .hostedRuntime => .sent
+
+/-- The value a plan takes for one install variable of one pack: `packValue` and
+`installValue` are the values supplied for that pack and for the whole install,
+`own` the planner's process environment and `sent` the installer's
+environment as the request carried it. -/
+def planValue (actor : Actor) (planner : Planner)
+    (packValue installValue own sent : Option String) : Option String :=
+  let environment := match planEnvironment planner with
+    | .own => own
+    | .sent => sent
+  match variableSource actor packValue.isSome installValue.isSome environment.isSome with
+  | .scoped => packValue
+  | .shared => installValue
+  | .environment => environment
+  | .unset => none
+
+theorem hosted_runtime_never_reads_its_own_environment :
+    planEnvironment .hostedRuntime ≠ .own := by
+  simp [planEnvironment]
+
+/-- Whatever the runtime's own environment holds, its plan takes the value the
+installer's plan takes from the environment the installer sent. -/
+theorem hosted_plan_takes_the_installers_value
+    (actor : Actor) (packValue installValue installer runtime : Option String) :
+    planValue actor .hostedRuntime packValue installValue runtime installer =
+      planValue actor .installer packValue installValue installer runtime := rfl
+
+theorem hosted_plan_ignores_the_runtime_environment
+    (actor : Actor) (packValue installValue sent first second : Option String) :
+    planValue actor .hostedRuntime packValue installValue first sent =
+      planValue actor .hostedRuntime packValue installValue second sent := rfl
+
+theorem agent_plan_reads_no_environment (planner : Planner) (own sent : Option String) :
+    planValue .agent planner none none own sent = none := by
+  cases planner <;> cases own <;> cases sent <;> rfl
+
 /-- The published root an Agent the pack ships needs reader on. -/
 inductive RootReader | notNeeded | published | unpublished
   deriving DecidableEq, Repr

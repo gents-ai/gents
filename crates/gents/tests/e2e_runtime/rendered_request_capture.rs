@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use gents::defra_node::Node as EmbeddedNode;
 use gents::{AgentBuilder, Gents};
@@ -24,6 +23,7 @@ use crate::support::streaming_backend::{
     MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse, StreamScript,
 };
 use crate::support::test_db;
+use gents_store::test_support::STALL_CEILING;
 
 const CAPTURE_MODEL: &str = "capture-model";
 const CAPTURE_BACKEND_ID: &str = "capture-backend";
@@ -111,9 +111,7 @@ async fn attached_image_reaches_the_provider_and_survives_the_next_turn() {
         )
         .await;
     assert_eq!(
-        fixture
-            .wait_terminal("pdf-third", Duration::from_secs(10))
-            .await,
+        fixture.wait_terminal("pdf-third").await,
         RequestLifecycleState::Failed
     );
     assert_eq!(backend.observed_turn_completion_bodies().len(), 2);
@@ -188,9 +186,7 @@ async fn a_failing_capture_sink_issues_no_provider_request() {
             "please must-not-send",
         )
         .await;
-    let terminal = fixture
-        .wait_terminal("req-capture-fault-1", Duration::from_secs(20))
-        .await;
+    let terminal = fixture.wait_terminal("req-capture-fault-1").await;
 
     assert_eq!(
         backend.observed_completion_requests(),
@@ -787,18 +783,14 @@ async fn retry_continues_recorded_tool_progress_without_republishing_input() {
     let content = format!("please use the tool {marker}");
     let parent = fixture.submit("retry-parent", marker, &content).await;
     assert_eq!(
-        fixture
-            .wait_terminal("retry-parent", Duration::from_secs(20))
-            .await,
+        fixture.wait_terminal("retry-parent").await,
         RequestLifecycleState::Failed
     );
     let doc_id = fixture
         .submit_retry("retry-successor", marker, &content, "retry-parent", &parent)
         .await;
     assert_eq!(
-        fixture
-            .wait_terminal("retry-successor", Duration::from_secs(20))
-            .await,
+        fixture.wait_terminal("retry-successor").await,
         RequestLifecycleState::Completed
     );
     let observed = backend.observed_completion_bodies();
@@ -879,9 +871,7 @@ async fn a_repaired_attempt_is_a_second_fact_with_a_different_canonical_request(
             &format!("please use the tool {marker}"),
         )
         .await;
-    let terminal = fixture
-        .wait_terminal("req-capture-repair", Duration::from_secs(20))
-        .await;
+    let terminal = fixture.wait_terminal("req-capture-repair").await;
     assert_eq!(
         terminal,
         RequestLifecycleState::Completed,
@@ -1792,7 +1782,7 @@ async fn rolling_chunk_failure_does_not_advance_session_and_retry_commits_once()
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal_state(&actors, &failed_doc, Duration::from_secs(20)).await,
+        wait_for_request_terminal_state(&actors, &failed_doc).await,
         RequestLifecycleState::Failed
     );
     assert!(
@@ -2268,7 +2258,7 @@ async fn wait_for_rendered_requests(
         ["RenderedRequest"],
     )
     .unwrap();
-    tokio::time::timeout(Duration::from_secs(10), async {
+    tokio::time::timeout(STALL_CEILING, async {
         loop {
             let rows = rendered_requests_as(reader, request_id).await;
             if rows.len() >= expected {
@@ -2295,7 +2285,7 @@ async fn boot_capture_agent_with(
     .backend_id(CAPTURE_BACKEND_ID)
     .model_name(CAPTURE_MODEL)
     .stream_batch_ms(0)
-    .deadline_duration_secs(30);
+    .deadline_duration_secs(gents_store::test_support::UNREACHED_DEADLINE.as_secs());
     let runtime = customize(behavior)
         .done()
         .build()
@@ -2662,9 +2652,7 @@ impl OwnedCaptureFixture {
     }
 
     async fn wait_completed(&self, request_id: &str) {
-        let state = self
-            .wait_terminal(request_id, Duration::from_secs(15))
-            .await;
+        let state = self.wait_terminal(request_id).await;
         let query = format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ lifecycle_state failure_reason }} }}"#,
             escape_graphql_string(request_id)
@@ -2677,13 +2665,10 @@ impl OwnedCaptureFixture {
         );
     }
 
-    async fn wait_terminal(&self, request_id: &str, timeout: Duration) -> RequestLifecycleState {
-        let state = crate::support::live_inference::wait_for_request_terminal(
-            &self.access,
-            request_id,
-            timeout,
-        )
-        .await;
+    async fn wait_terminal(&self, request_id: &str) -> RequestLifecycleState {
+        let state =
+            crate::support::live_inference::wait_for_request_terminal(&self.access, request_id)
+                .await;
         RequestLifecycleState::parse(&state).expect("terminal request lifecycle")
     }
 
@@ -2697,7 +2682,7 @@ impl OwnedCaptureFixture {
             r#"{{ GoalObservation(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
             escape_graphql_string(session_id)
         );
-        tokio::time::timeout(Duration::from_secs(15), async {
+        tokio::time::timeout(STALL_CEILING, async {
             loop {
                 let response = self.access.execute(&query).await.unwrap();
                 if !response["data"]["GoalObservation"]

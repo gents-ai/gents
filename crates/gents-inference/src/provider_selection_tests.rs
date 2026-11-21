@@ -1,0 +1,496 @@
+use std::sync::Arc;
+
+use crate::resolved::{SelectedConfiguration, SelectedConfigurationDocument};
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::{created_doc_id, escape_graphql_string};
+use gents_store::identity::{KeyIdentity, NodeIdentity};
+
+fn agent_identities(directory: &std::path::Path) -> anyhow::Result<(KeyIdentity, KeyIdentity)> {
+    Ok((
+        KeyIdentity::load_or_create(directory.join("agent"), None)?,
+        KeyIdentity::load_or_create(directory.join("sibling"), None)?,
+    ))
+}
+
+#[tokio::test]
+async fn modeled_provider_inputs_require_the_selected_agent_to_read_exact_documents(
+) -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let owner =
+        gents_store::identity::KeyIdentity::load_or_create(directory.path().join("node"), None)?;
+    let user = owner.did();
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(user)
+            .with_node_acp_enabled()
+            .build()
+            .await?,
+    );
+    let user_access = ConfigAccess::local_as(node.clone(), identity::Did::new(user)?);
+    let (agent, sibling) = agent_identities(directory.path())?;
+    let actor = identity::Did::new(agent.did())?;
+    // The sibling is also a managed Agent holding the baseline, so its refusal is
+    // the document policy's, not a missing node grant.
+    for agent_did in [&actor, &identity::Did::new(sibling.did())?] {
+        gents_store::identity::GrantSet::AgentBaseline
+            .grant(&user_access, agent_did)
+            .await?;
+    }
+    let context = defra_core::RequestContext::default().with_identity(Some(user.to_owned()));
+    let policy = node
+        .add_dac_policy_with_counter_as(
+            &context,
+            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
+            0,
+        )
+        .await?;
+    user_access.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&format!(
+        "type Agent @policy(id: \"{}\", resource: \"agents\") {{ agent_did: String }}\ntype AgentContext @policy(id: \"{}\", resource: \"configuration\") {{ context_id: String }}\ntype Tools @policy(id: \"{}\", resource: \"configuration\") {{ tools_id: String }}",
+        escape_graphql_string(&policy), escape_graphql_string(&policy), escape_graphql_string(&policy)
+    ))).await?;
+    let create = |name: &str, field: &str, value: &str| {
+        format!(
+            "mutation {{ create_{name}(input: {{{field}: \"{}\"}}) {{_docID}} }}",
+            escape_graphql_string(value)
+        )
+    };
+    let mut docs = Vec::new();
+    for (collection, field, value) in [
+        (
+            gents_store::collection::Collection::Agent,
+            "agent_did",
+            "agent",
+        ),
+        (
+            gents_store::collection::Collection::AgentContext,
+            "context_id",
+            "context",
+        ),
+        (
+            gents_store::collection::Collection::Tools,
+            "tools_id",
+            "tools",
+        ),
+        (
+            gents_store::collection::Collection::AgentContext,
+            "context_id",
+            "replacement",
+        ),
+    ] {
+        let name = collection.graphql_type();
+        let response = user_access
+            .write("test.provider_config.create", &create(name, field, value))
+            .await?;
+        docs.push(created_doc_id(&response, name)?);
+    }
+    user_access
+        .add_actor_relationship("Agent", &docs[0], "executor", &actor)
+        .await?;
+    user_access
+        .add_actor_relationship("AgentContext", &docs[1], "reader", &actor)
+        .await?;
+    user_access
+        .add_actor_relationship("Tools", &docs[2], "reader", &actor)
+        .await?;
+    for item in gents_lean_vocab::families::household_provider_assembly::cases() {
+        if item.input.revoke_tools {
+            user_access
+                .delete_actor_relationship("Tools", &docs[2], "reader", &actor)
+                .await?;
+        } else {
+            user_access
+                .add_actor_relationship("Tools", &docs[2], "reader", &actor)
+                .await?;
+        }
+        let who = match item.input.role.as_str() {
+            "agent" => agent.did(),
+            "sibling" => sibling.did(),
+            other => anyhow::bail!("unmodeled provider actor {other}"),
+        };
+        let selected = vec![
+            SelectedConfigurationDocument {
+                version: "fixture-version".into(),
+                collection: gents_store::collection::Collection::Agent,
+                doc_id: docs[0].clone(),
+                logical_id: None,
+            },
+            SelectedConfigurationDocument {
+                version: "fixture-version".into(),
+                collection: gents_store::collection::Collection::AgentContext,
+                doc_id: if item.input.missing_context {
+                    docs[3].clone()
+                } else {
+                    docs[1].clone()
+                },
+                logical_id: None,
+            },
+            SelectedConfigurationDocument {
+                version: "fixture-version".into(),
+                collection: gents_store::collection::Collection::Tools,
+                doc_id: docs[2].clone(),
+                logical_id: None,
+            },
+        ];
+        let binding = SelectedConfiguration::new(node.clone(), identity::Did::new(who)?, selected);
+        item.check(binding.check().await.is_ok());
+    }
+    node.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn modeled_inference_inputs_require_each_selected_native_document() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let owner =
+        gents_store::identity::KeyIdentity::load_or_create(directory.path().join("node"), None)?;
+    let user = owner.did();
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(user)
+            .with_node_acp_enabled()
+            .build()
+            .await?,
+    );
+    let access = ConfigAccess::local_as(node.clone(), identity::Did::new(user)?);
+    let (agent, sibling) = agent_identities(directory.path())?;
+    for agent_did in [agent.did(), sibling.did()] {
+        gents_store::identity::GrantSet::AgentBaseline
+            .grant(&access, &identity::Did::new(agent_did)?)
+            .await?;
+    }
+    let context = defra_core::RequestContext::default().with_identity(Some(user.to_owned()));
+    let policy = node
+        .add_dac_policy_with_counter_as(
+            &context,
+            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
+            0,
+        )
+        .await?;
+    let names = [
+        "Agent",
+        "InferenceProfile",
+        "InferenceSampling",
+        "InferenceExecution",
+        "InferenceRetryPolicy",
+        "CompactionConfig",
+    ];
+    let sdl = names
+        .iter()
+        .map(|name| {
+            format!(
+                "type {name} @policy(id: \"{}\", resource: \"{}\") {{ label: String }}",
+                escape_graphql_string(&policy),
+                if *name == "Agent" {
+                    "agents"
+                } else {
+                    "configuration"
+                }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    access
+        .add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&sdl))
+        .await?;
+    let create = |name: &str, label: &str| {
+        format!(
+            "mutation {{ create_{name}(input: {{label: \"{}\"}}) {{_docID}} }}",
+            escape_graphql_string(label)
+        )
+    };
+    let response = access
+        .write("test.inference.agent", &create("Agent", "agent"))
+        .await?;
+    let agent_doc = created_doc_id(&response, "Agent")?;
+    access
+        .add_actor_relationship(
+            "Agent",
+            &agent_doc,
+            "executor",
+            &identity::Did::new(agent.did())?,
+        )
+        .await?;
+    let documents = [
+        (
+            "profile",
+            gents_store::collection::Collection::InferenceProfile,
+        ),
+        (
+            "sampling",
+            gents_store::collection::Collection::InferenceSampling,
+        ),
+        (
+            "execution",
+            gents_store::collection::Collection::InferenceExecution,
+        ),
+        (
+            "retry",
+            gents_store::collection::Collection::InferenceRetryPolicy,
+        ),
+        (
+            "compaction",
+            gents_store::collection::Collection::Compaction,
+        ),
+        (
+            "summary-profile",
+            gents_store::collection::Collection::InferenceProfile,
+        ),
+    ];
+    let cases = gents_lean_vocab::families::household_inference_provider_selection::cases();
+    let mut ids = Vec::new();
+    for (label, collection) in documents {
+        let name = collection.graphql_type();
+        let response = access
+            .write("test.inference.create", &create(name, label))
+            .await?;
+        let doc_id = created_doc_id(&response, name)?;
+        access
+            .transact_write("test.inference.select", |txn| {
+                let (doc_id, agent_doc) = (&doc_id, &agent_doc);
+                Box::pin(async move {
+                    txn.add_entity_set_relationship(
+                        name,
+                        doc_id,
+                        "selected_by",
+                        "agents",
+                        agent_doc,
+                        "executor",
+                    )
+                    .await
+                })
+            })
+            .await?;
+        ids.push((label, collection, doc_id));
+    }
+    for item in cases {
+        assert_eq!(
+            documents.map(|(label, _)| label).as_slice(),
+            item.input.documents.as_slice()
+        );
+        let revoked = item.input.revoked.as_str();
+        if let Some((_, collection, doc_id)) = ids.iter().find(|(label, _, _)| *label == revoked) {
+            access
+                .transact_write("test.inference.revoke", |txn| {
+                    let agent_doc = &agent_doc;
+                    Box::pin(async move {
+                        txn.delete_entity_set_relationship(
+                            collection.graphql_type(),
+                            doc_id,
+                            "selected_by",
+                            "agents",
+                            agent_doc,
+                            "executor",
+                        )
+                        .await
+                    })
+                })
+                .await?;
+        }
+        let mut selected = vec![SelectedConfigurationDocument {
+            version: "fixture-version".into(),
+            collection: gents_store::collection::Collection::Agent,
+            doc_id: agent_doc.clone(),
+            logical_id: None,
+        }];
+        selected.extend(
+            ids.iter()
+                .map(|(_, collection, doc_id)| SelectedConfigurationDocument {
+                    version: "fixture-version".into(),
+                    collection: *collection,
+                    doc_id: doc_id.clone(),
+                    logical_id: None,
+                }),
+        );
+        let who = match item.input.actor.as_str() {
+            "agent" => agent.did(),
+            "sibling" => sibling.did(),
+            other => anyhow::bail!("unmodeled inference actor {other}"),
+        };
+        let allowed = SelectedConfiguration::new(node.clone(), identity::Did::new(who)?, selected)
+            .check()
+            .await
+            .is_ok();
+        if let Some((_, collection, doc_id)) = ids.iter().find(|(label, _, _)| *label == revoked) {
+            access
+                .transact_write("test.inference.restore", |txn| {
+                    let agent_doc = &agent_doc;
+                    Box::pin(async move {
+                        txn.add_entity_set_relationship(
+                            collection.graphql_type(),
+                            doc_id,
+                            "selected_by",
+                            "agents",
+                            agent_doc,
+                            "executor",
+                        )
+                        .await
+                    })
+                })
+                .await?;
+        }
+        item.check(allowed);
+    }
+    node.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn modeled_provider_inputs_recheck_backend_metadata_as_agent() -> anyhow::Result<()> {
+    use gents_store::config_client::{GraphqlEndpoint, NodePermission};
+
+    let directory = tempfile::tempdir()?;
+    let key_path = directory.path().to_owned();
+    let (runtime, user, agent) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        Ok((
+            KeyIdentity::load_or_create(key_path.join("runtime"), None)?,
+            KeyIdentity::load_or_create(key_path.join("user"), None)?,
+            KeyIdentity::load_or_create(key_path.join("agent"), None)?,
+        ))
+    })
+    .await??;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await?
+        .into_std()?;
+    let address = listener.local_addr()?;
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .enable_signing()
+            .with_node_identity_did(runtime.did())
+            .with_node_acp_enabled()
+            .with_http(defra_node::HttpConfig::with_listener(listener)?)
+            .build()
+            .await?,
+    );
+    let admin = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
+    let actor = identity::Did::new(agent.did())?;
+    for (subject, permissions) in [
+        (
+            identity::Did::new(user.did())?,
+            vec![
+                NodePermission::DocumentRead,
+                NodePermission::DocumentUpdate,
+                NodePermission::DacRelationAdd,
+                NodePermission::DacRelationDelete,
+                NodePermission::CollectionGet,
+            ],
+        ),
+        (
+            actor.clone(),
+            vec![NodePermission::DocumentRead, NodePermission::CollectionGet],
+        ),
+    ] {
+        for permission in permissions {
+            admin.grant_node_permission(&subject, permission).await?;
+        }
+    }
+    let access = ConfigAccess::Graphql(
+        GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), user.did())
+            .with_client_signing_capability(user.client_signing_capability()?)?
+            .with_client_signed_agent_creates(),
+    );
+    let context =
+        defra_core::RequestContext::default().with_identity(Some(runtime.did().to_owned()));
+    let policy = node
+        .add_dac_policy_with_counter_as(
+            &context,
+            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
+            0,
+        )
+        .await?;
+    let mut docs = Vec::new();
+    for (collection, field) in [
+        (gents_store::collection::Collection::Agent, "agent_did"),
+        (
+            gents_store::collection::Collection::InferenceProfile,
+            "profile_id",
+        ),
+        (
+            gents_store::collection::Collection::InferenceBackend,
+            "backend_id",
+        ),
+    ] {
+        let name = collection.graphql_type();
+        let resource = if collection == gents_store::collection::Collection::Agent {
+            "agents"
+        } else {
+            "configuration"
+        };
+        let schema = format!(
+            "type {name} @policy(id: \"{}\", resource: \"{resource}\") {{ {field}: String }}",
+            escape_graphql_string(&policy)
+        );
+        admin
+            .add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&schema))
+            .await?;
+        let mutation = format!("mutation($input: {name}MutationInputArg!) {{ create_{name}(input: $input) {{_docID}} }}");
+        let variables = serde_json::json!({"input": {(field): "value"}});
+        let response = access
+            .transact_write("test.provider_metadata.create", |txn| {
+                let mutation = &mutation;
+                let variables = &variables;
+                let schema = &schema;
+                Box::pin(async move {
+                    txn.execute_client_signed_create(mutation, variables, schema)
+                        .await
+                })
+            })
+            .await?;
+        docs.push(created_doc_id(&response, name)?);
+    }
+    access
+        .add_actor_relationship("Agent", &docs[0], "executor", &actor)
+        .await?;
+    access
+        .add_actor_relationship("InferenceProfile", &docs[1], "reader", &actor)
+        .await?;
+    access
+        .add_actor_relationship("InferenceBackendMetadata", &docs[2], "reader", &actor)
+        .await?;
+    for item in gents_lean_vocab::families::household_plugin_backend_selection::cases() {
+        assert_eq!(item.input.actor.as_deref(), Some("agent"));
+        let target = match item.input.revoked.as_str() {
+            "profile" => Some(("InferenceProfile", &docs[1])),
+            "backend" => Some(("InferenceBackendMetadata", &docs[2])),
+            "" => None,
+            _ => anyhow::bail!("unknown modeled revocation"),
+        };
+        if let Some((collection, doc)) = target {
+            access
+                .delete_actor_relationship(collection, doc, "reader", &actor)
+                .await?;
+        }
+        let selection = SelectedConfiguration::new(
+            node.clone(),
+            actor.clone(),
+            vec![
+                SelectedConfigurationDocument {
+                    version: "fixture-version".into(),
+                    collection: gents_store::collection::Collection::Agent,
+                    doc_id: docs[0].clone(),
+                    logical_id: None,
+                },
+                SelectedConfigurationDocument {
+                    version: "fixture-version".into(),
+                    collection: gents_store::collection::Collection::InferenceProfile,
+                    doc_id: docs[1].clone(),
+                    logical_id: None,
+                },
+                SelectedConfigurationDocument {
+                    version: "fixture-version".into(),
+                    collection: gents_store::collection::Collection::InferenceBackend,
+                    doc_id: docs[2].clone(),
+                    logical_id: None,
+                },
+            ],
+        );
+        let allowed = selection.check().await.is_ok();
+        if let Some((collection, doc)) = target {
+            access
+                .add_actor_relationship(collection, doc, "reader", &actor)
+                .await?;
+        }
+        item.check(allowed);
+    }
+    node.shutdown().await?;
+    Ok(())
+}

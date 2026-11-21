@@ -132,7 +132,7 @@ pub struct GoalSubmissionReceipt {
     pub client_did: String,
     pub node_did: String,
     pub session_id: String,
-    pub reference: gents_desktop_core::client::GoalSubmissionReference,
+    pub reference: gents_protocol::goal_control::GoalSubmissionReference,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -149,6 +149,11 @@ pub enum GoalSubmissionOutcome {
     rename_all_fields = "camelCase"
 )]
 pub enum GoalSubmissionRecovery {
+    Retained {
+        node_did: String,
+        command_id: String,
+        session_id: String,
+    },
     Unconfirmed {
         #[serde(rename = "nodeDid")]
         node_did: String,

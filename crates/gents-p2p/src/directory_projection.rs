@@ -199,15 +199,25 @@ const DIRECTORY_SOURCE_COLLECTIONS: [&str; 3] = ["Node", "NodeReadiness", "Agent
 pub async fn run_directory_projection(
     node: Arc<EmbeddedNode>,
     source_did: String,
+    intervals: crate::p2p_reconcile::intervals::P2pIntervals,
     cancel: CancellationToken,
 ) -> Result<()> {
+    if crate::peer_publication::idles(
+        &node,
+        gents_store::local::document_acp::Periodic::Directory,
+        &cancel,
+    )
+    .await
+    {
+        return Ok(());
+    }
     let store = GraphqlDirectoryStore::new(node.clone());
     let mut subscription = gents_store::subscription_source::subscribe_collections(
         &node,
         DIRECTORY_SOURCE_COLLECTIONS,
     )?;
     let mut subscription_open = true;
-    let mut interval = tokio::time::interval(crate::p2p_reconcile::intervals::sweep_interval());
+    let mut interval = tokio::time::interval(intervals.pairing_sweep);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     sweep_directory(&store, &source_did).await;
@@ -440,7 +450,7 @@ mod tests {
     }
 
     /// ACP-enabled fixture node signed by its own identity key. The directory
-    /// schema binds `AGENT_OWNERSHIP_POLICY_ID`, which only an ACP-enabled node
+    /// schema binds the Household policy, which only an ACP-enabled node
     /// registers, so the plain `node_builder` fixture cannot host it.
     async fn acp_node(dir: &std::path::Path) -> Result<Arc<EmbeddedNode>> {
         use gents_store::identity::NodeIdentity;
@@ -504,8 +514,11 @@ mod tests {
     async fn reconcile_on_node(input: &family::ReconcileInput) -> Result<family::ReconcileOutput> {
         let dir = tempfile::tempdir()?;
         let node = acp_node(dir.path()).await?;
-        node.add_collection(gents_protocol::schemas::NODE_DIRECTORY_ENTRY)
-            .await?;
+        node.add_collection(
+            &gents_protocol::schemas::HomePolicyIds::shared()
+                .render(gents_protocol::schemas::NODE_DIRECTORY_ENTRY),
+        )
+        .await?;
         let store = GraphqlDirectoryStore::new(node.clone());
         for entry in &input.existing {
             let row = DirectoryEntry {

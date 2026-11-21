@@ -31,7 +31,7 @@ mod goal;
 pub mod lsp;
 mod native_runner;
 mod plugin_build;
-pub use native_runner::enable_self_runner;
+pub use native_runner::NativeExecutables;
 pub use plugin_build::{run_plugin_build, PluginBuildOutcome, PLUGIN_BUILD_COMMAND};
 pub mod session_history;
 mod title_audit_usage;
@@ -116,6 +116,7 @@ pub use shared::run_command_for_test;
 pub(crate) use shared::shell_join;
 #[cfg(test)]
 pub(crate) use shared::validate_command_policy;
+pub use shared::CommandRequest;
 pub use shared::ToolContext;
 pub(crate) use shared::{
     admit_host_executable, current_managed_command_credential_snapshot, default_lsp_network_mode,
@@ -245,6 +246,17 @@ impl ToolSet {
         self.read_root.as_deref()
     }
 
+    /// The one root this set's file-writing tools write, or none when it has
+    /// no file-writing tool or its writers name different roots.
+    pub fn write_root(&self) -> Option<&std::path::Path> {
+        let mut roots = self.tools.iter().filter_map(|tool| match tool {
+            NativeTool::WriteFile { root } | NativeTool::EditFile { root } => Some(root),
+            _ => None,
+        });
+        let first = roots.next()?;
+        roots.all(|root| root == first).then_some(first.as_path())
+    }
+
     pub fn tool_names(&self) -> Vec<String> {
         self.tools.iter().map(NativeTool::tool_name).collect()
     }
@@ -264,17 +276,19 @@ impl ToolSet {
     }
 
     pub fn build_native_tools(&self) -> Result<Vec<Box<dyn ToolDyn>>> {
-        self.build_native_tools_with_writethrough(None)
+        self.build_native_tools_with_writethrough(None, &NativeExecutables::default())
     }
 
     pub fn build_native_tools_with_writethrough(
         &self,
         writethrough: Option<lsp::LspWritethrough>,
+        executables: &NativeExecutables,
     ) -> Result<Vec<Box<dyn ToolDyn>>> {
         let read_context = match &self.read_root {
             Some(root) => ToolContext::new(root.clone(), read_root_requires_create(&self.tools))?,
             None => ToolContext::from_default_read_root()?,
-        };
+        }
+        .with_native_executables(executables.clone());
 
         let mut built: Vec<Box<dyn ToolDyn>> = Vec::new();
         for tool in &self.tools {

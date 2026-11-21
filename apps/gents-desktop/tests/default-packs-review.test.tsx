@@ -4,11 +4,13 @@ import type {
   DefaultPack,
   DefaultPacksApproval,
 } from "@source-inc/gents-desktop-client";
-import { resetPreferences } from "../src/ui/preferences";
+import { preferences, resetPreferences } from "../src/ui/preferences";
+import { href } from "../src/ui/lib/router";
 import { PacksScreen } from "../src/ui/screens/PacksScreen";
 import { StarterPacksCard } from "../src/ui/screens/packs/DefaultPacksReview";
 import { rememberPacksView, resetInstalledPacks } from "../src/ui/screens/packs/model";
 import { resetDefaultPacks } from "../src/ui/screens/packs/useDefaultPacks";
+import { TOPICS_TO_TRY } from "../src/ui/screens/topicsToTry";
 import { renderIn, testApp, withFlags } from "./app-fixture";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 
@@ -84,6 +86,81 @@ beforeEach(() => {
   resetPreferences();
 });
 
+describe("things to try, after the starter packs", () => {
+  const seen = () =>
+    JSON.parse(localStorage.getItem("gents-preferences")!).state.thingsToTrySeen;
+
+  it("stays shut where it is not turned on", async () => {
+    const { api } = harness([]);
+    renderIn(local(api), <StarterPacksCard />);
+    await waitFor(() => expect(api.listDefaultPacks).toHaveBeenCalled());
+    expect(screen.queryByTestId("things-to-try-card")).toBeNull();
+  });
+
+  it("follows the packs once they are put off, and a chosen message lands in the new chat unsent", async () => {
+    withFlags({ "get-started": true });
+    const { api } = harness(ALL);
+    const app = local(api);
+    renderIn(app, <StarterPacksCard />);
+    expect(screen.queryByTestId("things-to-try-card")).toBeNull();
+    await click(within(await card()).getByRole("button", { name: "Not now" }));
+    const tries = await screen.findByTestId("things-to-try-card");
+    const first = TOPICS_TO_TRY[0]!;
+    for (const topic of TOPICS_TO_TRY)
+      expect(within(tries).getByRole("button", { name: topic.title })).toBeVisible();
+    expect(within(tries).queryByText(first.prompts[0]!)).toBeNull();
+    await click(within(tries).getByRole("button", { name: first.title }));
+    await click(await within(tries).findByRole("button", { name: first.prompts[0]! }));
+    await waitFor(() => expect(screen.queryByTestId("things-to-try-card")).toBeNull());
+    expect(seen()).toEqual([deployment.nodeDid]);
+    await waitFor(() =>
+      expect(Object.values(app.drafts.getState().drafts)).toEqual([first.prompts[0]]),
+    );
+  });
+
+  it("opens by itself on a node with no pack to offer, once", async () => {
+    withFlags({ "get-started": true });
+    const { api } = harness([]);
+    const first = renderIn(local(api), <StarterPacksCard />);
+    const tries = await screen.findByTestId("things-to-try-card");
+    await click(within(tries).getByRole("button", { name: "Get started" }));
+    await waitFor(() => expect(screen.queryByTestId("things-to-try-card")).toBeNull());
+    expect(seen()).toEqual([deployment.nodeDid]);
+    first.unmount();
+    resetDefaultPacks();
+    renderIn(local(api), <StarterPacksCard />);
+    await waitFor(() => expect(api.listDefaultPacks).toHaveBeenCalledTimes(2));
+    expect(screen.queryByTestId("things-to-try-card")).toBeNull();
+  });
+
+  it.each([
+    ["missing", /starter pack, which isn’t installed on this node yet\./],
+    [
+      "not_enabled",
+      /starter pack, which is installed on this node but not turned on\./,
+    ],
+    ["unavailable", /starter pack, which can’t be installed by this build of Gents\./],
+    ["installed", null],
+  ] as const)(
+    "says what a topic's %s starter pack lacks, and nothing once it is installed and on",
+    async (state, note) => {
+      withFlags({ "get-started": true });
+      const topic = TOPICS_TO_TRY.find((one) => one.pack)!;
+      const name = topic.pack!.id.split("/")[1]!;
+      const { api } = harness([pack(name, { state })]);
+      renderIn(local(api), <StarterPacksCard />);
+      if (state === "missing")
+        await click(within(await card()).getByRole("button", { name: "Not now" }));
+      const tries = await screen.findByTestId("things-to-try-card");
+      await click(within(tries).getByRole("button", { name: topic.title }));
+      await within(tries).findByRole("button", { name: topic.prompts[0]! });
+      const said = new RegExp(`Works best with the ${topic.pack!.name} starter pack`);
+      if (note === null) expect(within(tries).queryByText(said)).toBeNull();
+      else expect(within(tries).getByText(said)).toHaveTextContent(note);
+    },
+  );
+});
+
 describe("the starter packs card", () => {
   it("lists each pack not installed and on, with what the Engineer lacks and Install or Turn on", async () => {
     const { api, listDefaultPacks } = harness(ALL);
@@ -101,8 +178,15 @@ describe("the starter packs card", () => {
     expect(
       rows.map((row) => within(row).getAllByText(/^doing /)[0]!.textContent),
     ).toEqual(["doing web", "doing dynamic_workflows", "doing notes", "doing ocr"]);
+    /* each row, named by what it shows, opens to what the Engineer lacks
+       without it */
+    const about = within(rows[0]!).getByRole("button", { name: "web doing web" });
     expect(
-      within(rows[0]!).getByText("Without it the Engineer cannot do web."),
+      within(rows[0]!).queryByText(/^Without it the Engineer cannot do web\./),
+    ).not.toBeInTheDocument();
+    await click(about);
+    expect(
+      within(rows[0]!).getByText(/^Without it the Engineer cannot do web\./),
     ).toBeInTheDocument();
     expect(
       within(rows[0]!).getByRole("button", { name: "Install gents/web" }),
@@ -116,7 +200,9 @@ describe("the starter packs card", () => {
     expect(
       within(rows[3]!).getByText("The registry could not be reached."),
     ).toBeTruthy();
-    expect(within(rows[3]!).queryByRole("button")).toBeNull();
+    expect(
+      within(rows[3]!).queryByRole("button", { name: /^(Install|Turn on) / }),
+    ).toBeNull();
     expect(within(dialog).queryByText(/Permissions/)).toBeNull();
     expect(within(dialog).queryByText(/authority/i)).toBeNull();
     expect(within(dialog).getByRole("button", { name: "Install all" })).toBeEnabled();
@@ -260,7 +346,7 @@ describe("the starter packs card", () => {
       snapshot: {
         bootstrap,
         client: {
-          deployments: [{ ...deployment, nodeDid: "did:key:remote", source: "peer" }],
+          deployments: [{ ...deployment, nodeDid: "did:key:remote", local: false }],
         },
       },
     });
@@ -281,7 +367,6 @@ describe("the starter packs card", () => {
 
 describe("starter packs on the Packs page", () => {
   function page(api: object) {
-    withFlags({ packs: true });
     rememberPacksView("installed");
     return renderIn(local(api), <PacksScreen />);
   }
@@ -330,6 +415,96 @@ describe("starter packs on the Packs page", () => {
       within(section).queryByRole("button", { name: /^(Install|Turn on) / }),
     ).toBeNull();
     expect(listDefaultPacks).toHaveBeenCalledTimes(1);
+  });
+
+  it("links an opened pack to its own page, which the card does not", async () => {
+    const { api } = harness([web, git]);
+    rememberPacksView("installed");
+    renderIn(
+      local(api),
+      <>
+        <StarterPacksCard />
+        <PacksScreen />
+      </>,
+    );
+    const inCard = within(await card());
+    await click(inCard.getByRole("button", { name: "web doing web" }));
+    expect(inCard.queryByRole("link", { name: /View web’s page/ })).toBeNull();
+    await click(inCard.getByRole("button", { name: "Not now" }));
+    const section = await screen.findByRole("region", { name: "Starter packs" });
+    await click(within(section).getByRole("button", { name: "Show" }));
+    await click(within(section).getByRole("button", { name: "web doing web" }));
+    expect(
+      within(section).getByRole("link", { name: /View web’s page/ }),
+    ).toHaveAttribute("href", href({ name: "packs", item: "gents/web" }));
+  });
+
+  it("hides to one line, put off as the card's Not now is, and shows again here only", async () => {
+    const { api, listDefaultPacks } = harness([web, notes, git]);
+    const first = page(api);
+    const section = await screen.findByRole("region", { name: "Starter packs" });
+    await click(within(section).getByRole("button", { name: "Hide" }));
+    expect(within(section).queryByRole("button", { name: "Install all" })).toBeNull();
+    expect(within(section).getByText("2 starter packs aren’t set up.")).toBeVisible();
+    first.unmount();
+
+    /* read again with the card over the app: it stays closed, and Show opens
+       the packs on the page alone */
+    resetDefaultPacks();
+    renderIn(
+      local(api),
+      <>
+        <StarterPacksCard />
+        <PacksScreen />
+      </>,
+    );
+    const again = await screen.findByRole("region", { name: "Starter packs" });
+    expect(listDefaultPacks).toHaveBeenCalledTimes(2);
+    expect(within(again).getByText("2 starter packs aren’t set up.")).toBeVisible();
+    await click(within(again).getByRole("button", { name: "Show" }));
+    expect(within(again).getByRole("button", { name: "Install all" })).toBeVisible();
+    await act(async () => {});
+    expect(screen.queryByTestId("starter-packs-card")).toBeNull();
+  });
+
+  it("holds Hide while an install runs, as the card holds Not now", async () => {
+    let finish!: (result: DefaultPacksApproval) => void;
+    const { api } = harness([web, notes, git]);
+    api.approveDefaultPacks = vi.fn(
+      () => new Promise<DefaultPacksApproval>((resolve) => (finish = resolve)),
+    );
+    page(api);
+    const section = await screen.findByRole("region", { name: "Starter packs" });
+    await click(within(section).getByRole("button", { name: "Install all" }));
+    expect(within(section).getByRole("button", { name: "Hide" })).toBeDisabled();
+    await act(async () =>
+      finish({
+        packs: installed([web, notes, git], ["gents/web"]),
+        failed: [{ pack: "gents/notes", error: "digest mismatch", installed: false }],
+      }),
+    );
+    expect(within(section).getByRole("alert")).toHaveTextContent(
+      "Couldn't install notes",
+    );
+    expect(within(section).getByRole("button", { name: "Hide" })).toBeEnabled();
+  });
+
+  it("says the list couldn't be read even when the packs are put off", async () => {
+    const { api, listDefaultPacks } = harness([web, notes, git]);
+    listDefaultPacks.mockRejectedValueOnce(new Error("The node didn't answer."));
+    rememberPacksView("installed");
+    preferences.dismissStarterPacks(deployment.nodeDid);
+    renderIn(local(api), <PacksScreen />);
+    const section = await screen.findByRole("region", { name: "Starter packs" });
+    expect(within(section).getByRole("alert")).toHaveTextContent(
+      "Couldn't read the starter packs.",
+    );
+    expect(
+      within(section).queryByText(/starter packs? (isn|aren)’t set up/),
+    ).toBeNull();
+    expect(within(section).queryByRole("button", { name: /^(Show|Hide)$/ })).toBeNull();
+    await click(within(section).getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("2 starter packs aren’t set up.")).toBeVisible();
   });
 
   it("shows nothing when every starter pack is installed", async () => {

@@ -22,6 +22,8 @@ const CONTROL_WATCHER_IDLE_SLEEP: Duration = Duration::from_secs(60 * 60 * 24 * 
 
 #[derive(Clone, Copy)]
 pub(super) struct ControlWatcherTiming {
+    /// Also the longest a pending change waits for its reconcile after its
+    /// first wake (`ControlDebounce.due`).
     pub(super) debounce: Duration,
     pub(super) local_debounce: Duration,
     pub(super) settle_retry: Duration,
@@ -40,7 +42,7 @@ const CONTROL_WATCHER_TIMING: ControlWatcherTiming = ControlWatcherTiming {
 /// Coalesced changes to the control collections, with each subscribed
 /// collection id mapped back to its name.
 pub(super) struct ControlSubscription {
-    changes: events::DocumentChangeSubscription,
+    changes: gents_store::subscription_source::ChangeSubscription,
     names_by_id: RapidHashMap<String, &'static str>,
 }
 
@@ -48,7 +50,25 @@ pub(super) fn subscribe_control_changes(node: &defra_node::Node) -> Result<Contr
     let names = document_view::control_collection_names().collect::<Vec<_>>();
     let ids = gents_store::subscription_source::collection_ids(node, names.iter().copied())?;
     Ok(ControlSubscription {
-        changes: node.subscribe_collection_changes(ids.clone()),
+        changes: gents_store::subscription_source::subscribe(node, ids.clone()),
+        names_by_id: ids.into_iter().zip(names).collect(),
+    })
+}
+
+/// [`subscribe_control_changes`] with the access changes `access` delivers,
+/// as on a home whose access settles after its rows commit.
+#[cfg(test)]
+pub(super) fn subscribe_control_changes_with_access(
+    node: &defra_node::Node,
+    access: events::Subscription,
+) -> Result<ControlSubscription> {
+    let names = document_view::control_collection_names().collect::<Vec<_>>();
+    let ids = gents_store::subscription_source::collection_ids(node, names.iter().copied())?;
+    Ok(ControlSubscription {
+        changes: gents_store::subscription_source::ChangeSubscription::new(
+            node.subscribe_collection_changes(ids.clone()),
+            Some(access),
+        ),
         names_by_id: ids.into_iter().zip(names).collect(),
     })
 }
@@ -60,10 +80,33 @@ pub(super) struct ControlWatcherInputs {
     pub(super) node_did: String,
     pub(super) resolve_context: DocumentResolveContext,
     pub(super) tool_runtime: ToolRuntimeContext,
+    pub(super) system_log: bool,
     pub(super) proposals_tx: mpsc::Sender<ResolvedRuntimeSnapshot>,
     pub(super) runtime_status: RuntimeStatusHandle,
     pub(super) health_events_rx: mpsc::Receiver<()>,
     pub(super) shutdown: watch::Receiver<bool>,
+}
+
+/// `ControlDebounce.due`: `delay` after the latest wake, but no later than
+/// `ceiling` after the first wake the reconcile has not answered.
+pub(super) fn due(
+    first: tokio::time::Instant,
+    now: tokio::time::Instant,
+    delay: Duration,
+    ceiling: Duration,
+) -> tokio::time::Instant {
+    (now + delay).min(first + ceiling)
+}
+
+/// When the reconcile a wake at `now` schedules runs, remembering the first
+/// wake of the pending burst in `pending_since`.
+fn after_wake(
+    pending_since: &mut Option<tokio::time::Instant>,
+    delay: Duration,
+    ceiling: Duration,
+) -> tokio::time::Instant {
+    let now = tokio::time::Instant::now();
+    due(*pending_since.get_or_insert(now), now, delay, ceiling)
 }
 
 pub(super) async fn run_control_watcher(inputs: ControlWatcherInputs) -> Result<()> {
@@ -81,6 +124,7 @@ pub(super) async fn run_control_watcher_with_timing(
         node_did,
         resolve_context,
         tool_runtime,
+        system_log,
         proposals_tx,
         runtime_status,
         mut health_events_rx,
@@ -102,6 +146,7 @@ pub(super) async fn run_control_watcher_with_timing(
     let mut phase_transition_pending = false;
     let mut resync_required = false;
     let mut replicated_pending = false;
+    let mut pending_since = None;
     let ControlSubscription {
         changes: mut subscription,
         names_by_id,
@@ -116,6 +161,7 @@ pub(super) async fn run_control_watcher_with_timing(
         tokio::select! {
             _ = shutdown.changed() => return Ok(()),
             _ = &mut sleep, if dirty => {
+                pending_since = None;
                 backend_admission.validate(&node).await?;
                 replicated_pending = false;
                 if resync_required || pending_visibility || settle_deadline.is_some() {
@@ -184,7 +230,7 @@ pub(super) async fn run_control_watcher_with_timing(
                         &document_view,
                     )
                     .await?;
-                    super::startup::snapshot::demote_unbuildable_agents(&tool_runtime, &mut snapshot).await?;
+                    super::startup::snapshot::demote_unbuildable_agents(system_log, &tool_runtime, &mut snapshot).await?;
                     anyhow::Ok(snapshot)
                 }
                 .await
@@ -250,7 +296,7 @@ pub(super) async fn run_control_watcher_with_timing(
                 runtime_status
                     .set_reconcile_phase(ReconcilePhase::Debouncing)
                     .await;
-                sleep.as_mut().reset(tokio::time::Instant::now() + timing.debounce);
+                sleep.as_mut().reset(after_wake(&mut pending_since, timing.debounce, timing.debounce));
             }
             batch = subscription.recv() => {
                 let Some(batch) = batch else {
@@ -258,11 +304,13 @@ pub(super) async fn run_control_watcher_with_timing(
                 };
 
                 if batch.resync_required {
-                    tracing::warn!(
-                        node_did = %node_did,
-                        updates = batch.updates,
-                        "runtime control watcher document-change capacity exceeded; scheduling full reconcile"
-                    );
+                    if gents_store::subscription_source::overflowed(&batch) {
+                        tracing::warn!(
+                            node_did = %node_did,
+                            updates = batch.updates,
+                            "runtime control watcher document-change capacity exceeded; scheduling full reconcile"
+                        );
+                    }
                     resync_required = true;
                     dirty = true;
                     phase_transition_pending = true;
@@ -271,7 +319,7 @@ pub(super) async fn run_control_watcher_with_timing(
                     runtime_status
                         .set_reconcile_phase(ReconcilePhase::Debouncing)
                         .await;
-                    sleep.as_mut().reset(tokio::time::Instant::now() + timing.debounce);
+                    sleep.as_mut().reset(after_wake(&mut pending_since, timing.debounce, timing.debounce));
                     continue;
                 }
 
@@ -390,7 +438,7 @@ pub(super) async fn run_control_watcher_with_timing(
                     } else {
                         timing.local_debounce
                     };
-                    sleep.as_mut().reset(tokio::time::Instant::now() + debounce);
+                    sleep.as_mut().reset(after_wake(&mut pending_since, debounce, timing.debounce));
                 }
             }
         }

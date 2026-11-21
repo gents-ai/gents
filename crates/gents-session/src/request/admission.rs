@@ -141,6 +141,7 @@ pub async fn verify_fresh_local_self_request(
     identity: &dyn NodeIdentity,
     request: &AgentRequest,
     target_agent_did: &str,
+    operator_tool_root: Option<&std::path::Path>,
 ) -> AdmissionResult<AgentRequest> {
     let row = load_signed_request_as(node, &request.doc_id, target_agent_did).await?;
     deny_if(
@@ -190,6 +191,7 @@ pub async fn verify_fresh_local_self_request(
         &row,
         &admission,
         (identity.did() == target_agent_did).then_some(identity),
+        operator_tool_root,
     )
     .await?;
     row_into_agent_request(row, &request.doc_id).map_err(AgentRequestAdmissionError::denied)
@@ -600,6 +602,7 @@ pub struct AgentRequestAdmissionVerifier {
     node: Arc<EmbeddedNode>,
     identity: Arc<dyn NodeIdentity>,
     enrollment: EnrollmentAuthorityHandle,
+    operator_tool_root: Option<std::path::PathBuf>,
 }
 
 impl AgentRequestAdmissionVerifier {
@@ -612,7 +615,15 @@ impl AgentRequestAdmissionVerifier {
             node,
             identity,
             enrollment,
+            operator_tool_root: None,
         }
+    }
+
+    /// The operator tool root that bounds the workspace and working directory
+    /// a request may name.
+    pub fn with_operator_tool_root(mut self, root: Option<std::path::PathBuf>) -> Self {
+        self.operator_tool_root = root;
+        self
     }
 
     pub async fn verify_fresh(
@@ -963,7 +974,14 @@ impl AgentRequestAdmissionVerifier {
             }
         }
         require_admitted_observation(observation, denied)?;
-        verify_request_input(&self.node, &row, &admission, agent_identity).await?;
+        verify_request_input(
+            &self.node,
+            &row,
+            &admission,
+            agent_identity,
+            self.operator_tool_root.as_deref(),
+        )
+        .await?;
         let client_claim = (allow_cross_actor_client_claim
             && admission.kind == AgentRequestAdmissionKind::Client)
             .then(|| ClientClaimAdmission { row: row.clone() });
@@ -992,6 +1010,7 @@ async fn verify_request_input(
     row: &AgentRequestRow,
     admission: &AgentRequestAdmissionRecord,
     agent_identity: Option<&dyn NodeIdentity>,
+    operator_tool_root: Option<&std::path::Path>,
 ) -> AdmissionResult<()> {
     use gents_protocol::request_input::QueueSource;
     let input = row.input.as_ref().unwrap_or(&DEFAULT_REQUEST_INPUT);
@@ -1024,6 +1043,7 @@ async fn verify_request_input(
             agent_identity,
             &request,
             artifact_requested,
+            operator_tool_root,
         )
         .await
         .map_err(AgentRequestAdmissionError::denied)?;
@@ -1036,8 +1056,12 @@ async fn verify_request_input(
             "workspace admission requires the selected held Agent"
         )));
     } else {
-        crate::workspace::validate_unbound_request_workspace_input(&request, artifact_requested)
-            .map_err(AgentRequestAdmissionError::denied)?;
+        crate::workspace::validate_unbound_request_workspace_input(
+            &request,
+            artifact_requested,
+            operator_tool_root,
+        )
+        .map_err(AgentRequestAdmissionError::denied)?;
     }
     let runtime_control = admission.kind == AgentRequestAdmissionKind::RuntimeInternal
         && admission.runtime_source_kind == Some(RuntimeInternalSourceKind::LocalControl);
@@ -1648,36 +1672,51 @@ mod tests {
 
     use super::AgentRequestAdmissionVerifier;
     use gents_p2p::p2p_reconcile::enrollment_authority_channel;
-    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
+    use gents_protocol::request_admission::{
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestScope,
+    };
     use gents_store::identity::{KeyIdentity, NodeIdentity};
 
     #[test]
     fn generated_client_claim_queue_candidates_match_the_model() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().request_input_cases;
-        for case in cases {
+        gents_lean_vocab::families::request_input_contracts_claim_queue_candidate::replay(|case| {
             let input: gents_protocol::request_input::RequestInput =
-                serde_json::from_value(case["input"].clone()).unwrap();
-            for (agent_message, expected) in [
-                (false, "expected_client_claim_queue_candidate"),
-                (true, "expected_agent_message_claim_queue_candidate"),
-            ] {
-                assert_eq!(
-                    super::client_claim_queue_candidate(Some(&input), agent_message),
-                    case[expected].as_bool().unwrap(),
-                    "{}: local agent message {agent_message}",
-                    case["name"]
-                );
+                gents_lean_vocab::production_request_input(&case.input);
+            gents_lean_vocab::families::request_input_contracts_claim_queue_candidate::Candidates {
+                client_claim_queue_candidate: super::client_claim_queue_candidate(
+                    Some(&input),
+                    false,
+                ),
+                agent_message_claim_queue_candidate: super::client_claim_queue_candidate(
+                    Some(&input),
+                    true,
+                ),
             }
-        }
-        for name in [
-            "client-goal-original-edge-preserved",
-            "goal-source-needs-owned-admission",
-            "client-unrelated-runtime-queue-denied",
-            "client-local-agent-message-steering-candidate",
-        ] {
-            assert!(cases.iter().any(|case| case["name"] == name), "{name}");
-        }
+        });
         assert!(super::client_claim_queue_candidate(None, false));
+    }
+
+    #[tokio::test]
+    async fn unconfigured_node_hop_cap_follows_the_lean_default() {
+        let node_db = gents_inference::test_support::test_db(
+            "unconfigured-node-hop-cap",
+            crate::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = node_db.node.clone();
+        let node_did = node_db.node_identity.did().to_string();
+        gents_documents::test_support::ensure_test_node(&node, &node_did).await;
+        for case in gents_lean_vocab::families::causal_hop_contracts_default_cap::cases() {
+            let cap = super::max_request_hop(&node, &node_did).await.unwrap();
+            assert_ne!(
+                cap,
+                gents_protocol::request_lifecycle::RequestHopCapObservation::Unavailable,
+                "{}: the runtime reads its own Node",
+                case.input.name
+            );
+            case.check(cap.bound().map(u64::from));
+        }
+        node.shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -1764,10 +1803,12 @@ mod tests {
         let mut create = AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             "receipt-child",
-            identity.did(),
-            identity.did(),
-            agent.did(),
-            "receipt-session",
+            RequestScope::new(
+                identity.did(),
+                identity.did(),
+                agent.did(),
+                "receipt-session",
+            ),
             "original continuation",
             "scheduled",
             "2020-01-01T00:00:00Z",
@@ -1985,31 +2026,30 @@ mod tests {
             );
             let runtime_did = runtime.did().to_owned();
             let agent_did = agent.did().to_owned();
-            admin
-                .transact_write("test.admission_fixture_executor", |txn| {
-                    let runtime_did = &runtime_did;
-                    let agent_did = &agent_did;
-                    Box::pin(async move {
-                        let (agent_doc, _) = gents_documents::read_desired_state_record_in_txn(
-                            txn,
-                            gents_store::collection::Collection::Agent,
-                            runtime_did,
-                            agent_did,
-                        )
-                        .await?
-                        .ok_or_else(|| anyhow::anyhow!("fixture Agent document is missing"))?;
-                        txn.add_actor_relationship(
-                            "Agent",
-                            &agent_doc,
-                            "executor",
-                            &identity::Did::new(agent_did)?,
-                        )
-                        .await?;
-                        Ok::<_, anyhow::Error>(())
-                    })
+            user.transact_write("test.admission_fixture_executor", |txn| {
+                let runtime_did = &runtime_did;
+                let agent_did = &agent_did;
+                Box::pin(async move {
+                    let (agent_doc, _) = gents_documents::read_desired_state_record_in_txn(
+                        txn,
+                        gents_store::collection::Collection::Agent,
+                        runtime_did,
+                        agent_did,
+                    )
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("fixture Agent document is missing"))?;
+                    txn.add_actor_relationship(
+                        "Agent",
+                        &agent_doc,
+                        "executor",
+                        &identity::Did::new(agent_did)?,
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(())
                 })
-                .await
-                .unwrap();
+            })
+            .await
+            .unwrap();
             Self {
                 db,
                 runtime,
@@ -2033,10 +2073,12 @@ mod tests {
             let mut create = AgentRequestCreate::base(
                 gents_protocol::request_admission::RequestPurpose::Normal,
                 request_id,
-                self.runtime.did(),
-                self.runtime.did(),
-                agent_did,
-                session_id,
+                RequestScope::new(
+                    self.runtime.did(),
+                    self.runtime.did(),
+                    agent_did,
+                    session_id,
+                ),
                 "run the disallowed skill",
                 "interactive",
                 "2026-09-01T00:00:00Z",
@@ -2076,10 +2118,7 @@ mod tests {
             let mut create = AgentRequestCreate::base(
                 gents_protocol::request_admission::RequestPurpose::Normal,
                 request_id,
-                self.runtime.did(),
-                agent_did,
-                agent_did,
-                session_id,
+                RequestScope::new(self.runtime.did(), agent_did, agent_did, session_id),
                 content,
                 "interactive",
                 "2026-09-01T00:00:00Z",
@@ -2133,13 +2172,15 @@ mod tests {
                     Box::pin(async move {
                         crate::session::ensure_session_in_txn(
                             txn,
-                            session_id,
-                            node_did,
-                            agent_did,
-                            requester_did,
-                            None,
-                            None,
-                            "2026-09-01T00:00:00Z",
+                            crate::session::NewAgentSession {
+                                session_id,
+                                node_did,
+                                agent_did,
+                                requester_did,
+                                title: None,
+                                provenance: None,
+                                created_at: "2026-09-01T00:00:00Z",
+                            },
                         )
                         .await
                     })
@@ -2319,6 +2360,7 @@ mod tests {
                 fixture.runtime.as_ref(),
                 &request,
                 &agent_did,
+                None,
             )
             .await;
             assert_eq!(admitted.is_ok(), allowed, "case {index}: {admitted:?}");
@@ -2365,6 +2407,7 @@ mod tests {
                     fixture.runtime.as_ref(),
                     &request,
                     &agent_did,
+                    None,
                 )
                 .await
                 .is_err(),

@@ -180,7 +180,7 @@ mod tests {
         let output = tool
             .call(
                 DiscoverToolsArgs { query: None },
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .expect("discover should return model-readable text");
@@ -269,7 +269,7 @@ mod tests {
         let discovery = tokio::spawn(async move {
             tool.call(
                 DiscoverToolsArgs { query: None },
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
         });
@@ -339,7 +339,7 @@ mod tests {
             let output = tool
                 .call(
                     DiscoverToolsArgs { query: None },
-                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                    &gents_loop::tool::ToolCallEnvelope::default(),
                 )
                 .await
                 .expect("discover returns model-readable text");
@@ -379,7 +379,7 @@ mod tests {
         let output = tool
             .call(
                 DiscoverToolsArgs { query: None },
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .expect("discover returns model-readable text");

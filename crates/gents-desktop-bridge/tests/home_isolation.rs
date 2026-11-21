@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
+use gents_desktop_bridge::client_runtime::ClientRuntime;
 use gents_desktop_bridge::{
     resolve_policy, AppMeta, BootstrapPolicy, BridgeConfig, HomePolicy, ManagedServerPolicy,
     NodeHomePolicy, SnapshotGrants,
 };
-use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
+use gents_store::client_journal::paths::DesktopPaths;
 use tempfile::tempdir;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -27,6 +28,7 @@ async fn fixed_root_homes_do_not_collide() {
             managed_server: ManagedServerPolicy::Disabled,
             client_host: false,
             store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+            service_executable: None,
         },
         None,
     )
@@ -44,17 +46,17 @@ async fn fixed_root_homes_do_not_collide() {
     );
 
     let bridge_core = Arc::new(
-        ClientCore::start_with_paths_and_options(
+        ClientRuntime::start_with_paths_and_options(
             DesktopPaths::from_root(&bridge_root),
-            ClientCoreOptions::local_only(),
+            gents_desktop_bridge::client_test_support::file_journal_options(),
         )
         .await
         .expect("bridge client starts under FixedRoot"),
     );
     let domain_core = Arc::new(
-        ClientCore::start_with_paths_and_options(
+        ClientRuntime::start_with_paths_and_options(
             DesktopPaths::from_root(&domain_root),
-            ClientCoreOptions::local_only(),
+            gents_desktop_bridge::client_test_support::file_journal_options(),
         )
         .await
         .expect("second store starts concurrently under domain root"),
@@ -93,6 +95,7 @@ async fn local_runtime_allowed_binds_fixed_node_home() {
             managed_server: ManagedServerPolicy::Allowed,
             client_host: false,
             store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+            service_executable: None,
         },
         None,
     )

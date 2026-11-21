@@ -49,11 +49,16 @@ async fn model_driven_held_client_eval_and_optimization_records_are_private() ->
         0,
     )
     .await?;
-    for permission in [NodePermission::DocumentRead, NodePermission::DocumentUpdate] {
+    for permission in [
+        NodePermission::CollectionGet,
+        NodePermission::DocumentRead,
+        NodePermission::DocumentUpdate,
+    ] {
         node.add_nac_actor_relationship_as(&context, permission.as_str(), outsider.did())
             .await?;
     }
     for permission in [
+        NodePermission::CollectionGet,
         NodePermission::DocumentRead,
         NodePermission::DocumentUpdate,
         NodePermission::DacRelationAdd,
@@ -63,6 +68,7 @@ async fn model_driven_held_client_eval_and_optimization_records_are_private() ->
     }
     for actor in [managed.did(), runtime.did()] {
         for permission in [
+            NodePermission::CollectionGet,
             NodePermission::DocumentRead,
             NodePermission::DocumentUpdate,
             NodePermission::DacRelationAdd,
@@ -89,7 +95,9 @@ async fn model_driven_held_client_eval_and_optimization_records_are_private() ->
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
     ConfigAccess::local_as(node.clone(), identity::Did::new(user.did())?)
-        .add_collection(&schemas.join("\n"))
+        .add_collection(
+            &gents_protocol::schemas::HomePolicyIds::shared().render(&schemas.join("\n")),
+        )
         .await?;
     let endpoint = |actor: &gents_store::identity::KeyIdentity| -> anyhow::Result<ConfigAccess> {
         Ok(ConfigAccess::Graphql(

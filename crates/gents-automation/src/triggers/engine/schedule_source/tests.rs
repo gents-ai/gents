@@ -1,5 +1,4 @@
 use super::{schedule_visibility, ScheduleSource, TriggerSource};
-use gents_lean_vocab::{lean_identity_household_cases, LeanIdentitySubject};
 use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
 use gents_store::identity::NodeIdentity;
 use serde_json::json;
@@ -7,22 +6,6 @@ use std::sync::Arc;
 
 #[tokio::test]
 async fn modeled_cached_schedule_requires_runtime_visibility() -> anyhow::Result<()> {
-    let case = lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .expect("configuration contract");
-    let modeled_runtime = case
-        .relations
-        .iter()
-        .find_map(|relation| match &relation.subject {
-            LeanIdentitySubject::Actor { actor }
-                if relation.resource == "nodes" && relation.relation == "runtime_reader" =>
-            {
-                Some(actor)
-            }
-            _ => None,
-        })
-        .expect("modeled runtime");
     let directory = tempfile::tempdir()?;
     let user = gents_store::identity::KeyIdentity::load_or_create(
         directory.path().join("user.key"),
@@ -42,9 +25,17 @@ async fn modeled_cached_schedule_requires_runtime_visibility() -> anyhow::Result
     let runtime = node.node_identity_did().unwrap().to_owned();
     let context = defra_core::RequestContext::default().with_identity(Some(user.did().to_owned()));
     let policy = node
-        .add_dac_policy_with_counter_as(&context, &case.policy_yaml, 0)
+        .add_dac_policy_with_counter_as(
+            &context,
+            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
+            0,
+        )
         .await?;
-    assert_eq!(policy, gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID);
+    assert_eq!(
+        policy,
+        gents_protocol::schemas::HomePolicyIds::shared()
+            .id(gents_protocol::schemas::BuiltInPolicy::Household)
+    );
     node.add_nac_actor_relationship_as(
         &context,
         acp::nac::NodePermission::DocumentRead.as_str(),
@@ -63,11 +54,24 @@ async fn modeled_cached_schedule_requires_runtime_visibility() -> anyhow::Result
         &agent.agent_did,
     )
     .await?;
-    node.add_collection(gents_protocol::schemas::NODE).await?;
-    node.add_collection(gents_protocol::schemas::SCHEDULE)
-        .await?;
-    node.add_collection(gents_protocol::schemas::TRIGGER)
-        .await?;
+    node.add_nac_actor_relationship_as(
+        &context,
+        acp::nac::NodePermission::CollectionGet.as_str(),
+        &agent.agent_did,
+    )
+    .await?;
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::NODE),
+    )
+    .await?;
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::SCHEDULE),
+    )
+    .await?;
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::TRIGGER),
+    )
+    .await?;
     for (name, schema) in gents_protocol::schemas::RUNTIME_COLLECTION_NAMES
         .iter()
         .zip(gents_protocol::schemas::RUNTIME_ALL)
@@ -82,7 +86,8 @@ async fn modeled_cached_schedule_requires_runtime_visibility() -> anyhow::Result
                 .iter()
                 .any(|collection| collection.graphql_type() == *name)
         {
-            node.add_collection(schema).await?;
+            node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(schema))
+                .await?;
         }
     }
     let endpoint =
@@ -262,18 +267,18 @@ async fn modeled_cached_schedule_requires_runtime_visibility() -> anyhow::Result
         agent.agent_identity.as_ref(),
     )?;
     let mut last_name = serde_json::Value::Null;
-    for observation in &case.configuration_schedule_write_cases {
-        if observation["grant"] == true && observation["revoke"] != true {
+    for observation in gents_lean_vocab::families::household_schedule_write::cases() {
+        if observation.input.grant && !observation.input.revoke {
             user_access
                 .add_actor_relationship("Schedule", &schedule_doc, "writer", &agent_did)
                 .await?;
         }
-        if observation["revoke"] == true {
+        if observation.input.revoke {
             user_access
                 .delete_actor_relationship("Schedule", &schedule_doc, "writer", &agent_did)
                 .await?;
         }
-        let name = observation["name"].as_str().unwrap();
+        let name = observation.input.name.as_str();
         let mutation = format!(
             "mutation {{ update_Schedule(docID: \"{}\", input: {{display_name: \"{}\"}}) {{_docID _version {{cid}}}} }}",
             gents_store::graphql::escape_graphql_string(&schedule_doc),
@@ -282,7 +287,6 @@ async fn modeled_cached_schedule_requires_runtime_visibility() -> anyhow::Result
         let result = agent_access
             .write("test.schedule.agent_update", &mutation)
             .await;
-        let expected = observation["expected"].as_bool().unwrap();
         let changed = match &result {
             Ok(response) => {
                 let rows = response["data"]["update_Schedule"]
@@ -293,7 +297,6 @@ async fn modeled_cached_schedule_requires_runtime_visibility() -> anyhow::Result
             }
             Err(_) => false,
         };
-        assert_eq!(changed, expected, "{name}: {result:?}");
         if changed {
             let response = result?;
             let cid = response["data"]["update_Schedule"][0]["_version"][0]["cid"]
@@ -316,6 +319,7 @@ async fn modeled_cached_schedule_requires_runtime_visibility() -> anyhow::Result
             ))
             .await?;
         assert_eq!(observed["data"]["Schedule"][0]["display_name"], last_name);
+        observation.check(changed);
     }
     let replacement = create_schedule(
         &user_access,
@@ -326,8 +330,8 @@ async fn modeled_cached_schedule_requires_runtime_visibility() -> anyhow::Result
         None,
     )
     .await?;
-    for observation in &case.configuration_schedule_cases {
-        if observation["revoke_parent"] == true {
+    for observation in gents_lean_vocab::families::household_schedule_visibility::cases() {
+        if observation.input.revoke_parent {
             user_access
                 .delete_resource_relationship(
                     "Schedule",
@@ -342,15 +346,15 @@ async fn modeled_cached_schedule_requires_runtime_visibility() -> anyhow::Result
                 .add_resource_relationship("Schedule", &schedule_doc, "parent", "nodes", &node_doc)
                 .await?;
         }
-        let doc = if observation["missing"] == true {
+        let doc = if observation.input.missing {
             &replacement
         } else {
             &schedule_doc
         };
-        let actor = if observation["actor"].as_str() == Some(modeled_runtime) {
+        let actor = if observation.input.role == "runtime" {
             &runtime
         } else {
-            observation["actor"].as_str().unwrap()
+            observation.input.actor.as_str()
         };
         let observed = schedule_visibility(&node, actor, std::slice::from_ref(doc)).await;
         let allowed = match observed {
@@ -358,12 +362,7 @@ async fn modeled_cached_schedule_requires_runtime_visibility() -> anyhow::Result
             Err(gents_store::config_client::ConfigClientError::TransactionActorMismatch) => false,
             Err(error) => return Err(error.into()),
         };
-        assert_eq!(
-            allowed,
-            observation["expected"].as_bool().unwrap(),
-            "{}",
-            observation["name"]
-        );
+        observation.check(allowed);
     }
 
     let trigger_input = json!({"node_did":runtime, "trigger_id":"trigger", "task_id":"task",
@@ -387,6 +386,7 @@ async fn modeled_cached_schedule_requires_runtime_visibility() -> anyhow::Result
         goal_token_budget: None,
         output_schema_ref: None,
         hooks: Vec::new(),
+        command: None,
     };
     let schedule = gents_documents::automation::ResolvedSchedule {
         session_id_template: None,
@@ -395,10 +395,8 @@ async fn modeled_cached_schedule_requires_runtime_visibility() -> anyhow::Result
         trigger_doc_id: trigger_doc,
         schedule_doc_id: schedule_doc.clone(),
         schedule_id: "schedule".into(),
-        task_id: "task".into(),
         task,
         cadence: gents_documents::ScheduleCadence::Interval { interval_secs: 60 },
-        enabled: true,
         concurrency: gents_documents::ConcurrencyMode::Serial,
     };
     let snapshot = crate::triggers::engine::tests::snapshot_with_agent_and_schedules(

@@ -1644,21 +1644,43 @@ async fn exec_variables_doc_id(
         .with_context(|| format!("{collection} mutation omitted document"))
 }
 
-#[allow(clippy::too_many_arguments)]
+struct TraceRequest<'a> {
+    request_doc_id: &'a str,
+    request_id: &'a str,
+    session_id: &'a str,
+    node_did: &'a str,
+}
+
+struct ToolCallSeed<'a> {
+    sequence: u32,
+    tool_call_id: &'a str,
+    tool_name: &'a str,
+    arguments: Value,
+    lifecycle_state: &'a str,
+    result: Option<&'a str>,
+    failure_class: Option<&'a str>,
+}
+
 async fn seed_canonical_trace_tool(
     node: &UserSeededHome,
-    request_doc_id: &str,
-    request_id: &str,
-    session_id: &str,
-    node_did: &str,
-    sequence: u32,
-    tool_call_id: &str,
-    tool_name: &str,
-    arguments: Value,
-    lifecycle_state: &str,
-    result: Option<&str>,
-    failure_class: Option<&str>,
+    request: &TraceRequest<'_>,
+    call: ToolCallSeed<'_>,
 ) -> Result<String> {
+    let TraceRequest {
+        request_doc_id,
+        request_id,
+        session_id,
+        node_did,
+    } = *request;
+    let ToolCallSeed {
+        sequence,
+        tool_call_id,
+        tool_name,
+        arguments,
+        lifecycle_state,
+        result,
+        failure_class,
+    } = call;
     use gents_protocol::output::rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
@@ -2031,32 +2053,40 @@ async fn seed_trace_export_rows(node: &UserSeededHome) -> Result<()> {
     );
     seed_canonical_trace_tool(
         node,
-        &root_request_doc_id,
-        "req-1",
-        "session-1",
-        "did:test:amy",
-        2,
-        "call-success",
-        "read",
-        json!({"path":"README.md"}),
-        "completed",
-        Some("README contents"),
-        None,
+        &TraceRequest {
+            request_doc_id: &root_request_doc_id,
+            request_id: "req-1",
+            session_id: "session-1",
+            node_did: "did:test:amy",
+        },
+        ToolCallSeed {
+            sequence: 2,
+            tool_call_id: "call-success",
+            tool_name: "read",
+            arguments: json!({"path":"README.md"}),
+            lifecycle_state: "completed",
+            result: Some("README contents"),
+            failure_class: None,
+        },
     )
     .await?;
     let parent_tool_call_doc_id = seed_canonical_trace_tool(
         node,
-        &root_request_doc_id,
-        "req-1",
-        "session-1",
-        "did:test:amy",
-        3,
-        "call-fail",
-        "bash",
-        json!({"command":"grep","args":["-P","amy","README.md"]}),
-        "failed",
-        Some(&failed_result),
-        Some("toolReturnedError"),
+        &TraceRequest {
+            request_doc_id: &root_request_doc_id,
+            request_id: "req-1",
+            session_id: "session-1",
+            node_did: "did:test:amy",
+        },
+        ToolCallSeed {
+            sequence: 3,
+            tool_call_id: "call-fail",
+            tool_name: "bash",
+            arguments: json!({"command":"grep","args":["-P","amy","README.md"]}),
+            lifecycle_state: "failed",
+            result: Some(&failed_result),
+            failure_class: Some("toolReturnedError"),
+        },
     )
     .await?;
 
@@ -2125,32 +2155,40 @@ async fn seed_trace_export_rows(node: &UserSeededHome) -> Result<()> {
     .to_string();
     seed_canonical_trace_tool(
         node,
-        &root_request_doc_id,
-        "req-1",
-        "session-1",
-        "did:test:amy",
-        4,
-        "call-missing-tool",
-        "describe_tool",
-        json!({"service_id":"x-data","tool_name":"search_post"}),
-        "failed",
-        Some(&missing_tool_result),
-        Some("serviceUnavailable"),
+        &TraceRequest {
+            request_doc_id: &root_request_doc_id,
+            request_id: "req-1",
+            session_id: "session-1",
+            node_did: "did:test:amy",
+        },
+        ToolCallSeed {
+            sequence: 4,
+            tool_call_id: "call-missing-tool",
+            tool_name: "describe_tool",
+            arguments: json!({"service_id":"x-data","tool_name":"search_post"}),
+            lifecycle_state: "failed",
+            result: Some(&missing_tool_result),
+            failure_class: Some("serviceUnavailable"),
+        },
     )
     .await?;
     seed_canonical_trace_tool(
         node,
-        &root_request_doc_id,
-        "req-1",
-        "session-1",
-        "did:test:amy",
-        5,
-        "call-timed-out",
-        "bash",
-        json!({"command":"sleep 120"}),
-        "timedOut",
-        Some(""),
-        None,
+        &TraceRequest {
+            request_doc_id: &root_request_doc_id,
+            request_id: "req-1",
+            session_id: "session-1",
+            node_did: "did:test:amy",
+        },
+        ToolCallSeed {
+            sequence: 5,
+            tool_call_id: "call-timed-out",
+            tool_name: "bash",
+            arguments: json!({"command":"sleep 120"}),
+            lifecycle_state: "timedOut",
+            result: Some(""),
+            failure_class: None,
+        },
     )
     .await?;
     seed_canonical_terminal_text(
@@ -2198,17 +2236,21 @@ async fn seed_trace_export_rows(node: &UserSeededHome) -> Result<()> {
     .await?;
     seed_canonical_trace_tool(
         node,
-        &deadline_request_doc_id,
-        "req-deadline",
-        "session-2",
-        "did:test:amy",
-        2,
-        "call-deadline",
-        "read",
-        json!({"path":"README.md"}),
-        "completed",
-        Some("README contents"),
-        None,
+        &TraceRequest {
+            request_doc_id: &deadline_request_doc_id,
+            request_id: "req-deadline",
+            session_id: "session-2",
+            node_did: "did:test:amy",
+        },
+        ToolCallSeed {
+            sequence: 2,
+            tool_call_id: "call-deadline",
+            tool_name: "read",
+            arguments: json!({"path":"README.md"}),
+            lifecycle_state: "completed",
+            result: Some("README contents"),
+            failure_class: None,
+        },
     )
     .await?;
     for (session, agent, request, doc, state, activity, preview) in [
@@ -2348,6 +2390,10 @@ async fn spawn_projection_graphql_acp_mock() -> Result<ProjectionGraphqlAcpMock>
     let state = ProjectionGraphqlAcpState {
         allowed: Arc::new(allowed),
     };
+    let node: Arc<dyn gents_store::identity::NodeIdentity> = Arc::new(
+        tokio::task::spawn_blocking(|| gents_store::test_support::test_identity("projection-node"))
+            .await?,
+    );
     let router = Router::new()
         .route("/api/v0/graphql", post(projection_graphql_mock))
         .route("/api/v0/tx", post(projection_txn_begin))
@@ -2356,7 +2402,8 @@ async fn spawn_projection_graphql_acp_mock() -> Result<ProjectionGraphqlAcpMock>
             post(projection_txn_finish).delete(projection_txn_finish),
         )
         .route("/api/v0/acp/document/decide", post(projection_acp_mock))
-        .with_state(state);
+        .with_state(state)
+        .merge(gents_store::test_support::local_authentication_route(node));
     tokio::spawn(async move {
         let _ = axum::serve(listener, router).await;
     });

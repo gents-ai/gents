@@ -119,14 +119,16 @@ async fn create_work(node: &Arc<EmbeddedNode>, actor: &dyn NodeIdentity) {
     ).await.unwrap();
     crate::session::import_history_observation(
         node,
-        &physical,
-        "archive-session",
-        "runtime",
-        Some("other-requester"),
-        "Original transcript",
-        "archive:original",
-        1,
-        None,
+        crate::session::HistoryObservation {
+            request_id: &physical,
+            session_id: "archive-session",
+            node_did: "runtime",
+            requester_did: Some("other-requester"),
+            text: "Original transcript",
+            message_key_suffix: "archive:original",
+            sequence: 1,
+            tool_call: None,
+        },
     )
     .await;
 }
@@ -300,15 +302,18 @@ resources:
         )
         .await
         .unwrap();
-    let schema = gents_protocol::schemas::AGENT_SESSION.replace(
-        &format!(
-            "@policy(id: \"{}\", resource: \"sessions\")",
-            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID
-        ),
-        &format!("@policy(id: \"{policy}\", resource: \"sessions\")"),
-    );
+    let schema = gents_protocol::schemas::HomePolicyIds::shared()
+        .render(gents_protocol::schemas::AGENT_SESSION)
+        .replace(
+            &format!(
+                "@policy(id: \"{}\", resource: \"sessions\")",
+                gents_protocol::schemas::HomePolicyIds::shared()
+                    .id(gents_protocol::schemas::BuiltInPolicy::Household)
+            ),
+            &format!("@policy(id: \"{policy}\", resource: \"sessions\")"),
+        );
     ConfigAccess::local(Arc::clone(&node))
-        .add_collection(&schema)
+        .add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&schema))
         .await
         .unwrap();
     let id = create_session(&node, &owner).await.unwrap();
@@ -395,9 +400,12 @@ async fn concurrent_archive_calls_commit_one_revision() {
     gents_store::test_support::acp_policies::install_identity_acp_policies(&node)
         .await
         .unwrap();
-    node.add_collection(gents_protocol::schemas::AGENT_SESSION)
-        .await
-        .unwrap();
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared()
+            .render(gents_protocol::schemas::AGENT_SESSION),
+    )
+    .await
+    .unwrap();
     create_session(&node, &actor).await.unwrap();
     let ready = tokio::sync::Barrier::new(16);
     let calls = (0..16).map(|_| async {
@@ -455,13 +463,21 @@ async fn authenticated_http_archive_uses_the_same_durable_transaction_owner() ->
             0,
         )
         .await?;
-    assert_eq!(policy, gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID);
+    assert_eq!(
+        policy,
+        gents_protocol::schemas::HomePolicyIds::shared()
+            .id(gents_protocol::schemas::BuiltInPolicy::Household)
+    );
     for schema in [
         gents_protocol::schemas::NODE,
         gents_protocol::schemas::AGENT,
         gents_protocol::schemas::AGENT_SESSION,
     ] {
-        node.add_collection_as(&context, schema).await?;
+        node.add_collection_as(
+            &context,
+            &gents_protocol::schemas::HomePolicyIds::shared().render(schema),
+        )
+        .await?;
     }
     for actor in [agent.did(), worker.did(), reader.did()] {
         for permission in [

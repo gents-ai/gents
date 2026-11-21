@@ -2,7 +2,7 @@ use anyhow::Result;
 use gents_protocol::client_protocol::RequestLifecycleState;
 use gents_protocol::operations::request::{RequestInterruptInput, RequestWaitInput};
 use gents_protocol::row::AgentRequestRow;
-use gents_session::session::tool_call_state::CancelCause;
+use gents_protocol::tool_call::CancelCause;
 use gents_store::config_client::ConfigAccess;
 use serde_json::{json, Value};
 

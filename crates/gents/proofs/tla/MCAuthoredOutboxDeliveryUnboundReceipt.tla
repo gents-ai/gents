@@ -1,0 +1,3 @@
+---- MODULE MCAuthoredOutboxDeliveryUnboundReceipt ----
+EXTENDS AuthoredOutboxDelivery
+====

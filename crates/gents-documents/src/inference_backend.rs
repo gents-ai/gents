@@ -2,7 +2,8 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
 use crate::inference_defaults::{
-    ReasoningEffort, ANTHROPIC_API_ENDPOINT, DEFAULT_MAX_CONCURRENT, DEFAULT_MAX_QUEUE_DEPTH,
+    ReasoningEffort, ANTHROPIC_API_ENDPOINT, DEFAULT_CONNECT_TIMEOUT_SECS,
+    DEFAULT_DISCOVERY_TIMEOUT_SECS, DEFAULT_MAX_CONCURRENT, DEFAULT_MAX_QUEUE_DEPTH,
 };
 use gents_loop::backend_provider::BackendProviderKind;
 pub use gents_loop::claude_platform::ClaudePlatform;
@@ -156,8 +157,10 @@ pub struct InferenceBackendMetadata {
     pub oauth_account_ref: Option<String>,
     pub oauth_allow_overage: Option<bool>,
     pub claude_platform: Option<ClaudePlatform>,
+    pub client_version: Option<String>,
     pub connect_timeout_secs: Option<i64>,
     pub discovery_timeout_secs: Option<i64>,
+    pub request_timeout_secs: Option<i64>,
     pub max_concurrent: Option<i64>,
     pub max_queue_depth: Option<i64>,
     #[serde(
@@ -225,8 +228,10 @@ impl InferenceBackendMetadata {
             oauth_account_ref: fields.oauth_account_ref,
             oauth_allow_overage: fields.oauth_allow_overage,
             claude_platform: backend.claude_platform,
+            client_version: backend.client_version,
             connect_timeout_secs: backend.connect_timeout_secs,
             discovery_timeout_secs: backend.discovery_timeout_secs,
+            request_timeout_secs: backend.request_timeout_secs,
             max_concurrent: backend.max_concurrent,
             max_queue_depth: backend.max_queue_depth,
             enabled: backend.enabled,
@@ -270,8 +275,10 @@ impl InferenceBackendMetadata {
             endpoint: self.endpoint,
             auth,
             claude_platform: self.claude_platform,
+            client_version: self.client_version,
             connect_timeout_secs: self.connect_timeout_secs,
             discovery_timeout_secs: self.discovery_timeout_secs,
+            request_timeout_secs: self.request_timeout_secs,
             max_concurrent: self.max_concurrent,
             max_queue_depth: self.max_queue_depth,
             enabled: self.enabled,
@@ -354,27 +361,22 @@ mod selection_tests {
             "auth":{"kind":"credential", "id":"id", "version":"approved"}
         }))
         .unwrap();
-        let cases = gents_lean_vocab::lean_identity_household_cases();
-        let modeled = cases
-            .iter()
-            .find(|case| case.name == "configuration-explicit-grants")
-            .unwrap()
-            ._backend_credential_cases
-            .iter()
-            .find(|case| case["name"] == "rotated-credential")
-            .unwrap()["may_use"]
-            .as_bool()
-            .unwrap();
-        assert_eq!(
-            InferenceBackendMetadata::from_backend(
-                backend,
-                BackendAuthSelection::Credential {
-                    id: "id".into(),
-                    version: "other".into()
-                },
-            )
-            .is_ok(),
-            modeled
+        gents_lean_vocab::families::household_backend_credential_reference_version::replay(
+            |case| {
+                let version = if case.credential_version_matches {
+                    "approved"
+                } else {
+                    "other"
+                };
+                InferenceBackendMetadata::from_backend(
+                    backend.clone(),
+                    BackendAuthSelection::Credential {
+                        id: "id".into(),
+                        version: version.into(),
+                    },
+                )
+                .is_ok()
+            },
         );
     }
 }
@@ -403,6 +405,11 @@ pub struct InferenceBackend {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub claude_platform: Option<ClaudePlatform>,
+    /// Wire client version sent to providers that require one (ChatGPT Codex,
+    /// Grok OAuth); absent uses the built-in version of that client.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub client_version: Option<String>,
     /// Connection establishment only; default 10s, bounded by the operation deadline.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
@@ -411,6 +418,10 @@ pub struct InferenceBackend {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub discovery_timeout_secs: Option<i64>,
+    /// Total plugin model-call timeout through this backend; default 120s.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub request_timeout_secs: Option<i64>,
     /// Shared backend capacity across profiles; absent resolves to 1.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
@@ -490,6 +501,16 @@ impl InferenceBackend {
         self.max_queue_depth.unwrap_or(DEFAULT_MAX_QUEUE_DEPTH)
     }
 
+    pub fn effective_connect_timeout_secs(&self) -> i64 {
+        self.connect_timeout_secs
+            .unwrap_or(DEFAULT_CONNECT_TIMEOUT_SECS)
+    }
+
+    pub fn effective_discovery_timeout_secs(&self) -> i64 {
+        self.discovery_timeout_secs
+            .unwrap_or(DEFAULT_DISCOVERY_TIMEOUT_SECS)
+    }
+
     pub fn validation_violations(&self) -> Vec<String> {
         let mut violations = Vec::new();
         for (name, value) in [
@@ -510,6 +531,7 @@ impl InferenceBackend {
         for (name, value) in [
             ("connect_timeout_secs", self.connect_timeout_secs),
             ("discovery_timeout_secs", self.discovery_timeout_secs),
+            ("request_timeout_secs", self.request_timeout_secs),
         ] {
             if value.is_some_and(|value| value <= 0) {
                 violations.push(format!("{name} must be positive"));
@@ -536,6 +558,11 @@ impl InferenceBackend {
             ClaudePlatform::validate(self.provider_kind, self.claude_platform.as_ref())
         {
             violations.push(error.to_string());
+        }
+        if self.client_version.as_deref().is_some_and(|version| {
+            version.is_empty() || !version.bytes().all(|byte| byte.is_ascii_graphic())
+        }) {
+            violations.push("client_version must be a non-empty version without whitespace".into());
         }
         if self.provider_kind.is_claude_platform()
             && !(self.endpoint.starts_with("https://") || self.endpoint.starts_with("http://"))

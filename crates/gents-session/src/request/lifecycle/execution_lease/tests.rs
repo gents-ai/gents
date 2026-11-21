@@ -19,9 +19,12 @@ async fn claimed_owner_with_short_lease(
         &agent.agent_did,
         identity.clone(),
         "hello",
-        60,
-        ExecutionOrigin::Interactive,
-        "lease-test",
+        crate::request::lifecycle::ExecutionBinding {
+            deadline_duration_secs: 60,
+            execution_origin: ExecutionOrigin::Interactive,
+            backend_id: "lease-test".into(),
+            operator_tool_root: None,
+        },
         TriggerLineage::default(),
         Some(gents_store::identity::resolve_agent_identity(identity.as_ref(), agent).unwrap()),
     )
@@ -1367,10 +1370,14 @@ async fn generated_recovery_invalidates_real_admitted_renewal_transaction() {
             &row,
             generation,
             expiry,
-            fresh.clone(),
-            epoch + chrono::Duration::seconds(now as i64),
-            Some(crate::request::lifecycle::RecoverySelectionChoice::NoMessage),
-            Some(RequestLifecycleState::Failed),
+            crate::request::lifecycle::RecoveryFacts {
+                fresh_generation: fresh.clone(),
+                observed_now: epoch + chrono::Duration::seconds(now as i64),
+                selection_choice: Some(
+                    crate::request::lifecycle::RecoverySelectionChoice::NoMessage,
+                ),
+                expected_outcome: Some(RequestLifecycleState::Failed),
+            },
         )
         .await
         .unwrap();
@@ -1474,10 +1481,12 @@ async fn natural_finish_retries_changed_pending_snapshot_and_selects_exact_saved
     let mut pending = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         "late-input",
-        identity.did(),
-        &agent.agent_did,
-        &agent.agent_did,
-        &lifecycle.request.session_id,
+        gents_protocol::request_admission::RequestScope::new(
+            identity.did(),
+            &agent.agent_did,
+            &agent.agent_did,
+            &lifecycle.request.session_id,
+        ),
         "late input",
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -1612,8 +1621,8 @@ async fn backend_park_releases_local_lease_only_after_durable_transition() {
 }
 
 #[tokio::test]
-async fn backend_wait_is_invisible_to_the_node_identity() {
-    let (node, _db, identity, _agent, access, mut lifecycle) = parked_fixture().await;
+async fn backend_wait_is_invisible_to_an_unrelated_reader() {
+    let (node, _db, _identity, _agent, access, mut lifecycle) = parked_fixture().await;
     let doc_id = lifecycle.request().doc_id.clone();
     assert!(lifecycle.park_for_backend().await.unwrap());
     let query = format!(
@@ -1628,11 +1637,11 @@ async fn backend_wait_is_invisible_to_the_node_identity() {
             .len(),
         1
     );
-    let as_node =
-        gents_store::config_client::ConfigAccess::local_as(node, identity.did().parse().unwrap())
-            .execute(&query)
-            .await
-            .unwrap();
+    let as_node = gents_store::test_support::unrelated_document_reader(&node)
+        .await
+        .execute(&query)
+        .await
+        .unwrap();
     assert!(as_node["data"]["AgentRequestBackendWait"]
         .as_array()
         .is_none_or(Vec::is_empty));

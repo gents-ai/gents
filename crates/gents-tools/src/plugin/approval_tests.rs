@@ -107,7 +107,7 @@ async fn an_allow_reaches_the_waiting_call_and_clears_the_question() {
     let waiting = {
         let home = home.path().to_owned();
         let request = request.clone();
-        tokio::spawn(async move { ask(&home, &request, Duration::from_secs(10)).await })
+        tokio::spawn(async move { ask(None, &home, &request, Duration::from_secs(10)).await })
     };
     while pending(home.path()).unwrap().is_empty() {
         tokio::time::sleep(Duration::from_millis(5)).await;
@@ -134,7 +134,7 @@ async fn a_deny_reaches_the_waiting_call() {
     let waiting = {
         let home = home.path().to_owned();
         let request = request.clone();
-        tokio::spawn(async move { ask(&home, &request, Duration::from_secs(10)).await })
+        tokio::spawn(async move { ask(None, &home, &request, Duration::from_secs(10)).await })
     };
     while pending(home.path()).unwrap().is_empty() {
         tokio::time::sleep(Duration::from_millis(5)).await;
@@ -151,7 +151,7 @@ async fn a_deny_reaches_the_waiting_call() {
 async fn an_unanswered_question_times_out_and_is_removed() {
     let home = tempfile::tempdir().unwrap();
     let request = request(home.path());
-    let error = ask(home.path(), &request, Duration::from_millis(60))
+    let error = ask(None, home.path(), &request, Duration::from_millis(60))
         .await
         .unwrap_err();
     assert!(format!("{error:#}").contains("did not answer"));
@@ -245,7 +245,7 @@ async fn a_cancelled_waiter_cannot_leave_a_grantable_question() {
     let waiting = {
         let home = home.path().to_owned();
         let request = request.clone();
-        tokio::spawn(async move { ask(&home, &request, WAIT).await })
+        tokio::spawn(async move { ask(None, &home, &request, WAIT).await })
     };
     tokio::time::timeout(Duration::from_secs(2), async {
         while pending(home.path()).unwrap().is_empty() {
@@ -301,7 +301,7 @@ async fn a_call_with_nobody_listening_fails_at_once_naming_the_command() {
     let home = tempfile::tempdir().unwrap();
     let request = request(home.path());
     let started = std::time::Instant::now();
-    let error = ask(home.path(), &request, Duration::from_secs(60))
+    let error = ask(None, home.path(), &request, Duration::from_secs(60))
         .await
         .unwrap_err();
     let message = format!("{error:#}");

@@ -1,7 +1,10 @@
 use super::*;
+use crate::call::lifecycle::completion_delivery::{owes_completion_delivery, CompletionDelivery};
 use gents_protocol::background_completion::{
     background_completion_notification_message_key, BACKGROUND_COMPLETION_WAKE_PROMPT,
 };
+use gents_protocol::tool_call::ToolCallState;
+use gents_session::request::lifecycle::queue::BackgroundCompletionNotification;
 use gents_tools::rendering::tool_completion_presentation;
 
 pub(super) struct SideEffects {
@@ -9,53 +12,39 @@ pub(super) struct SideEffects {
     pub(super) created_wake: bool,
 }
 
-#[allow(clippy::too_many_arguments)]
+/// A background tool call's completion as its parent request is told: the
+/// parent session and request, the tool call row and name, its status,
+/// result and reason, and how the notice wakes the parent.
+pub struct BackgroundToolCompletion<'a> {
+    pub parent_session_id: &'a str,
+    pub parent_request_id: &'a str,
+    pub tool_call_doc_id: &'a str,
+    pub tool_name: &'a str,
+    pub status: &'a str,
+    pub result: &'a str,
+    pub reason: Option<&'a str>,
+    pub wake: gents_protocol::request_lifecycle::RequestHopCause,
+}
+
 pub async fn append_background_tool_completion(
     node: &std::sync::Arc<EmbeddedNode>,
     access: &gents_store::config_client::ConfigAccess,
-    parent_session_id: &str,
-    parent_request_id: &str,
-    tool_call_doc_id: &str,
-    tool_name: &str,
-    status: &str,
-    result: &str,
-    reason: Option<&str>,
-    wake: gents_protocol::request_lifecycle::RequestHopCause,
+    completion: &BackgroundToolCompletion<'_>,
 ) -> Result<()> {
+    let parent_request_id = completion.parent_request_id;
     let parent_request =
         gents_session::request::binding::load_agent_request_with_access(access, parent_request_id)
             .await?
             .ok_or_else(|| anyhow!("parent AgentRequest {parent_request_id} not found"))?;
 
-    append_with_parent(
-        node,
-        access,
-        &parent_request,
-        parent_session_id,
-        parent_request_id,
-        tool_call_doc_id,
-        tool_name,
-        status,
-        result,
-        reason,
-        wake,
-    )
-    .await
+    append_with_parent(node, access, &parent_request, completion).await
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn append_background_tool_completion_for_parent(
     node: &std::sync::Arc<EmbeddedNode>,
     access: &gents_store::config_client::ConfigAccess,
     parent_request_doc_id: &str,
-    parent_session_id: &str,
-    parent_request_id: &str,
-    tool_call_doc_id: &str,
-    tool_name: &str,
-    status: &str,
-    result: &str,
-    reason: Option<&str>,
-    wake: gents_protocol::request_lifecycle::RequestHopCause,
+    completion: &BackgroundToolCompletion<'_>,
 ) -> Result<()> {
     let parent_request = gents_session::request::binding::load_agent_request_by_doc_id_with_access(
         access,
@@ -63,10 +52,16 @@ pub(crate) async fn append_background_tool_completion_for_parent(
     )
     .await?
     .ok_or_else(|| anyhow!("parent AgentRequest {parent_request_doc_id} not found"))?;
-    append_with_parent(
-        node,
-        access,
-        &parent_request,
+    append_with_parent(node, access, &parent_request, completion).await
+}
+
+async fn append_with_parent(
+    node: &std::sync::Arc<EmbeddedNode>,
+    access: &gents_store::config_client::ConfigAccess,
+    parent_request: &gents_protocol::row::AgentRequest,
+    completion: &BackgroundToolCompletion<'_>,
+) -> Result<()> {
+    let BackgroundToolCompletion {
         parent_session_id,
         parent_request_id,
         tool_call_doc_id,
@@ -75,24 +70,7 @@ pub(crate) async fn append_background_tool_completion_for_parent(
         result,
         reason,
         wake,
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn append_with_parent(
-    node: &std::sync::Arc<EmbeddedNode>,
-    access: &gents_store::config_client::ConfigAccess,
-    parent_request: &gents_protocol::row::AgentRequest,
-    parent_session_id: &str,
-    parent_request_id: &str,
-    tool_call_doc_id: &str,
-    tool_name: &str,
-    status: &str,
-    result: &str,
-    reason: Option<&str>,
-    wake: gents_protocol::request_lifecycle::RequestHopCause,
-) -> Result<()> {
+    } = *completion;
     anyhow::ensure!(
         parent_request.request_id == parent_request_id,
         "background completion parent request mismatch"
@@ -250,22 +228,26 @@ async fn ensure_notification_delivery(
             access,
             node,
             parent,
-            delivery.content,
-            delivery.message_key,
-            BACKGROUND_COMPLETION_WAKE_PROMPT,
-            RequestQueue {
-                delivery: Default::default(),
-                position: None,
-                source: QueueSource::BackgroundCompletion,
-                policy: QueuePolicy::Coalesce,
-                key: Some(format!("background_completion:{}", parent.session_id)),
-                queued_after_request_id: Some(parent.request_id.clone()),
-                interrupted_request_id: None,
-                background_completion_wake_version: None,
+            BackgroundCompletionNotification {
+                content: delivery.content,
+                message_key: delivery.message_key,
+                wake_content: BACKGROUND_COMPLETION_WAKE_PROMPT,
+                queue: RequestQueue {
+                    delivery: Default::default(),
+                    position: None,
+                    source: QueueSource::BackgroundCompletion,
+                    policy: QueuePolicy::Coalesce,
+                    key: Some(QueueSource::BackgroundCompletion.queue_key(&parent.session_id)),
+                    queued_after_request_id: Some(parent.request_id.clone()),
+                    interrupted_request_id: None,
+                    background_completion_wake_version: None,
+                },
+                existing_notification_doc_id: existing
+                    .as_ref()
+                    .map(|receipt| receipt.doc_id.as_str()),
+                wake,
             },
-            existing.as_ref().map(|receipt| receipt.doc_id.as_str()),
             &delivery.native,
-            wake,
         )
         .await?;
     Ok(SideEffects {
@@ -330,18 +312,18 @@ async fn mark_background_tool_completion_side_effects_done(
         .get("status")
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
-    if status == "completed" {
+    if matches!(
+        CompletionDelivery::parse(status),
+        Some(CompletionDelivery::Delivered)
+    ) {
         return Ok(());
     }
     let lifecycle_state = row
         .get("lifecycle_state")
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
-    if !(status == "completionPending" || status.starts_with("completionPending:"))
-        || !matches!(
-            lifecycle_state,
-            "completed" | "failed" | "timedOut" | "cancelled"
-        )
+    if !ToolCallState::from_persisted(lifecycle_state)
+        .is_some_and(|state| owes_completion_delivery(state, Some(status)))
     {
         anyhow::bail!(
             "background completion tool row {tool_call_doc_id} is not awaiting terminal side effects"
@@ -349,6 +331,7 @@ async fn mark_background_tool_completion_side_effects_done(
     }
     let escaped_doc_id = escape_graphql_string(doc_id);
     let escaped_status = escape_graphql_string(status);
+    let delivered = CompletionDelivery::Delivered.render();
     let datetime_fields = agent_tool_call_datetime_update_fragment(access, doc_id, &[]).await?;
     let mutation = format!(
         r#"mutation {{
@@ -357,7 +340,7 @@ async fn mark_background_tool_completion_side_effects_done(
                     _docID: {{ _eq: "{escaped_doc_id}" }},
                     status: {{ _eq: "{escaped_status}" }}
                 }},
-                input: {{ status: "completed"{datetime_fields} }}
+                input: {{ status: "{delivered}"{datetime_fields} }}
             ) {{ _docID }}
         }}"#
     );

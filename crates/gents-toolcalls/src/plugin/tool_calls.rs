@@ -162,18 +162,16 @@ impl Session {
         }
         let arguments = Value::Object(arguments).to_string();
         settle(
-            gents_loop::tool_effects::scope(
-                None,
-                self.dispatcher.call(&self.parent, next, name, &arguments),
-            )
-            .await,
+            self.dispatcher
+                .call(&self.parent, next, name, &arguments)
+                .await,
         )
     }
 
     /// The `tool_calls` service of the plugin call `parent`, if it is granted
     /// and the call may compose.
     pub fn for_call(granted: bool, parent: &gents_loop::tool::ToolCallEnvelope) -> Option<Self> {
-        let dispatcher = gents_loop::tool_effects::current();
+        let dispatcher = parent.effects();
         if !available(granted, dispatcher.is_some()) {
             return None;
         }
@@ -253,10 +251,6 @@ mod tests {
             Result<gents_loop::tool_call_lifecycle::ToolOutcome, ToolEffectError>,
         > {
             Box::pin(async move {
-                assert!(
-                    gents_loop::tool_effects::current().is_none(),
-                    "child inherited delegation"
-                );
                 let input: Value = serde_json::from_str(arguments).unwrap();
                 self.0
                     .lock()
@@ -325,21 +319,19 @@ mod tests {
         }
 
         let forms = Arc::new(Forms::default());
-        gents_loop::tool_effects::scope(Some(forms.clone()), async {
-            let mut session =
-                Session::for_call(true, &gents_loop::tool::ToolCallEnvelope::ambient()).unwrap();
-            for (name, arguments) in [
-                ("files", json!({"path": "a"})),
-                ("files", json!({"path": "a", "raw_json": false})),
-                ("named", json!({})),
-                ("plain", json!({})),
-                ("absent", json!({})),
-            ] {
-                let arguments = arguments.as_object().unwrap().clone();
-                session.call(name, arguments).await.unwrap();
-            }
-        })
-        .await;
+        let parent = gents_loop::tool::ToolCallEnvelope::default()
+            .with_effects(Some(forms.clone() as Arc<dyn ToolEffectDispatcher>));
+        let mut session = Session::for_call(true, &parent).unwrap();
+        for (name, arguments) in [
+            ("files", json!({"path": "a"})),
+            ("files", json!({"path": "a", "raw_json": false})),
+            ("named", json!({})),
+            ("plain", json!({})),
+            ("absent", json!({})),
+        ] {
+            let arguments = arguments.as_object().unwrap().clone();
+            session.call(name, arguments).await.unwrap();
+        }
         assert_eq!(
             *forms.0.lock().unwrap(),
             [
@@ -355,22 +347,46 @@ mod tests {
     #[tokio::test]
     async fn rounds_chain_a_query_result_into_a_chart_without_model_calls() {
         let tools = Arc::new(Tools::default());
-        gents_loop::tool_effects::scope(Some(tools.clone()), async {
-            let session = Session::for_call(true, &gents_loop::tool::ToolCallEnvelope::ambient()).unwrap();
+        let parent = gents_loop::tool::ToolCallEnvelope::default()
+            .with_effects(Some(tools.clone() as Arc<dyn ToolEffectDispatcher>));
+        {
+            let session = Session::for_call(true, &parent).unwrap();
             let round: rounds::Round = Arc::new(|input, _| {
                 let output = match input.get("state").and_then(Value::as_str) {
-                    None => json!({"tool_calls":{"requests":[{"id":"table","tool_name":"query","arguments":{"sql":"SELECT day, sales FROM sales"}}],"state":"chart"}}),
-                    Some("chart") => json!({"tool_calls":{"requests":[{"id":"image","tool_name":"charts","arguments":{"data":input["tool_results"]["table"]["result"]}}],"state":"done"}}),
+                    None => {
+                        json!({"tool_calls":{"requests":[{"id":"table","tool_name":"query","arguments":{"sql":"SELECT day, sales FROM sales"}}],"state":"chart"}})
+                    }
+                    Some("chart") => {
+                        json!({"tool_calls":{"requests":[{"id":"image","tool_name":"charts","arguments":{"data":input["tool_results"]["table"]["result"]}}],"state":"done"}})
+                    }
                     Some("done") => input["tool_results"]["image"]["result"].clone(),
                     _ => unreachable!(),
                 };
-                Ok(PluginOutcome { verdict: PluginVerdict::Success, output, diagnostics: String::new(), fuel_used: 1, wall_ms: 0 })
+                Ok(PluginOutcome {
+                    verdict: PluginVerdict::Success,
+                    output,
+                    diagnostics: String::new(),
+                    fuel_used: 1,
+                    wall_ms: 0,
+                })
             });
-            let result = rounds::drive(rounds::HostCalls { model: None, http: None, tools: Some(session), data: None, jobs: None },
-                json!({"state":"forged", "tool_results":{"table":{"result":"forged"}}}), PluginBudget::default(), round).await.unwrap();
+            let result = rounds::drive(
+                rounds::HostCalls {
+                    model: None,
+                    http: None,
+                    tools: Some(session),
+                    data: None,
+                    jobs: None,
+                },
+                json!({"state":"forged", "tool_results":{"table":{"result":"forged"}}}),
+                PluginBudget::default(),
+                round,
+            )
+            .await
+            .unwrap();
             assert_eq!(result.output, json!({"alt":"Sales by day","rendered":true}));
             assert_eq!(result.fuel_used, 3);
-        }).await;
+        }
         let calls = tools.0.lock().unwrap();
         assert_eq!(
             calls
@@ -404,17 +420,14 @@ mod tests {
             let plugin =
                 crate::plugin::tool::PluginTool::resolve(executor.clone(), &selected, None)
                     .unwrap();
-            let output = gents_loop::tool_effects::scope(
-                Some(tools.clone()),
-                plugin.call("{}".into(), &gents_loop::tool::ToolCallEnvelope::ambient()),
-            )
-            .await
-            .unwrap();
+            let parent = gents_loop::tool::ToolCallEnvelope::default()
+                .with_effects(Some(tools.clone() as Arc<dyn ToolEffectDispatcher>));
+            let output = plugin.call("{}".into(), &parent).await.unwrap();
             let output: Value = serde_json::from_str(&output).unwrap();
             assert_eq!(output.get("tool_results").is_some(), granted);
         }
         assert_eq!(tools.0.lock().unwrap().len(), 1);
-        assert!(Session::for_call(true, &gents_loop::tool::ToolCallEnvelope::ambient()).is_none());
+        assert!(Session::for_call(true, &gents_loop::tool::ToolCallEnvelope::default()).is_none());
     }
 
     #[tokio::test]
@@ -442,14 +455,8 @@ mod tests {
                 crate::plugin::tool::PluginTool::resolve(executor.clone(), &selected, None)
                     .unwrap();
             let dispatcher = live.then(|| tools.clone() as Arc<dyn ToolEffectDispatcher>);
-            let call = gents_loop::tool_effects::scope(
-                dispatcher,
-                plugin.call_with_receipt(
-                    input.to_string(),
-                    &gents_loop::tool::ToolCallEnvelope::ambient(),
-                ),
-            )
-            .await;
+            let parent = gents_loop::tool::ToolCallEnvelope::default().with_effects(dispatcher);
+            let call = plugin.call_with_receipt(input.to_string(), &parent).await;
             let observed: Value = serde_json::from_str(&call.result.unwrap()).unwrap();
             let expected = if granted && live {
                 json!({"value": 1, "tool_calls": true})
@@ -465,16 +472,9 @@ mod tests {
                 format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))
             );
         }
-        let call = gents_loop::tool_effects::scope(
-            Some(tools.clone()),
-            executor.call(
-                &record,
-                input,
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
-            ),
-        )
-        .await
-        .unwrap();
+        let parent = gents_loop::tool::ToolCallEnvelope::default()
+            .with_effects(Some(tools.clone() as Arc<dyn ToolEffectDispatcher>));
+        let call = executor.call(&record, input, &parent).await.unwrap();
         assert!(!call.receipt.authority.unwrap().host_tools);
         assert!(tools.0.lock().unwrap().is_empty());
     }
@@ -513,21 +513,39 @@ mod tests {
                 })
             }
         }
-        gents_loop::tool_effects::scope(Some(Arc::new(Fatal)), async {
-            let session = Session::for_call(true, &gents_loop::tool::ToolCallEnvelope::ambient()).unwrap();
+        let parent = gents_loop::tool::ToolCallEnvelope::default()
+            .with_effects(Some(Arc::new(Fatal) as Arc<dyn ToolEffectDispatcher>));
+        {
+            let session = Session::for_call(true, &parent).unwrap();
             let polls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
             let observed = polls.clone();
             let round: rounds::Round = Arc::new(move |_, _| {
                 observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                Ok(PluginOutcome { verdict: PluginVerdict::Success,
+                Ok(PluginOutcome {
+                    verdict: PluginVerdict::Success,
                     output: json!({"tool_calls":{"requests":[{"id":"x","tool_name":"query","arguments":{}}]}}),
-                    diagnostics: String::new(), fuel_used: 1, wall_ms: 0 })
+                    diagnostics: String::new(),
+                    fuel_used: 1,
+                    wall_ms: 0,
+                })
             });
-            let result = rounds::drive(rounds::HostCalls { model: None, http: None, tools: Some(session), data: None, jobs: None },
-                json!({}), PluginBudget::default(), round).await.unwrap();
+            let result = rounds::drive(
+                rounds::HostCalls {
+                    model: None,
+                    http: None,
+                    tools: Some(session),
+                    data: None,
+                    jobs: None,
+                },
+                json!({}),
+                PluginBudget::default(),
+                round,
+            )
+            .await
+            .unwrap();
             assert_ne!(result.verdict, PluginVerdict::Success);
             assert_eq!(polls.load(std::sync::atomic::Ordering::SeqCst), 1);
-        }).await;
+        }
     }
 
     #[test]
@@ -561,20 +579,13 @@ mod tests {
                 "absent" => None,
                 dispatcher => panic!("unknown dispatcher scope {dispatcher}"),
             };
-            let child = case.input.dispatcher == "child";
-            let availability = gents_loop::tool_effects::scope(live, async {
-                if child {
-                    gents_loop::tool_effects::scope(None, async {
-                        Session::for_call(granted, &gents_loop::tool::ToolCallEnvelope::ambient())
-                            .is_some()
-                    })
-                    .await
-                } else {
-                    Session::for_call(granted, &gents_loop::tool::ToolCallEnvelope::ambient())
-                        .is_some()
-                }
-            })
-            .await;
+            let parent = gents_loop::tool::ToolCallEnvelope::default().with_effects(live);
+            let call = if case.input.dispatcher == "child" {
+                parent.with_effects(None)
+            } else {
+                parent
+            };
+            let availability = Session::for_call(granted, &call).is_some();
             case.check(
                 gents_lean_vocab::families::plugin_resources_availabilities::AvailabilityOutput {
                     availability,
@@ -680,9 +691,13 @@ mod tests {
             }
         }
         let clock = RoundClock::new();
-        gents_loop::tool_effects::scope(Some(Arc::new(Slow(clock.clone()))), async {
-            let session =
-                Session::for_call(true, &gents_loop::tool::ToolCallEnvelope::ambient()).unwrap();
+        let parent =
+            gents_loop::tool::ToolCallEnvelope::default()
+                .with_effects(Some(
+                    Arc::new(Slow(clock.clone())) as Arc<dyn ToolEffectDispatcher>
+                ));
+        {
+            let session = Session::for_call(true, &parent).unwrap();
             let guest_clock = clock.clone();
             let round: rounds::Round = Arc::new(move |input, _| {
                 guest_clock.advance(10);
@@ -726,8 +741,7 @@ mod tests {
                 result.diagnostics
             );
             assert_eq!(result.output, json!([{"result":"slow"},{"result":"slow"}]));
-        })
-        .await;
+        }
     }
 
     #[tokio::test]
@@ -773,6 +787,7 @@ mod tests {
                     );
                     clock.advance(400);
                     let allowed = gents_tools::plugin::approval::ask(
+                        None,
                         &home,
                         &request,
                         gents_tools::plugin::approval::WAIT,
@@ -795,16 +810,13 @@ mod tests {
         .await
         .unwrap();
         let clock = RoundClock::new();
-        gents_loop::tool_effects::scope(
-            Some(Arc::new(Asking(
-                home.path().to_owned(),
-                target,
-                clock.clone(),
-            ))),
-            async {
-                let session =
-                    Session::for_call(true, &gents_loop::tool::ToolCallEnvelope::ambient())
-                        .unwrap();
+        let parent = gents_loop::tool::ToolCallEnvelope::default().with_effects(Some(Arc::new(
+            Asking(home.path().to_owned(), target, clock.clone()),
+        )
+            as Arc<dyn ToolEffectDispatcher>));
+        {
+            {
+                let session = Session::for_call(true, &parent).unwrap();
                 let guest_clock = clock.clone();
                 let round: rounds::Round = Arc::new(move |input, _| {
                     guest_clock.advance(10);
@@ -847,9 +859,8 @@ mod tests {
                     result.diagnostics
                 );
                 assert_eq!(result.output, json!({"result":"allowed"}));
-            },
-        )
-        .await;
+            }
+        }
         let prompt = operator.await.unwrap();
         assert!(prompt.contains("team/plugin"), "{prompt}");
         assert!(

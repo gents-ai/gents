@@ -1,23 +1,11 @@
-pub use gents_desktop_core::inference::{AgentView, InferenceBackendView, NodeView};
+pub use gents_observe::client_inference::{AgentView, InferenceBackendView, NodeView};
 
 use serde::Serialize;
 use ts_rs::TS;
 
-use gents_desktop_core::client::PeerMutationResult;
 use gents_protocol::row::MailboxItemRow;
 
 use super::bootstrap::DesktopBootstrapSummary;
-
-#[derive(Debug, Clone, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct P2PHealthView {
-    pub status: String,
-    pub connected_peer_count: usize,
-    pub consecutive_failures: u32,
-    pub last_error: Option<String>,
-    pub last_ok_at: Option<String>,
-    pub last_failure_at: Option<String>,
-}
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "camelCase")]
@@ -25,10 +13,8 @@ pub struct SyncHealthView {
     pub state: String,
     pub cause: Option<String>,
     pub next_action: Option<String>,
-    pub last_error: Option<String>,
     pub runtime_count: usize,
     pub connected_runtime_count: usize,
-    pub activation_error_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -378,13 +364,12 @@ pub struct ChatRefusalView {
     pub detail: String,
 }
 
-impl From<gents_desktop_core::client::ChatRouteCause> for ChatRefusalView {
-    fn from(cause: gents_desktop_core::client::ChatRouteCause) -> Self {
-        let action = cause.next_action();
+impl From<gents_protocol::runtime_connection::ConnectionRefusalCause> for ChatRefusalView {
+    fn from(cause: gents_protocol::runtime_connection::ConnectionRefusalCause) -> Self {
         Self {
-            cause: cause.token().to_owned(),
-            next_action: action.token().to_owned(),
-            detail: action.description().to_owned(),
+            cause: cause.as_str().to_owned(),
+            next_action: "connect_runtime".to_owned(),
+            detail: "Connect this runtime to continue.".to_owned(),
         }
     }
 }
@@ -392,29 +377,14 @@ impl From<gents_desktop_core::client::ChatRouteCause> for ChatRefusalView {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DeploymentView {
-    pub peer_id: String,
+    pub local: bool,
     pub label: String,
     pub node_did: String,
-    pub addr: String,
-    pub source: Option<String>,
     pub graphql: Option<String>,
-    pub dial_succeeded: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
     pub runtime_connection: Option<String>,
     pub chat_safe: bool,
     pub chat_refusal: Option<ChatRefusalView>,
-    /// When this desktop's enrollment authorization on a joined node runs
-    /// out, after which reconciliation removes the node from this desktop;
-    /// none for a node this desktop reaches without enrollment. The node's
-    /// ACP grant carries no expiry of its own.
-    pub lease_expires_at: Option<String>,
-    /// Whether this desktop holds the node's signed operator endpoint, the
-    /// only path for its writes and operator reads (a fork, account
-    /// recovery). A joined node offers it once it advertises one; the node's
-    /// ACP still decides each signed request.
     pub operator_access: bool,
-    pub last_error: Option<String>,
     pub node: NodeView,
     pub node_config: Option<Node>,
     pub agent_configs: Vec<Agent>,
@@ -445,44 +415,25 @@ pub struct DeploymentView {
 #[serde(rename_all = "camelCase")]
 pub struct DesktopRuntimeSnapshot {
     pub client_did: String,
-    pub p2p_health: P2PHealthView,
     pub sync_health: SyncHealthView,
-    pub enrollment_requests: Option<Vec<EnrollmentRequestView>>,
+    pub access_requests: Vec<ClientAccessRequestView>,
     pub row_count: usize,
     pub approx_serialized_bytes: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub operator_config_authoritative_node_dids: Option<Vec<String>>,
     pub deployments: Vec<DeploymentView>,
-    pub ended_access: Vec<EndedAccessView>,
+    pub unkept_changes: Vec<UnkeptChangeView>,
 }
 
+/// A change a home did not keep; `message` is what the person reads.
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct EndedAccessView {
+pub struct UnkeptChangeView {
     pub node_did: String,
     pub label: String,
-    /// "expired" when the lease ran out, "revoked" when the node withdrew it
-    /// before then.
-    pub reason: String,
-    pub ended_at: String,
-    pub lease_expires_at: String,
-}
-
-impl From<gents_desktop_core::client::EndedAccess> for EndedAccessView {
-    fn from(ended: gents_desktop_core::client::EndedAccess) -> Self {
-        Self {
-            node_did: ended.node_did,
-            label: ended.label,
-            reason: match ended.reason {
-                gents_desktop_core::client::EndedAccessReason::Expired => "expired",
-                gents_desktop_core::client::EndedAccessReason::Revoked => "revoked",
-            }
-            .to_owned(),
-            ended_at: ended.ended_at,
-            lease_expires_at: ended.lease_expires_at,
-        }
-    }
+    pub at: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -498,70 +449,35 @@ pub struct DesktopClientSnapshot {
 
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct PeerMutationView {
-    pub peer_id: String,
-    pub label: String,
-    pub addr: String,
-    pub connected: bool,
-    pub warning: Option<String>,
-}
-
-impl From<PeerMutationResult> for PeerMutationView {
-    fn from(result: PeerMutationResult) -> Self {
-        Self {
-            peer_id: result.peer_id,
-            label: result.label,
-            addr: result.addr,
-            connected: result.connected,
-            warning: result.warning,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct PeerRemoveResponse {
+pub struct RuntimeRemoveResponse {
     #[serde(flatten)]
     pub snapshot: DesktopClientSnapshot,
-    pub mutation: PeerMutationView,
+    pub removed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct EnrollmentRequestView {
+pub struct ClientAccessRequestView {
     pub request_id: String,
-    pub network_id: String,
-    pub admin_did: String,
-    pub server_peer: String,
-    /// Presentation-only label; never enrollment authority or route selection.
-    pub server_label: Option<String>,
-    pub owner_node: String,
+    pub node_did: String,
+    pub client_did: String,
     pub state: String,
-    pub expires_at: String,
-    pub activation_error: Option<String>,
 }
 
-impl From<gents_desktop_core::client::EnrollmentRequestResult> for EnrollmentRequestView {
-    fn from(result: gents_desktop_core::client::EnrollmentRequestResult) -> Self {
+impl From<gents_protocol::client_access::ClientAccessReceipt> for ClientAccessRequestView {
+    fn from(receipt: gents_protocol::client_access::ClientAccessReceipt) -> Self {
+        use gents_protocol::client_access::ClientAccessState;
         Self {
-            request_id: result.request_id,
-            network_id: result.network_id,
-            admin_did: result.admin_did,
-            server_peer: result.server_peer,
-            server_label: None,
-            owner_node: result.owner_node,
-            state: result.state,
-            expires_at: result.expires_at,
-            activation_error: result.activation_error,
-        }
-    }
-}
-
-impl PeerRemoveResponse {
-    pub fn new(snapshot: DesktopClientSnapshot, mutation: PeerMutationResult) -> Self {
-        Self {
-            snapshot,
-            mutation: mutation.into(),
+            request_id: receipt.request_id,
+            node_did: receipt.node_did,
+            client_did: receipt.client_did,
+            state: match receipt.state {
+                ClientAccessState::Pending => "pending",
+                ClientAccessState::Approved => "approved",
+                ClientAccessState::Rejected => "rejected",
+                ClientAccessState::Revoked => "revoked",
+            }
+            .to_owned(),
         }
     }
 }

@@ -1,5 +1,7 @@
+import Proofs.Conformance.ClientDelegation
 import Proofs.Conformance.BackendPreflight
 import Proofs.Conformance.Identity.SessionChild
+import Proofs.Conformance.Identity.GenesisReadAccess
 import Proofs.Conformance.RemoteDelivery
 import Proofs.Conformance.StagedPermissionObjects
 import Proofs.Conformance.SessionStopAdmission
@@ -14,7 +16,9 @@ import Proofs.Conformance.DatastoreProtection
 import Proofs.Conformance.Identity.DelegatedPublicationRecovery
 import Proofs.Conformance.SelfConfigStructured
 import Proofs.Conformance.Recovery.PeriodicRegistry
+import Proofs.Conformance.Recovery.Sweeps
 import Proofs.Conformance.ProcessControlTerminal
+import Proofs.Conformance.ProcessStop
 import Proofs.Conformance.ToolCallTimeoutAfterSweep
 import Proofs.Conformance.PluginJobCallerInterrupt
 import Proofs.Conformance.BackgroundDiagnostics
@@ -26,7 +30,9 @@ import Proofs.Conformance.SessionOrigin
 import Proofs.Conformance.MailboxContent
 import Proofs.Conformance.ManualRequest
 import Proofs.Conformance.PendingRejection
+import Proofs.Conformance.TranscriptCases
 import Proofs.Conformance.ManagedExecSpawn
+import Proofs.Conformance.ManagedExecToolRoute
 import Proofs.Conformance.PluginBind
 import Proofs.Conformance.OperatorProtection
 import Proofs.Conformance.EnrollmentMemberRenewal
@@ -95,6 +101,7 @@ import Proofs.Conformance.Identity.WorkspaceCapability
 import Proofs.Conformance.Identity.MailboxAccess
 import Proofs.Conformance.Identity.SessionChildLocalSelfPublication
 import Proofs.Conformance.Identity.NodeProvisioning
+import Proofs.Conformance.Identity.RuntimeUse
 import Proofs.Conformance.Identity.WorkspaceRootAccess
 import Proofs.Conformance.HomeResolution
 import Proofs.Conformance.GraphqlName
@@ -155,7 +162,8 @@ import Proofs.Conformance.ClientTelemetry
 import Proofs.Conformance.InferenceObservation
 import Proofs.Conformance.Identity.Publication
 import Proofs.Conformance.Identity.GoalLinks
-import Proofs.Session.Identity.DelegatedPublicationCases
+import Proofs.Conformance.Identity.DelegatedPublication
+import Proofs.Conformance.Identity.AgentCreationReceipt
 import Proofs.Store.Identity.DelegatedFinality
 import Proofs.Conformance.Identity.CallbackParent
 import Proofs.Conformance.Identity.AgentIdentity
@@ -170,6 +178,7 @@ import Proofs.Store.Identity.GrantSetsConformance
 import Proofs.Store.Identity.ClientAgentCreation
 import Proofs.Store.Identity.AgentBlockSigning
 import Proofs.Conformance.Identity.Delegation
+import Proofs.Conformance.Identity.GrantRecipient
 import Proofs.Conformance.Identity.AgentBlockSigning
 import Proofs.Conformance.Identity.WorkspaceDatastoreWrite
 import Proofs.ToolCalls.Identity.ClientAgentJournal
@@ -203,6 +212,7 @@ import Proofs.Conformance.SessionQueueOrderCases
 import Proofs.Conformance.CountCarrier
 import Proofs.Conformance.ConfigurationScope
 import Proofs.Conformance.Initialization
+import Proofs.Conformance.EditorUndoCheckpoint
 import Proofs.Conformance.EnrollmentPendingRequests
 import Proofs.Conformance.EnrollmentInvite
 import Proofs.Conformance.WorkspacePermissionResolution
@@ -238,6 +248,13 @@ import Proofs.Conformance.ReceiptRecovery
 import Proofs.Conformance.HomeRetirement
 import Proofs.Conformance.StoreHandoff
 import Proofs.Conformance.StoreKeyCustody
+import Proofs.Conformance.AccessWake
+import Proofs.Conformance.ControlDebounce
+import Proofs.Conformance.DocumentAcpChoice
+import Proofs.Conformance.UserDelegation
+import Proofs.Conformance.OwedRegistration
+import Proofs.Conformance.HeldAudience
+import Proofs.Conformance.NodePublication
 import Proofs.Conformance.BackgroundExecutionRegistry
 import Proofs.Conformance.BackgroundWaitChange
 import Proofs.Conformance.InvocationReply
@@ -337,6 +354,7 @@ import Proofs.Conformance.RequestExecutionLease
 import Proofs.Conformance.InferenceRegistry
 import Proofs.Conformance.RootAdmission
 import Proofs.Conformance.Contracts.Json.ExecutionGate
+import Proofs.Conformance.Contracts.Json.NativeExecution
 import Proofs.Conformance.Contracts.Json.DispatchObservation
 import Proofs.Conformance.Contracts.Json.InterruptQueue
 import Proofs.Conformance.Contracts.Json.SessionControl
@@ -349,6 +367,22 @@ import Proofs.Conformance.Optimization
 import Proofs.Documents.ScopeTemplates.Derivation
 import Proofs.Conformance.ScopeCollectionRules
 import Proofs.Conformance.Identity.SecretPublication
+import Proofs.Conformance.Identity.HouseholdBPack
+import Proofs.Conformance.Identity.HouseholdBInference
+import Proofs.Conformance.Identity.HouseholdBGents
+import Proofs.Conformance.Identity.HouseholdBTrace
+import Proofs.Conformance.Identity.HouseholdBBackend
+import Proofs.Conformance.Identity.HouseholdStore
+import Proofs.Conformance.Identity.HouseholdP2p
+import Proofs.Conformance.Identity.HouseholdDocuments
+import Proofs.Conformance.Identity.HouseholdAutomation
+import Proofs.Conformance.Identity.HouseholdTools
+import Proofs.Conformance.Identity.HouseholdADocuments
+import Proofs.Conformance.Identity.HouseholdAAutomation
+import Proofs.Conformance.Identity.HouseholdATools
+import Proofs.Conformance.Identity.HouseholdCReaders
+import Proofs.Conformance.Identity.HouseholdCDocuments
+import Proofs.Conformance.Identity.HouseholdCToolGrants
 import Proofs.Conformance.LspServerStart
 import Proofs.Conformance.WorkspacePermissions
 
@@ -366,12 +400,23 @@ def snapshotPromptTailJson : String :=
   ""
 
 set_option maxHeartbeats 2000000 in
-/-- Every family's schema elaborates in one list term, whose definitional
-checks grow with the family count past the default heartbeat budget. -/
+private def functionEntries : List (String × Lean.Json) :=
+  conformance_function_entries%
+
+set_option maxHeartbeats 2000000 in
+private def familyEntries : List (String × Lean.Json) :=
+  conformance_family_entries%
+
+def snapshotFamiliesJson : String :=
+  (Lean.Json.mkObj (functionEntries ++ familyEntries)).compress
+
+def snapshotVocabulariesJson : String :=
+  (conformance_vocabularies%).compress
+
 def snapshotCaptureTailJson : String :=
   ""
-    ++ "\"families\":" ++ (conformance_families%).compress ++ ","
-    ++ "\"family_vocabularies\":" ++ (conformance_vocabularies%).compress ++ ","
+    ++ "\"families\":" ++ snapshotFamiliesJson ++ ","
+    ++ "\"family_vocabularies\":" ++ snapshotVocabulariesJson ++ ","
 
 def snapshotCoverageTailJson : String :=
   ""
@@ -381,8 +426,6 @@ def snapshotCoverageTailJson : String :=
       ++ featureSurfaceRequirementsJson
     ++ ",\"feature_matrix\":"
       ++ featureMatrixJson
-    ++ ",\"identity_household_cases\":"
-      ++ Identity.Conformance.householdCasesJson
     ++ "}"
 
 def snapshotJsonTail : String :=
@@ -391,64 +434,35 @@ def snapshotJsonTail : String :=
 def snapshotGoalCasesJson : String :=
   ""
     ++ "\"generated_by\":\"lake env lean --run Proofs/Conformance/Contracts.lean\","
-    ++ "\"delegated_publication_cases\":"
-      ++ Identity.DelegatedPublication.Cases.casesJson ++ ","
 
 def snapshotGoalMutationCasesJson : String :=
   ""
-    ++ "\"goal_client_start_cases\":" ++ Conformance.GoalClientStartContracts.casesJson ++ ","
 
 def snapshotRequestCasesJson : String :=
   ""
-    ++ "\"canonical_execution_gate_cases\":"
-      ++ Conformance.ExecutionGateContracts.casesJson ++ ","
-    ++ "\"session_input_edit_cases\":" ++ FoldQueueContracts.inputEditCasesJson ++ ","
-    ++ "\"canonical_dispatch_observation_cases\":"
-      ++ Conformance.DispatchObservationContracts.casesJson ++ ","
 
 def snapshotSessionCasesJson : String :=
   ""
-    ++ "\"request_input_cases\":" ++ requestInputCasesJson ++ ","
 
 def snapshotIdentityCasesJson : String :=
   ""
-    ++ "\"identity_grant_recipient_cases\":"
-      ++ Identity.GrantSetsConformance.recipientCasesJson ++ ","
 
 def snapshotClientCasesJson : String :=
   ""
 
 def snapshotRuntimeCasesJson : String :=
   ""
-    ++ "\"managed_exec_tool_boundary_cases\":"
-      ++ jsonArray
-        (managedExecToolBoundaryCases.map managedExecToolBoundaryCaseJson) ++ ","
-    ++ "\"process_stop_cases\":"
-      ++ jsonArray (processStopCases.map processStopCaseJson) ++ ","
-    ++ "\"completion_retry_cases\":"
-      ++ CompletionRetry.Contracts.casesJson ++ ","
 
 def snapshotRecoveryCasesJson : String :=
   ""
-    ++ "\"recovery_sweep_cases\":"
-      ++ jsonArray
-        (Recovery.recoverySweepCases.map recoverySweepCaseJson) ++ ","
     ++ "\"recovery_sweep_ids\":"
       ++ jsonArray (Recovery.registeredRecoverySweepIds.map jsonString) ++ ","
-    ++ "\"r6_backgrounding_cases\":"
-      ++ jsonArray
-        (r6BackgroundingCases.map r6BackgroundingCaseJson) ++ ","
 
 def snapshotPluginCasesJson : String :=
   ""
-    ++ "\"causal_hop_default_max_request_hop\":"
-      ++ Conformance.CausalHopContracts.defaultMaxRequestHopJson ++ ","
 
 def snapshotFileCasesJson : String :=
   ""
-    ++ "\"transcript_conformance_cases\":"
-      ++ jsonArray
-        (transcriptConformanceCases.map transcriptCaseJson) ++ ","
 
 
 def snapshotJson : String :=

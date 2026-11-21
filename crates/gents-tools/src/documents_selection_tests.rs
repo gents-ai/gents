@@ -5,17 +5,12 @@ use serde_json::json;
 use gents_documents::test_support::desired_state_fixtures::{
     apply_selection_changes, canonical, Change,
 };
-use gents_lean_vocab::lean_identity_household_cases;
 use gents_store::collection::Collection;
 use gents_store::config_client::ConfigAccess;
 use gents_store::identity::NodeIdentity;
 
 #[tokio::test]
 async fn modeled_skill_selection_and_revocation_follow_native_source_edges() -> anyhow::Result<()> {
-    let model = lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .expect("configuration model");
     let dir = tempfile::tempdir()?;
     let owner = gents_store::identity::KeyIdentity::load_or_create(dir.path().join("node"), None)?;
     let selected =
@@ -31,7 +26,7 @@ async fn modeled_skill_selection_and_revocation_follow_native_source_edges() -> 
     );
     let ctx = defra_core::RequestContext::default().with_identity(Some(owner.did().to_owned()));
     let policy = node
-        .add_dac_policy_with_counter_as(&ctx, &model.policy_yaml, 0)
+        .add_dac_policy_with_counter_as(&ctx, gents_protocol::schemas::AGENT_OWNERSHIP_POLICY, 0)
         .await?;
     for actor in [selected.did(), sibling.did()] {
         for permission in [
@@ -42,21 +37,27 @@ async fn modeled_skill_selection_and_revocation_follow_native_source_edges() -> 
                 .await?;
         }
     }
-    let previous_policy = gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID;
+    let previous_policy = gents_protocol::schemas::BuiltInPolicy::Household.placeholder();
     for schema in [
         gents_protocol::schemas::AGENT,
         gents_protocol::schemas::AGENT_CONTEXT,
         gents_protocol::schemas::TOOLS,
     ] {
-        node.add_collection(&schema.replace(previous_policy, &policy))
-            .await?;
+        node.add_collection(
+            &gents_protocol::schemas::HomePolicyIds::shared()
+                .render(&schema.replace(previous_policy, &policy)),
+        )
+        .await?;
     }
-    let skill_schema = gents_protocol::schemas::SKILL.replacen(
-        "type Skill ",
-        &format!("type Skill @policy(id: \"{policy}\", resource: \"configuration\") "),
-        1,
-    );
-    node.add_collection(&skill_schema).await?;
+    let skill_schema = gents_protocol::schemas::HomePolicyIds::shared()
+        .render(gents_protocol::schemas::SKILL)
+        .replacen(
+            "type Skill ",
+            &format!("type Skill @policy(id: \"{policy}\", resource: \"configuration\") "),
+            1,
+        );
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&skill_schema))
+        .await?;
     let access = ConfigAccess::local_as(node.clone(), identity::Did::new(owner.did())?);
     let did = gents_store::graphql::escape_graphql_string(owner.did());
     let agent = gents_store::graphql::escape_graphql_string(selected.did());
@@ -110,8 +111,8 @@ async fn modeled_skill_selection_and_revocation_follow_native_source_edges() -> 
             })
         })
         .await?;
-    for case in &model.configuration_tools_selection_cases {
-        let revoked = case["revoked"].as_bool().unwrap();
+    for case in gents_lean_vocab::families::household_tools_selection::cases() {
+        let revoked = case.input.revoked;
         if revoked {
             access
                 .transact_write("test.tools.revoke_context", |txn| {
@@ -130,7 +131,7 @@ async fn modeled_skill_selection_and_revocation_follow_native_source_edges() -> 
                 })
                 .await?;
         }
-        let actor = if case["actor"] == "sibling" {
+        let actor = if case.input.actor == "sibling" {
             sibling.did()
         } else {
             selected.did()
@@ -142,12 +143,7 @@ async fn modeled_skill_selection_and_revocation_follow_native_source_edges() -> 
             rows.iter()
                 .any(|row| row["_docID"].as_str() == Some(tools_doc.as_str()))
         });
-        assert_eq!(
-            visible,
-            case["expected"].as_bool().unwrap(),
-            "modeled {}",
-            case["name"]
-        );
+        case.check(visible);
         if revoked {
             access
                 .transact_write("test.tools.restore_context", |txn| {
@@ -167,8 +163,8 @@ async fn modeled_skill_selection_and_revocation_follow_native_source_edges() -> 
                 .await?;
         }
     }
-    for case in &model.configuration_skill_cases {
-        let revoked = case["revoked"].as_bool().unwrap();
+    for case in gents_lean_vocab::families::household_skill_selection::cases() {
+        let revoked = case.input.revoked;
         if revoked {
             access
                 .transact_write("test.skill.revoke", |txn| {
@@ -187,7 +183,7 @@ async fn modeled_skill_selection_and_revocation_follow_native_source_edges() -> 
                 })
                 .await?;
         }
-        let actor = if case["actor"] == "sibling" {
+        let actor = if case.input.actor == "sibling" {
             sibling.did()
         } else {
             selected.did()
@@ -198,12 +194,6 @@ async fn modeled_skill_selection_and_revocation_follow_native_source_edges() -> 
         let visible = response["data"]["Skill"]
             .as_array()
             .is_some_and(|rows| rows.iter().any(|row| row["_docID"] == skill_doc));
-        assert_eq!(
-            visible,
-            case["expected"].as_bool().unwrap(),
-            "modeled {}",
-            case["name"]
-        );
         use gents_inference::resolved::{
             ResolvedConfiguration, SelectedConfiguration, SelectedConfigurationDocument,
         };
@@ -251,15 +241,10 @@ async fn modeled_skill_selection_and_revocation_follow_native_source_edges() -> 
                 crate::native::skills::LoadSkillArgs {
                     name: "skill".into(),
                 },
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await;
-        assert_eq!(
-            loaded.is_ok(),
-            case["tool_expected"].as_bool().unwrap(),
-            "modeled tool {}",
-            case["name"]
-        );
+        let tool_loaded = loaded.is_ok();
         if let Ok(output) = loaded {
             assert!(output.contains("private skill"));
         }
@@ -268,14 +253,15 @@ async fn modeled_skill_selection_and_revocation_follow_native_source_edges() -> 
                 crate::native::skills::LoadSkillArgs {
                     name: "missing".into(),
                 },
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await;
-        assert_eq!(
-            catalog.is_ok(),
-            case["tool_expected"].as_bool().unwrap(),
-            "modeled catalog {}",
-            case["name"]
+        assert_eq!(catalog.is_ok(), tool_loaded, "{}", case.input.name);
+        case.check(
+            gents_lean_vocab::families::household_skill_selection::SkillVisibility {
+                read: visible,
+                tool: tool_loaded,
+            },
         );
     }
     let unrelated = vec![Change {

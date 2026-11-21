@@ -12,10 +12,10 @@ use crate::runtime::agent::loop_stream::{
 };
 use crate::turn::provider_input::budget::ContextCalibration;
 use crate::turn::provider_input::ProviderInputProfile;
-use gents_inference::admission::{self, CallKind};
 use gents_inference::compaction::{ReductionEngine, ReductionOptions};
 use gents_inference::llm::message::Message;
 use gents_inference::resolved::MaxTurnsProvenance;
+use gents_loop::provider_call::admission::CallKind;
 use gents_protocol::row::AgentRequest;
 use gents_toolcalls::call::hook::DefraSessionHook;
 
@@ -143,17 +143,23 @@ fn compact_turn(
             )
             .await
             .map_err(compactor_failure)?;
-        let (result, producer_join) = admission::scope_call_with_join(
-            CallKind::Compaction,
-            1,
-            compactor.reduce(
+        let call_admission = compaction_request
+            .provider_call
+            .admission
+            .as_ref()
+            .expect("admission call scope requires request context")
+            .for_call(CallKind::Compaction, 1);
+        options.provider_call.admission = Some(call_admission.clone());
+        options.provider_call.capture = compaction_request.provider_call.capture.clone();
+        let result = compactor
+            .reduce(
                 native_messages,
                 turn_context_window,
                 &options,
                 compaction_request.admission,
-            ),
-        )
-        .await;
+            )
+            .await;
+        let producer_join = call_admission.current_join();
         let result = result?;
         let producer_call = producer_join
             .filter(|join| matches!(join.call_kind, CallKind::Compaction))
@@ -393,7 +399,7 @@ where
         ));
         // Lean `CurrentInput.answersSelection`: a resumed retry
         // publishes no authored input, so steered messages stay
-        // queued for their own turn instead of folding into it.
+        // queued for a later turn instead of folding into it.
         let hook = if resume_from_history {
             hook
         } else {

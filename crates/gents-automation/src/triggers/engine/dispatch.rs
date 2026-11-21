@@ -64,6 +64,10 @@ impl TriggerEngine {
             return result;
         }
 
+        if let Some(command) = intent.task.command.clone() {
+            return self.dispatch_command(intent, command).await;
+        }
+
         if let Some(request_id) = intent.pre_materialized_request_id.clone() {
             let result = FireResult::Fired { request_id };
             (intent.on_result)(result.clone());
@@ -413,7 +417,7 @@ impl TriggerEngine {
     ) -> Result<(), FireResult> {
         if intent.trigger_kind != TriggerKind::Event {
             let validation = if let Some(schedule) = schedule {
-                if schedule.task_id != intent.task.task_id {
+                if schedule.task.task_id != intent.task.task_id {
                     Err(anyhow::anyhow!("schedule Task changed before admission"))
                 } else {
                     validate_task_delivery_options(

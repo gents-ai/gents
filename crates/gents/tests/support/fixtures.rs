@@ -116,6 +116,7 @@ pub fn test_agent_with_identity(
         openai_wire_api: gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
         backend_endpoint: "http://localhost:8000/v1".to_string(),
         claude_platform: None,
+        client_version: None,
         backend_auth: gents_documents::BackendAuth::Unauthenticated,
         model_name: gents_inference::resolved::DEFAULT_MODEL_NAME.to_string(),
         service_tier: None,
@@ -128,6 +129,8 @@ pub fn test_agent_with_identity(
         compaction: None,
         compaction_inference: None,
         max_total_tokens: None,
+        max_invalid_tool_calls: gents_loop::loop_stream::DEFAULT_MAX_INVALID_TOOL_CALLS,
+        repeated_tool_failure_limit: gents_loop::loop_stream::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
         stream_batch_ms: gents_inference::resolved::DEFAULT_STREAM_BATCH_MS,
         stream_liveness_timeout: Duration::from_secs(
             gents_documents::inference_defaults::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
@@ -135,6 +138,7 @@ pub fn test_agent_with_identity(
         deadline_duration: Duration::from_secs(
             gents_documents::inference_defaults::DEFAULT_DEADLINE_DURATION_SECS,
         ),
+        title_timeout: Duration::from_secs(gents_inference::resolved::DEFAULT_TITLE_TIMEOUT_SECS),
         provider_idle_timeout: Duration::from_secs(
             gents_inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
         ),
@@ -439,7 +443,7 @@ pub async fn held_canonical_message(
 pub async fn canonical_run_timeline_rows(
     access: &gents_store::config_client::ConfigAccess,
     request_id: &str,
-) -> gents_observe::observe::run_timeline::RunTimelineRows {
+) -> gents_observe::observe::run_timeline::rows::RunTimelineRows {
     gents_observe::observe::run_timeline_fetch::load_settled_run_timeline_rows(
         access,
         request_id,
@@ -581,6 +585,17 @@ async fn bind_agent_backend_chain(
 ) {
     let owner = db.node_identity.did();
     let user = super::managed_fixture_user(db).await;
+    let admin = gents_store::config_client::ConfigAccess::local_as(
+        db.node.clone(),
+        identity::Did::new(owner).expect("valid runtime DID"),
+    );
+    gents_store::identity::GrantSet::OperatorUser
+        .grant(
+            &admin,
+            &identity::Did::new(user.did()).expect("valid user DID"),
+        )
+        .await
+        .expect("grant fixture User operator access");
     let access = db.client_access(&user);
     let read = |collection: gents_store::collection::Collection, id: String| {
         let access = access.clone();
@@ -604,17 +619,6 @@ async fn bind_agent_backend_chain(
         .await
         .is_none()
     {
-        let admin = gents_store::config_client::ConfigAccess::local_as(
-            db.node.clone(),
-            identity::Did::new(owner).expect("valid runtime DID"),
-        );
-        gents_store::identity::GrantSet::OperatorUser
-            .grant(
-                &admin,
-                &identity::Did::new(user.did()).expect("valid user DID"),
-            )
-            .await
-            .expect("grant fixture User operator access");
         let node = serde_json::json!({"node_did": owner});
         let plan = gents_documents::DesiredStateApplyPlan::new(vec![
             gents_documents::DesiredStateApplyDocument {

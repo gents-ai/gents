@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -16,6 +14,7 @@ pub mod agent_transcript;
 pub mod builder_runtime;
 pub mod canonical_reads;
 pub mod commit_race_proxy;
+pub mod fake_llm;
 
 pub mod fixtures;
 pub mod http_mock;
@@ -24,6 +23,7 @@ pub mod interrupt;
 pub mod live_inference;
 pub mod mock_endpoint;
 pub mod mock_subscription;
+pub mod ports;
 
 pub mod signed_mailbox;
 pub mod snapshots;
@@ -171,44 +171,12 @@ pub async fn load_managed_fixture_user(db: &TestDb) -> gents_store::identity::Ke
 }
 
 pub async fn managed_agent_fixture(db: &TestDb) -> ManagedAgentFixture {
-    use gents_documents::apply_desired_state_plan;
-    use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-
     let user = managed_fixture_user(db).await;
-    let user_did = identity::Did::new(user.did()).expect("valid user DID");
     let runtime = db.node_identity.as_ref();
     assert_ne!(user.did(), runtime.did());
-    let admin = gents_store::config_client::ConfigAccess::local_as(
-        db.node.clone(),
-        identity::Did::new(runtime.did()).expect("valid runtime DID"),
-    );
-    // An enrolled User's grants bound what its Agent creation may project.
-    gents_store::identity::GrantSet::OperatorUser
-        .grant(&admin, &user_did)
-        .await
-        .expect("grant test user operator access");
     let access = db.client_access(&user);
-    let node = serde_json::json!({"node_did": runtime.did()});
-    let node_plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: gents_store::collection::Collection::Node,
-        add: node.clone(),
-        update: node,
-    }])
-    .expect("render test Node");
-    access
-        .transact_write("test.managed_agent.node", |txn| {
-            let plan = &node_plan;
-            Box::pin(async move {
-                apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &gents_inference::resolved::ProviderProfilePolicy,
-                )
-                .await
-            })
-        })
-        .await
-        .expect("install test Node as user");
+    // An enrolled User's grants bound what its Agent creation may project.
+    gents_documents::test_support::enroll_test_user(&db.node, runtime, &user, &access).await;
     let (agent, binding) = install_managed_agent(db, &access, &user, "Test agent").await;
     ManagedAgentFixture {
         user,
@@ -402,177 +370,14 @@ pub async fn test_p2p_db_without_node(name: &str, admission: TestP2pAdmission) -
 /// visible local Node before they publish, and later fixture configuration by
 /// the same User updates this document instead of racing a second owner.
 async fn install_runtime_node(db: &TestDb) {
-    use gents_documents::apply_desired_state_plan;
-    use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-
-    let runtime = db.node_identity.as_ref();
-    let admin = gents_store::config_client::ConfigAccess::local_as(
-        db.node.clone(),
-        identity::Did::new(runtime.did()).expect("valid runtime DID"),
-    );
     let user = managed_fixture_user(db).await;
-    gents_store::identity::GrantSet::OperatorUser
-        .grant(
-            &admin,
-            &identity::Did::new(user.did()).expect("valid user DID"),
-        )
-        .await
-        .expect("grant fixture User operator access");
-    let node = serde_json::json!({"node_did": runtime.did()});
-    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: gents_store::collection::Collection::Node,
-        add: node.clone(),
-        update: node,
-    }])
-    .expect("render runtime Node");
-    db.client_access(&user)
-        .transact_write("test.p2p.runtime_node", |txn| {
-            let plan = &plan;
-            Box::pin(async move {
-                apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &gents_inference::resolved::ProviderProfilePolicy,
-                )
-                .await
-            })
-        })
-        .await
-        .expect("install runtime Node as its User");
-}
-
-pub async fn create_request(
-    node: &EmbeddedNode,
-    request_id: &str,
-    session_id: &str,
-    status: &str,
-    created_at: &str,
-) -> String {
-    create_request_with_valid_until(node, request_id, session_id, status, created_at, None).await
-}
-
-pub async fn create_request_with_valid_until(
-    node: &EmbeddedNode,
-    request_id: &str,
-    session_id: &str,
-    status: &str,
-    created_at: &str,
-    valid_until: Option<&str>,
-) -> String {
-    create_request_with_signed_fields(
-        node,
-        request_id,
-        session_id,
-        status,
-        created_at,
-        valid_until,
-        None,
-        None,
-        None,
+    gents_documents::test_support::enroll_test_user(
+        &db.node,
+        db.node_identity.as_ref(),
+        &user,
+        &db.client_access(&user),
     )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-pub async fn create_request_with_signed_fields(
-    node: &EmbeddedNode,
-    request_id: &str,
-    session_id: &str,
-    status: &str,
-    created_at: &str,
-    valid_until: Option<&str>,
-    input: Option<&str>,
-    retry_parent_request: Option<&str>,
-    retry_root_request: Option<&str>,
-) -> String {
-    create_request_for_agent_with_signed_fields(
-        node,
-        NODE_DID,
-        request_id,
-        session_id,
-        status,
-        created_at,
-        valid_until,
-        input,
-        retry_parent_request,
-        retry_root_request,
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-pub async fn create_request_for_agent_with_signed_fields(
-    node: &EmbeddedNode,
-    node_did: &str,
-    request_id: &str,
-    session_id: &str,
-    lifecycle_state: &str,
-    created_at: &str,
-    valid_until: Option<&str>,
-    input: Option<&str>,
-    retry_parent_request: Option<&str>,
-    retry_root_request: Option<&str>,
-) -> String {
-    let request_id = escape_graphql_string(request_id);
-    let session_id = escape_graphql_string(session_id);
-    let created_at = escape_graphql_string(created_at);
-    let node_did = escape_graphql_string(node_did);
-    let valid_until = valid_until
-        .map(escape_graphql_string)
-        .map(|value| format!(r#"valid_until: "{value}","#))
-        .unwrap_or_default();
-    let input = input
-        .map(|value| serde_json::from_str::<serde_json::Value>(value).expect("request input JSON"))
-        .map(|value| {
-            gents_protocol::graphql::graphql_input_literal(&value).expect("request input GraphQL")
-        })
-        .map(|value| format!("input: {value},"))
-        .unwrap_or_default();
-    let retry_parent_request = retry_parent_request
-        .map(escape_graphql_string)
-        .unwrap_or_default();
-    let retry_root_request = escape_graphql_string(retry_root_request.unwrap_or(&request_id));
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentRequest(input: {{
-                request_id: "{request_id}",
-                purpose: "normal",
-                node_did: "{node_did}",
-                agent_did: "{AGENT_NAME}",
-                session_id: "{session_id}",
-                retry_parent_request: "{retry_parent_request}",
-                retry_root_request: "{retry_root_request}",
-                superseded_by_request: "",
-                content: "hello",
-                lifecycle_state: "{lifecycle_state}",
-                backend_id: "",
-                execution_origin: "interactive",
-                created_at: "{created_at}",
-                {valid_until}
-                {input}
-                retry_count: 0,
-                max_retries: {max_retries},
-                request_hop: 0
-            }}) {{ _docID }}
-        }}"#,
-        max_retries = gents_session::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
-    );
-    let resp = node.execute(&mutation).await;
-    assert!(
-        !resp.has_errors(),
-        "create request failed: {:?}",
-        resp.errors
-    );
-
-    let query = format!(
-        r#"{{
-            AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{
-                _docID
-            }}
-        }}"#
-    );
-    let resp = node.execute(&query).await;
-    first_row::<DocIdRow>(&resp, "AgentRequest").doc_id
+    .await;
 }
 
 pub async fn exact_request_doc_id(node: &EmbeddedNode, request_id: &str) -> String {
@@ -921,203 +726,6 @@ pub async fn create_agent_session_in_scope(
     .await;
 }
 
-pub async fn create_agent_message(
-    node: &EmbeddedNode,
-    session_id: &str,
-    sequence: u32,
-    role: &str,
-    content: &str,
-    timestamp: &str,
-) {
-    create_agent_message_in_scope(
-        node, NODE_DID, None, session_id, sequence, role, content, timestamp,
-    )
-    .await;
-}
-
-#[allow(clippy::too_many_arguments)]
-pub async fn create_agent_message_in_scope(
-    node: &EmbeddedNode,
-    node_did: &str,
-    requester_did: Option<&str>,
-    session_id: &str,
-    sequence: u32,
-    role: &str,
-    content: &str,
-    timestamp: &str,
-) {
-    use gents::defra_node::QueryRequest;
-    use gents_protocol::output::rows::{
-        output_segment_create_variables, transcript_message_create_variables,
-        CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-    };
-    use gents_protocol::output::{
-        MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
-        OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload, SegmentRun, SourceClose,
-        StreamDeclaration, StreamPayload, TranscriptMessage,
-    };
-    use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
-
-    let role = match role {
-        "user" => MessageRole::User,
-        "assistant" => MessageRole::Assistant,
-        "system" => MessageRole::System,
-        other => panic!("unsupported message role in create_agent_message_in_scope: {other}"),
-    };
-
-    let request_doc_id = format!("fixture-request:{session_id}:{sequence}");
-    let segment = OutputSegment {
-        node_did: node_did.into(),
-        requester_did: requester_did.map(Into::into),
-        session_id: session_id.into(),
-        request_doc_id: request_doc_id.clone(),
-        source: if role == MessageRole::Assistant {
-            OutputSource::ProviderTurn {
-                scope: CaptureScope {
-                    kind: CaptureScopeKind::Inference,
-                    seq: u64::from(sequence),
-                },
-                turn_index: 0,
-                attempt: 0,
-            }
-        } else {
-            OutputSource::Authored {
-                key: format!("fixture:{sequence}"),
-            }
-        },
-        writer: OutputWriter::RequestExecution {
-            execution_generation: "fixture-generation".into(),
-        },
-        ordinal: Some(0),
-        runs: vec![SegmentRun {
-            stream: 0,
-            bytes: content.len().try_into().unwrap(),
-            declaration: Some(StreamDeclaration {
-                block_index: 0,
-                part_index: 0,
-                payload: StreamPayload::Text,
-            }),
-        }],
-        payload: content.into(),
-        close: Some(SourceClose::Closed {
-            outcome: OutputOutcome::Complete,
-            segments: 1,
-            stream_bytes: vec![content.len() as u64],
-        }),
-        created_at: timestamp.into(),
-    };
-    let segment_response = node
-        .execute_request(
-            QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
-                .with_variables(output_segment_create_variables(&segment).unwrap()),
-        )
-        .await;
-    assert!(
-        !segment_response.has_errors(),
-        "create_AgentOutputSegment failed: {:?}",
-        segment_response.errors
-    );
-    let close_doc_id = gents_store::graphql::single_mutation_document(
-        &segment_response,
-        "create_AgentOutputSegment",
-    )
-    .unwrap()
-    .unwrap()["_docID"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-
-    let message = TranscriptMessage {
-        native_request_id: None,
-        message_key: gents_session::session::sequence_message_key(
-            node_did,
-            session_id,
-            requester_did,
-            sequence,
-        ),
-        session_id: session_id.into(),
-        node_did: node_did.into(),
-        requester_did: requester_did.map(Into::into),
-        request_doc_id: Some(request_doc_id),
-        publication: MessagePublication::RequestExecution {
-            execution_generation: "fixture-generation".into(),
-        },
-        outcome: OutputOutcome::Complete,
-        sequence,
-        role,
-        native_id: (role == MessageRole::Assistant).then(|| format!("native-{sequence}")),
-        blocks: vec![MessageBlock::Text {
-            text: PresentedPayload {
-                output: PayloadRef {
-                    close_doc_id,
-                    stream: 0,
-                },
-                presentation: PayloadPresentation::Full,
-            },
-        }],
-        created_at: timestamp.into(),
-    };
-    let response = node
-        .execute_request(
-            QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
-                .with_variables(transcript_message_create_variables(&message).unwrap()),
-        )
-        .await;
-    assert!(
-        !response.has_errors(),
-        "create_AgentMessage failed: {:?}",
-        response.errors
-    );
-}
-
-#[allow(clippy::too_many_arguments)]
-pub async fn create_agent_tool_call(
-    node: &EmbeddedNode,
-    session_id: &str,
-    message_sequence: u32,
-    tool_call_id: &str,
-    tool_name: &str,
-    status: &str,
-    started_at: &str,
-    completed_at: &str,
-) -> String {
-    let session_id_escaped = escape_graphql_string(session_id);
-    let tool_call_id_escaped = escape_graphql_string(tool_call_id);
-    let tool_name_escaped = escape_graphql_string(tool_name);
-    let status_escaped = escape_graphql_string(status);
-    let started_escaped = escape_graphql_string(started_at);
-    let completed_escaped = escape_graphql_string(completed_at);
-    let tool_call_key = format!("{session_id_escaped}:{tool_call_id_escaped}");
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentToolCall(input: {{
-                tool_call_key: "{tool_call_key}",
-                session_id: "{session_id_escaped}",
-                node_did: "{NODE_DID}",
-                requester_did: null,
-                message_sequence: {message_sequence},
-                tool_name: "{tool_name_escaped}",
-                tool_call_id: "{tool_call_id_escaped}",
-                status: "{status_escaped}",
-                started_at: "{started_escaped}",
-                completed_at: "{completed_escaped}"
-            }}) {{ _docID }}
-        }}"#
-    );
-    let resp = node.execute(&mutation).await;
-    assert!(
-        !resp.has_errors(),
-        "create_AgentToolCall failed: {:?}",
-        resp.errors
-    );
-    gents_store::graphql::single_mutation_document(&resp, "create_AgentToolCall")
-        .expect("mutation envelope")
-        .expect("created call")["_docID"]
-        .as_str()
-        .expect("physical call ID")
-        .to_owned()
-}
-
 pub async fn create_compaction_entry(
     node: &EmbeddedNode,
     session_id: &str,
@@ -1310,12 +918,7 @@ pub async fn complete_pending_request_with_canonical_output(
     .await?;
     let prepared = accepted_turn::PreparedAcceptedTurn { backend };
     let runtime = accepted_turn::boot_prepared_accepted_turn(db, prepared, agent).await;
-    live_inference::wait_for_request_terminal(
-        db.node.as_ref(),
-        &row.request_id,
-        std::time::Duration::from_secs(20),
-    )
-    .await;
+    live_inference::wait_for_request_terminal(db.node.as_ref(), &row.request_id).await;
     runtime.shutdown().await;
     let request_id = escape_graphql_string(&row.request_id);
     let response = db

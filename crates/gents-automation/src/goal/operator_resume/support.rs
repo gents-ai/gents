@@ -3,7 +3,9 @@ use gents_documents::{apply_desired_state_plan, write_inference_backend_document
 use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
 use gents_inference::auth::credential::{preset_account_backend, store_sign_in};
-use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
+use gents_protocol::request_admission::{
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestScope,
+};
 use gents_store::collection::Collection;
 use gents_store::config_client::ConfigAccess;
 use gents_store::identity::request_receipt::verify_request_receipt_signature;
@@ -242,13 +244,15 @@ impl Fixture {
                 Box::pin(async move {
                     gents_session::session::ensure_session_in_txn(
                         txn,
-                        session,
-                        identity.did(),
-                        &binding.agent_did,
-                        Some(user.did()),
-                        None,
-                        None,
-                        "2026-01-01T00:00:00Z",
+                        gents_session::session::NewAgentSession {
+                            session_id: session,
+                            node_did: identity.did(),
+                            agent_did: &binding.agent_did,
+                            requester_did: Some(user.did()),
+                            title: None,
+                            provenance: None,
+                            created_at: "2026-01-01T00:00:00Z",
+                        },
                     )
                     .await?;
                     Ok::<_, anyhow::Error>(())
@@ -310,10 +314,7 @@ impl Fixture {
             let mut request = AgentRequestCreate::base(
                 gents_protocol::request_admission::RequestPurpose::Normal,
                 request_id,
-                identity.did(),
-                user.did(),
-                &binding.agent_did,
-                &session,
+                RequestScope::new(identity.did(), user.did(), &binding.agent_did, &session),
                 "Earlier work",
                 "interactive",
                 "2010-01-01T00:00:00Z",
@@ -334,10 +335,7 @@ impl Fixture {
         let mut create = AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             &parent_id,
-            identity.did(),
-            user.did(),
-            &binding.agent_did,
-            &session,
+            RequestScope::new(identity.did(), user.did(), &binding.agent_did, &session),
             "Original context",
             "interactive",
             "2020-01-01T00:00:00Z",
@@ -462,8 +460,10 @@ impl Fixture {
             self.parent.agent_did.clone(),
             &self.goal.goal_id,
             "Original signed continuation",
-            1,
-            false,
+            gents_protocol::request_input::GoalContinuationInput {
+                sequence: 1,
+                wrapup: false,
+            },
             "2021-01-01T00:00:00Z",
             self.parent.request_hop,
         )
@@ -564,10 +564,12 @@ impl Fixture {
         let mut create = AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             id,
-            self.identity.did(),
-            self.user.did(),
-            &self.parent.agent_did,
-            &self.session,
+            RequestScope::new(
+                self.identity.did(),
+                self.user.did(),
+                &self.parent.agent_did,
+                &self.session,
+            ),
             "Other work",
             "interactive",
             date,
@@ -959,8 +961,10 @@ impl Fixture {
                 self.parent.agent_did.clone(),
                 &g.goal_id,
                 child.content.as_deref().unwrap(),
-                seq,
-                wrapup,
+                gents_protocol::request_input::GoalContinuationInput {
+                    sequence: seq,
+                    wrapup,
+                },
                 child.created_at.as_deref().unwrap(),
                 self.parent.request_hop,
             )

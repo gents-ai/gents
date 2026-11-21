@@ -6,10 +6,11 @@ use serde_json::Value;
 use tauri::State;
 use ts_rs::TS;
 
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::{current_core, DesktopAppState};
 use gents_protocol::operations::pack::EditedDocuments;
 use gents_server::packs;
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 pub(super) fn home(state: &DesktopAppState) -> Result<std::path::PathBuf, BridgeError> {
     state.policy.node_home.clone().ok_or_else(|| {
@@ -149,6 +150,21 @@ pub struct PackInstallRequest {
     pub root_agents: Option<Vec<String>>,
 }
 
+impl From<PackInstallRequest> for packs::PackInstall {
+    fn from(request: PackInstallRequest) -> Self {
+        Self {
+            package: request.package,
+            registry: request.registry,
+            inference_slots: request.inference_slots,
+            edited: request.edited,
+            grant_authority: request.grant_authority,
+            preview: request.preview,
+            expect_digest: request.expect_digest,
+            root_agents: request.root_agents,
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn desktop_pack_install(
     request: PackInstallRequest,
@@ -156,21 +172,8 @@ pub async fn desktop_pack_install(
 ) -> Result<PackInstallView, BridgeError> {
     {
         let home = home(&state)?;
-        run(move || {
-            packs::install(
-                home,
-                request.package,
-                request.registry,
-                request.inference_slots,
-                request.edited,
-                request.grant_authority,
-                request.preview,
-                request.expect_digest,
-                request.root_agents,
-            )
-            .map_err(PackChangeError::into_anyhow)
-        })
-        .await
+        run(move || packs::install(home, request.into()).map_err(PackChangeError::into_anyhow))
+            .await
     }
 }
 

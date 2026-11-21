@@ -201,69 +201,43 @@ async fn modeled_agent_create_route_drives_the_transaction_route() {
 
 #[test]
 fn modeled_configuration_create_collections_use_trusted_schemas() {
-    let case = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .expect("configuration contract");
-    for modeled in &case.configuration_signed_create_collections {
+    gents_lean_vocab::families::household_signed_create_collections::replay(|input| {
         let Some(collection) = crate::collection::Collection::ALL
             .into_iter()
-            .find(|collection| collection.graphql_type() == modeled.collection)
+            .find(|collection| collection.graphql_type() == input.collection)
         else {
-            assert!(!modeled.supported, "{}", modeled.collection);
-            continue;
+            return gents_lean_vocab::families::household_signed_create_collections::SignedCreate {
+                supported: false,
+                update_supported: false,
+            };
         };
         let actual = super::client_signed_agent::trusted_create_schema(collection);
-        assert_eq!(
-            actual.is_some(),
-            modeled.supported,
-            "{}",
-            modeled.collection
-        );
-        if modeled.supported {
-            let route = super::client_signed_agent::update_route(true, collection, true);
-            assert_eq!(route == CreateRoute::Signed, modeled.update_supported);
-            assert_ne!(route, CreateRoute::Native);
-        }
+        let route = super::client_signed_agent::update_route(true, collection, true);
+        assert_ne!(route, CreateRoute::Native);
         if let Some(schema) = actual {
             let definitions = query::parse_sdl(schema).expect("trusted schema parses");
             assert_eq!(definitions.len(), 1);
-            assert_eq!(definitions[0].name, modeled.collection);
+            assert_eq!(definitions[0].name, input.collection);
         }
-    }
+        gents_lean_vocab::families::household_signed_create_collections::SignedCreate {
+            supported: actual.is_some(),
+            update_supported: route == CreateRoute::Signed,
+        }
+    });
 }
 
 #[test]
 fn modeled_client_intent_refuses_ordinary_mutations() {
-    let case = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .unwrap();
-    for observation in &case.ordinary_client_mutation_cases {
-        assert_eq!(
-            super::client_signed_agent::ordinary_mutation_allowed(
-                observation.intent,
-                observation.mutation
-            ),
-            observation.allowed
-        );
-    }
+    gents_lean_vocab::families::household_ordinary_client_mutation::replay(|input| {
+        super::client_signed_agent::ordinary_mutation_allowed(input.intent, input.mutation)
+    });
 }
 
 #[test]
 fn modeled_configuration_delete_collections_use_trusted_schemas() {
-    let case = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .unwrap();
-    for modeled in &case.configuration_signed_delete_collections {
-        let name = modeled["collection"].as_str().unwrap();
+    gents_lean_vocab::families::household_signed_delete_collections::replay(|input| {
+        let name = input.collection.as_str();
         let schema = super::client_signed_agent::trusted_delete_schema(name);
-        assert_eq!(
-            schema.is_some(),
-            modeled["supported"].as_bool().unwrap(),
-            "{name}"
-        );
         if let Some(schema) = schema {
             let parsed = query::parse_sdl(schema).unwrap();
             assert_eq!(parsed.len(), 1);
@@ -277,50 +251,44 @@ fn modeled_configuration_delete_collections_use_trusted_schemas() {
             }
             assert!(super::client_signed_agent::signing_schema(schema, name).is_ok());
         }
-    }
+        schema.is_some()
+    });
 }
 
 #[test]
 fn modeled_signed_write_replay_requires_confirmed_abort_and_authority() {
-    let case = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .unwrap();
-    for observation in &case.configuration_signed_write_retry_cases {
-        assert_eq!(
-            super::txn::client_signed_write_may_retry(
-                observation.dispatched,
-                observation.confirmed_abort,
-                observation.replay_authorized,
-            ),
-            observation.may_retry,
-        );
-    }
+    gents_lean_vocab::families::household_signed_write_retry::replay(|input| {
+        super::txn::client_signed_write_may_retry(
+            input.dispatched,
+            input.confirmed_abort,
+            input.replay_authorized,
+        )
+    });
 }
 
 #[test]
 fn modeled_agent_immutable_replacements_preserve_genesis() {
-    let case = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .unwrap();
-    for observation in &case.configuration_immutable_cases {
-        for field in ["agent_did", "creation_nonce", "node_did"] {
-            let current = serde_json::json!({(field): observation.observed});
-            let proposed =
-                serde_json::json!({(field): observation.proposed, "display_name": "new"});
+    gents_lean_vocab::families::household_configuration_immutable::replay(|input| {
+        let allowed = ["agent_did", "creation_nonce", "node_did"].map(|field| {
+            let current = serde_json::json!({(field): input.observed});
+            let proposed = serde_json::json!({(field): input.proposed, "display_name": "new"});
             let patch = super::client_signed_agent::configuration_replacement_patch(
                 crate::collection::Collection::Agent,
                 &current,
                 &proposed,
             );
-            assert_eq!(patch.is_ok(), observation.allowed, "{field}");
-            if let Ok(patch) = patch {
+            if let Ok(patch) = &patch {
                 assert!(patch.get(field).is_none());
                 assert_eq!(patch["display_name"], "new");
             }
-        }
-    }
+            patch.is_ok()
+        });
+        assert!(
+            allowed.iter().all(|field| *field == allowed[0]),
+            "{input:?}: {allowed:?}"
+        );
+        allowed[0]
+    });
 }
 
 #[test]
@@ -342,11 +310,7 @@ fn modeled_held_signer_binds_the_actor_and_bearer() -> anyhow::Result<()> {
             actor_b.did()
         }
     };
-    let case = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .unwrap();
-    for observation in &case.held_client_signer_cases {
+    gents_lean_vocab::families::household_held_client_signer::replay(|observation| {
         let actor = did(&observation.actor);
         let endpoint = if observation.bearer == observation.actor {
             super::GraphqlEndpoint::as_principal("http://127.0.0.1:1/api/v0/graphql", actor)
@@ -354,8 +318,9 @@ fn modeled_held_signer_binds_the_actor_and_bearer() -> anyhow::Result<()> {
             super::GraphqlEndpoint::with_authenticated_delegation(
                 "http://127.0.0.1:1/api/v0/graphql",
                 "Bearer forged",
-                identity::Did::new(actor)?,
-            )?
+                identity::Did::new(actor).expect("held signer DID"),
+            )
+            .expect("delegated endpoint")
         };
         let result = if observation.has_private {
             let capability = if observation.signer == "user-a" {
@@ -371,8 +336,8 @@ fn modeled_held_signer_binds_the_actor_and_bearer() -> anyhow::Result<()> {
         } else {
             super::client_signed_agent::client_signer(&endpoint).map(|_| ())
         };
-        assert_eq!(result.is_ok(), observation.allowed, "{observation:?}");
-    }
+        result.is_ok()
+    });
     Ok(())
 }
 
@@ -404,8 +369,15 @@ async fn client_agent_genesis_is_signed_by_the_authenticated_desktop_principal(
             0,
         )
         .await?;
-    assert_eq!(policy, gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID);
-    node.add_collection(gents_protocol::schemas::AGENT).await?;
+    assert_eq!(
+        policy,
+        gents_protocol::schemas::HomePolicyIds::shared()
+            .id(gents_protocol::schemas::BuiltInPolicy::Household)
+    );
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::AGENT),
+    )
+    .await?;
     let endpoint = super::GraphqlEndpoint::as_principal(
         format!("http://{address}/api/v0/graphql"),
         actor.did(),
@@ -478,8 +450,15 @@ async fn large_client_signed_agent_document_crosses_websocket_frame_boundaries(
             0,
         )
         .await?;
-    assert_eq!(policy, gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID);
-    node.add_collection(gents_protocol::schemas::AGENT).await?;
+    assert_eq!(
+        policy,
+        gents_protocol::schemas::HomePolicyIds::shared()
+            .id(gents_protocol::schemas::BuiltInPolicy::Household)
+    );
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::AGENT),
+    )
+    .await?;
     let endpoint = super::GraphqlEndpoint::as_principal(
         format!("http://{address}/api/v0/graphql"),
         actor.did(),
@@ -562,17 +541,36 @@ async fn client_configuration_creates_are_signed_by_the_authenticated_principal(
         node.add_nac_actor_relationship_as(&context, permission.as_str(), editor.did())
             .await?;
     }
-    node.add_collection(gents_protocol::schemas::AGENT).await?;
-    node.add_collection(gents_protocol::schemas::AGENT_CONTEXT)
-        .await?;
-    node.add_collection(gents_protocol::schemas::TOOLS).await?;
-    node.add_collection(gents_protocol::schemas::TASK).await?;
-    node.add_collection(gents_protocol::schemas::SCHEDULE)
-        .await?;
-    node.add_collection(gents_protocol::schemas::TRIGGER)
-        .await?;
-    node.add_collection(gents_protocol::schemas::INFERENCE_BACKEND_METADATA)
-        .await?;
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::AGENT),
+    )
+    .await?;
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared()
+            .render(gents_protocol::schemas::AGENT_CONTEXT),
+    )
+    .await?;
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::TOOLS),
+    )
+    .await?;
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::TASK),
+    )
+    .await?;
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::SCHEDULE),
+    )
+    .await?;
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::TRIGGER),
+    )
+    .await?;
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared()
+            .render(gents_protocol::schemas::INFERENCE_BACKEND_METADATA),
+    )
+    .await?;
     let backend_schema = node.get_collection("InferenceBackendMetadata")?.unwrap();
     let approved_schema = super::client_signed_agent::signing_schema(
         gents_protocol::schemas::INFERENCE_BACKEND_METADATA,
@@ -580,12 +578,20 @@ async fn client_configuration_creates_are_signed_by_the_authenticated_principal(
     )?;
     assert_eq!(backend_schema.version_id, approved_schema.version_id);
     assert_eq!(backend_schema.collection_id, approved_schema.collection_id);
-    node.add_collection(gents_protocol::schemas::CALLBACK)
-        .await?;
-    node.add_collection(gents_protocol::schemas::CALLBACK_BINDING)
-        .await?;
-    node.add_collection(gents_protocol::schemas::CALLBACK_MODULE)
-        .await?;
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::CALLBACK),
+    )
+    .await?;
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared()
+            .render(gents_protocol::schemas::CALLBACK_BINDING),
+    )
+    .await?;
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared()
+            .render(gents_protocol::schemas::CALLBACK_MODULE),
+    )
+    .await?;
     let url = format!("http://{address}/api/v0/graphql");
     let spoofed = super::GraphqlEndpoint::as_principal(&url, actor.did())
         .with_client_signing_capability(editor.client_signing_capability()?);
@@ -595,7 +601,7 @@ async fn client_configuration_creates_are_signed_by_the_authenticated_principal(
     ));
     let did_only = super::GraphqlEndpoint::as_principal(&url, actor.did());
     assert!(matches!(
-        did_only.authorization(),
+        did_only.runtime_authorization().await,
         Err(super::ConfigClientError::ClientAgentSignerRequired)
     ));
     let did_only = super::ConfigAccess::Graphql(did_only);

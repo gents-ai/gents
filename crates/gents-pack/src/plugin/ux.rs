@@ -96,8 +96,9 @@ pub struct UxListing {
     /// (`crate::observe::ux_data`); empty for a dev plugin, which declares nothing.
     #[serde(default)]
     pub data: Vec<UxDataSurface>,
-    /// `sha256:<hex>` of a page document's content, so a reader learns of an
-    /// edit from the listing alone; absent for the other doors.
+    /// `sha256:<hex>` of a page document's content, or of the archive a pack
+    /// plugin was installed from, so a reader learns of an edit or a
+    /// reinstall from the listing alone; absent for dev plugins.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub digest: Option<String>,
 }
@@ -223,7 +224,7 @@ fn pack_listing(home: &Path, record: &HomePackInstall, ux: &PackUxPlugin) -> Res
         contributes: Some(ux.contributes.clone()),
         default_enabled: ux.default_enabled,
         data: ux.data.clone(),
-        digest: None,
+        digest: Some(record.digest.clone()),
     })
 }
 

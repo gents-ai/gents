@@ -78,7 +78,7 @@ async fn publish_hook_action(
             None,
             internal_id,
             &args.to_string(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await;
     (action, published.message_doc_id)
@@ -103,24 +103,14 @@ async fn publish_hook_call(
 
 #[tokio::test]
 async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
+    gents_lean_vocab::snapshot().await;
     use gents_protocol::request_admission::{
-        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
     };
     use gents_session::request::lifecycle::{
         ClaimOutcome, RequestTerminalOutcome, TerminalizeResult,
     };
-    use gents_toolcalls::background::status::ProcessControlScope;
 
-    let originating = gents_lean_vocab::lean_r6_backgrounding_case(
-        "originating_request_without_matching_requester_is_denied",
-    );
-    let absent =
-        gents_lean_vocab::lean_r6_backgrounding_case("absent_requester_next_turn_authorized");
-    let empty =
-        gents_lean_vocab::lean_r6_backgrounding_case("empty_requester_does_not_alias_absent");
-    let same_requester = gents_lean_vocab::lean_r6_backgrounding_case(
-        "read_process_same_requester_next_turn_authorized",
-    );
     let (db, user, client, binding) =
         crate::test_support::root::signed_test_node("background-hook-scope").await;
     let node = db.node.clone();
@@ -138,10 +128,7 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
         AgentRequestCreate::base(
             RequestPurpose::Normal,
             id,
-            runtime.did(),
-            user.did(),
-            agent.did(),
-            session,
+            RequestScope::new(runtime.did(), user.did(), agent.did(), session),
             "spawn",
             "interactive",
             &now,
@@ -207,30 +194,6 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
     .await;
     assert_eq!(spawned["ok"], true);
     let handle = spawned["tool_call_id"].as_str().unwrap().to_owned();
-
-    // Historical optional scopes still compare exactly, independently of admission.
-    let scope = |requester| ProcessControlScope {
-        request_id: "historical-next".into(),
-        session_id: session.into(),
-        node_did: runtime.did().into(),
-        requester_did: requester,
-    };
-    assert_eq!(
-        scope(None).authorizes(session, runtime.did(), None),
-        absent.legal
-    );
-    assert_eq!(
-        scope(Some(user.did().into())).authorizes(session, runtime.did(), Some(user.did())),
-        same_requester.legal
-    );
-    assert_eq!(
-        scope(Some(String::new())).authorizes(session, runtime.did(), None),
-        empty.legal
-    );
-    assert_eq!(
-        scope(Some("did:requester".into())).authorizes(session, runtime.did(), None),
-        originating.legal
-    );
 
     hook.set_active_request_binding(
         Some("scope-origin".into()),
@@ -325,10 +288,7 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
     let mut historical = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "scope-historical",
-        runtime.did(),
-        agent.did(),
-        agent.did(),
-        session,
+        RequestScope::new(runtime.did(), agent.did(), agent.did(), session),
         "historical",
         "interactive",
         &now,

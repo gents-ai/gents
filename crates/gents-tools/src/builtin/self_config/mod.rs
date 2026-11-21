@@ -174,14 +174,16 @@ pub fn build_self_config_tools(
     tasks: Arc<dyn crate::task_run::TaskRunService>,
 ) -> Vec<Box<dyn ToolDyn>> {
     build_self_config_tools_with_runtime(
-        usage_cache,
-        node,
-        node_did,
-        identity,
-        None,
+        SelfConfigRuntime {
+            usage_cache,
+            node,
+            node_did,
+            identity,
+            runtime_identity: None,
+            plugins,
+            tasks,
+        },
         config,
-        plugins,
-        tasks,
         None,
     )
 }
@@ -244,33 +246,44 @@ pub async fn build_runtime_self_config_tools(
     let node_did = runtime_identity.did().to_owned();
     let binding = runtime_node_binding(&node, &node_did, runtime_identity.as_ref()).await?;
     Ok(build_self_config_tools_with_runtime(
-        usage_cache,
-        node,
-        node_did,
-        Some(agent_identity),
-        Some(runtime_identity),
+        SelfConfigRuntime {
+            usage_cache,
+            node,
+            node_did,
+            identity: Some(agent_identity),
+            runtime_identity: Some(runtime_identity),
+            plugins,
+            tasks,
+        },
         config,
-        plugins,
-        tasks,
         Some(binding),
     ))
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "runtime and physical Node binding are explicit capabilities"
-)]
+pub struct SelfConfigRuntime {
+    pub usage_cache: Arc<gents_inference::usage_observation::UsageCache>,
+    pub node: Arc<EmbeddedNode>,
+    pub node_did: String,
+    pub identity: Option<Arc<dyn NodeIdentity>>,
+    pub runtime_identity: Option<Arc<dyn NodeIdentity>>,
+    pub plugins: Arc<dyn crate::plugin_host::PluginHost>,
+    pub tasks: Arc<dyn crate::task_run::TaskRunService>,
+}
+
 pub fn build_self_config_tools_with_runtime(
-    usage_cache: Arc<gents_inference::usage_observation::UsageCache>,
-    node: Arc<EmbeddedNode>,
-    node_did: String,
-    identity: Option<Arc<dyn NodeIdentity>>,
-    runtime_identity: Option<Arc<dyn NodeIdentity>>,
+    runtime: SelfConfigRuntime,
     config: &SelfConfigToolConfig,
-    plugins: Arc<dyn crate::plugin_host::PluginHost>,
-    tasks: Arc<dyn crate::task_run::TaskRunService>,
     node_binding: Option<gents_documents::ConfigurationNodeBinding>,
 ) -> Vec<Box<dyn ToolDyn>> {
+    let SelfConfigRuntime {
+        usage_cache,
+        node,
+        node_did,
+        identity,
+        runtime_identity,
+        plugins,
+        tasks,
+    } = runtime;
     if !config.enabled {
         return Vec::new();
     }
@@ -286,6 +299,7 @@ pub fn build_self_config_tools_with_runtime(
             // The plugin host carries the node home, as `serve` gives it, so a
             // reader-grant step names the `--home` it must run against.
             .with_node_home(plugins.home().map(std::path::Path::to_path_buf))
+            .with_registry_url(config.registry_url.as_deref())
             .with_no_lockout(config.no_lockout)
             .with_process_ceiling(config.process_ceiling.clone())
             .with_held_grants(OperatorGrants {
@@ -322,6 +336,9 @@ pub fn build_self_config_tools_with_runtime(
         tasks,
         selected_plugins: config.selected_plugins.clone(),
         ceiling_plugins: config.ceiling_plugins.clone(),
+        plugin_builder: config.plugin_builder.clone(),
+        ux_preview_assets: config.ux_preview_assets.clone(),
+        envelope: gents_loop::tool::ToolCallEnvelope::default(),
     }));
     tools
 }

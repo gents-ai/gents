@@ -1,3 +1,4 @@
+use gents_protocol::delegation_audience::HeldRecord;
 use gents_protocol::graphql::{execute_graphql_async, GraphqlRequestOptions};
 use serde_json::Value;
 
@@ -7,16 +8,20 @@ use super::{graphql_api_base, ConfigClientError, GraphqlEndpoint};
 
 type Result<T, E = ConfigClientError> = std::result::Result<T, E>;
 
-const HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-
+/// The client of every HTTP request to the store, read or write: it waits
+/// for the server's answer or a connection failure, never a client clock. A
+/// commit abandoned by a total request timeout while a loaded server is still
+/// committing has an unknown outcome that only a dead server justifies, and
+/// a read under one fails a live server that is only slow
+/// (`tla/CommitResponseWait.tla`, `ClientWindow`). Keepalive probes end a
+/// connection whose host is gone (`NoKeepalive`); a live server that stops
+/// answering holds the request until the server bounds it (`Wedged`).
 pub(super) async fn http_client() -> Result<&'static reqwest::Client> {
     static CLIENT: tokio::sync::OnceCell<reqwest::Client> = tokio::sync::OnceCell::const_new();
     CLIENT
         .get_or_try_init(|| async {
             tokio::task::spawn_blocking(|| {
-                reqwest::Client::builder()
-                    .timeout(HTTP_TIMEOUT)
-                    .pool_idle_timeout(gents_protocol::graphql::POOLED_CONNECTION_IDLE_LIMIT)
+                gents_protocol::graphql::store_http_client_builder()
                     .build()
                     .map_err(ConfigClientError::HttpClientBuild)
             })
@@ -41,11 +46,57 @@ pub(super) async fn auto_commit(
         Some(variables) => serde_json::json!({"query": mutation, "variables": variables}),
         None => serde_json::json!({"query": mutation}),
     };
-    let response = endpoint
-        .authorize(http_client().await?.post(endpoint.url()))?
-        .json(&body)
-        .send()
-        .await
+    match auto_commit_once(endpoint, &body).await? {
+        (Err(refused), false, presented)
+            if recovers_window(endpoint, &refused, &presented).await? =>
+        {
+            auto_commit_once(endpoint, &body).await?.0
+        }
+        (answered, _, _) => answered,
+    }
+}
+
+/// Whether `error` is a delegation DefraDB refused for its window, which the
+/// endpoint recovers by minting it again at its home's clock and sending the
+/// request once more (`Identity.HeldAudience.resend`). External premise
+/// (defradb.rs#3006): such a write was refused before anything was written.
+async fn recovers_window(
+    endpoint: &GraphqlEndpoint,
+    error: &ConfigClientError,
+    presented: &HeldRecord,
+) -> Result<bool> {
+    match error.credential_answer() {
+        Some(answer @ gents_protocol::delegation_audience::CredentialAnswer::OutsideWindow) => {
+            endpoint.recovers(answer, presented).await
+        }
+        _ => Ok(false),
+    }
+}
+
+/// One mutation, sent once more for a refused credential, whether it was,
+/// and the record its last sending was minted from.
+async fn auto_commit_once(
+    endpoint: &GraphqlEndpoint,
+    body: &Value,
+) -> Result<(Result<Value>, bool, HeldRecord)> {
+    let client = http_client().await?;
+    let sent = endpoint
+        .send_counting_resends(|endpoint| {
+            Ok(endpoint.authorize(client.post(endpoint.url()))?.json(body))
+        })
+        .await?;
+    Ok((
+        answer_mutation(endpoint, sent.response).await,
+        sent.resent,
+        sent.presented,
+    ))
+}
+
+async fn answer_mutation(
+    endpoint: &GraphqlEndpoint,
+    response: std::result::Result<reqwest::Response, reqwest::Error>,
+) -> Result<Value> {
+    let response = response
         .map_err(|source| ConfigClientError::PostMutation {
             endpoint: endpoint.to_string(),
             source,
@@ -80,6 +131,48 @@ pub(super) async fn query_with_options(
     options: GraphqlRequestOptions,
 ) -> Result<Value> {
     ensure_query_document(query)?;
+    let (answered, presented) = query_once(endpoint, query, variables, options).await;
+    let refused = match &answered {
+        Err(ConfigClientError::Protocol(error)) => {
+            error.transport_error().and_then(reqwest::Error::status)
+        }
+        _ => None,
+    };
+    let recovered = match (refused, &answered) {
+        (Some(status), _) => endpoint.recovers_refusal(status, &presented).await?,
+        (None, Err(error)) => recovers_window(endpoint, error, &presented).await?,
+        (None, Ok(_)) => false,
+    };
+    if recovered {
+        query_once(endpoint, query, variables, options).await.0
+    } else {
+        answered
+    }
+}
+
+/// One query, and the record its credential was minted from.
+async fn query_once(
+    endpoint: &GraphqlEndpoint,
+    query: &str,
+    variables: Option<&Value>,
+    options: GraphqlRequestOptions,
+) -> (Result<Value>, HeldRecord) {
+    if let Err(error) = endpoint.runtime_authentication().await {
+        return (Err(error), endpoint.delegation_audience.record());
+    }
+    let presented = endpoint.delegation_audience.record();
+    (
+        send_query(endpoint, query, variables, options).await,
+        presented,
+    )
+}
+
+async fn send_query(
+    endpoint: &GraphqlEndpoint,
+    query: &str,
+    variables: Option<&Value>,
+    options: GraphqlRequestOptions,
+) -> Result<Value> {
     let authorization = endpoint.authorization()?;
     Ok(match variables {
         Some(variables) => {
@@ -110,9 +203,8 @@ pub(super) async fn txn_begin(
         path
     };
     let response = endpoint
-        .authorize(client.post(url))?
-        .send()
-        .await
+        .send_resolving(|endpoint| endpoint.authorize(client.post(&url)))
+        .await?
         .map_err(|source| ConfigClientError::PostTxBegin {
             endpoint: endpoint.to_string(),
             source,
@@ -157,8 +249,7 @@ pub(super) async fn txn_execute(
     variables: &Value,
 ) -> Result<Value> {
     let response = endpoint
-        .authorize(client.post(endpoint.url()))?
-        .header("x-defradb-tx", id)
+        .authorize_in_transaction(client.post(endpoint.url()), id)?
         .json(&serde_json::json!({"query": query, "variables": variables}))
         .send()
         .await
@@ -214,7 +305,8 @@ pub(super) async fn txn_commit(
 ) -> std::result::Result<(), TxnCommitError> {
     let api_base = graphql_api_base(endpoint.url()).map_err(TxnCommitError::CleanupRequired)?;
     let response = endpoint
-        .authorize(client.post(format!("{api_base}/tx/{id}")))
+        .authorize_runtime(client.post(format!("{api_base}/tx/{id}")))
+        .await
         .map_err(TxnCommitError::CleanupRequired)?
         .send()
         .await
@@ -280,7 +372,8 @@ pub(super) async fn txn_discard(
     client: &reqwest::Client,
 ) -> Result<()> {
     let response = endpoint
-        .authorize(client.delete(format!("{}/tx/{id}", graphql_api_base(endpoint.url())?)))?
+        .authorize_runtime(client.delete(format!("{}/tx/{id}", graphql_api_base(endpoint.url())?)))
+        .await?
         .send()
         .await
         .map_err(|source| ConfigClientError::PostTxDiscard {
@@ -555,5 +648,48 @@ mod tests {
             &[Some("read_only=true".to_owned()), None]
         );
         server.abort();
+    }
+
+    /// A loaded server may take any time to answer a commit; the client's
+    /// verdict is the server's, not its own clock's
+    /// (`tla/CommitResponseWait.tla`, `ClientWindow`). Once the connection is
+    /// up the clock is paused, and a paused clock jumps to the next timer
+    /// whenever both sides wait, so a client timer of any length would fire
+    /// before the server's hour.
+    #[tokio::test]
+    async fn a_commit_the_server_answers_late_is_confirmed() {
+        use axum::{
+            routing::{get, post},
+            Router,
+        };
+
+        let app = Router::new()
+            .route("/api/v0/version", get(|| async { "" }))
+            .route(
+                "/api/v0/tx/{id}",
+                post(|| async {
+                    tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                    ""
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = http_client().await.unwrap().clone();
+        let version = endpoint.replace("/graphql", "/version");
+        client.get(version).send().await.unwrap();
+        tokio::time::pause();
+        let started = tokio::time::Instant::now();
+        let result = txn_commit(&GraphqlEndpoint::anonymous(endpoint), "17", &client).await;
+        server.abort();
+        if let Err(
+            TxnCommitError::CleanupRequired(error)
+            | TxnCommitError::TransactionConsumed(error)
+            | TxnCommitError::ConfirmedConflict(error),
+        ) = result
+        {
+            panic!("the server's commit is confirmed: {error:?}");
+        }
+        assert!(started.elapsed() >= std::time::Duration::from_secs(3600));
     }
 }

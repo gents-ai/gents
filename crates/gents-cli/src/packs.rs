@@ -69,23 +69,34 @@ pub async fn info(registry: Option<String>, package: String) -> Result<Value> {
     capture_report(command::account::info(PackInfoArgs { package, registry })).await
 }
 
+#[derive(Debug, Default)]
+pub struct PackInstall {
+    pub package: String,
+    pub registry: Option<String>,
+    pub inference_slots: Vec<String>,
+    pub edited: EditedDocuments,
+    pub grant_authority: bool,
+    pub preview: bool,
+    pub expect_digest: Option<String>,
+    pub root_agents: Option<Vec<String>>,
+}
+
 /// Installs `package`, or with `preview` reports what the install would
 /// write. With `expect_digest`, a pack whose content digest differs (the one
 /// a preview reported, or a link named) is refused before any write. With
 /// `root_agents`, the `PACK=AGENT` rows a preview listed, an approved install
 /// grants its tool root to those agents only.
-#[allow(clippy::too_many_arguments)]
-pub async fn install(
-    home: PathBuf,
-    package: String,
-    registry: Option<String>,
-    inference_slots: Vec<String>,
-    edited: EditedDocuments,
-    grant_authority: bool,
-    preview: bool,
-    expect_digest: Option<String>,
-    root_agents: Option<Vec<String>>,
-) -> Result<Value, PackChangeError> {
+pub async fn install(home: PathBuf, change: PackInstall) -> Result<Value, PackChangeError> {
+    let PackInstall {
+        package,
+        registry,
+        inference_slots,
+        edited,
+        grant_authority,
+        preview,
+        expect_digest,
+        root_agents,
+    } = change;
     capture_report(command::install(PackInstallArgs {
         package,
         inference_slots,
@@ -143,13 +154,13 @@ pub async fn enable_core_packs_from(
         .iter()
         .map(|pack| owner::core_pack(&home, pack))
         .collect::<Result<Vec<_>>>()?;
-    owner::enable(&home, archives, &packs).await
+    owner::enable(&home, archives, &packs, None).await
 }
 
 /// Installs each core pack `home` lacks from `archives`, as `init
 /// --engineer` leaves it. Returns `{installed, not_installed}`.
 pub async fn install_core_packs_from(home: PathBuf, archives: &[(&str, &[u8])]) -> Result<Value> {
-    crate::commands::init::default_packs::install_missing(&home, archives).await
+    crate::commands::init::default_packs::install_missing(&home, archives, None).await
 }
 
 /// Wires the installed `plugin` into `agent`'s Tools and Context (or with
@@ -187,6 +198,8 @@ pub async fn promote(
         selector,
         name,
         agent,
+        registry: None,
+        javy: "javy".to_owned(),
         output: OutputFormat::Json,
     }))
     .await
@@ -542,21 +555,17 @@ pub async fn plugin_call(
     let coordinate = plugin_call_target(&home, &ux, &name)?;
     let (namespace, _) = gents_pack::pack::registry::split_pack_coordinate(&coordinate);
     tracing::info!(ux = %ux, pack = %coordinate, plugin = %name, "ux plugin call");
-    gents_tools::plugin::approval::scope_interactive(
-        true,
-        crate::commands::plugin::call_installed_for_operator(
-            &home,
-            namespace,
-            &name,
-            input,
-            operator,
-            &gents_loop::tool::ToolCallEnvelope::default().with_extension(
-                gents_tools::runtime_context::ToolHostContext {
-                    interactive: true,
-                    ..Default::default()
-                },
-            ),
-        ),
+    crate::commands::plugin::call_installed_for_operator(
+        &home,
+        namespace,
+        &name,
+        input,
+        operator,
+        &gents_tools::runtime_context::ToolHostContext {
+            interactive: true,
+            ..Default::default()
+        }
+        .call(),
     )
     .await
 }
@@ -607,6 +616,8 @@ mod tests {
                 tool_ceiling: gents_service::args::ToolCeilingArg::Readonly,
                 tool_root: None,
                 store_encryption: None,
+                document_acp: Default::default(),
+                client_identity: None,
             },
         )
         .unwrap();

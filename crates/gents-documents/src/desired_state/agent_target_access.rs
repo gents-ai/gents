@@ -164,11 +164,23 @@ async fn change(
             txn.delete_actor_relationship("Agent", doc, RELATION, &did)
                 .await
         }
-        .with_context(|| {
-            format!(
-                "the configuring actor cannot {} {RELATION} for {writer} on Agent {target}, which its agent target selection declares",
-                if add { "grant" } else { "revoke" }
-            )
+        .map_err(|error| {
+            let (verb, declares) = if add {
+                ("grant", "declares")
+            } else {
+                ("revoke", "no longer declares")
+            };
+            let sentence = format!(
+                "the configuring actor cannot {verb} {RELATION} for {writer} on Agent {target}, which its agent target selection {declares}"
+            );
+            let message = if error.is_permission_denied() {
+                format!(
+                    "{sentence}: that takes administrator on Agent {target}, held by the Node's owner and the Node's administrators. No operation grants it to an Agent, so ask one of them to make this change; retried as this actor it is refused again"
+                )
+            } else {
+                sentence
+            };
+            anyhow::Error::new(error).context(message)
         })?;
     }
     Ok(())

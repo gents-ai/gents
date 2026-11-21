@@ -76,7 +76,31 @@ where
             request_admission,
             root_execution_guard: None,
             auxiliary_tasks: auxiliary_tasks::AuxiliaryTasks::default(),
+            #[cfg(test)]
+            driven_deadline: None,
         })
+    }
+
+    /// The request deadline of every drive is reached when `cut` is
+    /// notified, not by the clock: a test drives the cut once it has observed
+    /// the steps the cut must follow (TLA+ `WallClockBound` `"driven"`).
+    #[cfg(test)]
+    pub(in crate::runtime::agent) fn with_driven_deadline(
+        mut self,
+        cut: Arc<tokio::sync::Notify>,
+    ) -> Self {
+        self.driven_deadline = Some(cut);
+        self
+    }
+
+    #[cfg(test)]
+    pub(in crate::runtime::agent) fn driven_deadline(&self) -> Option<&tokio::sync::Notify> {
+        self.driven_deadline.as_deref()
+    }
+
+    #[cfg(not(test))]
+    pub(in crate::runtime::agent) fn driven_deadline(&self) -> Option<&tokio::sync::Notify> {
+        None
     }
 
     pub(in crate::runtime::agent) fn with_inference_observations(
@@ -122,7 +146,7 @@ where
         mut self,
         root: Option<PathBuf>,
     ) -> Self {
-        gents_session::workspace::install_process_operator_tool_root(root.clone());
+        self.request_admission = self.request_admission.with_operator_tool_root(root.clone());
         self.operator_tool_root = root;
         self
     }

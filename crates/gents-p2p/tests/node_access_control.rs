@@ -1,7 +1,6 @@
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{Context, Result};
 use defra_node::{HttpConfig, Node as EmbeddedNode, StorageBackend};
@@ -22,11 +21,22 @@ fn free_address() -> SocketAddr {
     address
 }
 
-async fn served_home(data_dir: &Path, principal: &str, address: SocketAddr) -> Arc<EmbeddedNode> {
+async fn served_home(
+    data_dir: &Path,
+    identity: &Arc<KeyIdentity>,
+    address: SocketAddr,
+) -> Arc<EmbeddedNode> {
+    let principal = identity.did();
     let node = EmbeddedNode::builder()
         .data_path(data_dir)
         .with_storage_backend(StorageBackend::Regolith)
-        .with_http(HttpConfig::with_addr(address))
+        .with_http(
+            HttpConfig::with_listener(std::net::TcpListener::bind(address).unwrap())
+                .unwrap()
+                .with_extra_routes(gents_store::test_support::local_authentication_route(
+                    identity.clone(),
+                )),
+        )
         .with_p2p(gents_p2p::test_support::transport::test_p2p_config(
             &gents_p2p::test_support::transport::TestP2pAdmission::default(),
             data_dir,
@@ -36,23 +46,6 @@ async fn served_home(data_dir: &Path, principal: &str, address: SocketAddr) -> A
         .build()
         .await
         .expect("served home node");
-    let endpoint = format!("http://{address}/api/v0/graphql");
-    tokio::time::timeout(Duration::from_secs(10), async {
-        while !gents_protocol::graphql::graphql_endpoint_available(
-            &endpoint,
-            gents_protocol::graphql::GraphqlRequestOptions {
-                timeout: Duration::from_secs(1),
-                max_attempts: 1,
-                retry_backoff: Duration::ZERO,
-            },
-        )
-        .await
-        {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .expect("served home HTTP listener");
     Arc::new(node)
 }
 
@@ -91,7 +84,7 @@ async fn assert_access_control(
         .await
         .expect_err("an anonymous HTTP mutation must be refused");
     assert!(
-        refused.to_string().contains("not authorized"),
+        refused.is_permission_denied(),
         "unexpected refusal: {refused:#}"
     );
     let refused_schema = anonymous
@@ -99,7 +92,7 @@ async fn assert_access_control(
         .await
         .expect_err("an anonymous HTTP schema change must be refused");
     assert!(
-        refused_schema.to_string().contains("401"),
+        refused_schema.is_permission_denied(),
         "unexpected schema refusal: {refused_schema:#}"
     );
 
@@ -142,7 +135,7 @@ async fn assert_access_control(
         admitted.is_err(),
         "P2P admits exactly the application collections the model admits: {outcome:?}"
     );
-    let replicated = gents_store::identity::node_p2p(node)
+    let replicated = gents_p2p::node_access::operations(node)
         .expect("P2P transport")
         .get_collections()
         .await
@@ -156,7 +149,7 @@ async fn assert_access_control(
 /// Stopping the phase runtime releases the node's detached HTTP/P2P tasks for the next opener.
 fn serve_phase(
     data_dir: &Path,
-    principal: &str,
+    identity: &Arc<KeyIdentity>,
     phase: impl for<'a> FnOnce(
         &'a Arc<EmbeddedNode>,
         SocketAddr,
@@ -169,7 +162,7 @@ fn serve_phase(
         .build()?;
     let result = runtime.block_on(async {
         let address = free_address();
-        let node = served_home(data_dir, principal, address).await;
+        let node = served_home(data_dir, identity, address).await;
         let result = phase(&node, address).await;
         node.shutdown().await.expect("node shutdown");
         result
@@ -185,18 +178,18 @@ fn served_home_admits_only_its_principal_across_restart() -> Result<()> {
         home.path().join("principal.key"),
         None,
     )?);
-    let principal = identity.did().to_string();
     let data_dir = home.path().join("data");
 
-    serve_phase(&data_dir, &principal, |node, address| {
+    serve_phase(&data_dir, &identity, |node, address| {
         let identity = identity.clone();
         Box::pin(async move {
-            node.add_collection(SCHEMA).await?;
+            node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(SCHEMA))
+                .await?;
             assert_access_control(node, identity.as_ref(), address, "first").await;
             Ok(())
         })
     })?;
-    serve_phase(&data_dir, &principal, |node, address| {
+    serve_phase(&data_dir, &identity, |node, address| {
         let identity = identity.clone();
         Box::pin(async move {
             assert_access_control(node, identity.as_ref(), address, "restarted").await;

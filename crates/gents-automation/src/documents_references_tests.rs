@@ -1,5 +1,6 @@
 use gents_documents::ConfigReferences;
 use gents_store::collection::Collection;
+use gents_store::test_support::{fixture_agent_did, FIXTURE_AGENT_NONCE};
 use serde_json::json;
 
 #[test]
@@ -8,13 +9,13 @@ fn callback_admission_reuses_projection_and_filter_secret_checks() {
         "handler":{"kind":"built_in","emitter":"create_workspace"}});
     let source =
         json!({"event_source_id":"source", "node_did":"owner", "source_collection":"Records"});
-    let binding = json!({"binding_id":"binding", "node_did":"owner", "agent_did":crate::triggers::callback::test_agent_did(),
+    let binding = json!({"binding_id":"binding", "node_did":"owner", "agent_did":fixture_agent_did(FIXTURE_AGENT_NONCE),
         "callback_id":"callback", "event_source_id":"source", "input_fields":["name"]});
     let validate = |source, binding| {
         ConfigReferences::from_documents(
             "owner",
             [
-                (Collection::Agent, json!({"node_did":"owner", "agent_did":crate::triggers::callback::test_agent_did(), "creation_nonce":"nonce", "inference_profile_id":"profile"})),
+                (Collection::Agent, json!({"node_did":"owner", "agent_did":fixture_agent_did(FIXTURE_AGENT_NONCE), "creation_nonce":"nonce", "inference_profile_id":"profile"})),
                 (Collection::InferenceProfile, json!({"node_did":"owner", "profile_id":"profile", "backend_id":"backend", "model_name":"model"})),
                 (Collection::InferenceBackend, json!({"node_did":"owner", "backend_id":"backend", "name":"Backend", "provider_kind":"OpenAiCompatible", "endpoint":"http://localhost:8000/v1", "auth":{"kind":"unauthenticated"}})),
                 (Collection::Callback, callback.clone()),

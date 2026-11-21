@@ -67,8 +67,12 @@ impl WriteToolFieldFill {
     /// Resolve this fill from the current tool-call runtime context. Shared by
     /// the bounded write and query tools so the correlation / source-field
     /// vocabulary cannot drift.
-    pub fn resolve(&self, field_name: &str) -> Result<String> {
-        self.resolve_optional(field_name)?.ok_or_else(|| {
+    pub fn resolve(
+        &self,
+        call: &gents_loop::tool::ToolCallEnvelope,
+        field_name: &str,
+    ) -> Result<String> {
+        self.resolve_optional(call, field_name)?.ok_or_else(|| {
             let source = match self {
                 Self::Correlation => "correlation",
                 Self::SourceField(source_field) => source_field,
@@ -83,13 +87,16 @@ impl WriteToolFieldFill {
     /// (absent or null on the source document) resolves to `None`. Bounded
     /// writes use this to omit an unset optional fill; query filters and
     /// plugin inputs keep [`Self::resolve`] so a missing scope fails closed.
-    pub fn resolve_optional(&self, field_name: &str) -> Result<Option<String>> {
-        let runtime = gents_loop::tool_call_lifecycle::runtime::current_tool_runtime_context()
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "runtime-filled field `{field_name}` requires an active AgentRequest context"
-                )
-            })?;
+    pub fn resolve_optional(
+        &self,
+        call: &gents_loop::tool::ToolCallEnvelope,
+        field_name: &str,
+    ) -> Result<Option<String>> {
+        let runtime = call.runtime().ok_or_else(|| {
+            anyhow::anyhow!(
+                "runtime-filled field `{field_name}` requires an active AgentRequest context"
+            )
+        })?;
         match self {
             Self::Correlation => runtime
                 .correlation
@@ -304,6 +311,7 @@ impl WriteToolDecl {
             |error| anyhow::anyhow!("invalid collection {:?}: {error}", self.collection),
         )?;
         reject_protected_collection_name(&self.collection)?;
+        reject_managed_collection_name(&self.collection)?;
         reject_workspace_datastore_write(&self.collection)?;
         for (index, field) in self.fields.iter().enumerate() {
             if field.name.trim().is_empty() {
@@ -462,6 +470,8 @@ pub const PROTECTED_DATASTORE_COLLECTIONS: &[&str] = &[
     gents_protocol::schemas::EVAL_VERDICT_NAME,
     gents_protocol::schemas::OPTIMIZATION_JOB_NAME,
     gents_protocol::schemas::PENDING_CHAT_SUBMISSION_NAME,
+    gents_protocol::schemas::CLIENT_AUTHORED_SUBMISSION_NAME,
+    gents_protocol::schemas::CLIENT_OUTBOX_SEQUENCE_NAME,
 ];
 
 /// These collections require the workspace publication owner to stage native
@@ -489,6 +499,26 @@ pub fn reject_protected_collection_name(collection: &str) -> Result<()> {
     if PROTECTED_DATASTORE_COLLECTIONS.contains(&collection) {
         anyhow::bail!(
             "collection {collection:?} is protected and cannot be exposed through a datastore tool"
+        );
+    }
+    Ok(())
+}
+
+/// `Documents.DatastoreProtection.writeDeclarationRefused`.
+pub fn write_declaration_refused(protected: bool, managed: bool, mailbox: bool) -> bool {
+    protected || (managed && !mailbox)
+}
+
+fn reject_managed_collection_name(collection: &str) -> Result<()> {
+    let managed = gents_store::schema::catalog::RUNTIME_CATALOG.manages(collection)
+        || gents_protocol::schemas::is_replicated_protocol_collection(collection);
+    if write_declaration_refused(
+        PROTECTED_DATASTORE_COLLECTIONS.contains(&collection),
+        managed,
+        collection == gents_protocol::row::MAILBOX_COLLECTION,
+    ) {
+        anyhow::bail!(
+            "collection {collection:?} is managed by Gents; a write tool declares application collections only"
         );
     }
     Ok(())
@@ -591,6 +621,33 @@ mod tests {
             super::reject_protected_collection_name(&case.collection)
                 .is_err_and(|error| format!("{error:#}").contains("protected"))
         });
+    }
+
+    #[test]
+    fn write_declaration_refusal_follows_the_model() {
+        gents_lean_vocab::families::documents_datastore_protection_write_declaration_refused::replay(
+            |case| super::write_declaration_refused(case.protected, case.managed, case.mailbox),
+        );
+    }
+
+    #[test]
+    fn a_write_tool_declares_no_collection_gents_manages_but_the_mailbox() {
+        let managed = gents_store::schema::catalog::RUNTIME_CATALOG
+            .managed_names()
+            .chain(
+                gents_protocol::schemas::REPLICATED_PROTOCOL_COLLECTION_NAMES
+                    .iter()
+                    .copied(),
+            );
+        for collection in managed {
+            let refused = super::reject_managed_collection_name(collection);
+            assert_eq!(
+                refused.is_err(),
+                collection != gents_protocol::row::MAILBOX_COLLECTION,
+                "{collection}"
+            );
+        }
+        assert!(super::reject_managed_collection_name("Notes").is_ok());
     }
 
     #[test]

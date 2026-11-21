@@ -1,4 +1,0 @@
----- MODULE MCTestCacheStoreExpiring ----
-EXTENDS TestCacheStore
-
-====

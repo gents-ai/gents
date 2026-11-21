@@ -90,6 +90,19 @@ pub struct HostTools {
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<CliTool>>", optional = nullable))]
     #[schemars(transform = crate::accepts_null)]
     pub cli: Vec<CliTool>,
+    /// Bytes of workspace instruction text (AGENTS.md) this Agent places in
+    /// provider context, across every file found. Unset uses 32 KiB. Must be
+    /// between 1 and 262,144.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub max_instruction_chars: Option<i64>,
+    /// Background calls one request can hold at once: Bash runs, remote
+    /// service calls and plugin jobs, counted together. Unset uses 8. Must be
+    /// between 1 and 8, the host ceiling the store's contention retries are
+    /// sized for (`gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub max_background_tool_calls: Option<i64>,
 }
 
 /// File access. The mode owns enablement; there is no separate enable flag.
@@ -752,6 +765,18 @@ impl Tools {
         }
         let mut errors = Vec::new();
         if let Some(host) = &self.host {
+            at_most(
+                &mut errors,
+                "host.max_instruction_chars",
+                host.max_instruction_chars,
+                crate::tool_limits::MAX_CONFIGURED_INSTRUCTION_CHARS,
+            );
+            at_most(
+                &mut errors,
+                "host.max_background_tool_calls",
+                host.max_background_tool_calls,
+                gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT,
+            );
             if let Some(files) = &host.files {
                 at_most(
                     &mut errors,

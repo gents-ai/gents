@@ -48,6 +48,8 @@ async fn account_events_never_repoint_a_profile() -> Result<()> {
         auth: gents_documents::BackendAuth::NodeOAuth { account_ref: None },
         connect_timeout_secs: None,
         discovery_timeout_secs: None,
+        client_version: None,
+        request_timeout_secs: None,
         max_concurrent: None,
         max_queue_depth: None,
         enabled: true,

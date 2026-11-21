@@ -3,10 +3,6 @@ use serde_json::json;
 
 #[test]
 fn modeled_affected_validation_preserves_visible_dependencies() {
-    let case = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .expect("configuration contract");
     let document = |key: &str| match key {
         "agent" => (
             Collection::Agent,
@@ -60,19 +56,17 @@ fn modeled_affected_validation_preserves_visible_dependencies() {
         ),
         _ => panic!("unknown modeled document {key}"),
     };
-    for modeled in &case.configuration_affected_cases {
-        let documents = modeled["documents"]
-            .as_array()
-            .unwrap()
+    gents_lean_vocab::families::household_configuration_affected::replay(|modeled| {
+        let documents = modeled
+            .documents
             .iter()
-            .map(|key| document(key.as_str().unwrap()))
+            .map(|key| document(key))
             .collect::<Vec<_>>();
-        let changed = modeled["changed"]
-            .as_array()
-            .unwrap()
+        let changed = modeled
+            .changed
             .iter()
             .map(|key| {
-                let (collection, value) = document(key.as_str().unwrap());
+                let (collection, value) = document(key);
                 (
                     collection,
                     value[collection.unique_field()]
@@ -83,14 +77,8 @@ fn modeled_affected_validation_preserves_visible_dependencies() {
             })
             .collect();
         let snapshot = ConfigReferences::from_documents("owner", documents).unwrap();
-        let actual = snapshot.validate_affected(&changed);
-        assert_eq!(
-            actual.is_ok(),
-            modeled["expected"].as_bool().unwrap(),
-            "{}: {actual:?}",
-            modeled["name"]
-        );
-    }
+        snapshot.validate_affected(&changed).is_ok()
+    });
 }
 
 #[test]
@@ -262,4 +250,49 @@ fn trigger_scope_checks_use_bound_task_and_source_for_both_templates() {
             validate(invalid).unwrap();
         }
     }
+}
+
+#[test]
+fn publication_refuses_a_command_trigger_whose_every_fire_is_refused() {
+    use gents_store::identity::NodeIdentity;
+    let directory = tempfile::tempdir().unwrap();
+    let runtime =
+        gents_store::identity::KeyIdentity::load_or_create(directory.path().join("runtime"), None)
+            .unwrap();
+    let owner = runtime.did();
+    let base = json!({
+        "node":{"node_did":owner},
+        "tasks":[{"node_did":owner,"task_id":"tick","command":{"argv":["true"]}}],
+        "schedules":[{"node_did":owner,"schedule_id":"schedule","cadence":{"kind":"interval","interval_secs":10}}],
+        "event_sources":[{"node_did":owner,"event_source_id":"event","source_collection":"Records"}],
+        "triggers":[{"node_did":owner,"trigger_id":"trigger","task_id":"tick","source":{"kind":"schedule","schedule_id":"schedule"}}]
+    });
+    let validate = |value| {
+        let config = serde_json::from_value::<super::super::PackConfig>(value).unwrap();
+        let plan = crate::DesiredStateApplyPlan::from_pack_config(&config).unwrap();
+        ConfigReferences::from_documents(
+            owner,
+            plan.documents()
+                .iter()
+                .map(|doc| (doc.collection, doc.add.clone())),
+        )?
+        .validate()
+    };
+    validate(base.clone()).unwrap();
+    let mut budgeted = base.clone();
+    budgeted["triggers"][0]["max_fires_per_hour"] = json!(30);
+    validate(budgeted).unwrap();
+    let mut targeted = base.clone();
+    targeted["triggers"][0]["session_id_template"] = json!("tick");
+    let error = format!("{:#}", validate(targeted.clone()).unwrap_err());
+    assert!(error.contains("session_id_template"), "{error}");
+    targeted["triggers"][0]["concurrency"] = json!("queued_serial");
+    assert!(validate(targeted).is_err());
+    let mut queued = base.clone();
+    queued["triggers"][0]["concurrency"] = json!("queued_serial");
+    assert!(validate(queued).is_err());
+    let mut event = base;
+    event["triggers"][0]["source"] = json!({"kind":"event","event_source_id":"event"});
+    let error = format!("{:#}", validate(event).unwrap_err());
+    assert!(error.contains("not an event Trigger"), "{error}");
 }

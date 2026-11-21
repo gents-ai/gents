@@ -27,6 +27,7 @@ default = [
     "defra-node/p2p",
     "defra-node/wasmtime-runtime",
 ]
+vera = ["gents-store/vera"]
 typescript = ["dep:ts-rs", "gents-loop/typescript", "gents-protocol/typescript", "gents-store/typescript", "gents-documents/typescript", "gents-inference/typescript", "gents-p2p/typescript", "gents-pack/typescript", "gents-session/typescript", "gents-tools/typescript", "gents-toolcalls/typescript", "gents-automation/typescript", "gents-observe/typescript"]
 # Gates the optional live-inference collection out of default builds.
 live-e2e = ["gents-store/live-e2e", "gents-documents/live-e2e", "gents-inference/live-e2e", "gents-p2p/live-e2e", "gents-pack/live-e2e", "gents-session/live-e2e", "gents-tools/live-e2e", "gents-toolcalls/live-e2e", "gents-automation/live-e2e", "gents-observe/live-e2e"]
@@ -34,7 +35,7 @@ live-e2e = ["gents-store/live-e2e", "gents-documents/live-e2e", "gents-inference
 # through dev-dependencies, never by production builds.
 test-home-guard = ["gents-store/test-home-guard", "gents-documents/test-home-guard", "gents-inference/test-home-guard", "gents-p2p/test-home-guard", "gents-pack/test-home-guard", "gents-session/test-home-guard", "gents-tools/test-home-guard", "gents-toolcalls/test-home-guard", "gents-automation/test-home-guard", "gents-observe/test-home-guard"]
 # Native fixtures for downstream conformance tests; never enabled in production.
-test-fixtures = ["dep:gents-lean-vocab", "test-home-guard", "axum/ws", "gents-store/test-fixtures", "gents-documents/test-fixtures", "gents-inference/test-fixtures", "gents-p2p/test-fixtures", "gents-pack/test-fixtures", "gents-session/test-fixtures", "gents-tools/test-fixtures", "gents-toolcalls/test-fixtures", "gents-automation/test-fixtures", "gents-observe/test-fixtures"]
+test-fixtures = ["gents-loop/test-fixtures", "dep:gents-lean-vocab", "test-home-guard", "axum/ws", "gents-store/test-fixtures", "gents-documents/test-fixtures", "gents-inference/test-fixtures", "gents-p2p/test-fixtures", "gents-pack/test-fixtures", "gents-session/test-fixtures", "gents-tools/test-fixtures", "gents-toolcalls/test-fixtures", "gents-automation/test-fixtures", "gents-observe/test-fixtures"]
 
 [dependencies]
 # Decoder of Lean-generated cases; compiled in only for test-fixtures.
@@ -53,108 +54,43 @@ acp.workspace = true
 schema.workspace = true
 storage.workspace = true
 db.workspace = true
-document.workspace = true
 rapidhash = { workspace = true }
 ts-rs = { version = "10.1", optional = true, default-features = false, features = ["serde-compat", "no-serde-warnings"] }
 anyhow.workspace = true
 # Trial homes serve Agent identity provisioning beside DefraDB's own routes.
 axum = "0.8"
-async-stream = "0.3"
 async-trait = "0.1"
-# RS256 for Google service account assertions; the same build rustls already links.
-aws-lc-rs = { version = "1", default-features = false, features = ["aws-lc-sys"] }
-base64.workspace = true
-bs58 = "0.5"
-bytes.workspace = true
-caseless = "0.2.2"
-unicode-normalization = "0.1.25"
 chrono.workspace = true
-chrono-tz.workspace = true
-crypto.workspace = true
-cursor.workspace = true
 defra-core.workspace = true
 defra-http.workspace = true
 defra-p2p-adapter.workspace = true
-gents-fs-runner = { path = "../gents-fs-runner" }
 gents-claude = { workspace = true, features = ["transport"] }
 gents-loop = { workspace = true, features = ["native"] }
 gents-protocol.workspace = true
-gents-migration = { path = "../gents-migration" }
 defra-node.workspace = true
-dirs.workspace = true
 events.workspace = true
 futures = "0.3"
-eventsource-stream = "0.2.3"
 hostname.workspace = true
-lens.workspace = true
 identity.workspace = true
-k256 = { version = "0.13", default-features = false }
 libc = "0.2"
-minijinja.workspace = true
-opentelemetry.workspace = true
 p2p.workspace = true
 query.workspace = true
 rand.workspace = true
-regolith = "0.2.4"
 serde.workspace = true
 serde_json.workspace = true
-serde_path_to_error = "0.1"
-same-file = "1.0.6"
-serde_yaml.workspace = true
 regex = "1"
-schemars = "1"
-jsonschema = { version = "0.46.5", default-features = false }
 sha2.workspace = true
-hmac.workspace = true
-hkdf.workspace = true
-zeroize.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 toml.workspace = true
 tracing.workspace = true
-tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
-tokio-tungstenite = { version = "0.26.2", features = ["rustls-tls-native-roots"] }
+tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-native-roots"] }
 uuid.workspace = true
 rig-core.workspace = true
 reqwest = { workspace = true, features = ["stream"] }
-reqwest-provider = { package = "reqwest", version = "0.13", default-features = false }
-rmcp = { version = "1.2.0", features = ["client", "transport-streamable-http-client-reqwest", "reqwest"] }
 tokio-util = "0.7"
 tempfile = "3"
-memmap2 = "0.9"
-kovan-map = "0.2.2"
-
-# The pack container (src/pack/archive.rs). A pack travels as a
-# gzip-compressed tar; `tar`/`flate2` build and read it.
-tar = "0.4"
-flate2 = "1"
-
-# The pack store's name index (src/pack/store.rs): orders a name's stored
-# versions to resolve a bare `namespace/name` to its highest one.
-semver = "1"
-
-# `afterburner_afb::Afb` parses a plugin's compiled `.afb` (src/pack/archive.rs
-# reads a pack's declared assets, one of which may be a plugin's artifact;
-# src/plugin.rs parses that artifact to classify it before ever running it).
-afterburner-afb = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1" }
-afterburner-core = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1" }
-# The plugin runner (src/plugin.rs): runs a plugin's compiled `.afb` via
-# Afterburner's own `afb_run::run_afb_bytes`, the library entry point built
-# for an embedder that needs to run a package without the `burn` CLI's
-# registry-client weight (`bin` feature, pulled in separately by
-# `gents-cli`). Pinned to the same rev as the other afterburner-* crates
-# above so all of them always agree on the `.afb`/`Manifold` wire shapes.
-afterburner = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1", default-features = false, features = [
-    "afb-run",
-] }
-# The workerless runtime a plugin's WASI host calls run on (src/plugin/wasi_runtime.rs);
-# afterburner's WASI host drives its futures on nuclei.
-nuclei = { version = "0.5.6", default-features = false }
-# `wasmtime::Caller` for the host imports a declaring plugin may call (`plugin/host_imports.rs`);
-# the version follows the one afterburner pins so the lockfile holds a single wasmtime.
-wasmtime = { version = "49", default-features = false, features = ["runtime"] }
-
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = { version = "3.7.0", features = ["OSX_10_15"] }
@@ -175,6 +111,7 @@ windows-sys = { version = "0.61.2", features = [
 ] }
 
 [dev-dependencies]
+wiremock = "0.6"
 gents-workspace-hack = { workspace = true }
 # Integration tests link the library with its fixtures.
 gents = { path = ".", features = ["test-fixtures", "typescript"] }

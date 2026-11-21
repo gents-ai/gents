@@ -7,6 +7,7 @@ use tokio_util::sync::CancellationToken;
 use crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
 use gents_documents::task_delivery::TriggerKind;
 
+pub mod command;
 pub(crate) mod deferred_delivery;
 pub mod durable;
 pub(crate) mod event_delivery;
@@ -26,17 +27,22 @@ type TriggerLockMap = RapidHashMap<TriggerLockKey, TriggerLock>;
 
 /// Dispatches every fire from `sources` through the production materializer
 /// until `cancel` fires: the trigger task the runtime starts once its startup
-/// barrier releases.
+/// barrier releases. Command Tasks run under `tool_root`, the operator's tool
+/// ceiling.
 pub async fn run_trigger_engine(
     node: Arc<defra_node::Node>,
     snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
     sources: Vec<Box<dyn TriggerSource>>,
+    tool_root: Option<std::path::PathBuf>,
     cancel: CancellationToken,
 ) {
     let materializer: Arc<dyn MaterializerHandle> = Arc::new(
-        production_materializer::ProductionMaterializer::new(node, snapshot_rx.clone()),
+        production_materializer::ProductionMaterializer::new(node.clone(), snapshot_rx.clone()),
     );
     TriggerEngine::new(snapshot_rx, materializer)
+        .with_command_host(Arc::new(command::ProductionCommandHost::new(
+            node, tool_root,
+        )))
         .run(sources, cancel)
         .await;
 }
@@ -167,12 +173,28 @@ pub const UNACKNOWLEDGED_STATUS: &str = "unacknowledged";
 
 #[derive(Debug, Clone)]
 pub enum FireResult {
-    Duplicate { request_id: String },
-    Fired { request_id: String },
-    Skipped { reason: String },
-    Errored { error: String },
-    Rejected { error: String },
-    BudgetExhausted { reason: String },
+    Duplicate {
+        request_id: String,
+    },
+    Fired {
+        request_id: String,
+    },
+    Skipped {
+        reason: String,
+    },
+    Errored {
+        error: String,
+    },
+    Rejected {
+        error: String,
+    },
+    BudgetExhausted {
+        reason: String,
+    },
+    /// A command Task's fire launched its command; no request was written.
+    CommandStarted {
+        run_id: String,
+    },
 }
 
 pub trait TriggerSource: Send + Sync {
@@ -181,25 +203,28 @@ pub trait TriggerSource: Send + Sync {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<FireIntent>> + Send + '_>>;
 }
 
+/// One fire a materializer turns into a request: the Task and its rendered
+/// prompt, the trigger and source that caused it, and the fire's durable
+/// identity, prepared delivery and reserved request and session ids.
+pub(crate) struct FireMaterialization<'a> {
+    pub(crate) task: &'a gents_documents::automation::ResolvedTask,
+    pub(crate) trigger_id: Option<&'a str>,
+    pub(crate) trigger_kind: TriggerKind,
+    pub(crate) trigger_doc_id: Option<&'a str>,
+    pub(crate) source_doc_id: Option<&'a str>,
+    pub(crate) correlation: Option<&'a str>,
+    pub(crate) trigger_context: Option<&'a str>,
+    pub(crate) rendered_prompt: &'a str,
+    pub(crate) rendered_goal_objective: Option<&'a str>,
+    pub(crate) durable_fire_key: &'a str,
+    pub(crate) delivery: Option<&'a durable::PreparedFire>,
+    pub(crate) prepared_ids: Option<(&'a str, &'a str)>,
+}
+
 pub(crate) trait MaterializerHandle: Send + Sync {
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "positional contract shared by the production and spy materializers"
-    )]
     fn materialize(
         &self,
-        task: &gents_documents::automation::ResolvedTask,
-        trigger_id: Option<&str>,
-        trigger_kind: TriggerKind,
-        trigger_doc_id: Option<&str>,
-        source_doc_id: Option<&str>,
-        correlation: Option<&str>,
-        trigger_context: Option<&str>,
-        rendered_prompt: &str,
-        rendered_goal_objective: Option<&str>,
-        durable_fire_key: &str,
-        delivery: Option<&crate::triggers::engine::durable::PreparedFire>,
-        prepared_ids: Option<(&str, &str)>,
+        fire: FireMaterialization<'_>,
     ) -> std::pin::Pin<
         Box<dyn std::future::Future<Output = Result<String, MaterializeError>> + Send + '_>,
     >;
@@ -251,6 +276,9 @@ pub(crate) struct TriggerEngine {
     snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
     materializer: Arc<dyn MaterializerHandle>,
     per_trigger_locks: Mutex<TriggerLockMap>,
+    command_host: Option<Arc<dyn command::CommandHost>>,
+    command_runs: Arc<Mutex<command::CommandRuns>>,
+    command_shutdown: CancellationToken,
 }
 
 impl TriggerEngine {
@@ -262,7 +290,15 @@ impl TriggerEngine {
             snapshot_rx,
             materializer,
             per_trigger_locks: Mutex::new(RapidHashMap::new()),
+            command_host: None,
+            command_runs: Arc::default(),
+            command_shutdown: CancellationToken::new(),
         }
+    }
+
+    pub(crate) fn with_command_host(mut self, host: Arc<dyn command::CommandHost>) -> Self {
+        self.command_host = Some(host);
+        self
     }
 
     pub(crate) async fn run(self, sources: Vec<Box<dyn TriggerSource>>, cancel: CancellationToken) {
@@ -295,6 +331,7 @@ impl TriggerEngine {
                 }
             }
         }
+        engine.command_shutdown.cancel();
     }
 
     async fn prune_trigger_lock(&self, lock_key: &TriggerLockKey, lock: &TriggerLock) {
@@ -330,22 +367,22 @@ impl TriggerEngine {
         };
         let mut materialized = self
             .materializer
-            .materialize(
-                &intent.task,
-                intent.trigger_id.as_deref(),
-                intent.trigger_kind,
-                trigger_doc_id.as_deref(),
-                source_doc_id.as_deref(),
-                intent.correlation.as_deref(),
-                intent.trigger_context.as_deref(),
-                &rendered,
-                rendered_goal_objective.as_deref(),
-                &intent.durable_fire_key,
-                delivery.as_ref(),
-                prepared_ids
+            .materialize(FireMaterialization {
+                task: &intent.task,
+                trigger_id: intent.trigger_id.as_deref(),
+                trigger_kind: intent.trigger_kind,
+                trigger_doc_id: trigger_doc_id.as_deref(),
+                source_doc_id: source_doc_id.as_deref(),
+                correlation: intent.correlation.as_deref(),
+                trigger_context: intent.trigger_context.as_deref(),
+                rendered_prompt: &rendered,
+                rendered_goal_objective: rendered_goal_objective.as_deref(),
+                durable_fire_key: &intent.durable_fire_key,
+                delivery: delivery.as_ref(),
+                prepared_ids: prepared_ids
                     .as_ref()
                     .map(|(request, session)| (request.as_str(), session.as_str())),
-            )
+            })
             .await;
         if materialized.is_err() && rendered_goal_objective.is_some() && delivery.is_none() {
             if let Ok(Some(request_id)) = self

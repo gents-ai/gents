@@ -1,4 +1,5 @@
-pub mod migration;
+pub mod catalog;
+pub mod journal;
 
 #[cfg(test)]
 mod pushdown_tests;
@@ -78,11 +79,13 @@ pub async fn ensure_runtime_schemas(node: &EmbeddedNode) -> Result<()> {
     if let Some(access) = crate::config_client::ConfigAccess::claimed_for_node(node) {
         return Ok(access
             .run_local_owned(|node| async move {
-                crate::schema::migration::ensure_migrations_borrowed(node.as_ref()).await
+                catalog::ensure_runtime(node.as_ref())
+                    .await
+                    .map_err(catalog::RuntimeSchemaError::Schema)
             })
             .await?);
     }
-    Ok(crate::schema::migration::ensure_migrations_borrowed(node).await?)
+    Ok(catalog::ensure_runtime(node).await?)
 }
 
 #[cfg(test)]
@@ -94,14 +97,19 @@ mod legacy_backend_tests {
     async fn legacy_history_preflight_leaves_existing_document_untouched() -> anyhow::Result<()> {
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         let access = crate::config_client::ConfigAccess::local(node.clone());
-        let unbound = gents_protocol::schemas::INFERENCE_BACKEND.replace(
-            &format!(
-                " @policy(id: \"{}\", resource: \"secret_configuration\")",
-                gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID
-            ),
-            "",
-        );
-        access.add_collection(&unbound).await?;
+        let unbound = gents_protocol::schemas::HomePolicyIds::shared()
+            .render(gents_protocol::schemas::INFERENCE_BACKEND)
+            .replace(
+                &format!(
+                    " @policy(id: \"{}\", resource: \"secret_configuration\")",
+                    gents_protocol::schemas::HomePolicyIds::shared()
+                        .id(gents_protocol::schemas::BuiltInPolicy::Household)
+                ),
+                "",
+            );
+        access
+            .add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&unbound))
+            .await?;
         access
             .write(
                 "legacy_fixture",
@@ -133,14 +141,18 @@ mod legacy_backend_tests {
     async fn unbound_legacy_schema_is_refused_even_when_no_rows_are_visible() -> anyhow::Result<()>
     {
         let node = crate::test_support::node_builder().build().await?;
-        let unbound = gents_protocol::schemas::INFERENCE_BACKEND.replace(
-            &format!(
-                " @policy(id: \"{}\", resource: \"secret_configuration\")",
-                gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID
-            ),
-            "",
-        );
-        node.add_collection(&unbound).await?;
+        let unbound = gents_protocol::schemas::HomePolicyIds::shared()
+            .render(gents_protocol::schemas::INFERENCE_BACKEND)
+            .replace(
+                &format!(
+                    " @policy(id: \"{}\", resource: \"secret_configuration\")",
+                    gents_protocol::schemas::HomePolicyIds::shared()
+                        .id(gents_protocol::schemas::BuiltInPolicy::Household)
+                ),
+                "",
+            );
+        node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&unbound))
+            .await?;
         let previous = node
             .get_collection(gents_protocol::schemas::INFERENCE_BACKEND_NAME)?
             .expect("unbound legacy schema");
@@ -159,28 +171,78 @@ mod legacy_backend_tests {
 
     #[tokio::test]
     async fn fresh_baseline_installs_private_legacy_schema() -> anyhow::Result<()> {
-        let node = Arc::new(crate::test_support::node_builder().build().await?);
-        ensure_runtime_schemas(&node).await?;
-        let collection = node
-            .get_collection(gents_protocol::schemas::INFERENCE_BACKEND_NAME)?
-            .expect("fresh legacy schema");
-        let binding = !collection.is_branchable
-            && collection.policy.as_ref().is_some_and(|policy| {
-                policy.id == gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID
-                    && policy.resource_name == "secret_configuration"
-            });
-        let modeled = gents_lean_vocab::lean_identity_household_cases()
-            .iter()
-            .find(|case| case.name == "configuration-explicit-grants")
-            .unwrap();
-        let case = modeled
-            .fresh_backend_admission_cases
-            .iter()
-            .find(|case| {
-                case["origin"] == true && case["binding"] == true && case["intact"] == true
+        use crate::identity::NodeIdentity;
+        use crate::local::backend_protection::FreshBackendStore;
+        for case in gents_lean_vocab::families::household_fresh_backend_admission::cases() {
+            let directory = tempfile::tempdir()?;
+            let home = directory.path().to_owned();
+            let data = home.join("data");
+            let lock_home = home.clone();
+            let lock_data = data.clone();
+            let lock = tokio::task::spawn_blocking(move || {
+                std::fs::create_dir_all(&lock_data)?;
+                Ok::<_, anyhow::Error>(crate::local::home::lock_store(&lock_home, &lock_data)?)
             })
-            .unwrap();
-        assert_eq!(binding, case["allowed"].as_bool().unwrap());
+            .await??;
+            if !case.input.origin {
+                tokio::fs::write(data.join("stray"), b"not fresh").await?;
+            }
+            let key = crate::local::store_key::StoreKey::from_host(&[5; 32])?;
+            let identity_path = home.join("node.key");
+            let runtime = tokio::task::spawn_blocking(
+                move || -> anyhow::Result<std::sync::Arc<dyn NodeIdentity>> {
+                    Ok(std::sync::Arc::new(
+                        crate::identity::KeyIdentity::load_or_create(identity_path, None)?,
+                    ))
+                },
+            )
+            .await??;
+            let owner_path = home.join("owner.key");
+            let owner = tokio::task::spawn_blocking(move || -> anyhow::Result<identity::Did> {
+                Ok(identity::Did::new(
+                    crate::identity::KeyIdentity::load_or_create(owner_path, None)?.did(),
+                )?)
+            })
+            .await??;
+            let did = runtime.did().to_owned();
+            let initialized = match FreshBackendStore::observe(&data, &lock).await {
+                Ok(fresh) => fresh
+                    .initialize(
+                        &key,
+                        &runtime,
+                        &owner,
+                        crate::local::document_acp::DocumentAcp::Local,
+                    )
+                    .await
+                    .is_ok(),
+                Err(_) => false,
+            };
+            let admitted = if initialized {
+                let node = crate::local::store_key::persistent_builder(
+                    &data,
+                    &key,
+                    crate::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+                )?
+                .with_node_identity_did(did)
+                .build()
+                .await?;
+                let collection = node
+                    .get_collection(gents_protocol::schemas::INFERENCE_BACKEND_NAME)?
+                    .expect("fresh legacy schema");
+                let binding = !collection.is_branchable
+                    && collection.policy.as_ref().is_some_and(|policy| {
+                        policy.id
+                            == gents_protocol::schemas::HomePolicyIds::shared()
+                                .id(gents_protocol::schemas::BuiltInPolicy::Household)
+                            && policy.resource_name == "secret_configuration"
+                    });
+                node.shutdown().await?;
+                binding
+            } else {
+                false
+            };
+            case.check(admitted);
+        }
         Ok(())
     }
 

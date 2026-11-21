@@ -18,21 +18,27 @@ inductive RunDecision where
   | taskDisabled
   | agentMissing
   | agentDisabled
+  /-- A command Task runs on the Node from its Trigger; a client's manual run
+  writes a request for an Agent to answer, and a command Task has none. -/
+  | commandTask
   deriving DecidableEq, Repr
 
 /-- A Task runs only when it and the Agent that answers it are enabled. The
-Task is judged first, so a refusal names the document the caller chose. -/
-def runDecision (task agent : Presence) : RunDecision :=
-  match task, agent with
-  | .missing, _ => .taskMissing
-  | .disabled, _ => .taskDisabled
-  | .enabled, .missing => .agentMissing
-  | .enabled, .disabled => .agentDisabled
-  | .enabled, .enabled => .run
+Task is judged first, so a refusal names the document the caller chose; an
+enabled command Task is refused before any Agent is looked for. -/
+def runDecision (task agent : Presence) (command : Bool) : RunDecision :=
+  match task, command, agent with
+  | .missing, _, _ => .taskMissing
+  | .disabled, _, _ => .taskDisabled
+  | .enabled, true, _ => .commandTask
+  | .enabled, false, .missing => .agentMissing
+  | .enabled, false, .disabled => .agentDisabled
+  | .enabled, false, .enabled => .run
 
-theorem run_requires_both_enabled (task agent : Presence)
-    (h : runDecision task agent = .run) : task = .enabled ∧ agent = .enabled := by
-  cases task <;> cases agent <;> simp_all [runDecision]
+theorem run_requires_both_enabled (task agent : Presence) (command : Bool)
+    (h : runDecision task agent command = .run) :
+    task = .enabled ∧ agent = .enabled ∧ command = false := by
+  cases task <;> cases agent <;> cases command <;> simp_all [runDecision]
 
 inductive Matches where
   | none

@@ -13,16 +13,10 @@ use p2p::iroh::{IrohDiscoveryConfig, IrohRelayModeConfig};
 
 use super::*;
 use crate::p2p_reconcile::templates::Scope;
-use crate::p2p_reconcile::GraphqlEnrollmentStore;
 use crate::p2p_reconcile::{combine_filters, equality_filter};
 use defra_node::P2PConfig;
 use defra_p2p_adapter::P2pDocumentRequest;
 use fixtures::{runtime_http_test_node, wait_for_active_peer, wait_for_peer_info};
-use gents_protocol::enrollment::{
-    derive_enrollment_id, encode_offer, enrollment_schema_fingerprint, EnrollmentDecisionKind,
-    EnrollmentOfferRecord, EnrollmentRequestRecord, ENROLLMENT_PROTOCOL_VERSION,
-};
-use gents_protocol::network_token::NetworkRecord;
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 use gents_store::schema::ensure_runtime_schemas;
@@ -88,7 +82,7 @@ async fn explicit_file_image_push_refuses_runtime_local_collections() {
         "file-change documents reached the P2P transport"
     );
     for node in [sender, receiver] {
-        assert!(gents_store::identity::node_p2p(node)
+        assert!(crate::node_access::operations(node)
             .unwrap()
             .get_collections()
             .await

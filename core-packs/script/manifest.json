@@ -2,8 +2,7 @@
   "manifest_version": 1,
   "namespace": "gents",
   "name": "script",
-  "version": "0.1.3",
-  "plugin_interface": 1,
+  "version": "1.0.0-rc2",
   "kind": "documents",
   "description": "Sandboxed JavaScript with optional access to the caller's tools.",
   "authors": ["gents-ai contributors"],
@@ -28,5 +27,5 @@
       "required": ["script"]
     }
   }],
-  "assets": ["README.md", "pack_config.json", "plugins/script.afb", "plugins/script/TOOL.md", "plugins/script/tests/compute.json", "plugins/script/tests/sleep.json", "plugins/script/tests/isolation.json", "plugins/script/tests/probe.json", "plugins/script/tests/surface.json", "plugins/script/tests/batch.json", "plugins/script/tests/chosen_form.json", "tests/install.json", "tests/content.json"]
+  "assets": ["README.md", "pack_config.json", "plugins/script.afb", "plugins/script/TOOL.md", "plugins/script/tests/compute.json", "plugins/script/tests/sleep.json", "plugins/script/tests/isolation.json", "plugins/script/tests/probe.json", "tests/install.json", "tests/content.json"]
 }

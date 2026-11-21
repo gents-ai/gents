@@ -2,10 +2,9 @@ use super::native::native_service;
 use super::pairing::drain_managed_runtime_pairing;
 use super::port::capitalize;
 use crate::config::ManagedServerPolicy;
-use crate::error::BridgeError;
 use crate::state::DesktopAppState;
 use crate::types::{ManagedServerRepairOutcome, ManagedServerRepairResult};
-use gents_desktop_core::client::client_store_from_other_version;
+use gents_desktop_core::client::journal::keys::client_store_from_other_version;
 use gents_desktop_core::home_reset::resolve_user_home;
 use gents_desktop_core::preference::MANAGED_SERVER_CONFIG;
 use gents_protocol::operations::install_repair::IncompatibleStoreKind;
@@ -15,6 +14,7 @@ use gents_protocol::operations::install_repair::{
     RepairReceipt, RepairStep, ServiceMove,
 };
 use gents_service::repair::{execute, Progress, ServiceProgram};
+use gents_store::client_error::BridgeError;
 use std::future::Future;
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager as _, Runtime};
@@ -74,7 +74,11 @@ where
     use crate::tauri_commands::service_executable::{
         ensure_installable_location, resolve_service_executable, ServiceExecutable,
     };
-    let resolved = resolve_service_executable(app, state.policy.desktop_paths.root())?;
+    let resolved = resolve_service_executable(
+        app,
+        state.policy.desktop_paths.root(),
+        state.policy.service_executable.as_deref(),
+    )?;
     match resolved {
         ServiceExecutable::InPlace(path) => {
             ensure_installable_location(&path)?;
@@ -111,7 +115,7 @@ where
             repaired: Vec::new(),
             outcome: ManagedServerRepairOutcome::NoLocalNode,
             blocker: None,
-            saved_peers: Vec::new(),
+            saved_runtimes: Vec::new(),
             local_node_lost: false,
         });
     };
@@ -151,24 +155,24 @@ where
         ),
     };
 
-    let peers_path = paths.peer_directory_path();
+    let peers_path = paths.runtime_directory_path();
     let mut local_node_lost = stale_node;
     let late = async {
         let client = repair_client_state(state, &mut repaired, RepairClientScope::All).await?;
         local_node_lost |= client.local_node_lost;
-        gents_desktop_core::client::load_peer_records(peers_path)
+        gents_store::client_journal::runtime_directory::load_runtime_connections(peers_path)
             .await
             .map_err(|error| BridgeError::untyped(error.to_string()))
     }
     .await;
-    let saved_peers = match late {
-        Ok(peers) => crate::snapshot::saved_peer_views(&peers),
+    let saved_runtimes = match late {
+        Ok(peers) => crate::snapshot::saved_runtime_views(&peers),
         Err(error) => {
             outcome = ManagedServerRepairOutcome::Blocked;
             blocker = Some(capitalize(format!("{error:#}")));
-            gents_desktop_core::client::load_peer_records(peers_path)
+            gents_store::client_journal::runtime_directory::load_runtime_connections(peers_path)
                 .await
-                .map(|peers| crate::snapshot::saved_peer_views(&peers))
+                .map(|peers| crate::snapshot::saved_runtime_views(&peers))
                 .unwrap_or_default()
         }
     };
@@ -176,7 +180,7 @@ where
         repaired,
         outcome,
         blocker,
-        saved_peers,
+        saved_runtimes,
         local_node_lost,
     })
 }

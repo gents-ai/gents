@@ -232,7 +232,7 @@ mod no_model {
         ensure!(live.plist().is_file(), "the service was not installed");
 
         let pid = live.service_pid().context("the service runs")?;
-        let mut second = Terminal::spawn(&live.gents(), &live.log("second-run"))?;
+        let mut second = Terminal::spawn(&live.gents_root(), &live.log("second-run"))?;
         second.quit_shell().await?;
         ensure!(
             !second.transcript().contains(FOLDER_QUESTION)
@@ -616,8 +616,8 @@ mod no_model {
         let live = LiveBox::new()?;
         let home = live.init_home("home", backend.endpoint(), NO_MODEL_NAME)?;
         let copy = live.root.join("copy-of-gents");
-        fs::copy(cli_bin(), &copy)?;
-        let mut command = live.gents_from(&copy);
+        gents_store::test_support::copy_executable(Path::new(cli_bin()), &copy)?;
+        let mut command = live.root_from(&copy);
         command.arg("--home").arg(&home.home);
         let mut installing = Terminal::spawn(&command, &live.log("copy"))?;
         installing.quit_shell().await?;
@@ -1216,7 +1216,7 @@ mod with_model {
             "Give one short greeting in plain text. Do not call tools. Turn {}",
             uuid::Uuid::new_v4()
         );
-        let mut print = live.gents();
+        let mut print = live.gents_root();
         print.args(["-p", &prompt, "--home"]).arg(&folder);
         let output = tokio::time::timeout(
             TURN,

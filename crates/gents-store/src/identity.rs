@@ -1,19 +1,21 @@
-use rapidhash::{HashMapExt, RapidHashMap};
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use defra_core::signing::{SigningConfig, SigningKeyType};
 use identity::{FullIdentity as _, Identity as _, RawIdentity};
 
 pub mod agent;
+pub mod client_access;
 mod enrollment_approval;
+mod enrollment_gate;
 mod enrollment_grant;
 mod error;
 mod file_key;
 pub mod grant_sets;
+pub mod home_status;
 pub(crate) mod macos;
-mod provision_client;
+pub(crate) mod provision_client;
 mod registered;
 pub mod request_receipt;
 
@@ -27,15 +29,24 @@ pub use enrollment_approval::{
     approve_enrollment, grant_as_approver, verify_pending_client_request, ApprovalStep,
     EnrollmentApproval, EnrollmentApprovalError,
 };
+pub use enrollment_gate::enrollment_decision_gate;
 pub use enrollment_grant::{
-    grant_enrollment_authority, load_enrollment_grant_receipts, plan_grant,
-    plan_membership_withdrawal, plan_withdrawal, EnrollmentGrantError, EnrollmentGrantOutcome,
-    EnrollmentGrantReceipt, EnrollmentGrantTuple, EnrollmentGrantWithdrawal,
+    administration_owed, after_removal, grant_enrollment_authority, lapse_clock,
+    load_enrollment_grant_receipts, membership_lapsed, owed_removals, permission_grant_admitted,
+    plan_grant, plan_membership_withdrawal, plan_owing, plan_withdrawal, restoration_step,
+    settle_owed_withdrawals, settlement_step, AfterRemoval, EnrollmentGrantError,
+    EnrollmentGrantOutcome, EnrollmentGrantReceipt, EnrollmentGrantTuple,
+    EnrollmentGrantWithdrawal, RestorationStep, SettlementStep,
+};
+pub(crate) use enrollment_grant::{
+    close_owed_removal, owed_removal_receipts, NODE_ADMINISTRATOR_RELATION,
 };
 pub use error::{identity_key_unavailable, IdentityError, IdentityKeyUnavailable};
 pub use file_key::{load_file_identity, load_or_create_file_identity, InsecureKeyPermissions};
 pub(crate) use file_key::{publish_private_key_file, read_private_key_file};
-pub use grant_sets::{GrantSet, GrantSetError};
+pub use grant_sets::{
+    node_runtime_permissions, GrantSet, GrantSetError, Recipient, RecipientGrants,
+};
 pub use macos::{
     load_macos_keychain_identity, load_macos_secure_enclave_identity,
     load_or_create_macos_keychain_identity, load_or_create_macos_secure_enclave_identity,
@@ -163,8 +174,19 @@ impl ManagedAgentSigner {
         self.runtime_proof.as_ref()
     }
 
-    pub fn native(&self) -> &defra_node::EmbeddedSigner {
-        &self.signer
+    /// `request`, signed with this Agent's key and decided by document ACP
+    /// even where node access control grants the Agent `bypass-dac`.
+    pub fn attach(&self, request: query::QueryRequest) -> query::QueryRequest {
+        Self::deny_dac_bypass(self.signer.attach(request))
+    }
+
+    /// `request` made as a managed Agent, decided by document ACP even where
+    /// node access control grants the Agent `bypass-dac`: managed-Agent
+    /// signing never resolves the bypass (Lean
+    /// `Configuration.toolSessionReadAllowed`).
+    pub fn deny_dac_bypass(mut request: query::QueryRequest) -> query::QueryRequest {
+        request.context = request.context.with_dac_bypass_denied();
+        request
     }
 }
 
@@ -181,11 +203,6 @@ impl std::fmt::Debug for ManagedAgentSigner {
 struct KnownPublicKey {
     key_type: crypto::KeyType,
     bytes: Vec<u8>,
-}
-
-fn known_public_keys() -> &'static RwLock<RapidHashMap<String, KnownPublicKey>> {
-    static TYPED_KEYS: OnceLock<RwLock<RapidHashMap<String, KnownPublicKey>>> = OnceLock::new();
-    TYPED_KEYS.get_or_init(|| RwLock::new(RapidHashMap::new()))
 }
 
 #[derive(Debug)]
@@ -233,7 +250,6 @@ impl KeyIdentity {
         let identity = Arc::new(identity);
         let did = identity.did()?.to_string();
         let public_key_bytes = identity.public_key_bytes();
-        register_public_key(&did, identity.key_type(), public_key_bytes.clone());
         register_ed25519_signing_identity(&did, &identity.private_key_bytes(), &public_key_bytes)?;
         Ok(Self {
             did,
@@ -275,7 +291,7 @@ pub fn register_ed25519_signing_identity(
             remote_signer: None,
             signing_authorization: None,
         },
-    );
+    )?;
     Ok(())
 }
 
@@ -288,6 +304,35 @@ pub fn commit_signer_identity_for_did(did: &str) -> Result<String> {
             source,
         })?;
     Ok(lowercase_hex(&public_key_bytes))
+}
+
+/// The DID that signed a commit, from `_commits { signature { identity type } }`:
+/// the inverse of [`commit_signer_identity_for_did`]. DefraDB verifies the
+/// signature when the block arrives, so this names the node that wrote it.
+/// The DID is derived as DefraDB derives it at merge
+/// (`verified_signature_signer_did`), so a compressed secp256k1 or P-256
+/// header key names the same DID as its uncompressed form.
+pub fn commit_signer_did(identity: &str, signature_type: &str) -> Result<String> {
+    let parsed =
+        serde_json::from_value(serde_json::Value::from(signature_type)).map_err(|source| {
+            IdentityError::UnknownCommitSignatureType {
+                signature_type: signature_type.to_owned(),
+                source,
+            }
+        })?;
+    let key_type = match parsed {
+        defra_core::SignatureType::EdDSA => crypto::KeyType::Ed25519,
+        defra_core::SignatureType::ES256K => crypto::KeyType::Secp256k1,
+        defra_core::SignatureType::ES256 => crypto::KeyType::Secp256r1,
+        defra_core::SignatureType::BLSAugV1 => crypto::KeyType::Bls12381,
+    };
+    crypto::public_key_from_string(key_type, identity)
+        .and_then(|key| key.did())
+        .map_err(|source| IdentityError::UnreadableCommitSigner {
+            identity: identity.to_owned(),
+            signature_type: signature_type.to_owned(),
+            source,
+        })
 }
 
 /// DefraDB tolerates up to 60s of clock skew and its bearers carry no nonce,
@@ -344,11 +389,16 @@ pub fn can_mint_defradb_bearer(did: &str) -> bool {
     defra_core::signing::get_identity(did).is_some_and(|config| config.has_local_private_key())
 }
 
-/// P2P administration must carry the node DID explicitly across worker boundaries.
-pub fn node_p2p(node: &defra_node::Node) -> Option<Arc<dyn defra_p2p_adapter::P2POperations>> {
-    let context = defra_core::RequestContext::default()
-        .with_identity(node.node_identity_did().map(ToOwned::to_owned));
-    node.p2p_arc().and_then(|p2p| p2p.bind_request(&context))
+impl KeyIdentity {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn sign_now(&self, payload: &[u8]) -> Result<Vec<u8>> {
+        self.identity
+            .sign(payload)
+            .map_err(|source| IdentityError::SignPayload {
+                did: self.did.clone(),
+                source,
+            })
+    }
 }
 
 #[async_trait]
@@ -400,19 +450,6 @@ impl NodeIdentity for KeyIdentity {
     }
 }
 
-fn register_public_key(did: &str, key_type: crypto::KeyType, public_key: Vec<u8>) {
-    known_public_keys()
-        .write()
-        .expect("known public keys lock poisoned")
-        .insert(
-            did.to_string(),
-            KnownPublicKey {
-                key_type,
-                bytes: public_key,
-            },
-        );
-}
-
 fn lowercase_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut output = String::with_capacity(bytes.len() * 2);
@@ -423,27 +460,15 @@ fn lowercase_hex(bytes: &[u8]) -> String {
     output
 }
 
+/// A `did:key` names its public key; every identity this runtime holds or
+/// registers is one, since each is checked against the DID its key derives.
 fn known_public_key_for_did(did: &str) -> Result<KnownPublicKey> {
-    if let Some(key) = known_public_keys()
-        .read()
-        .expect("known public keys lock poisoned")
-        .get(did)
-        .cloned()
-    {
-        return Ok(key);
-    }
-
     if did.starts_with("did:key:") {
         let (key_type, bytes) =
             crypto::parse_did_key(did).map_err(|source| IdentityError::ParseDidKey {
                 did: did.to_owned(),
                 source,
             })?;
-        tracing::trace!(
-            did,
-            ?key_type,
-            "resolved public key from did:key (not in local registry)"
-        );
         return Ok(KnownPublicKey { key_type, bytes });
     }
 

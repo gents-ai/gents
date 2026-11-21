@@ -14,6 +14,7 @@ fn task_with_hooks(task_id: &str, hooks: Vec<TaskHook>) -> Task {
         goal_objective_template: None,
         goal_token_budget: None,
         hooks,
+        command: None,
         enabled: true,
         output_schema_ref: None,
         created_at: None,

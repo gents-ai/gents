@@ -25,7 +25,7 @@ function deployment(
 ): DeploymentView {
   return {
     nodeDid: "did:key:z6MkRemote",
-    dialSucceeded: true,
+
     runtimeConnection: options.runtimeConnection ?? "connected",
     chatSafe: options.chatSafe ?? true,
     node: {
@@ -99,14 +99,14 @@ describe("selectedNodeReadinessDecision", () => {
   it("offers account recovery without calling rejected sign-in a temporary outage", () => {
     const signedOut = projectDeploymentOperationalState({
       ...unavailable("credentials_required"),
-      source: "local-standard",
+      local: true,
     }).agent;
     expect(signedOut.label).toBe("Sign in to continue");
     expect(signedOut.detail).toContain("sign in or select another account");
     expect(signedOut.action).toBe("configureInference");
     const ineligible = projectDeploymentOperationalState({
       ...unavailable("subscription_not_entitled"),
-      source: "local-standard",
+      local: true,
     }).agent;
     expect(ineligible.label).toBe("Subscription access unavailable");
     expect(ineligible.detail).toContain("configure an API key");
@@ -220,12 +220,8 @@ describe("selectedNodeReadinessDecision", () => {
     ["stale", { sourceReason: "router_generation_stale" }, "agentUnavailable"],
     ["disabled", {}, "agentUnavailable"],
     ["pairing-pending", { chatSafe: false }, null],
-    ["runtime-connecting", { runtimeConnection: "connecting" }, "runtimeNotConnected"],
-    [
-      "runtime-disconnected",
-      { runtimeConnection: "disconnected" },
-      "runtimeNotConnected",
-    ],
+    ["runtime-connecting", { runtimeConnection: "connecting" }, null],
+    ["runtime-disconnected", { runtimeConnection: "disconnected" }, null],
     ["runtime-refused", { runtimeConnection: "refused" }, "runtimeNotConnected"],
     ["ready", {}, null],
   ] as const)(

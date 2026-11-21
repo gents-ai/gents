@@ -1,8 +1,7 @@
 #[cfg(test)]
-use gents_desktop_core::inference::backend_config_view;
-use rapidhash::RapidHashMap;
+use gents_observe::client_inference::backend_config_view;
 
-use gents_desktop_core::client::{ClientCore, ClientPeerStatus};
+use crate::client_runtime::ClientRuntime;
 use gents_documents::{BashMode, FileToolMode};
 use gents_protocol::row::{
     AgentReadinessUnavailableReason, AgentReadinessUnknownReason, NodeReadinessRow,
@@ -17,13 +16,9 @@ use super::super::types::{
     TaskRunSummaryView, TaskView, Tools, TriggerView,
 };
 use super::runtime_tasks::{recent_runs_for_task_views, session_summaries, task_run_histories};
-use super::to_health_view;
-
-static STARTERS: std::sync::LazyLock<super::runtime_tasks::StarterCache> =
-    std::sync::LazyLock::new(Default::default);
 
 pub(crate) fn node_reads(
-    core: &ClientCore,
+    core: &ClientRuntime,
     node_did: &str,
 ) -> anyhow::Result<gents_store::config_client::ConfigAccess> {
     core.operator_observation_graphql(node_did)
@@ -33,27 +28,13 @@ pub(crate) fn node_reads(
 
 /// One `DeploymentView` per configured node, each built only from that node's
 /// own store; the fleet totals sum the nodes' stores.
-pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot {
-    let sync_state = core.sync_state();
+pub async fn build_runtime_snapshot(core: &ClientRuntime) -> DesktopRuntimeSnapshot {
     let stores = core.stores();
     let mut row_count = 0;
     let mut approx_serialized_bytes = 0_usize;
     let mut operator_config_authoritative_node_dids = Vec::new();
-    let enrollment_requests = core
-        .active_status_enrollment_requests()
-        .await
-        .map(|requests| requests.into_iter().map(Into::into).collect())
-        .ok();
-    let peer_statuses_by_id: RapidHashMap<String, ClientPeerStatus> = sync_state
-        .peers
-        .iter()
-        .cloned()
-        .map(|status| (status.peer_id.clone(), status))
-        .collect();
-
-    let mut deployments = sync_state
-        .directory
-        .clone()
+    let mut deployments = core
+        .runtime_connections()
         .into_iter()
         .map(|peer| {
             let store = stores.snapshot(&peer.node_did);
@@ -67,7 +48,6 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                     .filter(|did| **did == peer.node_did)
                     .cloned(),
             );
-            let status = peer_statuses_by_id.get(&peer.peer_id);
             let node_row = store.nodes.iter().find(|row| row.node_did == peer.node_did);
             let mailbox_items = store
                 .mailbox_items
@@ -81,8 +61,10 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 })
                 .map(MailboxItemView::from)
                 .collect::<Vec<_>>();
-            let inference =
-                gents_desktop_core::inference::InferenceSetupState::project(&store, &peer.node_did);
+            let inference = gents_observe::client_inference::InferenceSetupState::project(
+                &store,
+                &peer.node_did,
+            );
             let node = inference.node;
             let node_config = node_row.cloned();
             let agent_configs = inference.agent_configs;
@@ -281,13 +263,9 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
             let runtime_connection = stores
                 .runtime_connection(&peer.node_did)
                 .map(|status| status.as_str().to_owned());
-            let chat_refusal = peer.chat_refusal();
+            let chat_refusal = peer.refusal(&peer.node_did);
             let chat_safe = chat_refusal.is_none();
-            let lease_expires_at = peer
-                .is_enrollment()
-                .then(|| peer.enrollment_authorization_expires_at.clone())
-                .flatten();
-            let operator_access = peer.operator_graphql().is_some();
+            let operator_access = peer.validate();
             let node_readiness = project_node_readiness(
                 store.node_readiness(&peer.node_did),
                 &peer.node_did,
@@ -296,19 +274,14 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
             );
 
             DeploymentView {
-                peer_id: peer.peer_id,
+                local: peer.local_node_home.is_some(),
                 label: peer.label,
                 node_did: peer.node_did,
-                addr: peer.addr,
-                source: peer.source,
-                graphql: peer.graphql,
-                dial_succeeded: status.is_some_and(|status| status.dial_succeeded),
+                graphql: Some(peer.graphql),
                 runtime_connection,
                 chat_safe,
                 chat_refusal: chat_refusal.map(Into::into),
-                lease_expires_at,
                 operator_access,
-                last_error: status.and_then(|status| status.last_error.clone()),
                 node,
                 node_config,
                 agent_configs,
@@ -341,7 +314,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
         if let Ok(access) = node_reads(core, &deployment.node_did) {
             super::runtime_tasks::resolve_summary_starters(
                 &access,
-                &STARTERS,
+                core.starters(),
                 deployment.sessions.iter_mut(),
             )
             .await;
@@ -357,9 +330,25 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
 
     DesktopRuntimeSnapshot {
         client_did: core.node_identity().did().to_owned(),
-        p2p_health: to_health_view(&sync_state.transport),
         sync_health: super::project_client_sync_health(core),
-        enrollment_requests,
+        access_requests: core
+            .runtime_connections()
+            .into_iter()
+            .filter_map(|connection| {
+                let request = connection.access_request?;
+                Some(
+                    gents_protocol::client_access::ClientAccessReceipt {
+                        request_id: request.request_id,
+                        node_did: connection.node_did,
+                        client_did: request.client_did,
+                        state: connection
+                            .access_state
+                            .unwrap_or(gents_protocol::client_access::ClientAccessState::Pending),
+                    }
+                    .into(),
+                )
+            })
+            .collect(),
         row_count,
         approx_serialized_bytes,
         operator_config_authoritative_node_dids: {
@@ -368,12 +357,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 .then_some(operator_config_authoritative_node_dids)
         },
         deployments,
-        ended_access: core
-            .ended_access()
-            .await
-            .into_iter()
-            .map(Into::into)
-            .collect(),
+        unkept_changes: core.owed.unkept(),
     }
 }
 

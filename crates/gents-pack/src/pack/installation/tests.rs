@@ -7,17 +7,12 @@ const OWNER: &str = "did:key:zPackInstallOwner";
 
 #[test]
 fn pack_cleanup_observation_matches_model() {
-    let modeled = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .expect("configuration policy model");
-    assert_eq!(modeled.configuration_pack_cleanup_cases.len(), 4);
-    for case in &modeled.configuration_pack_cleanup_cases {
-        let observed = case["visible"].as_array().unwrap().iter().all(|visible| {
-            require_owned_document_visible("Tools", "tool", visible.as_bool().unwrap()).is_ok()
-        });
-        assert_eq!(observed, case["expected"].as_bool().unwrap(), "{case}");
-    }
+    gents_lean_vocab::families::household_pack_cleanup_visible::replay(|input| {
+        input
+            .visible
+            .iter()
+            .all(|visible| require_owned_document_visible("Tools", "tool", *visible).is_ok())
+    });
 }
 
 #[test]
@@ -49,13 +44,15 @@ async fn install_source_is_recorded_and_retained_across_updates() {
                     write_record_in_txn(
                         txn,
                         OWNER,
-                        pack,
                         &prior,
-                        Vec::new(),
-                        true,
-                        false,
+                        RecordWrite {
+                            pack,
+                            documents: Vec::new(),
+                            explicit: true,
+                            plugin_store: false,
+                            source: Some(source),
+                        },
                         None,
-                        Some(source),
                     )
                     .await
                 })
@@ -73,13 +70,15 @@ async fn install_source_is_recorded_and_retained_across_updates() {
                     write_record_in_txn(
                         txn,
                         OWNER,
-                        unchanged,
                         &prior,
-                        Vec::new(),
-                        true,
-                        false,
+                        RecordWrite {
+                            pack: unchanged,
+                            documents: Vec::new(),
+                            explicit: true,
+                            plugin_store: false,
+                            source,
+                        },
                         None,
-                        source,
                     )
                     .await
                 })
@@ -1152,14 +1151,20 @@ async fn read_installed_pack_fails_loudly_on_more_than_one_record() {
     )
     .await
     .unwrap();
-    node.add_collection(gents_protocol::schemas::NODE)
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::NODE),
+    )
+    .await
+    .unwrap();
+    let schema = gents_protocol::schemas::HomePolicyIds::shared()
+        .render(gents_protocol::schemas::PACK_INSTALLATION)
+        .replace(
+            r#"@index(fields: ["node_did", "coordinate"], unique: true)"#,
+            "",
+        );
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&schema))
         .await
         .unwrap();
-    let schema = gents_protocol::schemas::PACK_INSTALLATION.replace(
-        r#"@index(fields: ["node_did", "coordinate"], unique: true)"#,
-        "",
-    );
-    node.add_collection(&schema).await.unwrap();
     let runtime_access =
         ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
     let user_did = identity::Did::new(user.did()).unwrap();
@@ -1327,28 +1332,36 @@ async fn install_dependee(
     );
     let requested = BTreeMap::from([("worker".to_owned(), "profile".to_owned())]);
     let prepared = super::super::prepare_document_pack_archive_with_runtime(
-        &local,
-        runtime.did(),
+        &crate::pack::InstallTarget {
+            access: &local,
+            owner: runtime.did(),
+            plugin_home: None,
+        },
         &archive,
-        &requested,
-        &[],
-        None,
-        &|_| None,
+        &crate::pack::PackGraphInputs {
+            dependencies: &[],
+            requested: &requested,
+            environment: &|_| None,
+            overrides: &Default::default(),
+        },
         runtime,
-        &Default::default(),
     )
     .await
     .unwrap();
     super::super::install_prepared_document_graph(
-        access,
-        runtime.did(),
+        &crate::pack::InstallTarget {
+            access,
+            owner: runtime.did(),
+            plugin_home: None,
+        },
         &archive,
         &prepared,
-        DriftPolicy::Refuse,
-        None,
+        crate::pack::DocumentGraphPolicy {
+            drift: DriftPolicy::Refuse,
+            profiles: &gents_inference::resolved::ProviderProfilePolicy,
+        },
         false,
         explicit,
-        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -1942,16 +1955,20 @@ fn operator_record(archive: &crate::pack::archive::PackArchive) -> crate::pack::
 
 async fn self_config_install(archive: &crate::pack::archive::PackArchive, home: Option<&Path>) {
     install_prepared_document_pack(
-        &access().await,
-        OWNER,
+        &crate::pack::InstallTarget {
+            access: &access().await,
+            owner: OWNER,
+            plugin_home: home,
+        },
         archive,
         &[],
         &prepared(),
-        home,
         false,
         crate::pack::InstalledVia::SelfConfig,
-        DriftPolicy::Refuse,
-        &gents_inference::resolved::ProviderProfilePolicy,
+        crate::pack::DocumentGraphPolicy {
+            drift: DriftPolicy::Refuse,
+            profiles: &gents_inference::resolved::ProviderProfilePolicy,
+        },
     )
     .await
     .unwrap();
@@ -1997,16 +2014,20 @@ async fn operator_installs_document_pack_ux_with_its_data_plugin() {
     let archive = crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
     let home = tempfile::tempdir().unwrap();
     install_prepared_document_pack(
-        &access().await,
-        OWNER,
+        &crate::pack::InstallTarget {
+            access: &access().await,
+            owner: OWNER,
+            plugin_home: Some(home.path()),
+        },
         &archive,
         &[],
         &prepared(),
-        Some(home.path()),
         true,
         InstalledVia::Operator,
-        DriftPolicy::Refuse,
-        &gents_inference::resolved::ProviderProfilePolicy,
+        crate::pack::DocumentGraphPolicy {
+            drift: DriftPolicy::Refuse,
+            profiles: &gents_inference::resolved::ProviderProfilePolicy,
+        },
     )
     .await
     .unwrap();
@@ -2068,6 +2089,87 @@ async fn documents_pack_shipping_workflows_is_materialized_with_no_plugin_instal
         root.strip_prefix(home.path()).unwrap()
     );
     assert!(root.join("workflows/hello.rhai").is_file());
+}
+
+/// An Agent's self-config install reaches the shared install owner, so a
+/// command Task needs the grant there as it does on the operator's routes.
+#[tokio::test]
+async fn a_prepared_install_ships_a_command_task_only_under_the_grant() {
+    let access = access().await;
+    let archive = documents_archive_shipping(&[]);
+    let mut prepared = prepared();
+    prepared.config.tasks = vec![serde_json::from_value(json!({
+        "node_did": OWNER, "task_id": "tick", "command": {"argv": ["true"]},
+        "tags": ["gents:pack:acme/demo"]
+    }))
+    .unwrap()];
+    let target = crate::pack::InstallTarget {
+        access: &access,
+        owner: OWNER,
+        plugin_home: None,
+    };
+    let install = |grant_authority: bool| {
+        install_prepared_document_pack(
+            &target,
+            &archive,
+            &[],
+            &prepared,
+            grant_authority,
+            InstalledVia::SelfConfig,
+            crate::pack::DocumentGraphPolicy {
+                drift: DriftPolicy::Refuse,
+                profiles: &gents_inference::resolved::ProviderProfilePolicy,
+            },
+        )
+    };
+    let tasks = || async {
+        access
+            .execute("{ Task { task_id command } }")
+            .await
+            .unwrap()["data"]["Task"]
+            .clone()
+    };
+    let refusal = format!("{:#}", install(false).await.unwrap_err());
+    assert!(refusal.contains("ships command Tasks (tick)"), "{refusal}");
+    assert_eq!(
+        tasks().await,
+        json!([]),
+        "the refused install wrote nothing"
+    );
+    install(true)
+        .await
+        .expect("the grant installs the command Task");
+    assert_eq!(
+        tasks().await,
+        json!([{"task_id": "tick", "command": {"argv": ["true"]}}])
+    );
+    install(false)
+        .await
+        .expect("reinstalling the same command needs no new grant");
+    prepared.config.tasks[0].command = serde_json::from_value(json!({"argv": ["false"]})).unwrap();
+    let refusal = format!(
+        "{:#}",
+        install_prepared_document_pack(
+            &target,
+            &archive,
+            &[],
+            &prepared,
+            false,
+            InstalledVia::SelfConfig,
+            crate::pack::DocumentGraphPolicy {
+                drift: DriftPolicy::Refuse,
+                profiles: &gents_inference::resolved::ProviderProfilePolicy,
+            },
+        )
+        .await
+        .unwrap_err()
+    );
+    assert!(refusal.contains("ships command Tasks (tick)"), "{refusal}");
+    assert_eq!(
+        tasks().await,
+        json!([{"task_id": "tick", "command": {"argv": ["true"]}}]),
+        "an upgrade changing the command needs the grant and writes nothing without it"
+    );
 }
 
 #[tokio::test]
@@ -2139,17 +2241,21 @@ async fn prepare_returns_the_slot_it_cannot_pick_a_model_for() {
     .unwrap();
     let (node, access) = dependency_fixture().await;
     let refused = prepare_document_pack_install(
-        &access,
-        OWNER,
+        &crate::pack::InstallTarget {
+            access: &access,
+            owner: OWNER,
+            plugin_home: None,
+        },
         &manifest,
         &config(&[]),
-        &Default::default(),
-        &[],
+        None,
+        &crate::pack::PackGraphInputs {
+            dependencies: &[],
+            requested: &Default::default(),
+            environment: &|_| None,
+            overrides: &Default::default(),
+        },
         crate::pack::InstalledVia::Operator,
-        None,
-        None,
-        &|_| None,
-        &Default::default(),
     )
     .await;
     let Err(PackChangeError::Slots(crate::pack::SlotBindingError::Unbound { slots, .. })) = refused
@@ -2393,10 +2499,13 @@ async fn try_install_dependent_with_dependee(
     dependent: &crate::pack::archive::PackArchive,
     plugin_home: Option<&std::path::Path>,
 ) -> Result<InstallReport> {
-    let prepared = prepare_graph(
+    let on = GraphNode {
         access,
         node,
         runtime,
+    };
+    let prepared = prepare_graph(
+        &on,
         dependent,
         &[dependee],
         &|_| None,
@@ -2404,14 +2513,19 @@ async fn try_install_dependent_with_dependee(
         plugin_home,
     )
     .await?;
-    install_prepared_graph(access, node, runtime, dependent, &prepared, plugin_home).await
+    install_prepared_graph(&on, dependent, &prepared, plugin_home).await
 }
 
-#[expect(clippy::too_many_arguments, reason = "the graph preparation inputs")]
+/// The fixture node a test prepares and installs pack graphs on: the User's
+/// access, the embedded Node, and the runtime identity that provisions.
+struct GraphNode<'a> {
+    access: &'a ConfigAccess,
+    node: &'a Arc<defra_node::Node>,
+    runtime: &'a gents_store::identity::KeyIdentity,
+}
+
 async fn prepare_graph(
-    access: &ConfigAccess,
-    node: &Arc<defra_node::Node>,
-    runtime: &gents_store::identity::KeyIdentity,
+    on: &GraphNode<'_>,
     root: &crate::pack::archive::PackArchive,
     dependencies: &[&crate::pack::archive::PackArchive],
     environment: &(dyn Fn(&str) -> Option<String> + Sync),
@@ -2419,34 +2533,46 @@ async fn prepare_graph(
     plugin_home: Option<&std::path::Path>,
 ) -> Result<PreparedDocumentPackInstall> {
     use gents_store::identity::NodeIdentity as _;
+    let GraphNode {
+        access,
+        node,
+        runtime,
+    } = *on;
     let local = ConfigAccess::local_as(
         node.clone(),
         identity::Did::new(access.actor_did().unwrap())?,
     );
     let requested = BTreeMap::from([("worker".to_owned(), "profile".to_owned())]);
     super::super::prepare_document_pack_archive_with_runtime(
-        &local,
-        runtime.did(),
+        &crate::pack::InstallTarget {
+            access: &local,
+            owner: runtime.did(),
+            plugin_home,
+        },
         root,
-        &requested,
-        dependencies,
-        plugin_home,
-        environment,
+        &crate::pack::PackGraphInputs {
+            dependencies,
+            requested: &requested,
+            environment,
+            overrides,
+        },
         runtime,
-        overrides,
     )
     .await
     .map_err(super::PackChangeError::into_anyhow)
 }
 
 async fn install_prepared_graph(
-    access: &ConfigAccess,
-    node: &Arc<defra_node::Node>,
-    runtime: &gents_store::identity::KeyIdentity,
+    on: &GraphNode<'_>,
     root: &crate::pack::archive::PackArchive,
     prepared: &PreparedDocumentPackInstall,
     plugin_home: Option<&std::path::Path>,
 ) -> Result<InstallReport> {
+    let GraphNode {
+        access,
+        node,
+        runtime,
+    } = *on;
     use gents_store::identity::NodeIdentity as _;
     let node_access = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
     super::super::apply_prepared_dependency_schemas(&node_access, prepared).await?;
@@ -2457,15 +2583,19 @@ async fn install_prepared_graph(
             .await?;
     }
     let (report, _) = super::super::install_prepared_document_graph(
-        access,
-        runtime.did(),
+        &crate::pack::InstallTarget {
+            access,
+            owner: runtime.did(),
+            plugin_home,
+        },
         root,
         prepared,
-        DriftPolicy::Refuse,
-        plugin_home,
+        crate::pack::DocumentGraphPolicy {
+            drift: DriftPolicy::Refuse,
+            profiles: &gents_inference::resolved::ProviderProfilePolicy,
+        },
         false,
         true,
-        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await?;
     Ok(report)
@@ -2522,6 +2652,39 @@ async fn dependee_names(access: &ConfigAccess) -> (Value, Value) {
     )
 }
 
+/// The root and a new dependency record their slots in `agent_bindings`
+/// alone: a hosted runtime looks a binding up and its client never does, so a
+/// binding in `variables` would make the two sides plan different graphs.
+#[tokio::test]
+async fn an_installation_records_agent_bindings_only_in_agent_bindings() {
+    let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
+    let owner = gents_store::identity::NodeIdentity::did(&runtime);
+    let (_guards, dependee, dependent) = documents_dependency_pair(false, false);
+    install_dependent_with_dependee(&access, &node, &runtime, &dependee, &dependent, None).await;
+    let records = access
+        .transact_readonly("test.pack.recorded_bindings", |txn| {
+            Box::pin(async move {
+                Ok::<_, anyhow::Error>([
+                    read_record(txn, owner, "fixture/dependent_fixture").await?,
+                    read_record(txn, owner, "fixture/dependee_fixture").await?,
+                ])
+            })
+        })
+        .await
+        .unwrap();
+    for record in records {
+        assert!(!record.agent_bindings.is_empty());
+        assert!(
+            !record
+                .variables
+                .keys()
+                .any(|name| crate::pack::is_agent_binding_variable(name)),
+            "{:?}",
+            record.variables
+        );
+    }
+}
+
 #[tokio::test]
 async fn a_documents_dependency_installs_non_explicitly_before_its_dependent() {
     let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
@@ -2551,6 +2714,11 @@ async fn a_documents_dependency_installs_non_explicitly_before_its_dependent() {
 async fn installing_a_dependent_preserves_the_installed_dependency_environment() {
     use gents_store::identity::NodeIdentity as _;
     let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
+    let on = GraphNode {
+        access: &access,
+        node: &node,
+        runtime: &runtime,
+    };
     let (_dependee_guard, dependee) = dependee_with_variables(
         "1.0.0",
         "${DEPENDEE_LABEL:-unset}",
@@ -2560,39 +2728,21 @@ async fn installing_a_dependent_preserves_the_installed_dependency_environment()
     let original = |name: &str| (name == "DEPENDEE_LABEL").then(|| "original".to_owned());
     let changed = |name: &str| (name == "DEPENDEE_LABEL").then(|| "dependent".to_owned());
     let none = DependencyVariableOverrides::new();
-    let prepared = prepare_graph(
-        &access,
-        &node,
-        &runtime,
-        &dependee,
-        &[],
-        &original,
-        &none,
-        None,
-    )
-    .await
-    .unwrap();
-    install_prepared_graph(&access, &node, &runtime, &dependee, &prepared, None)
+    let prepared = prepare_graph(&on, &dependee, &[], &original, &none, None)
+        .await
+        .unwrap();
+    install_prepared_graph(&on, &dependee, &prepared, None)
         .await
         .unwrap();
 
-    let prepared = prepare_graph(
-        &access,
-        &node,
-        &runtime,
-        &dependent,
-        &[&dependee],
-        &changed,
-        &none,
-        None,
-    )
-    .await
-    .unwrap();
+    let prepared = prepare_graph(&on, &dependent, &[&dependee], &changed, &none, None)
+        .await
+        .unwrap();
     let installed_tools = dependee_tools(&access, runtime.did()).await;
     let mut edited_tools = installed_tools.clone();
     edited_tools["display_name"] = json!("concurrent edit");
     write_dependee_tools(&access, &edited_tools).await;
-    let error = install_prepared_graph(&access, &node, &runtime, &dependent, &prepared, None)
+    let error = install_prepared_graph(&on, &dependent, &prepared, None)
         .await
         .unwrap_err();
     assert!(
@@ -2600,19 +2750,10 @@ async fn installing_a_dependent_preserves_the_installed_dependency_environment()
         "{error:#}"
     );
     write_dependee_tools(&access, &installed_tools).await;
-    let prepared = prepare_graph(
-        &access,
-        &node,
-        &runtime,
-        &dependent,
-        &[&dependee],
-        &changed,
-        &none,
-        None,
-    )
-    .await
-    .unwrap();
-    install_prepared_graph(&access, &node, &runtime, &dependent, &prepared, None)
+    let prepared = prepare_graph(&on, &dependent, &[&dependee], &changed, &none, None)
+        .await
+        .unwrap();
+    install_prepared_graph(&on, &dependent, &prepared, None)
         .await
         .unwrap();
     assert_eq!(
@@ -2624,19 +2765,10 @@ async fn installing_a_dependent_preserves_the_installed_dependency_environment()
         "fixture/dependee_fixture".to_owned(),
         BTreeMap::from([("DEPENDEE_LABEL".to_owned(), Some("explicit".to_owned()))]),
     )]);
-    let prepared = prepare_graph(
-        &access,
-        &node,
-        &runtime,
-        &dependent,
-        &[&dependee],
-        &changed,
-        &overrides,
-        None,
-    )
-    .await
-    .unwrap();
-    install_prepared_graph(&access, &node, &runtime, &dependent, &prepared, None)
+    let prepared = prepare_graph(&on, &dependent, &[&dependee], &changed, &overrides, None)
+        .await
+        .unwrap();
+    install_prepared_graph(&on, &dependent, &prepared, None)
         .await
         .unwrap();
     assert_eq!(
@@ -2658,19 +2790,10 @@ async fn installing_a_dependent_preserves_the_installed_dependency_environment()
             Some("did:key:other".to_owned()),
         )]),
     )]);
-    let error = prepare_graph(
-        &access,
-        &node,
-        &runtime,
-        &dependent,
-        &[&dependee],
-        &changed,
-        &refused,
-        None,
-    )
-    .await
-    .err()
-    .expect("the node identity is not a pack variable");
+    let error = prepare_graph(&on, &dependent, &[&dependee], &changed, &refused, None)
+        .await
+        .err()
+        .expect("the node identity is not a pack variable");
     assert!(format!("{error:#}").contains("GENTS_PACK_NODE_DID"));
     node.shutdown().await.expect("node shutdown");
 }
@@ -2678,23 +2801,19 @@ async fn installing_a_dependent_preserves_the_installed_dependency_environment()
 #[tokio::test]
 async fn upgrading_a_pack_preserves_omitted_install_values() {
     let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
+    let on = GraphNode {
+        access: &access,
+        node: &node,
+        runtime: &runtime,
+    };
     let (_first_guard, first) =
         dependee_with_variables("1.0.0", "${UPGRADE_LABEL}", "${UPGRADE_DEFAULT:-first}");
     let original = |name: &str| (name == "UPGRADE_LABEL").then(|| "original".to_owned());
     let none = DependencyVariableOverrides::new();
-    let prepared = prepare_graph(
-        &access,
-        &node,
-        &runtime,
-        &first,
-        &[],
-        &original,
-        &none,
-        None,
-    )
-    .await
-    .unwrap();
-    install_prepared_graph(&access, &node, &runtime, &first, &prepared, None)
+    let prepared = prepare_graph(&on, &first, &[], &original, &none, None)
+        .await
+        .unwrap();
+    install_prepared_graph(&on, &first, &prepared, None)
         .await
         .unwrap();
     let (_next_guard, next) = dependee_with_variables(
@@ -2702,11 +2821,11 @@ async fn upgrading_a_pack_preserves_omitted_install_values() {
         "updated: ${UPGRADE_LABEL}",
         "${UPGRADE_DEFAULT:-second}",
     );
-    let prepared = prepare_graph(&access, &node, &runtime, &next, &[], &|_| None, &none, None)
+    let prepared = prepare_graph(&on, &next, &[], &|_| None, &none, None)
         .await
         .unwrap();
     assert!(prepared.preserves_root_values());
-    install_prepared_graph(&access, &node, &runtime, &next, &prepared, None)
+    install_prepared_graph(&on, &next, &prepared, None)
         .await
         .unwrap();
     assert_eq!(
@@ -2720,20 +2839,16 @@ async fn upgrading_a_pack_preserves_omitted_install_values() {
 async fn installed_dependency_inference_uses_recorded_agent_profile() {
     use gents_store::identity::NodeIdentity as _;
     let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
+    let on = GraphNode {
+        access: &access,
+        node: &node,
+        runtime: &runtime,
+    };
     let (_guards, dependee, _) = documents_dependency_pair(false, false);
-    let prepared = prepare_graph(
-        &access,
-        &node,
-        &runtime,
-        &dependee,
-        &[],
-        &|_| None,
-        &Default::default(),
-        None,
-    )
-    .await
-    .unwrap();
-    install_prepared_graph(&access, &node, &runtime, &dependee, &prepared, None)
+    let prepared = prepare_graph(&on, &dependee, &[], &|_| None, &Default::default(), None)
+        .await
+        .unwrap();
+    install_prepared_graph(&on, &dependee, &prepared, None)
         .await
         .unwrap();
     let snapshot = access
@@ -2891,15 +3006,19 @@ async fn refused_dependency(dependee_plugin: bool, change: &dyn Fn(&mut Value)) 
         identity::Did::new(access.actor_did().unwrap()).unwrap(),
     );
     let error = super::super::prepare_document_pack_archive_with_runtime(
-        &local,
-        gents_store::identity::NodeIdentity::did(&runtime),
+        &crate::pack::InstallTarget {
+            access: &local,
+            owner: gents_store::identity::NodeIdentity::did(&runtime),
+            plugin_home: None,
+        },
         &dependent,
-        &BTreeMap::from([("worker".to_owned(), "profile".to_owned())]),
-        &[&dependee],
-        None,
-        &|_| None,
+        &crate::pack::PackGraphInputs {
+            dependencies: &[&dependee],
+            requested: &BTreeMap::from([("worker".to_owned(), "profile".to_owned())]),
+            environment: &|_| None,
+            overrides: &Default::default(),
+        },
         &runtime,
-        &Default::default(),
     )
     .await
     .err()
@@ -2993,17 +3112,21 @@ async fn prepare_naming_plugin(
         .unwrap();
     seed_pack_node(&node_access(&node), OWNER).await.unwrap();
     prepare_document_pack_install(
-        &node_access(&node),
-        OWNER,
+        &crate::pack::InstallTarget {
+            access: &node_access(&node),
+            owner: OWNER,
+            plugin_home,
+        },
         manifest,
         &config_naming_plugin("acme/web_search"),
-        &crate::pack::PackInferenceBindings::new(),
-        &[],
-        crate::pack::InstalledVia::Operator,
-        plugin_home,
         None,
-        &|_| None,
-        &Default::default(),
+        &crate::pack::PackGraphInputs {
+            dependencies: &[],
+            requested: &crate::pack::PackInferenceBindings::new(),
+            environment: &|_| None,
+            overrides: &Default::default(),
+        },
+        crate::pack::InstalledVia::Operator,
     )
     .await
     .map_err(PackChangeError::into_anyhow)
@@ -3060,17 +3183,21 @@ async fn remote_install_refuses_unverifiable_plugin_before_writes_and_installs_p
         config: &PackConfig,
     ) -> Result<PreparedDocumentPackInstall> {
         prepare_document_pack_install(
-            access,
-            owner,
+            &crate::pack::InstallTarget {
+                access,
+                owner,
+                plugin_home: None,
+            },
             archive.manifest(),
             config,
-            &crate::pack::PackInferenceBindings::new(),
-            &[],
-            crate::pack::InstalledVia::Operator,
-            None,
             Some(archive),
-            &|_| None,
-            &Default::default(),
+            &crate::pack::PackGraphInputs {
+                dependencies: &[],
+                requested: &crate::pack::PackInferenceBindings::new(),
+                environment: &|_| None,
+                overrides: &Default::default(),
+            },
+            crate::pack::InstalledVia::Operator,
         )
         .await
         .map_err(PackChangeError::into_anyhow)
@@ -3100,16 +3227,20 @@ async fn remote_install_refuses_unverifiable_plugin_before_writes_and_installs_p
         .await
         .unwrap();
     install_prepared_document_pack(
-        &access,
-        identity.did(),
+        &crate::pack::InstallTarget {
+            access: &access,
+            owner: identity.did(),
+            plugin_home: None,
+        },
         &archive,
         &[],
         &prepared,
-        None,
         false,
         crate::pack::InstalledVia::Operator,
-        DriftPolicy::Refuse,
-        &gents_inference::resolved::ProviderProfilePolicy,
+        crate::pack::DocumentGraphPolicy {
+            drift: DriftPolicy::Refuse,
+            profiles: &gents_inference::resolved::ProviderProfilePolicy,
+        },
     )
     .await
     .unwrap();
@@ -3602,17 +3733,21 @@ async fn pinned_plugin_references_match_executable_model_before_install_or_updat
                 .await
                 .unwrap();
             let result = prepare_document_pack_install(
-                &access,
-                OWNER,
+                &crate::pack::InstallTarget {
+                    access: &access,
+                    owner: OWNER,
+                    plugin_home: Some(home.path()),
+                },
                 archive.manifest(),
                 &config,
-                &crate::pack::PackInferenceBindings::new(),
-                &[],
-                crate::pack::InstalledVia::Operator,
-                Some(home.path()),
                 Some(&archive),
-                &|_| None,
-                &Default::default(),
+                &crate::pack::PackGraphInputs {
+                    dependencies: &[],
+                    requested: &crate::pack::PackInferenceBindings::new(),
+                    environment: &|_| None,
+                    overrides: &Default::default(),
+                },
+                crate::pack::InstalledVia::Operator,
             )
             .await;
             accepted.push(result.is_ok());
@@ -3645,38 +3780,34 @@ async fn failed_transaction_begin_restores_the_previous_plugin_record() {
     let bindings = crate::pack::PackInferenceBindings::new();
     let assets = |bytes| BTreeMap::from([("plugins/web_search.afb".to_owned(), bytes)]);
     super::documents::install_documents_with_plugins(
-        &access,
-        OWNER,
+        &crate::pack::InstallTarget {
+            access: &access,
+            owner: OWNER,
+            plugin_home: Some(home.path()),
+        },
         &manifest,
         &format!("sha256:{}", "1".repeat(64)),
         &config,
         DriftPolicy::Refuse,
-        Some(home.path()),
         assets(old),
-        false,
         &bindings,
-        Vec::new(),
-        true,
-        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
     let before = crate::plugin::store::read_record(home.path(), "acme", "web_search").unwrap();
     node.shutdown().await.expect("node shutdown");
     let error = super::documents::install_documents_with_plugins(
-        &access,
-        OWNER,
+        &crate::pack::InstallTarget {
+            access: &access,
+            owner: OWNER,
+            plugin_home: Some(home.path()),
+        },
         &manifest,
         &format!("sha256:{}", "2".repeat(64)),
         &config,
         DriftPolicy::Refuse,
-        Some(home.path()),
         assets(new),
-        false,
         &bindings,
-        Vec::new(),
-        true,
-        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap_err();
@@ -3715,19 +3846,17 @@ async fn plugin_update_rolls_back_files_when_surviving_pin_rejects_and_accepts_u
     let assets = |bytes: Vec<u8>| BTreeMap::from([("plugins/web_search.afb".to_owned(), bytes)]);
     let bindings = crate::pack::PackInferenceBindings::new();
     let initial = super::documents::install_documents_with_plugins(
-        &access,
-        owner,
+        &crate::pack::InstallTarget {
+            access: &access,
+            owner,
+            plugin_home: Some(home.path()),
+        },
         &manifest,
         &format!("sha256:{}", "1".repeat(64)),
         &empty,
         DriftPolicy::Refuse,
-        Some(home.path()),
         assets(old_bytes),
-        false,
         &bindings,
-        Vec::new(),
-        true,
-        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -3750,19 +3879,17 @@ async fn plugin_update_rolls_back_files_when_surviving_pin_rejects_and_accepts_u
         .await
         .unwrap();
     let rejected = super::documents::install_documents_with_plugins(
-        &access,
-        owner,
+        &crate::pack::InstallTarget {
+            access: &access,
+            owner,
+            plugin_home: Some(home.path()),
+        },
         &manifest,
         &format!("sha256:{}", "2".repeat(64)),
         &empty,
         DriftPolicy::Refuse,
-        Some(home.path()),
         assets(new_bytes.clone()),
-        false,
         &bindings,
-        Vec::new(),
-        true,
-        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap_err();
@@ -3783,19 +3910,17 @@ async fn plugin_update_rolls_back_files_when_surviving_pin_rejects_and_accepts_u
     .unwrap();
     let updated = super::super::provenance::stamp_pack_origin(&manifest, &updated).unwrap();
     let accepted = super::documents::install_documents_with_plugins(
-        &access,
-        owner,
+        &crate::pack::InstallTarget {
+            access: &access,
+            owner,
+            plugin_home: Some(home.path()),
+        },
         &manifest,
         &format!("sha256:{}", "2".repeat(64)),
         &updated,
         DriftPolicy::Overwrite,
-        Some(home.path()),
         assets(new_bytes),
-        false,
         &bindings,
-        Vec::new(),
-        true,
-        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await;
     accepted.unwrap();
@@ -3835,19 +3960,17 @@ async fn cancelling_pack_install_caller_does_not_cancel_owned_commit() {
     let child_access = access.clone();
     let caller = tokio::spawn(async move {
         super::documents::install_documents_with_plugins(
-            &child_access,
-            OWNER,
+            &crate::pack::InstallTarget {
+                access: &child_access,
+                owner: OWNER,
+                plugin_home: Some(&home_path),
+            },
             &manifest,
             &format!("sha256:{}", "3".repeat(64)),
             &config,
             DriftPolicy::Refuse,
-            Some(&home_path),
             BTreeMap::from([("plugins/web_search.afb".to_owned(), bytes)]),
-            false,
             &crate::pack::PackInferenceBindings::new(),
-            Vec::new(),
-            true,
-            &gents_inference::resolved::ProviderProfilePolicy,
         )
         .await
     });
@@ -4015,8 +4138,10 @@ async fn installed_plugin_pin_is_rechecked_at_graph_commit() {
             home.path(),
             &old_archive,
             false,
-            None,
-            &BTreeMap::new(),
+            crate::pack::plugin_lifecycle::PluginSlotBindings {
+                owner: None,
+                bindings: &BTreeMap::new(),
+            },
             crate::pack::InstalledVia::Operator,
             crate::pack::PackSource::Local { file_name: None },
             |_, _| async { Ok(()) },
@@ -4039,8 +4164,10 @@ async fn installed_plugin_pin_is_rechecked_at_graph_commit() {
             home.path(),
             &updated,
             false,
-            None,
-            &BTreeMap::new(),
+            crate::pack::plugin_lifecycle::PluginSlotBindings {
+                owner: None,
+                bindings: &BTreeMap::new(),
+            },
             crate::pack::InstalledVia::Operator,
             crate::pack::PackSource::Local { file_name: None },
             |_, _| async { Ok(()) },
@@ -4064,19 +4191,17 @@ async fn installed_plugin_pin_is_rechecked_at_graph_commit() {
         })).unwrap();
         let manifest = plugin_pack_manifest("stale_pin", "documents", &[]);
         let result = super::documents::install_documents_with_plugins(
-            &access,
-            OWNER,
+            &crate::pack::InstallTarget {
+                access: &access,
+                owner: OWNER,
+                plugin_home: Some(home.path()),
+            },
             &manifest,
             &format!("sha256:{}", "4".repeat(64)),
             &config,
             DriftPolicy::Refuse,
-            Some(home.path()),
             BTreeMap::new(),
-            false,
             &BTreeMap::new(),
-            Vec::new(),
-            true,
-            &gents_inference::resolved::ProviderProfilePolicy,
         )
         .await;
         assert_eq!(
@@ -4108,8 +4233,10 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
         home.path(),
         &old_archive,
         false,
-        None,
-        &BTreeMap::new(),
+        crate::pack::plugin_lifecycle::PluginSlotBindings {
+            owner: None,
+            bindings: &BTreeMap::new(),
+        },
         crate::pack::InstalledVia::Operator,
         crate::pack::PackSource::Local { file_name: None },
         |_, _| async { Ok(()) },
@@ -4139,19 +4266,17 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
     let install_owner = owner.clone();
     let installer = tokio::spawn(async move {
         super::documents::install_documents_with_plugins(
-            &access_for_install,
-            &install_owner,
+            &crate::pack::InstallTarget {
+                access: &access_for_install,
+                owner: &install_owner,
+                plugin_home: Some(&home_for_install),
+            },
             &manifest,
             &format!("sha256:{}", "3".repeat(64)),
             &config,
             DriftPolicy::Refuse,
-            Some(&home_for_install),
             BTreeMap::new(),
-            false,
             &BTreeMap::new(),
-            Vec::new(),
-            true,
-            &gents_inference::resolved::ProviderProfilePolicy,
         )
         .await
     });
@@ -4175,8 +4300,10 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
         home.path(),
         &updated,
         false,
-        None,
-        &BTreeMap::new(),
+        crate::pack::plugin_lifecycle::PluginSlotBindings {
+            owner: None,
+            bindings: &BTreeMap::new(),
+        },
         crate::pack::InstalledVia::Operator,
         crate::pack::PackSource::Local { file_name: None },
         move |identity, _| async move {
@@ -4209,8 +4336,10 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
         home.path(),
         &updated,
         false,
-        None,
-        &BTreeMap::new(),
+        crate::pack::plugin_lifecycle::PluginSlotBindings {
+            owner: None,
+            bindings: &BTreeMap::new(),
+        },
         crate::pack::InstalledVia::Operator,
         crate::pack::PackSource::Local { file_name: None },
         move |identity, _| async move {
@@ -4248,8 +4377,10 @@ async fn standalone_plugin_update_restores_store_and_home_on_pin_conflict() {
         home.path(),
         &old_archive,
         false,
-        None,
-        &BTreeMap::new(),
+        crate::pack::plugin_lifecycle::PluginSlotBindings {
+            owner: None,
+            bindings: &BTreeMap::new(),
+        },
         crate::pack::InstalledVia::Operator,
         crate::pack::PackSource::Local { file_name: None },
         |_, _| async { Ok(()) },
@@ -4284,8 +4415,10 @@ async fn standalone_plugin_update_restores_store_and_home_on_pin_conflict() {
         home.path(),
         &updated,
         false,
-        None,
-        &BTreeMap::new(),
+        crate::pack::plugin_lifecycle::PluginSlotBindings {
+            owner: None,
+            bindings: &BTreeMap::new(),
+        },
         crate::pack::InstalledVia::Operator,
         crate::pack::PackSource::Local { file_name: None },
         move |identity, _| async move {
@@ -4412,19 +4545,17 @@ async fn definitive_document_drift_rejection_restores_previously_pinned_plugin()
     let assets = |bytes| BTreeMap::from([("plugins/web_search.afb".to_owned(), bytes)]);
     let bindings = crate::pack::PackInferenceBindings::new();
     super::documents::install_documents_with_plugins(
-        &access,
-        owner,
+        &crate::pack::InstallTarget {
+            access: &access,
+            owner,
+            plugin_home: Some(home.path()),
+        },
         &manifest,
         &format!("sha256:{}", "1".repeat(64)),
         &config,
         DriftPolicy::Refuse,
-        Some(home.path()),
         assets(old_bytes),
-        false,
         &bindings,
-        Vec::new(),
-        true,
-        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -4432,19 +4563,17 @@ async fn definitive_document_drift_rejection_restores_previously_pinned_plugin()
     let before = crate::plugin::store::read_record(home.path(), "acme", "web_search").unwrap();
     let docs = access.execute("{Tools(filter: {tools_id: {_eq: \"drift-tools\"}}) {display_name integrations} PackInstallation {coordinate digest}}").await.unwrap();
     let error = super::documents::install_documents_with_plugins(
-        &access,
-        owner,
+        &crate::pack::InstallTarget {
+            access: &access,
+            owner,
+            plugin_home: Some(home.path()),
+        },
         &manifest,
         &format!("sha256:{}", "2".repeat(64)),
         &config,
         DriftPolicy::Refuse,
-        Some(home.path()),
         assets(new_bytes),
-        false,
         &bindings,
-        Vec::new(),
-        true,
-        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap_err();
@@ -4602,12 +4731,14 @@ async fn client_signs_pack_installation_record_and_dependency_updates() -> Resul
                 write_record_in_txn(
                     txn,
                     owner,
-                    first,
                     &Record::default(),
-                    Vec::new(),
-                    true,
-                    true,
-                    None,
+                    RecordWrite {
+                        pack: first,
+                        documents: Vec::new(),
+                        explicit: true,
+                        plugin_store: true,
+                        source: None,
+                    },
                     None,
                 )
                 .await
@@ -4632,8 +4763,20 @@ async fn client_signs_pack_installation_record_and_dependency_updates() -> Resul
             let owner = &owner;
             Box::pin(async move {
                 let prior = read_record(txn, owner, &next.coordinate).await?;
-                write_record_in_txn(txn, owner, next, &prior, Vec::new(), true, true, None, None)
-                    .await
+                write_record_in_txn(
+                    txn,
+                    owner,
+                    &prior,
+                    RecordWrite {
+                        pack: next,
+                        documents: Vec::new(),
+                        explicit: true,
+                        plugin_store: true,
+                        source: None,
+                    },
+                    None,
+                )
+                .await
             })
         })
         .await?;
@@ -4690,15 +4833,19 @@ async fn hosted_plugin_root_preserves_existing_pack_documents() -> Result<()> {
     )
     .await?;
     let prepared = prepare_document_pack_archive(
-        &access,
-        OWNER,
+        &crate::pack::InstallTarget {
+            access: &access,
+            owner: OWNER,
+            plugin_home: Some(home.path()),
+        },
         &archive,
-        &crate::pack::PackInferenceBindings::new(),
-        &[],
+        &crate::pack::PackGraphInputs {
+            dependencies: &[],
+            requested: &crate::pack::PackInferenceBindings::new(),
+            environment: &|_| None,
+            overrides: &Default::default(),
+        },
         InstalledVia::Operator,
-        Some(home.path()),
-        &|_| None,
-        &Default::default(),
     )
     .await?;
     let graph = hosted_document_graph(&archive, &prepared, true)?;
@@ -4745,8 +4892,10 @@ async fn a_retirement_the_node_did_not_record_keeps_the_plugin_bytes() {
         home.path(),
         &archive,
         false,
-        None,
-        &BTreeMap::new(),
+        crate::pack::plugin_lifecycle::PluginSlotBindings {
+            owner: None,
+            bindings: &BTreeMap::new(),
+        },
         InstalledVia::Operator,
         crate::pack::PackSource::Local { file_name: None },
         |_, _| async { Ok(()) },
@@ -4758,6 +4907,7 @@ async fn a_retirement_the_node_did_not_record_keeps_the_plugin_bytes() {
     let packs = crate::pack::node_packs::NodePacks {
         access: &access,
         node_did: OWNER,
+        registry_url: crate::pack::registry::DEFAULT_REGISTRY_URL,
         home: Some(home.path()),
         grants_authority: false,
     };

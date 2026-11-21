@@ -49,10 +49,9 @@ async fn reserve_inventory_session(
     let create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         format!("reserve-inventory-{session_id}"),
-        node_did,
-        &requester,
-        agent_did,
-        session_id,
+        gents_protocol::request_admission::RequestScope::new(
+            node_did, &requester, agent_did, session_id,
+        ),
         "inventory",
         "interactive",
         created_at,
@@ -438,11 +437,7 @@ async fn generated_projection_cases_use_native_owners_and_scopes() {
                     );
                 }
                 if let Some(issued) = issued {
-                    gents_toolcalls::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request(
-                        node.clone(), &mut request_owner, &scope.node_did, 1, "write_file",
-                        "later-inventory-tool", json!({"path": "later.rs"}),
-                        gents_protocol::tool_call::AwaitMode::Foreground, true,
-                    ).await.unwrap();
+                    gents_toolcalls::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request(node.clone(), &mut request_owner, &scope.node_did, gents_toolcalls::call::lifecycle::admission_fixture::AcceptedFixtureCall { turn: 1, tool_name: "write_file", tool_call_id: "later-inventory-tool", arguments: json!({"path": "later.rs"}), await_mode: gents_protocol::tool_call::AwaitMode::Foreground, start_running: true }).await.unwrap();
                     let changed = FileInventorySnapshot::load(&node, &admission)
                         .await
                         .unwrap();
@@ -523,7 +518,7 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
     use gents_lean_vocab::families::file_inventory_contracts_fork_snapshot as fork;
     use gents_session::session::{fork_on, ForkBoundary, ForkParams};
     use gents_toolcalls::call::lifecycle::admission_fixture::{
-        pending_client_fixture_request, publish_accepted_on_claimed_request,
+        pending_client_fixture_request, publish_accepted_on_claimed_request, AcceptedFixtureCall,
     };
     for case in gents_lean_vocab::families::file_inventory_contracts_fork_snapshot::cases() {
         let (fixture, mut request_owner) =
@@ -641,10 +636,12 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
             gents_protocol::request_admission::AgentRequestCreate::base(
                 gents_protocol::request_admission::RequestPurpose::Normal,
                 request_id,
-                &did,
-                &requester,
-                signer.did(),
-                &parent,
+                gents_protocol::request_admission::RequestScope::new(
+                    &did,
+                    &requester,
+                    signer.did(),
+                    &parent,
+                ),
                 "spawn",
                 "interactive",
                 chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -669,12 +666,14 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
             node.clone(),
             &mut later_request,
             &did,
-            0,
-            "write_file",
-            "later-parent-tool",
-            serde_json::json!({"path": "selected.rs"}),
-            gents_protocol::tool_call::AwaitMode::Foreground,
-            true,
+            AcceptedFixtureCall {
+                turn: 0,
+                tool_name: "write_file",
+                tool_call_id: "later-parent-tool",
+                arguments: serde_json::json!({"path": "selected.rs"}),
+                await_mode: gents_protocol::tool_call::AwaitMode::Foreground,
+                start_running: true,
+            },
         )
         .await
         .unwrap();
@@ -812,12 +811,14 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
             node.clone(),
             &mut unknown_request,
             &did,
-            0,
-            "external_tool",
-            "uncaptured-tool",
-            serde_json::json!({}),
-            gents_protocol::tool_call::AwaitMode::Foreground,
-            true,
+            AcceptedFixtureCall {
+                turn: 0,
+                tool_name: "external_tool",
+                tool_call_id: "uncaptured-tool",
+                arguments: serde_json::json!({}),
+                await_mode: gents_protocol::tool_call::AwaitMode::Foreground,
+                start_running: true,
+            },
         )
         .await
         .unwrap();
@@ -968,7 +969,9 @@ async fn check_real_inventory_chronology(
     notify: bool,
 ) -> gents_lean_vocab::families::file_inventory_contracts_terminal_chronology::ChronologyObservation
 {
-    use gents_toolcalls::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
+    use gents_toolcalls::call::lifecycle::admission_fixture::{
+        publish_accepted_on_claimed_request, AcceptedFixtureCall,
+    };
     let (fixture, mut request) = published_admission_with_owner(PublishedAdmissionOptions {
         name: "inventory-terminal-chronology".into(),
         real_identity: true,
@@ -1002,14 +1005,16 @@ async fn check_real_inventory_chronology(
         gents_toolcalls::background::completion::append_background_tool_completion(
             &node,
             &first.access().unwrap(),
-            first.session_id(),
-            &request.request().request_id,
-            first.doc_id().unwrap(),
-            "write_file",
-            "completed",
-            "first retained output",
-            None,
-            gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+            &gents_toolcalls::background::completion::BackgroundToolCompletion {
+                parent_session_id: first.session_id(),
+                parent_request_id: &request.request().request_id,
+                tool_call_doc_id: first.doc_id().unwrap(),
+                tool_name: "write_file",
+                status: "completed",
+                result: "first retained output",
+                reason: None,
+                wake: gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+            },
         )
         .await
         .unwrap();
@@ -1019,12 +1024,14 @@ async fn check_real_inventory_chronology(
         node.clone(),
         &mut request,
         &fixture.node_did,
-        1,
-        "write_file",
-        "second-chronology-tool",
-        serde_json::json!({"path":"repeated.rs"}),
-        gents_protocol::tool_call::AwaitMode::Foreground,
-        true,
+        AcceptedFixtureCall {
+            turn: 1,
+            tool_name: "write_file",
+            tool_call_id: "second-chronology-tool",
+            arguments: serde_json::json!({"path":"repeated.rs"}),
+            await_mode: gents_protocol::tool_call::AwaitMode::Foreground,
+            start_running: true,
+        },
     )
     .await
     .unwrap();

@@ -5,11 +5,11 @@ use std::process::Command as ProcessCommand;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
-use gents_desktop_core::client::DesktopPaths;
-use gents_desktop_core::local_runtime::{
+use gents::client_runtime::{
     dangerously_overwrite_desktop_home, default_node_home, init_standard_local_runtime,
     render_human_summary, reset_desktop_runtime_state, DesktopInitOptions,
 };
+use gents_store::client_journal::paths::DesktopPaths;
 use tracing_subscriber::{prelude::*, EnvFilter};
 
 #[derive(Debug, Parser)]
@@ -18,6 +18,12 @@ use tracing_subscriber::{prelude::*, EnvFilter};
     about = "Tauri desktop launcher for local and peered Gents runtimes"
 )]
 struct Cli {
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "The gents-desktop-tauri binary to launch. Defaults to the one beside this launcher, then PATH"
+    )]
+    tauri_bin: Option<PathBuf>,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -62,7 +68,7 @@ fn main() -> anyhow::Result<()> {
         return run_command(command);
     }
 
-    launch_desktop()
+    launch_desktop(cli.tauri_bin)
 }
 
 fn run_command(command: Command) -> anyhow::Result<()> {
@@ -72,10 +78,7 @@ fn run_command(command: Command) -> anyhow::Result<()> {
                 .enable_all()
                 .build()
                 .map_err(|error| anyhow::anyhow!(error))?;
-            let desktop_paths = match args.desktop_home {
-                Some(root) => DesktopPaths::from_root(root),
-                None => DesktopPaths::discover()?,
-            };
+            let desktop_paths = DesktopPaths::resolve(args.desktop_home)?;
             if args.dangerously_overwrite {
                 dangerously_overwrite_desktop_home(desktop_paths.root())?;
             } else if args.reset {
@@ -97,8 +100,8 @@ fn run_command(command: Command) -> anyhow::Result<()> {
     }
 }
 
-fn launch_desktop() -> anyhow::Result<()> {
-    let tauri_binary = resolve_tauri_binary()?;
+fn launch_desktop(explicit: Option<PathBuf>) -> anyhow::Result<()> {
+    let tauri_binary = resolve_tauri_binary(explicit)?;
     tracing::info!(path = %tauri_binary.display(), "launching tauri desktop shell");
 
     if is_debug_build(&tauri_binary) && !dev_server_reachable() {
@@ -140,9 +143,8 @@ fn dev_server_reachable() -> bool {
     .is_ok()
 }
 
-fn resolve_tauri_binary() -> anyhow::Result<PathBuf> {
-    if let Ok(explicit) = std::env::var("GENTS_DESKTOP_TAURI_BIN") {
-        let explicit = PathBuf::from(explicit);
+fn resolve_tauri_binary(explicit: Option<PathBuf>) -> anyhow::Result<PathBuf> {
+    if let Some(explicit) = explicit {
         if explicit.is_file() {
             return Ok(explicit);
         }
@@ -163,7 +165,7 @@ fn resolve_tauri_binary() -> anyhow::Result<PathBuf> {
     }
 
     Err(anyhow::anyhow!(
-        "could not find the Tauri desktop binary `{}`. Install or build `gents-desktop-tauri`, or set GENTS_DESKTOP_TAURI_BIN.",
+        "could not find the Tauri desktop binary `{}`. Install or build `gents-desktop-tauri`, or pass --tauri-bin.",
         tauri_binary_name()
     ))
 }
@@ -237,4 +239,63 @@ fn with_default_transport_noise_filters(filter: EnvFilter) -> EnvFilter {
     .fold(filter, |filter, directive| {
         filter.add_directive(directive.parse().expect("valid tracing directive"))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn the_launcher_command_line_is_well_formed() {
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn init_reads_every_flag() {
+        let cli = Cli::try_parse_from([
+            "gents-desktop",
+            "init",
+            "--node-home",
+            "node",
+            "--desktop-home",
+            "desktop",
+            "--reset",
+            "--label",
+            "Studio",
+            "--json",
+        ])
+        .expect("init flags parse");
+        let Some(Command::Init(args)) = cli.command else {
+            panic!("init is a subcommand");
+        };
+        assert_eq!(args.node_home, Some(PathBuf::from("node")));
+        assert_eq!(args.desktop_home, Some(PathBuf::from("desktop")));
+        assert!(args.reset && args.json && !args.dangerously_overwrite);
+        assert_eq!(args.label.as_deref(), Some("Studio"));
+    }
+
+    #[test]
+    fn no_subcommand_launches_the_desktop() {
+        let cli = Cli::try_parse_from(["gents-desktop"]).expect("bare launch parses");
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn a_debug_build_is_one_under_a_debug_profile_directory() {
+        assert!(is_debug_build(Path::new(
+            "target/debug/gents-desktop-tauri"
+        )));
+        assert!(!is_debug_build(Path::new(
+            "target/release/gents-desktop-tauri"
+        )));
+        assert!(!is_debug_build(Path::new(
+            "target/debugger/gents-desktop-tauri"
+        )));
+    }
+
+    #[test]
+    fn every_transport_noise_directive_parses() {
+        with_default_transport_noise_filters(EnvFilter::new("warn"));
+    }
 }

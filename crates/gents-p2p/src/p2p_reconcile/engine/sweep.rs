@@ -9,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 use gents_store::identity::NodeIdentity;
 
 use super::super::enrollment_reconcile::EnrollmentAuthorityHandle;
+use super::super::intervals::P2pIntervals;
 use super::super::{EmbeddedRemoteP2pAdmin, RemoteP2pAdmin};
 use super::reconcile::{prepare_pairing_peer, reconcile_prepared_peer};
 use super::{GraphqlPairingStateStore, PairingStateStore, MAX_CONCURRENT_PEER_PREPARATIONS};
@@ -31,6 +32,7 @@ pub async fn run_pairing_reconciler(
     node: Arc<EmbeddedNode>,
     identity: Arc<dyn NodeIdentity>,
     enrollment: EnrollmentAuthorityHandle,
+    intervals: P2pIntervals,
     cancel: CancellationToken,
 ) -> Result<()> {
     if node.p2p_arc().is_none() {
@@ -46,18 +48,27 @@ pub async fn run_pairing_reconciler(
         gents_store::subscription_source::subscribe_collections(&node, PAIRING_STATE_COLLECTIONS)?;
     let connections = node.subscribe(&[events::EventName::PeerConnection]);
 
-    run_pairing_reconciler_loop(&admin, &store, subscription, connections, &cancel).await;
+    run_pairing_reconciler_loop(
+        &admin,
+        &store,
+        subscription,
+        connections,
+        intervals.pairing_sweep,
+        &cancel,
+    )
+    .await;
     Ok(())
 }
 
 pub(super) async fn run_pairing_reconciler_loop(
     admin: &dyn RemoteP2pAdmin,
     store: &dyn PairingStateStore,
-    mut subscription: events::DocumentChangeSubscription,
+    mut subscription: gents_store::subscription_source::ChangeSubscription,
     mut connections: events::Subscription,
+    sweep_interval: std::time::Duration,
     cancel: &CancellationToken,
 ) {
-    let mut interval = tokio::time::interval(super::super::intervals::sweep_interval());
+    let mut interval = tokio::time::interval(sweep_interval);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut replay_connections = BTreeMap::new();
     let mut failing_peers = BTreeSet::<String>::new();
@@ -129,7 +140,7 @@ pub(super) async fn run_pairing_reconciler_loop(
                     subscription_open = false;
                     continue;
                 };
-                if batch.resync_required {
+                if gents_store::subscription_source::overflowed(&batch) {
                     tracing::warn!(target: "gents::runtime::agent::p2p_reconcile::engine",
                         updates = batch.updates,
                         "pairing reconciler document-change capacity exceeded; performing authoritative sweep"

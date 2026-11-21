@@ -1,4 +1,4 @@
-type InferenceBackendMetadata @policy(id: "fd59b3cc10193581adb497fd6d55c7e740f4866f720af6f18da780248ce26a5c", resource: "configuration") @index(fields: ["node_did", "backend_id"], unique: true) {
+type InferenceBackendMetadata @policy(id: "$household", resource: "configuration") @index(fields: ["node_did", "backend_id"], unique: true) {
     backend_id: String
     node_did: String @index
     creation_nonce: String
@@ -14,10 +14,12 @@ type InferenceBackendMetadata @policy(id: "fd59b3cc10193581adb497fd6d55c7e740f48
     oauth_allow_overage: Boolean
     connect_timeout_secs: Int
     discovery_timeout_secs: Int
+    request_timeout_secs: Int
     max_concurrent: Int
     max_queue_depth: Int
     enabled: Boolean @index
     tags: [String!]
     updated_at: DateTime @index(direction: DESC)
     claude_platform: JSON
+    client_version: String
 }

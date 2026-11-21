@@ -50,12 +50,6 @@ fn doc_field(template: &str) -> Option<&str> {
         .then_some(field)
 }
 
-fn terminal(state: Option<&str>) -> bool {
-    state
-        .and_then(|state| RequestLifecycleState::parse(state).ok())
-        .is_some_and(RequestLifecycleState::is_terminal)
-}
-
 struct Violations(Vec<(String, String)>);
 
 impl Violations {
@@ -171,7 +165,7 @@ impl Check for HandoffDelivery {
         let mut violations = Violations(Vec::new());
         for row in requests {
             let state = str_field(row, "lifecycle_state");
-            if !terminal(state) {
+            if !RequestLifecycleState::is_terminal_str(state) {
                 violations.push(
                     "request_not_terminal",
                     format!(
@@ -220,12 +214,13 @@ impl Check for HandoffDelivery {
                 }
             }
             let emits = fire.get("emit_outcome").and_then(Value::as_bool) == Some(true);
-            let work_ended = terminal(str_field(request, "lifecycle_state"))
-                && str_field(fire, "goal_id").is_none_or(|goal| {
-                    goal_status
-                        .get(goal)
-                        .is_some_and(|status| ENDED_GOAL.contains(status))
-                });
+            let work_ended =
+                RequestLifecycleState::is_terminal_str(str_field(request, "lifecycle_state"))
+                    && str_field(fire, "goal_id").is_none_or(|goal| {
+                        goal_status
+                            .get(goal)
+                            .is_some_and(|status| ENDED_GOAL.contains(status))
+                    });
             match outcome_by_key.get(key) {
                 None if emits && work_ended => violations.push(
                     "fire_without_outcome",

@@ -68,6 +68,30 @@ pub async fn stop_trigger_for_budget(
     Ok(())
 }
 
+/// Records a command Task's run on the Trigger that fired it. It writes only
+/// `last_run`, which no fire observation touches, so it never races the
+/// fire's own runtime update.
+pub async fn record_trigger_command_run(
+    node: &std::sync::Arc<EmbeddedNode>,
+    node_did: &str,
+    trigger_id: &str,
+    run: &super::CommandRun,
+) -> Result<()> {
+    use gents_protocol::document_query::{fields::trigger as fields, Filter, Input, Update};
+    let rendered = Update::matching(
+        Filter::eq(fields::NODE_DID, node_did).and(Filter::eq(fields::TRIGGER_ID, trigger_id)),
+        Input::new().set(fields::LAST_RUN, serde_json::to_value(run)?),
+    )
+    .render();
+    gents_store::config_client::ConfigAccess::write_local_rendered(
+        node,
+        "document.record_trigger_command_run",
+        &rendered,
+    )
+    .await?;
+    Ok(())
+}
+
 pub async fn load_trigger_next_run_at_batch(
     node: &EmbeddedNode,
     scopes: &[(String, String)],

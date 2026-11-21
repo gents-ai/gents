@@ -111,6 +111,7 @@ pub struct MailboxRows {
     doc_ids: Option<Vec<String>>,
     session_ids: Option<Vec<String>>,
     open_only: bool,
+    for_reader: bool,
 }
 
 impl MailboxRows {
@@ -120,6 +121,7 @@ impl MailboxRows {
             doc_ids: None,
             session_ids: None,
             open_only: false,
+            for_reader: false,
         }
     }
 
@@ -137,13 +139,22 @@ impl MailboxRows {
         self.open_only = true;
         self
     }
+
+    /// Only the items filed for the reader (Lean
+    /// `Identity.MailboxAccess.clientItems`). A reader holding `bypass-dac`
+    /// observes every item on the node, so document ACP no longer narrows a
+    /// client's list to its own items.
+    pub fn for_reader(mut self) -> Self {
+        self.for_reader = true;
+        self
+    }
 }
 
 impl View for MailboxRows {
     type Collection = fields::mailbox_item::Doc;
     type Row = gents_protocol::row::MailboxItemRow;
 
-    fn query(&self, _reader_did: &str) -> Query<Self::Collection> {
+    fn query(&self, reader_did: &str) -> Query<Self::Collection> {
         use fields::mailbox_item as f;
         let mut query = Query::select(
             Selection::new()
@@ -182,6 +193,9 @@ impl View for MailboxRows {
         }
         if self.open_only {
             query = query.filter(Filter::eq(f::STATUS, "open"));
+        }
+        if self.for_reader {
+            query = query.filter(Filter::eq(f::REQUESTER_DID, reader_did));
         }
         query
     }

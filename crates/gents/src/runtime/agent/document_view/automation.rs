@@ -42,6 +42,16 @@ pub(super) fn resolve_automation(
             unavailable_triggers.insert(trigger_id.clone());
             continue;
         }
+        if task.command.is_some() {
+            // The Node runs a command Task from its schedule; an event source
+            // reads documents as the Task's Agent, and a command Task has none.
+            if matches!(trigger.source, gents_documents::TriggerSource::Event { .. }) {
+                unavailable_triggers.insert(trigger_id.clone());
+            } else {
+                trigger_tasks.insert(trigger_id, resolved_task_from(task));
+            }
+            continue;
+        }
         let agent_did = task.agent_did.as_str();
         let Some(behavior_record) = view.agents.get(agent_did) else {
             unavailable_triggers.insert(trigger_id.clone());
@@ -80,28 +90,38 @@ pub(super) fn resolve_automation(
 
         match &trigger.source {
             gents_documents::TriggerSource::Schedule { schedule_id } => {
-                resolve_schedule_trigger(
+                match resolve_schedule_trigger(
                     view,
                     schedule_id,
                     &trigger_record.doc_id,
                     &trigger_id,
                     concurrency,
                     task.clone(),
-                    &mut schedules,
-                    &mut unavailable_schedules,
-                );
+                ) {
+                    Some(schedule) => {
+                        schedules.insert(trigger_id.clone(), schedule);
+                    }
+                    None => {
+                        unavailable_schedules.insert(trigger_id.clone());
+                    }
+                }
             }
             gents_documents::TriggerSource::Event { event_source_id } => {
-                resolve_event_trigger(
+                match resolve_event_trigger(
                     view,
                     event_source_id,
                     &trigger_record.doc_id,
                     &trigger_id,
                     concurrency,
                     task.clone(),
-                    &mut event_triggers,
-                    &mut unavailable_event_triggers,
-                );
+                ) {
+                    Some(event_trigger) => {
+                        event_triggers.insert(trigger_id.clone(), event_trigger);
+                    }
+                    None => {
+                        unavailable_event_triggers.insert(trigger_id.clone());
+                    }
+                }
             }
         }
         let create_session = trigger.create_session.unwrap_or(false);
@@ -161,7 +181,6 @@ fn resolve_tasks(
     active_tasks
 }
 
-#[allow(clippy::too_many_arguments)]
 fn resolve_schedule_trigger(
     view: &DocumentRuntimeView,
     schedule_id: &str,
@@ -169,17 +188,14 @@ fn resolve_schedule_trigger(
     trigger_id: &str,
     concurrency: ConcurrencyMode,
     task: ResolvedTask,
-    active_schedules: &mut RapidHashMap<String, ResolvedSchedule>,
-    unavailable_schedules: &mut RapidHashSet<String>,
-) {
+) -> Option<ResolvedSchedule> {
     let Some(schedule_record) = view.schedules.get(schedule_id) else {
         tracing::warn!(
             trigger_id = %trigger_id,
             schedule_id = %schedule_id,
             "schedule quarantined: referenced schedule document is missing",
         );
-        unavailable_schedules.insert(trigger_id.to_string());
-        return;
+        return None;
     };
     let schedule = &schedule_record.value;
 
@@ -190,8 +206,7 @@ fn resolve_schedule_trigger(
             %error,
             "schedule quarantined: invalid cadence",
         );
-        unavailable_schedules.insert(trigger_id.to_string());
-        return;
+        return None;
     }
 
     if task_template_references_group(&task.prompt_template) {
@@ -201,29 +216,22 @@ fn resolve_schedule_trigger(
             "schedule quarantined: group.* template scope is only available to \
              per_group event triggers",
         );
-        unavailable_schedules.insert(trigger_id.to_string());
-        return;
+        return None;
     }
 
-    active_schedules.insert(
-        trigger_id.to_string(),
-        ResolvedSchedule {
-            session_id_template: None,
-            create_session: false,
-            max_fires_per_hour: gents_documents::DEFAULT_MAX_FIRES_PER_HOUR,
-            trigger_doc_id: trigger_doc_id.to_string(),
-            schedule_doc_id: schedule_record.doc_id.clone(),
-            schedule_id: schedule.schedule_id.clone(),
-            task_id: task.task_id.clone(),
-            task,
-            cadence: schedule.cadence.clone(),
-            enabled: true,
-            concurrency,
-        },
-    );
+    Some(ResolvedSchedule {
+        session_id_template: None,
+        create_session: false,
+        max_fires_per_hour: gents_documents::DEFAULT_MAX_FIRES_PER_HOUR,
+        trigger_doc_id: trigger_doc_id.to_string(),
+        schedule_doc_id: schedule_record.doc_id.clone(),
+        schedule_id: schedule.schedule_id.clone(),
+        task,
+        cadence: schedule.cadence.clone(),
+        concurrency,
+    })
 }
 
-#[allow(clippy::too_many_arguments)]
 fn resolve_event_trigger(
     view: &DocumentRuntimeView,
     event_source_id: &str,
@@ -231,23 +239,17 @@ fn resolve_event_trigger(
     trigger_id: &str,
     concurrency: ConcurrencyMode,
     task: ResolvedTask,
-    active_event_triggers: &mut RapidHashMap<String, ResolvedEventTrigger>,
-    unavailable_event_triggers: &mut RapidHashSet<String>,
-) {
+) -> Option<ResolvedEventTrigger> {
     let Some(source_record) = view.event_sources.get(event_source_id) else {
         tracing::warn!(
             trigger_id = %trigger_id,
             event_source_id = %event_source_id,
             "event trigger quarantined: referenced event source is missing",
         );
-        unavailable_event_triggers.insert(trigger_id.to_string());
-        return;
+        return None;
     };
     let source = &source_record.value;
-    let Some(task_record) = view.tasks.get(&task.task_id) else {
-        unavailable_event_triggers.insert(trigger_id.to_string());
-        return;
-    };
+    let task_record = view.tasks.get(&task.task_id)?;
 
     let source_collection = source.source_collection.clone();
     let event_kind = source
@@ -260,8 +262,7 @@ fn resolve_event_trigger(
     if let Err(error) = source.validate() {
         tracing::warn!(trigger_id = %trigger_id, %error,
             "event trigger quarantined: invalid event source configuration");
-        unavailable_event_triggers.insert(trigger_id.to_string());
-        return;
+        return None;
     }
     let correlation_field = source
         .correlation_field
@@ -281,42 +282,36 @@ fn resolve_event_trigger(
             trigger_id = %trigger_id,
             "event trigger quarantined: group.* template scope requires per_group mode",
         );
-        unavailable_event_triggers.insert(trigger_id.to_string());
-        return;
+        return None;
     }
     let (expected_count, expected_count_field, group_timeout_secs, group_min_count) =
         source.group_projection();
 
-    active_event_triggers.insert(
-        trigger_id.to_string(),
-        ResolvedEventTrigger {
-            event_source_id: event_source_id.to_owned(),
-            event_source_doc_id: source_record.doc_id.clone(),
-            task_doc_id: task_record.doc_id.clone(),
-            session_id_template: None,
-            create_session: false,
-            max_fires_per_hour: gents_documents::DEFAULT_MAX_FIRES_PER_HOUR,
-            trigger_doc_id: trigger_doc_id.to_string(),
-            trigger_id: trigger_id.to_string(),
-            task_id: task.task_id.clone(),
-            task,
-            source_collection,
-            event_kind,
-            filter: source.filter.clone(),
-            enabled: true,
-            concurrency,
-            fire_mode,
-            correlation_field,
-            expected_count,
-            expected_count_field,
-            group_timeout_secs,
-            group_min_count,
-            workspace_authority: source
-                .workspace_authority
-                .as_ref()
-                .map(|authority| authority.as_str().to_string()),
-        },
-    );
+    Some(ResolvedEventTrigger {
+        event_source_id: event_source_id.to_owned(),
+        event_source_doc_id: source_record.doc_id.clone(),
+        task_doc_id: task_record.doc_id.clone(),
+        session_id_template: None,
+        create_session: false,
+        max_fires_per_hour: gents_documents::DEFAULT_MAX_FIRES_PER_HOUR,
+        trigger_doc_id: trigger_doc_id.to_string(),
+        trigger_id: trigger_id.to_string(),
+        task,
+        source_collection,
+        event_kind,
+        filter: source.filter.clone(),
+        concurrency,
+        fire_mode,
+        correlation_field,
+        expected_count,
+        expected_count_field,
+        group_timeout_secs,
+        group_min_count,
+        workspace_authority: source
+            .workspace_authority
+            .as_ref()
+            .map(|authority| authority.as_str().to_string()),
+    })
 }
 
 fn task_template_references_group(template: &str) -> bool {

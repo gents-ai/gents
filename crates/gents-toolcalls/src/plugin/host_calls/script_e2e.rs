@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use gents_loop::tool::{BoxFuture, Tool, ToolDefinition};
 use gents_loop::tool_call_lifecycle::ToolOutcome;
-use gents_loop::tool_effects::{self, ToolEffectDispatcher, ToolEffectError};
+use gents_loop::tool_effects::{ToolEffectDispatcher, ToolEffectError};
 use gents_pack::plugin::PluginVerdict;
 use gents_tools::native::file_tools::read_tools::ReadFileTool;
 use gents_tools::native::shared::ToolContext;
@@ -68,22 +68,22 @@ async fn script_discovers_batches_and_reads_objects_on_a_scratch_home() {
             const files = await Promise.all([tools.read_file({path: 'a.txt'}), tools.read_file({path: 'b.txt'})]);
             return {names, types: files.map(f => typeof f), contents: files.map(f => f.content), ok: files.every(f => f.ok)};
         "#});
-    let envelope = gents_loop::tool::ToolCallEnvelope::ambient();
-    let result = tool_effects::scope(
-        Some(files.clone()),
-        executor.call_data_bound_for(
+    let envelope = gents_loop::tool::ToolCallEnvelope::default()
+        .with_effects(Some(files.clone() as Arc<dyn ToolEffectDispatcher>));
+    let result = executor
+        .call_data_bound_for(
             &record,
             input,
             super::super::executor::ToolInvocation {
                 tool_root: None,
+                own_folder: None,
                 tool_calls: true,
                 context: &envelope,
             },
             None,
-        ),
-    )
-    .await
-    .unwrap();
+        )
+        .await
+        .unwrap();
     assert_eq!(
         result.outcome.verdict,
         PluginVerdict::Success,
@@ -94,9 +94,8 @@ async fn script_discovers_batches_and_reads_objects_on_a_scratch_home() {
         result.outcome.output,
         json!({"names": ["read_file"], "types": ["object", "object"], "contents": ["L1: alpha", "L1: beta"], "ok": true})
     );
-    let oversized = tool_effects::scope(
-        Some(files.clone()),
-        executor.call_data_bound_for(
+    let oversized = executor
+        .call_data_bound_for(
             &record,
             json!({"script": r#"
             const path = 'x'.repeat(600000);
@@ -104,14 +103,14 @@ async fn script_discovers_batches_and_reads_objects_on_a_scratch_home() {
         "#}),
             super::super::executor::ToolInvocation {
                 tool_root: None,
+                own_folder: None,
                 tool_calls: true,
-                context: &gents_loop::tool::ToolCallEnvelope::ambient(),
+                context: &envelope,
             },
             None,
-        ),
-    )
-    .await
-    .unwrap();
+        )
+        .await
+        .unwrap();
     assert_ne!(oversized.outcome.verdict, PluginVerdict::Success);
     assert!(
         oversized.outcome.diagnostics.contains("TOO_LARGE"),

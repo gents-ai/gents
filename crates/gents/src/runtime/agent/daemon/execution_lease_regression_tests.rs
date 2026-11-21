@@ -3,53 +3,19 @@ use std::sync::atomic::AtomicBool;
 
 const ACTIVE_STREAM_INTERVAL: Duration = Duration::from_millis(300);
 
-#[derive(Clone)]
-struct RecoveringProvider {
-    available: Arc<AtomicBool>,
-    /// The connection fails once the opened stream is first read, as an HTTP
-    /// client does, instead of before the attempt is opened.
-    fails_on_first_read: bool,
-}
-
-#[allow(refining_impl_trait)]
-impl CompletionModel for RecoveringProvider {
-    type Response = ();
-    type StreamingResponse = ();
-    type Client = ();
-
-    fn make(_: &(), _: impl Into<String>) -> Self {
-        unreachable!()
-    }
-
-    async fn completion(
-        &self,
-        _: CompletionRequest,
-    ) -> Result<CompletionResponse<()>, CompletionError> {
-        unreachable!()
-    }
-
-    async fn stream(
-        &self,
-        request: CompletionRequest,
-    ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        gents_inference::test_support::capture_scripted_provider_request(&request, "backend-recovery")
-            .await?;
-        if !self.available.load(Ordering::SeqCst) {
-            let error = CompletionError::ProviderError("HTTP status 503: unavailable".into());
-            if self.fails_on_first_read {
-                return Ok(StreamingCompletionResponse::stream(Box::pin(stream::iter(
-                    vec![Err(error)],
-                ))));
-            }
-            return Err(error);
+/// Fails every call while the backend is not `available`, at dispatch or,
+/// as an HTTP client does, once the opened stream is first read; replies once
+/// it is.
+fn recovering_provider(available: Arc<AtomicBool>, fails_on_first_read: bool) -> ScriptedProvider {
+    ScriptedProvider::responding(move |_| {
+        let unavailable = || rig::completion::CompletionError::ProviderError("HTTP status 503: unavailable".into());
+        match (available.load(Ordering::SeqCst), fails_on_first_read) {
+            (true, _) => Reply::text("recovered reply"),
+            (false, true) => Reply::Stream(vec![Step::Error(unavailable())]),
+            (false, false) => Reply::Fail(unavailable()),
         }
-        Ok(StreamingCompletionResponse::stream(Box::pin(stream::iter(
-            vec![
-                Ok(RawStreamingChoice::Message("recovered reply".into())),
-                Ok(RawStreamingChoice::FinalResponse(())),
-            ],
-        ))))
-    }
+    })
+    .capturing_openai("backend-recovery")
 }
 
 #[tokio::test]
@@ -84,10 +50,7 @@ async fn unavailable_provider_parks_and_resumes(fails_on_first_read: bool) {
         tool_config: Arc::new(Default::default()),
         agent_config: agent_config.clone(),
         provider_family: None,
-        model: Arc::new(RecoveringProvider {
-            available: available.clone(),
-            fails_on_first_read,
-        }),
+        model: Arc::new(recovering_provider(available.clone(), fails_on_first_read)),
         preamble: prompt.preamble().to_owned(),
         loop_tools: Arc::new(Vec::new()),
         prompt_builder: prompt,
@@ -193,71 +156,99 @@ async fn unavailable_provider_parks_and_resumes(fails_on_first_read: bool) {
     node.shutdown().await.expect("node shutdown");
 }
 
-#[derive(Clone)]
-struct NonTerminalProvider {
+/// Streams two reasoning chunks, notifies `processed_two` once both were
+/// taken, then never answers again.
+fn buffered_reasoning_shutdown_provider(processed_two: Arc<tokio::sync::Notify>) -> ScriptedProvider {
+    ScriptedProvider::responding(move |_| {
+        Reply::Stream(vec![
+            Step::Chunk(rig::streaming::RawStreamingChoice::ReasoningDelta {
+                id: None,
+                reasoning: "first".into(),
+            }),
+            Step::Chunk(rig::streaming::RawStreamingChoice::ReasoningDelta {
+                id: None,
+                reasoning: " second".into(),
+            }),
+            Step::Signal(processed_two.clone()),
+            Step::Pending,
+        ])
+    })
+    .capturing_openai("shutdown-reasoning")
+}
+
+/// Calls the `lease_block` tool on every call.
+fn lease_loss_provider() -> ScriptedProvider {
+    ScriptedProvider::responding(|_| {
+        Reply::turn(vec![
+            rig::streaming::RawStreamingChoice::ToolCall(rig::streaming::RawStreamingToolCall::new(
+                "lease-tool".into(),
+                "lease_block".into(),
+                serde_json::json!({}),
+            )),
+            rig::streaming::RawStreamingChoice::FinalResponse(()),
+        ])
+    })
+    .capturing_openai("lease-loss")
+}
+
+/// Answers every call without a terminal response: received reasoning that
+/// then never progresses (`reasoning_prefix`); or partial text followed by
+/// `active_chunks` paced chunks and a final response, by empty deltas forever
+/// (`empty_forever`), or by the end of the stream.
+fn non_terminal_provider(
     empty_forever: bool,
     active_chunks: Option<usize>,
     reasoning_prefix: bool,
-    stream_calls: Arc<AtomicUsize>,
-    empty_deltas: Arc<AtomicUsize>,
-    partial_emitted: Arc<AtomicUsize>,
-}
-
-#[derive(Clone)]
-struct LeaseLossProvider;
-
-#[derive(Clone)]
-struct BufferedReasoningShutdownProvider {
-    processed_two: Arc<tokio::sync::Notify>,
-}
-
-#[allow(refining_impl_trait)]
-impl CompletionModel for BufferedReasoningShutdownProvider {
-    type Response = ();
-    type StreamingResponse = ();
-    type Client = ();
-
-    fn make(_: &(), _: impl Into<String>) -> Self {
-        Self {
-            processed_two: Arc::new(tokio::sync::Notify::new()),
+) -> ScriptedProvider {
+    ScriptedProvider::responding(move |_| {
+        if reasoning_prefix {
+            return Reply::Stream(vec![
+                Step::Chunk(rig::streaming::RawStreamingChoice::ReasoningDelta {
+                    id: None,
+                    reasoning: "received deadline reasoning".into(),
+                }),
+                Step::Pending,
+            ]);
         }
-    }
+        let mut steps = vec![Step::Chunk(rig::streaming::RawStreamingChoice::Message(
+            "durable partial incident text".into(),
+        ))];
+        if let Some(chunks) = active_chunks {
+            for index in 1..=chunks {
+                steps.push(Step::Delay(ACTIVE_STREAM_INTERVAL));
+                steps.push(Step::Chunk(rig::streaming::RawStreamingChoice::Message(format!(
+                    " chunk-{index}"
+                ))));
+            }
+            steps.push(Step::Chunk(rig::streaming::RawStreamingChoice::FinalResponse(())));
+        } else if empty_forever {
+            steps.push(Step::Repeat {
+                chunk: rig::streaming::RawStreamingChoice::Message(String::new()),
+                every: Duration::from_millis(10),
+                until: None,
+            });
+        }
+        Reply::Stream(steps)
+    })
+    .capturing_openai("scripted")
+}
 
-    async fn completion(
-        &self,
-        _: CompletionRequest,
-    ) -> Result<CompletionResponse<()>, CompletionError> {
-        Err(CompletionError::ProviderError("stream only".into()))
-    }
+/// Calls whose stream yielded its partial text.
+fn partials_emitted(model: &ScriptedProvider) -> usize {
+    model
+        .records()
+        .iter()
+        .filter(|record| record.yielded > 0)
+        .count()
+}
 
-    async fn stream(
-        &self,
-        request: CompletionRequest,
-    ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        gents_inference::test_support::capture_scripted_provider_request(&request, "shutdown-reasoning")
-            .await?;
-        let processed_two = self.processed_two.clone();
-        let events: rig::streaming::StreamingResult<()> =
-            Box::pin(stream::unfold(0usize, move |index| {
-                let processed_two = processed_two.clone();
-                async move {
-                    match index {
-                        0 | 1 => Some((
-                            Ok(RawStreamingChoice::ReasoningDelta {
-                                id: None,
-                                reasoning: if index == 0 { "first" } else { " second" }.into(),
-                            }),
-                            index + 1,
-                        )),
-                        _ => {
-                            processed_two.notify_one();
-                            std::future::pending().await
-                        }
-                    }
-                }
-            }));
-        Ok(StreamingCompletionResponse::stream(events))
-    }
+/// Empty deltas streamed after each call's partial text.
+fn empty_deltas(model: &ScriptedProvider) -> usize {
+    model
+        .records()
+        .iter()
+        .map(|record| record.yielded.saturating_sub(1))
+        .sum()
 }
 
 async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss: Option<&str>) {
@@ -277,9 +268,8 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
     }
     let node_did = agent_config.node_did().to_owned();
     let identity = agent_config.node_identity().clone();
-    let model = BufferedReasoningShutdownProvider {
-        processed_two: Arc::new(tokio::sync::Notify::new()),
-    };
+    let processed_two = Arc::new(tokio::sync::Notify::new());
+    let model = buffered_reasoning_shutdown_provider(processed_two.clone());
     let prompt = LayeredPromptBuilder::for_agent(
         &agent_config.system_prompt,
         &agent_config.agent_did,
@@ -329,7 +319,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
     tokio::pin!(process);
     tokio::time::timeout(Duration::from_secs(10), async {
         tokio::select! {
-            _ = model.processed_two.notified() => {},
+            _ = processed_two.notified() => {},
             _ = &mut process => panic!("request exited before both reasoning chunks were processed"),
         }
     }).await.expect("both provider chunks must be processed");
@@ -595,41 +585,6 @@ async fn graceful_shutdown_after_lease_expiry_does_not_claim_lost_output() {
     graceful_shutdown_reasoning_case(false, Some("expired")).await;
 }
 
-#[allow(refining_impl_trait)]
-impl CompletionModel for LeaseLossProvider {
-    type Response = ();
-    type StreamingResponse = ();
-    type Client = ();
-    fn make(_: &(), _: impl Into<String>) -> Self {
-        Self
-    }
-    async fn completion(
-        &self,
-        _: CompletionRequest,
-    ) -> Result<CompletionResponse<()>, CompletionError> {
-        Err(CompletionError::ProviderError("stream only".into()))
-    }
-    async fn stream(
-        &self,
-        request: CompletionRequest,
-    ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        gents_inference::test_support::capture_scripted_provider_request(&request, "lease-loss").await?;
-        let events = vec![
-            Ok(RawStreamingChoice::ToolCall(
-                rig::streaming::RawStreamingToolCall::new(
-                    "lease-tool".into(),
-                    "lease_block".into(),
-                    serde_json::json!({}),
-                ),
-            )),
-            Ok(RawStreamingChoice::FinalResponse(())),
-        ];
-        Ok(StreamingCompletionResponse::stream(Box::pin(stream::iter(
-            events,
-        ))))
-    }
-}
-
 #[derive(Clone)]
 struct LeaseBlockingTool {
     entered: Option<Arc<AtomicBool>>,
@@ -688,7 +643,7 @@ async fn lease_poll_ownership_loss_does_not_fail_a_running_tool() {
         tool_config: Arc::new(Default::default()),
         agent_config: agent_config.clone(),
         provider_family: None,
-        model: Arc::new(LeaseLossProvider),
+        model: Arc::new(lease_loss_provider()),
         preamble: prompt.preamble().to_owned(),
         loop_tools: Arc::new(vec![Box::new(LeaseBlockingTool { entered: None })
             as Box<dyn gents_loop::tool::ToolDyn>]),
@@ -749,96 +704,6 @@ async fn lease_poll_ownership_loss_does_not_fail_a_running_tool() {
     assert!(row["cancel_cause"].is_null());
 }
 
-#[allow(refining_impl_trait)]
-impl CompletionModel for NonTerminalProvider {
-    type Response = ();
-    type StreamingResponse = ();
-    type Client = ();
-
-    fn make(_: &(), _: impl Into<String>) -> Self {
-        Self {
-            empty_forever: false,
-            active_chunks: None,
-            reasoning_prefix: false,
-            stream_calls: Arc::new(AtomicUsize::new(0)),
-            empty_deltas: Arc::new(AtomicUsize::new(0)),
-            partial_emitted: Arc::new(AtomicUsize::new(0)),
-        }
-    }
-
-    async fn completion(
-        &self,
-        _: CompletionRequest,
-    ) -> Result<CompletionResponse<()>, CompletionError> {
-        Err(CompletionError::ProviderError(
-            "streaming regression only".into(),
-        ))
-    }
-
-    async fn stream(
-        &self,
-        request: CompletionRequest,
-    ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        gents_inference::test_support::capture_scripted_provider_request(&request, "scripted").await?;
-
-        self.stream_calls.fetch_add(1, Ordering::SeqCst);
-        if self.reasoning_prefix {
-            let inner: rig::streaming::StreamingResult<()> =
-                Box::pin(stream::unfold(0usize, |index| async move {
-                    if index == 0 {
-                        Some((
-                            Ok(RawStreamingChoice::ReasoningDelta {
-                                id: None,
-                                reasoning: "received deadline reasoning".into(),
-                            }),
-                            1,
-                        ))
-                    } else {
-                        std::future::pending().await
-                    }
-                }));
-            return Ok(StreamingCompletionResponse::stream(inner));
-        }
-        let endless = self.empty_forever;
-        let active_chunks = self.active_chunks;
-        let empty_deltas = self.empty_deltas.clone();
-        let partial_emitted = self.partial_emitted.clone();
-        let inner: rig::streaming::StreamingResult<()> =
-            Box::pin(stream::unfold(0usize, move |index| {
-                let empty_deltas = empty_deltas.clone();
-                let partial_emitted = partial_emitted.clone();
-                async move {
-                    if index == 0 {
-                        partial_emitted.fetch_add(1, Ordering::SeqCst);
-                        Some((
-                            Ok(RawStreamingChoice::Message(
-                                "durable partial incident text".into(),
-                            )),
-                            1,
-                        ))
-                    } else if index <= active_chunks.unwrap_or(0) {
-                        tokio::time::sleep(ACTIVE_STREAM_INTERVAL).await;
-                        Some((
-                            Ok(RawStreamingChoice::Message(format!(" chunk-{index}"))),
-                            index + 1,
-                        ))
-                    } else if active_chunks.is_some_and(|chunks| index == chunks + 1) {
-                        Some((Ok(RawStreamingChoice::FinalResponse(())), index + 1))
-                    } else if active_chunks.is_some() {
-                        None
-                    } else if endless {
-                        tokio::time::sleep(Duration::from_millis(10)).await;
-                        empty_deltas.fetch_add(1, Ordering::SeqCst);
-                        Some((Ok(RawStreamingChoice::Message(String::new())), index + 1))
-                    } else {
-                        None
-                    }
-                }
-            }));
-        Ok(StreamingCompletionResponse::stream(inner))
-    }
-}
-
 async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool) {
     let (db, user, access, mut agent_config) = held_daemon_fixture("daemon-lease").await;
     let node = db.node.clone();
@@ -852,14 +717,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
         .stream_liveness_timeout = Duration::from_secs(5);
     let node_did = agent_config.node_did().to_owned();
     let identity = agent_config.node_identity().clone();
-    let model = NonTerminalProvider {
-        empty_forever,
-        active_chunks: None,
-        reasoning_prefix: false,
-        stream_calls: Arc::new(AtomicUsize::new(0)),
-        empty_deltas: Arc::new(AtomicUsize::new(0)),
-        partial_emitted: Arc::new(AtomicUsize::new(0)),
-    };
+    let model = non_terminal_provider(empty_forever, None, false);
     let prompt = LayeredPromptBuilder::for_agent(
         &agent_config.system_prompt,
         &agent_config.agent_did,
@@ -921,7 +779,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
         // The interrupt must follow the provider's partial text: the request
         // promises to retain output the loop received, not text a provider
         // has yet to send (TLA+ `InterruptPartialOutput`).
-        let partial_before = model.partial_emitted.load(Ordering::SeqCst);
+        let partial_before = partials_emitted(&model);
         tokio::time::timeout(Duration::from_secs(15), async {
             let process = daemon.process_request(request, shutdown_rx.clone());
             tokio::pin!(process);
@@ -937,7 +795,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
                             .unwrap();
                         if !empty_forever
                             || observed_renewal
-                            || model.partial_emitted.load(Ordering::SeqCst) == partial_before
+                            || partials_emitted(&model) == partial_before
                         {
                             continue;
                         }
@@ -1056,7 +914,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
         .await
         .expect("owned request must converge without restarting the daemon");
     }
-    assert_eq!(model.stream_calls.load(Ordering::SeqCst), 8);
+    assert_eq!(model.calls(), 8);
     let captures = held_daemon_query(&agent_access, "{ RenderedRequest { _docID } }").await;
     assert!(!captures.has_errors(), "{:?}", captures.errors);
     assert_eq!(
@@ -1069,7 +927,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
     );
     if empty_forever {
         assert!(
-            model.empty_deltas.load(Ordering::SeqCst) >= 8,
+            empty_deltas(&model) >= 8,
             "provider emitted traffic after its last semantic progress"
         );
     }
@@ -1106,7 +964,7 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
         tool_config: Arc::new(Default::default()),
         agent_config: agent_config.clone(),
         provider_family: None,
-        model: Arc::new(LeaseLossProvider),
+        model: Arc::new(lease_loss_provider()),
         preamble: prompt.preamble().to_owned(),
         loop_tools: Arc::new(vec![Box::new(LeaseBlockingTool {
             entered: Some(tool_entered.clone()),
@@ -1261,14 +1119,7 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
     }
     let node_did = agent_config.node_did().to_owned();
     let identity = agent_config.node_identity().clone();
-    let model = NonTerminalProvider {
-        empty_forever: false,
-        active_chunks: Some(ACTIVE_CHUNKS),
-        reasoning_prefix: false,
-        stream_calls: Arc::new(AtomicUsize::new(0)),
-        empty_deltas: Arc::new(AtomicUsize::new(0)),
-        partial_emitted: Arc::new(AtomicUsize::new(0)),
-    };
+    let model = non_terminal_provider(false, Some(ACTIVE_CHUNKS), false);
     let prompt = LayeredPromptBuilder::for_agent(
         &agent_config.system_prompt,
         &agent_config.agent_did,
@@ -1360,10 +1211,16 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
         content.contains(&format!("chunk-{ACTIVE_CHUNKS}")),
         "final output was truncated: {data}"
     );
-    assert_eq!(model.stream_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(model.calls(), 1);
     node.shutdown().await.expect("node shutdown");
 }
 
+/// The deadline is the property here, so the test drives the cut itself
+/// (TLA+ `WallClockBound` `"driven"`): it waits until the received reasoning
+/// is committed, then reaches the request deadline, which the clock never
+/// does. A 3 s wall-clock deadline instead raced the steps from the claim to
+/// the provider call and, on a loaded host, cut the request before the
+/// provider was called, leaving no prefix to close.
 #[tokio::test]
 async fn deadline_closes_received_openai_reasoning_without_another_provider_call() {
     use gents_protocol::output::reconstruction::{reconstruct_stream, ObservedSegment};
@@ -1373,22 +1230,17 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
     let (db, user, access, mut agent_config) = held_daemon_fixture("daemon-lease").await;
     let node = db.node.clone();
     let agent_access = held_daemon_agent_access(&db, &agent_config);
+    let unreached = gents_store::test_support::UNREACHED_DEADLINE;
+    let cut = Arc::new(tokio::sync::Notify::new());
     {
         let agent_config = Arc::get_mut(&mut agent_config).unwrap();
-        agent_config.deadline_duration = Duration::from_secs(3);
-        agent_config.stream_liveness_timeout = Duration::from_secs(8);
-        agent_config.provider_idle_timeout = Duration::from_secs(8);
+        agent_config.deadline_duration = unreached;
+        agent_config.stream_liveness_timeout = unreached;
+        agent_config.provider_idle_timeout = unreached;
     }
     let node_did = agent_config.node_did().to_owned();
     let identity = agent_config.node_identity().clone();
-    let model = NonTerminalProvider {
-        empty_forever: false,
-        active_chunks: None,
-        reasoning_prefix: true,
-        stream_calls: Arc::new(AtomicUsize::new(0)),
-        empty_deltas: Arc::new(AtomicUsize::new(0)),
-        partial_emitted: Arc::new(AtomicUsize::new(0)),
-    };
+    let model = non_terminal_provider(false, None, true);
     let prompt = LayeredPromptBuilder::for_agent(
         &agent_config.system_prompt,
         &agent_config.agent_did,
@@ -1427,21 +1279,40 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
             gents_p2p::p2p_reconcile::enrollment_authority_channel().1,
         ),
     })
-    .unwrap();
+    .unwrap()
+    .with_driven_deadline(cut.clone());
     let request =
         create_held_routed_request(&db, &user, &access, &agent_config, Some("lease regression"))
             .await;
     let doc_id = request.doc_id.clone();
-    let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    tokio::time::timeout(
-        Duration::from_secs(10),
-        daemon.process_request(request, shutdown_rx),
-    )
-    .await
-    .expect("request deadline must stop the nonterminal provider")
-    .expect("deadline request handling completes");
-
     let escaped = gents_store::graphql::escape_graphql_string(&doc_id);
+    let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let process = daemon.process_request(request, shutdown_rx);
+    tokio::pin!(process);
+    tokio::select! {
+        outcome = &mut process => panic!("the request ended before its deadline: {outcome:?}"),
+        () = gents_store::test_support::read_when_changed(
+            &node,
+            "AgentOutputSegment",
+            "the received reasoning is committed before the cut",
+            async || {
+                let result = held_daemon_query(&agent_access, &format!(
+                    r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{escaped}" }} }}) {{ payload }} }}"#
+                ))
+                .await;
+                let payloads = result.data.as_ref().map(|data| data["AgentOutputSegment"].to_string());
+                match payloads {
+                    Some(payloads) if payloads.contains("received deadline reasoning") => Ok(()),
+                    _ => Err(format!("{:?} {:?}", result.data, result.errors)),
+                }
+            },
+        ) => {}
+    }
+    cut.notify_one();
+    process
+        .await
+        .expect("deadline request handling completes");
+
     let response = held_daemon_query(&agent_access, &format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ lifecycle_state }} }}"#
         ))
@@ -1501,6 +1372,6 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
         )
         .is_ok_and(|content| content.text == "received deadline reasoning")
     }));
-    assert_eq!(model.stream_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(model.calls(), 1);
     node.shutdown().await.expect("node shutdown");
 }

@@ -12,10 +12,10 @@ use super::{
 use crate::runtime::agent::loop_stream::LoopStreamItem;
 use crate::runtime::agent::stream_processor::{processor_failure, StreamProcessor};
 use crate::turn::provider_input::ProviderInputProfile;
-use gents_inference::admission;
 use gents_inference::resolved::MaxTurnsProvenance;
 use gents_loop::error::LoopStreamError;
-use gents_session::request::lifecycle::{RequestLifecycle, TriggerExecutionContext};
+use gents_loop::provider_call::admission;
+use gents_session::request::lifecycle::RequestLifecycle;
 use gents_session::request::seam_error::RuntimeSeamError;
 use gents_session::request::streaming::{DefraStreamWriter, StreamWriter};
 use gents_toolcalls::call::hook::DefraSessionHook;
@@ -32,11 +32,12 @@ pub(super) struct StreamDrive<'a> {
     pub(super) inference_token: &'a CancellationToken,
     pub(super) request_id: &'a String,
     pub(super) session_id: &'a String,
-    pub(super) trigger_correlation: &'a Option<String>,
-    pub(super) trigger_context: &'a TriggerExecutionContext,
     pub(super) request_deadline: RequestDeadline,
+    pub(super) driven_deadline: Option<&'a tokio::sync::Notify>,
     pub(super) terminal_failure_reason: &'a std::sync::Arc<std::sync::Mutex<Option<String>>>,
     pub(super) max_turns_provenance: MaxTurnsProvenance,
+    pub(super) capture:
+        Option<&'a std::sync::Arc<gents_inference::rendered_request::scope::RequestCaptureScope>>,
 }
 
 pub(super) async fn drive_inference_stream<S>(
@@ -60,10 +61,10 @@ where
         inference_token,
         request_id,
         session_id,
-        trigger_correlation,
-        trigger_context,
         request_deadline,
+        driven_deadline,
         terminal_failure_reason,
+        capture,
         ..
     } = drive;
     let mut processor = crate::runtime::agent::stream_processor::StreamProcessor::new(
@@ -72,7 +73,8 @@ where
         lifecycle,
         doc_id,
         provider_profile,
-    );
+    )
+    .with_capture(capture.cloned());
     let mut lease_poll = tokio::time::interval(Duration::from_secs(1));
     lease_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut stream_error = None;
@@ -160,19 +162,7 @@ where
                 let processor = &mut processor;
                 let stream = &mut stream;
                 let (flushed, item) = box_stream_branch(move || async move {
-                    let progress = async {
-                        gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(None,
-                            request_deadline,
-                            request_token.clone(),
-                            None,
-                            None,
-                            Some(session_id.clone()),
-                            trigger_correlation.clone(),
-                            trigger_context.source_fields.clone(),
-                            false,
-                            stream.next(),
-                        ).await
-                    };
+                    let progress = stream.next();
                     crate::runtime::agent::stream_processor::flush_while_polling(
                         processor.flush_pending(), progress,
                     ).await
@@ -188,17 +178,8 @@ where
             }
             result = await_with_request_deadline(
                 request_deadline,
-                gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(None,
-                    request_deadline,
-                    request_token.clone(),
-                    None,
-                    None,
-                    Some(session_id.clone()),
-                    trigger_correlation.clone(),
-                    trigger_context.source_fields.clone(),
-                    false,
-                    stream.next(),
-                ),
+                driven_deadline,
+                stream.next(),
                 "waiting for inference stream item",
             ) => {
                 match result {

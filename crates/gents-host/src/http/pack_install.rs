@@ -76,6 +76,9 @@ struct InstallRequest {
     /// agents. The serving runtime's environment never binds one.
     #[serde(default)]
     bind_agents: Vec<String>,
+    /// The installer's environment value of each variable the packs read: the
+    /// only environment the runtime plans this install from.
+    installer_environment: std::collections::BTreeMap<String, String>,
     overwrite: bool,
     keep: bool,
     preview: bool,
@@ -152,10 +155,8 @@ pub async fn install_remote(
     })
     .await??;
     let response = endpoint
-        .authorize(client.post(url))?
-        .json(&body)
-        .send()
-        .await
+        .send_resolving(|endpoint| Ok(endpoint.authorize(client.post(url.clone()))?.json(&body)))
+        .await?
         .context(
             "remote pack install outcome is unconfirmed; inspect the runtime before retrying",
         )?;
@@ -179,6 +180,17 @@ pub async fn encode_install_request(
     owner: &str,
     explicit: bool,
 ) -> Result<serde_json::Value> {
+    let supplied = gents_pack::pack::install_flow::supplied_variables(
+        &args.dependency_variables,
+        &args.bind_agents,
+    )?;
+    let packs = std::iter::once(pack)
+        .chain(dependencies.iter())
+        .collect::<Vec<_>>();
+    let installer_environment =
+        gents_pack::pack::install_flow::installer_environment(&packs, &supplied, &|name| {
+            args.environment.value(name)
+        })?;
     let root = pack.shared_archive();
     let root_source = pack.provenance();
     let dependency_sources = dependencies
@@ -211,6 +223,7 @@ pub async fn encode_install_request(
             inference_slots,
             dependency_variables,
             bind_agents,
+            installer_environment,
             overwrite,
             keep,
             preview,
@@ -275,6 +288,12 @@ pub async fn install_handler(
         Ok(Err(error)) => return refused(StatusCode::BAD_REQUEST, error),
         Err(error) => return refused(StatusCode::INTERNAL_SERVER_ERROR, error),
     };
+    if !received.request.wire.is_empty() && !received.request.preview {
+        return refused(
+            StatusCode::BAD_REQUEST,
+            "a remote install carries no wiring; the client wires its plugins after it, signing each write itself",
+        );
+    }
     if received.root.manifest().metadata.kind != PackKind::Documents {
         return refused(
             StatusCode::BAD_REQUEST,
@@ -419,6 +438,9 @@ async fn install_owned(
     } = received;
     let explicit = request.explicit;
     let args = DocumentsInstallRequest {
+        environment: gents_pack::operations::pack::InstallEnvironment::HostedRuntime(
+            request.installer_environment,
+        ),
         home: home.clone(),
         remote: false,
         inference_slots: request.inference_slots,
@@ -433,7 +455,7 @@ async fn install_owned(
         grant_authority: request.grant_authority,
         wire: request.wire,
     };
-    let mut result = gents_pack::pack::install_flow::install_documents_pack_resolved(
+    let result = gents_pack::pack::install_flow::install_documents_pack_resolved(
         &access,
         &state.node_did,
         &root,
@@ -444,18 +466,6 @@ async fn install_owned(
     )
     .await
     .map_err(gents_pack::pack::PackChangeError::into_anyhow)?;
-    if !args.wire.is_empty() && !args.preview {
-        result["wired"] = gents_pack::pack::plugin_wire::wire_pack_plugins(
-            &access,
-            &state.node_did,
-            &home,
-            &root,
-            &args.wire,
-            gents_service::home_state::load_held_user_identity,
-        )
-        .await?
-        .into();
-    }
     Ok(result)
 }
 

@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use gents_documents::{BashMode, BashTools, HostTools, Tools};
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
@@ -9,11 +7,10 @@ use serde_json::{json, Value};
 use crate::support::agent_requests::{submit_user_request, RequestActors};
 use crate::support::interrupt::BootedAgent;
 use crate::support::live_inference::{
-    bind_target, boot_live_agent_with_ceiling, live_target, wait_for_request_terminal,
-    wait_for_rows,
+    bind_target, boot_live_agent_with_ceiling, live_target, rows_when, wait_for_request_terminal,
 };
-use crate::support::snapshots::SnapshotReader;
 use crate::support::{test_db, TestDb};
+use gents_store::test_support::snapshot_reader::SnapshotReader;
 
 const SESSION: &str = "live-background-session";
 
@@ -74,8 +71,7 @@ impl Fixture {
         )
         .await;
         assert_eq!(
-            wait_for_request_terminal(&self.actors.fixture.access, id, Duration::from_secs(120))
-                .await,
+            wait_for_request_terminal(&self.actors.fixture.access, id).await,
             "completed"
         );
     }
@@ -123,11 +119,10 @@ impl Fixture {
             r#"{{AgentToolCall(filter: {{_docID: {{_eq: "{}"}}}}) {{lifecycle_state}}}}"#,
             escape_graphql_string(call["_docID"].as_str().unwrap())
         );
-        wait_for_rows(
+        rows_when(
             &self.actors.fixture.access,
             "AgentToolCall",
             &query,
-            Duration::from_secs(30),
             |rows| rows["AgentToolCall"][0]["lifecycle_state"] == state,
         )
         .await;

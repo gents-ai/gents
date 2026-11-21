@@ -74,6 +74,14 @@ async fn observe(
     };
     let trigger: crate::Trigger = serde_json::from_value(value)?;
     let selected = match read_record(txn, Collection::Task, owner, &trigger.task_id).await? {
+        // A command Task has no Agent to read an event source as.
+        Some((_, task))
+            if task
+                .get("command")
+                .is_some_and(|command| !command.is_null()) =>
+        {
+            None
+        }
         Some((_, task)) => {
             let task: crate::Task = serde_json::from_value(task)?;
             let source = match trigger.source {
@@ -342,24 +350,33 @@ pub(crate) async fn grant_changes(txn: &ConfigApplyTxn<'_>, captured: Capture) -
         )
         .await?;
         let Some(selected) = current.selected.as_ref() else {
+            if let Some(before) = prior_selection {
+                txn.change_configuration_reader(
+                    gents_protocol::owner_staged::SelectedConfiguration::Trigger,
+                    &current.doc_id,
+                    &identity::Did::new(&before.agent)?,
+                    false,
+                )
+                .await?;
+            }
             continue;
         };
         let agent_changed = prior_selection.is_none_or(|before| before.agent != selected.agent);
         if agent_changed {
             if let Some(before) = prior_selection {
-                txn.delete_actor_relationship(
-                    "Trigger",
+                txn.change_configuration_reader(
+                    gents_protocol::owner_staged::SelectedConfiguration::Trigger,
                     &current.doc_id,
-                    "reader",
                     &identity::Did::new(&before.agent)?,
+                    false,
                 )
                 .await?;
             }
-            txn.add_actor_relationship(
-                "Trigger",
+            txn.change_configuration_reader(
+                gents_protocol::owner_staged::SelectedConfiguration::Trigger,
                 &current.doc_id,
-                "reader",
                 &identity::Did::new(&selected.agent)?,
+                true,
             )
             .await?;
         }
@@ -372,11 +389,11 @@ pub(crate) async fn grant_changes(txn: &ConfigApplyTxn<'_>, captured: Capture) -
                 let (source_doc, _) = read_record(txn, Collection::EventSource, &owner, source_id)
                     .await?
                     .context("selected EventSource is unavailable")?;
-                txn.add_actor_relationship(
-                    "EventSource",
+                txn.change_configuration_reader(
+                    gents_protocol::owner_staged::SelectedConfiguration::EventSource,
                     &source_doc,
-                    "reader",
                     &identity::Did::new(&selected.agent)?,
+                    true,
                 )
                 .await?;
             }
@@ -417,11 +434,11 @@ pub(crate) async fn grant_changes(txn: &ConfigApplyTxn<'_>, captured: Capture) -
             let (source_doc, _) = read_record(txn, Collection::EventSource, &owner, source)
                 .await?
                 .context("callback EventSource is unavailable")?;
-            txn.add_actor_relationship(
-                "EventSource",
+            txn.change_configuration_reader(
+                gents_protocol::owner_staged::SelectedConfiguration::EventSource,
                 &source_doc,
-                "reader",
                 &identity::Did::new(&selected.agent)?,
+                true,
             )
             .await?;
         }
@@ -443,19 +460,19 @@ pub(crate) async fn grant_changes(txn: &ConfigApplyTxn<'_>, captured: Capture) -
                 .await?
                 .context("selected CallbackBinding is unavailable")?;
             if let Some(before) = prior.as_ref() {
-                txn.delete_actor_relationship(
-                    "CallbackBinding",
+                txn.change_configuration_reader(
+                    gents_protocol::owner_staged::SelectedConfiguration::CallbackBinding,
                     &binding_doc,
-                    "reader",
                     &identity::Did::new(&before.agent)?,
+                    false,
                 )
                 .await?;
             }
-            txn.add_actor_relationship(
-                "CallbackBinding",
+            txn.change_configuration_reader(
+                gents_protocol::owner_staged::SelectedConfiguration::CallbackBinding,
                 &binding_doc,
-                "reader",
                 &identity::Did::new(&selected.agent)?,
+                true,
             )
             .await?;
         }
@@ -467,11 +484,11 @@ pub(crate) async fn grant_changes(txn: &ConfigApplyTxn<'_>, captured: Capture) -
             let (callback_doc, _) = read_record(txn, Collection::Callback, &owner, callback_id)
                 .await?
                 .context("selected Callback is unavailable")?;
-            txn.add_actor_relationship(
-                "Callback",
+            txn.change_configuration_reader(
+                gents_protocol::owner_staged::SelectedConfiguration::Callback,
                 &callback_doc,
-                "reader",
                 &identity::Did::new(&selected.agent)?,
+                true,
             )
             .await?;
         }
@@ -486,11 +503,11 @@ pub(crate) async fn grant_changes(txn: &ConfigApplyTxn<'_>, captured: Capture) -
                     read_record(txn, Collection::CallbackModule, &owner, module_id)
                         .await?
                         .context("selected CallbackModule is unavailable")?;
-                txn.add_actor_relationship(
-                    "CallbackModule",
+                txn.change_configuration_reader(
+                    gents_protocol::owner_staged::SelectedConfiguration::CallbackModule,
                     &module_doc,
-                    "reader",
                     &identity::Did::new(&selected.agent)?,
+                    true,
                 )
                 .await?;
             }

@@ -4,7 +4,7 @@ use gents_protocol::node_readiness::{
 };
 use serde_json::{json, Value};
 
-use crate::http::prometheus::MetricsQueryData;
+use crate::http::prometheus::store::MetricsQueryData;
 use crate::http::router::RuntimeHttpState;
 use crate::http::version::version_response;
 
@@ -188,7 +188,7 @@ mod tests {
 
     use super::*;
     use crate::http::liveness::{ActiveRequest, ActiveToolCall, RuntimeLivenessSnapshot};
-    use crate::http::prometheus::{MetricsBackendRow, MetricsQueryData, MetricsRuntimeRow};
+    use crate::http::prometheus::store::{MetricsBackendRow, MetricsQueryData, MetricsRuntimeRow};
     use gents_protocol::row::{
         AgentReadinessEntry, AgentReadinessState, NodeReadinessProcessState, NodeReadinessRow,
         NodeReadinessSnapshot, NODE_READINESS_FORMAT_VERSION,
@@ -198,6 +198,7 @@ mod tests {
         let (activation_runtime, activation_observation) =
             crate::http::router::empty_activation_state();
         RuntimeHttpState {
+            client_access_decisions: Default::default(),
             graphql: gents_store::config_client::GraphqlEndpoint::anonymous(
                 "http://localhost:9181/api/v0/graphql",
             ),
@@ -223,6 +224,9 @@ mod tests {
             activation_observation,
             replicated_schema: Default::default(),
             serve_lifecycle: Default::default(),
+            document_acp: Default::default(),
+            node_identity: None,
+            pack_watch_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(16)),
         }
     }
 

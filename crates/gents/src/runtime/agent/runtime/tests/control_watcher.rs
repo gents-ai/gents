@@ -245,6 +245,7 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
             subscription,
             node_did: agent.node_did().to_string(),
             tool_runtime: test_tool_runtime(&node, agent.node_did(), &resolve_context),
+            system_log: false,
             resolve_context,
             proposals_tx: proposal_tx,
             runtime_status: runtime_status.clone(),
@@ -378,6 +379,7 @@ async fn control_watcher_reconciles_a_local_write_without_the_replication_deboun
             subscription,
             node_did: agent.node_did().to_string(),
             tool_runtime: test_tool_runtime(&node, agent.node_did(), &resolve_context),
+            system_log: false,
             resolve_context,
             proposals_tx: proposal_tx,
             runtime_status,
@@ -416,6 +418,134 @@ async fn control_watcher_reconciles_a_local_write_without_the_replication_deboun
             .expect("default agent in snapshot")
             .system_prompt,
         "operator prompt"
+    );
+
+    let _ = shutdown_tx.send(true);
+    watcher_task.await.unwrap().unwrap();
+}
+
+#[test]
+fn the_reconcile_deadline_matches_the_lean_model() {
+    let base = tokio::time::Instant::now();
+    let at = |millis: u64| base + Duration::from_millis(millis);
+    gents_lean_vocab::families::control_debounce_due::replay(|input| {
+        let due = super::super::control_watcher::due(
+            at(input.first_wake),
+            at(input.now),
+            Duration::from_millis(input.delay),
+            Duration::from_millis(input.ceiling),
+        );
+        u64::try_from((due - base).as_millis()).unwrap()
+    });
+}
+
+/// TLA `ControlDebounce` (`MCControlDebounceGreen`; without the ceiling,
+/// `MCControlDebounceUncapped`).
+#[tokio::test]
+async fn sustained_access_changes_do_not_starve_a_pending_control_change() {
+    use events::Bus as _;
+    let fixture = held_runtime_fixture(
+        "control-watcher-busy",
+        "backend-control",
+        "http://127.0.0.1:8114/v1",
+    )
+    .await;
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
+    let agent_access = fixture.agent_config_access().await;
+    let agent = crate::Gents::from_default_agent_documents(
+        node.clone(),
+        identity,
+        crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
+            tool_ceiling: ToolCeiling::meta_only(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let resolve_context = agent
+        .document_runtime_context()
+        .cloned()
+        .expect("document-backed agent");
+    let runtime_status = RuntimeStatusHandle::new(node.clone(), agent.node_did().to_string());
+    runtime_status
+        .initialize_startup(agent.default_agent_did())
+        .await
+        .unwrap();
+    let bus = Arc::new(events::ChannelBus::new());
+    let subscription = super::super::control_watcher::subscribe_control_changes_with_access(
+        &node,
+        bus.subscribe(&[events::EventName::AcpCacheInvalidated]),
+    )
+    .unwrap();
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (proposal_tx, mut proposal_rx) = mpsc::channel(4);
+    let timing = ControlWatcherTiming {
+        debounce: Duration::from_millis(200),
+        local_debounce: Duration::from_millis(200),
+        ..TEST_CONTROL_WATCHER_TIMING
+    };
+    let watcher_task = tokio::spawn(run_control_watcher_with_timing(
+        ControlWatcherInputs {
+            node: node.clone(),
+            backend_admission: agent.backend_admission.clone(),
+            subscription,
+            node_did: agent.node_did().to_string(),
+            tool_runtime: test_tool_runtime(&node, agent.node_did(), &resolve_context),
+            system_log: false,
+            resolve_context,
+            proposals_tx: proposal_tx,
+            runtime_status,
+            health_events_rx: mpsc::channel::<()>(1).1,
+            shutdown: shutdown_rx,
+        },
+        timing,
+    ));
+
+    write_documents(
+        &agent_access,
+        "test.context.busy",
+        vec![(
+            gents_store::collection::Collection::AgentContext,
+            serde_json::json!({
+                "node_did": agent.node_did(),
+                "context_id": format!("{}:context", agent.default_agent_did()),
+                "tools_id": format!("{}:tools", agent.default_agent_did()),
+                "system_prompt": "busy home prompt"
+            }),
+        )],
+    )
+    .await;
+    let busy = tokio::spawn({
+        let bus = bus.clone();
+        async move {
+            loop {
+                bus.publish(events::Message::acp_cache_invalidated(
+                    events::AcpCacheInvalidatedData {
+                        height: 0,
+                        module_state_root: String::new(),
+                        previous_root: String::new(),
+                        entries_invalidated: 0,
+                    },
+                ));
+                tokio::time::sleep(timing.debounce / 4).await;
+            }
+        }
+    });
+
+    let snapshot = tokio::time::timeout(PROPOSAL_TIMEOUT, proposal_rx.recv())
+        .await
+        .expect("a pending control change is reconciled while access changes keep arriving")
+        .expect("reconciled snapshot");
+    busy.abort();
+    assert_eq!(
+        snapshot
+            .agents
+            .get(agent.default_agent_did())
+            .expect("default agent in snapshot")
+            .system_prompt,
+        "busy home prompt"
     );
 
     let _ = shutdown_tx.send(true);
@@ -470,6 +600,7 @@ async fn control_watcher_demotes_and_recovers_agent_on_measured_health_flip() {
             subscription: subscribe_control_changes(&node).unwrap(),
             node_did: agent.node_did().to_string(),
             tool_runtime: test_tool_runtime(&node, agent.node_did(), &resolve_context),
+            system_log: false,
             resolve_context,
             proposals_tx: proposal_tx,
             runtime_status: runtime_status.clone(),
@@ -597,6 +728,7 @@ async fn control_watcher_recovers_after_resolve_error() {
             subscription: subscribe_control_changes(&node).unwrap(),
             node_did: agent.node_did().to_string(),
             tool_runtime: test_tool_runtime(&node, agent.node_did(), &resolve_context),
+            system_log: false,
             resolve_context,
             proposals_tx: proposal_tx,
             runtime_status: runtime_status.clone(),
@@ -673,6 +805,7 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
         subscription: subscribe_control_changes(&node).unwrap(),
         node_did: agent.node_did().to_string(),
         tool_runtime: test_tool_runtime(&node, agent.node_did(), &resolve_context),
+        system_log: false,
         resolve_context,
         proposals_tx: proposal_tx,
         runtime_status: runtime_status.clone(),
@@ -878,6 +1011,7 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
         subscription,
         node_did: node_did.clone(),
         tool_runtime: test_tool_runtime(&node, &node_did, &resolve_context),
+        system_log: false,
         resolve_context,
         proposals_tx: proposal_tx,
         runtime_status: runtime_status.clone(),
@@ -1030,6 +1164,7 @@ async fn control_watcher_proposes_a_new_fingerprint_when_the_named_plugin_instal
         subscription: subscribe_control_changes(&node).unwrap(),
         node_did: node_did.clone(),
         tool_runtime: test_tool_runtime(&node, &node_did, &resolve_context),
+        system_log: false,
         resolve_context,
         proposals_tx: proposal_tx,
         runtime_status,
@@ -1169,6 +1304,7 @@ async fn control_watcher_wake_follows_the_lean_tool_admission_model() {
             subscription: subscribe_control_changes(&node).unwrap(),
             node_did: node_did.clone(),
             tool_runtime: test_tool_runtime(&node, &node_did, &resolve_context),
+            system_log: false,
             resolve_context,
             proposals_tx: proposal_tx,
             runtime_status,

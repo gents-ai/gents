@@ -95,6 +95,7 @@ fn configuration_fingerprint_reflects_schedule_set() {
         goal_token_budget: None,
         output_schema_ref: None,
         hooks: Vec::new(),
+        command: None,
     };
     let with_schedule = base.clone().with_automation(ResolvedAutomation {
         schedules: RapidHashMap::from_iter([(
@@ -106,10 +107,8 @@ fn configuration_fingerprint_reflects_schedule_set() {
                 trigger_doc_id: "s1-doc".to_string(),
                 schedule_doc_id: "s1-schedule-doc".to_string(),
                 schedule_id: "s1".to_string(),
-                task_id: "t1".to_string(),
                 task: task.clone(),
                 cadence: ScheduleCadence::Interval { interval_secs: 60 },
-                enabled: true,
                 concurrency: ConcurrencyMode::Serial,
             },
         )]),

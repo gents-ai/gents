@@ -11,7 +11,7 @@ use gents_loop::tool_call_lifecycle::ToolOutcome;
 use gents_loop::tool_effects::{ToolEffectDispatcher, ToolEffectError};
 use gents_session::exec::ownership::{process_recorder, with_process_recorder, ProcessRecorder};
 use gents_tools::plugin::approval::workspace::Context as ApprovalContext;
-use gents_tools::runtime_context::{enter_ambient, host, ToolHostContext};
+use gents_tools::runtime_context::{host, ToolHostContext};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -154,7 +154,7 @@ impl World {
         let parent = self.parent(input, parent_token, captures.clone());
         let offered: Option<Arc<dyn ToolEffectDispatcher>> =
             input.offered.then(|| Arc::new(Captures::default()) as _);
-        enter_ambient(&parent, async {
+        async {
             match input.path {
                 Path::Foreground => Some(
                     gents_loop::loop_stream::foreground_envelope(
@@ -224,15 +224,12 @@ impl World {
                     })
                 }
             }
-        })
+        }
         .await
     }
 
     fn deadline(&self, envelope: &ToolCallEnvelope) -> Source {
-        match envelope
-            .runtime_unchecked()
-            .and_then(|runtime| runtime.deadline_at)
-        {
+        match envelope.runtime().and_then(|runtime| runtime.deadline_at) {
             None => Source::Absent,
             Some(deadline) if deadline == self.parent_deadline => Source::Parent,
             Some(deadline) if deadline == self.admitted_deadline => Source::Admitted,
@@ -249,7 +246,7 @@ impl World {
         let Some(callee) = self
             .derive(input, &parent)
             .await
-            .and_then(|envelope| envelope.runtime_unchecked())
+            .and_then(|envelope| envelope.runtime())
         else {
             return Cancel::Absent;
         };
@@ -261,7 +258,7 @@ impl World {
         let callee = self
             .derive(input, &parent)
             .await
-            .and_then(|envelope| envelope.runtime_unchecked())
+            .and_then(|envelope| envelope.runtime())
             .expect("a derivation is a function of its input");
         parent.cancel();
         if callee.cancellation_token.is_cancelled() {
@@ -273,20 +270,18 @@ impl World {
 
     async fn seen(&self, input: &Input<Path>) -> Option<Seen<Cancel, Source>> {
         let envelope = self.derive(input, &CancellationToken::new()).await?;
-        let (host, recorder, dispatcher) = enter_ambient(&envelope, async {
+        let (host, recorder, dispatcher) = async {
             (
                 host(&envelope),
                 process_recorder(&envelope).is_some(),
                 envelope.effects().is_some(),
             )
-        })
+        }
         .await;
         Some(Seen {
             deadline: self.deadline(&envelope),
             cancel: self.cancel(input).await,
-            background: envelope
-                .runtime_unchecked()
-                .is_some_and(|runtime| runtime.background),
+            background: envelope.runtime().is_some_and(|runtime| runtime.background),
             dispatcher,
             interactive: host.interactive,
             approval: host.approval.is_some(),

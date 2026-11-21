@@ -1,0 +1,4 @@
+---- MODULE MCOwedSettlementSilent ----
+EXTENDS OwedSettlement
+
+====

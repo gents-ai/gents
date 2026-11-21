@@ -21,57 +21,58 @@ pub fn admit(artifact: &[u8], plugin: &PackPlugin) -> Result<()> {
     PluginRunner::compile(artifact, plugin).map(|_| ())
 }
 
-#[allow(clippy::too_many_arguments)]
+/// The pack a plugin is installed from, as the plugin's record names it.
+pub struct OwningPack<'a> {
+    pub namespace: &'a str,
+    pub coordinate: &'a str,
+    pub version: &'a str,
+    pub digest: &'a str,
+    pub gents_version: Option<crate::pack::core_packs::Release>,
+}
+
+/// A plugin as its pack ships it: its declaration, its artifact bytes, its
+/// rendered instructions, and the data collections it declares.
+pub struct ShippedPlugin<'a> {
+    pub declaration: &'a PackPlugin,
+    pub artifact: &'a [u8],
+    pub instructions: Option<String>,
+    pub data_unique_keys: BTreeMap<String, Vec<Vec<String>>>,
+    pub data_collection_fields: BTreeMap<String, Vec<String>>,
+    pub data_collection_schemas: BTreeMap<String, String>,
+}
+
 pub fn install_from_pack(
     home: &Path,
-    pack_namespace: &str,
-    pack_coordinate: &str,
-    pack_version: &str,
-    pack_digest: &str,
-    plugin: &PackPlugin,
-    artifact_bytes: &[u8],
-    instructions: Option<String>,
-    data_unique_keys: BTreeMap<String, Vec<Vec<String>>>,
-    data_collection_fields: BTreeMap<String, Vec<String>>,
+    pack: &OwningPack<'_>,
+    plugin: ShippedPlugin<'_>,
     consent: bool,
 ) -> Result<InstalledPlugin> {
     let lock = store::try_lock_store(home)?;
-    install_from_pack_locked(
-        &lock,
-        home,
-        pack_namespace,
-        pack_coordinate,
-        pack_version,
-        pack_digest,
-        plugin,
-        artifact_bytes,
-        instructions,
-        data_unique_keys,
-        data_collection_fields,
-        BTreeMap::new(),
-        None,
-        consent,
-    )
-    .map_err(Into::into)
+    install_from_pack_locked(&lock, home, pack, plugin, consent).map_err(Into::into)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn install_from_pack_locked(
     lock: &store::StoreGuard,
     home: &Path,
-    pack_namespace: &str,
-    pack_coordinate: &str,
-    pack_version: &str,
-    pack_digest: &str,
-    plugin: &PackPlugin,
-    artifact_bytes: &[u8],
-    instructions: Option<String>,
-    data_unique_keys: BTreeMap<String, Vec<Vec<String>>>,
-    data_collection_fields: BTreeMap<String, Vec<String>>,
-    data_collection_schemas: BTreeMap<String, String>,
-    plugin_interface: Option<u32>,
+    pack: &OwningPack<'_>,
+    plugin: ShippedPlugin<'_>,
     consent: bool,
 ) -> Result<InstalledPlugin, GrantError> {
+    let OwningPack {
+        namespace: pack_namespace,
+        coordinate: pack_coordinate,
+        version: pack_version,
+        digest: pack_digest,
+        gents_version,
+    } = *pack;
+    let ShippedPlugin {
+        declaration: plugin,
+        artifact: artifact_bytes,
+        instructions,
+        data_unique_keys,
+        data_collection_fields,
+        data_collection_schemas,
+    } = plugin;
     // The pack lifecycle already holds this lock across its transaction window; flock does not re-enter.
     lock.for_home(home)?;
     store::check_plugin_ownership(home, pack_namespace, &plugin.name, pack_coordinate)?;
@@ -118,7 +119,7 @@ fn install_from_pack_locked(
         data_unique_keys,
         data_collection_fields,
         data_collection_schemas,
-        plugin_interface,
+        gents_version,
     };
     store::write_record(home, &record)?;
     Ok(record)
@@ -131,30 +132,18 @@ pub fn install_pack_plugins<'a>(
     asset: impl Fn(&str) -> Result<&'a [u8]>,
     consent: bool,
 ) -> Result<Vec<InstalledPlugin>> {
-    install_pack_plugins_with_bindings(
-        home,
-        manifest,
-        pack_digest,
-        asset,
-        consent,
-        None,
-        &BTreeMap::new(),
-        |_| Ok(()),
-    )
+    install_pack_plugins_and_publish(home, manifest, pack_digest, asset, consent, |_| Ok(()))
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "install inputs and policies supplied by each install entry point"
-)]
-pub fn install_pack_plugins_with_bindings<'a>(
+/// [`install_pack_plugins`], publishing the installed records locally under
+/// the same store lock with `publish_local`, and restoring the previous
+/// records when either step fails.
+pub fn install_pack_plugins_and_publish<'a>(
     home: &Path,
     manifest: &PackManifest,
     pack_digest: &str,
     asset: impl Fn(&str) -> Result<&'a [u8]>,
     consent: bool,
-    owner: Option<&str>,
-    bindings: &BTreeMap<String, String>,
     publish_local: impl FnOnce(&[InstalledPlugin]) -> Result<()>,
 ) -> Result<Vec<InstalledPlugin>> {
     let lock = store::try_lock_store(home)?;
@@ -163,15 +152,6 @@ pub fn install_pack_plugins_with_bindings<'a>(
     let result = (|| {
         let installed =
             install_pack_plugins_locked(&lock, home, manifest, pack_digest, asset, consent)?;
-        if !bindings.is_empty() {
-            bind_plugin_slots_locked(
-                &lock,
-                home,
-                manifest,
-                owner.context("plugin slot bindings require an owner")?,
-                bindings,
-            )?;
-        }
         publish_local(&installed)?;
         Ok(installed)
     })();
@@ -194,6 +174,8 @@ fn install_pack_plugins_locked<'a>(
 ) -> Result<Vec<InstalledPlugin>, GrantError> {
     lock.for_home(home)?;
     let pack_coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
+    let gents_version =
+        crate::pack::core_packs::declared_release(manifest).map_err(anyhow::Error::from)?;
     manifest
         .metadata
         .plugins
@@ -209,17 +191,21 @@ fn install_pack_plugins_locked<'a>(
             install_from_pack_locked(
                 lock,
                 home,
-                &manifest.metadata.namespace,
-                &pack_coordinate,
-                &manifest.version,
-                pack_digest,
-                plugin,
-                asset(&plugin.artifact)?,
-                instructions,
-                data_unique_keys,
-                data_collection_fields,
-                data_collection_schemas,
-                manifest.plugin_interface,
+                &OwningPack {
+                    namespace: &manifest.metadata.namespace,
+                    coordinate: &pack_coordinate,
+                    version: &manifest.version,
+                    digest: pack_digest,
+                    gents_version,
+                },
+                ShippedPlugin {
+                    declaration: plugin,
+                    artifact: asset(&plugin.artifact)?,
+                    instructions,
+                    data_unique_keys,
+                    data_collection_fields,
+                    data_collection_schemas,
+                },
                 consent,
             )
         })

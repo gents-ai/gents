@@ -2,109 +2,8 @@ use gents::defra_node::Node as EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use gents_store::graphql::escape_graphql_string;
+use gents_store::test_support::snapshot_reader::{SnapshotChanges, SnapshotReader};
 use serde::Deserialize;
-
-pub enum SnapshotChanges {
-    Local(events::DocumentChangeSubscription),
-    Remote {
-        access: Box<gents_store::config_client::ConfigAccess>,
-        query: String,
-        changes: gents_store::config_client::GraphqlSubscription,
-    },
-}
-
-impl SnapshotChanges {
-    pub async fn recv(&mut self) {
-        match self {
-            Self::Local(changes) => {
-                changes.recv().await.expect("document subscription closed");
-            }
-            Self::Remote {
-                access,
-                query,
-                changes,
-            } => {
-                if changes
-                    .recv()
-                    .await
-                    .expect("document subscription failed")
-                    .is_none()
-                {
-                    assert_eq!(
-                        changes.end(),
-                        Some(gents_store::config_client::SubscriptionEnd::RenewalDue),
-                        "document subscription closed unexpectedly"
-                    );
-                    *changes = access
-                        .subscribe(query)
-                        .await
-                        .expect("renew document subscription");
-                }
-            }
-        }
-    }
-}
-
-pub trait SnapshotReader {
-    fn subscribe_changes(
-        &self,
-        collection: &str,
-    ) -> impl std::future::Future<Output = SnapshotChanges>;
-    fn read_data(&self, query: &str) -> impl std::future::Future<Output = serde_json::Value>;
-}
-
-impl SnapshotReader for EmbeddedNode {
-    async fn subscribe_changes(&self, collection: &str) -> SnapshotChanges {
-        SnapshotChanges::Local(
-            gents_store::subscription_source::subscribe_collections(self, [collection])
-                .expect("observe collection"),
-        )
-    }
-    async fn read_data(&self, query: &str) -> serde_json::Value {
-        let response =
-            gents_store::graphql::graphql_with_transaction_retry(self, query, "test.snapshot")
-                .await
-                .expect("snapshot read");
-        assert!(
-            !response.has_errors(),
-            "snapshot query failed: {:?}",
-            response.errors
-        );
-        response.data.unwrap_or_default()
-    }
-}
-
-impl<T> SnapshotReader for std::sync::Arc<T>
-where
-    T: SnapshotReader + ?Sized,
-{
-    async fn subscribe_changes(&self, collection: &str) -> SnapshotChanges {
-        self.as_ref().subscribe_changes(collection).await
-    }
-    async fn read_data(&self, query: &str) -> serde_json::Value {
-        self.as_ref().read_data(query).await
-    }
-}
-
-impl SnapshotReader for gents_store::config_client::ConfigAccess {
-    async fn subscribe_changes(&self, collection: &str) -> SnapshotChanges {
-        if let Some(node) = self.local_node() {
-            node.subscribe_changes(collection).await
-        } else {
-            let query = format!("subscription {{ {collection} {{ _docID }} }}");
-            let changes = self.subscribe(&query).await.expect("subscribe as actor");
-            SnapshotChanges::Remote {
-                access: Box::new(self.clone()),
-                query,
-                changes,
-            }
-        }
-    }
-    async fn read_data(&self, query: &str) -> serde_json::Value {
-        let mut response = self.execute(query).await.expect("snapshot query as actor");
-        response["data"].take()
-    }
-}
 
 impl SnapshotReader for super::agent_requests::RequestActors {
     async fn subscribe_changes(&self, collection: &str) -> SnapshotChanges {
@@ -440,6 +339,31 @@ pub async fn fetch_runtime_snapshot_as(
         .await
         .expect("read runtime snapshot as held user");
     decode_runtime_snapshot(response.get("data")?, node_did)
+}
+
+/// Resolves with the first runtime snapshot satisfying `predicate`, failing
+/// once `NodeRuntime` has not changed for
+/// [`STALL_CEILING`](gents_store::test_support::STALL_CEILING).
+pub async fn wait_for_runtime_snapshot_as<F>(
+    access: &gents_store::config_client::ConfigAccess,
+    node_did: &str,
+    predicate: F,
+) -> RuntimeSnapshot
+where
+    F: Fn(&RuntimeSnapshot) -> bool,
+{
+    let data = super::live_inference::rows_when(
+        access,
+        "NodeRuntime",
+        &runtime_snapshot_query(node_did),
+        |data| {
+            decode_runtime_snapshot(data, node_did)
+                .as_ref()
+                .is_some_and(&predicate)
+        },
+    )
+    .await;
+    decode_runtime_snapshot(&data, node_did).expect("runtime snapshot satisfied its predicate")
 }
 
 pub async fn fetch_node_readiness_snapshot(

@@ -265,9 +265,11 @@ async fn the_breaker_trips_on_consecutive_not_evidence_and_resume_continues() {
     let recovered = ScriptedExecutor::new().with_default(passed());
     let outcome = resume(
         &launching.access,
-        launching.owner(),
-        "run-1",
-        &launching.runs_dir(),
+        RunLocation {
+            owner: launching.owner(),
+            run_id: "run-1",
+            runs_dir: &launching.runs_dir(),
+        },
         &recovered,
         &registry,
         CancellationToken::new(),
@@ -307,9 +309,11 @@ async fn resume_refuses_an_embedded_executor_for_a_pack_that_grants_host_bash() 
 
     let error = resume(
         &launching.access,
-        launching.owner(),
-        "run-1",
-        &launching.runs_dir(),
+        RunLocation {
+            owner: launching.owner(),
+            run_id: "run-1",
+            runs_dir: &launching.runs_dir(),
+        },
         &ScriptedExecutor::new().with_default(passed()),
         &CheckRegistry::builtin(),
         CancellationToken::new(),
@@ -393,9 +397,11 @@ async fn an_invalidated_run_refuses_resume() {
 
     let error = resume(
         &launching.access,
-        launching.owner(),
-        "run-1",
-        &launching.runs_dir(),
+        RunLocation {
+            owner: launching.owner(),
+            run_id: "run-1",
+            runs_dir: &launching.runs_dir(),
+        },
         &ScriptedExecutor::new().with_default(passed()),
         &CheckRegistry::builtin(),
         CancellationToken::new(),

@@ -168,6 +168,7 @@ impl BoundedWriteTool {
 
     fn build_mutation(
         &self,
+        call: &gents_loop::tool::ToolCallEnvelope,
         args: &Map<String, Value>,
         types: &std::collections::BTreeMap<String, String>,
     ) -> Result<String> {
@@ -233,7 +234,7 @@ impl BoundedWriteTool {
                     value
                 }
                 Some(fill) => {
-                    let Some(value) = fill.resolve_optional(&field.name)? else {
+                    let Some(value) = fill.resolve_optional(call, &field.name)? else {
                         continue;
                     };
                     filled = Value::String(value);
@@ -317,11 +318,11 @@ impl gents_loop::tool::Tool for BoundedWriteTool {
     async fn call(
         &self,
         args: Self::Args,
-        _context: &gents_loop::tool::ToolCallEnvelope,
+        call: &gents_loop::tool::ToolCallEnvelope,
     ) -> Result<Self::Output, Self::Error> {
         self.ensure_declaration()?;
         let types = self.resolved_field_types().await?;
-        let mutation = self.build_mutation(&args.0, &types)?;
+        let mutation = self.build_mutation(call, &args.0, &types)?;
         let signed_mutation = self.client_schema.as_ref().map(|_| {
             format!(
                 "mutation($input: {}MutationInputArg!) {{ add_{}(input: $input) {{ _docID {} }} }}",

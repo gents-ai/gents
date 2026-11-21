@@ -62,7 +62,11 @@ async fn workspace_completion_reads_keep_selected_agent_visibility() -> anyhow::
             0,
         )
         .await?;
-    assert_eq!(policy, gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID);
+    assert_eq!(
+        policy,
+        gents_protocol::schemas::HomePolicyIds::shared()
+            .id(gents_protocol::schemas::BuiltInPolicy::Household)
+    );
     for schema in [
         gents_protocol::schemas::ISOLATED_WORKSPACE,
         gents_protocol::schemas::WORKSPACE_PLACEMENT,
@@ -70,7 +74,11 @@ async fn workspace_completion_reads_keep_selected_agent_visibility() -> anyhow::
         gents_protocol::schemas::WORKSPACE_RECEIPT,
         gents_protocol::schemas::REPOSITORY_PLACEMENT,
     ] {
-        node.add_collection_as(&context, schema).await?;
+        node.add_collection_as(
+            &context,
+            &gents_protocol::schemas::HomePolicyIds::shared().render(schema),
+        )
+        .await?;
     }
     let admin =
         gents_store::config_client::ConfigAccess::local_as(node.clone(), runtime.did().parse()?);
@@ -252,10 +260,10 @@ async fn runtime_seal_case(unowned: bool) {
     action.path_capability = WorkspacePathCapability::exact_paths(vec!["patch.rs".into()]).unwrap();
     let created = {
         let mut ctx = fx.ctx(&mut memory, git_worktree_caps());
-        ctx.owner_node_did = did.to_owned();
+        ctx.provenance.owner_node_did = did.to_owned();
         ctx.repository.owner_node_did = did.to_owned();
-        ctx.writer_principal = agent.did().to_owned();
-        ctx.integrator_principal = agent.did().to_owned();
+        ctx.provenance.writer_principal = agent.did().to_owned();
+        ctx.provenance.integrator_principal = agent.did().to_owned();
         execute_create_workspace_plan(
             &emit_create_workspace_plan(action.clone()),
             &mut Vec::new(),
@@ -316,10 +324,12 @@ async fn runtime_seal_case(unowned: bool) {
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         "runtime-capability-writer",
-        did,
-        did,
-        agent.did(),
-        "runtime-capability-session",
+        gents_protocol::request_admission::RequestScope::new(
+            did,
+            did,
+            agent.did(),
+            "runtime-capability-session",
+        ),
         "Apply the owned patch",
         "interactive",
         &timestamp,
@@ -545,8 +555,12 @@ async fn invisible_workspace_request_cannot_release_exclusive_binding() -> anyho
         0,
     )
     .await?;
-    node.add_collection_as(&context, gents_protocol::schemas::AGENT_REQUEST)
-        .await?;
+    node.add_collection_as(
+        &context,
+        &gents_protocol::schemas::HomePolicyIds::shared()
+            .render(gents_protocol::schemas::AGENT_REQUEST),
+    )
+    .await?;
     let admin =
         gents_store::config_client::ConfigAccess::local_as(node.clone(), runtime.did().parse()?);
     for actor in [first.did(), second.did()] {

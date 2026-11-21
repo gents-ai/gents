@@ -1,7 +1,7 @@
 use gents_protocol::output::{OutputSource, OutputWriter};
 use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_store::config_client::session_children::ownership::*;
 use gents_store::config_client::{ConfigAccess, NodePermission};
@@ -57,6 +57,7 @@ async fn modeled_auxiliary_child_repair_requires_signed_exact_parent_and_native_
         for actor in [agent.did(), foreign.did()] {
             for permission in [
                 NodePermission::DocumentRead,
+                NodePermission::CollectionGet,
                 NodePermission::DocumentUpdate,
                 NodePermission::DacRelationAdd,
                 NodePermission::DacRelationDelete,
@@ -115,10 +116,7 @@ async fn modeled_auxiliary_child_repair_requires_signed_exact_parent_and_native_
         let mut parent = AgentRequestCreate::base(
             RequestPurpose::Normal,
             &parent_id,
-            root.did(),
-            root.did(),
-            agent.did(),
-            &session_id,
+            RequestScope::new(root.did(), root.did(), agent.did(), &session_id),
             "parent",
             "interactive",
             "2026-10-21T00:00:00Z",
@@ -158,10 +156,7 @@ async fn modeled_auxiliary_child_repair_requires_signed_exact_parent_and_native_
         let mut aux = AgentRequestCreate::base(
             RequestPurpose::TitleAudit,
             &aux_id,
-            root.did(),
-            agent.did(),
-            agent.did(),
-            &session_id,
+            RequestScope::new(root.did(), agent.did(), agent.did(), &session_id),
             "audit",
             "interactive",
             "2026-10-21T00:00:00Z",

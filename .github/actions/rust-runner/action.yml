@@ -5,6 +5,11 @@ inputs:
   lean:
     description: Install elan and link the persistent Lake cache (tests load the generated Lean contract).
     default: "false"
+  lean-contract:
+    description: >-
+      Build the Lean conformance contract here (`true`), or leave it to the job,
+      which builds it beside its Rust compile (`deferred`; scripts/ci/gate.py run_build).
+    default: "true"
   afterburner:
     description: Install the Afterburner compiler test prerequisites (the gents-cli suite).
     default: "false"
@@ -51,8 +56,7 @@ runs:
         mkdir -p "${RUNNER_TEMP}/tmp"
         echo "TMPDIR=${RUNNER_TEMP}/tmp" >> "${GITHUB_ENV}"
 
-    # gents-migration's build script compiles the fixture lens for WASM and
-    # the callback fixture and pack tests need WASI.
+    # The callback fixture and pack tests need WASI.
     - name: Install pinned Rust toolchain and WASM targets
       shell: bash
       run: .github/scripts/setup-rust.sh wasm32-wasip1
@@ -106,14 +110,14 @@ runs:
       shell: bash
       working-directory: crates/gents/proofs
       run: |
-        lake build Cache.Main
+        lake --verbose build Cache.Main
         lake env lean --run .lake/packages/mathlib/Cache/Main.lean get
 
     # Lean-backed tests build this target on first use under a shared lock with
     # their output captured; on a cold runner cache that build outlasts the
     # gate's 600 s silence guard. Build it here, visibly; warm, it is a no-op.
     - name: Build the Lean conformance contract
-      if: inputs.lean == 'true'
+      if: inputs.lean == 'true' && inputs.lean-contract != 'deferred'
       shell: bash
       working-directory: crates/gents/proofs
       run: lake build Proofs.Conformance.Contracts:olean

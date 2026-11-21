@@ -258,6 +258,13 @@ pub async fn explain_trigger_in_txn(
             format!("Task {} is disabled", trigger.task_id),
             "Update the Task with enabled: true.",
         ),
+        Some(task) if task.command.is_some() => trace.passed(
+            "task",
+            format!(
+                "Task {} is enabled and runs a command on this node",
+                trigger.task_id
+            ),
+        ),
         Some(task) => {
             match decoded::<Agent>(txn, Collection::Agent, owner, &task.agent_did).await? {
                 None => trace.failed(
