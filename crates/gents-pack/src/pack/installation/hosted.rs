@@ -63,7 +63,13 @@ pub enum HostedPackStageError {
 pub enum HostedRejection {
     #[error(
         "{}",
-        super::refusal::document_change_message(coordinate, edited, 0, true, super::PackChangeSurface::Hosted)
+        super::refusal::document_change_message(
+            coordinate,
+            edited,
+            0,
+            true,
+            super::PackChangeSurface::Hosted
+        )
     )]
     Edited {
         coordinate: String,
@@ -71,7 +77,13 @@ pub enum HostedRejection {
     },
     #[error(
         "{}",
-        super::refusal::document_change_message(coordinate, differing, 0, false, super::PackChangeSurface::Hosted)
+        super::refusal::document_change_message(
+            coordinate,
+            differing,
+            0,
+            false,
+            super::PackChangeSurface::Hosted
+        )
     )]
     Differing {
         coordinate: String,
@@ -221,7 +233,9 @@ impl HostedPackStage {
             && !scope.nonce.is_empty())
         {
             return Err(HostedPackStageError::Rejected(HostedRejection::Other(
-                anyhow::anyhow!("hosted pack approval scope does not match the staged archive graph"),
+                anyhow::anyhow!(
+                    "hosted pack approval scope does not match the staged archive graph"
+                ),
             )));
         }
         let graph = self.graph.clone();

@@ -80,8 +80,9 @@ pub fn reused_variable_preview(
         .context("pack has no configuration")?;
     let authored: serde_json::Value = serde_json::from_slice(pack.asset(path)?)?;
     let installed = serde_json::to_value(config)?;
-    let uses =
-        crate::pack::interpolate::inspect_install_variables(&authored, &|_| Some("preview".into()))?;
+    let uses = crate::pack::interpolate::inspect_install_variables(&authored, &|_| {
+        Some("preview".into())
+    })?;
     let uses = uses.into_iter().map(|entry| {
         let mut parts = entry.path.trim_start_matches('/').splitn(3, '/');
         let field = parts.next().unwrap_or_default();
@@ -720,8 +721,9 @@ pub fn installer_environment(
             .context("parsing pack config for install variables")?;
         // Interpolation reads an empty value as unset, which would end the
         // scan at the first name without a default.
-        let uses =
-            crate::pack::interpolate::inspect_install_variables(&config, &|_| Some("named".into()))?;
+        let uses = crate::pack::interpolate::inspect_install_variables(&config, &|_| {
+            Some("named".into())
+        })?;
         names.extend(
             uses.into_iter()
                 .flat_map(|entry| entry.variables.into_keys()),

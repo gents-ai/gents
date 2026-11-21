@@ -165,7 +165,6 @@ pub fn interpolate_with(
     }
 }
 
-
 pub fn escape(text: &str) -> String {
     text.replace('$', "$$")
 }
@@ -267,6 +266,9 @@ mod install_variable_conformance {
         .unwrap_err();
         assert_eq!(refusal.names, ["TOKEN"]);
         let text = refusal.to_string();
-        assert!(text.contains("TOKEN") && !text.contains("sk-live-host"), "{text}");
+        assert!(
+            text.contains("TOKEN") && !text.contains("sk-live-host"),
+            "{text}"
+        );
     }
 }

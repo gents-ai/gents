@@ -22,7 +22,7 @@ import { fileName, previewParts, previewPlugins, previewSettings } from "./revie
 export type PreviewRead =
   | { state: "reading" }
   | { state: "read"; report: PackInstallReport }
-  | { state: "unread"; error: string };
+  | { state: "unread"; error: string; cause?: unknown };
 
 type PreviewApi = {
   installPack: (request: {
@@ -52,7 +52,9 @@ export async function readPackPreview(api: PreviewApi, request: PackReviewReques
     });
     previews.setState({ [key]: { state: "read", report } });
   } catch (error) {
-    previews.setState({ [key]: { state: "unread", error: errorText(error) } });
+    previews.setState({
+      [key]: { state: "unread", error: errorText(error), cause: error },
+    });
   }
 }
 

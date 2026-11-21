@@ -191,12 +191,20 @@ mod tests {
             assert!(!text.contains("--home"), "{class}: {text}");
             assert!(!text.contains("  "), "{class}: {text}");
             assert_eq!(
-                serde_json::from_value::<HostedInstallFailure>(serde_json::to_value(class).unwrap())
-                    .unwrap(),
+                serde_json::from_value::<HostedInstallFailure>(
+                    serde_json::to_value(class).unwrap()
+                )
+                .unwrap(),
                 class
             );
         }
-        assert_eq!(HostedInstallFailure::ApplyRejected.to_string(), "apply_rejected");
-        assert_eq!(HostedInstallOutcome::NotInstalled.to_string(), "not_installed");
+        assert_eq!(
+            HostedInstallFailure::ApplyRejected.to_string(),
+            "apply_rejected"
+        );
+        assert_eq!(
+            HostedInstallOutcome::NotInstalled.to_string(),
+            "not_installed"
+        );
     }
 }

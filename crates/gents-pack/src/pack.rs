@@ -79,11 +79,12 @@ pub use installation::{
     record_plugin_retirement_as, record_plugin_store_change, record_plugin_store_change_as,
     record_staged_plugin_store_change, referenced_pack_digests, remove_pack,
     tools_taking_installer_root, visible_plugin_selections, DependencyVariableOverrides,
-    DocumentGraphPolicy, DriftPolicy, HostedDocumentGraph, HostedPackPreparation, InstallReport,
-    InstallTarget, InstalledCatalogEntry, InstalledPack, InstalledPackPlugin, InstallerRootAgent,
-    EditedDocumentRefusal, PackAgentRoot, PackChangeError, PackChangeSurface, PackGraphInputs,
-    PackIdentity, PackRemovalError, PackRootRecord, PackSource, PackSourceHistory,
-    PluginPinConflict, PluginReferenceUnresolved, PluginSelection, PluginStoreChangeError, PluginStoreLocation, PreparedDependency, PreparedDocumentPackInstall,
+    DocumentGraphPolicy, DriftPolicy, EditedDocumentRefusal, HostedDocumentGraph,
+    HostedPackPreparation, HostedRefusal, InstallReport, InstallTarget, InstalledCatalogEntry,
+    InstalledPack, InstalledPackPlugin, InstallerRootAgent, PackAgentRoot, PackChangeError,
+    PackChangeSurface, PackGraphInputs, PackIdentity, PackRemovalError, PackRootRecord, PackSource,
+    PackSourceHistory, PluginPinConflict, PluginReferenceUnresolved, PluginSelection,
+    PluginStoreChangeError, PluginStoreLocation, PreparedDependency, PreparedDocumentPackInstall,
     RemoveReport, Retained,
 };
 pub(crate) use installation::{

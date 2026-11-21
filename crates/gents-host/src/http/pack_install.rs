@@ -16,14 +16,14 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::router::RuntimeHttpState;
 use failure::SessionFailure;
-use gents_protocol::operations::pack::hosted::HostedInstallFailure as Class;
 use gents_pack::pack::install_flow::DocumentsInstallRequest;
 use gents_pack::pack::resolved_pack::ResolvedPack;
+use gents_protocol::operations::pack::hosted::HostedInstallFailure as Class;
 
 mod failure;
 pub mod session;
 
-const PATH: &str = "/packs/install";
+pub(crate) const PATH: &str = "/packs/install";
 /// The root and its dependencies share one pack's compressed bound, so a
 /// remote install never buffers more archive bytes than one maximal pack.
 pub const MAX_ARCHIVE_BYTES: usize = gents_pack::pack::archive::MAX_PACK_BYTES;
@@ -194,7 +194,10 @@ pub async fn encode_install_request(
 }
 
 fn refused(status: StatusCode, class: Class) -> Response {
-    failed(status, SessionFailure::not_installed(class)(anyhow::anyhow!("refused")))
+    failed(
+        status,
+        SessionFailure::not_installed(class)(anyhow::anyhow!("refused")),
+    )
 }
 
 fn failed(status: StatusCode, failure: SessionFailure) -> Response {

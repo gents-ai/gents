@@ -35,15 +35,15 @@ pub use client_pack_evidence::{
     PackRelationshipEvidence, PackRelationshipTarget, PackSchemaEvidence,
 };
 mod pack_difference;
-pub use pack_difference::{
-    PackMutationDifference, PackMutationKind, ValueShape, MAX_REPORTED_DIFFERENCES,
-};
 pub use client_request_input::{client_request_input, ClientRequestInputError};
 pub use client_signed_agent::prepare_request_evidence;
 pub use client_signed_agent::ClientSigningCapability;
 pub use client_signed_agent::{
     configuration_replacement_patch, prepare_goal_delete_evidence, verify_goal_delete_evidence,
     verify_request_evidence,
+};
+pub use pack_difference::{
+    PackMutationDifference, PackMutationKind, ValueShape, MAX_REPORTED_DIFFERENCES,
 };
 pub mod agent_session;
 #[cfg(test)]

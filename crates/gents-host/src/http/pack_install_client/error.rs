@@ -1,4 +1,3 @@
-use gents_protocol::operations::pack::hosted::{HostedInstallFailure, HostedInstallOutcome};
 use gents_store::config_client::{PackEvidenceError, PackMutationDifference};
 
 /// Why a hosted pack session could not go on. No variant carries a plan
@@ -38,16 +37,8 @@ pub enum PackSessionError {
         step: SessionStep,
         received: &'static str,
     },
-    #[error(
-        "the runtime refused the install ({outcome}, {class}): {}",
-        reason(.detail, .class)
-    )]
-    RuntimeFailed {
-        class: HostedInstallFailure,
-        outcome: HostedInstallOutcome,
-        detail: Option<String>,
-        documents: Option<Box<gents_pack::pack::EditedDocumentRefusal>>,
-    },
+    #[error(transparent)]
+    RuntimeFailed(#[from] gents_pack::pack::HostedRefusal),
     #[error("remote pack install scope does not match the reviewed artifacts and node")]
     ScopeMismatch,
     #[error("runtime proposed an unexpected extra pack effect")]
@@ -68,26 +59,6 @@ pub enum PackSessionError {
     Evidence(#[from] PackEvidenceError),
     #[error(fmt = gents_protocol::error_chain::held)]
     Endpoint(#[source] anyhow::Error),
-}
-
-impl PackSessionError {
-    /// The runtime's refusal, keeping its text only for a class that may
-    /// show runtime text.
-    pub fn runtime_failed(
-        class: HostedInstallFailure,
-        outcome: HostedInstallOutcome,
-        detail: Option<String>,
-        documents: Option<gents_pack::pack::EditedDocumentRefusal>,
-    ) -> Self {
-        Self::RuntimeFailed {
-            class,
-            outcome,
-            detail: detail.filter(|_| class.shows_runtime_text(true)),
-            documents: documents
-                .filter(|_| class == HostedInstallFailure::DocumentsEdited)
-                .map(Box::new),
-        }
-    }
 }
 
 /// The step of the client's plan a runtime message answered.
@@ -145,10 +116,6 @@ pub enum SendError {
     Stopped(#[source] tokio::task::JoinError),
     #[error("remote pack install connection lost; inspect the runtime before retrying")]
     Lost(#[source] tokio_tungstenite::tungstenite::Error),
-}
-
-fn reason<'a>(detail: &'a Option<String>, class: &HostedInstallFailure) -> &'a str {
-    detail.as_deref().unwrap_or(class.description())
 }
 
 struct Listed<'a>(&'a [PackMutationDifference]);

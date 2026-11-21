@@ -284,7 +284,11 @@ mod tests {
         }
     }
 
-    fn field(path: &str, constructed: Option<ValueShape>, proposed: Option<ValueShape>) -> PackMutationDifference {
+    fn field(
+        path: &str,
+        constructed: Option<ValueShape>,
+        proposed: Option<ValueShape>,
+    ) -> PackMutationDifference {
         PackMutationDifference::Field {
             path: path.to_owned(),
             constructed,
@@ -294,11 +298,14 @@ mod tests {
 
     #[test]
     fn a_differing_field_is_named_by_path_and_shape() {
-        let differences = create("Agent", json!({"agent_did": "did:key:client", "name": "Scout"}))
-            .differences(&create(
-                "Agent",
-                json!({"agent_did": "did:key:runtime", "name": "Scout"}),
-            ));
+        let differences = create(
+            "Agent",
+            json!({"agent_did": "did:key:client", "name": "Scout"}),
+        )
+        .differences(&create(
+            "Agent",
+            json!({"agent_did": "did:key:runtime", "name": "Scout"}),
+        ));
         assert_eq!(
             differences,
             vec![field(
@@ -316,12 +323,11 @@ mod tests {
 
     #[test]
     fn an_absent_key_against_a_null_one_is_named_at_its_path() {
-        let differences = create("PackInstallation", json!({"variables": {}})).differences(
-            &create(
+        let differences =
+            create("PackInstallation", json!({"variables": {}})).differences(&create(
                 "PackInstallation",
                 json!({"variables": {"GENTS_PACK_BIND_AGENT_WEB_RESEARCHER": null}}),
-            ),
-        );
+            ));
         assert_eq!(
             differences,
             vec![field(
@@ -427,8 +433,14 @@ mod tests {
                 json!({"variables": {"API_TOKEN": secret}}),
                 json!({"variables": {"API_TOKEN": "other"}}),
             ),
-            (json!({"variables": {"API_TOKEN": secret}}), json!({"variables": null})),
-            (json!({"a": 1}), json!({"a": 1, "variables": {"API_TOKEN": secret}})),
+            (
+                json!({"variables": {"API_TOKEN": secret}}),
+                json!({"variables": null}),
+            ),
+            (
+                json!({"a": 1}),
+                json!({"a": 1, "variables": {"API_TOKEN": secret}}),
+            ),
             (
                 json!({"headers": {"Authorization": format!("Bearer {token}")}}),
                 json!({"headers": {"Authorization": "Bearer other"}}),

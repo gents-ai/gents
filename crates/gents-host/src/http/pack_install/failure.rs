@@ -34,14 +34,17 @@ impl SessionFailure {
         move |error| Self::of(class, HostedInstallOutcome::Unconfirmed, error.into())
     }
 
-    fn of(class: HostedInstallFailure, outcome: HostedInstallOutcome, error: anyhow::Error) -> Self {
-        let class = if gents_store::config_client::user_write::UserWriteRefusal::in_chain(
-            error.as_ref(),
-        ) {
-            HostedInstallFailure::RefusedForAPerson
-        } else {
-            class
-        };
+    fn of(
+        class: HostedInstallFailure,
+        outcome: HostedInstallOutcome,
+        error: anyhow::Error,
+    ) -> Self {
+        let class =
+            if gents_store::config_client::user_write::UserWriteRefusal::in_chain(error.as_ref()) {
+                HostedInstallFailure::RefusedForAPerson
+            } else {
+                class
+            };
         Self {
             class,
             outcome,
@@ -165,9 +168,12 @@ impl RefusalIdentifiers {
         prepared: &gents_pack::pack::PreparedDocumentPackInstall,
     ) -> serde_json::Result<()> {
         use gents_store::collection::Collection;
-        for config in std::iter::once(&prepared.config)
-            .chain(prepared.dependencies.iter().map(|dependency| &dependency.config))
-        {
+        for config in std::iter::once(&prepared.config).chain(
+            prepared
+                .dependencies
+                .iter()
+                .map(|dependency| &dependency.config),
+        ) {
             let config = serde_json::to_value(config)?;
             for collection in Collection::ALL {
                 let rows = collection
@@ -210,7 +216,8 @@ impl RefusalIdentifiers {
 /// unique id, and each Tools plugin reference's coordinate and digest.
 fn literal_config(config: &serde_json::Value) -> bool {
     use gents_store::collection::Collection;
-    let literal = |value: &serde_json::Value| value.as_str().is_none_or(|text| !text.contains("${"));
+    let literal =
+        |value: &serde_json::Value| value.as_str().is_none_or(|text| !text.contains("${"));
     Collection::ALL.into_iter().all(|collection| {
         collection
             .dir_name()
@@ -226,7 +233,9 @@ fn literal_config(config: &serde_json::Value) -> bool {
                             .and_then(serde_json::Value::as_array)
                             .into_iter()
                             .flatten()
-                            .all(|reference| literal(&reference["plugin"]) && literal(&reference["digest"])))
+                            .all(|reference| {
+                                literal(&reference["plugin"]) && literal(&reference["digest"])
+                            }))
             })
     })
 }
@@ -292,11 +301,20 @@ mod tests {
         for literal in [true, false] {
             let ids = identifiers(literal, &[]);
             for (error, class, name) in [
-                (plugin(), HostedInstallFailure::PluginUnresolved, "safety-tools"),
-                (differing(), HostedInstallFailure::DocumentsDiffer, "Tools/safety-tools"),
+                (
+                    plugin(),
+                    HostedInstallFailure::PluginUnresolved,
+                    "safety-tools",
+                ),
+                (
+                    differing(),
+                    HostedInstallFailure::DocumentsDiffer,
+                    "Tools/safety-tools",
+                ),
                 (unset(), HostedInstallFailure::UnsetVariables, "API_TOKEN"),
             ] {
-                let failure = SessionFailure::change(HostedInstallFailure::PreparationFailed, error, &ids);
+                let failure =
+                    SessionFailure::change(HostedInstallFailure::PreparationFailed, error, &ids);
                 assert_eq!(failure.class, class);
                 let message = failure.message();
                 let shown = message["detail"].as_str().unwrap_or_default();
@@ -305,7 +323,10 @@ mod tests {
                     class.shows_runtime_text(literal),
                     "{class} literal={literal}: {message}"
                 );
-                assert!(!shown.contains("pack update") && !shown.contains("--home"), "{shown}");
+                assert!(
+                    !shown.contains("pack update") && !shown.contains("--home"),
+                    "{shown}"
+                );
             }
         }
         let other = SessionFailure::change(
@@ -339,8 +360,14 @@ mod tests {
                 json!({"coordinate": "fixture/root", "named": ["Tools/literal-tools"], "unnamed": 2})
             );
             let text = message["detail"].as_str().unwrap();
-            assert!(text.contains(": Tools/literal-tools and 2 others."), "{text}");
-            assert!(!message.to_string().contains("sk-live") && !text.contains("stale"), "{text}");
+            assert!(
+                text.contains(": Tools/literal-tools and 2 others."),
+                "{text}"
+            );
+            assert!(
+                !message.to_string().contains("sk-live") && !text.contains("stale"),
+                "{text}"
+            );
         }
         let rendered = SessionFailure::change(
             HostedInstallFailure::PreparationFailed,

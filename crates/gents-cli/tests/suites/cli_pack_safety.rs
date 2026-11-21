@@ -614,7 +614,10 @@ async fn a_session_install_grants_its_planned_root_agents_reader_on_the_installe
         .as_str()
         .with_context(|| format!("the receipt carries the pack digest: {receipt}"))?;
     let rows = graphql_query(&graphql, installed).await?;
-    assert_eq!(rows["data"]["PackInstallation"][0]["digest"], digest, "{rows}");
+    assert_eq!(
+        rows["data"]["PackInstallation"][0]["digest"], digest,
+        "{rows}"
+    );
     assert!(
         receipt.get("installer_root_agents").is_none(),
         "the planned rows are taken off the outcome to make the grant: {receipt}"

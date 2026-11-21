@@ -93,6 +93,27 @@ type Request = {
 
 /* the bridge's install: a preview reports `previewed`, an install runs
    `install` (which may refuse) */
+/** An install refusal as the bridge types it. */
+function refused(
+  kind: "documents_edited" | "authority_required" | "digest_changed",
+  sentence: string,
+  documents: { coordinate: string; named: string[]; unnamed: number } = {
+    coordinate: "",
+    named: [],
+    unnamed: 0,
+  },
+) {
+  return Object.assign(new Error(sentence), {
+    packRefusal: {
+      class: kind,
+      coordinate: documents.coordinate || null,
+      named: documents.named,
+      unnamed: documents.unnamed,
+      sentence,
+    },
+  });
+}
+
 function bridge(
   previewed: (request: Request) => unknown = () => preview(),
   install: (request: Request) => unknown = () => ({
@@ -474,8 +495,9 @@ describe("the install review", () => {
     const installPack = bridge(undefined, () => {
       if (!refused) {
         refused = true;
-        throw new Error(
-          "plugin fetch asks for HTTP; install it with --grant-authority",
+        throw refused(
+          "authority_required",
+          "Allow the requested access in this install review.",
         );
       }
       return { pack: "docs", digest: DIGEST, source: "registry" };
@@ -524,8 +546,10 @@ describe("the install review", () => {
     const installPack = bridge(undefined, () => {
       if (!refused) {
         refused = true;
-        throw new Error(
-          "1 of acme/docs's documents were edited since it was installed: Agent/writer; use --overwrite or --keep",
+        throw refused(
+          "documents_edited",
+          "1 of acme/docs's documents were edited since it was installed: Agent/writer. Overwrite replaces them with the pack's versions; keep leaves them as edited. Choose Overwrite or Keep in this install review",
+          { coordinate: "acme/docs", named: ["Agent/writer"], unnamed: 0 },
         );
       }
       return { pack: "docs", digest: DIGEST, source: "registry" };
@@ -536,9 +560,24 @@ describe("the install review", () => {
     await user.click(installButton(review));
     const edits = await within(review).findByRole("region", { name: "Your edits" });
     expect(within(edits).getByRole("radio", { name: "Keep my edits" })).toBeChecked();
+    const alert = within(review).getByRole("alert");
+    expect(alert).toHaveTextContent("Agent/writer");
+    expect(alert).not.toHaveTextContent("--overwrite");
     await user.click(installButton(review));
     await waitFor(() => expect(installs(installPack)).toHaveLength(2));
     expect(installs(installPack)[1]).toMatchObject({ edited: "keep" });
+  });
+
+  it("reads a refusal from its type, never from words in its text", async () => {
+    const installPack = bridge(undefined, () => {
+      throw new Error("use --overwrite or --keep, or --grant-authority; not the expected digest");
+    });
+    show(installPack);
+    const { user, review } = await openRegistryReview();
+    await waitFor(() => expect(installButton(review)).toBeEnabled());
+    await user.click(installButton(review));
+    expect(await within(review).findByRole("alert")).toHaveTextContent("Couldn't install:");
+    expect(within(review).queryByRole("region", { name: "Your edits" })).toBeNull();
   });
 
   it("names the pack when its preview fails", async () => {
@@ -619,8 +658,9 @@ describe("the install review", () => {
 
   it("refuses a pack that changed since it was reviewed, and reviews it again", async () => {
     const installPack = bridge(undefined, () => {
-      throw new Error(
-        `the pack's digest is sha256:${"f".repeat(64)}, not the expected ${DIGEST}. Nothing was installed.`,
+      throw refused(
+        "digest_changed",
+        "The pack changed since it was reviewed. Review it again.",
       );
     });
     show(installPack);
@@ -876,8 +916,9 @@ describe("a pack link", () => {
   it("says on the pack's page when the pack isn't the one the link names, and offers no install", async () => {
     const linked = `sha256:${"1".repeat(64)}`;
     const installPack = bridge(() => {
-      throw new Error(
-        `the pack's digest is ${DIGEST}, not the expected ${linked}. Nothing was installed.`,
+      throw refused(
+        "digest_changed",
+        "The pack changed since it was reviewed. Review it again.",
       );
     });
     show(installPack, { package: "acme/docs", source: "link", digest: linked });

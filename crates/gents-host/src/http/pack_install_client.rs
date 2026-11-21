@@ -82,7 +82,7 @@ impl ServerMessage {
                 outcome,
                 detail,
                 documents,
-            } => PackSessionError::runtime_failed(class, outcome, detail, documents),
+            } => gents_pack::pack::HostedRefusal::new(class, outcome, detail, documents).into(),
             other => PackSessionError::Unexpected {
                 step,
                 received: other.kind(),
@@ -133,14 +133,18 @@ impl PackInstallSession {
             .held_client_signing_capability()
             .map_err(|error| PackSessionError::Endpoint(error.into()))?
             .clone();
-        let mut socket = connect(endpoint).await.map_err(PackSessionError::Endpoint)?;
+        let mut socket = connect(endpoint)
+            .await
+            .map_err(PackSessionError::Endpoint)?;
         let presented_at = std::time::Instant::now();
         send(&mut socket, first).await?;
         let (scope, preparation) = match receive(&mut socket).await? {
             ServerMessage::Ready { scope, preparation } => (scope, preparation),
             other => return Err(other.refusal(SessionStep::Start)),
         };
-        if scope.node_did != node_did || scope.pack_digests != pack_digests || scope.nonce.is_empty()
+        if scope.node_did != node_did
+            || scope.pack_digests != pack_digests
+            || scope.nonce.is_empty()
         {
             return Err(PackSessionError::ScopeMismatch);
         }
@@ -171,9 +175,7 @@ impl PackInstallSession {
                 .authorization()
                 .map_err(|error| PackSessionError::Endpoint(error.into()))?
                 .ok_or_else(|| {
-                    PackSessionError::Endpoint(anyhow::anyhow!(
-                        "client authentication is required"
-                    ))
+                    PackSessionError::Endpoint(anyhow::anyhow!("client authentication is required"))
                 })?;
             self.presented_at = std::time::Instant::now();
             send(
@@ -250,7 +252,9 @@ impl PackInstallSession {
         expected: &PackRelationship,
     ) -> Result<(), PackSessionError> {
         let id = match self.proposal().await? {
-            ServerMessage::ApproveRelationship { id, relationship } if relationship == *expected => {
+            ServerMessage::ApproveRelationship { id, relationship }
+                if relationship == *expected =>
+            {
                 id
             }
             ServerMessage::ApproveRelationship { relationship, .. } => {
@@ -390,6 +394,18 @@ pub struct PackReplaySession {
 struct PackReplayState {
     session: Option<PackInstallSession>,
     result: Option<Value>,
+    refusal: Option<gents_pack::pack::HostedRefusal>,
+}
+
+impl PackReplayState {
+    /// The transport error the interpreter sees, keeping the runtime's typed
+    /// refusal for the install to return.
+    fn refused(&mut self, error: PackSessionError) -> PackApprovalError {
+        if let PackSessionError::RuntimeFailed(refusal) = &error {
+            self.refusal.get_or_insert_with(|| refusal.clone());
+        }
+        transport_error(error)
+    }
 }
 
 impl PackReplaySession {
@@ -398,6 +414,7 @@ impl PackReplaySession {
             inner: tokio::sync::Mutex::new(PackReplayState {
                 session: Some(session),
                 result: None,
+                refusal: None,
             }),
         }
     }
@@ -431,7 +448,7 @@ impl PackReplayTransport for PackReplaySession {
             .map_err(transport_error)?
             .read(document, variables)
             .await
-            .map_err(transport_error)
+            .map_err(|error| state.refused(error))
     }
 
     async fn apply_graph(
@@ -446,7 +463,7 @@ impl PackReplayTransport for PackReplaySession {
             .map_err(transport_error)?
             .graph(mutation)
             .await
-            .map_err(transport_error)
+            .map_err(|error| state.refused(error))
     }
 
     async fn apply_relationship(
@@ -461,7 +478,7 @@ impl PackReplayTransport for PackReplaySession {
             .map_err(transport_error)?
             .relationship(relationship)
             .await
-            .map_err(transport_error)
+            .map_err(|error| state.refused(error))
     }
 
     async fn next_timestamp(
@@ -476,7 +493,7 @@ impl PackReplayTransport for PackReplaySession {
             .map_err(transport_error)?
             .timestamp(kind)
             .await
-            .map_err(transport_error)
+            .map_err(|error| state.refused(error))
     }
 
     async fn commit(&self) -> std::result::Result<(), PackApprovalError> {
@@ -488,7 +505,7 @@ impl PackReplayTransport for PackReplaySession {
             .map_err(transport_error)?
             .finish()
             .await
-            .map_err(transport_error)?;
+            .map_err(|error| state.refused(error))?;
         state.result = Some(result);
         state.session.take();
         Ok(())
@@ -512,11 +529,13 @@ pub async fn install_remote(
     dependencies: &[gents_pack::pack::resolved_pack::ResolvedPack],
     args: &gents_pack::pack::install_flow::DocumentsInstallRequest,
     explicit: bool,
-) -> Result<Value> {
-    ensure!(
-        args.wire.is_empty(),
-        "a hosted pack install carries no wiring; its plugins are wired after it"
-    );
+) -> Result<Value, gents_pack::pack::PackChangeError> {
+    if !args.wire.is_empty() {
+        return Err(anyhow::anyhow!(
+            "a hosted pack install carries no wiring; its plugins are wired after it"
+        )
+        .into());
+    }
     let request =
         super::pack_install::encode_install_request(pack, dependencies, args, owner, explicit)
             .await?;
@@ -524,7 +543,9 @@ pub async fn install_remote(
         .chain(dependencies.iter())
         .map(|source| source.digest().to_owned())
         .collect::<Vec<_>>();
-    let mut session = PackInstallSession::start(endpoint, request, owner, &digests).await?;
+    let mut session = PackInstallSession::start(endpoint, request, owner, &digests)
+        .await
+        .map_err(refused)?;
     let preparation = session.preparation().clone();
     let access = gents_store::config_client::ConfigAccess::Graphql(endpoint.clone());
     let requested = gents_pack::operations::pack::parse_inference_slots(&args.inference_slots)?;
@@ -569,18 +590,24 @@ pub async fn install_remote(
     })
     .await
     .context("reconstructing the reviewed pack graph")??;
-    let evidence = prepare_pack_schema_approval(&session.actor, &session.scope).await?;
+    let evidence = prepare_pack_schema_approval(&session.actor, &session.scope)
+        .await
+        .map_err(anyhow::Error::from)?;
     send(
         &mut session.socket,
         json!({"type": "schemas_ready", "evidence": evidence}),
     )
-    .await?;
+    .await
+    .map_err(anyhow::Error::from)?;
     let replay = std::sync::Arc::new(PackReplaySession::new(session));
     let access = gents_store::config_client::ConfigAccess::Graphql(
-        endpoint.clone().with_pack_replay(replay.clone())?,
+        endpoint
+            .clone()
+            .with_pack_replay(replay.clone())
+            .map_err(anyhow::Error::from)?,
     );
     let policy = gents_pack::operations::pack::drift_policy(args.edited);
-    access
+    let applied = access
         .transact_write("pack.hosted_document_graph.replay", |txn| {
             let graph = &graph;
             Box::pin(async move {
@@ -596,8 +623,23 @@ pub async fn install_remote(
                 Ok::<_, anyhow::Error>(())
             })
         })
-        .await?;
-    Ok(replay.result().await?)
+        .await;
+    if let Err(error) = applied {
+        return Err(match replay.inner.lock().await.refusal.take() {
+            Some(refusal) => refusal.into(),
+            None => anyhow::Error::from(error).into(),
+        });
+    }
+    replay.result().await.map_err(refused)
+}
+
+/// A session error as the install's: the runtime's typed refusal by its own
+/// variant.
+fn refused(error: PackSessionError) -> gents_pack::pack::PackChangeError {
+    match error {
+        PackSessionError::RuntimeFailed(refusal) => refusal.into(),
+        other => anyhow::Error::from(other).into(),
+    }
 }
 
 /// Previews an install over the runtime's install session, which authorizes
@@ -695,7 +737,10 @@ mod tests {
             }]
         );
         let text = refused.to_string();
-        assert!(!text.contains("injected") && !text.contains("reviewed"), "{text}");
+        assert!(
+            !text.contains("injected") && !text.contains("reviewed"),
+            "{text}"
+        );
         drop(session);
         server.await??;
         Ok(())
@@ -819,8 +864,13 @@ mod tests {
     }
 
     async fn start(endpoint: &GraphqlEndpoint) -> Result<PackInstallSession, PackSessionError> {
-        PackInstallSession::start(endpoint, json!({}), "did:key:node", &["sha256:root".to_owned()])
-            .await
+        PackInstallSession::start(
+            endpoint,
+            json!({}),
+            "did:key:node",
+            &["sha256:root".to_owned()],
+        )
+        .await
     }
 
     #[tokio::test]
@@ -880,7 +930,8 @@ mod tests {
         let proposal = json!({"type": "approve_relationship", "id": 1,
             "relationship": relationship("did:key:injected")})
         .to_string();
-        let (endpoint, server, _key) = scripted_runtime(vec![ready().to_string(), proposal]).await?;
+        let (endpoint, server, _key) =
+            scripted_runtime(vec![ready().to_string(), proposal]).await?;
         let mut session = start(&endpoint).await?;
         let error = session
             .relationship(&relationship("did:key:reviewed"))
@@ -894,11 +945,17 @@ mod tests {
         else {
             panic!("{error:#}");
         };
-        assert_eq!((collection.as_str(), doc_id.as_str()), ("Agent", "bae-agent"));
+        assert_eq!(
+            (collection.as_str(), doc_id.as_str()),
+            ("Agent", "bae-agent")
+        );
         assert_eq!(differences.len(), 1, "{error}");
         let text = error.to_string();
         assert!(text.contains("/target/did"), "{text}");
-        assert!(!text.contains("injected") && !text.contains("reviewed"), "{text}");
+        assert!(
+            !text.contains("injected") && !text.contains("reviewed"),
+            "{text}"
+        );
         drop(session);
         server.await??;
         Ok(())
@@ -906,7 +963,9 @@ mod tests {
 
     #[tokio::test]
     async fn a_runtime_refusal_is_its_class_and_next_step() -> Result<()> {
-        use gents_protocol::operations::pack::hosted::{HostedInstallFailure, HostedInstallOutcome};
+        use gents_protocol::operations::pack::hosted::{
+            HostedInstallFailure, HostedInstallOutcome,
+        };
         let failed =
             json!({"type": "failed", "class": "apply_rejected", "outcome": "not_installed"})
                 .to_string();
@@ -919,12 +978,12 @@ mod tests {
         assert!(
             matches!(
                 error,
-                PackSessionError::RuntimeFailed {
+                PackSessionError::RuntimeFailed(gents_pack::pack::HostedRefusal {
                     class: HostedInstallFailure::ApplyRejected,
                     outcome: HostedInstallOutcome::NotInstalled,
                     detail: None,
                     documents: None,
-                }
+                })
             ),
             "{error:#}"
         );
@@ -954,7 +1013,10 @@ mod tests {
         .to_string();
         let (endpoint, server, _key) = scripted_runtime(vec![unset]).await?;
         let error = start(&endpoint).await.err().expect("refused");
-        assert!(format!("{error:#}").ends_with(": names API_TOKEN"), "{error:#}");
+        assert!(
+            format!("{error:#}").ends_with(": names API_TOKEN"),
+            "{error:#}"
+        );
         server.await??;
         Ok(())
     }

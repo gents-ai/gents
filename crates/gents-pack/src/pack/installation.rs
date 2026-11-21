@@ -42,7 +42,7 @@ pub use hosted::{
     stage_hosted_pack, HostedHomePublication, HostedPackApproval, HostedPackStage,
     HostedPackStageError, HostedRejection,
 };
-pub use refusal::{EditedDocumentRefusal, PackChangeSurface};
+pub use refusal::{EditedDocumentRefusal, HostedRefusal, PackChangeSurface};
 pub use removal::{
     ensure_plugins_unreferenced, plugin_pin_conflicts, visible_plugin_selections,
     PluginPinConflict, PluginSelection,
@@ -1173,7 +1173,13 @@ pub enum PackChangeError {
     },
     #[error(
         "{}",
-        refusal::document_change_message(coordinate, differing, 0, false, PackChangeSurface::Local)
+        refusal::document_change_message(
+            coordinate,
+            differing,
+            0,
+            false,
+            PackChangeSurface::Local
+        )
     )]
     Differing {
         coordinate: String,
@@ -1185,6 +1191,13 @@ pub enum PackChangeError {
     Slots(#[from] super::SlotBindingError),
     #[error(transparent)]
     PluginReference(#[from] PluginReferenceUnresolved),
+    #[error(transparent)]
+    Hosted(#[from] HostedRefusal),
+    #[error("{error}. Next: {next}")]
+    Refused {
+        error: gents_protocol::operations::pack::PackOperationError,
+        next: String,
+    },
     #[error(fmt = gents_protocol::error_chain::held)]
     Other(#[from] anyhow::Error),
 }
@@ -1201,6 +1214,7 @@ impl PackChangeError {
                 coordinate,
                 differing,
             } => refusal::document_change_message(coordinate, differing, 0, false, surface),
+            Self::Hosted(refusal) => refusal.message_for_surface(surface),
             other => other.to_string(),
         }
     }
@@ -1243,7 +1257,9 @@ impl gents_store::config_client::TransactionFailure for PackChangeError {
             | Self::Differing { .. }
             | Self::Grant(GrantError::Ungranted { .. })
             | Self::Slots(super::SlotBindingError::Unbound { .. })
-            | Self::PluginReference(_) => None,
+            | Self::PluginReference(_)
+            | Self::Hosted(_)
+            | Self::Refused { .. } => None,
             Self::Other(error)
             | Self::Grant(GrantError::Other(error))
             | Self::Slots(super::SlotBindingError::Other(error)) => {

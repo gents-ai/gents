@@ -1,3 +1,4 @@
+use gents_protocol::operations::pack::hosted::{HostedInstallFailure, HostedInstallOutcome};
 use serde::{Deserialize, Serialize};
 
 /// Where a refused pack change is read, which decides the step it names.
@@ -22,6 +23,50 @@ pub struct EditedDocumentRefusal {
 impl EditedDocumentRefusal {
     pub fn message_for_surface(&self, surface: PackChangeSurface) -> String {
         document_change_message(&self.coordinate, &self.named, self.unnamed, true, surface)
+    }
+}
+
+/// A hosted install the runtime refused, as its client holds it: the class,
+/// whether anything may have been written, and the runtime's text where the
+/// class may show it.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "the runtime refused the install ({outcome}, {class}): {}",
+    self.message_for_surface(PackChangeSurface::Hosted)
+)]
+pub struct HostedRefusal {
+    pub class: HostedInstallFailure,
+    pub outcome: HostedInstallOutcome,
+    pub detail: Option<String>,
+    pub documents: Option<EditedDocumentRefusal>,
+}
+
+impl HostedRefusal {
+    /// Keeps the runtime's text only for a class that may show runtime text,
+    /// and its documents only for an edited refusal.
+    pub fn new(
+        class: HostedInstallFailure,
+        outcome: HostedInstallOutcome,
+        detail: Option<String>,
+        documents: Option<EditedDocumentRefusal>,
+    ) -> Self {
+        Self {
+            class,
+            outcome,
+            detail: detail.filter(|_| class.shows_runtime_text(true)),
+            documents: documents.filter(|_| class == HostedInstallFailure::DocumentsEdited),
+        }
+    }
+
+    pub fn message_for_surface(&self, surface: PackChangeSurface) -> String {
+        match (&self.documents, &self.detail) {
+            (Some(documents), _) if surface != PackChangeSurface::Hosted => {
+                documents.message_for_surface(surface)
+            }
+            (_, Some(detail)) => detail.clone(),
+            (Some(documents), None) => documents.message_for_surface(surface),
+            (None, None) => self.class.description().to_owned(),
+        }
     }
 }
 
@@ -101,6 +146,41 @@ mod tests {
     }
 
     #[test]
+    fn a_hosted_refusal_keeps_runtime_text_only_where_its_class_may_show_it() {
+        let documents = EditedDocumentRefusal {
+            coordinate: "fixture/root".into(),
+            named: vec!["Tools/a".into()],
+            unnamed: 1,
+        };
+        let refused = |class| {
+            HostedRefusal::new(
+                class,
+                HostedInstallOutcome::NotInstalled,
+                Some("runtime text sk-live".into()),
+                Some(documents.clone()),
+            )
+        };
+        let hidden = refused(HostedInstallFailure::ApplyRejected);
+        assert_eq!(
+            (hidden.detail.as_deref(), hidden.documents.as_ref()),
+            (None, None)
+        );
+        assert_eq!(
+            hidden.to_string(),
+            format!(
+                "the runtime refused the install (not_installed, apply_rejected): {}",
+                HostedInstallFailure::ApplyRejected.description()
+            )
+        );
+        let edited = refused(HostedInstallFailure::DocumentsEdited);
+        assert_eq!(
+            edited.message_for_surface(PackChangeSurface::Desktop),
+            documents.message_for_surface(PackChangeSurface::Desktop)
+        );
+        assert!(edited.to_string().ends_with("runtime text sk-live"));
+    }
+
+    #[test]
     fn the_local_text_names_every_local_step() {
         let edited = document_change_message(
             "gents/web",
@@ -117,8 +197,16 @@ mod tests {
              on `gents config pack install`, `gents config pack update` or `gents config pack \
              remove`, or options.edited on the agent pack command"
         );
-        let differing =
-            document_change_message("gents/web", &["Tools/t".into()], 0, false, PackChangeSurface::Hosted);
-        assert!(differing.contains("Tools/t") && !differing.contains("gents config"), "{differing}");
+        let differing = document_change_message(
+            "gents/web",
+            &["Tools/t".into()],
+            0,
+            false,
+            PackChangeSurface::Hosted,
+        );
+        assert!(
+            differing.contains("Tools/t") && !differing.contains("gents config"),
+            "{differing}"
+        );
     }
 }

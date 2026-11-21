@@ -454,3 +454,33 @@ mod tests {
         assert!(sent.get("owner").is_none());
     }
 }
+
+/// What an install refusal asks of the person in the install review.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PackInstallRefusalClass {
+    DocumentsEdited,
+    AuthorityRequired,
+    DigestChanged,
+}
+
+/// A typed install refusal, with the sentence the install review shows.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PackInstallRefusal {
+    pub class: PackInstallRefusalClass,
+    pub coordinate: Option<String>,
+    pub named: Vec<String>,
+    pub unnamed: usize,
+    pub sentence: String,
+}
+
+/// A failed install: the bridge error, and the refusal the review asks about
+/// where the install refused for one.
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PackInstallError {
+    #[serde(flatten)]
+    pub error: gents_store::client_error::BridgeError,
+    pub pack_refusal: Option<PackInstallRefusal>,
+}

@@ -412,8 +412,8 @@ async fn run_inner(
         access: user_access,
         refresher,
     } = user;
-    let runtime_did =
-        identity::Did::new(&state.node_did).map_err(SessionFailure::not_installed(Class::NotAuthorized))?;
+    let runtime_did = identity::Did::new(&state.node_did)
+        .map_err(SessionFailure::not_installed(Class::NotAuthorized))?;
     runtime_access
         .transact_readonly("pack.hosted_schema.authorize", |txn| {
             let runtime_did = &runtime_did;

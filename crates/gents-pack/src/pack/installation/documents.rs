@@ -1542,7 +1542,11 @@ fn plugin_references_resolve(
                 let home = plugin_home.context("plugin home is unavailable")?;
                 match installed_plugin_record(home, namespace, name) {
                     Ok(record) => {
-                        if let Some(pin) = reference.digest.as_ref().filter(|pin| **pin != record.digest) {
+                        if let Some(pin) = reference
+                            .digest
+                            .as_ref()
+                            .filter(|pin| **pin != record.digest)
+                        {
                             return Ok(Err(PluginReferenceUnresolved::PinMismatch {
                                 pack: manifest.name.clone(),
                                 tools: tools.tools_id.clone(),

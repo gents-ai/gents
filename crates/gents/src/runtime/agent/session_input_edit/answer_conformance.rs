@@ -46,10 +46,7 @@ fn a_refused_user_write_is_answered_as_the_lean_model_says() {
             match super::answer(admission) {
                 None => Outcome::Pending,
                 Some(reason) => {
-                    assert_eq!(
-                        reason,
-                        gents_protocol::failure_text::REFUSED_FOR_A_PERSON
-                    );
+                    assert_eq!(reason, gents_protocol::failure_text::REFUSED_FOR_A_PERSON);
                     Outcome::Rejected
                 }
             }
