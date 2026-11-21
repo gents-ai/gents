@@ -49,7 +49,7 @@ fn answer(
 ) -> Option<String> {
     admission.err().map(|refusal| {
         tracing::info!(%refusal, "stored command refused before any write");
-        gents_store::config_client::user_write::REFUSED_FOR_A_PERSON.to_owned()
+        gents_protocol::failure_text::REFUSED_FOR_A_PERSON.to_owned()
     })
 }
 

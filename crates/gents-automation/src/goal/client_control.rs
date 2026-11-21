@@ -168,7 +168,7 @@ pub(crate) async fn attach_client_goal_graphs(
 
 fn refused(refusal: gents_store::config_client::user_write::UserWriteRefusal) -> String {
     tracing::info!(%refusal, "goal control refused before any write");
-    gents_store::config_client::user_write::REFUSED_FOR_A_PERSON.into()
+    gents_protocol::failure_text::REFUSED_FOR_A_PERSON.into()
 }
 
 /// Preflight performs no document writes. Once staging begins, every error

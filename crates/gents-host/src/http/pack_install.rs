@@ -15,9 +15,14 @@ use gents_pack::pack::PackKind;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::router::RuntimeHttpState;
+use failure::SessionFailure;
+use gents_protocol::operations::pack::hosted::{
+    HostedInstallFailure as Class, HostedInstallOutcome as Outcome,
+};
 use gents_pack::pack::install_flow::DocumentsInstallRequest;
 use gents_pack::pack::resolved_pack::ResolvedPack;
 
+mod failure;
 pub mod session;
 
 const PATH: &str = "/packs/install";
@@ -164,11 +169,16 @@ pub async fn install_remote(
     let body = response.bytes().await.context(
         "remote pack install response was unreadable; inspect the runtime before retrying",
     )?;
-    anyhow::ensure!(
-        status.is_success(),
-        "remote pack install returned HTTP {status}: {}",
-        String::from_utf8_lossy(&body)
-    );
+    if !status.is_success() {
+        let refusal: Refusal = serde_json::from_slice(&body).with_context(|| {
+            format!("remote pack install returned HTTP {status} without a failure class")
+        })?;
+        return Err(super::pack_install_client::PackSessionError::RuntimeFailed {
+            class: refusal.class,
+            outcome: refusal.outcome,
+        }
+        .into());
+    }
     serde_json::from_slice(&body)
         .context("remote pack install response was unreadable; inspect the runtime before retrying")
 }
@@ -238,10 +248,22 @@ pub async fn encode_install_request(
     .context("packing remote document archives")?
 }
 
-fn refused(status: StatusCode, error: impl std::fmt::Display) -> Response {
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Refusal {
+    class: Class,
+    outcome: Outcome,
+}
+
+fn refused(status: StatusCode, class: Class) -> Response {
+    failed(status, SessionFailure::not_installed(class)(anyhow::anyhow!("refused")))
+}
+
+fn failed(status: StatusCode, failure: SessionFailure) -> Response {
+    failure.log();
     (
         status,
-        Json(serde_json::json!({"error": format!("{error:#}"), "outcome": "not_installed"})),
+        Json(serde_json::json!({"class": failure.class, "outcome": failure.outcome})),
     )
         .into_response()
 }
@@ -253,53 +275,36 @@ pub async fn install_handler(
     body: Result<Bytes, BytesRejection>,
 ) -> Response {
     let Some(actor) = identity.did().cloned() else {
-        return refused(
-            StatusCode::UNAUTHORIZED,
-            "Client authentication is required.",
-        );
+        return refused(StatusCode::UNAUTHORIZED, Class::NotAuthorized);
     };
     let Some(home) = state.home.clone() else {
-        return refused(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "runtime plugin store unavailable",
-        );
+        return refused(StatusCode::SERVICE_UNAVAILABLE, Class::RuntimeUnavailable);
     };
     let access = match delegated_install_access(&state, &headers, actor) {
         Ok(access) => access,
-        Err(error) => return refused(StatusCode::UNAUTHORIZED, error),
+        Err(_) => return refused(StatusCode::UNAUTHORIZED, Class::NotAuthorized),
     };
     let body = match body {
         Ok(body) => body,
-        Err(rejection) if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => {
-            return refused(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                format!(
-                    "remote pack install request exceeds the {MAX_BODY} byte bound \
-                     ({MAX_ARCHIVE_BYTES} compressed archive bytes)"
-                ),
-            )
-        }
-        Err(rejection) => return refused(rejection.status(), rejection.body_text()),
+        Err(rejection) => return refused(rejection.status(), Class::InvalidRequest),
     };
     let node_did = state.node_did.clone();
     let received = match tokio::task::spawn_blocking(move || decode_request(&body, &node_did)).await
     {
         Ok(Ok(received)) => received,
-        Ok(Err(error)) => return refused(StatusCode::BAD_REQUEST, error),
-        Err(error) => return refused(StatusCode::INTERNAL_SERVER_ERROR, error),
+        Ok(Err(_)) => return refused(StatusCode::BAD_REQUEST, Class::InvalidRequest),
+        Err(_) => return refused(StatusCode::INTERNAL_SERVER_ERROR, Class::InvalidRequest),
     };
-    if !received.request.wire.is_empty() && !received.request.preview {
-        return refused(
-            StatusCode::BAD_REQUEST,
-            "a remote install carries no wiring; the client wires its plugins after it, signing each write itself",
-        );
+    if (!received.request.wire.is_empty() && !received.request.preview)
+        || received.root.manifest().metadata.kind != PackKind::Documents
+    {
+        return refused(StatusCode::BAD_REQUEST, Class::InvalidRequest);
     }
-    if received.root.manifest().metadata.kind != PackKind::Documents {
-        return refused(
-            StatusCode::BAD_REQUEST,
-            "plugin packs require the reviewed install session",
-        );
-    }
+    let class = if received.request.preview {
+        Class::PreviewFailed
+    } else {
+        Class::ApplyUnconfirmed
+    };
     // Detached so a dropped client cannot cancel an install mid-commit.
     let result =
         tokio::spawn(
@@ -308,19 +313,14 @@ pub async fn install_handler(
         .await;
     match result {
         Ok(Ok(value)) => Json(value).into_response(),
-        Ok(Err(error)) => (
+        Ok(Err(error)) => failed(
             StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({"error": format!("{error:#}"), "outcome": "unconfirmed"})),
-        )
-            .into_response(),
-        Err(error) => (
+            SessionFailure::unconfirmed(class)(error),
+        ),
+        Err(error) => failed(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({
-                "error": format!("pack install outcome unconfirmed: {error}"),
-                "outcome": "unconfirmed",
-            })),
-        )
-            .into_response(),
+            SessionFailure::unconfirmed(class)(error),
+        ),
     }
 }
 

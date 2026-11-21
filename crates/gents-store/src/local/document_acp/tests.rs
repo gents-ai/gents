@@ -387,7 +387,7 @@ fn what_a_person_reads_names_no_internals() {
         .map(ToString::to_string)
         .chain(delegation.iter().map(ToString::to_string))
         .chain([
-            crate::config_client::user_write::REFUSED_FOR_A_PERSON.to_owned(),
+            gents_protocol::failure_text::REFUSED_FOR_A_PERSON.to_owned(),
             crate::config_client::owed::OWED_FAILED_FOR_A_PERSON.to_owned(),
         ]);
     for text in read {

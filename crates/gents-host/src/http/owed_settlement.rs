@@ -54,7 +54,7 @@ pub async fn settle(
         Err(gents_store::config_client::owed::OwedPassError::DelegationRequired) if vera => {
             return failure(
                 StatusCode::UNAUTHORIZED,
-                gents_store::config_client::user_write::REFUSED_FOR_A_PERSON,
+                gents_protocol::failure_text::REFUSED_FOR_A_PERSON,
             )
         }
         Err(gents_store::config_client::owed::OwedPassError::DelegationRequired) => Vec::new(),

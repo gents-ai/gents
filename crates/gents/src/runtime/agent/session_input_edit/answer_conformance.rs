@@ -48,7 +48,7 @@ fn a_refused_user_write_is_answered_as_the_lean_model_says() {
                 Some(reason) => {
                     assert_eq!(
                         reason,
-                        gents_store::config_client::user_write::REFUSED_FOR_A_PERSON
+                        gents_protocol::failure_text::REFUSED_FOR_A_PERSON
                     );
                     Outcome::Rejected
                 }

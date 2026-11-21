@@ -49,8 +49,8 @@ enum ServerMessage {
         result: Value,
     },
     Failed {
-        error: String,
-        outcome: String,
+        class: gents_protocol::operations::pack::hosted::HostedInstallFailure,
+        outcome: gents_protocol::operations::pack::hosted::HostedInstallOutcome,
     },
 }
 
@@ -71,7 +71,7 @@ impl ServerMessage {
     /// The error this message is when it does not answer `step`.
     fn refusal(self, step: SessionStep) -> PackSessionError {
         match self {
-            Self::Failed { error, outcome } => PackSessionError::RuntimeFailed { outcome, error },
+            Self::Failed { class, outcome } => PackSessionError::RuntimeFailed { class, outcome },
             other => PackSessionError::Unexpected {
                 step,
                 received: other.kind(),
@@ -866,6 +866,52 @@ mod tests {
         assert!(text.contains("/target/did"), "{text}");
         assert!(!text.contains("injected") && !text.contains("reviewed"), "{text}");
         drop(session);
+        server.await??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_runtime_refusal_is_its_class_and_next_step() -> Result<()> {
+        use gents_protocol::operations::pack::hosted::{HostedInstallFailure, HostedInstallOutcome};
+        let failed =
+            json!({"type": "failed", "class": "apply_rejected", "outcome": "not_installed"})
+                .to_string();
+        let (endpoint, server, _key) = scripted_runtime(vec![ready().to_string(), failed]).await?;
+        let mut session = start(&endpoint).await?;
+        let error = session
+            .read("{ Node { _docID } }", &json!({}))
+            .await
+            .expect_err("the runtime refused");
+        assert!(
+            matches!(
+                error,
+                PackSessionError::RuntimeFailed {
+                    class: HostedInstallFailure::ApplyRejected,
+                    outcome: HostedInstallOutcome::NotInstalled,
+                }
+            ),
+            "{error:#}"
+        );
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "the runtime refused the install (not_installed, apply_rejected): {}",
+                HostedInstallFailure::ApplyRejected.description()
+            )
+        );
+        drop(session);
+        server.await??;
+
+        let quoting = json!({"type": "failed", "class": "apply_rejected",
+            "outcome": "not_installed", "error": "token sk-live-private"})
+        .to_string();
+        let (endpoint, server, _key) = scripted_runtime(vec![quoting]).await?;
+        let error = start(&endpoint).await.err().expect("refused");
+        assert!(
+            matches!(error, PackSessionError::Receive(ReceiveError::Unreadable { .. })),
+            "a failure carrying runtime text is not a failure this client reads: {error:#}"
+        );
+        assert!(!format!("{error:#}").contains("sk-live-private"));
         server.await??;
         Ok(())
     }

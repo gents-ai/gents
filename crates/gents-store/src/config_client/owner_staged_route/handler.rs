@@ -152,7 +152,7 @@ async fn decide(
             failure(
                 StatusCode::FORBIDDEN,
                 "updateRequired",
-                crate::config_client::user_write::REFUSED_FOR_A_PERSON,
+                gents_protocol::failure_text::REFUSED_FOR_A_PERSON,
             )
         }
         Err(ConfigClientError::OwnerStagedRelationshipUnmanaged { .. }) => failure(

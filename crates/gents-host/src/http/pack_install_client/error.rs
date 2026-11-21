@@ -1,3 +1,4 @@
+use gents_protocol::operations::pack::hosted::{HostedInstallFailure, HostedInstallOutcome};
 use gents_store::config_client::{PackEvidenceError, PackMutationDifference};
 
 /// Why a hosted pack session could not go on. No variant carries a plan
@@ -37,8 +38,11 @@ pub enum PackSessionError {
         step: SessionStep,
         received: &'static str,
     },
-    #[error("remote pack install failed ({outcome}): {error}")]
-    RuntimeFailed { outcome: String, error: String },
+    #[error("the runtime refused the install ({outcome}, {class}): {}", .class.description())]
+    RuntimeFailed {
+        class: HostedInstallFailure,
+        outcome: HostedInstallOutcome,
+    },
     #[error("remote pack install scope does not match the reviewed artifacts and node")]
     ScopeMismatch,
     #[error("runtime proposed an unexpected extra pack effect")]

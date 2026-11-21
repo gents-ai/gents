@@ -20,6 +20,11 @@ pub const FAILURE_TEXT_MAX_BYTES: usize = 4096;
 pub const TRUNCATION_MARKER: &str = "…(truncated)";
 const REDACTED: &str = "[REDACTED]";
 
+/// What a person reads where a refused write for them is answered; the
+/// refusal itself stays in the logs.
+pub const REFUSED_FOR_A_PERSON: &str =
+    "This change could not be applied on this home. Update Gents on this device and try again.";
+
 /// The error and each of its causes, as anyhow's `{:#}` joins them, each
 /// cause redacted and cut to [`FAILURE_CAUSE_MAX_BYTES`], the whole cut to
 /// [`FAILURE_TEXT_MAX_BYTES`].
