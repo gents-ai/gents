@@ -479,6 +479,7 @@ fn an_agent_binding_is_never_read_from_the_process_environment() {
         crate::operations::pack::install_value(
             gents_protocol::operations::pack::PackActor::User,
             variables,
+            &crate::operations::pack::InstallEnvironment::Installer,
             name,
         )
     };
