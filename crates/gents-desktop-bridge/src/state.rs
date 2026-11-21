@@ -309,6 +309,7 @@ pub fn resolve_policy(
         managed_server: config.managed_server,
         client_host: config.client_host,
         store_key_custody: config.store_key_custody,
+        service_executable: config.service_executable.clone(),
     })
 }
 

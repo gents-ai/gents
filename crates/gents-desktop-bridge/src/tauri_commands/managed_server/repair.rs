@@ -74,7 +74,11 @@ where
     use crate::tauri_commands::service_executable::{
         ensure_installable_location, resolve_service_executable, ServiceExecutable,
     };
-    let resolved = resolve_service_executable(app, state.policy.desktop_paths.root())?;
+    let resolved = resolve_service_executable(
+        app,
+        state.policy.desktop_paths.root(),
+        state.policy.service_executable.as_deref(),
+    )?;
     match resolved {
         ServiceExecutable::InPlace(path) => {
             ensure_installable_location(&path)?;

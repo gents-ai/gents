@@ -9,7 +9,6 @@ pub(crate) struct LiveBackendOverride {
     pub(crate) provider: Option<String>,
     pub(crate) api_key: Option<String>,
     pub(crate) api_key_env_var: Option<String>,
-    pub(crate) openrouter_api_key: Option<String>,
     pub(crate) inference_settings: Option<String>,
 }
 
@@ -44,9 +43,7 @@ impl LiveBackendConfig {
             || api_key_env_var.is_some()
         {
             if let Some(env_var_name) = api_key_env_var.as_deref() {
-                std::env::var(env_var_name).with_context(|| {
-                    format!("set {env_var_name} because --api-key-env-var points at it")
-                })?;
+                require_key_variable(env_var_name, "--api-key-env-var")?;
             }
 
             return Ok(Self {
@@ -61,20 +58,17 @@ impl LiveBackendConfig {
             });
         }
 
-        if override_config.is_some_and(|config| config.openrouter_api_key.is_some()) {
-            return Ok(Self {
-                endpoint: "https://openrouter.ai/api/v1".to_string(),
-                model_name,
-                provider_kind: BackendProviderKind::OpenRouter,
-                api_key: None,
-                api_key_env_var: Some("OPENROUTER_API_KEY".to_string()),
-                inference_settings,
-            });
-        }
-
-        anyhow::bail!(
-            "pass --inference-url or set OPENROUTER_API_KEY to run the live Tauri bridge runner"
-        );
+        require_key_variable(OPENROUTER_KEY_VARIABLE, "the OpenRouter fallback").context(
+            "pass --inference-url or set OPENROUTER_API_KEY to run the live Tauri bridge runner",
+        )?;
+        Ok(Self {
+            endpoint: "https://openrouter.ai/api/v1".to_string(),
+            model_name,
+            provider_kind: BackendProviderKind::OpenRouter,
+            api_key: None,
+            api_key_env_var: Some(OPENROUTER_KEY_VARIABLE.to_string()),
+            inference_settings,
+        })
     }
 }
 
@@ -104,9 +98,7 @@ impl LiveBackendConfig {
         let api_key = field(|config| config.api_key.as_ref());
         let api_key_env_var = field(|config| config.api_key_env_var.as_ref());
         if let Some(env_var_name) = api_key_env_var.as_deref() {
-            std::env::var(env_var_name).with_context(|| {
-                format!("set {env_var_name} because --agent-target-api-key-env-var points at it")
-            })?;
+            require_key_variable(env_var_name, "--agent-target-api-key-env-var")?;
         }
         Ok(Some(Self {
             endpoint,
@@ -117,6 +109,17 @@ impl LiveBackendConfig {
             inference_settings: None,
         }))
     }
+}
+
+/// The variable the OpenRouter fallback backend names as its key source.
+const OPENROUTER_KEY_VARIABLE: &str = "OPENROUTER_API_KEY";
+
+/// The runtime reads a backend's key from the variable it names, so the
+/// runner refuses to seed one whose variable is unset.
+fn require_key_variable(name: &str, source: &str) -> Result<()> {
+    std::env::var(name)
+        .map(drop)
+        .with_context(|| format!("set {name} because {source} points at it"))
 }
 
 fn normalize_optional_owned(value: Option<&String>) -> Option<String> {

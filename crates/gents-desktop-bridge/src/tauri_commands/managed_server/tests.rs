@@ -123,6 +123,7 @@ fn orchestration_state() -> (tempfile::TempDir, DesktopAppState) {
             snapshot_grants: SnapshotGrants::core_only(),
             managed_server: ManagedServerPolicy::Allowed,
             store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+            service_executable: None,
             client_host: false,
         },
         None,

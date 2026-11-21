@@ -568,7 +568,7 @@ pub(crate) fn embedded_runtime_options() -> gents::DocumentRuntimeOptions {
     gents::DocumentRuntimeOptions {
         native_executables: gents_tools::native::NativeExecutables {
             host: host_executable(),
-            fs_runner: None,
+            ..Default::default()
         },
         ..Default::default()
     }
