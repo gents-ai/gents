@@ -52,7 +52,10 @@ impl PinFixture {
             gents_protocol::schemas::NETWORK_ENROLLMENT_DECISION,
             gents_protocol::schemas::NETWORK_AUTHORIZATION_REVISION,
         ] {
-            node.add_collection(collection).await?;
+            node.add_collection(
+                &gents_protocol::schemas::HomePolicyIds::shared().render(collection),
+            )
+            .await?;
         }
         let runtime_did = identity::Did::new(runtime.did())?;
         let runtime_access = ConfigAccess::local_as(node.clone(), runtime_did.clone());
