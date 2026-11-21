@@ -1,19 +1,3 @@
-/// Reserve invalid-call budget before dispatch and stop at any duplicate,
-/// because repetition decisions depend on preceding results.
-pub(super) fn read_prefix<'a>(
-    calls: impl IntoIterator<Item = (&'a str, &'a str, bool)>,
-    limit: usize,
-) -> usize {
-    let mut seen = Vec::new();
-    for (name, args, read) in calls.into_iter().take(limit) {
-        if !read || seen.contains(&(name, args)) {
-            break;
-        }
-        seen.push((name, args));
-    }
-    seen.len()
-}
-
 fn unique<T>(ids: &[T]) -> bool
 where
     T: Eq,
@@ -312,7 +296,8 @@ mod tests {
     use std::io::Write;
     use std::process::{Command, Stdio};
 
-    use super::{ordered_indices, read_prefix};
+    use super::ordered_indices;
+    use crate::tool_effects::parallel::read_prefix;
 
     #[test]
     fn read_prefix_conforms_to_executable_lean_owner() {

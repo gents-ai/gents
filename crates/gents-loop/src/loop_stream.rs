@@ -1378,17 +1378,16 @@ where
             while let Some((first_call, _)) = pending_calls.front() {
                 let first_args = value_to_json_string(&first_call.function.arguments);
                 let first_decision = repeated_tool_failure.decide(&first_call.function.name, &first_args);
-                let candidates: Vec<_> = pending_calls.iter().take(invalid_tool_progress.remaining().min(4)).map(|(call, _)| {
+                let read_limit = invalid_tool_progress.remaining().min(crate::tool_effects::parallel::MAX_PARALLEL_READ_TOOLS);
+                let candidates: Vec<_> = pending_calls.iter().take(read_limit).map(|(call, _)| {
                     let name = call.function.name.as_str();
                     let args = value_to_json_string(&call.function.arguments);
-                    let read = tools.iter().find(|tool| tool.name() == name)
-                        .is_some_and(|tool| tool.footprint(&args, &tool_context) == crate::tool::ToolFootprint::Read)
-                        && admit_tool(tools.as_slice(), name, &args, &tool_context).is_none();
+                    let read = crate::tool_effects::parallel::is_read(tools.as_slice(), name, &args, &tool_context);
                     (name, args, read)
                 }).collect();
                 let batch_len = if first_decision == repeated_tool_failure::RepeatDecision::Dispatch
                     && !repeated_tool_failure.success_may_stop(&first_call.function.name, &first_args) {
-                    parallel::read_prefix(candidates.iter().map(|(name, args, read)| (*name, args.as_str(), *read)), invalid_tool_progress.remaining().min(4))
+                    crate::tool_effects::parallel::read_prefix(candidates.iter().map(|(name, args, read)| (*name, args.as_str(), *read)), read_limit)
                 } else { 0 };
                 if batch_len > 1 {
                     let batch = (0..batch_len).map(|_| pending_calls.pop_front().expect("batch prefix exists")).collect();
