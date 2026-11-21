@@ -28,6 +28,14 @@ pub enum Action {
     Fail,
 }
 
+pub fn preflight(
+    verified: bool,
+    keychain_custody: bool,
+    key_readable_without_interaction: bool,
+) -> Option<Phase> {
+    (verified && (!keychain_custody || key_readable_without_interaction)).then_some(Phase::Staged)
+}
+
 impl Phase {
     pub fn can_restore_prior(self, candidate_may_have_opened: bool, same_build: bool) -> bool {
         (!candidate_may_have_opened || same_build)

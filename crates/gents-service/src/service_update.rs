@@ -17,6 +17,7 @@ mod backup_conformance;
 mod copy_executable_tests;
 mod execute;
 mod files;
+mod preflight;
 mod recovery;
 mod repair_backups;
 mod stage;
@@ -362,10 +363,18 @@ pub fn executable_digest(path: &Path) -> Result<String> {
 }
 
 pub async fn check(home: Option<PathBuf>) -> Result<()> {
-    emit(&check_metadata(home).await?).await
+    emit(&check_metadata(home, preflight::check_store_key).await?).await
 }
 
-async fn check_metadata(home: Option<PathBuf>) -> Result<serde_json::Value> {
+async fn check_metadata<R>(home: Option<PathBuf>, read_key: R) -> Result<serde_json::Value>
+where
+    R: FnOnce(
+            &Path,
+            Option<&gents_store::local::store_key::StoreEncryption>,
+        ) -> std::result::Result<(), preflight::PreflightError>
+        + Send
+        + 'static,
+{
     let Some(home) = home else {
         return Ok(metadata(false));
     };
@@ -375,6 +384,7 @@ async fn check_metadata(home: Option<PathBuf>) -> Result<serde_json::Value> {
             &gents_store::local::home::default_data_dir(&home),
         )?;
         let config = read_init_config(&home)?.context("home must be initialized")?;
+        read_key(&home, config.store_encryption.as_ref())?;
         let state = read_runtime_state(&home)?.context("runtime endpoint missing")?;
         let settings = NetworkSettings::read(&home)?;
         let identity = crate::home_state::load_initialized_home_identity(&home, &config)?;
@@ -785,7 +795,19 @@ pub(crate) async fn can_update_live(home: &Path) -> Result<bool> {
     if observed.build != installed {
         return Ok(false);
     }
-    match check_metadata(Some(home.to_path_buf())).await {
+    repair_preflight(home, preflight::check_store_key).await
+}
+
+async fn repair_preflight<R>(home: &Path, read_key: R) -> Result<bool>
+where
+    R: FnOnce(
+            &Path,
+            Option<&gents_store::local::store_key::StoreEncryption>,
+        ) -> std::result::Result<(), preflight::PreflightError>
+        + Send
+        + 'static,
+{
+    match check_metadata(Some(home.to_path_buf()), read_key).await {
         Ok(_) => Ok(true),
         Err(error)
             if gents_store::local::storage_backend::incompatible_store(
