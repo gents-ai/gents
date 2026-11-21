@@ -22,7 +22,7 @@ use accounts::{
 use gents_service::state::P2pAdmissionState;
 use metrics::{healthz_handler, metrics_handler};
 use status::status_route;
-pub use status::BACKEND_PROBES_STATUS_FIELD;
+pub use status::{BACKEND_PROBES_STATUS_FIELD, NATIVE_EXECUTORS_STATUS_FIELD};
 use views::{fleet_handler, fleet_slots_handler, mcp_pool_handler, self_handler, sessions_handler};
 
 mod accounts;

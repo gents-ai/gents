@@ -7,10 +7,10 @@ namespace Pack.Operations
 
 deriving instance Lean.ToJson for
   Actor, Digest, DigestAdmission, Edited, EditedAdmission, VariableSource, RootReader, ReaderAction,
-  HostRootSource
+  HostRootSource, Planner, PlanEnvironment
 
 attribute [conformance_function] digestAdmission editedAdmission variableSource readerAction
-  hostRootSource hostRootSupplied
+  hostRootSource hostRootSupplied planEnvironment
 
 end Pack.Operations
 

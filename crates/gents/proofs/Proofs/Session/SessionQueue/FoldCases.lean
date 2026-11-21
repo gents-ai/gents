@@ -133,6 +133,7 @@ structure RetrySelectionCase where
   name : String
   parentPublished : Bool
   selected : List RequestId
+  arrived : List RequestId
   deriving Repr
 
 def RetrySelectionCase.resume (value : RetrySelectionCase) : Bool :=
@@ -141,11 +142,14 @@ def RetrySelectionCase.resume (value : RetrySelectionCase) : Bool :=
 def RetrySelectionCase.answered (value : RetrySelectionCase) : List RequestId :=
   PromptAssembly.CurrentInput.answersSelection value.resume value.selected
 
-def retrySelectionCases : List RetrySelectionCase :=
-  [ ⟨"resumed_retry_leaves_its_selection_queued", true, [104]⟩
-  , ⟨"fresh_retry_answers_its_selection", false, [104]⟩ ]
+def RetrySelectionCase.answeredArrival (value : RetrySelectionCase) : List RequestId :=
+  PromptAssembly.CurrentInput.answersSelection value.resume value.arrived
 
-example : retrySelectionCases.map (fun c => (c.resume, c.answered)) =
-    [(true, []), (false, [104])] := by native_decide
+def retrySelectionCases : List RetrySelectionCase :=
+  [ ⟨"resumed_retry_leaves_its_selection_queued", true, [104], [105]⟩
+  , ⟨"fresh_retry_answers_its_selection", false, [104], [105]⟩ ]
+
+example : retrySelectionCases.map (fun c => (c.resume, c.answered, c.answeredArrival)) =
+    [(true, [], []), (false, [104], [105])] := by native_decide
 
 end SessionQueue.FoldCases

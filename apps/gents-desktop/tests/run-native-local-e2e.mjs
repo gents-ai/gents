@@ -136,7 +136,6 @@ async function runPhase(phase) {
   const env = {
     ...process.env,
     TMPDIR: `${runTmp}/`,
-    GENTS_BIN: join(binaries, "gents"),
     GENTS_NATIVE_E2E: "1",
     GENTS_E2E_NODE_HOME: nodeHome,
     GENTS_E2E_LOCAL_TOOL_ROOT: toolRoot,
@@ -152,7 +151,13 @@ async function runPhase(phase) {
   log = createWriteStream(join(artifactRoot, `${phase}.log`));
   app = spawn(
     join(binaries, "gents-desktop-tauri"),
-    ["--desktop-home", desktopHome, "--console-log"],
+    [
+      "--desktop-home",
+      desktopHome,
+      "--console-log",
+      "--gents-bin",
+      join(binaries, "gents"),
+    ],
     {
       cwd: repoRoot,
       env,

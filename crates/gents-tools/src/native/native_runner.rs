@@ -23,6 +23,9 @@ pub struct NativeExecutables {
     /// A standalone `gents-fs-runner` that serves the filesystem tools in
     /// place of `host`.
     pub fs_runner: Option<PathBuf>,
+    /// The built page `ux preview` renders in, for a build that carries
+    /// none beside it.
+    pub ux_preview_assets: Option<PathBuf>,
 }
 
 fn effective_deadline(

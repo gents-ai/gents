@@ -28,6 +28,7 @@ async fn fixed_root_homes_do_not_collide() {
             managed_server: ManagedServerPolicy::Disabled,
             client_host: false,
             store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+            service_executable: None,
         },
         None,
     )
@@ -94,6 +95,7 @@ async fn local_runtime_allowed_binds_fixed_node_home() {
             managed_server: ManagedServerPolicy::Allowed,
             client_host: false,
             store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+            service_executable: None,
         },
         None,
     )

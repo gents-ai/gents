@@ -54,13 +54,10 @@ pub async fn test_node() -> Arc<EmbeddedNode> {
 
 #[cfg(test)]
 pub(crate) fn bound_bearer(
+    node: &Arc<EmbeddedNode>,
     credential_id: &str,
 ) -> Option<std::sync::Arc<super::DbCredentialBearer>> {
-    super::bearer::bearer_registry()
-        .lock()
-        .expect("bearer registry mutex poisoned")
-        .get(credential_id)
-        .and_then(std::sync::Weak::upgrade)
+    super::bearer::LiveBearers::of(node).live(credential_id)
 }
 
 #[cfg(test)]

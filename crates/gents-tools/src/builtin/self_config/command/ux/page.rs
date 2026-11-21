@@ -92,7 +92,7 @@ impl ConfigCommandTool {
         let invalid = page.validate().err().map(|error| format!("{error:#}"));
         let admitted = findings.is_empty() && invalid.is_none();
         let listing = ux_page::listing_id(&page.page_id);
-        let renders = super::super::ux_preview::renders();
+        let renders = super::super::ux_preview::renders(self.ux_preview_assets.as_deref());
         ordered! {
             "page": page.page_id,
             "admitted": admitted,
