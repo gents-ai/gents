@@ -3366,27 +3366,39 @@ async fn a_reader_read_the_actor_may_not_make_reports_unknown_and_still_lists() 
     let root = ceiling.path().join("shared-root");
     std::fs::create_dir_all(&root).unwrap();
     let root_text = root.to_string_lossy().into_owned();
-    let published = gents_store::config_client::ConfigAccess::local_as(
+    let publisher = gents_store::config_client::ConfigAccess::local_as(
         node.clone(),
         runtime.node_did.parse().unwrap(),
-    )
-    .write(
-        "test.workspace.root",
-        &format!(
-            r#"mutation {{ create_WorkspaceRoot(input: {{node_did:"{}", root_path:"{}", enabled:true}}) {{_docID}} }}"#,
-            gents_store::graphql::escape_graphql_string(&runtime.node_did),
-            gents_store::graphql::escape_graphql_string(&root_text),
-        ),
-    )
-    .await
-    .unwrap();
-    assert!(gents_store::graphql::created_doc_id(&published, "WorkspaceRoot").is_ok());
+    );
+    let published = publisher
+        .write(
+            "test.workspace.root",
+            &format!(
+                r#"mutation {{ create_WorkspaceRoot(input: {{node_did:"{}", root_path:"{}", enabled:true}}) {{_docID}} }}"#,
+                gents_store::graphql::escape_graphql_string(&runtime.node_did),
+                gents_store::graphql::escape_graphql_string(&root_text),
+            ),
+        )
+        .await
+        .unwrap();
+    let doc = gents_store::graphql::created_doc_id(&published, "WorkspaceRoot").unwrap();
+    let agent = runtime.agent_identity.clone().unwrap();
+    publisher
+        .add_actor_relationship(
+            "WorkspaceRoot",
+            &doc,
+            "reader",
+            &agent.did().parse().unwrap(),
+        )
+        .await
+        .unwrap();
 
     // An access of the shape the runtime builds for an Agent: an asserted
-    // identity, no Agent signer and no client signing key.
+    // Agent identity that reads the root, no Agent signer and no client
+    // signing key, so the relationship read is refused.
     let refused = gents_store::config_client::ConfigAccess::local_as(
         node.clone(),
-        runtime.node_did.parse().unwrap(),
+        agent.did().parse().unwrap(),
     );
     let listed = super::list_workspace_roots_with_readers(&refused)
         .await
