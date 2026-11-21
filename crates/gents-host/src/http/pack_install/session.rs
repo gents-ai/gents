@@ -440,10 +440,19 @@ async fn run_inner(
             ))
         }
     };
+    if request.preview {
+        let result = preview(state, home, access, request).await?;
+        return send(
+            &mut *socket.lock().await,
+            json!({"type": "previewed", "result": result}),
+        )
+        .await
+        .map_err(SessionFailure::not_installed(Class::PreviewFailed));
+    }
     let mut received = async {
         anyhow::ensure!(
-            !request.preview && request.wire.is_empty(),
-            "hosted pack session cannot preview or wire plugins"
+            request.wire.is_empty(),
+            "hosted pack session cannot wire plugins"
         );
         let node_did = state.node_did.clone();
         tokio::task::spawn_blocking(move || decode_install_request(request, &node_did)).await?
@@ -729,4 +738,32 @@ async fn run_inner(
     .await
     .map_err(SessionFailure::unconfirmed(Class::ReceiptFailed))?;
     Ok(())
+}
+
+/// A preview over the session, after the session authorized its User to
+/// update the Node. It writes nothing.
+async fn preview(
+    state: &RuntimeHttpState,
+    home: PathBuf,
+    access: ConfigAccess,
+    request: InstallRequest,
+) -> std::result::Result<Value, SessionFailure> {
+    let node_did = state.node_did.clone();
+    let received = tokio::task::spawn_blocking(move || decode_install_request(request, &node_did))
+        .await
+        .map_err(SessionFailure::not_installed(Class::InvalidRequest))?
+        .map_err(SessionFailure::not_installed(Class::InvalidRequest))?;
+    if received.root.manifest().metadata.kind != gents_pack::pack::PackKind::Documents {
+        return Err(SessionFailure::not_installed(Class::InvalidRequest)(
+            anyhow::anyhow!("a hosted preview takes a documents pack"),
+        ));
+    }
+    let identifiers = RefusalIdentifiers::of(
+        &std::iter::once(&received.root)
+            .chain(received.dependencies.iter())
+            .collect::<Vec<_>>(),
+    );
+    super::install_owned(state.clone(), home, received, access)
+        .await
+        .map_err(|error| SessionFailure::change(Class::PreviewFailed, error, &identifiers))
 }

@@ -48,6 +48,9 @@ enum ServerMessage {
     Finished {
         result: Value,
     },
+    Previewed {
+        result: Value,
+    },
     Failed {
         class: gents_protocol::operations::pack::hosted::HostedInstallFailure,
         outcome: gents_protocol::operations::pack::hosted::HostedInstallOutcome,
@@ -66,6 +69,7 @@ impl ServerMessage {
             Self::Applied { .. } => "applied",
             Self::Timestamp { .. } => "timestamp",
             Self::Finished { .. } => "finished",
+            Self::Previewed { .. } => "previewed",
             Self::Failed { .. } => "failed",
         }
     }
@@ -594,6 +598,28 @@ pub async fn install_remote(
         })
         .await?;
     Ok(replay.result().await?)
+}
+
+/// Previews an install over the runtime's install session, which authorizes
+/// the client's User to update the Node first. A preview writes nothing.
+pub async fn preview_remote(
+    endpoint: &GraphqlEndpoint,
+    owner: &str,
+    pack: &gents_pack::pack::resolved_pack::ResolvedPack,
+    dependencies: &[gents_pack::pack::resolved_pack::ResolvedPack],
+    args: &gents_pack::pack::install_flow::DocumentsInstallRequest,
+    explicit: bool,
+) -> Result<Value> {
+    ensure!(args.preview, "a remote preview is a request with --preview");
+    let request =
+        super::pack_install::encode_install_request(pack, dependencies, args, owner, explicit)
+            .await?;
+    let mut socket = connect(endpoint).await?;
+    send(&mut socket, json!({"type": "start", "request": request})).await?;
+    match receive(&mut socket).await? {
+        ServerMessage::Previewed { result } => Ok(result),
+        other => Err(other.refusal(SessionStep::Start).into()),
+    }
 }
 
 #[cfg(test)]

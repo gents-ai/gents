@@ -109,7 +109,7 @@ async fn install_documents_pack_inner(
             }
         }
         if needs_runtime_store && args.preview {
-            return gents_host::http::pack_install::install_remote(
+            return gents_host::http::pack_install_client::preview_remote(
                 endpoint,
                 owner,
                 pack,

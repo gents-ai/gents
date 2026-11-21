@@ -16,9 +16,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::router::RuntimeHttpState;
 use failure::SessionFailure;
-use gents_protocol::operations::pack::hosted::{
-    HostedInstallFailure as Class, HostedInstallOutcome as Outcome,
-};
+use gents_protocol::operations::pack::hosted::HostedInstallFailure as Class;
 use gents_pack::pack::install_flow::DocumentsInstallRequest;
 use gents_pack::pack::resolved_pack::ResolvedPack;
 
@@ -130,61 +128,6 @@ fn encode_request(
     Ok(serde_json::to_vec(&fields(root, dependencies))?)
 }
 
-pub async fn install_remote(
-    endpoint: &gents_store::config_client::GraphqlEndpoint,
-    owner: &str,
-    pack: &ResolvedPack,
-    dependencies: &[ResolvedPack],
-    args: &DocumentsInstallRequest,
-    explicit: bool,
-) -> Result<serde_json::Value> {
-    let mut url = reqwest::Url::parse(endpoint.url())?;
-    anyhow::ensure!(
-        matches!(url.scheme(), "http" | "https")
-            && url.username().is_empty()
-            && url.password().is_none()
-            && url.query().is_none()
-            && url.fragment().is_none(),
-        "remote pack install requires an HTTP URL without credentials"
-    );
-    let prefix = url
-        .path()
-        .strip_suffix("/api/v0/graphql")
-        .context("remote pack install requires a Gents runtime GraphQL endpoint")?;
-    url.set_path(&format!("{prefix}{PATH}"));
-    let body = encode_install_request(pack, dependencies, args, owner, explicit).await?;
-    let client = tokio::task::spawn_blocking(|| {
-        reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-    })
-    .await??;
-    let response = endpoint
-        .send_resolving(|endpoint| Ok(endpoint.authorize(client.post(url.clone()))?.json(&body)))
-        .await?
-        .context(
-            "remote pack install outcome is unconfirmed; inspect the runtime before retrying",
-        )?;
-    let status = response.status();
-    let body = response.bytes().await.context(
-        "remote pack install response was unreadable; inspect the runtime before retrying",
-    )?;
-    if !status.is_success() {
-        let refusal: Refusal = serde_json::from_slice(&body).with_context(|| {
-            format!("remote pack install returned HTTP {status} without a failure class")
-        })?;
-        return Err(super::pack_install_client::PackSessionError::runtime_failed(
-            refusal.class,
-            refusal.outcome,
-            refusal.detail,
-            None,
-        )
-        .into());
-    }
-    serde_json::from_slice(&body)
-        .context("remote pack install response was unreadable; inspect the runtime before retrying")
-}
-
 pub async fn encode_install_request(
     pack: &ResolvedPack,
     dependencies: &[ResolvedPack],
@@ -248,14 +191,6 @@ pub async fn encode_install_request(
     })
     .await
     .context("packing remote document archives")?
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Refusal {
-    class: Class,
-    outcome: Outcome,
-    detail: Option<String>,
 }
 
 fn refused(status: StatusCode, class: Class) -> Response {
