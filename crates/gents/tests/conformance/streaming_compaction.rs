@@ -119,6 +119,7 @@ pub(super) fn compaction_reducers_follow_the_lean_model() {
                 ),
                 reducer_is_identity: reduced == input,
                 reducer_is_idempotent: reapplied == reduced,
+                stubbed_results: stubbed_results(&input, &reduced),
             },
         );
     }
@@ -194,7 +195,8 @@ fn is_subsequence(needle: &[String], haystack: &[String]) -> bool {
 fn compaction_messages_for_rows(
     rows: &[gents_lean_vocab::families::contracts_compaction_reducer_gate::CompactionRowWire],
 ) -> Vec<Message> {
-    rows.iter()
+    let messages = rows
+        .iter()
         .map(|row| match row.kind.as_str() {
             "ordinary" => compaction_text_message(&row.role, row.text.as_deref().unwrap()),
             "assistant_tool_calls" => {
@@ -214,14 +216,59 @@ fn compaction_messages_for_rows(
             }
             "tool_result" => {
                 assert_eq!(row.role, "user");
-                compaction_tool_result_message(
-                    row.call_id.as_deref().unwrap(),
-                    "large tool payload",
-                )
+                let bytes = usize::try_from(row.original_bytes.expect("measured size")).unwrap();
+                compaction_tool_result_message(row.call_id.as_deref().unwrap(), &"x".repeat(bytes))
             }
             other => panic!("unsupported compaction row kind {other:?}"),
         })
-        .collect()
+        .collect::<Vec<_>>();
+    // The model decides stubbing from these sizes, so they must be what the
+    // production reducer really measures for these messages.
+    let fixture_sizes = rows
+        .iter()
+        .filter(|row| row.kind == "tool_result")
+        .map(|row| gents_inference::compaction::history::StubSizes {
+            original_bytes: usize::try_from(row.original_bytes.unwrap()).unwrap(),
+            stub_bytes: usize::try_from(row.stub_bytes.expect("measured stub size")).unwrap(),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        gents_inference::compaction::history::tool_result_stub_sizes(&messages),
+        fixture_sizes,
+        "fixture sizes are the reducer's real measurements: {rows:?}"
+    );
+    messages
+}
+
+/// Tool results the reducer replaced: those whose content differs from the
+/// input result with the same call id.
+fn stubbed_results(input: &[Message], reduced: &[Message]) -> u64 {
+    let results = |messages: &[Message]| {
+        messages
+            .iter()
+            .flat_map(|message| match message {
+                Message::User { content } => content
+                    .iter()
+                    .filter_map(|item| match item {
+                        UserContent::ToolResult(result) => Some(result.clone()),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            })
+            .collect::<Vec<_>>()
+    };
+    let before = results(input);
+    results(reduced)
+        .iter()
+        .filter(|after| {
+            let original = before
+                .iter()
+                .find(|result| tool_result_id(result) == tool_result_id(after))
+                .expect("a reduced result comes from the input");
+            original.content != after.content
+        })
+        .count() as u64
 }
 
 fn with_leading_reasoning(messages: &[Message]) -> Vec<Message> {

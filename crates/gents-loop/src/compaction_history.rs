@@ -58,19 +58,7 @@ pub fn strip_tool_results_sourced(
                 request_id,
                 content,
             } => {
-                let opens_turn = content
-                    .iter()
-                    .any(|item| matches!(item, AssistantContent::ToolCall(_)));
-                if opens_turn {
-                    tool_calls.clear();
-                }
-
-                for item in content.iter() {
-                    if let AssistantContent::ToolCall(tool_call) = item {
-                        tool_calls.insert(tool_call_key(tool_call), ToolCallInfo::from(tool_call));
-                    }
-                }
-
+                record_tool_calls(&content, &mut tool_calls);
                 stripped_messages.push(SourcedMessage {
                     source_index,
                     block_indices,
@@ -109,6 +97,84 @@ pub fn strip_tool_results_sourced(
     }
 
     (stripped_messages, file_activity)
+}
+
+/// The calls a tool result's stub may name: those of the latest assistant
+/// message that made any. A call id repeated in one message names its first
+/// call, as the sanitizer keeps the first, so a result measures the same in
+/// the raw history and in the provider view.
+fn record_tool_calls(
+    content: &[AssistantContent],
+    tool_calls: &mut RapidHashMap<String, ToolCallInfo>,
+) {
+    let opens_turn = content
+        .iter()
+        .any(|item| matches!(item, AssistantContent::ToolCall(_)));
+    if opens_turn {
+        tool_calls.clear();
+    }
+    for item in content {
+        if let AssistantContent::ToolCall(tool_call) = item {
+            tool_calls
+                .entry(tool_call_key(tool_call))
+                .or_insert_with(|| ToolCallInfo::from(tool_call));
+        }
+    }
+}
+
+/// What stripping measures for one tool result: the UTF-8 bytes of its
+/// payload (non-text blocks by their JSON encoding) and of the stub that
+/// would replace it. The Lean model's `Compaction.StubSizes`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StubSizes {
+    pub original_bytes: usize,
+    pub stub_bytes: usize,
+}
+
+impl StubSizes {
+    /// The no-expansion floor (Lean `Compaction.stubEligible`): a stub
+    /// replaces a result only when it is strictly smaller.
+    pub fn stub_saves_bytes(self) -> bool {
+        self.stub_bytes < self.original_bytes
+    }
+}
+
+/// Measures one tool result: its sizes and the stub that would replace it.
+/// The one measurement both stripping and the tests use.
+fn measure_tool_result(
+    tool_result: &ToolResult,
+    tool_calls: &RapidHashMap<String, ToolCallInfo>,
+) -> (StubSizes, String) {
+    let stub = stub_candidate(tool_result, tool_calls);
+    let sizes = StubSizes {
+        original_bytes: tool_result_byte_count(tool_result),
+        stub_bytes: stub.len(),
+    };
+    (sizes, stub)
+}
+
+/// Measures every tool result in `messages`, in order, as
+/// `strip_tool_results` measures it when deciding whether to stub it.
+/// Test support: the conformance replay checks fixture sizes against it.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn tool_result_stub_sizes(messages: &[Message]) -> Vec<StubSizes> {
+    let mut tool_calls = RapidHashMap::new();
+    let mut sizes = Vec::new();
+    for message in messages {
+        match message {
+            Message::Assistant { content, .. } => record_tool_calls(content, &mut tool_calls),
+            Message::User { content } => {
+                sizes.extend(content.iter().filter_map(|item| match item {
+                    UserContent::ToolResult(tool_result) => {
+                        Some(measure_tool_result(tool_result, &tool_calls).0)
+                    }
+                    _ => None,
+                }));
+            }
+            Message::System { .. } => {}
+        }
+    }
+    sizes
 }
 
 fn resolved_keys_per_turn<'a>(
@@ -615,16 +681,29 @@ fn strip_tool_result(
     mut tool_result: ToolResult,
     tool_calls: &RapidHashMap<String, ToolCallInfo>,
 ) -> ToolResult {
-    let existing = parse_stub(&tool_result);
+    let (sizes, stub) = measure_tool_result(&tool_result, tool_calls);
+    if !sizes.stub_saves_bytes() {
+        return tool_result;
+    }
+    tool_result.content = vec![ToolResultContent::Text(Text { text: stub })];
+    tool_result
+}
+
+/// The stub that would replace `tool_result`. A result that already is a
+/// stub rebuilds to itself, so it is never replaced again.
+fn stub_candidate(
+    tool_result: &ToolResult,
+    tool_calls: &RapidHashMap<String, ToolCallInfo>,
+) -> String {
+    let existing = parse_stub(tool_result);
     let byte_count = existing
         .as_ref()
-        .map_or_else(|| tool_result_byte_count(&tool_result), |it| it.byte_count);
-    let truncated = existing.as_ref().map_or_else(
-        || tool_result_was_truncated(&tool_result),
-        |it| it.truncated,
-    );
+        .map_or_else(|| tool_result_byte_count(tool_result), |it| it.byte_count);
+    let truncated = existing
+        .as_ref()
+        .map_or_else(|| tool_result_was_truncated(tool_result), |it| it.truncated);
 
-    let call_id = tool_result_key(&tool_result);
+    let call_id = tool_result_key(tool_result);
     let info = tool_calls.get(&call_id);
     let tool_name = info.map_or("unknown", |info| info.name.as_str());
     let argument = info
@@ -634,12 +713,10 @@ fn strip_tool_result(
     let truncated = if truncated { STUB_TRUNCATED } else { "" };
 
     let recovery = serde_json::json!({"action": "output", "call_id": call_id});
-    let stub = format!(
+    format!(
         "{STUB_HEAD}{tool_name}{argument}, call_id: {call_id}, \
          {byte_count} bytes{truncated}{STUB_JOIN}{STUB_RECOVERY}{recovery}{STUB_TAIL}"
-    );
-    tool_result.content = vec![ToolResultContent::Text(Text { text: stub })];
-    tool_result
+    )
 }
 
 fn tool_result_byte_count(tool_result: &ToolResult) -> usize {
