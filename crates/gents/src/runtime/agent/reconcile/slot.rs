@@ -482,7 +482,7 @@ where
                 failure_count += 1;
                 tracing::error!(
                     agent_did = %agent_config.agent.agent_did,
-                    error = %error,
+                    error = %gents_protocol::error_chain::ErrorChain(error.as_ref()),
                     delay_ms = delay.as_millis() as u64,
                     "agent slot failed, scheduling restart"
                 );

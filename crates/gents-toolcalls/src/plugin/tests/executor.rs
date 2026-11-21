@@ -2688,3 +2688,84 @@ mod job_calls {
         finish(admission).await;
     }
 }
+
+#[test]
+fn a_busy_store_resolves_to_its_typed_cause_never_to_not_installed() {
+    let (home, _) = installed_echo();
+    let executor = PluginExecutor::new(Some(home.path().to_owned()));
+    let guard = store::try_lock_store(home.path()).unwrap();
+    let busy = executor.resolve("team/plugin", None).unwrap_err();
+    assert!(busy.is_busy());
+    let erased = anyhow::Error::new(busy).context("building plugin tool");
+    assert!(store::PublishedPluginReadError::error_chain_is_busy(
+        erased.as_ref()
+    ));
+    assert_eq!(
+        format!("{erased:#}"),
+        "building plugin tool: resolving plugin team/plugin: plugin store is busy; retry this pack operation"
+    );
+    drop(guard);
+    assert!(executor.resolve("team/plugin", None).is_ok());
+    let missing = executor.resolve("team/missing", None).unwrap_err();
+    assert!(!missing.is_busy());
+    assert!(!store::PublishedPluginReadError::error_chain_is_busy(
+        &missing
+    ));
+    assert!(
+        gents_protocol::error_chain::ErrorChain(&missing)
+            .to_string()
+            .starts_with("plugin team/missing is not installed: "),
+        "{}",
+        gents_protocol::error_chain::ErrorChain(&missing)
+    );
+}
+
+#[tokio::test]
+async fn a_plugin_tool_refused_by_a_busy_store_names_the_cause_once() {
+    let (home, _) = installed_echo();
+    let executor = Arc::new(PluginExecutor::new(Some(home.path().to_owned())));
+    let tool = PluginTool::resolve(executor, &tool_ref(None), None).unwrap();
+    let _guard = store::try_lock_store(home.path()).unwrap();
+    let dispatched = tool
+        .call_with_receipt("{}".into(), &gents_loop::tool::ToolCallEnvelope::default())
+        .await;
+    let error = dispatched.result.unwrap_err();
+    let gents_loop::tool::ToolError::ToolCallError(message) = &error else {
+        panic!("expected a plugin tool error: {error}");
+    };
+    assert_eq!(
+        message.to_string(),
+        "resolving plugin team/plugin: plugin store is busy; retry this pack operation"
+    );
+    assert!(dispatched.plugin_receipt.is_some());
+}
+
+#[tokio::test]
+async fn a_failed_plugin_attempt_names_its_cause_once() {
+    let (home, mut record) = installed_echo();
+    record.granted = None;
+    record.declaration.limits = Some(gents_pack::pack::PluginLimits {
+        max_output_mib: Some(2),
+        ..Default::default()
+    });
+    store::write_record(home.path(), &record).unwrap();
+    let executor = Arc::new(PluginExecutor::new(Some(home.path().to_owned())));
+    let tool = PluginTool::resolve(executor, &tool_ref(None), None).unwrap();
+    let dispatched = tool
+        .call_with_receipt("{}".into(), &gents_loop::tool::ToolCallEnvelope::default())
+        .await;
+    let error = dispatched.result.unwrap_err();
+    let gents_loop::tool::ToolError::ToolCallError(message) = &error else {
+        panic!("expected a plugin tool error: {error}");
+    };
+    assert_eq!(
+        message.to_string(),
+        "executing plugin team/plugin: plugin resource limits have no recorded consent; reinstall with --grant-authority"
+    );
+    let receipt = dispatched.plugin_receipt.unwrap();
+    assert_eq!(receipt.coordinate, "team/plugin");
+    assert_eq!(
+        receipt.verdict,
+        gents_protocol::plugin::PluginExecutionVerdict::AdmissionRefused
+    );
+}

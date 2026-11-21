@@ -134,7 +134,7 @@ pub(crate) enum RunError {
     #[error(fmt = gents_protocol::error_chain::held)]
     Refused(#[from] anyhow::Error),
     /// The call ran and failed; `receipt` records the attempt.
-    #[error("{source:#}")]
+    #[error("executing plugin {}", .receipt.coordinate)]
     Attempt {
         source: anyhow::Error,
         receipt: Box<PluginExecutionReceipt>,
@@ -155,6 +155,46 @@ impl RunError {
             Self::Refused(error) => error,
             attempt @ Self::Attempt { .. } => attempt.into(),
         }
+    }
+}
+
+/// Why a plugin coordinate did not resolve to its published record. A busy
+/// store is a transient publication state, never an absent plugin.
+#[derive(Debug, thiserror::Error)]
+pub enum PluginResolutionError {
+    #[error("invalid plugin coordinate {coordinate}")]
+    Coordinate {
+        coordinate: String,
+        #[source]
+        source: gents_protocol::error_chain::PassedThrough,
+    },
+    #[error("plugin {coordinate} is not installed: this runtime has no plugin directory")]
+    NoHome { coordinate: String },
+    #[error("resolving plugin {coordinate}")]
+    Busy {
+        coordinate: String,
+        #[source]
+        source: store::PublishedPluginReadError,
+    },
+    #[error("plugin {coordinate} is not installed")]
+    NotInstalled {
+        coordinate: String,
+        #[source]
+        source: store::PublishedPluginReadError,
+    },
+    #[error(
+        "plugin {coordinate} is installed as {installed}, not the pinned {pinned}; reinstall it or update the pin"
+    )]
+    PinMismatch {
+        coordinate: String,
+        installed: String,
+        pinned: String,
+    },
+}
+
+impl PluginResolutionError {
+    pub fn is_busy(&self) -> bool {
+        matches!(self, Self::Busy { .. })
     }
 }
 
@@ -564,10 +604,12 @@ impl PluginExecutor {
                 .is_some_and(|root| own.canonicalize().is_ok_and(|own| own == *root)),
         });
         let session_id = session.and_then(|context| context.session_id);
-        let record = &self.resolve(
-            &format!("{}/{}", record.namespace, record.name),
-            Some(&record.digest),
-        )?;
+        let record = &self
+            .resolve(
+                &format!("{}/{}", record.namespace, record.name),
+                Some(&record.digest),
+            )
+            .map_err(anyhow::Error::from)?;
         let context = BindContext {
             workdir: workdir.as_deref(),
             own_folder,
@@ -698,21 +740,40 @@ impl PluginExecutor {
         )
     }
 
-    pub fn resolve(&self, coordinate: &str, pinned: Option<&str>) -> Result<InstalledPlugin> {
-        let (namespace, name) = gents_documents::plugin_coordinate::parse_coordinate(coordinate)?;
-        let home = self.home.as_deref().with_context(|| {
-            format!("plugin {coordinate} is not installed: this runtime has no plugin directory")
-        })?;
-        let (record, _store) = store::read_published_record(home, namespace, name)
-            .with_context(|| format!("plugin {coordinate} is not installed"))?;
-        if let Some(pinned) = pinned {
-            anyhow::ensure!(
-                record.digest == pinned,
-                "plugin {coordinate} is installed as {}, not the pinned {pinned}; reinstall it or update the pin",
-                record.digest
-            );
+    pub fn resolve(
+        &self,
+        coordinate: &str,
+        pinned: Option<&str>,
+    ) -> std::result::Result<InstalledPlugin, PluginResolutionError> {
+        let coordinate = coordinate.to_owned();
+        let (namespace, name) =
+            match gents_documents::plugin_coordinate::parse_coordinate(&coordinate) {
+                Ok(parts) => parts,
+                Err(source) => {
+                    return Err(PluginResolutionError::Coordinate {
+                        coordinate,
+                        source: gents_protocol::error_chain::PassedThrough::new(source),
+                    })
+                }
+            };
+        let Some(home) = self.home.as_deref() else {
+            return Err(PluginResolutionError::NoHome { coordinate });
+        };
+        let record = match store::read_published_record(home, namespace, name) {
+            Ok((record, _store)) => record,
+            Err(source) if source.is_busy() => {
+                return Err(PluginResolutionError::Busy { coordinate, source })
+            }
+            Err(source) => return Err(PluginResolutionError::NotInstalled { coordinate, source }),
+        };
+        match pinned {
+            Some(pinned) if record.digest != pinned => Err(PluginResolutionError::PinMismatch {
+                coordinate,
+                installed: record.digest,
+                pinned: pinned.to_owned(),
+            }),
+            _ => Ok(record),
         }
-        Ok(record)
     }
 
     // Dropping this future does not stop an admitted call; its plugin wall-clock budget remains authoritative.
@@ -1038,7 +1099,7 @@ impl gents_tools::plugin_host::PluginHost for PluginExecutor {
     }
 
     fn resolve(&self, coordinate: &str, pinned: Option<&str>) -> Result<InstalledPlugin> {
-        PluginExecutor::resolve(self, coordinate, pinned)
+        PluginExecutor::resolve(self, coordinate, pinned).map_err(Into::into)
     }
 
     async fn call_outcome(
