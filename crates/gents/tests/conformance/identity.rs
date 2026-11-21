@@ -374,7 +374,7 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
                         .check_doc_access(
                             &Identity::Authenticated(actual_actor(actor)?),
                             DocumentPermission::Delete,
-                            gents_protocol::schemas::HomePolicyIds::shared()
+                            gents_protocol::schemas::HomePolicyIds::node_store()
                                 .id(gents_protocol::schemas::BuiltInPolicy::Household),
                             "configuration",
                             doc_id,
@@ -611,7 +611,7 @@ async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyh
                     .check_doc_access(
                         &Identity::Authenticated(actor(modeled)?),
                         DocumentPermission::Update,
-                        gents_protocol::schemas::HomePolicyIds::shared()
+                        gents_protocol::schemas::HomePolicyIds::node_store()
                             .id(gents_protocol::schemas::BuiltInPolicy::Household),
                         "agents",
                         &agent_doc,

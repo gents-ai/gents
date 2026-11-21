@@ -173,6 +173,7 @@ impl UserSeededHome {
             .with_document_projector(gents_store::local::document_projector(
                 runtime.clone(),
                 std::sync::Arc::new(ceiling),
+                gents_protocol::schemas::HomePolicyIds::node_store(),
             )?)
             .with_node_identity_did(node_did)
             .with_node_acp_enabled()

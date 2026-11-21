@@ -191,7 +191,7 @@ async fn modeled_group_clock_is_owned_by_selected_agent_and_linked_once() -> any
         gents_protocol::schemas::EVENT_GROUP_STATE,
     ] {
         owner
-            .add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(schema))
+            .add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(schema))
             .await?;
     }
     let created = owner

@@ -63,12 +63,12 @@ resources:
         .unwrap();
     ConfigAccess::local(node.clone())
         .add_collection(
-            &gents_protocol::schemas::HomePolicyIds::shared()
+            &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_store::schema::AGENT_SESSION_SCHEMA)
                 .replace(
                     &format!(
                         "@policy(id: \"{}\", resource: \"sessions\")",
-                        gents_protocol::schemas::HomePolicyIds::shared()
+                        gents_protocol::schemas::HomePolicyIds::node_store()
                             .id(gents_protocol::schemas::BuiltInPolicy::Household)
                     ),
                     &format!("@policy(id: \"{policy}\", resource: \"sessions\")"),

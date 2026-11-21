@@ -64,7 +64,7 @@ async fn workspace_completion_reads_keep_selected_agent_visibility() -> anyhow::
         .await?;
     assert_eq!(
         policy,
-        gents_protocol::schemas::HomePolicyIds::shared()
+        gents_protocol::schemas::HomePolicyIds::node_store()
             .id(gents_protocol::schemas::BuiltInPolicy::Household)
     );
     for schema in [
@@ -76,7 +76,7 @@ async fn workspace_completion_reads_keep_selected_agent_visibility() -> anyhow::
     ] {
         node.add_collection_as(
             &context,
-            &gents_protocol::schemas::HomePolicyIds::shared().render(schema),
+            &gents_protocol::schemas::HomePolicyIds::node_store().render(schema),
         )
         .await?;
     }
@@ -557,7 +557,7 @@ async fn invisible_workspace_request_cannot_release_exclusive_binding() -> anyho
     .await?;
     node.add_collection_as(
         &context,
-        &gents_protocol::schemas::HomePolicyIds::shared()
+        &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::AGENT_REQUEST),
     )
     .await?;

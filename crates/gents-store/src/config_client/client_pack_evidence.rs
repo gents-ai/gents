@@ -288,11 +288,14 @@ fn collection(mutation: &PackMutation) -> &str {
     }
 }
 
-fn trusted_schema(mutation: &PackMutation) -> Result<schema::CollectionVersion, PackEvidenceError> {
+fn trusted_schema(
+    mutation: &PackMutation,
+    ids: &gents_protocol::schemas::HomePolicyIds,
+) -> Result<schema::CollectionVersion, PackEvidenceError> {
     let name = collection(mutation);
     let sdl = trusted_delete_schema(name)
         .ok_or_else(|| PackEvidenceError::UnsupportedCollection(name.to_owned()))?;
-    Ok(signing_schema(sdl, name)?)
+    Ok(signing_schema(sdl, name, ids)?)
 }
 
 /// Sign the caller's already validated pack plan with the held client key.
@@ -315,7 +318,8 @@ pub async fn prepare_pack_evidence(
                 .await?,
         ),
     };
-    prepare_pack_evidence_observed(actor, scope, mutation, observed).await
+    let ids = access.home_policy_ids().await?;
+    prepare_pack_evidence_observed(actor, scope, mutation, observed, ids).await
 }
 
 /// Use the caller's transaction snapshot, including its earlier staged writes.
@@ -334,16 +338,19 @@ pub async fn prepare_pack_evidence_in_txn(
             Some(snapshot(txn, doc_id).await?)
         }
     };
-    prepare_pack_evidence_observed(actor, scope, mutation, observed).await
+    let ids = txn.home_policy_ids().await?;
+    prepare_pack_evidence_observed(actor, scope, mutation, observed, ids).await
 }
 
 /// Build from the transaction's history response, verifying its native blocks
-/// before the held client key signs the exact operation.
+/// before the held client key signs the exact operation, for a home whose
+/// built-in policies have `ids`.
 pub async fn prepare_pack_evidence_from_history(
     actor: &ClientSigningCapability,
     scope: &PackApprovalScope,
     mutation: &PackMutation,
     history: Option<Value>,
+    ids: &gents_protocol::schemas::HomePolicyIds,
 ) -> Result<PackEvidence, PackEvidenceError> {
     let observed = match (mutation, history) {
         (PackMutation::Create { .. }, None) => None,
@@ -364,7 +371,7 @@ pub async fn prepare_pack_evidence_from_history(
         }
         _ => return Err(PackEvidenceError::Mismatch),
     };
-    prepare_pack_evidence_observed(actor, scope, mutation, observed).await
+    prepare_pack_evidence_observed(actor, scope, mutation, observed, ids).await
 }
 
 async fn prepare_pack_evidence_observed(
@@ -372,8 +379,9 @@ async fn prepare_pack_evidence_observed(
     scope: &PackApprovalScope,
     mutation: &PackMutation,
     observed: Option<ClientUpdateSnapshot>,
+    ids: &gents_protocol::schemas::HomePolicyIds,
 ) -> Result<PackEvidence, PackEvidenceError> {
-    let schema = trusted_schema(mutation)?;
+    let schema = trusted_schema(mutation, ids)?;
     let requested = mutation.clone();
     let signing = (*actor.config).clone();
     let graph =
@@ -456,7 +464,7 @@ pub(super) async fn verify_pack_evidence(
         Ok::<_, PackEvidenceError>(evidence)
     })
     .await??;
-    let schema = trusted_schema(mutation)?;
+    let schema = trusted_schema(mutation, txn.home_policy_ids().await?)?;
     let observed = match mutation {
         PackMutation::Create { .. } => None,
         PackMutation::Update { doc_id, .. } | PackMutation::Delete { doc_id, .. } => {
@@ -532,10 +540,11 @@ impl ConfigApplyTxn<'_> {
             &scope,
             mutation,
             Some(snapshot(self, doc_id).await?),
+            self.home_policy_ids().await?,
         )
         .await?;
         let observed = snapshot(self, doc_id).await?;
-        let schema = trusted_schema(mutation)?;
+        let schema = trusted_schema(mutation, self.home_policy_ids().await?)?;
         let requested = mutation.clone();
         let graph = tokio::task::spawn_blocking(move || match (requested, evidence.graph) {
             (PackMutation::Update { doc_id, input, .. }, PackGraphEvidence::Update(evidence)) => {
@@ -569,7 +578,7 @@ pub(super) async fn apply_pack_evidence(
     mutation: &PackMutation,
     graph: VerifiedPackEvidence,
 ) -> Result<Value, PackEvidenceError> {
-    let _ = trusted_schema(mutation)?;
+    let _ = trusted_schema(mutation, txn.home_policy_ids().await?)?;
     let result = match (mutation, graph) {
         (PackMutation::Create { collection, input }, VerifiedPackEvidence::Create(graph)) => {
             let document = format!("mutation($input: {collection}MutationInputArg!) {{ create_{collection}(input: $input) {{ _docID }} }}");

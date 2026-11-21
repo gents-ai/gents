@@ -77,7 +77,7 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
     ] {
         node.add_collection_as(
             &context,
-            &gents_protocol::schemas::HomePolicyIds::shared().render(schema),
+            &gents_protocol::schemas::HomePolicyIds::node_store().render(schema),
         )
         .await?;
     }
@@ -99,7 +99,7 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
         {
             node.add_collection_as(
                 &context,
-                &gents_protocol::schemas::HomePolicyIds::shared().render(schema),
+                &gents_protocol::schemas::HomePolicyIds::node_store().render(schema),
             )
             .await?;
         }

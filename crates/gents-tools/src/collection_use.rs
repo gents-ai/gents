@@ -271,7 +271,7 @@ pub(crate) async fn collection_cleanup_plan(
     let mut plan = Vec::new();
     for collection in &pack.declared {
         if !existing.contains(collection)
-            || gents_store::schema::catalog::RUNTIME_CATALOG.manages(collection)
+            || gents_store::schema::catalog::is_runtime_collection(collection)
         {
             continue;
         }

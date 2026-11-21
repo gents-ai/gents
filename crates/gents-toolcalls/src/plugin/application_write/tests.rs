@@ -297,7 +297,7 @@ async fn a_collection_grant_cannot_bypass_native_document_acp() {
         .await
         .unwrap();
     let schema = format!("type Parcel @policy(id: \"{}\", resource: \"parcels\") {{ reference: String status: String }}",gents_store::graphql::escape_graphql_string(&policy));
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&schema))
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&schema))
         .await
         .unwrap();
     let owner = ConfigAccess::Graphql(

@@ -27,7 +27,6 @@ bit-set = { version = "0.8" }
 bit-vec = { version = "0.8" }
 bitflags = { version = "2", default-features = false, features = ["serde", "std"] }
 brotli-decompressor = { version = "5" }
-bytemuck = { version = "1", default-features = false, features = ["extern_crate_alloc"] }
 bytes = { version = "1", features = ["serde"] }
 cipher = { version = "0.4", default-features = false, features = ["block-padding", "std"] }
 clap = { version = "4", features = ["derive", "env"] }
@@ -41,8 +40,8 @@ crypto-common-6f8ce4dd05d13bba = { package = "crypto-common", version = "0.2", d
 crypto-common-c65f7effa3be6d31 = { package = "crypto-common", version = "0.1", default-features = false, features = ["getrandom", "std"] }
 curve25519-dalek = { version = "5", features = ["rand_core", "serde"] }
 data-encoding = { version = "2" }
-db = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f9903e129dfd398c01ea89b91204c56aee526554", default-features = false, features = ["native", "wasmtime-runtime"] }
-defra-p2p-adapter = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f9903e129dfd398c01ea89b91204c56aee526554", default-features = false, features = ["iroh", "kms", "native", "wasmtime-runtime"] }
+db = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "095e098653c72fe470aa57a1435d9d7fbc0b5e7f", default-features = false, features = ["native", "wasmtime-runtime"] }
+defra-p2p-adapter = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "095e098653c72fe470aa57a1435d9d7fbc0b5e7f", default-features = false, features = ["iroh", "kms", "native", "wasmtime-runtime"] }
 der = { version = "0.7", default-features = false, features = ["oid", "pem", "std"] }
 deranged = { version = "0.5", features = ["powerfmt", "serde"] }
 derive_more = { version = "2", features = ["add", "add_assign", "as_ref", "debug", "deref", "deref_mut", "display", "from", "from_str", "index", "index_mut", "into", "into_iterator", "is_variant", "not", "try_into"] }
@@ -82,7 +81,7 @@ inout = { version = "0.1", default-features = false, features = ["std"] }
 ipnet = { version = "2", features = ["serde"] }
 itertools = { version = "0.14" }
 lazy_static = { version = "1", default-features = false, features = ["spin_no_std"] }
-lens = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f9903e129dfd398c01ea89b91204c56aee526554", default-features = false, features = ["wasmtime-runtime"] }
+lens = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "095e098653c72fe470aa57a1435d9d7fbc0b5e7f", default-features = false, features = ["wasmtime-runtime"] }
 libc = { version = "0.2", features = ["extra_traits"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
 memchr = { version = "2" }
@@ -96,7 +95,7 @@ once_cell = { version = "1", features = ["critical-section"] }
 opentelemetry = { version = "0.31", default-features = false, features = ["metrics", "trace"] }
 oxc_data_structures = { version = "0.127", features = ["code_buffer", "fieldless_enum", "inline_string", "rope", "slice_iter", "stack"] }
 p256 = { version = "0.13", features = ["ecdh"] }
-p2p = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f9903e129dfd398c01ea89b91204c56aee526554", features = ["iroh-transport", "kms"] }
+p2p = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "095e098653c72fe470aa57a1435d9d7fbc0b5e7f", features = ["iroh-transport", "kms"] }
 pbkdf2 = { version = "0.12" }
 percent-encoding = { version = "2" }
 phf = { version = "0.13", features = ["macros"] }

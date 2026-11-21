@@ -1,4 +1,3 @@
-use gents_protocol::client_authentication::ClientAuthentication;
 use gents_protocol::owner_staged::{OwnerStagedChange, SelectedConfiguration};
 
 use super::apply_txn::TxnBackend;
@@ -8,7 +7,8 @@ use crate::local::document_acp::{configuration_grant_route, ConfigurationGrantRo
 impl ConfigApplyTxn<'_> {
     /// Grant or revoke `agent` `reader` of the selected configuration document
     /// `doc_id`, as the home's provider routes a change only the document's
-    /// owner manages (`Identity.OwnerStaged.configurationGrantRoute`).
+    /// owner manages (`Identity.OwnerStaged.configurationGrantRoute`), the
+    /// provider being the one the runtime authenticates the client by.
     pub async fn change_configuration_reader(
         &self,
         configuration: SelectedConfiguration,
@@ -16,7 +16,7 @@ impl ConfigApplyTxn<'_> {
         agent: &identity::Did,
         grant: bool,
     ) -> Result<()> {
-        let provider = self.document_acp().await?;
+        let provider = self.authenticated_provider().await?;
         let actor_owns = provider == DocumentAcp::Local || self.actor_owns(doc_id).await?;
         match configuration_grant_route(provider, actor_owns) {
             ConfigurationGrantRoute::Direct if grant => {
@@ -53,7 +53,7 @@ impl ConfigApplyTxn<'_> {
         let owner = node
             .document_acp()
             .get_doc_owner(
-                gents_protocol::schemas::HomePolicyIds::shared()
+                crate::local::document_acp::node_policy_ids(node)
                     .id(gents_protocol::schemas::BuiltInPolicy::Household),
                 "configuration",
                 doc_id,
@@ -64,18 +64,5 @@ impl ConfigApplyTxn<'_> {
             Some(owner) => identity.as_ref() == Some(&owner),
             None => true,
         })
-    }
-
-    async fn document_acp(&self) -> Result<DocumentAcp> {
-        match &self.backend {
-            TxnBackend::Embedded { node, .. } => Ok(crate::local::document_acp::provider_of(node)),
-            TxnBackend::Http { endpoint, .. } => match endpoint.runtime_authentication().await? {
-                ClientAuthentication::Local => Ok(DocumentAcp::Local),
-                ClientAuthentication::Vera { .. } => Ok(DocumentAcp::Vera),
-                ClientAuthentication::Unavailable => {
-                    Err(ConfigClientError::RuntimeAuthenticationUnavailable)
-                }
-            },
-        }
     }
 }

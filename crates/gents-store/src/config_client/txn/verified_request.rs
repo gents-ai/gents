@@ -71,7 +71,11 @@ impl ConfigApplyTxn<'_> {
             return Ok(Ok(()));
         };
         let stored = user_write::StoredCreate::new(
-            crate::config_client::StoredCreateCommands::of_request(create, doc_id)?,
+            crate::config_client::StoredCreateCommands::of_request(
+                create,
+                doc_id,
+                crate::local::document_acp::node_policy_ids(node),
+            )?,
             credentials.to_vec(),
         );
         if let Err(refusal) =

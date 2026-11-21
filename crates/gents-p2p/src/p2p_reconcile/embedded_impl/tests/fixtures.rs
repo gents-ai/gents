@@ -75,8 +75,12 @@ async fn p2p_node_with_options(
     }
     if let Some(identity) = projector {
         builder = builder.with_document_projector(
-            gents_store::local::document_projector(identity, no_tool_sources())
-                .expect("document projector"),
+            gents_store::local::document_projector(
+                identity,
+                no_tool_sources(),
+                gents_protocol::schemas::HomePolicyIds::node_store(),
+            )
+            .expect("document projector"),
         );
     }
     let node = Arc::new(builder.build().await.expect("embedded p2p node"));
@@ -93,7 +97,7 @@ async fn p2p_node() -> TestNode {
 pub(super) async fn test_node() -> TestNode {
     let test = p2p_node().await;
     test.node
-        .add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(TEST_SCHEMA))
+        .add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(TEST_SCHEMA))
         .await
         .expect("test schema");
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -190,7 +194,7 @@ pub(in crate::p2p_reconcile) async fn runtime_http_test_node_with_schema(
     let test = p2p_node_with_options(Some(identity.did()), Some(address), None, None).await;
     if let Some(schema) = initial_schema {
         test.node
-            .add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(schema))
+            .add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(schema))
             .await
             .unwrap();
     }
