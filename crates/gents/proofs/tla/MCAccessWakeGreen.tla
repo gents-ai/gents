@@ -1,0 +1,3 @@
+---- MODULE MCAccessWakeGreen ----
+EXTENDS AccessWake
+====

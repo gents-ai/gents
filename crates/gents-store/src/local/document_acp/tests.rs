@@ -284,6 +284,13 @@ enum Loop {
 }
 
 #[test]
+fn access_wakes_match_the_lean_model() {
+    gents_lean_vocab::families::access_wake_listens::replay::<Provider>(|input| {
+        super::access_wakes(document_acp(input.provider))
+    });
+}
+
+#[test]
 fn periodic_publication_matches_the_lean_model() {
     gents_lean_vocab::families::identity_node_publication_periodic::replay::<
         Loop,

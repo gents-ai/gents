@@ -261,7 +261,7 @@ pub struct UxDataWatch {
     access: ConfigAccess,
     request: UxDataCall,
     declaration: QueryToolDecl,
-    changes: events::DocumentChangeSubscription,
+    changes: gents_store::subscription_source::ChangeSubscription,
     last: Value,
     closed: bool,
 }
