@@ -405,10 +405,7 @@ impl GraphqlEndpoint {
         let presented = self.delegation_audience.record();
         let response = build(self)?.send().await;
         let recovered = match &response {
-            Ok(answered) => {
-                self.recovers_refusal(answered.status(), &presented)
-                    .await?
-            }
+            Ok(answered) => self.recovers_refusal(answered.status(), &presented).await?,
             Err(_) => false,
         };
         if recovered {

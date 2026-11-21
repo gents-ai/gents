@@ -161,7 +161,10 @@ async fn query_once(
         return (Err(error), endpoint.delegation_audience.record());
     }
     let presented = endpoint.delegation_audience.record();
-    (send_query(endpoint, query, variables, options).await, presented)
+    (
+        send_query(endpoint, query, variables, options).await,
+        presented,
+    )
 }
 
 async fn send_query(
