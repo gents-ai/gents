@@ -132,6 +132,7 @@ import Proofs.Conformance.Functions.Session
 import Proofs.Conformance.Functions.ToolCalls
 import Proofs.Conformance.Functions.Tools
 import Proofs.Conformance.Functions.Shared
+import Proofs.Conformance.RequestContext
 import Proofs.Conformance.Functions.Store
 import Proofs.Conformance.Pack
 import Proofs.Conformance.StorageWriteGate

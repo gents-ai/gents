@@ -314,6 +314,21 @@ pub async fn verified_creation_origin(
     access: &ConfigAccess,
     scope: &SessionScope,
 ) -> Result<Option<CreationOrigin>> {
+    let Some(cause) = verified_creation_cause(access, scope).await? else {
+        return Ok(None);
+    };
+    Ok(Some(CreationOrigin {
+        cause,
+        starter: verified_recorded_starter(access, scope).await?,
+    }))
+}
+
+/// The cause named by `scope`'s verified creation receipt, read from the
+/// session row alone; `None` when the session carries no verified receipt.
+pub async fn verified_creation_cause(
+    access: &ConfigAccess,
+    scope: &SessionScope,
+) -> Result<Option<gents_protocol::session::SessionCreationCause>> {
     let rows = session_rows(
         access,
         &session_scope_filter(
@@ -335,13 +350,7 @@ pub async fn verified_creation_origin(
     else {
         return Ok(None);
     };
-    if verified_creation_receipt(&owner.session, &owner.doc_id, cause).is_none() {
-        return Ok(None);
-    }
-    Ok(Some(CreationOrigin {
-        cause,
-        starter: verified_recorded_starter(access, scope).await?,
-    }))
+    Ok(verified_creation_receipt(&owner.session, &owner.doc_id, cause).map(|_| cause))
 }
 
 /// The opening request `scope`'s session recorded in its provenance when it

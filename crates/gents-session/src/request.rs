@@ -1,6 +1,7 @@
 pub mod admission;
 pub mod aggregate_token_limit;
 pub mod binding;
+pub mod context;
 pub mod event_delivery;
 pub mod hooks;
 pub mod interrupt;

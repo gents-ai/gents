@@ -34,9 +34,10 @@ pub async fn create_started_session(
     source: gents_protocol::session::SessionReference,
     parent: &str,
     opening: &str,
+    cause: gents_protocol::session::SessionCreationCause,
 ) -> String {
     use gents_protocol::session::{
-        SessionCreationCause, SessionCreationReceipt, SessionCreationStarter, SessionProvenance,
+        SessionCreationReceipt, SessionCreationStarter, SessionProvenance,
     };
     use gents_store::identity::NodeIdentity as _;
     assert_eq!(
@@ -65,7 +66,7 @@ pub async fn create_started_session(
         requester_did: session.requester_did.clone(),
         agent_did: session.agent_did.clone(),
         opening_request_doc_id: opening.to_owned(),
-        cause: SessionCreationCause::AgentNew,
+        cause,
         cause_binding: "fixture-call".to_owned(),
         starter: Some(SessionCreationStarter {
             source,
@@ -303,6 +304,7 @@ pub async fn seed_lineage_case(
                 },
                 &mapped(parent),
                 &mapped(opening),
+                gents_protocol::session::SessionCreationCause::AgentNew,
             )
             .await;
             continue;
