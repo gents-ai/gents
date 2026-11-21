@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use super::materialize::{cache_root, cache_root_disposition, lock_exclusive, CacheRelease};
 use super::{HomePackInstall, InstalledPackPlugin};
-use crate::plugin::store::StoreGuard;
+use crate::plugin::store::{StoreGuard, StoreWriter};
 
 pub struct PreparedCacheRelease {
     root: PathBuf,
@@ -116,7 +116,7 @@ pub async fn remove_checked(
 ) -> Result<HomeRemoval> {
     let mut removal =
         remove_checked_keeping_bytes(guard, home, coordinate, checked, access).await?;
-    release_removed_plugin_bytes(home, &mut removal)?;
+    release_removed_plugin_bytes(&StoreWriter::Offline(home.to_owned()), &mut removal)?;
     Ok(removal)
 }
 
@@ -184,24 +184,27 @@ pub async fn remove_checked_keeping_bytes(
 
 /// Releases the plugin bytes of a [`remove_checked_keeping_bytes`] removal
 /// that nothing else references.
-pub fn release_removed_plugin_bytes(home: &Path, removal: &mut HomeRemoval) -> Result<()> {
+pub fn release_removed_plugin_bytes(writer: &StoreWriter, removal: &mut HomeRemoval) -> Result<()> {
     let plugin_digests = removal
         .record
         .plugins
         .iter()
         .map(|plugin| plugin.digest.clone())
         .collect();
-    removal.plugin_bytes = release_plugin_bytes(home, &plugin_digests).context(
+    removal.plugin_bytes = release_plugin_bytes(writer, &plugin_digests).context(
         "the local pack was removed, but unreferenced plugin-byte cleanup did not finish",
     )?;
     Ok(())
 }
 
-pub fn release_plugin_bytes(home: &Path, digests: &BTreeSet<String>) -> Result<Vec<String>> {
+pub fn release_plugin_bytes(
+    writer: &StoreWriter,
+    digests: &BTreeSet<String>,
+) -> Result<Vec<String>> {
     if digests.is_empty() {
         return Ok(Vec::new());
     }
-    crate::plugin::store::release_unreferenced_bytes(home, digests)
+    crate::plugin::store::release_unreferenced_bytes(writer, digests)
 }
 
 /// Deletes each stored archive in `digests` that no home record and no
@@ -243,10 +246,11 @@ pub struct DocumentsRelease {
 /// releases its plugin records and the plugin bytes and archives nothing else
 /// references.
 pub async fn release_documents_pack(
-    home: &Path,
+    writer: &StoreWriter,
     access: Option<&ConfigAccess>,
     report: &super::RemoveReport,
 ) -> Result<DocumentsRelease> {
+    let home = writer.home();
     super::forget_home_install(home, &report.pack)?;
     let mut candidates = BTreeSet::new();
     let mut release = |removed: &super::RemoveReport| {
@@ -258,7 +262,7 @@ pub async fn release_documents_pack(
                 .map(|plugin| plugin.digest.clone()),
         );
         super::plugin_lifecycle::release_plugin_records(
-            home,
+            writer,
             &removed.pack,
             &removed.documents.plugins,
         )
@@ -269,7 +273,7 @@ pub async fn release_documents_pack(
         .iter()
         .map(&mut release)
         .collect::<Result<Vec<_>>>()?;
-    let plugin_bytes = release_plugin_bytes(home, &candidates)?;
+    let plugin_bytes = release_plugin_bytes(writer, &candidates)?;
     let digests = std::iter::once(report)
         .chain(&report.dependencies)
         .flat_map(|removed| removed.digests.iter().cloned())

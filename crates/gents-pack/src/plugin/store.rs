@@ -8,7 +8,35 @@ use serde::{Deserialize, Serialize};
 use gents_documents::plugin_coordinate::checked_component;
 
 mod read;
+mod write;
 pub use read::{StoreAbsent, StoreReadIdentity, StoreReadPin};
+
+/// Who writes the plugin store, and so where it may create it: a runtime
+/// writes only into the home it pinned when it started
+/// ([`StoreReadPin::try_exclusive`]); an offline writer names its home on
+/// each call and may initialize a new one.
+#[derive(Debug, Clone)]
+pub enum StoreWriter {
+    Offline(PathBuf),
+    Runtime(StoreReadPin),
+}
+
+impl StoreWriter {
+    pub fn home(&self) -> &Path {
+        match self {
+            Self::Offline(home) => home,
+            Self::Runtime(pin) => pin.home(),
+        }
+    }
+
+    /// The exclusive writer lease, without blocking.
+    pub fn try_lock(&self) -> Result<StoreGuard> {
+        match self {
+            Self::Offline(home) => try_lock_store(home),
+            Self::Runtime(pin) => pin.try_exclusive().map_err(Into::into),
+        }
+    }
+}
 
 fn plugins_root(home: &Path) -> PathBuf {
     home.join(gents_store::local::home::PLUGINS_DIR_NAME)
@@ -182,14 +210,21 @@ pub fn owns_plugin_record(
 }
 
 pub fn remove_record_if_owned(
-    home: &Path,
+    writer: &StoreWriter,
     namespace: &str,
     name: &str,
     pack_coordinate: &str,
     digest: &str,
 ) -> Result<bool> {
-    let guard = try_lock_store(home)?;
-    remove_record_if_owned_locked(&guard, home, namespace, name, pack_coordinate, digest)
+    let guard = writer.try_lock()?;
+    remove_record_if_owned_locked(
+        &guard,
+        writer.home(),
+        namespace,
+        name,
+        pack_coordinate,
+        digest,
+    )
 }
 
 pub(crate) fn remove_record_if_owned_locked(
@@ -284,6 +319,7 @@ pub fn read_bytes(home: &Path, digest_hex: &str) -> Result<Vec<u8>> {
 
 pub struct StoreGuard {
     home: PathBuf,
+    pinned: Option<std::sync::Arc<read::PinnedHome>>,
     _lock: gents_store::local::file_lock::FileLock,
 }
 
@@ -292,8 +328,26 @@ impl StoreGuard {
         &self.home
     }
 
-    /// Prevents a held lock for one home from authorizing mutations in another.
+    /// Prevents a held lock for one home from authorizing mutations in
+    /// another: a runtime writer's guard admits only the home it pinned.
     pub fn for_home(&self, home: &Path) -> Result<()> {
+        if let Some(pinned) = &self.pinned {
+            return match pinned.at(home)? {
+                (true, true) => Ok(()),
+                (present, _) => Err(anyhow::Error::from(PublishedPluginReadError::from(
+                    if present {
+                        StoreAbsent::Replaced
+                    } else {
+                        StoreAbsent::Missing
+                    },
+                ))
+                .context(format!(
+                    "the plugin store lock in use belongs to the home pinned at {}, not {}",
+                    self.home.display(),
+                    home.display()
+                ))),
+            };
+        }
         anyhow::ensure!(
             self.home.as_path() == home,
             "the plugin store lock in use belongs to {}, not {}",
@@ -318,6 +372,7 @@ pub fn lock_store(home: &Path) -> Result<StoreGuard> {
         .with_context(|| format!("locking {}", path.display()))?;
     Ok(StoreGuard {
         home: home.to_owned(),
+        pinned: None,
         _lock: lock,
     })
 }
@@ -369,7 +424,7 @@ impl PublishedPluginReadError {
 
 /// Async mutation owners use a nonblocking lock attempt to avoid parking a Tokio worker.
 pub fn try_lock_store(home: &Path) -> Result<StoreGuard> {
-    try_lock_store_writer(home).map_err(Into::into)
+    write::try_lock_offline(home).map_err(Into::into)
 }
 
 /// A read of the published store. It never creates the store: a home whose
@@ -378,30 +433,6 @@ pub fn try_lock_store_shared(
     home: &Path,
 ) -> std::result::Result<StoreGuard, PublishedPluginReadError> {
     StoreReadIdentity::capture(home)?.try_shared()
-}
-
-fn try_lock_store_writer(home: &Path) -> std::result::Result<StoreGuard, PublishedPluginReadError> {
-    bootstrap_store(home)?;
-    let path = lock_path(home);
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&path)
-        .with_context(|| format!("opening {}", path.display()))
-        .map_err(PublishedPluginReadError::Read)?;
-    let lock = match gents_store::local::file_lock::FileLock::try_exclusive(file) {
-        Ok(lock) => lock,
-        Err(std::fs::TryLockError::WouldBlock) => return Err(PublishedPluginReadError::Busy),
-        Err(std::fs::TryLockError::Error(error)) => {
-            return Err(PublishedPluginReadError::Read(
-                anyhow::Error::new(error).context(format!("locking {}", path.display())),
-            ));
-        }
-    };
-    Ok(StoreGuard {
-        home: home.to_owned(),
-        _lock: lock,
-    })
 }
 
 /// The guard keeps the plugin record and its pack provenance in one published observation.
@@ -427,8 +458,12 @@ pub fn read_pinned_record(
     Ok((record, guard))
 }
 
-pub fn release_unreferenced_bytes(home: &Path, digests: &BTreeSet<String>) -> Result<Vec<String>> {
-    let _lock = try_lock_store(home)?;
+pub fn release_unreferenced_bytes(
+    writer: &StoreWriter,
+    digests: &BTreeSet<String>,
+) -> Result<Vec<String>> {
+    let _lock = writer.try_lock()?;
+    let home = writer.home();
     let referenced: BTreeSet<String> = list_records(home)?
         .into_iter()
         .map(|record| record.digest)
@@ -715,13 +750,18 @@ mod tests {
             let owns = owns_plugin_record(home.path(), "acme", "echo", claimant, &artifact);
             assert_eq!(std::fs::read(&path).ok(), before, "asking changes nothing");
 
-            let removal =
-                match remove_record_if_owned(home.path(), "acme", "echo", claimant, &artifact) {
-                    Ok(true) => Removal::Removed,
-                    Ok(false) => Removal::Kept,
-                    Err(error) if unreadable(&error) => Removal::Unreadable,
-                    Err(error) => panic!("{error:#}"),
-                };
+            let removal = match remove_record_if_owned(
+                &StoreWriter::Offline(home.path().to_owned()),
+                "acme",
+                "echo",
+                claimant,
+                &artifact,
+            ) {
+                Ok(true) => Removal::Removed,
+                Ok(false) => Removal::Kept,
+                Err(error) if unreadable(&error) => Removal::Unreadable,
+                Err(error) => panic!("{error:#}"),
+            };
             let after = std::fs::read(&path).ok();
             if removal != Removal::Removed {
                 assert_eq!(after, before, "a record that is not removed is untouched");
@@ -756,7 +796,11 @@ mod tests {
                 .unwrap();
             }
             let candidates: BTreeSet<String> = input.candidates.iter().map(digest).collect();
-            let released = release_unreferenced_bytes(home.path(), &candidates).unwrap();
+            let released = release_unreferenced_bytes(
+                &StoreWriter::Offline(home.path().to_owned()),
+                &candidates,
+            )
+            .unwrap();
             let mut remaining: Vec<String> = input
                 .stored
                 .iter()

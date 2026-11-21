@@ -32,6 +32,14 @@ pub trait PluginHost: Send + Sync {
         None
     }
 
+    /// The writer of this host's plugin store: the runtime's, pinned to the
+    /// home it started in.
+    fn store_writer(&self) -> Option<gents_pack::plugin::store::StoreWriter> {
+        self.store_pin()
+            .cloned()
+            .map(gents_pack::plugin::store::StoreWriter::Runtime)
+    }
+
     /// Every plugin record in the plugin home.
     fn installed(&self) -> Result<Vec<InstalledPlugin>>;
 

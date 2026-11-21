@@ -411,7 +411,7 @@ pub(crate) struct PluginStageInput {
 }
 
 pub(crate) async fn stage_pack_graph(
-    home: &Path,
+    writer: &store::StoreWriter,
     inputs: Vec<PluginStageInput>,
     consent: bool,
     owner: &str,
@@ -420,10 +420,11 @@ pub(crate) async fn stage_pack_graph(
         return Err(anyhow::anyhow!("plugin slot bindings require an owner").into());
     }
     let cleanup = gents_store::drop_cleanup::DropCleanup::current();
-    let home = home.to_owned();
+    let writer = writer.clone();
     let owner = owner.to_owned();
     tokio::task::spawn_blocking(move || {
-        let lock = store::try_lock_store(&home)?;
+        let lock = writer.try_lock()?;
+        let home = writer.home().to_owned();
         store::list_records(&home)?;
         let mut previous = Vec::new();
         let mut seen = std::collections::BTreeSet::new();

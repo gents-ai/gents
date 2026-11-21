@@ -1,5 +1,6 @@
+use super::super::write::{write, WriteOutcome, Writer};
 use super::super::{
-    bootstrap_store, lock_store, read_published_record, try_lock_store_shared,
+    bootstrap_store, lock_store, read_published_record, try_lock_store, try_lock_store_shared,
     PublishedPluginReadError,
 };
 use super::*;
@@ -103,4 +104,134 @@ fn a_pin_binds_the_home_it_was_captured_in_even_before_the_store_exists() {
         early.try_shared(),
         Err(PublishedPluginReadError::Absent(StoreAbsent::Replaced))
     ));
+}
+
+#[test]
+fn write_admission_replays_the_lean_owner() {
+    gents_lean_vocab::families::plugin_store_home_write::replay::<WriteOutcome, Writer>(|i| {
+        write(
+            i.writer,
+            i.home_present,
+            i.same_home,
+            i.store_pinned,
+            i.store_present,
+            i.contended,
+        )
+    });
+}
+
+fn plugins_dir(home: &Path) -> PathBuf {
+    home.join(gents_store::local::home::PLUGINS_DIR_NAME)
+}
+
+fn absent(result: Result<StoreGuard, PublishedPluginReadError>) -> StoreAbsent {
+    match result {
+        Err(PublishedPluginReadError::Absent(absent)) => absent,
+        Err(error) => panic!("expected an absent store, got {error:?}"),
+        Ok(_) => panic!("expected an absent store, got a lease"),
+    }
+}
+
+#[test]
+fn a_runtime_writer_never_creates_a_store_in_a_replaced_or_removed_home() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    std::fs::create_dir(&home).unwrap();
+    let pin = StoreReadPin::capture(&home);
+    std::fs::rename(&home, root.path().join("retired")).unwrap();
+    std::fs::create_dir(&home).unwrap();
+    assert_eq!(absent(pin.try_exclusive()), StoreAbsent::Replaced);
+    assert!(!plugins_dir(&home).exists());
+    assert!(!plugins_dir(&root.path().join("retired")).exists());
+
+    let removed = root.path().join("removed");
+    std::fs::create_dir(&removed).unwrap();
+    let pin = StoreReadPin::capture(&removed);
+    std::fs::remove_dir(&removed).unwrap();
+    assert_eq!(absent(pin.try_exclusive()), StoreAbsent::Missing);
+    assert!(!removed.exists());
+}
+
+#[test]
+fn a_runtime_writer_creates_the_store_in_its_own_fresh_home() {
+    let home = tempfile::tempdir().unwrap();
+    let pin = StoreReadPin::capture(home.path());
+    let guard = pin.try_exclusive().unwrap();
+    assert!(plugins_dir(home.path()).join(".store.lock").is_file());
+    guard.for_home(home.path()).unwrap();
+    assert!(matches!(
+        pin.try_shared(),
+        Err(PublishedPluginReadError::Busy)
+    ));
+    drop(guard);
+    drop(pin.try_shared().unwrap());
+    drop(pin.try_exclusive().unwrap());
+}
+
+#[test]
+fn a_runtime_writer_never_recreates_a_store_its_reader_pinned() {
+    let home = tempfile::tempdir().unwrap();
+    bootstrap_store(home.path()).unwrap();
+    let pin = StoreReadPin::capture(home.path());
+    assert!(pin.is_captured());
+    std::fs::remove_dir_all(plugins_dir(home.path())).unwrap();
+    assert_eq!(absent(pin.try_exclusive()), StoreAbsent::Missing);
+    assert!(!plugins_dir(home.path()).exists());
+    bootstrap_store(home.path()).unwrap();
+    assert_eq!(absent(pin.try_exclusive()), StoreAbsent::Replaced);
+}
+
+#[test]
+fn a_pinned_writer_guard_admits_only_its_pinned_home() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    std::fs::create_dir(&home).unwrap();
+    let guard = StoreReadPin::capture(&home).try_exclusive().unwrap();
+    std::fs::rename(&home, root.path().join("retired")).unwrap();
+    std::fs::create_dir(&home).unwrap();
+    let error = guard.for_home(&home).unwrap_err();
+    assert!(
+        matches!(
+            gents_protocol::error_chain::find_source::<PublishedPluginReadError>(error.as_ref()),
+            Some(PublishedPluginReadError::Absent(StoreAbsent::Replaced))
+        ),
+        "{error:#}"
+    );
+}
+
+#[test]
+fn writers_and_readers_still_contend_as_busy() {
+    let home = tempfile::tempdir().unwrap();
+    let pin = StoreReadPin::capture(home.path());
+    let other = StoreReadPin::capture(home.path());
+    let held = pin.try_exclusive().unwrap();
+    assert!(matches!(
+        other.try_exclusive(),
+        Err(PublishedPluginReadError::Busy)
+    ));
+    assert!(PublishedPluginReadError::error_chain_is_busy(
+        try_lock_store(home.path()).err().unwrap().as_ref()
+    ));
+    drop(held);
+    let offline = try_lock_store(home.path()).unwrap();
+    assert!(matches!(
+        pin.try_exclusive(),
+        Err(PublishedPluginReadError::Busy)
+    ));
+    drop(offline);
+    let reader = try_lock_store_shared(home.path()).unwrap();
+    assert!(matches!(
+        pin.try_exclusive(),
+        Err(PublishedPluginReadError::Busy)
+    ));
+    drop(reader);
+    drop(pin.try_exclusive().unwrap());
+}
+
+#[test]
+fn an_offline_writer_initializes_the_home_it_names() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("new");
+    drop(try_lock_store(&home).unwrap());
+    assert!(plugins_dir(&home).join(".store.lock").is_file());
 }

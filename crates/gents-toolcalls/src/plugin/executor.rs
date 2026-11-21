@@ -378,6 +378,11 @@ impl PluginExecutor {
         self.home.as_deref()
     }
 
+    /// The store identity this executor pinned when it was created.
+    pub fn store_pin(&self) -> Option<&store::StoreReadPin> {
+        self.store.as_ref()
+    }
+
     pub fn with_models(mut self, models: Arc<dyn ModelResolver>) -> Self {
         self.models = Some(models);
         self
@@ -1120,7 +1125,7 @@ impl gents_tools::plugin_host::PluginHost for PluginExecutor {
     }
 
     fn store_pin(&self) -> Option<&store::StoreReadPin> {
-        self.store.as_ref()
+        PluginExecutor::store_pin(self)
     }
 
     fn installed(&self) -> Result<Vec<InstalledPlugin>> {
