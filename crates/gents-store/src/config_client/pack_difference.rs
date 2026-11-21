@@ -376,7 +376,7 @@ mod tests {
                 other => panic!("{other:?}"),
             })
             .collect();
-        assert_eq!(paths, ["/tags/1", "/tags/2", "/a~1b", "/c~0d"]);
+        assert_eq!(paths, ["/a~1b", "/c~0d", "/tags/1", "/tags/2"]);
     }
 
     #[test]
