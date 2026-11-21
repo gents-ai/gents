@@ -159,19 +159,35 @@ async fn event_configuration_publication_rebinding_and_revocation_use_native_gra
             .iter()
             .any(|collection| collection.graphql_type() == *name)
         {
-            user.add_collection(schema).await?;
+            user.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(schema))
+                .await?;
         }
     }
-    user.add_collection(gents_protocol::schemas::EVENT_SOURCE_CURSOR)
-        .await?;
-    user.add_collection(gents_protocol::schemas::AGENT_SESSION)
-        .await?;
-    user.add_collection(gents_protocol::schemas::AGENT_REQUEST)
-        .await?;
-    user.add_collection(gents_protocol::schemas::TRIGGER_FIRE)
-        .await?;
-    user.add_collection(gents_protocol::schemas::CALLBACK_INVOCATION)
-        .await?;
+    user.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared()
+            .render(gents_protocol::schemas::EVENT_SOURCE_CURSOR),
+    )
+    .await?;
+    user.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared()
+            .render(gents_protocol::schemas::AGENT_SESSION),
+    )
+    .await?;
+    user.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared()
+            .render(gents_protocol::schemas::AGENT_REQUEST),
+    )
+    .await?;
+    user.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared()
+            .render(gents_protocol::schemas::TRIGGER_FIRE),
+    )
+    .await?;
+    user.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared()
+            .render(gents_protocol::schemas::CALLBACK_INVOCATION),
+    )
+    .await?;
     user.add_collection("type EventPolicyInput { value: String }")
         .await?;
     let runtime_did = root.did();

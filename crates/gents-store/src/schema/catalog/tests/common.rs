@@ -8,7 +8,7 @@ use defra_core::{
 use defra_node::Node as EmbeddedNode;
 use identity::{Identity as _, RawIdentity};
 
-use crate::schema::catalog::NODE_POLICIES;
+use gents_protocol::schemas::{BuiltInPolicy, HomePolicyIds};
 
 pub fn node_identity() -> String {
     let key = crypto::generate_ed25519().expect("node key");
@@ -39,12 +39,12 @@ pub async fn fresh_node() -> Arc<EmbeddedNode> {
         .build()
         .await
         .expect("build node");
-    for policy in &NODE_POLICIES {
+    for policy in BuiltInPolicy::ALL {
         let actual = node
-            .add_dac_policy_with_counter_as(&node_context(&node), policy.definition, 0)
+            .add_dac_policy_with_counter_as(&node_context(&node), policy.definition(), 0)
             .await
             .expect("fixture policy");
-        assert_eq!(actual, policy.id);
+        assert_eq!(actual, HomePolicyIds::shared().id(policy));
     }
     std::mem::forget(dir);
     Arc::new(node)

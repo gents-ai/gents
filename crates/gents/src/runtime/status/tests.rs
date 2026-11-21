@@ -81,9 +81,15 @@ async fn runtime_status_publication_preserves_native_ownership_and_revocation() 
         0,
     )
     .await?;
-    node.add_collection(gents_protocol::schemas::NODE).await?;
-    node.add_collection(gents_protocol::schemas::NODE_RUNTIME)
-        .await?;
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::NODE),
+    )
+    .await?;
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared()
+            .render(gents_protocol::schemas::NODE_RUNTIME),
+    )
+    .await?;
     let access = |actor: &gents_store::identity::KeyIdentity| -> anyhow::Result<ConfigAccess> {
         Ok(ConfigAccess::Graphql(
             GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), actor.did())

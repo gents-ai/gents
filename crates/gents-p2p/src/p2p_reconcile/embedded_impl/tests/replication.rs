@@ -62,18 +62,30 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
             0,
         )
         .await?;
-        node.add_collection(schema).await?;
-        node.add_collection(gents_protocol::schemas::NETWORK_ENROLLMENT_DECISION)
+        node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(schema))
             .await?;
+        node.add_collection(
+            &gents_protocol::schemas::HomePolicyIds::shared()
+                .render(gents_protocol::schemas::NETWORK_ENROLLMENT_DECISION),
+        )
+        .await?;
     }
     for node in [candidate_node, admin_node] {
-        node.add_collection(gents_protocol::schemas::AGENT_SESSION)
-            .await?;
-        node.add_collection(gents_protocol::schemas::PEER_REGISTRY)
-            .await?;
+        node.add_collection(
+            &gents_protocol::schemas::HomePolicyIds::shared()
+                .render(gents_protocol::schemas::AGENT_SESSION),
+        )
+        .await?;
+        node.add_collection(
+            &gents_protocol::schemas::HomePolicyIds::shared()
+                .render(gents_protocol::schemas::PEER_REGISTRY),
+        )
+        .await?;
     }
     admin_node
-        .add_collection(gents_protocol::schemas::NODE)
+        .add_collection(
+            &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::NODE),
+        )
         .await?;
     let candidate_local =
         ConfigAccess::local_as(candidate_node.clone(), identity::Did::new(candidate.did())?);
@@ -330,7 +342,8 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         admin_node
             .document_acp()
             .get_doc_owner(
-                gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
+                gents_protocol::schemas::HomePolicyIds::shared()
+                    .id(gents_protocol::schemas::BuiltInPolicy::Household),
                 "enrollment_records",
                 &doc
             )

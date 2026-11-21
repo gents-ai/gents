@@ -378,7 +378,8 @@ async fn verify_native_owner(
 
 async fn remove_native_owner(node: &defra_node::Node, resource: &str, id: &str) {
     let acp = node.document_acp();
-    let policy = gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID;
+    let policy = gents_protocol::schemas::HomePolicyIds::shared()
+        .id(gents_protocol::schemas::BuiltInPolicy::Household);
     assert!(acp.is_doc_registered(policy, resource, id).await.unwrap());
     acp.unregister_doc_object(policy, resource, id)
         .await
@@ -448,18 +449,28 @@ async fn recovery_fixture(name: &str, pending: bool) -> RecoveryFixture {
     )
     .await
     .unwrap();
-    node.add_collection(gents_protocol::schemas::NODE)
-        .await
-        .unwrap();
-    node.add_collection(gents_protocol::schemas::NODE_READINESS)
-        .await
-        .unwrap();
-    node.add_collection(gents_protocol::schemas::NODE_RUNTIME)
-        .await
-        .unwrap();
-    node.add_collection(gents_protocol::schemas::AGENT)
-        .await
-        .unwrap();
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::NODE),
+    )
+    .await
+    .unwrap();
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared()
+            .render(gents_protocol::schemas::NODE_READINESS),
+    )
+    .await
+    .unwrap();
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared()
+            .render(gents_protocol::schemas::NODE_RUNTIME),
+    )
+    .await
+    .unwrap();
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::AGENT),
+    )
+    .await
+    .unwrap();
     let user_access = ConfigAccess::Graphql(
         gents_store::config_client::GraphqlEndpoint::as_principal(&endpoint, user.did())
             .with_client_signing_capability(user.client_signing_capability().unwrap())
@@ -762,7 +773,8 @@ async fn published_readiness_observation_matches_model() {
 async fn readiness_binding_preflight_matches_model() {
     let policy_binding = format!(
         " @policy(id: \"{}\", resource: \"operations\")",
-        gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID
+        gents_protocol::schemas::HomePolicyIds::shared()
+            .id(gents_protocol::schemas::BuiltInPolicy::Household)
     );
     for case in gents_lean_vocab::families::identity_operations_readiness_binding::cases::<String>()
     {
@@ -779,7 +791,9 @@ async fn readiness_binding_preflight_matches_model() {
                 .unwrap(),
             "unbound" => node
                 .add_collection(
-                    &gents_protocol::schemas::NODE_READINESS.replace(&policy_binding, ""),
+                    &gents_protocol::schemas::HomePolicyIds::shared()
+                        .render(gents_protocol::schemas::NODE_READINESS)
+                        .replace(&policy_binding, ""),
                 )
                 .await
                 .unwrap(),
@@ -792,10 +806,14 @@ async fn readiness_binding_preflight_matches_model() {
                 )
                 .await
                 .unwrap();
-                node.add_collection(&gents_protocol::schemas::NODE_READINESS.replace(
-                    &policy_binding,
-                    &policy_binding.replace("operations", "configuration"),
-                ))
+                node.add_collection(
+                    &gents_protocol::schemas::HomePolicyIds::shared()
+                        .render(gents_protocol::schemas::NODE_READINESS)
+                        .replace(
+                            &policy_binding,
+                            &policy_binding.replace("operations", "configuration"),
+                        ),
+                )
                 .await
                 .unwrap();
             }
