@@ -69,8 +69,8 @@ impl LayeredPromptBuilder {
         tool_surface: &ToolSurface,
         allowed_targets: &[(String, String)],
     ) -> Self {
-        let tool_names = tool_surface.tool_names();
-        let tool_refs = tool_names.iter().map(String::as_str).collect::<Vec<_>>();
+        let advertised = tool_surface.advertised_tool_names();
+        let tool_refs = advertised.iter().map(String::as_str).collect::<Vec<_>>();
         let mut builder = Self::for_agent(
             &agent.system_prompt,
             &agent.agent_did,
@@ -84,7 +84,7 @@ impl LayeredPromptBuilder {
         }
         builder.skills = agent.skills.clone();
         builder.skill_ceiling = gents_documents::skills::skill_tool_ceiling(
-            tool_names.iter().cloned(),
+            tool_surface.tool_names(),
             tool_surface.allowed_mcp_service_ids(),
             tool_surface.includes_meta_tools(),
         );

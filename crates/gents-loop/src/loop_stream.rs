@@ -1382,7 +1382,8 @@ where
                 let candidates: Vec<_> = pending_calls.iter().take(read_limit).map(|(call, _)| {
                     let name = call.function.name.as_str();
                     let args = value_to_json_string(&call.function.arguments);
-                    let read = crate::tool_effects::parallel::is_read(tools.as_slice(), name, &args, &tool_context);
+                    let read = crate::tool_effects::parallel::is_read(tools.as_slice(), name, &args, &tool_context)
+                        && crate::tool_policy::presentation::admit(tools.as_slice(), name, crate::tool_policy::presentation::Origin::Provider).is_ok();
                     (name, args, read)
                 }).collect();
                 let batch_len = if first_decision == repeated_tool_failure::RepeatDecision::Dispatch
@@ -1848,7 +1849,7 @@ where
 {
     let rag_text = current_rag_text(&prompt, history, prior);
     let mut tool_defs = Vec::with_capacity(tools.len());
-    for tool in tools {
+    for tool in tools.iter().filter(|tool| !tool.hidden()) {
         let native = tool
             .definition_for(rag_text.clone(), &config.tool_context)
             .await;

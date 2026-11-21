@@ -395,6 +395,9 @@ mod control_tests {
         pending_second: bool,
     }
     impl ToolDyn for Probe {
+        fn hidden(&self) -> bool {
+            false
+        }
         fn name(&self) -> String {
             "probe".into()
         }
@@ -688,6 +691,9 @@ mod control_tests {
     }
 
     impl ToolDyn for HeldFirst {
+        fn hidden(&self) -> bool {
+            false
+        }
         fn name(&self) -> String {
             "probe".into()
         }

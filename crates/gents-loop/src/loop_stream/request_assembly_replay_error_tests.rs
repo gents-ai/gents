@@ -1118,3 +1118,70 @@ async fn every_provider_assembly_rechecks_configuration_before_reading_input() {
     );
     assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
+
+struct Named(&'static str);
+
+impl ToolDyn for Named {
+    fn hidden(&self) -> bool {
+        false
+    }
+    fn name(&self) -> String {
+        self.0.into()
+    }
+    fn definition<'a>(
+        &'a self,
+        _: String,
+    ) -> crate::tool::BoxFuture<'a, crate::tool::ToolDefinition> {
+        Box::pin(async move {
+            crate::tool::ToolDefinition {
+                name: self.0.into(),
+                description: String::new(),
+                parameters: serde_json::json!({"type": "object"}),
+            }
+        })
+    }
+    fn call<'a>(
+        &'a self,
+        _: String,
+        _: &'a crate::tool::ToolCallEnvelope,
+    ) -> crate::tool::BoxFuture<'a, Result<String, crate::tool::ToolError>> {
+        Box::pin(async { Ok(String::new()) })
+    }
+}
+
+#[tokio::test]
+async fn hidden_tools_stay_out_of_the_provider_request_through_request_binding() {
+    let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(Named("script")), Box::new(Named("query"))];
+    let tools = crate::tool::bind_request_tools(
+        Arc::new(crate::tool_policy::presentation::present_tools(
+            tools,
+            &["query".into()],
+        )),
+        crate::tool::ToolRequestContext {
+            request_id: "request".into(),
+            request_doc_id: "request".into(),
+            node_did: "did:key:node".into(),
+            agent_did: "did:key:agent".into(),
+            session_id: "session".into(),
+            caused_by_source_doc_id: None,
+            admitted_client: None,
+        },
+    );
+    let request = super::build_request(
+        &assembly_only(),
+        Message::user("prompt"),
+        &[],
+        &[],
+        &tools,
+        &replay_assembly_config(),
+    )
+    .await
+    .unwrap();
+    let names: Vec<_> = request
+        .tools
+        .iter()
+        .map(|tool| tool.name.as_str())
+        .collect();
+    assert_eq!(names, ["script"]);
+    assert!(tools[1].hidden());
+}

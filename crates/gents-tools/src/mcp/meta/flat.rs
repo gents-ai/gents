@@ -67,6 +67,9 @@ pub(super) struct FlatRemoteTool {
 }
 
 impl ToolDyn for FlatRemoteTool {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         self.definition.name.clone()
     }

@@ -1843,6 +1843,9 @@ impl FixedOutputTool {
 }
 
 impl ToolDyn for FixedOutputTool {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         self.name.clone()
     }
