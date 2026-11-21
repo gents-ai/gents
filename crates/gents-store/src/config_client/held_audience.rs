@@ -2,8 +2,8 @@ use std::sync::{Arc, RwLock};
 
 use futures::future::BoxFuture;
 use gents_protocol::delegation_audience::{
-    recovery, CredentialAnswer, CredentialRefusal, DelegationAudience, HeldAudienceChange,
-    HomeClock, PresentedCredential, Recovery,
+    change_since, recovery, CredentialAnswer, CredentialRefusal, DelegationAudience,
+    HeldAudienceChange, HeldRecord, HomeClock, PresentedCredential, Recovery,
 };
 use gents_protocol::home_attestation::{HomeNonce, HomeStatusRefusal};
 
@@ -43,8 +43,10 @@ pub(super) struct HeldAudienceCell(Arc<Held>);
 
 #[derive(Default)]
 struct Held {
-    audience: RwLock<Option<DelegationAudience>>,
-    clock: RwLock<Option<HomeClock>>,
+    /// The audience and clock under one lock, so a credential is minted
+    /// from one record, never an audience of one read and a clock of
+    /// another.
+    record: RwLock<HeldRecord>,
     /// Held from a status read's nonce until what it read is kept, so a
     /// read that started earlier never replaces one that started later
     /// (TLA+ `HeldAudienceReads`).
@@ -60,84 +62,77 @@ const STATUS_READ_LIMIT: std::time::Duration = std::time::Duration::from_secs(30
 impl HeldAudienceCell {
     pub(super) fn new(audience: Option<DelegationAudience>) -> Self {
         Self(Arc::new(Held {
-            audience: RwLock::new(audience),
+            record: RwLock::new(HeldRecord {
+                audience,
+                clock: None,
+            }),
             ..Held::default()
         }))
+    }
+
+    /// The audience and clock the endpoint mints from now.
+    pub(super) fn record(&self) -> HeldRecord {
+        self.0
+            .record
+            .read()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
     }
 
     /// What the endpoint mints a delegation at now: its home's clock as it
     /// read it, and its device's clock.
     pub(super) fn minting_clock(&self) -> (Option<HomeClock>, u64) {
-        (
-            *self
-                .0
-                .clock
-                .read()
-                .unwrap_or_else(|poison| poison.into_inner()),
-            self.0.device.now(),
-        )
+        (self.record().clock, self.device_now())
+    }
+
+    pub(super) fn device_now(&self) -> u64 {
+        self.0.device.now()
     }
 
     pub(super) async fn reading(&self) -> tokio::sync::MutexGuard<'_, ()> {
         self.0.reads.lock().await
     }
 
-    fn set_clock(&self, clock: Option<HomeClock>) {
-        *self
-            .0
-            .clock
-            .write()
-            .unwrap_or_else(|poison| poison.into_inner()) = clock;
-    }
-
     /// Keep what the home's own status says, read now, and say what it
     /// changed (`Identity.HeldAudience.observe`).
     pub(super) fn observe(&self, home: &AuthenticatedHome) -> HeldAudienceChange {
         let reported = home.reported();
-        let held = self.get();
-        let (held_clock, now) = self.minting_clock();
+        let now = self.device_now();
+        let mut record = self
+            .0
+            .record
+            .write()
+            .unwrap_or_else(|poison| poison.into_inner());
         let read = reported.provider_time.map(|provider_at_read| HomeClock {
             provider_at_read,
             clock_at_read: now,
         });
         let moved =
-            gents_protocol::delegation_audience::clock_moved(held_clock.as_ref(), read.as_ref());
-        let change = reported.audience.change_with_clock(held.as_ref(), moved);
+            gents_protocol::delegation_audience::clock_moved(record.clock.as_ref(), read.as_ref());
+        let change = reported
+            .audience
+            .change_with_clock(record.audience.as_ref(), moved);
         if matches!(
             change,
             HeldAudienceChange::Learned(_)
                 | HeldAudienceChange::Changed(_)
                 | HeldAudienceChange::Reclocked
         ) {
-            self.set_clock(read);
+            record.clock = read;
         } else if change == HeldAudienceChange::Forgotten {
-            self.set_clock(None);
+            record.clock = None;
         }
-        self.set(change.clone().held_after(held));
+        record.audience = change.clone().held_after(record.audience.take());
         change
     }
 
     pub(super) fn get(&self) -> Option<DelegationAudience> {
-        self.0
-            .audience
-            .read()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .clone()
-    }
-
-    fn set(&self, audience: Option<DelegationAudience>) {
-        *self
-            .0
-            .audience
-            .write()
-            .unwrap_or_else(|poison| poison.into_inner()) = audience;
+        self.record().audience
     }
 
     fn resolving(&self, node: String, resolver: Arc<dyn ResolveAudience>) -> Self {
-        let (clock, _) = self.minting_clock();
         Self(Arc::new(Held {
-            audience: RwLock::new(self.get()),
-            clock: RwLock::new(clock),
+            record: RwLock::new(self.record()),
             reads: tokio::sync::Mutex::new(()),
             resolver: Some((node, resolver)),
             device: self.0.device.clone(),
@@ -146,10 +141,8 @@ impl HeldAudienceCell {
 
     #[cfg(any(test, feature = "test-fixtures"))]
     fn on_device_clock(&self, device: Arc<dyn Fn() -> u64 + Send + Sync>) -> Self {
-        let (clock, _) = self.minting_clock();
         Self(Arc::new(Held {
-            audience: RwLock::new(self.get()),
-            clock: RwLock::new(clock),
+            record: RwLock::new(self.record()),
             reads: tokio::sync::Mutex::new(()),
             resolver: self.0.resolver.clone(),
             device: DeviceClock(Some(device)),
@@ -238,15 +231,9 @@ impl GraphqlEndpoint {
     }
 
     /// Read the home's status and keep what it reports when it is the
-    /// home's, holding the cell's status lock from the read's nonce until it
-    /// is kept (TLA+ `HeldAudienceReads`); `None` when no status could be
-    /// read.
-    async fn reread_status(&self) -> Option<Result<HeldAudienceChange, HomeStatusRefusal>> {
-        let _reading = self.delegation_audience.reading().await;
-        self.read_and_keep().await
-    }
-
-    /// [`Self::reread_status`] for a caller holding the status lock.
+    /// home's; the caller holds the cell's status lock from the read's nonce
+    /// until it is kept (TLA+ `HeldAudienceReads`). `None` when no status
+    /// could be read.
     async fn read_and_keep(&self) -> Option<Result<HeldAudienceChange, HomeStatusRefusal>> {
         Some(match self.read_status().await? {
             Ok(home) => Ok(self.keep_status(&home).await),
@@ -261,13 +248,14 @@ impl GraphqlEndpoint {
         }
     }
 
-    fn presented_credential(&self) -> PresentedCredential {
+    /// The credential a request minted from `presented` carried.
+    fn presented_credential(&self, presented: &HeldRecord) -> PresentedCredential {
         if self.delegated_authorization.is_some()
             || self.principal_did.is_none()
             || self.client_signing_capability.is_none()
         {
             PresentedCredential::None
-        } else if self.mints_delegations() {
+        } else if presented.audience.is_some() {
             PresentedCredential::Delegation
         } else {
             PresentedCredential::IdentityToken
@@ -275,22 +263,30 @@ impl GraphqlEndpoint {
     }
 
     /// Read the home's status again after its node answered a request this
-    /// endpoint sent with `answer`, and keep the audience and clock it
-    /// reports when it is the home's; otherwise why it is not. `None` when
-    /// the answer refuses no credential this endpoint presented
+    /// endpoint minted from `presented` with `answer`, keep the audience and
+    /// clock it reports when it is the home's, and say how the record kept
+    /// differs from `presented` (`Identity.HeldAudience.changeSince`);
+    /// otherwise why the status is not the home's. `None` when the answer
+    /// refuses no credential this endpoint presented
     /// (`Identity.HeldAudience.refusalOf`) or no status could be read.
     pub(super) async fn reread_after_refusal(
         &self,
         answer: CredentialAnswer,
+        presented: &HeldRecord,
     ) -> Option<(
         CredentialRefusal,
         Result<HeldAudienceChange, HomeStatusRefusal>,
     )> {
-        let refusal = CredentialRefusal::of(answer, self.presented_credential());
+        let refusal = CredentialRefusal::of(answer, self.presented_credential(presented));
         if refusal == CredentialRefusal::Other {
             return None;
         }
-        Some((refusal, self.reread_status().await?))
+        let _reading = self.delegation_audience.reading().await;
+        let read = self.read_and_keep().await?;
+        Some((
+            refusal,
+            read.map(|_| change_since(presented, &self.delegation_audience.record())),
+        ))
     }
 
     /// The audience this endpoint mints request-bound delegations for, with
@@ -307,10 +303,10 @@ impl GraphqlEndpoint {
             return Ok(None);
         }
         let reread = || {
-            let (clock, _) = self.delegation_audience.minting_clock();
+            let record = self.delegation_audience.record();
             gents_protocol::delegation_audience::reread_before_request_bound(
-                self.delegation_audience.get().as_ref(),
-                clock.is_some(),
+                record.audience.as_ref(),
+                record.clock.is_some(),
             )
         };
         if reread() {
@@ -321,11 +317,15 @@ impl GraphqlEndpoint {
                 }
             }
         }
-        let (clock, now) = self.delegation_audience.minting_clock();
-        match self.delegation_audience.get() {
+        let record = self.delegation_audience.record();
+        let now = self.delegation_audience.device_now();
+        match record.audience {
             Some(audience) if audience.genesis_id.is_some() => Ok(Some(RequestBoundAudience {
                 audience,
-                issued_at: gents_protocol::delegation_audience::issue_at(clock.as_ref(), now),
+                issued_at: gents_protocol::delegation_audience::issue_at(
+                    record.clock.as_ref(),
+                    now,
+                ),
             })),
             _ => Err(super::DelegationError::AudienceUnavailable.into()),
         }
@@ -348,13 +348,17 @@ impl GraphqlEndpoint {
         gents_protocol::delegation_audience::issue_at(clock.as_ref(), now)
     }
 
-    /// Whether a request this endpoint sent and its node answered with
-    /// `answer` is to be sent once more, after the home's status was read
-    /// again and the audience and clock it reports kept
+    /// Whether a request this endpoint minted from `presented` and its node
+    /// answered with `answer` is to be sent once more, after the home's
+    /// status was read again and the audience and clock it reports kept
     /// (`Identity.HeldAudience.recovery`); a status that is not the home's
     /// fails the request.
-    pub async fn recovers(&self, answer: CredentialAnswer) -> Result<bool, ConfigClientError> {
-        let Some((refusal, read)) = self.reread_after_refusal(answer).await else {
+    pub async fn recovers(
+        &self,
+        answer: CredentialAnswer,
+        presented: &HeldRecord,
+    ) -> Result<bool, ConfigClientError> {
+        let Some((refusal, read)) = self.reread_after_refusal(answer, presented).await else {
             return Ok(false);
         };
         let (authenticated, record) = match &read {
@@ -374,8 +378,9 @@ impl GraphqlEndpoint {
     pub async fn recovers_refusal(
         &self,
         status: reqwest::StatusCode,
+        presented: &HeldRecord,
     ) -> Result<bool, ConfigClientError> {
-        self.recovers(CredentialAnswer::of_status(status.as_u16()))
+        self.recovers(CredentialAnswer::of_status(status.as_u16()), presented)
             .await
     }
 
@@ -388,29 +393,51 @@ impl GraphqlEndpoint {
     where
         F: Fn(&Self) -> Result<reqwest::RequestBuilder, ConfigClientError>,
     {
-        Ok(self.send_counting_resends(build).await?.0)
+        Ok(self.send_counting_resends(build).await?.response)
     }
 
     /// `send_resolving`, and whether the request was sent once more.
-    pub(super) async fn send_counting_resends<F>(
-        &self,
-        build: F,
-    ) -> Result<(Result<reqwest::Response, reqwest::Error>, bool), ConfigClientError>
+    pub(super) async fn send_counting_resends<F>(&self, build: F) -> Result<Sent, ConfigClientError>
     where
         F: Fn(&Self) -> Result<reqwest::RequestBuilder, ConfigClientError>,
     {
         self.runtime_authentication().await?;
+        let presented = self.delegation_audience.record();
         let response = build(self)?.send().await;
         let recovered = match &response {
-            Ok(answered) => self.recovers_refusal(answered.status()).await?,
+            Ok(answered) => {
+                self.recovers_refusal(answered.status(), &presented)
+                    .await?
+            }
             Err(_) => false,
         };
         if recovered {
-            Ok((build(self)?.send().await, true))
+            let presented = self.delegation_audience.record();
+            Ok(Sent {
+                response: build(self)?.send().await,
+                resent: true,
+                presented,
+            })
         } else {
-            Ok((response, false))
+            Ok(Sent {
+                response,
+                resent: false,
+                presented,
+            })
         }
     }
+}
+
+/// A request sent through [`GraphqlEndpoint::send_counting_resends`].
+pub(super) struct Sent {
+    pub(super) response: Result<reqwest::Response, reqwest::Error>,
+    /// Whether it was sent once more.
+    pub(super) resent: bool,
+    /// The record its last sending was minted from, or one taken before
+    /// it: the record only moves forward, so a record taken earlier differs
+    /// from a newer one whenever the one it was minted from does
+    /// (`Identity.HeldAudience.changeSince`).
+    pub(super) presented: HeldRecord,
 }
 
 #[cfg(test)]

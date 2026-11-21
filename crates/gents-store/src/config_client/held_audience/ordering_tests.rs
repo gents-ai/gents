@@ -124,12 +124,14 @@ async fn a_read_answered_late_never_replaces_a_read_that_started_after_it() {
     let endpoint = endpoint(&home, 1).await;
     let first = tokio::spawn({
         let endpoint = endpoint.clone();
-        async move { endpoint.recovers(refused()).await }
+        let presented = endpoint.delegation_audience.record();
+        async move { endpoint.recovers(refused(), &presented).await }
     });
     home.entered.notified().await;
     let second = tokio::spawn({
         let endpoint = endpoint.clone();
-        async move { endpoint.recovers(refused()).await }
+        let presented = endpoint.delegation_audience.record();
+        async move { endpoint.recovers(refused(), &presented).await }
     });
     settle().await;
     assert_eq!(
@@ -172,7 +174,8 @@ async fn a_clock_read_answered_late_never_replaces_a_later_one() {
     home.entered.notified().await;
     let recovering = tokio::spawn({
         let endpoint = endpoint.clone();
-        async move { endpoint.recovers(refused()).await }
+        let presented = endpoint.delegation_audience.record();
+        async move { endpoint.recovers(refused(), &presented).await }
     });
     settle().await;
     gate.notify_one();
@@ -205,12 +208,14 @@ async fn a_dropped_read_keeps_nothing_and_frees_the_status_lock() {
     let endpoint = endpoint(&home, 1).await;
     let dropped = tokio::spawn({
         let endpoint = endpoint.clone();
-        async move { endpoint.recovers(refused()).await }
+        let presented = endpoint.delegation_audience.record();
+        async move { endpoint.recovers(refused(), &presented).await }
     });
     home.entered.notified().await;
     dropped.abort();
     assert!(dropped.await.unwrap_err().is_cancelled());
-    assert!(endpoint.recovers(refused()).await.unwrap());
+    let presented = endpoint.delegation_audience.record();
+    assert!(endpoint.recovers(refused(), &presented).await.unwrap());
     assert_eq!(endpoint.delegation_audience.get(), Some(audience(3)));
     gate.notify_one();
     settle().await;
@@ -218,5 +223,58 @@ async fn a_dropped_read_keeps_nothing_and_frees_the_status_lock() {
         endpoint.delegation_audience.get(),
         Some(audience(3)),
         "the dropped read's late answer is kept by no one"
+    );
+}
+
+/// TLA+ `HeldAudienceReads` `Queued`: two requests minted for the audience the
+/// home left are refused; the second waits while the first reads and keeps
+/// the new audience, so its own read changes nothing. It is sent again all
+/// the same, since what it presented is not what is kept (gents#3963).
+#[tokio::test(flavor = "current_thread")]
+async fn a_refusal_queued_behind_another_is_sent_again_with_the_newest_audience() {
+    let gate = Arc::new(Notify::new());
+    let home = home(vec![
+        Answer {
+            audience: 2,
+            provider_time: None,
+            gate: Some(gate.clone()),
+        },
+        Answer {
+            audience: 2,
+            provider_time: None,
+            gate: None,
+        },
+        Answer {
+            audience: 2,
+            provider_time: None,
+            gate: None,
+        },
+    ])
+    .await;
+    let endpoint = endpoint(&home, 1).await;
+    let first = tokio::spawn({
+        let endpoint = endpoint.clone();
+        let presented = endpoint.delegation_audience.record();
+        async move { endpoint.recovers(refused(), &presented).await }
+    });
+    home.entered.notified().await;
+    let second = tokio::spawn({
+        let endpoint = endpoint.clone();
+        let presented = endpoint.delegation_audience.record();
+        async move { endpoint.recovers(refused(), &presented).await }
+    });
+    settle().await;
+    gate.notify_one();
+    assert!(first.await.unwrap().unwrap(), "the first request resends");
+    assert!(
+        second.await.unwrap().unwrap(),
+        "the request queued behind it resends"
+    );
+    assert_eq!(home.reads.load(Ordering::SeqCst), 2);
+    assert_eq!(endpoint.delegation_audience.get(), Some(audience(2)));
+    let presented = endpoint.delegation_audience.record();
+    assert!(
+        !endpoint.recovers(refused(), &presented).await.unwrap(),
+        "a request minted for the audience kept is told"
     );
 }

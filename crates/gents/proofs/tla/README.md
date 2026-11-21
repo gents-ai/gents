@@ -561,17 +561,22 @@ See `../README.md` for how this fits the broader formal-verification model.
   (observer), `NoRecheck`, `AckBeforeWatch` (product).
 - `HeldAudienceReads` — concurrent reads of a home's signed status by the
   clones of one endpoint, which share one held audience, clock and client
-  authentication (#3963). A read starts after a credential refusal, before a
-  request-bound delegation or a dated write, or to discover the runtime's
-  client authentication; the home restarts between reads and a reader may be
+  authentication (#3963). Each reader is a request minted from the record the
+  cell held, refused, which reads the status, keeps it and decides whether to
+  send again (Lean `HeldAudience.recovery` over `HeldAudience.recordChange`);
+  the home restarts and its clock moves between reads and a reader may be
   dropped mid-read. Green holds the cell's status lock from the read's nonce
-  until what it read is kept and mints from the cell: `AudienceNeverOlder`,
-  `ClockNeverOlder`, `MintsNewest`, `ReadsDoNotOverlap` and
-  `EveryReaderMints` hold. RED: `Unordered` (the code before #3963: an
-  earlier read replaces a later deployment), `Clock` (the same with no
-  restart, regressing the clock and authentication), `Overlap` (two
-  recoveries read and keep at once) and `OwnRead` (ordered reads, but a
-  request mints from its own read's answer after a newer one was kept).
+  until what it read is kept, reports how the record kept differs from the one
+  the request presented (`changeSince`) and mints from the cell:
+  `AudienceNeverOlder`, `ClockNeverOlder`, `MintsNewest`, `ReadsDoNotOverlap`,
+  `ResendsExactlyWhenStale` and `EveryReaderSettles` hold. RED: `Unordered`
+  (the code before #3963: an earlier read replaces a later deployment),
+  `Clock` (the same with no restart, regressing the clock and
+  authentication), `Overlap` (two recoveries read and keep at once), `OwnRead`
+  (ordered reads, but a request mints from its own read's answer after a newer
+  one was kept) and `Queued` (ordered reads, but a request reports only what
+  its own read changed, so one queued behind a peer that kept the newer
+  audience is told instead of sent again).
 - `CallerAncestry` — a `gents runtime service stop` caller walking its parent
   chain to decide whether the service's job is its ancestor while processes
   exit, orphans are adopted and freed process IDs are reused. The caller asks
