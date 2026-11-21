@@ -737,6 +737,22 @@ theorem forged_operation_can_inherit_parent_read :
     allowed 5 forgedParent "user" "operations" "forged" "read" = true := by
   native_decide
 
+/-- A `NetworkAdminPin` is an `operations` document. Any actor past the create
+gate owns the pin it creates and may parent it to any Node, so the Node's
+runtime reader reads a pin it does not own. -/
+def foreignPin (creator : DID) : State :=
+  apply (directCreate
+    { objects := [⟨"nodes", "home", "user"⟩],
+      relations := [⟨"nodes", "home", "runtime_reader", .actor "runtime"⟩], enrolled := [] }
+    creator "operations" "pin" true true)
+    (.grantAs creator ⟨"operations", "pin", "parent", .object "nodes" "home"⟩)
+
+theorem foreign_pin_is_runtime_readable_not_owned :
+    ["user", "agent"].map (fun creator =>
+      (allowed 5 (foreignPin creator) "runtime" "operations" "pin" "read",
+       allowed 5 (foreignPin creator) "runtime" "operations" "pin" "owner")) =
+      [(true, false), (true, false)] := by native_decide
+
 /-- Installing a policy on an existing unbound collection can leave legacy
 objects readable without registered ownership. Only an absent collection or
 one already bound to the expected policy is eligible for this fresh path. A
