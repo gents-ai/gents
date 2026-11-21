@@ -48,7 +48,9 @@ fn document(groups: serde_json::Value) -> Tools {
 #[test]
 fn integrations_plugins_job_block_errors_name_the_field() {
     let tools = |job: serde_json::Value| {
-        document(json!({"integrations":{"plugins":[{"plugin":"ns/runner","job":job}]}}))
+        document(
+            json!({"agents":{"target_ids":["a"]},"integrations":{"plugins":[{"plugin":"ns/runner","job":job}]}}),
+        )
     };
     assert!(tools(json!({"agent_targets":["a"]})).validate().is_ok());
     for (job, field) in [
@@ -78,7 +80,7 @@ fn integrations_plugins_job_block_errors_name_the_field() {
 #[test]
 fn a_0_21_job_policy_with_project_roots_still_loads_and_drops_them() {
     let tools = document(
-        json!({"integrations":{"plugins":[{"plugin":"ns/runner","job":{
+        json!({"agents":{"target_ids":["a"]},"integrations":{"plugins":[{"plugin":"ns/runner","job":{
             "agent_targets":["a"],
             "policy":{"trusted_packs":["ns/pack"],"project_roots":["/work"]},
         }}]}}),
@@ -168,4 +170,29 @@ fn hidden_names_are_exact_and_round_trip_but_bind_only_writes() {
         refusal.contains("select script with tool_calls: true"),
         "{refusal}"
     );
+}
+
+#[test]
+fn a_job_target_the_caller_cannot_start_is_refused_on_write_only() {
+    let tools = |agents: serde_json::Value| {
+        let mut value = json!({"integrations": {"plugins": [
+            {"plugin": "ns/runner", "job": {"agent_targets": ["a", "b"]}}
+        ]}});
+        if !agents.is_null() {
+            value["agents"] = agents;
+        }
+        document(value)
+    };
+    let refused = tools(json!({"target_ids": ["a"]}));
+    let message = refused.validate().unwrap_err().to_string();
+    assert!(
+        message.contains("integrations.plugins[ns/runner].job.agent_targets names [\"b\"]"),
+        "{message}"
+    );
+    assert!(refused.validate_stored().is_ok());
+    assert!(tools(serde_json::Value::Null).validate().is_err());
+    assert!(tools(json!({"target_ids": ["a", "b"]})).validate().is_ok());
+    assert!(tools(json!({"target_ids": ["a", "b"], "enabled": false}))
+        .validate()
+        .is_ok());
 }

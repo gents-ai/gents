@@ -87,6 +87,18 @@ mod tests {
         }))?;
         let first_id =
             write_tools_document(&access, &tools, &crate::test_support::AdmitAllProfiles).await?;
+        let mut unreachable_job = tools.clone();
+        unreachable_job.integrations = Some(serde_json::from_value(json!({"plugins":[
+            {"plugin":"gents/script","tool_calls":true},
+            {"plugin":"ns/runner","job":{"agent_targets":["absent"]}}
+        ]}))?);
+        assert!(write_tools_document(
+            &access,
+            &unreachable_job,
+            &crate::test_support::AdmitAllProfiles
+        )
+        .await
+        .is_err());
         let mut foreign = tools.clone();
         foreign.node_did = "did:key:other".into();
         assert_ne!(

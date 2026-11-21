@@ -720,7 +720,38 @@ impl Tools {
     pub fn validation_violations(&self) -> Vec<String> {
         let mut errors = self.stored_violations();
         errors.extend(self.presentation_violations());
+        errors.extend(self.job_target_violations());
         errors
+    }
+
+    fn job_target_violations(&self) -> Vec<String> {
+        let caller_targets = self
+            .agents
+            .as_ref()
+            .map(|agents| agents.target_ids.as_slice())
+            .unwrap_or_default();
+        self.integrations
+            .iter()
+            .flat_map(|integrations| integrations.plugins.iter().flatten())
+            .filter_map(|plugin| {
+                let job = plugin.job.as_ref()?;
+                if gents_protocol::job_settings::job_targets_configured(
+                    caller_targets,
+                    &job.agent_targets,
+                ) {
+                    return None;
+                }
+                let missing: Vec<&String> = job
+                    .agent_targets
+                    .iter()
+                    .filter(|target| !caller_targets.contains(target))
+                    .collect();
+                Some(format!(
+                    "integrations.plugins[{}].job.agent_targets names {missing:?}, which agents.target_ids does not list, so the job could never start them; add them to agents.target_ids (agents.enabled can stay off) or remove them from the job",
+                    plugin.plugin
+                ))
+            })
+            .collect()
     }
 
     fn presentation_violations(&self) -> Vec<String> {

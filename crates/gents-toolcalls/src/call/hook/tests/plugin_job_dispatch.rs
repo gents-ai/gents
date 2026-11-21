@@ -329,7 +329,7 @@ async fn step0(output: Value, options: Options) -> Step0 {
     let tools: gents_documents::Tools = serde_json::from_value(json!({
         "tools_id": format!("{}:tools", caller.did()),
         "node_did": identity.did(),
-        "agents": {"enabled": true, "target_ids": if options.caller_targets { vec!["t-worker"] } else { Vec::new() }},
+        "agents": {"enabled": true, "target_ids": ["t-worker"]},
         "integrations": {"plugins": [{"plugin": "team/plugin", "job": hook.job_tools.get(TOOL).unwrap().settings}]},
     })).unwrap();
     gents_documents::write_tools_document(
@@ -339,6 +339,31 @@ async fn step0(output: Value, options: Options) -> Step0 {
     )
     .await
     .unwrap();
+    if !options.caller_targets {
+        let tools_id = format!("{}:tools", caller.did());
+        let node_did = identity.did().to_owned();
+        owner
+            .transact_write("test.plugin_job_stored_unconfigured_caller", |txn| {
+                let tools_id = &tools_id;
+                let node_did = &node_did;
+                Box::pin(async move {
+                    txn.execute_desired_state_mutation(
+                        "mutation($node: String, $tools: String, $input: ToolsMutationInputArg!) { update_Tools(filter: {node_did: {_eq: $node}, tools_id: {_eq: $tools}}, input: $input) { _docID } }",
+                        &json!({
+                            "node": node_did,
+                            "tools": tools_id,
+                            "input": {"agents": {"enabled": true, "target_ids": null}},
+                        }),
+                        gents_store::collection::Collection::Tools,
+                        false,
+                    )
+                    .await
+                    .map_err(anyhow::Error::from)
+                })
+            })
+            .await
+            .unwrap();
+    }
     if options.driver {
         let runtime = JobRuntime::new(
             node.clone(),
