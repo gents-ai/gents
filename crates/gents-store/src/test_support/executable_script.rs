@@ -66,13 +66,24 @@ pub struct HeldSibling {
 pub fn hold_sibling() -> HeldSibling {
     let (mut forked_reader, forked_writer) = std::io::pipe().unwrap();
     let (release_reader, release) = std::io::pipe().unwrap();
-    let (forked, released) = (forked_writer.as_raw_fd(), release_reader.as_raw_fd());
-    let mut command = Command::new("/bin/true");
+    let (forked, released, releaser) = (
+        forked_writer.as_raw_fd(),
+        release_reader.as_raw_fd(),
+        release.as_raw_fd(),
+    );
+    // `true` from PATH: macOS has no /bin/true.
+    let mut command = Command::new("true");
     // SAFETY: the hook runs in the forked child before exec and calls only
-    // the async-signal-safe `write` and `read` on descriptors this
-    // closure's spawning thread keeps open until the spawn returns.
+    // the async-signal-safe `close`, `write` and `read` on descriptors this
+    // closure's spawning thread keeps open until the spawn returns. The child
+    // first closes its own copy of the release pipe's write end: otherwise
+    // that copy keeps the pipe open, so a sibling never released (a test that
+    // fails before `release`) blocks in `read` forever and holds the test
+    // process's output open after the process exits. Closed, the read ends
+    // when the parent writes or drops `release`.
     unsafe {
         command.pre_exec(move || {
+            libc::close(releaser);
             libc::write(forked, [1u8].as_ptr().cast(), 1);
             libc::read(released, [0u8].as_mut_ptr().cast(), 1);
             Ok(())
