@@ -87,10 +87,8 @@
       "labels": ["self-hosted", "macOS", "ARM64", "ci-notary"]
     },
     "release-macos": {
-      "labels": ["self-hosted", "macOS", "ARM64", "ci-desktop"]
-    },
-    "release-candidate-macos": {
-      "labels": ["self-hosted", "macOS", "ARM64", "ci-release-candidate"]
+      "labels": ["self-hosted", "macOS", "ARM64", "ci-signing"],
+      "comment": "ci-signing marks a runner whose signing keychain holds a Developer ID identity with its full certificate chain; a desktop runner without one fails signing preflight."
     },
     "docker": {
       "labels": ["self-hosted", "Linux", "X64", "ci-docker"]
