@@ -17,12 +17,14 @@ third-party = [
     { name = "defra-node", git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "6765d920f1d730e343764d2cb2e440a0bbdece0a" },
 ]
 
-# The Vera crates behind the opt-in `vera` feature. Left in, their feature sets
-# would be unified into every test build. The revision is the DefraDB pin in
-# Cargo.toml.
+# The Vera crates behind the opt-in `vera` feature, and vera-modules, which
+# gents-store's tests also take for the creator Vera seeds genesis policies
+# under. Left in, their feature sets would be unified into every test build.
+# The revision is the DefraDB pin in Cargo.toml.
 [traversal-excludes]
 third-party = [
     { name = "vera-embedded", git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "6765d920f1d730e343764d2cb2e440a0bbdece0a" },
     { name = "vera", git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "6765d920f1d730e343764d2cb2e440a0bbdece0a" },
     { name = "vera-node", git = "https://github.com/sourcenetwork/vera.rs", rev = "1367a56b2471bc379fd0e5522b8492d4b4b6e5d8" },
+    { name = "vera-modules", git = "https://github.com/sourcenetwork/vera.rs", rev = "1367a56b2471bc379fd0e5522b8492d4b4b6e5d8" },
 ]
