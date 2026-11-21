@@ -33,13 +33,16 @@ async fn create_unbound_legacy_store(
     key: &StoreKey,
     did: &str,
 ) -> anyhow::Result<()> {
-    let unbound = gents_protocol::schemas::INFERENCE_BACKEND.replace(
-        &format!(
-            " @policy(id: \"{}\", resource: \"secret_configuration\")",
-            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID
-        ),
-        "",
-    );
+    let unbound = gents_protocol::schemas::HomePolicyIds::shared()
+        .render(gents_protocol::schemas::INFERENCE_BACKEND)
+        .replace(
+            &format!(
+                " @policy(id: \"{}\", resource: \"secret_configuration\")",
+                gents_protocol::schemas::HomePolicyIds::shared()
+                    .id(gents_protocol::schemas::BuiltInPolicy::Household)
+            ),
+            "",
+        );
     let node = gents_store::local::store_key::persistent_builder(
         data,
         key,
@@ -48,7 +51,8 @@ async fn create_unbound_legacy_store(
     .with_node_identity_did(did.to_owned())
     .build()
     .await?;
-    node.add_collection(&unbound).await?;
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&unbound))
+        .await?;
     let created = node.execute(r#"mutation { create_InferenceBackend(input:{node_did:"legacy", backend_id:"b", name:"old", provider_kind:"OpenAiCompatible", endpoint:"https://provider.example", auth:{kind:"api_key",key:"legacy-secret"}}) {_docID} }"#).await;
     anyhow::ensure!(
         !created.has_errors(),

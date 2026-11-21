@@ -2822,7 +2822,8 @@ mod tests {
                 .get_collection(gents_protocol::schemas::INFERENCE_BACKEND_NAME)?
                 .context("legacy backend baseline missing")?;
             assert!(collection.policy.is_some_and(|policy| policy.id
-                == gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID
+                == gents_protocol::schemas::HomePolicyIds::shared()
+                    .id(gents_protocol::schemas::BuiltInPolicy::Household)
                 && policy.resource_name == "secret_configuration"));
             node.shutdown().await?;
         }
@@ -3234,17 +3235,18 @@ mod tests {
         .unwrap();
     }
 
+    #[cfg(not(feature = "vera"))]
     fn refuses_an_embedded_vera_home(error: &anyhow::Error) -> bool {
-        use gents_store::local::document_acp::DocumentAcpError;
-        match refused_document_acp(error) {
-            DocumentAcpError::NotYetUsable => cfg!(feature = "vera"),
-            DocumentAcpError::Unavailable => !cfg!(feature = "vera"),
-            _ => false,
-        }
+        matches!(
+            refused_document_acp(error),
+            gents_store::local::document_acp::DocumentAcpError::Unavailable
+        )
     }
 
+    #[cfg(not(feature = "vera"))]
     #[tokio::test]
-    async fn an_embedded_vera_home_is_refused_before_anything_is_written() {
+    async fn a_build_without_the_vera_node_refuses_an_embedded_vera_home_before_anything_is_written(
+    ) {
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path().join("home");
         let mut args = init_args();
@@ -3273,8 +3275,9 @@ mod tests {
         assert!(!home.exists());
     }
 
+    #[cfg(not(feature = "vera"))]
     #[tokio::test]
-    async fn a_rerun_on_a_home_that_recorded_embedded_vera_is_refused_before_its_store_is_made() {
+    async fn a_build_without_the_vera_node_refuses_a_rerun_on_a_home_that_recorded_embedded_vera() {
         use gents_store::local::document_acp::DocumentAcp;
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path().join("home");

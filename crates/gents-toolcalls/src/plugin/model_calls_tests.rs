@@ -561,17 +561,48 @@ async fn modeled_plugin_profile_uses_immediate_actor_and_rechecks_each_request()
                 .await?;
         }
     }
-    assert!(gents_protocol::schemas::INFERENCE_PROFILE
-        .contains(gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID));
-    let profile_schema = gents_protocol::schemas::INFERENCE_PROFILE
-        .replace(gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID, &policy);
-    node.add_collection_as(&ctx, &profile_schema).await?;
-    let backend_schema = gents_protocol::schemas::INFERENCE_BACKEND_METADATA
-        .replace(gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID, &policy);
-    node.add_collection_as(&ctx, &backend_schema).await?;
-    let credential_schema = gents_protocol::schemas::BACKEND_CREDENTIAL
-        .replace(gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID, &policy);
-    node.add_collection_as(&ctx, &credential_schema).await?;
+    assert!(gents_protocol::schemas::HomePolicyIds::shared()
+        .render(gents_protocol::schemas::INFERENCE_PROFILE)
+        .contains(
+            gents_protocol::schemas::HomePolicyIds::shared()
+                .id(gents_protocol::schemas::BuiltInPolicy::Household)
+        ));
+    let profile_schema = gents_protocol::schemas::HomePolicyIds::shared()
+        .render(gents_protocol::schemas::INFERENCE_PROFILE)
+        .replace(
+            gents_protocol::schemas::HomePolicyIds::shared()
+                .id(gents_protocol::schemas::BuiltInPolicy::Household),
+            &policy,
+        );
+    node.add_collection_as(
+        &ctx,
+        &gents_protocol::schemas::HomePolicyIds::shared().render(&profile_schema),
+    )
+    .await?;
+    let backend_schema = gents_protocol::schemas::HomePolicyIds::shared()
+        .render(gents_protocol::schemas::INFERENCE_BACKEND_METADATA)
+        .replace(
+            gents_protocol::schemas::HomePolicyIds::shared()
+                .id(gents_protocol::schemas::BuiltInPolicy::Household),
+            &policy,
+        );
+    node.add_collection_as(
+        &ctx,
+        &gents_protocol::schemas::HomePolicyIds::shared().render(&backend_schema),
+    )
+    .await?;
+    let credential_schema = gents_protocol::schemas::HomePolicyIds::shared()
+        .render(gents_protocol::schemas::BACKEND_CREDENTIAL)
+        .replace(
+            gents_protocol::schemas::HomePolicyIds::shared()
+                .id(gents_protocol::schemas::BuiltInPolicy::Household),
+            &policy,
+        );
+    node.add_collection_as(
+        &ctx,
+        &gents_protocol::schemas::HomePolicyIds::shared().render(&credential_schema),
+    )
+    .await?;
     let access = ConfigAccess::Graphql(
         gents_store::config_client::GraphqlEndpoint::as_principal(
             format!("http://{address}/api/v0/graphql"),

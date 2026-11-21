@@ -260,7 +260,7 @@ async fn probe_db() -> ProbeDb {
             .await
             .expect("embedded node"),
     );
-    node.add_collection(PROBE_SCHEMA)
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(PROBE_SCHEMA))
         .await
         .expect("add probe schema");
     ProbeDb {
@@ -439,9 +439,11 @@ type TextVersionProbe {
 async fn text_crdt_reads_each_revision_at_its_cid() {
     let db = probe_db().await;
     let node = db.node;
-    node.add_collection(TEXT_PROBE_SCHEMA)
-        .await
-        .expect("add text probe schema");
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared().render(TEXT_PROBE_SCHEMA),
+    )
+    .await
+    .expect("add text probe schema");
 
     let revisions = [
         "fn main() {}\n",
@@ -513,9 +515,11 @@ async fn text_crdt_versions_written_in_one_transaction_stay_readable() {
 
     let db = probe_db().await;
     let node = db.node;
-    node.add_collection(TEXT_PROBE_SCHEMA)
-        .await
-        .expect("add text probe schema");
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared().render(TEXT_PROBE_SCHEMA),
+    )
+    .await
+    .expect("add text probe schema");
     let created = node
         .execute(r#"mutation { row: create_TextVersionProbe(input: { probe_id: "txn", text: "one\n" }) { _docID } }"#)
         .await;

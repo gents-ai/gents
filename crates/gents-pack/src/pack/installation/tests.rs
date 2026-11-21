@@ -1151,14 +1151,20 @@ async fn read_installed_pack_fails_loudly_on_more_than_one_record() {
     )
     .await
     .unwrap();
-    node.add_collection(gents_protocol::schemas::NODE)
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::NODE),
+    )
+    .await
+    .unwrap();
+    let schema = gents_protocol::schemas::HomePolicyIds::shared()
+        .render(gents_protocol::schemas::PACK_INSTALLATION)
+        .replace(
+            r#"@index(fields: ["node_did", "coordinate"], unique: true)"#,
+            "",
+        );
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&schema))
         .await
         .unwrap();
-    let schema = gents_protocol::schemas::PACK_INSTALLATION.replace(
-        r#"@index(fields: ["node_did", "coordinate"], unique: true)"#,
-        "",
-    );
-    node.add_collection(&schema).await.unwrap();
     let runtime_access =
         ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
     let user_did = identity::Did::new(user.did()).unwrap();
