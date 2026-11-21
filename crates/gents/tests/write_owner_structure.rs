@@ -6992,7 +6992,7 @@ fn stores_claimed_before_the_choice(syntax: &syn::File) -> Vec<String> {
 
 /// A function that checks a home's document-ACP choice does so before it
 /// claims or opens the home's store, so a refused home is left untouched
-/// (Lean `DocumentAcpChoice.enter`). Syntactic: claims are matched by name,
+/// (Lean `DocumentAcpChoice.admit`). Syntactic: claims are matched by name,
 /// and a function that never checks the choice is not held to it.
 #[test]
 fn a_homes_choice_is_checked_before_its_store_is_claimed() {

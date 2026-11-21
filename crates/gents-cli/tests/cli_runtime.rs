@@ -2,6 +2,8 @@
 mod cli_diagnose;
 #[path = "suites/cli_document.rs"]
 mod cli_document;
+#[path = "suites/cli_home_document_access.rs"]
+mod cli_home_document_access;
 #[path = "suites/cli_init.rs"]
 mod cli_init;
 #[path = "suites/cli_job.rs"]

@@ -39,19 +39,25 @@ async fn modeled_task_receipt_shares_native_session_permissions() -> anyhow::Res
     let policy = node
         .add_dac_policy_with_counter_as(&ctx, gents_protocol::schemas::AGENT_OWNERSHIP_POLICY, 0)
         .await?;
-    assert_eq!(policy, gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID);
+    assert_eq!(
+        policy,
+        gents_protocol::schemas::HomePolicyIds::shared()
+            .id(gents_protocol::schemas::BuiltInPolicy::Household)
+    );
     for schema in [
         gents_protocol::schemas::NODE,
         gents_protocol::schemas::AGENT,
         gents_protocol::schemas::AGENT_SESSION,
     ] {
-        user.add_collection(schema).await?;
+        user.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(schema))
+            .await?;
     }
     for schema in [
         gents_protocol::schemas::TRIGGER_FIRE,
         gents_protocol::schemas::FIRE_OUTCOME,
     ] {
-        user.add_collection(schema).await?;
+        user.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(schema))
+            .await?;
     }
     let node_row = user
         .write(
@@ -170,7 +176,8 @@ async fn modeled_task_receipt_shares_native_session_permissions() -> anyhow::Res
             .check_doc_access(
                 &defra_node::AcpIdentity::Authenticated(did.parse()?),
                 permission,
-                gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
+                gents_protocol::schemas::HomePolicyIds::shared()
+                    .id(gents_protocol::schemas::BuiltInPolicy::Household),
                 &case.input.resource,
                 doc,
             )

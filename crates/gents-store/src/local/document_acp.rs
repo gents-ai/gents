@@ -69,8 +69,6 @@ pub enum DocumentAcpError {
          keychain key instead"
     )]
     NodeKeyCannotSign { node: String },
-    #[error("this kind of home cannot be opened by this version of Gents yet")]
-    NotYetUsable,
     #[error("make this change from the Gents app or CLI on your own device")]
     HeldUserKey,
     #[error(
@@ -129,7 +127,6 @@ impl DocumentAcpError {
             Self::Switch { .. }
             | Self::Unavailable
             | Self::NodeKeyCannotSign { .. }
-            | Self::NotYetUsable
             | Self::HeldUserKey
             | Self::DelegationRequired
             | Self::TransportGrantsAwaitProvider
@@ -449,13 +446,8 @@ pub(crate) fn admit(
     })
 }
 
-fn usable(provider: DocumentAcp) -> Result<DocumentAcp> {
-    match provider {
-        DocumentAcp::Local => Ok(provider),
-        DocumentAcp::Vera => Err(DocumentAcpError::NotYetUsable),
-    }
-}
-
+/// [`admit`] for a home's choice as its init config records it, before
+/// anything is written or a node is built.
 fn enter(
     recorded: Option<DocumentAcp>,
     requested: DocumentAcp,
@@ -465,7 +457,6 @@ fn enter(
     decide(recorded, requested, available, node_key_signs, || {
         "a Secure Enclave node identity".to_owned()
     })
-    .and_then(usable)
 }
 
 pub fn ensure_admissible(

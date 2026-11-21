@@ -62,13 +62,18 @@ resources:
         .await
         .unwrap();
     ConfigAccess::local(node.clone())
-        .add_collection(&gents_store::schema::AGENT_SESSION_SCHEMA.replace(
-            &format!(
-                "@policy(id: \"{}\", resource: \"sessions\")",
-                gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID
-            ),
-            &format!("@policy(id: \"{policy}\", resource: \"sessions\")"),
-        ))
+        .add_collection(
+            &gents_protocol::schemas::HomePolicyIds::shared()
+                .render(gents_store::schema::AGENT_SESSION_SCHEMA)
+                .replace(
+                    &format!(
+                        "@policy(id: \"{}\", resource: \"sessions\")",
+                        gents_protocol::schemas::HomePolicyIds::shared()
+                            .id(gents_protocol::schemas::BuiltInPolicy::Household)
+                    ),
+                    &format!("@policy(id: \"{policy}\", resource: \"sessions\")"),
+                ),
+        )
         .await
         .unwrap();
     let owner_did = owner.did().to_owned();

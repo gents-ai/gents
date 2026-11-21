@@ -855,7 +855,7 @@ async fn event_source_next_fire_emits_intent_on_matching_real_event() {
             payload: String
         }
     "#;
-    node.add_collection(webhook_sdl)
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(webhook_sdl))
         .await
         .expect("add_collection for WebhookEvent");
     let task = ResolvedTask {
@@ -1695,7 +1695,7 @@ async fn event_source_filter_probe_gates_fire_on_operator_filter() {
             email: String
         }
     "#;
-    node.add_collection(webhook_sdl)
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(webhook_sdl))
         .await
         .expect("add_collection for WebhookEvent");
 
@@ -1794,7 +1794,7 @@ async fn event_source_hydrates_doc_vars_from_source_doc_fields() {
             email: String
         }
     "#;
-    node.add_collection(webhook_sdl)
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(webhook_sdl))
         .await
         .expect("add_collection for WebhookEvent");
 
@@ -1970,7 +1970,7 @@ async fn event_source_on_result_writes_runtime_fields_on_fired() {
             payload: String
         }
     "#;
-    node.add_collection(webhook_sdl)
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(webhook_sdl))
         .await
         .expect("add_collection for WebhookEvent");
 
@@ -2068,7 +2068,7 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
             payload: String
         }
     "#;
-    node.add_collection(webhook_sdl)
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(webhook_sdl))
         .await
         .expect("add_collection for WebhookEvent");
 
@@ -2214,7 +2214,7 @@ async fn event_source_fans_out_one_event_across_multiple_matching_triggers() {
             payload: String
         }
     "#;
-    node.add_collection(webhook_sdl)
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(webhook_sdl))
         .await
         .expect("add_collection for WebhookEvent");
     let task = resolved_task("ignored");
@@ -2284,7 +2284,7 @@ async fn event_source_tries_all_triggers_when_first_filter_misses() {
             kind: String @index
         }
     "#;
-    node.add_collection(webhook_sdl)
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(webhook_sdl))
         .await
         .expect("add_collection for WebhookEvent");
     let task = resolved_task("ignored");

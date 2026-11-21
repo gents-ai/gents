@@ -44,10 +44,10 @@ async fn modeled_provider_inputs_require_the_selected_agent_to_read_exact_docume
             0,
         )
         .await?;
-    user_access.add_collection(&format!(
+    user_access.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&format!(
         "type Agent @policy(id: \"{}\", resource: \"agents\") {{ agent_did: String }}\ntype AgentContext @policy(id: \"{}\", resource: \"configuration\") {{ context_id: String }}\ntype Tools @policy(id: \"{}\", resource: \"configuration\") {{ tools_id: String }}",
         escape_graphql_string(&policy), escape_graphql_string(&policy), escape_graphql_string(&policy)
-    )).await?;
+    ))).await?;
     let create = |name: &str, field: &str, value: &str| {
         format!(
             "mutation {{ create_{name}(input: {{{field}: \"{}\"}}) {{_docID}} }}",
@@ -189,7 +189,9 @@ async fn modeled_inference_inputs_require_each_selected_native_document() -> any
         })
         .collect::<Vec<_>>()
         .join("\n");
-    access.add_collection(&sdl).await?;
+    access
+        .add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&sdl))
+        .await?;
     let create = |name: &str, label: &str| {
         format!(
             "mutation {{ create_{name}(input: {{label: \"{}\"}}) {{_docID}} }}",
@@ -417,7 +419,9 @@ async fn modeled_provider_inputs_recheck_backend_metadata_as_agent() -> anyhow::
             "type {name} @policy(id: \"{}\", resource: \"{resource}\") {{ {field}: String }}",
             escape_graphql_string(&policy)
         );
-        admin.add_collection(&schema).await?;
+        admin
+            .add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&schema))
+            .await?;
         let mutation = format!("mutation($input: {name}MutationInputArg!) {{ create_{name}(input: $input) {{_docID}} }}");
         let variables = serde_json::json!({"input": {(field): "value"}});
         let response = access

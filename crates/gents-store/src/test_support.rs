@@ -382,9 +382,10 @@ impl tracing::Subscriber for CapturedTargetSubscriber {
 }
 
 pub fn unbound_journal_schema() -> String {
-    use gents_protocol::schemas::{CLIENT_JOURNAL_POLICY_ID, CLIENT_JOURNAL_POLICY_RESOURCE};
+    use gents_protocol::schemas::{BuiltInPolicy, CLIENT_JOURNAL_POLICY_RESOURCE};
     let directive = format!(
-        r#" @policy(id: "{CLIENT_JOURNAL_POLICY_ID}", resource: "{CLIENT_JOURNAL_POLICY_RESOURCE}")"#
+        r#" @policy(id: "{}", resource: "{CLIENT_JOURNAL_POLICY_RESOURCE}")"#,
+        BuiltInPolicy::ClientJournal.placeholder()
     );
     let sdl = gents_protocol::schemas::PENDING_CHAT_SUBMISSION;
     assert!(sdl.contains(&directive));
@@ -400,7 +401,10 @@ pub async fn client_journal_node(
             .build()
             .await?,
     );
-    node.add_collection(&unbound_journal_schema()).await?;
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared().render(&unbound_journal_schema()),
+    )
+    .await?;
     Ok(node)
 }
 

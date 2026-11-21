@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use defra_node::Node as EmbeddedNode;
+use gents_protocol::schemas::{BuiltInPolicy, HomePolicyIds};
 use tokio::sync::Mutex;
 use tracing::{debug, info};
 
@@ -48,14 +49,15 @@ pub async fn ensure_runtime(node: &EmbeddedNode) -> Result<()> {
 pub async fn ensure(node: &EmbeddedNode, catalog: &Catalog<'_>) -> Result<()> {
     let _guard = ENSURE_LOCK.lock().await;
     let started = Instant::now();
-    validate_bindings(node, catalog).await?;
+    let ids = HomePolicyIds::shared();
+    validate_bindings(node, catalog, ids).await?;
     reject_unknown_lineage(node, catalog).await?;
-    let file_image_owner = validate_file_image_bindings(node, catalog)?;
-    super::node_policies::register(node, catalog).await?;
-    let registered = register_baseline(node, catalog).await?;
-    register_branchable_identity_collection_owners(node, catalog).await?;
+    let file_image_owner = validate_file_image_bindings(node, catalog, ids)?;
+    super::node_policies::register(node, catalog, ids).await?;
+    let registered = register_baseline(node, catalog, ids).await?;
+    register_branchable_identity_collection_owners(node, catalog, ids).await?;
     if let Some(owner) = file_image_owner {
-        register_file_image_owner(node, owner, catalog).await?;
+        register_file_image_owner(node, owner, catalog, ids).await?;
     }
     verify_lineages(node, catalog).await?;
     reconcile_ordinary_indexes(node, catalog).await?;
@@ -68,7 +70,11 @@ pub async fn ensure(node: &EmbeddedNode, catalog: &Catalog<'_>) -> Result<()> {
     Ok(())
 }
 
-async fn register_baseline(node: &EmbeddedNode, catalog: &Catalog<'_>) -> Result<usize> {
+async fn register_baseline(
+    node: &EmbeddedNode,
+    catalog: &Catalog<'_>,
+    ids: &HomePolicyIds,
+) -> Result<usize> {
     let mut missing = Vec::new();
     for entry in catalog.baseline {
         if node.get_collection(entry.name)?.is_none() {
@@ -78,11 +84,13 @@ async fn register_baseline(node: &EmbeddedNode, catalog: &Catalog<'_>) -> Result
     if missing.is_empty() {
         return Ok(0);
     }
-    let batch = missing
-        .iter()
-        .map(|entry| entry.sdl)
-        .collect::<Vec<_>>()
-        .join("\n");
+    let batch = ids.render(
+        &missing
+            .iter()
+            .map(|entry| entry.sdl)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
     node.add_collection(&batch)
         .await
         .map_err(|source| SchemaError::BaselineRegister {
@@ -106,8 +114,10 @@ async fn register_baseline(node: &EmbeddedNode, catalog: &Catalog<'_>) -> Result
 async fn register_branchable_identity_collection_owners(
     node: &EmbeddedNode,
     catalog: &Catalog<'_>,
+    ids: &HomePolicyIds,
 ) -> Result<()> {
-    use gents_protocol::schemas::{AGENT_OWNERSHIP_POLICY_ID, IDENTITY_POLICY_BINDINGS};
+    use gents_protocol::schemas::IDENTITY_POLICY_BINDINGS;
+    let household = ids.id(BuiltInPolicy::Household);
     let owned: Vec<_> = IDENTITY_POLICY_BINDINGS
         .iter()
         .filter(|(name, _)| {
@@ -131,20 +141,12 @@ async fn register_branchable_identity_collection_owners(
                     collection: (*name).to_owned(),
                 })?;
         if acp
-            .is_doc_registered(
-                AGENT_OWNERSHIP_POLICY_ID,
-                resource,
-                &collection.collection_id,
-            )
+            .is_doc_registered(household, resource, &collection.collection_id)
             .await
             .map_err(|error| SchemaError::from(defra_node::Error::from(error)))?
         {
             let owner = acp
-                .get_doc_owner(
-                    AGENT_OWNERSHIP_POLICY_ID,
-                    resource,
-                    &collection.collection_id,
-                )
+                .get_doc_owner(household, resource, &collection.collection_id)
                 .await
                 .map_err(|error| SchemaError::from(defra_node::Error::from(error)))?;
             if owner.as_ref() != Some(&runtime) {
@@ -153,14 +155,9 @@ async fn register_branchable_identity_collection_owners(
                 });
             }
         } else {
-            acp.register_object(
-                &runtime,
-                AGENT_OWNERSHIP_POLICY_ID,
-                resource,
-                &collection.collection_id,
-            )
-            .await
-            .map_err(|error| SchemaError::from(defra_node::Error::from(error)))?;
+            acp.register_object(&runtime, household, resource, &collection.collection_id)
+                .await
+                .map_err(|error| SchemaError::from(defra_node::Error::from(error)))?;
         }
     }
     Ok(())
@@ -172,6 +169,7 @@ async fn register_file_image_owner(
     node: &EmbeddedNode,
     owner: &str,
     catalog: &Catalog<'_>,
+    ids: &HomePolicyIds,
 ) -> Result<()> {
     let owner = owner
         .parse::<identity::Did>()
@@ -185,9 +183,9 @@ async fn register_file_image_owner(
                 .ok_or_else(|| SchemaError::CollectionMissing {
                     collection: (*name).into(),
                 })?;
-        validate_file_image_policy(&collection, *branchable)?;
+        validate_file_image_policy(&collection, *branchable, ids)?;
         let acp = node.document_acp();
-        let policy = gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_ID;
+        let policy = ids.id(BuiltInPolicy::ToolFileChange);
         let resource = gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_RESOURCE;
         if acp
             .is_doc_registered(policy, resource, &collection.collection_id)

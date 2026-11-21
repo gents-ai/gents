@@ -97,14 +97,19 @@ mod legacy_backend_tests {
     async fn legacy_history_preflight_leaves_existing_document_untouched() -> anyhow::Result<()> {
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         let access = crate::config_client::ConfigAccess::local(node.clone());
-        let unbound = gents_protocol::schemas::INFERENCE_BACKEND.replace(
-            &format!(
-                " @policy(id: \"{}\", resource: \"secret_configuration\")",
-                gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID
-            ),
-            "",
-        );
-        access.add_collection(&unbound).await?;
+        let unbound = gents_protocol::schemas::HomePolicyIds::shared()
+            .render(gents_protocol::schemas::INFERENCE_BACKEND)
+            .replace(
+                &format!(
+                    " @policy(id: \"{}\", resource: \"secret_configuration\")",
+                    gents_protocol::schemas::HomePolicyIds::shared()
+                        .id(gents_protocol::schemas::BuiltInPolicy::Household)
+                ),
+                "",
+            );
+        access
+            .add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&unbound))
+            .await?;
         access
             .write(
                 "legacy_fixture",
@@ -136,14 +141,18 @@ mod legacy_backend_tests {
     async fn unbound_legacy_schema_is_refused_even_when_no_rows_are_visible() -> anyhow::Result<()>
     {
         let node = crate::test_support::node_builder().build().await?;
-        let unbound = gents_protocol::schemas::INFERENCE_BACKEND.replace(
-            &format!(
-                " @policy(id: \"{}\", resource: \"secret_configuration\")",
-                gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID
-            ),
-            "",
-        );
-        node.add_collection(&unbound).await?;
+        let unbound = gents_protocol::schemas::HomePolicyIds::shared()
+            .render(gents_protocol::schemas::INFERENCE_BACKEND)
+            .replace(
+                &format!(
+                    " @policy(id: \"{}\", resource: \"secret_configuration\")",
+                    gents_protocol::schemas::HomePolicyIds::shared()
+                        .id(gents_protocol::schemas::BuiltInPolicy::Household)
+                ),
+                "",
+            );
+        node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&unbound))
+            .await?;
         let previous = node
             .get_collection(gents_protocol::schemas::INFERENCE_BACKEND_NAME)?
             .expect("unbound legacy schema");
@@ -222,7 +231,9 @@ mod legacy_backend_tests {
                     .expect("fresh legacy schema");
                 let binding = !collection.is_branchable
                     && collection.policy.as_ref().is_some_and(|policy| {
-                        policy.id == gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID
+                        policy.id
+                            == gents_protocol::schemas::HomePolicyIds::shared()
+                                .id(gents_protocol::schemas::BuiltInPolicy::Household)
                             && policy.resource_name == "secret_configuration"
                     });
                 node.shutdown().await?;

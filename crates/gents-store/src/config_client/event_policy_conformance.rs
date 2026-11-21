@@ -44,13 +44,27 @@ async fn modeled_event_configuration_grants_use_native_permissions() -> anyhow::
             0,
         )
         .await?;
-    assert_eq!(policy, gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID);
-    owner.add_collection(gents_protocol::schemas::NODE).await?;
+    assert_eq!(
+        policy,
+        gents_protocol::schemas::HomePolicyIds::shared()
+            .id(gents_protocol::schemas::BuiltInPolicy::Household)
+    );
     owner
-        .add_collection(gents_protocol::schemas::TRIGGER)
+        .add_collection(
+            &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::NODE),
+        )
         .await?;
     owner
-        .add_collection(gents_protocol::schemas::EVENT_SOURCE)
+        .add_collection(
+            &gents_protocol::schemas::HomePolicyIds::shared()
+                .render(gents_protocol::schemas::TRIGGER),
+        )
+        .await?;
+    owner
+        .add_collection(
+            &gents_protocol::schemas::HomePolicyIds::shared()
+                .render(gents_protocol::schemas::EVENT_SOURCE),
+        )
         .await?;
     let response = owner
         .write(
@@ -157,7 +171,10 @@ async fn modeled_event_configuration_grants_use_native_permissions() -> anyhow::
         case.check(allowed);
     }
     owner
-        .add_collection(gents_protocol::schemas::EVENT_SOURCE_CURSOR)
+        .add_collection(
+            &gents_protocol::schemas::HomePolicyIds::shared()
+                .render(gents_protocol::schemas::EVENT_SOURCE_CURSOR),
+        )
         .await?;
     let created = owner.write("test.event_policy.cursor", "mutation {create_EventSourceCursor(input:{cursor_key:\"cursor\",owner_did:\"node\",source_collection:\"Source\",after:\"0\"}){_docID}}").await?;
     let cursor_doc = crate::graphql::created_doc_id(&created, "EventSourceCursor")?;

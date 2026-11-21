@@ -125,7 +125,8 @@ async fn private_client_journal_obeys_native_policy_and_refuses_exact_peer_pull(
             .check_doc_access(
                 &native_identity,
                 permission,
-                gents_protocol::schemas::CLIENT_JOURNAL_POLICY_ID,
+                gents_protocol::schemas::HomePolicyIds::shared()
+                    .id(gents_protocol::schemas::BuiltInPolicy::ClientJournal),
                 gents_protocol::schemas::CLIENT_JOURNAL_POLICY_RESOURCE,
                 doc_id,
             )
@@ -250,7 +251,8 @@ async fn private_client_journal_obeys_native_policy_and_refuses_exact_peer_pull(
         .document_acp()
         .register_doc_object(
             &owner.did().parse().unwrap(),
-            gents_protocol::schemas::CLIENT_JOURNAL_POLICY_ID,
+            gents_protocol::schemas::HomePolicyIds::shared()
+                .id(gents_protocol::schemas::BuiltInPolicy::ClientJournal),
             gents_protocol::schemas::CLIENT_JOURNAL_POLICY_RESOURCE,
             doc_id,
         )
