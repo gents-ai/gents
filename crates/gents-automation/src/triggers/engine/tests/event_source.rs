@@ -105,9 +105,7 @@ async fn startup_seeding_covers_every_document_beyond_the_former_cap() {
     node.shutdown().await.expect("node shutdown");
 }
 
-use events::{
-    Bus, ChannelBus, DocumentChangeSubscription, EventName, Message, Subscription, Update,
-};
+use events::{Bus, ChannelBus, EventName, Message, Subscription, Update};
 
 #[derive(Clone)]
 struct FakeUpdateSubscriptionSource(Arc<ChannelBus>);
@@ -139,11 +137,11 @@ impl gents_store::subscription_source::UpdateSubscriptionSource for FakeUpdateSu
         self.0.subscribe(&[EventName::Update])
     }
 
-    fn subscribe_collection_changes(
+    fn subscribe_changes(
         &self,
         collection_ids: Vec<String>,
-    ) -> DocumentChangeSubscription {
-        self.0.subscribe_collection_changes(collection_ids)
+    ) -> gents_store::subscription_source::ChangeSubscription {
+        self.0.subscribe_collection_changes(collection_ids).into()
     }
 }
 
