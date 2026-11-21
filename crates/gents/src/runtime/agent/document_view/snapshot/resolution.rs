@@ -100,7 +100,7 @@ pub(super) fn agent_context_documents(
     let (tool_selection, agents) = match tools {
         None => (ResolvedToolSelection::default(), AgentToolConfig::default()),
         Some(tools) => {
-            tools.validate()?;
+            tools.validate_stored()?;
             if let Some(remote) = &tools.remote {
                 for service in &remote.services {
                     owned_doc!(&view.tool_services, service.mcp_service_id.as_str(), scope)?;

@@ -112,3 +112,60 @@ fn rc0_eth_tool_ids_are_read_and_dropped_but_other_unknown_keys_still_fail() {
     });
     assert!(serde_json::from_value::<Tools>(unknown).is_err());
 }
+
+fn hiding(hidden: &[&str], script: bool) -> Tools {
+    let mut tools = document(if script {
+        json!({"integrations": {"plugins": [{"plugin": "gents/script", "tool_calls": true}]}})
+    } else {
+        json!({})
+    });
+    tools.hidden_tool_names = hidden.iter().map(|name| name.to_string()).collect();
+    tools
+}
+
+#[test]
+fn hiding_configuration_conforms_to_lean() {
+    gents_lean_vocab::families::tool_presentation_configuration_valid::replay(|case| {
+        let mut hidden = Vec::new();
+        if case.hides_others {
+            hidden.push("schema");
+        }
+        if case.hides_gateway {
+            hidden.push("config");
+        }
+        hiding(&hidden, case.script_selected)
+            .validation_violations()
+            .is_empty()
+    });
+}
+
+#[test]
+fn hidden_names_are_exact_and_round_trip_but_bind_only_writes() {
+    let tools = hiding(&["schema"], true);
+    let value = serde_json::to_value(&tools).unwrap();
+    assert_eq!(value["hidden_tool_names"], json!(["schema"]));
+    assert_eq!(serde_json::from_value::<Tools>(value).unwrap(), tools);
+    let mut absent = serde_json::to_value(hiding(&[], true)).unwrap();
+    assert!(absent.get("hidden_tool_names").is_none());
+    absent["hidden_tool_names"] = serde_json::Value::Null;
+    assert!(serde_json::from_value::<Tools>(absent)
+        .unwrap()
+        .hidden_tool_names
+        .is_empty());
+    for bad in [" schema", "sch*", ""] {
+        let violations = hiding(&[bad], true).stored_violations();
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.starts_with("hidden_tool_names")),
+            "{bad:?}: {violations:?}"
+        );
+    }
+    let unreachable = hiding(&["schema"], false);
+    assert!(unreachable.validate_stored().is_ok());
+    let refusal = unreachable.validate().unwrap_err().to_string();
+    assert!(
+        refusal.contains("select script with tool_calls: true"),
+        "{refusal}"
+    );
+}

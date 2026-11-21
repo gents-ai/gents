@@ -129,7 +129,7 @@ impl ResolvedToolSelection {
     }
 
     pub fn from_document(tools: &gents_documents::Tools) -> anyhow::Result<Self> {
-        tools.validate()?;
+        tools.validate_stored()?;
         let host = tools.host.as_ref();
         let files = host.and_then(|host| host.files.as_ref());
         let bash_group = host.and_then(|host| host.bash.as_ref());

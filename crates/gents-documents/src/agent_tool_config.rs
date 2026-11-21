@@ -10,7 +10,7 @@ pub struct AgentToolConfig {
 
 impl AgentToolConfig {
     pub fn from_document(tools: &super::Tools) -> Result<Self> {
-        tools.validate()?;
+        tools.validate_stored()?;
         Ok(Self {
             targets: Vec::new(),
             enabled: tools

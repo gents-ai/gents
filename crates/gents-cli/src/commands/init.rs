@@ -1727,6 +1727,7 @@ fn tools_for_package(
         integrations: None,
         self_config: None,
         tags: Vec::new(),
+        hidden_tool_names: Vec::new(),
     }
 }
 

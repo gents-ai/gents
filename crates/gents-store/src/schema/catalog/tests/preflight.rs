@@ -57,6 +57,12 @@ async fn a_collection_from_before_its_current_fields_is_refused_without_conversi
             r#"mutation {create_Trigger(input: {trigger_id: "retained", node_did: "owner"}) {_docID}}"#,
             &["create_session", "max_fires_per_hour"][..],
         ),
+        (
+            schemas::TOOLS_NAME,
+            schemas::TOOLS,
+            r#"mutation {create_Tools(input: {tools_id: "retained", node_did: "owner"}) {_docID}}"#,
+            &["hidden_tool_names"][..],
+        ),
     ] {
         let node = fresh_node().await;
         let sdl = schemas::HomePolicyIds::shared().render(sdl);

@@ -472,6 +472,11 @@ def scenarios : List CaseRow := examplesToRows ++
     , doc := [("self_config", "{\"enable_self_config\":true}")]
     , patch := [("self_config",
         some "{\"enable_self_config\":true,\"enable_pack_authority\":true}")] }
+  , { name := "tools_hiding_is_not_a_grant_accepted"
+    , target := .tools, guarded := false, validates := true
+    , doc := [("self_config", "{\"enable_self_config\":true}"),
+        ("integrations", "{\"plugins\":[{\"plugin\":\"gents/script\",\"tool_calls\":true}]}")]
+    , patch := [("hidden_tool_names", some "[\"schema\"]")] }
   , { name := "tools_grant_unrelated_edit_on_granted_tools_accepted"
     , target := .tools, guarded := false, validates := true
     , doc := [("self_config", "{\"enable_self_config\":true,\"enable_pack_install\":true}")]
