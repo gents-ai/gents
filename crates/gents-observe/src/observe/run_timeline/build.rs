@@ -69,10 +69,11 @@ pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
                 reasoning_output_tokens: call.reasoning_output_tokens,
                 provider_total_tokens: call.provider_total_tokens,
                 usage_completeness: call.usage_completeness.clone(),
-                context_accounting: call
-                    .context_accounting_json
-                    .as_deref()
-                    .and_then(|json| serde_json::from_str(json).ok()),
+                context_accounting: call.context_accounting_json.as_deref().and_then(|json| {
+                    gents_inference::rendered_request::ContextAccounting::parse(json)
+                        .ok()?
+                        .current()
+                }),
                 queued_at: call.queued_at.clone(),
                 started_at: call.started_at.clone(),
                 ended_at: call.ended_at.clone(),

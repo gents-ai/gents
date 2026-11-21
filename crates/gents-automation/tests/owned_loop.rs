@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use gents_inference::llm::message::UserContent;
+use gents_loop::test_support::scripted_provider::ScriptedProvider;
 use gents_loop::tool::ToolDyn;
 
 use gents_inference::llm::message::Message;
@@ -162,32 +163,16 @@ async fn managed_terminal_tool_result_terminates_loop() {
 async fn tool_call_turn_executes_threads_result_and_completes() {
     let (_db, hook, writer, mut lifecycle) = owned_test_hook().await;
     let prompt = Message::user("use the echo tool");
+    // Large enough that its stub saves bytes: a smaller output stays verbatim.
+    let echoed = format!("ECHOED {}", "e".repeat(512));
 
-    let model = scripted(vec![
-        vec![
-            RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
-                "call-1".to_string(),
-                "echo".to_string(),
-                serde_json::json!({}),
-            )),
-            RawStreamingChoice::FinalResponse(()),
-        ],
-        vec![
-            RawStreamingChoice::Message("done".to_string()),
-            RawStreamingChoice::FinalResponse(()),
-        ],
-    ]);
-    let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(EchoTool {
-        name: "echo".to_string(),
-        output: "ECHOED".to_string(),
-    })];
-
+    let model = echo_turn_model();
     let stream = run_loop_stream(
         model.clone(),
         Some(hook.clone()),
         TaggedMessage::unassociated(prompt),
         Vec::new(),
-        Arc::new(tools),
+        Arc::new(echo_tools(&echoed)),
         owned_config_for(4, &lifecycle),
     );
     let collected = collect_owned_scripted_stream(
@@ -199,7 +184,7 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
     )
     .await;
     assert!(collected.error.is_none(), "{:?}", collected.error);
-    assert_eq!(collected.tool_results, vec!["ECHOED".to_string()]);
+    assert_eq!(collected.tool_results, vec![echoed]);
     assert_eq!(collected.final_text.as_deref(), Some("done"));
 
     let dispatched = model.histories();
@@ -218,33 +203,7 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
         "fresh result must reach the next dispatch intact below threshold"
     );
 
-    let persisted = gents_session::session::load_history_with_access(
-        &lifecycle.access().unwrap(),
-        &lifecycle.request().session_id,
-        &lifecycle.request().node_did,
-        lifecycle.request().requester_did.as_deref(),
-    )
-    .await
-    .expect("load persisted session history");
-    let persisted_view = gents_loop::loop_stream::provider_view_tagged(
-        persisted
-            .into_iter()
-            .map(gents_loop::loop_stream::TaggedMessage::unassociated)
-            .collect(),
-    )
-    .expect("project durable history for a later request");
-    let durable_result = persisted_view
-        .iter()
-        .flat_map(|row| match &row.message {
-            Message::User { content } => content.iter().collect::<Vec<_>>(),
-            _ => Vec::new(),
-        })
-        .find_map(|item| match item {
-            UserContent::ToolResult(result) => Some(result),
-            _ => None,
-        })
-        .expect("persisted tool result remains represented in provider history");
-    let durable_stub = tool_result_text(&durable_result.content[0]);
+    let durable_stub = durable_tool_result_text(&lifecycle).await;
     assert!(durable_stub.contains("full output: sessions"));
     assert!(durable_stub.contains("\"action\":\"output\""));
     assert!(durable_stub.contains("\"call_id\":\"call-1\""));
@@ -281,6 +240,92 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
         .unwrap();
     let output = agent_tool_output(&lifecycle, tool_doc_id).await;
     assert!(output.contains("ECHOED"));
+}
+
+/// A small tool output stays verbatim in the durable history a later
+/// request sees: its stub would be larger than the output.
+#[tokio::test]
+async fn small_tool_output_stays_verbatim_in_the_durable_view() {
+    let (_db, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let stream = run_loop_stream(
+        echo_turn_model(),
+        Some(hook.clone()),
+        TaggedMessage::unassociated(Message::user("use the echo tool")),
+        Vec::new(),
+        Arc::new(echo_tools("ECHOED")),
+        owned_config_for(4, &lifecycle),
+    );
+    let collected = collect_owned_scripted_stream(
+        stream,
+        &hook,
+        &writer,
+        &mut lifecycle,
+        gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+    )
+    .await;
+    assert!(collected.error.is_none(), "{:?}", collected.error);
+    assert_eq!(collected.tool_results, vec!["ECHOED".to_string()]);
+
+    assert_eq!(durable_tool_result_text(&lifecycle).await, "ECHOED");
+}
+
+/// One echo call, then a final answer.
+fn echo_turn_model() -> ScriptedProvider {
+    scripted(vec![
+        vec![
+            RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
+                "call-1".to_string(),
+                "echo".to_string(),
+                serde_json::json!({}),
+            )),
+            RawStreamingChoice::FinalResponse(()),
+        ],
+        vec![
+            RawStreamingChoice::Message("done".to_string()),
+            RawStreamingChoice::FinalResponse(()),
+        ],
+    ])
+}
+
+fn echo_tools(output: &str) -> Vec<Box<dyn ToolDyn>> {
+    vec![Box::new(EchoTool {
+        name: "echo".to_string(),
+        output: output.to_string(),
+    })]
+}
+
+/// The text of the session's tool result in the provider view a later
+/// request builds from durable history.
+async fn durable_tool_result_text(
+    lifecycle: &gents_session::request::lifecycle::RequestLifecycle,
+) -> String {
+    let persisted = gents_session::session::load_history_with_access(
+        &lifecycle.access().unwrap(),
+        &lifecycle.request().session_id,
+        &lifecycle.request().node_did,
+        lifecycle.request().requester_did.as_deref(),
+    )
+    .await
+    .expect("load persisted session history");
+    let persisted_view = gents_loop::loop_stream::provider_view_tagged(
+        persisted
+            .into_iter()
+            .map(gents_loop::loop_stream::TaggedMessage::unassociated)
+            .collect(),
+    )
+    .expect("project durable history for a later request");
+    let durable_result = persisted_view
+        .iter()
+        .flat_map(|row| match &row.message {
+            Message::User { content } => content.iter().collect::<Vec<_>>(),
+            _ => Vec::new(),
+        })
+        .find_map(|item| match item {
+            UserContent::ToolResult(result) => Some(result),
+            _ => None,
+        })
+        .expect("persisted tool result remains represented in provider history");
+    tool_result_text(&durable_result.content[0]).to_string()
 }
 
 fn rejected_notice(text: &str) -> String {

@@ -217,6 +217,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
                     source: None,
                     physical_header: None,
                     block_indices: Vec::new(),
+                    stub_receipts: Vec::new(),
                 };
             let signer = agent_config.agent_identity.managed_agent_signer().unwrap();
             gents_session::session::provider_context_reduction::persist(

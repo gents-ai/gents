@@ -7,6 +7,7 @@ use gents_protocol::rendered_request::{
 fn accounting_json(estimated_input_tokens: usize) -> String {
     serde_json::to_string(&ContextAccounting {
         accounting_version: CONTEXT_ACCOUNTING_VERSION,
+        history_stubbing: Default::default(),
         turn_index: 0,
         attempt: 0,
         estimator: "test".to_string(),
