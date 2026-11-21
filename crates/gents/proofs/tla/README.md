@@ -507,6 +507,27 @@ See `../README.md` for how this fits the broader formal-verification model.
   every ephemeral range; `PerRunnerSpread` shows
   why separate directories rarely collided while one process per binary
   spread its cursor.
+- `UpdateHelperRegistration` — registering a managed update's helper job
+  beside the helper's own retirement of it. A submitter (a duplicate or
+  resumed `service update`) and a status reader each read the receipt, take
+  the operation's `helper.lock` and ask Lean
+  `RuntimeReconcile.UpdateHandoff.helperRegistration`, then write the job
+  definition, reload and start it; a status reader takes the lock only for a
+  phase Lean `statusTakesLock` admits. The helper holds the lock while it
+  serves, then removes its definition, reloads and stops; it may crash (the
+  kernel drops its lock) and systemd respawns it. `start` fails exactly when
+  the definition was absent at the last reload and is still absent (systemd
+  v255). launchd's steps are not modelled, although the same job runs on
+  macOS. `StartFindsUnit`, `NoRegistrationAfterRetirement` and
+  `StagedSubmitterYieldsOnlyToHelper` hold in the green model. RED:
+  `Unlocked` is the re-registration before 2855a05b05 and breaks
+  `StartFindsUnit` (run 42840804695); `StaleRead` decides on the receipt read
+  before the lock and breaks `NoRegistrationAfterRetirement`;
+  `FirstRegistration` registers a Staged resubmission without the lock and
+  breaks `StartFindsUnit`; `UngatedStatus` lets a status reader lock in every
+  phase and breaks `StagedSubmitterYieldsOnlyToHelper`, a Staged update that
+  nobody registers; `DuplicatePhase` breaks `DuplicateReportsAccepted`, the
+  script's assertion that a duplicate submission reports accepted.
 - `ExecutableStaging` — the service updater stages an executable that is
   exec'd afterwards (`copy_executable`), while other threads spawn. A
   sibling's spawn copies the updater's descriptors until that child execs,
@@ -886,6 +907,17 @@ for m in MCDroppedPermitCleanup*.cfg MCClientIdentityMetadata*.cfg; do
 done
 ```
 
+For UpdateHelperRegistration — the green model checks clean; the five
+diagnostics are EXPECTED to report the violation named in their config:
+```bash
+./scripts/run-tlc.sh MCUpdateHelperRegistration
+./scripts/run-tlc.sh MCUpdateHelperRegistrationUnlocked
+./scripts/run-tlc.sh MCUpdateHelperRegistrationStaleRead
+./scripts/run-tlc.sh MCUpdateHelperRegistrationFirstRegistration
+./scripts/run-tlc.sh MCUpdateHelperRegistrationUngatedStatus
+./scripts/run-tlc.sh MCUpdateHelperRegistrationDuplicatePhase
+```
+
 Each run directly, from this directory, is:
 ```bash
 java -cp <tla2tools.jar> tlc2.TLC -workers 2 -metadir <scratch dir> \
@@ -1070,6 +1102,12 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 | `MCClientIdentityMetadataRemoveThenRename.cfg`, `RemoveThenRenameReread.cfg` | as green, `RemoveBeforeRename = TRUE` | `NeverUninstalled` and `NoMissingFileError` intentionally VIOLATED: w2 removes the file w1 installed | 52 and 55 distinct states | 12 | <1s |
 | `MCClientIdentityMetadataNoReread.cfg` | `SingleWinnerKey = FALSE`, `Reread = FALSE` | `OkSawOwnMetadata` intentionally VIOLATED | 46 distinct states | 11 | <1s |
 | `MCClientIdentityMetadataDivergentKey.cfg` | `SingleWinnerKey = FALSE` | `AgreedInstall` intentionally VIOLATED: w1 accepts, w2 renames over it | 42 distinct states | 11 | <1s |
+| `MCUpdateHelperRegistration.cfg` | `Submitters = {s}`, `Readers = {q}`, `InitialPhases = {"staged", "accepted"}`, every safeguard on | Passes `TypeOK`, `StartFindsUnit`, `NoRegistrationAfterRetirement`, `StagedSubmitterYieldsOnlyToHelper` | 1,495 distinct states; 3,937 generated | 17 | <1s |
+| `MCUpdateHelperRegistrationUnlocked.cfg` | as green, `LockedReregistration = FALSE` | `StartFindsUnit` intentionally VIOLATED: Read(s) at accepted, HelperFinish, Write(s), HelperRemove, Reload(s), Start(s) finds no unit | 479 distinct states before counterexample; 968 generated | 7 | <1s |
+| `MCUpdateHelperRegistrationStaleRead.cfg` | as green, `ReadUnderLock = FALSE`, `InitialPhases = {"accepted"}` | `NoRegistrationAfterRetirement` intentionally VIOLATED: Read(s) at accepted, HelperFinish, HelperRemove, HelperCrash frees the lock, TryLock(s), Decide(s) on the stale read, Write(s) | 507 distinct states before counterexample; 1,095 generated | 8 | <1s |
+| `MCUpdateHelperRegistrationFirstRegistration.cfg` | as green, `LockedFirstRegistration = FALSE` | `StartFindsUnit` intentionally VIOLATED: Read(s) at staged, HelperFinish to failed, Write(s), HelperRemove, Reload(s), Start(s) finds no unit | 418 distinct states before counterexample; 814 generated | 7 | <1s |
+| `MCUpdateHelperRegistrationUngatedStatus.cfg` | as green, `StatusGate = FALSE` | `StagedSubmitterYieldsOnlyToHelper` intentionally VIOLATED: HelperCrash, Read(s) and Read(q) at staged, TryLock(q) takes the lock, TryLock(s) finds it held by the status reader | 273 distinct states before counterexample; 482 generated | 6 | <1s |
+| `MCUpdateHelperRegistrationDuplicatePhase.cfg` | as green, `InitialPhases = {"accepted"}` | `DuplicateReportsAccepted` intentionally VIOLATED: HelperFinish, Read(s) reads a finished receipt | 9 distinct states before counterexample; 9 generated | 3 | <1s |
 
 The nine BackgroundAdmissionContention rows used TLC2 `2026.11.06.222357`
 (rev `d8fb231`) with Homebrew OpenJDK 25.0.2 on macOS arm64 and
@@ -1092,6 +1130,10 @@ rows checked their temporal properties over the complete state space.
 The seven DesktopUpdateListener rows used TLC2 `2026.11.06.222357` (rev
 `d8fb231`) with Homebrew OpenJDK 25.0.2 on macOS arm64 and `-workers 2`; the
 green runs checked their temporal properties over the complete state space.
+
+The six UpdateHelperRegistration rows used the pinned TLC 1.7.4 with
+Temurin 17.0.21 on macOS arm64 and `-workers 1 -fp 1`, as
+`tla_check.py run` does.
 
 ## PairingTransport derived requirements
 
