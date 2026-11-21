@@ -541,8 +541,7 @@ pub async fn prepare_document_pack_install(
                         return Some(owner.to_owned());
                     }
                     capture_variable(&captured, name, || root.resolve(name, environment))
-                })
-                .map_err(|names| anyhow::anyhow!("unset variables: {}", names.join(", ")))?;
+                })?;
                 let variables = captured.into_inner().unwrap_or_else(|e| e.into_inner());
                 root.with_variables(variables)
             }

@@ -171,12 +171,8 @@ pub fn decode_pack_config(
             .pointer("/node/node_did")
             .and_then(Value::as_str)
             .map(|owner| {
-                interpolate::interpolate_with(owner, environment).map_err(|missing| {
-                    anyhow::anyhow!(
-                        "node owner references unset variables: {}",
-                        missing.join(", ")
-                    )
-                })
+                interpolate::interpolate_with(owner, environment)
+                    .map_err(|names| interpolate::UnsetVariables { names })
             })
             .transpose()?
     } else {
@@ -389,12 +385,8 @@ pub(super) fn interpolate_values(
 ) -> Result<()> {
     match value {
         Value::String(text) => {
-            *text = interpolate::interpolate_with(text, environment).map_err(|missing| {
-                anyhow::anyhow!(
-                    "pack config references unset environment variables: {}",
-                    missing.join(", ")
-                )
-            })?;
+            *text = interpolate::interpolate_with(text, environment)
+                .map_err(|names| interpolate::UnsetVariables { names })?;
         }
         Value::Array(values) => {
             for value in values {
