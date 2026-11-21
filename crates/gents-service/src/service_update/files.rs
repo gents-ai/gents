@@ -6,15 +6,20 @@ use std::io::Read as _;
 use std::os::unix::fs::PermissionsExt as _;
 
 pub(super) fn lock(path: &Path) -> Result<File> {
+    try_lock(path)?.context("another updater owns this operation")
+}
+pub(super) fn try_lock(path: &Path) -> std::io::Result<Option<File>> {
     let file = fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .read(true)
         .write(true)
         .open(path)?;
-    file.try_lock()
-        .context("another updater owns this operation")?;
-    Ok(file)
+    match file.try_lock() {
+        Ok(()) => Ok(Some(file)),
+        Err(fs::TryLockError::WouldBlock) => Ok(None),
+        Err(fs::TryLockError::Error(error)) => Err(error),
+    }
 }
 pub(super) fn submission_lock(path: &Path) -> Result<File> {
     let file = fs::OpenOptions::new()
