@@ -891,6 +891,7 @@ async fn serve_foreground(
                 native_executables: gents_tools::native::NativeExecutables {
                     host: client.host_executable(),
                     fs_runner: args.fs_runner.clone(),
+                    ux_preview_assets: args.ux_preview_assets.clone(),
                 },
                 backend_health: Some(backend_health.clone()),
                 p2p_intervals: p2p_intervals(&args),

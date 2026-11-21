@@ -61,6 +61,7 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
             edited: Default::default(),
             grant_authority: args.grant_authority,
             wire: Vec::new(),
+            environment: Default::default(),
         };
         crate::commands::pack::wire::record_approvals(
             &home,

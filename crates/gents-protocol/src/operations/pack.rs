@@ -119,6 +119,22 @@ pub enum VariableSource {
     Unset,
 }
 
+/// Lean `Pack.Operations.Planner`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Planner {
+    Installer,
+    HostedRuntime,
+}
+
+/// Lean `Pack.Operations.PlanEnvironment`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanEnvironment {
+    Own,
+    Sent,
+}
+
 /// Lean `Pack.Operations.RootReader`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

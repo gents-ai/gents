@@ -67,7 +67,7 @@ impl std::fmt::Display for JavyMissing {
         write!(
             f,
             "javy is not runnable ({}); promotion builds the workflow with javy 8.1.1, which \
-             .github/scripts/setup-afterburner-toolchains.sh installs (or set JAVY to its path)",
+             .github/scripts/setup-afterburner-toolchains.sh installs (or pass its path as --javy)",
             self.0
         )
     }
@@ -137,11 +137,6 @@ fn reserve_promoted_dir(home: &Path, name: &str) -> Result<PathBuf> {
         )
     })?;
     Ok(dir)
-}
-
-/// The javy command promotion checks: `JAVY` when set, otherwise `javy` on PATH.
-pub fn javy_command() -> String {
-    std::env::var("JAVY").unwrap_or_else(|_| "javy".into())
 }
 
 fn javy_version(javy: &str) -> Result<String, JavyMissing> {

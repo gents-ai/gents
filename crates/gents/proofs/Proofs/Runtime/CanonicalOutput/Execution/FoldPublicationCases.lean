@@ -198,20 +198,24 @@ private def observe (world : World) (accepted : Bool) : Observation :=
       message.header.request == some world.requestId && message.header.role == .user).map
         (·.key) }
 
-def claimed : Option World := do
+def claimedWith (pending : List SessionQueue.QueueEntry) (admitted : List RequestId) :
+    Option World := do
   let parent ← terminalRunningParent
   let gate ← Gate.acquire (Gate.initial parent) 1 true
   let queue : SessionQueue.SessionQueueState :=
-    { scope := ⟨1, 1, some 1⟩, active := none, pending := [activeEntry, selectedEntry]
-    , terminal := ∅ }
+    { scope := ⟨1, 1, some 1⟩, active := none, pending, terminal := ∅ }
   let world ← claimAndActivate { gate with queue := queue, claimed := none } 1 6
     { nextActivation (some 1) with
-      request := { nextAdmission (some 1) with entry := activeEntry }, admitted := [903] }
+      request := { nextAdmission (some 1) with entry := activeEntry }, admitted }
   let ready ← reacquire world
   beginProcessing ready 1 6 8
 
-def run (steps : List Step) : Option (List Observation) := do
-  let start ← claimed
+def claimed : Option World := claimedWith [activeEntry, selectedEntry] [903]
+
+def busyTurnClaimed : Option World := claimedWith [activeEntry] []
+
+def run (steps : List Step) (initial : Option World := claimed) : Option (List Observation) := do
+  let start ← initial
   let (_, observations) := steps.foldl (fun (state, observed) step =>
     let (next, accepted) := apply state step
     (next, observed ++ [observe next.world accepted])) (({ world := start, now := 6, turn := none } : RunState), [])
@@ -324,5 +328,18 @@ theorem consumed_selection_cannot_be_edited :
     (((run (steeringCases[6]!).2).getD []).getLast?.map fun o =>
       (o.accepted, o.folding, o.authoredKeys)) =
       some (false, [], ["prompt", "folded:903"]) := by native_decide
+
+def busyTurnSteeringCases : List (String × List Step) :=
+  [ ("two_steers_behind_busy_turn_share_one_intake",
+      [.publishPrompt 8, .acceptTurn 8, .enqueueSteering 904, .enqueueSteering 905,
+       .intake 8 true, .publishFolded 8 904, .publishFolded 8 905,
+       .finishOrIntake 8 true, .finish]) ]
+
+theorem two_steers_behind_busy_turn_share_one_intake :
+    let observed := (run (busyTurnSteeringCases[0]!).2 busyTurnClaimed).getD []
+    (observed[4]?).map (·.folding) = some [904, 905] ∧
+      observed.getLast?.map (fun o => (o.accepted, o.active, o.pending, o.folding, o.authoredKeys)) =
+        some (true, none, [], [], ["prompt", "folded:904", "folded:905"]) := by
+  native_decide
 
 end CanonicalOutput.Execution.FoldPublication

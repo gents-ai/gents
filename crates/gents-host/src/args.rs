@@ -194,6 +194,12 @@ pub struct ServeArgs {
     pub fs_runner: Option<PathBuf>,
     #[arg(
         long,
+        value_name = "PATH",
+        help = "Built UX preview page directory for `ux preview`, for a build that carries none beside it"
+    )]
+    pub ux_preview_assets: Option<PathBuf>,
+    #[arg(
+        long,
         value_enum,
         default_value_t = P2pTransportArg::Iroh,
         help = "P2P transport for this server. Use `none` for local-only demos that only need GraphQL"

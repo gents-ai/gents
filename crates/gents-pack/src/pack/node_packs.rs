@@ -487,7 +487,12 @@ impl NodePacks<'_> {
         provisioner: Option<&AgentProvisioner<'_>>,
     ) -> Result<PreparedDocumentPackInstall> {
         let environment = |name: &str| {
-            crate::operations::pack::install_value(PackActor::Agent, &change.variables, name)
+            crate::operations::pack::install_value(
+                PackActor::Agent,
+                &change.variables,
+                &crate::operations::pack::InstallEnvironment::Installer,
+                name,
+            )
         };
         let mut prepared = super::prepare_document_pack_archive_with_provisioner(
             &crate::pack::InstallTarget {
