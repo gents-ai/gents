@@ -9,13 +9,14 @@ pub struct NodePolicy {
     pub definition: &'static str,
     pub id: &'static str,
     manages: fn(&Catalog<'_>) -> bool,
-    mismatch: fn() -> SchemaError,
+    pub(super) mismatch: fn() -> SchemaError,
 }
 
 /// Every access policy the node adds under counter 0 as its owner, in a fixed
 /// order. A deployment that holds policies from its first block, as an
-/// embedded Vera node does, is created with exactly these: the node adopts a
-/// policy that is there and cannot add one that is not.
+/// embedded Vera node does, is created with exactly these
+/// (`vera_seed::seed`): the node adopts a policy that is there and cannot add
+/// one that is not.
 pub const NODE_POLICIES: [NodePolicy; 4] = [
     NodePolicy {
         definition: gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
@@ -53,12 +54,27 @@ pub(super) async fn register(
         }
         node.node_identity_did()
             .ok_or(SchemaError::MissingNodeIdentity)?;
-        let added = node
-            .add_dac_policy_with_counter_as(&node_context(node), policy.definition, 0)
-            .await?;
+        let added = match seeded_id(node, policy).await? {
+            Some(seeded) => seeded,
+            None => {
+                node.add_dac_policy_with_counter_as(&node_context(node), policy.definition, 0)
+                    .await?
+            }
+        };
         if added != policy.id {
             return Err((policy.mismatch)());
         }
     }
     Ok(())
+}
+
+#[cfg(feature = "vera")]
+use super::vera_seed::seeded_id;
+
+#[cfg(not(feature = "vera"))]
+async fn seeded_id(
+    _node: &EmbeddedNode,
+    _policy: &NodePolicy,
+) -> Result<Option<String>, SchemaError> {
+    Ok(None)
 }

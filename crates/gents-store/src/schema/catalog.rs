@@ -10,6 +10,8 @@ mod install;
 mod node_policies;
 #[cfg(test)]
 mod tests;
+#[cfg(feature = "vera")]
+pub mod vera_seed;
 
 pub use compatibility::{check_lineages, validate_existing_schema};
 pub use error::SchemaError;
