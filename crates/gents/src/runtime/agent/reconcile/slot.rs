@@ -45,9 +45,18 @@ pub(super) struct AgentSlot {
     pub(super) worker_task_count: usize,
     pub(super) queue_capacity: usize,
     pub(super) generation: u64,
+    standing: Arc<std::sync::Mutex<BuildStanding>>,
 }
 
 impl AgentSlot {
+    /// Whether the slot exhausted its build budget and runs nothing.
+    pub(super) fn parked(&self) -> bool {
+        match self.standing.lock() {
+            Ok(standing) => *standing == BuildStanding::Demoted,
+            Err(_) => true,
+        }
+    }
+
     pub(super) fn matches(
         &self,
         agent_config: &AgentWithTools,
@@ -66,13 +75,16 @@ pub(crate) trait SlotFailurePolicy: Send + Sync {
     fn on_build_failure(&self, _agent_did: &str, _failure_number: u32, _error: &str) {}
     async fn on_slot_created(&self, agent_did: &str, generation: u64) -> Result<()>;
     async fn try_demote(&self, agent_did: &str, generation: u64, error: &str) -> Result<bool>;
+    /// A demoted slot is parked; `publication_busy` says whether its last
+    /// build failed only because an installer held the plugin store.
+    fn on_slot_parked(&self, _publication_busy: bool) {}
     async fn on_slot_retired(&self, agent_did: &str, generation: u64, recreated: bool);
 }
 
 async fn handle_slot_failure(
     agent_did: &str,
     generation: u64,
-    error: &str,
+    failure: &anyhow::Error,
     failure_policy: Option<&dyn SlotFailurePolicy>,
     standing: &Arc<std::sync::Mutex<BuildStanding>>,
     shutdown: &mut watch::Receiver<bool>,
@@ -81,6 +93,10 @@ async fn handle_slot_failure(
     let Some(policy) = failure_policy else {
         return false;
     };
+    let error = &format!(
+        "{}",
+        gents_protocol::error_chain::ErrorChain(failure.as_ref())
+    );
     enum Verdict {
         Restart,
         AlreadyDemoted,
@@ -121,7 +137,11 @@ async fn handle_slot_failure(
         Verdict::Transitioned => {}
     }
     match policy.try_demote(agent_did, generation, error).await {
-        Ok(true) => {}
+        Ok(true) => policy.on_slot_parked(
+            gents_pack::plugin::store::PublishedPluginReadError::error_chain_is_busy(
+                failure.as_ref(),
+            ),
+        ),
         Ok(false) => tracing::warn!(
             agent_did,
             generation,
@@ -328,7 +348,7 @@ where
             capacity,
             shutdown,
             state_rx,
-            standing,
+            standing: standing.clone(),
         },
         executor_capacity,
         runner,
@@ -343,6 +363,7 @@ where
         executor_capacity,
         #[cfg(test)]
         worker_task_count: executor_capacity,
+        standing,
         queue_capacity: AGENT_EXECUTOR_QUEUE_CAPACITY,
         generation,
     }
@@ -468,7 +489,7 @@ where
                 if handle_slot_failure(
                     &agent_config.agent.agent_did,
                     generation,
-                    &format!("{error:#}"),
+                    &error,
                     failure_policy.as_deref(),
                     &standing,
                     &mut shutdown,
@@ -494,7 +515,7 @@ where
                 if handle_slot_failure(
                     &agent_config.agent.agent_did,
                     generation,
-                    "agent runner panicked",
+                    &anyhow::anyhow!("agent runner panicked"),
                     failure_policy.as_deref(),
                     &standing,
                     &mut shutdown,

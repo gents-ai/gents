@@ -51,4 +51,53 @@ theorem a_demoting_publication_keeps_the_epoch_open (now deadline : Nat) :
     closesEpoch (reconcile true now deadline) = false := by
   by_cases h : now < deadline <;> simp [reconcile, closesEpoch, h]
 
+/-- Why an agent is unavailable when the runtime starts, as startup weighs it. -/
+inductive StartupCause where
+  | degraded | publicationBusy | invalid
+  deriving DecidableEq, Repr
+
+/-- A tool surface that could not be built only because an installer held the
+plugin store is transient, like the degraded readiness reasons; any other
+unbuilt surface is invalid configuration. -/
+def startupCause (degradedReason surfaceUnavailable publicationBusy : Bool) : StartupCause :=
+  if degradedReason then .degraded
+  else if surfaceUnavailable && publicationBusy then .publicationBusy
+  else .invalid
+
+/-- Startup proceeds with a runnable agent, or with none when every
+unavailable agent has a transient cause; invalid configuration blocks it.
+A node whose agents all wait on a held store starts degraded and recovers
+when the store is released. -/
+def startupProceeds (runnable : Nat) (causes : List StartupCause) : Bool :=
+  decide (0 < runnable) || (!causes.isEmpty && causes.all (· != .invalid))
+
+/-- A reconciled proposal is sent when the configuration changed, or when a
+recovery is pending: a slot parked by a held store has an unchanged
+configuration, so deduplicating by fingerprint would strand it. -/
+def sendProposal (changed recoveryPending : Bool) : Bool := changed || recoveryPending
+
+/-- A slot is rebuilt when its configuration changed or it is parked: a parked
+slot runs nothing, so a matching configuration does not make it reusable. -/
+def recreateSlot (configurationMatches parked : Bool) : Bool := !configurationMatches || parked
+
+/-- After a failed reconcile the watcher retries while the change is still
+settling or a recovery is pending; otherwise it goes idle until the next
+event, and a pending recovery would be lost. -/
+def retryAfterFailure (settling recoveryPending : Bool) : Bool := settling || recoveryPending
+
+theorem a_store_held_at_startup_does_not_block_it :
+    startupProceeds 0 [.publicationBusy, .degraded] = true := by decide
+
+theorem invalid_configuration_still_blocks_startup :
+    startupProceeds 0 [.publicationBusy, .invalid] = false := by decide
+
+theorem a_pending_recovery_is_never_deduplicated (changed : Bool) :
+    sendProposal changed true = true := by cases changed <;> rfl
+
+theorem a_parked_slot_is_rebuilt (configurationMatches : Bool) :
+    recreateSlot configurationMatches true = true := by cases configurationMatches <;> rfl
+
+theorem a_failed_reconcile_keeps_a_pending_recovery (settling : Bool) :
+    retryAfterFailure settling true = true := by cases settling <;> rfl
+
 end RuntimeReconcile.SurfacePublication

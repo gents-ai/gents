@@ -663,6 +663,13 @@ See `../README.md` for how this fits the broader formal-verification model.
   busy, `EventResetsEpoch` lets each change restart the epoch (both violate
   `RevocationBound`), `RunsUnpinned` admits a digest outside the active pins,
   and `DemotesEarly` demotes on contention inside the epoch.
+- `PluginSurfaceRecovery` — an agent a held plugin store parked or left
+  unavailable at startup, recovered without another configuration change:
+  the installer's release emits no database event and the recovered
+  configuration is the active one. The watcher carries the pending recovery
+  through a transient reconcile failure (Lean `retryAfterFailure`) and past
+  fingerprint deduplication (`sendProposal`); `DropsRecovery` does neither and
+  violates `RecoversWithoutNewEvent`.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## Checking

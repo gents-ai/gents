@@ -13,7 +13,9 @@ use gents_tools::surface::ToolRuntimeContext;
 
 use super::super::document_view;
 use super::super::DocumentResolveContext;
-use super::surface_publication::{epoch_deadline, reconcile, Disposition};
+use super::surface_publication::{
+    epoch_deadline, reconcile, retry_after_failure, send_proposal, Disposition,
+};
 use gents_pack::plugin::store::{PublishedPluginReadError, StoreAbsent};
 use gents_protocol::error_chain::ErrorChain;
 
@@ -156,6 +158,15 @@ pub(super) async fn run_control_watcher_with_timing(
     let mut pending_since = None;
     let mut publication_epoch = None;
     let mut awaiting_release = false;
+    let mut recovery_events = runtime_status.publication_recovery();
+    let mut recovery_pending = *recovery_events.borrow_and_update() != 0;
+    if recovery_pending {
+        dirty = true;
+        publication_epoch = Some(tokio::time::Instant::now() + timing.publication_wait);
+        sleep
+            .as_mut()
+            .reset(tokio::time::Instant::now() + timing.debounce);
+    }
     let ControlSubscription {
         changes: mut subscription,
         names_by_id,
@@ -277,7 +288,7 @@ pub(super) async fn run_control_watcher_with_timing(
                 {
                     Ok(snapshot) => {
                         let fingerprint = snapshot.configuration_fingerprint();
-                        if phase_announced || last_proposed_fingerprint.as_deref() != Some(fingerprint.as_str()) {
+                        if phase_announced || send_proposal(last_proposed_fingerprint.as_deref() != Some(fingerprint.as_str()), recovery_pending && disposition == Disposition::Publish) {
                             if !phase_announced {
                                 runtime_status
                                     .set_reconcile_phase(ReconcilePhase::Resolving)
@@ -288,6 +299,9 @@ pub(super) async fn run_control_watcher_with_timing(
                             }
                             last_proposed_fingerprint = Some(fingerprint);
                             proposed_update = true;
+                            if disposition == Disposition::Publish {
+                                recovery_pending = false;
+                            }
                         }
                     }
                     Err(error) => {
@@ -308,9 +322,10 @@ pub(super) async fn run_control_watcher_with_timing(
                 }
                 drop(publication);
                 if resolve_failed {
-                    if settle_deadline
-                        .is_some_and(|deadline| tokio::time::Instant::now() < deadline)
-                    {
+                    if retry_after_failure(
+                        settle_deadline.is_some_and(|deadline| tokio::time::Instant::now() < deadline),
+                        recovery_pending,
+                    ) {
                         dirty = true;
                         sleep
                             .as_mut()
@@ -343,6 +358,17 @@ pub(super) async fn run_control_watcher_with_timing(
                 dirty = false;
                 settle_deadline = None;
                 sleep.as_mut().reset(tokio::time::Instant::now() + timing.idle_sleep);
+            }
+            changed = recovery_events.changed() => {
+                if changed.is_err() {
+                    return Ok(());
+                }
+                recovery_events.borrow_and_update();
+                recovery_pending = true;
+                dirty = true;
+                publication_epoch = Some(epoch_deadline(publication_epoch, tokio::time::Instant::now(), timing.publication_wait));
+                awaiting_release = false;
+                sleep.as_mut().reset(after_wake(&mut pending_since, timing.debounce, timing.debounce));
             }
             Some(()) = health_events_rx.recv() => {
                 tracing::info!(

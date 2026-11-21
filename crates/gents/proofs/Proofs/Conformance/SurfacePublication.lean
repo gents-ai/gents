@@ -5,7 +5,9 @@ namespace Conformance.SurfacePublication
 
 open Lean RuntimeReconcile.SurfacePublication
 
-deriving instance ToJson for Disposition
+deriving instance ToJson for Disposition, StartupCause
+
+attribute [conformance_function] startupCause sendProposal recreateSlot retryAfterFailure
 
 structure EpochInput where
   opened : Option Nat
@@ -34,5 +36,21 @@ def reconcile : Family ReconcileInput Disposition where
     [(0, 60000), (59999, 60000), (60000, 60000), (90000, 60000)].map fun (now, deadline) =>
       { busy, now, deadline }
   model := fun i => RuntimeReconcile.SurfacePublication.reconcile i.busy i.now i.deadline
+
+structure StartupInput where
+  runnable : Nat
+  causes : List StartupCause
+  deriving ToJson
+
+@[conformance_family]
+def startupProceeds : Family StartupInput Bool where
+  inputs :=
+    [ { runnable := 1, causes := [.invalid] }
+    , { runnable := 0, causes := [] }
+    , { runnable := 0, causes := [.degraded] }
+    , { runnable := 0, causes := [.publicationBusy] }
+    , { runnable := 0, causes := [.publicationBusy, .degraded] }
+    , { runnable := 0, causes := [.publicationBusy, .invalid] } ]
+  model := fun i => RuntimeReconcile.SurfacePublication.startupProceeds i.runnable i.causes
 
 end Conformance.SurfacePublication

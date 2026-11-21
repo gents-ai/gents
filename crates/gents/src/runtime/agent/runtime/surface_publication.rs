@@ -27,6 +27,46 @@ pub(super) fn reconcile(busy: bool, now: Instant, deadline: Instant) -> Disposit
     }
 }
 
+/// Lean `RuntimeReconcile.SurfacePublication.sendProposal`.
+pub(super) fn send_proposal(changed: bool, recovery_pending: bool) -> bool {
+    changed || recovery_pending
+}
+
+/// Lean `RuntimeReconcile.SurfacePublication.retryAfterFailure`.
+pub(super) fn retry_after_failure(settling: bool, recovery_pending: bool) -> bool {
+    settling || recovery_pending
+}
+
+/// Lean `RuntimeReconcile.SurfacePublication.StartupCause`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum StartupCause {
+    Degraded,
+    PublicationBusy,
+    Invalid,
+}
+
+/// Lean `RuntimeReconcile.SurfacePublication.startupCause`.
+pub(super) fn startup_cause(
+    degraded_reason: bool,
+    surface_unavailable: bool,
+    publication_busy: bool,
+) -> StartupCause {
+    if degraded_reason {
+        StartupCause::Degraded
+    } else if surface_unavailable && publication_busy {
+        StartupCause::PublicationBusy
+    } else {
+        StartupCause::Invalid
+    }
+}
+
+/// Lean `RuntimeReconcile.SurfacePublication.startupProceeds`.
+pub(super) fn startup_proceeds(runnable: usize, causes: &[StartupCause]) -> bool {
+    runnable > 0
+        || (!causes.is_empty() && causes.iter().all(|cause| *cause != StartupCause::Invalid))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -42,6 +82,23 @@ mod tests {
         });
         gents_lean_vocab::families::surface_publication_reconcile::replay::<Disposition>(|i| {
             reconcile(i.busy, at(i.now), at(i.deadline))
+        });
+    }
+
+    #[test]
+    fn recovery_and_startup_decisions_replay_the_lean_owner() {
+        use gents_lean_vocab::families as family;
+        family::runtime_reconcile_surface_publication_send_proposal::replay(|i| {
+            send_proposal(i.changed, i.recovery_pending)
+        });
+        family::runtime_reconcile_surface_publication_retry_after_failure::replay(|i| {
+            retry_after_failure(i.settling, i.recovery_pending)
+        });
+        family::runtime_reconcile_surface_publication_startup_cause::replay::<StartupCause>(|i| {
+            startup_cause(i.degraded_reason, i.surface_unavailable, i.publication_busy)
+        });
+        family::surface_publication_startup_proceeds::replay::<StartupCause>(|i| {
+            startup_proceeds(usize::try_from(i.runnable).unwrap(), &i.causes)
         });
     }
 }
