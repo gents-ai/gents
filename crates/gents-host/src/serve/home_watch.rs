@@ -112,11 +112,11 @@ pub(crate) async fn home_gone(home: &Path, identity: HomeIdentity) {
 }
 
 /// Exits at once, so no shutdown flush or `Drop` writes into the path.
-pub(crate) fn exit_home_gone(home: &Path) -> ! {
-    eprintln!(
+pub(crate) fn exit_home_gone(stderr: gents::runtime::native_logging::Stderr, home: &Path) -> ! {
+    stderr.write(&format!(
         "Error: {} was deleted or replaced while the server ran",
         home.display()
-    );
+    ));
     std::process::exit(gents_service::native_service::HOME_GONE_EXIT_CODE)
 }
 
