@@ -1226,9 +1226,7 @@ async fn verified_agent_new_creation_matching(
         return Ok(decided);
     }
     let (load, accepted, failure) =
-        match crate::tool_call::query::result::load_accepted_call(access, call_doc, scope)
-            .await
-        {
+        match crate::tool_call::query::result::load_accepted_call(access, call_doc, scope).await {
             Ok(accepted) => (Load::Loaded, Some(accepted), None),
             Err(error) => (Load::of(&error), None, Some(anyhow::Error::new(error))),
         };
@@ -1785,8 +1783,14 @@ mod conformance {
         let cases = [
             (failed(), CauseLoad::QueryFailed),
             (parent(parent(failed())), CauseLoad::QueryFailed),
-            (ToolCallLoadError::Missing("call".into()), CauseLoad::Missing),
-            (parent(ToolCallLoadError::Missing("parent".into())), CauseLoad::ParentMissing),
+            (
+                ToolCallLoadError::Missing("call".into()),
+                CauseLoad::Missing,
+            ),
+            (
+                parent(ToolCallLoadError::Missing("parent".into())),
+                CauseLoad::ParentMissing,
+            ),
             (
                 parent(ToolCallLoadError::Invalid(anyhow::anyhow!("rebound"))),
                 CauseLoad::ParentUnreadable,

@@ -137,8 +137,7 @@ pub(super) async fn render_request_context_message(
     request: &AgentRequest,
     frozen_instruction_manifest: Option<&str>,
 ) -> Result<Option<Message>> {
-    let creation =
-        gents_session::request::context::request_creation_cause(access, request).await?;
+    let creation = gents_session::request::context::request_creation_cause(access, request).await?;
     let instructions = gents_session::workspace::instruction_body_for_request(
         frozen_instruction_manifest,
         gents_session::workspace::request_workspace_cwd(request).as_deref(),
@@ -151,7 +150,7 @@ pub(super) async fn render_request_context_message(
             creation,
             profile_model,
         )
-            .map(|body| Message::user(format!("<context>\n{body}\n</context>"))),
+        .map(|body| Message::user(format!("<context>\n{body}\n</context>"))),
     )
 }
 

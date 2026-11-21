@@ -994,15 +994,16 @@ async fn load_accepted_tool_call_walk(
         .map(|effect| effect.parent_tool_call_doc_id.clone())
         .or_else(|| call.spawned_by_tool_call_doc_id.clone());
     if let Some(parent_doc) = parent_doc {
-        let AcceptedToolCall((parent, headers, _, parent_args, accepted)) =
-            Box::pin(load_accepted_tool_call_walk(source, &parent_doc, scope, ancestry))
-                .await
-                .map_err(|error| {
-                    ToolCallLoadError::Parent(Box::new(ParentLoadError {
-                        doc_id: parent_doc.clone(),
-                        error,
-                    }))
-                })?;
+        let AcceptedToolCall((parent, headers, _, parent_args, accepted)) = Box::pin(
+            load_accepted_tool_call_walk(source, &parent_doc, scope, ancestry),
+        )
+        .await
+        .map_err(|error| {
+            ToolCallLoadError::Parent(Box::new(ParentLoadError {
+                doc_id: parent_doc.clone(),
+                error,
+            }))
+        })?;
         let args = accept_derived(
             source,
             &call,

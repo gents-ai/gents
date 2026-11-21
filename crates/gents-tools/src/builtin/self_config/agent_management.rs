@@ -1023,8 +1023,9 @@ async fn agent_apply_in_txn(
                         .zip(requested)
                     {
                         if override_reported(requested, before != after) {
-                            overridden_on_request
-                                .push(format!("{name}: overridden on request (source value: {before})"));
+                            overridden_on_request.push(format!(
+                                "{name}: overridden on request (source value: {before})"
+                            ));
                         }
                     }
                 }
@@ -1284,38 +1285,6 @@ fn clone_override_values(tools: &Tools) -> [(&'static str, Value); 3] {
     ]
 }
 
-#[cfg(test)]
-mod clone_receipt_conformance {
-    use gents_lean_vocab::families;
-
-    #[test]
-    fn clone_report_matches_lean() {
-        families::self_config_clone_receipt_report::replay(|i| {
-            let report = super::clone_report(
-                i.is_clone,
-                i.source_has_self_config,
-                i.prompt_mentions_config,
-            );
-            families::self_config_clone_receipt_report::Report {
-                self_config_not_copied: report.self_config_not_copied,
-                prompt_warning: report.prompt_warning,
-            }
-        });
-    }
-
-    #[test]
-    fn override_report_matches_lean() {
-        families::self_config_clone_receipt_override_reported::replay(|i| {
-            super::override_reported(i.requested, i.changed)
-        });
-    }
-
-    #[test]
-    fn prompt_mentions_match_lean() {
-        families::clone_receipt_prompt_mention::replay(|i| super::prompt_mentions_config(&i.prompt));
-    }
-}
-
 /// Lean `SelfConfig.yoloGroup`: the User grants `agent_did`, an Agent the
 /// User created as its own unrestricted agent, the self-configuration of
 /// `source_did` (its Tools' `self_config` group) and native write on its own
@@ -1360,4 +1329,38 @@ pub async fn grant_own_self_configuration(
             })
         })
         .await
+}
+
+#[cfg(test)]
+mod clone_receipt_conformance {
+    use gents_lean_vocab::families;
+
+    #[test]
+    fn clone_report_matches_lean() {
+        families::self_config_clone_receipt_report::replay(|i| {
+            let report = super::clone_report(
+                i.is_clone,
+                i.source_has_self_config,
+                i.prompt_mentions_config,
+            );
+            families::self_config_clone_receipt_report::Report {
+                self_config_not_copied: report.self_config_not_copied,
+                prompt_warning: report.prompt_warning,
+            }
+        });
+    }
+
+    #[test]
+    fn override_report_matches_lean() {
+        families::self_config_clone_receipt_override_reported::replay(|i| {
+            super::override_reported(i.requested, i.changed)
+        });
+    }
+
+    #[test]
+    fn prompt_mentions_match_lean() {
+        families::clone_receipt_prompt_mention::replay(|i| {
+            super::prompt_mentions_config(&i.prompt)
+        });
+    }
 }

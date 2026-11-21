@@ -77,9 +77,9 @@ fn is_request_context_message_only_matches_context_user_text() {
 
 #[test]
 fn stored_context_readers_match_lean() {
-    gents_lean_vocab::families::prompt_assembly_request_context_keeps_stored_context::replay(
-        |i| super::keeps_stored_context(i.history_reader),
-    );
+    gents_lean_vocab::families::prompt_assembly_request_context_keeps_stored_context::replay(|i| {
+        super::keeps_stored_context(i.history_reader)
+    });
 }
 
 #[test]
