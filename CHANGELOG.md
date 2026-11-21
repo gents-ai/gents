@@ -6,6 +6,15 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Breaking: the last runtime environment switches are flags (#1764).
+  `gents automation job promote --javy PATH` replaces `JAVY`;
+  `gents server --ux-preview-assets PATH` and `gents config pack ux preview
+  --assets PATH` replace `GENTS_UX_PREVIEW_ASSETS`; the desktop app's
+  `--gents-bin PATH` launch argument replaces `GENTS_BIN`; `gents-desktop
+  --tauri-bin PATH` replaces `GENTS_DESKTOP_TAURI_BIN`. Release desktop builds
+  take product telemetry settings only at build time (`GENTS_UMAMI_*` while
+  compiling), never from the running app's environment. The desktop bridge
+  test runner takes only flags; its harness turns its variables into them.
 - Breaking: `GENTS_REGISTRY` is no longer read. `gents server --registry URL`
   chooses the registry an Agent's `config pack` commands resolve and search
   from; a tool call still names none. `gents init`, bare `gents` setup,

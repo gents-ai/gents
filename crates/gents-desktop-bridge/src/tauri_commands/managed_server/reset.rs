@@ -181,7 +181,11 @@ where
     settled.check_confirmation(confirmation, disposition)?;
 
     if full_reset {
-        let executable = resolve_service_executable(app, state.policy.desktop_paths.root())?;
+        let executable = resolve_service_executable(
+            app,
+            state.policy.desktop_paths.root(),
+            state.policy.service_executable.as_deref(),
+        )?;
         executable.install()?;
         let executable = executable.service_path().to_path_buf();
         let home = state.policy.node_home.clone().ok_or_else(|| {

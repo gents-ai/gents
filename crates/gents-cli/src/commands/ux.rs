@@ -60,6 +60,7 @@ async fn preview(args: UxPreviewArgs) -> Result<()> {
             node_did,
             out: args.out,
             viewport: args.viewport,
+            assets: args.assets,
         },
         target,
     )

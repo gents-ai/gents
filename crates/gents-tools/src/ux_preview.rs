@@ -34,7 +34,6 @@ const AUDIT_JS: &str = include_str!("ux_preview/audit.js");
 const PAGE_ORIGIN: &str = "https://ux-preview.gents.invalid";
 const PAGE_ENTRY: &str = "ux-preview.html";
 const DOOR_PREFIX: &str = "/__preview/";
-const ASSETS_ENV: &str = "GENTS_UX_PREVIEW_ASSETS";
 const ASSETS_DEV_DIR: &str = "apps/gents-desktop/dist-ux-preview";
 const THEMES: [&str; 2] = ["light", "dark"];
 const MAX_RECORDED_CALLS: usize = 100;
@@ -79,6 +78,9 @@ pub struct PreviewRequest {
     pub node_did: String,
     pub out: PathBuf,
     pub viewport: Viewport,
+    /// The built preview page, named where the process starts; `None` looks
+    /// for it beside this build (`renderer_available`).
+    pub assets: Option<PathBuf>,
 }
 
 /// A plugin ready to preview: an installed listing, or a draft file that
@@ -169,14 +171,15 @@ where
 }
 
 /// Whether this build can render a page: an installed build carries no
-/// preview page, so `ux preview` has nothing to load there.
-pub fn renderer_available() -> bool {
-    assets_dir().is_ok()
+/// preview page, so `ux preview` has nothing to load there unless the process
+/// was started with one (`assets`).
+pub fn renderer_available(assets: Option<&Path>) -> bool {
+    assets_dir(assets).is_ok()
 }
 
-fn assets_dir() -> Result<PathBuf> {
-    if let Some(dir) = std::env::var_os(ASSETS_ENV) {
-        return Ok(PathBuf::from(dir));
+fn assets_dir(assets: Option<&Path>) -> Result<PathBuf> {
+    if let Some(dir) = assets {
+        return Ok(dir.to_owned());
     }
     let exe = std::env::current_exe().context("locating this binary")?;
     exe.ancestors()
@@ -716,7 +719,7 @@ async fn drive(
 }
 
 async fn run_inner(request: PreviewRequest, target: PreviewTarget) -> Result<UxPreviewReport> {
-    let assets = assets_dir()?;
+    let assets = assets_dir(request.assets.as_deref())?;
     let browser_path = browser::find()?;
     tokio::fs::create_dir_all(&request.out)
         .await
