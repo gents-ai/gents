@@ -324,10 +324,10 @@ async fn bounded_writes_follow_the_datastore_write_model() {
     {
         let input = &case.input;
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-        node.add_collection(&format!(
+        node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&format!(
             "type {} {{ drift_sig: String summary: String status: String run_id: String expected_total: String }}",
             input.collection
-        ))
+        )))
         .await
         .unwrap();
         let fields = input
@@ -663,9 +663,12 @@ async fn count_carriers_store_as_the_count_carrier_model() {
     {
         let schema = case.input.schema.as_str();
         let collection = format!("CountCarrier{index}");
-        node.add_collection(&format!("type {collection} {{ count: {schema} }}"))
-            .await
-            .unwrap();
+        node.add_collection(
+            &gents_protocol::schemas::HomePolicyIds::shared()
+                .render(&format!("type {collection} {{ count: {schema} }}")),
+        )
+        .await
+        .unwrap();
         let declaration = WriteToolDecl {
             notification: None,
             tool_name: format!("write_count_{index}"),
@@ -761,9 +764,12 @@ async fn integer_fields_take_count_text_as_the_count_carrier_model() {
         let schema = case.input.schema.clone();
         if !tools.contains_key(&schema) {
             let collection = format!("CountText{}", tools.len());
-            node.add_collection(&format!("type {collection} {{ count: {schema} }}"))
-                .await
-                .unwrap();
+            node.add_collection(
+                &gents_protocol::schemas::HomePolicyIds::shared()
+                    .render(&format!("type {collection} {{ count: {schema} }}")),
+            )
+            .await
+            .unwrap();
             let tool = BoundedWriteTool::new(
                 ConfigAccess::local_as(
                     node.clone(),

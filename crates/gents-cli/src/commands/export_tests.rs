@@ -138,7 +138,10 @@ async fn native_export_preserves_fields_beyond_selection_width_limit() {
         .collect::<Vec<_>>()
         .join(" ");
     access
-        .add_collection(&format!("type ExportWide {{ {fields} }}"))
+        .add_collection(
+            &gents_protocol::schemas::HomePolicyIds::shared()
+                .render(&format!("type ExportWide {{ {fields} }}")),
+        )
         .await
         .unwrap();
     let values = (0..130)

@@ -175,7 +175,9 @@ async fn home(provider: Provider) -> anyhow::Result<Home> {
         gents_protocol::schemas::NODE,
         gents_protocol::schemas::NETWORK_ENROLLMENT_GRANT,
     ] {
-        runtime_access.add_collection(schema).await?;
+        runtime_access
+            .add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(schema))
+            .await?;
     }
     crate::identity::GrantSet::OperatorUser
         .grant(&runtime_access, &owner.did().parse()?)
@@ -254,7 +256,8 @@ impl Home {
             .check_named_permission(
                 member,
                 "administrator",
-                gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
+                gents_protocol::schemas::HomePolicyIds::shared()
+                    .id(gents_protocol::schemas::BuiltInPolicy::Household),
                 "nodes",
                 &self.node_doc,
             )

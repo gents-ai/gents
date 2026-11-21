@@ -2822,7 +2822,8 @@ mod tests {
                 .get_collection(gents_protocol::schemas::INFERENCE_BACKEND_NAME)?
                 .context("legacy backend baseline missing")?;
             assert!(collection.policy.is_some_and(|policy| policy.id
-                == gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID
+                == gents_protocol::schemas::HomePolicyIds::shared()
+                    .id(gents_protocol::schemas::BuiltInPolicy::Household)
                 && policy.resource_name == "secret_configuration"));
             node.shutdown().await?;
         }

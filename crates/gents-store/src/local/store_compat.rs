@@ -51,24 +51,22 @@ pub enum StoreCompatibilityError {
 /// The collections and access policies this build serves. Any change to them
 /// changes the fingerprint, and the next start checks the store again.
 pub fn fingerprint() -> String {
-    use gents_protocol::schemas::{
-        AGENT_OWNERSHIP_POLICY_ID, CLIENT_JOURNAL_POLICY_ID, MAILBOX_POLICY_ID,
-        TOOL_FILE_CHANGE_POLICY_ID,
-    };
+    use gents_protocol::schemas::{BuiltInPolicy, HomePolicyIds};
+    let ids = HomePolicyIds::shared();
     let mut digest = Sha256::new();
     for policy in [
-        AGENT_OWNERSHIP_POLICY_ID,
-        CLIENT_JOURNAL_POLICY_ID,
-        MAILBOX_POLICY_ID,
-        TOOL_FILE_CHANGE_POLICY_ID,
+        BuiltInPolicy::Household,
+        BuiltInPolicy::ClientJournal,
+        BuiltInPolicy::Mailbox,
+        BuiltInPolicy::ToolFileChange,
     ] {
-        digest.update(policy.as_bytes());
+        digest.update(ids.id(policy).as_bytes());
         digest.update([0]);
     }
     for collection in crate::schema::catalog::BASELINE.iter() {
         digest.update(collection.name.as_bytes());
         digest.update([0]);
-        digest.update(collection.sdl.as_bytes());
+        digest.update(ids.render(collection.sdl).as_bytes());
         digest.update([0]);
         digest.update(collection.expected_version.unwrap_or_default().as_bytes());
         digest.update([0]);

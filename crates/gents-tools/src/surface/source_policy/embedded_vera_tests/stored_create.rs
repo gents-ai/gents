@@ -4,7 +4,7 @@ use std::time::{Duration, SystemTime};
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
-use gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID;
+use gents_protocol::schemas::{BuiltInPolicy, HomePolicyIds};
 use gents_store::config_client::owed::settle_owed_while_online;
 use gents_store::config_client::user_write::UserWriteRefusal;
 use gents_store::config_client::{
@@ -178,7 +178,11 @@ async fn owner(node: &defra_node::Node, document: &str) -> anyhow::Result<Option
     Ok(node
         .vera_acp()
         .expect("the node decides document access through Vera")
-        .get_doc_owner(AGENT_OWNERSHIP_POLICY_ID, REQUEST_RESOURCE, document)
+        .get_doc_owner(
+            HomePolicyIds::shared().id(BuiltInPolicy::Household),
+            REQUEST_RESOURCE,
+            document,
+        )
         .await?)
 }
 
@@ -192,7 +196,7 @@ async fn working_agent_reads(
         .check_doc_access(
             &acp::Identity::Authenticated(identity::Did::new(agent)?),
             acp::DocumentPermission::Read,
-            AGENT_OWNERSHIP_POLICY_ID,
+            HomePolicyIds::shared().id(BuiltInPolicy::Household),
             REQUEST_RESOURCE,
             document,
         )

@@ -46,10 +46,10 @@ async fn denied_plugin_write_rolls_back_completed_terminal_and_settles_failed() 
         .unwrap();
     fixture
         .node
-        .add_collection(&format!(
+        .add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&format!(
             "type TerminalParcel @policy(id: \"{}\", resource: \"parcels\") {{ status: String }}\n             type TerminalNote {{ body: String }}",
             gents_store::graphql::escape_graphql_string(&policy)
-        ))
+        )))
         .await
         .unwrap();
     let owner_access = ConfigAccess::local_as(
