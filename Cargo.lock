@@ -7501,7 +7501,6 @@ dependencies = [
  "bitflags 2.13.2",
  "block2",
  "brotli-decompressor 5.0.0",
- "bytemuck",
  "bytes",
  "cc",
  "cipher 0.4.4",

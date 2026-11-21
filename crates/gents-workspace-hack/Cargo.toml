@@ -27,7 +27,6 @@ bit-set = { version = "0.8" }
 bit-vec = { version = "0.8" }
 bitflags = { version = "2", default-features = false, features = ["serde", "std"] }
 brotli-decompressor = { version = "5" }
-bytemuck = { version = "1", default-features = false, features = ["extern_crate_alloc"] }
 bytes = { version = "1", features = ["serde"] }
 cipher = { version = "0.4", default-features = false, features = ["block-padding", "std"] }
 clap = { version = "4", features = ["derive", "env"] }
