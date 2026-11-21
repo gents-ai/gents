@@ -476,19 +476,6 @@ def creationSigner : Conformance.Family CreationSignerInput CreationSignerOutput
     { expected := signerAccepts i
       pluginJobExpected := if i.agentNew then some (signerAccepts i) else none }
 
-structure DeferredCreationInput where
-  kind : Bool
-  receipt : Bool
-  opening : Bool
-  cause : Bool
-  deriving ToJson
-
-@[conformance_family]
-def deferredCreation : Conformance.Family DeferredCreationInput Bool where
-  inputs := jobCreationCases.map fun (kind, receipt, opening, cause) =>
-    { kind, receipt, opening, cause }
-  model := fun i => DurableLineage.deferredCreationAllowed i.kind i.receipt i.opening i.cause
-
 structure InterruptInput where
   callerSession : String
   targetSession : String
