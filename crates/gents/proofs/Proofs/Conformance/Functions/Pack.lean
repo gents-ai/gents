@@ -1,5 +1,6 @@
 import Proofs.Pack.Operations
 import Proofs.Pack.CorePacks
+import Proofs.Pack.HostedRefusal
 import Proofs.Conformance.Pack
 import Proofs.Conformance.Family
 
@@ -48,3 +49,11 @@ deriving instance Lean.ToJson for Target
 attribute [conformance_function] fixtureGrant
 
 end Pack.AllowedFolders
+
+namespace Pack.HostedRefusal
+
+deriving instance Lean.ToJson for Failure
+
+attribute [conformance_function] showsRuntimeText namesEditedDocument
+
+end Pack.HostedRefusal

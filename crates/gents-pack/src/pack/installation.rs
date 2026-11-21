@@ -23,6 +23,7 @@ pub use documents::declared_collections;
 pub(crate) use documents::{
     prepare_document_pack_archive_with_provisioner, sdl_paths, StageRecord,
 };
+mod refusal;
 mod removal;
 pub use catalog::{installed_catalog, InstalledCatalogEntry};
 pub use declared_access::declared_readers;
@@ -34,12 +35,14 @@ pub use documents::{
     prepare_document_pack_archive_with_runtime, prepare_document_pack_install,
     prepare_hosted_document_pack_archive, tools_taking_installer_root, DependencyVariableOverrides,
     DocumentGraphPolicy, HostedDocumentGraph, HostedPackPreparation, InstallTarget,
-    InstallerRootAgent, PackGraphInputs, PreparedDependency, PreparedDocumentPackInstall,
+    InstallerRootAgent, PackGraphInputs, PluginReferenceUnresolved, PreparedDependency,
+    PreparedDocumentPackInstall,
 };
 pub use hosted::{
     stage_hosted_pack, HostedHomePublication, HostedPackApproval, HostedPackStage,
-    HostedPackStageError,
+    HostedPackStageError, HostedRejection,
 };
+pub use refusal::{EditedDocumentRefusal, PackChangeSurface};
 pub use removal::{
     ensure_plugins_unreferenced, plugin_pin_conflicts, visible_plugin_selections,
     PluginPinConflict, PluginSelection,
@@ -1161,24 +1164,16 @@ impl gents_store::config_client::TransactionFailure for PluginStoreChangeError {
 #[derive(Debug, thiserror::Error)]
 pub enum PackChangeError {
     #[error(
-        "{} of {coordinate}'s documents were edited since it was installed: {}. Overwrite replaces \
-         them with the pack's versions (a removal deletes them); keep leaves them as edited. \
-         Decide with --overwrite or --keep on `gents config pack install`, `gents config pack update` or \
-         `gents config pack remove`, or options.edited on the agent pack command",
-        .edited.len(),
-        .edited.join(", ")
+        "{}",
+        refusal::document_change_message(coordinate, edited, 0, true, PackChangeSurface::Local)
     )]
     Edited {
         coordinate: String,
         edited: Vec<String>,
     },
     #[error(
-        "{} of {coordinate}'s documents already exist on this node with different content: {}; \
-         the pack adopts an existing document only when it matches. Rename or remove them, or \
-         decide: overwrite replaces them with the pack's versions, keep leaves them as they are \
-         (--overwrite or --keep on `gents config pack install`, options.edited on the agent pack command)",
-        .differing.len(),
-        .differing.join(", ")
+        "{}",
+        refusal::document_change_message(coordinate, differing, 0, false, PackChangeSurface::Local)
     )]
     Differing {
         coordinate: String,
@@ -1188,11 +1183,28 @@ pub enum PackChangeError {
     Grant(#[from] GrantError),
     #[error(transparent)]
     Slots(#[from] super::SlotBindingError),
+    #[error(transparent)]
+    PluginReference(#[from] PluginReferenceUnresolved),
     #[error(fmt = gents_protocol::error_chain::held)]
     Other(#[from] anyhow::Error),
 }
 
 impl PackChangeError {
+    /// This refusal's text as `surface` reads it; only the document refusals
+    /// name a step that differs by surface.
+    pub fn message_for_surface(&self, surface: PackChangeSurface) -> String {
+        match self {
+            Self::Edited { coordinate, edited } => {
+                refusal::document_change_message(coordinate, edited, 0, true, surface)
+            }
+            Self::Differing {
+                coordinate,
+                differing,
+            } => refusal::document_change_message(coordinate, differing, 0, false, surface),
+            other => other.to_string(),
+        }
+    }
+
     /// Erasing through `anyhow::Error::from` would hide an access error at the
     /// top of `Other`: a transparent variant's `source()` skips its own inner
     /// error, so a transaction owner or classifier searching the chain could
@@ -1230,7 +1242,8 @@ impl gents_store::config_client::TransactionFailure for PackChangeError {
             Self::Edited { .. }
             | Self::Differing { .. }
             | Self::Grant(GrantError::Ungranted { .. })
-            | Self::Slots(super::SlotBindingError::Unbound { .. }) => None,
+            | Self::Slots(super::SlotBindingError::Unbound { .. })
+            | Self::PluginReference(_) => None,
             Self::Other(error)
             | Self::Grant(GrantError::Other(error))
             | Self::Slots(super::SlotBindingError::Other(error)) => {

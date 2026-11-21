@@ -17,10 +17,14 @@ pub enum HostedInstallFailure {
     ApplyRejected,
     ApplyUnconfirmed,
     ReceiptFailed,
+    UnsetVariables,
+    PluginUnresolved,
+    DocumentsDiffer,
+    DocumentsEdited,
 }
 
 impl HostedInstallFailure {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 15] = [
         Self::RuntimeUnavailable,
         Self::NotAuthorized,
         Self::RefusedForAPerson,
@@ -32,7 +36,32 @@ impl HostedInstallFailure {
         Self::ApplyRejected,
         Self::ApplyUnconfirmed,
         Self::ReceiptFailed,
+        Self::UnsetVariables,
+        Self::PluginUnresolved,
+        Self::DocumentsDiffer,
+        Self::DocumentsEdited,
     ];
+
+    /// Lean `Pack.HostedRefusal.showsRuntimeText`: whether the runtime's text
+    /// for this class crosses the wire, when every identifier the received
+    /// archives author is `literal`.
+    pub fn shows_runtime_text(self, literal: bool) -> bool {
+        match self {
+            Self::UnsetVariables => true,
+            Self::PluginUnresolved | Self::DocumentsDiffer | Self::DocumentsEdited => literal,
+            Self::RuntimeUnavailable
+            | Self::NotAuthorized
+            | Self::RefusedForAPerson
+            | Self::InvalidRequest
+            | Self::PreparationFailed
+            | Self::PreviewFailed
+            | Self::SchemaPreparation
+            | Self::SchemaApplyFailed
+            | Self::ApplyRejected
+            | Self::ApplyUnconfirmed
+            | Self::ReceiptFailed => false,
+        }
+    }
 
     /// What the class means to the installer, with the next step.
     pub fn description(self) -> &'static str {
@@ -80,8 +109,30 @@ impl HostedInstallFailure {
                 "the install applied but its receipt could not be assembled or sent; inspect the \
                  Node (`gents config pack list`) before retrying"
             }
+            Self::UnsetVariables => {
+                "the pack reads install variables that have no value; supply each as NAME=VALUE, \
+                 or give it a value in the installing environment"
+            }
+            Self::PluginUnresolved => {
+                "a Tools document names a plugin the runtime does not hold, or pins one to \
+                 another digest; install the pack that ships it on the runtime first"
+            }
+            Self::DocumentsDiffer => {
+                "documents the pack would write already exist on the Node with other content; \
+                 rename or remove them, or retry the same install with --overwrite or --keep"
+            }
+            Self::DocumentsEdited => {
+                "documents of the pack were edited since it was installed; retry the same \
+                 install with --overwrite or --keep"
+            }
         }
     }
+}
+
+/// Lean `Pack.HostedRefusal.namesEditedDocument`: whether an edited document
+/// is named in a refusal rather than counted.
+pub fn names_edited_document(literal: bool, shipped: bool) -> bool {
+    literal && shipped
 }
 
 impl std::fmt::Display for HostedInstallFailure {
@@ -107,6 +158,31 @@ impl std::fmt::Display for HostedInstallOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disclosure_matches_the_lean_model() {
+        let cases = gents_lean_vocab::families::pack_hosted_refusal_shows_runtime_text::cases();
+        for class in HostedInstallFailure::ALL {
+            assert!(
+                cases
+                    .iter()
+                    .any(|case| serde_json::to_value(&case.input.failure).unwrap()
+                        == serde_json::to_value(class).unwrap()),
+                "{class} is not a Lean class"
+            );
+        }
+        for case in cases {
+            let class: HostedInstallFailure = case.input.failure;
+            case.check(class.shows_runtime_text(case.input.literal));
+        }
+    }
+
+    #[test]
+    fn edited_naming_matches_the_lean_model() {
+        gents_lean_vocab::families::pack_hosted_refusal_names_edited_document::replay(|input| {
+            names_edited_document(input.literal, input.shipped)
+        });
+    }
 
     #[test]
     fn every_class_names_a_step_a_remote_installer_can_take() {

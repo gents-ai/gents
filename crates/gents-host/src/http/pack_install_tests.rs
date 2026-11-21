@@ -269,7 +269,7 @@ async fn a_remote_install_carries_no_wiring_on_any_home() {
         assert_eq!(status, StatusCode::BAD_REQUEST, "{document_acp:?}: {body}");
         assert_eq!(
             body,
-            serde_json::json!({"class": "invalid_request", "outcome": "not_installed"}),
+            serde_json::json!({"class": "invalid_request", "outcome": "not_installed", "detail": null}),
             "{document_acp:?}: the refusal is its class, never runtime text"
         );
         assert_eq!(

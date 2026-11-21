@@ -51,6 +51,8 @@ enum ServerMessage {
     Failed {
         class: gents_protocol::operations::pack::hosted::HostedInstallFailure,
         outcome: gents_protocol::operations::pack::hosted::HostedInstallOutcome,
+        detail: Option<String>,
+        documents: Option<gents_pack::pack::EditedDocumentRefusal>,
     },
 }
 
@@ -71,7 +73,12 @@ impl ServerMessage {
     /// The error this message is when it does not answer `step`.
     fn refusal(self, step: SessionStep) -> PackSessionError {
         match self {
-            Self::Failed { class, outcome } => PackSessionError::RuntimeFailed { class, outcome },
+            Self::Failed {
+                class,
+                outcome,
+                detail,
+                documents,
+            } => PackSessionError::runtime_failed(class, outcome, detail, documents),
             other => PackSessionError::Unexpected {
                 step,
                 received: other.kind(),
@@ -580,7 +587,8 @@ pub async fn install_remote(
                     policy,
                     &gents_inference::resolved::ProviderProfilePolicy,
                 )
-                .await?;
+                .await
+                .map_err(gents_pack::pack::PackChangeError::into_anyhow)?;
                 Ok::<_, anyhow::Error>(())
             })
         })
@@ -888,6 +896,8 @@ mod tests {
                 PackSessionError::RuntimeFailed {
                     class: HostedInstallFailure::ApplyRejected,
                     outcome: HostedInstallOutcome::NotInstalled,
+                    detail: None,
+                    documents: None,
                 }
             ),
             "{error:#}"
@@ -903,15 +913,22 @@ mod tests {
         server.await??;
 
         let quoting = json!({"type": "failed", "class": "apply_rejected",
-            "outcome": "not_installed", "error": "token sk-live-private"})
+            "outcome": "not_installed", "detail": "token sk-live-private", "documents": null})
         .to_string();
         let (endpoint, server, _key) = scripted_runtime(vec![quoting]).await?;
         let error = start(&endpoint).await.err().expect("refused");
         assert!(
-            matches!(error, PackSessionError::Receive(ReceiveError::Unreadable { .. })),
-            "a failure carrying runtime text is not a failure this client reads: {error:#}"
+            !format!("{error:#}").contains("sk-live-private"),
+            "a class that shows no runtime text never shows it: {error:#}"
         );
-        assert!(!format!("{error:#}").contains("sk-live-private"));
+        server.await??;
+
+        let unset = json!({"type": "failed", "class": "unset_variables",
+            "outcome": "not_installed", "detail": "names API_TOKEN", "documents": null})
+        .to_string();
+        let (endpoint, server, _key) = scripted_runtime(vec![unset]).await?;
+        let error = start(&endpoint).await.err().expect("refused");
+        assert!(format!("{error:#}").ends_with(": names API_TOKEN"), "{error:#}");
         server.await??;
         Ok(())
     }

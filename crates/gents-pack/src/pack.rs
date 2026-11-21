@@ -81,9 +81,9 @@ pub use installation::{
     tools_taking_installer_root, visible_plugin_selections, DependencyVariableOverrides,
     DocumentGraphPolicy, DriftPolicy, HostedDocumentGraph, HostedPackPreparation, InstallReport,
     InstallTarget, InstalledCatalogEntry, InstalledPack, InstalledPackPlugin, InstallerRootAgent,
-    PackAgentRoot, PackChangeError, PackGraphInputs, PackIdentity, PackRemovalError,
-    PackRootRecord, PackSource, PackSourceHistory, PluginPinConflict, PluginSelection,
-    PluginStoreChangeError, PluginStoreLocation, PreparedDependency, PreparedDocumentPackInstall,
+    EditedDocumentRefusal, PackAgentRoot, PackChangeError, PackChangeSurface, PackGraphInputs,
+    PackIdentity, PackRemovalError, PackRootRecord, PackSource, PackSourceHistory,
+    PluginPinConflict, PluginReferenceUnresolved, PluginSelection, PluginStoreChangeError, PluginStoreLocation, PreparedDependency, PreparedDocumentPackInstall,
     RemoveReport, Retained,
 };
 pub(crate) use installation::{
@@ -92,7 +92,7 @@ pub(crate) use installation::{
 };
 pub use installation::{
     stage_hosted_pack, HostedHomePublication, HostedPackApproval, HostedPackStage,
-    HostedPackStageError,
+    HostedPackStageError, HostedRejection,
 };
 pub use loader::{
     authored_document_schema, authored_pack_config_schema, decode_pack_config,

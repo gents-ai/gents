@@ -152,6 +152,7 @@ import Proofs.Shared.ToolExecution.Parallel
 import Proofs.Automation.Hooks
 import Proofs.Pack.Operations
 import Proofs.Pack.CorePacks
+import Proofs.Pack.HostedRefusal
 
 import Proofs.Session.Request.PreclaimBoundary
 

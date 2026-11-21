@@ -422,7 +422,9 @@ async fn hosted_pack_install_preview_names_variables_without_their_values() -> R
     ];
     let unset = run_cli_failure_stderr(&home, &args)?;
     anyhow::ensure!(
-        unset.contains("preview_failed") && !unset.contains(runtime_secret),
+        unset.contains("unset_variables")
+            && unset.contains("PACK_PREVIEW_SECRET")
+            && !unset.contains(runtime_secret),
         "the preview read the runtime's own environment: {unset}"
     );
     let preview = run_cli_json_with_env(&home, &args, &[("PACK_PREVIEW_SECRET", secret)])?;

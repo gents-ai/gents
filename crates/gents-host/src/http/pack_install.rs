@@ -173,10 +173,12 @@ pub async fn install_remote(
         let refusal: Refusal = serde_json::from_slice(&body).with_context(|| {
             format!("remote pack install returned HTTP {status} without a failure class")
         })?;
-        return Err(super::pack_install_client::PackSessionError::RuntimeFailed {
-            class: refusal.class,
-            outcome: refusal.outcome,
-        }
+        return Err(super::pack_install_client::PackSessionError::runtime_failed(
+            refusal.class,
+            refusal.outcome,
+            refusal.detail,
+            None,
+        )
         .into());
     }
     serde_json::from_slice(&body)
@@ -253,6 +255,7 @@ pub async fn encode_install_request(
 struct Refusal {
     class: Class,
     outcome: Outcome,
+    detail: Option<String>,
 }
 
 fn refused(status: StatusCode, class: Class) -> Response {
@@ -261,11 +264,7 @@ fn refused(status: StatusCode, class: Class) -> Response {
 
 fn failed(status: StatusCode, failure: SessionFailure) -> Response {
     failure.log();
-    (
-        status,
-        Json(serde_json::json!({"class": failure.class, "outcome": failure.outcome})),
-    )
-        .into_response()
+    (status, Json(failure.body())).into_response()
 }
 
 pub async fn install_handler(
@@ -305,6 +304,11 @@ pub async fn install_handler(
     } else {
         Class::ApplyUnconfirmed
     };
+    let identifiers = failure::RefusalIdentifiers::of(
+        &std::iter::once(&received.root)
+            .chain(received.dependencies.iter())
+            .collect::<Vec<_>>(),
+    );
     // Detached so a dropped client cannot cancel an install mid-commit.
     let result =
         tokio::spawn(
@@ -315,7 +319,7 @@ pub async fn install_handler(
         Ok(Ok(value)) => Json(value).into_response(),
         Ok(Err(error)) => failed(
             StatusCode::UNPROCESSABLE_ENTITY,
-            SessionFailure::unconfirmed(class)(error),
+            SessionFailure::change(class, error, &identifiers),
         ),
         Err(error) => failed(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -430,7 +434,7 @@ async fn install_owned(
     home: PathBuf,
     received: Received,
     access: gents_store::config_client::ConfigAccess,
-) -> Result<serde_json::Value> {
+) -> Result<serde_json::Value, gents_pack::pack::PackChangeError> {
     let Received {
         root,
         dependencies,
@@ -455,7 +459,7 @@ async fn install_owned(
         grant_authority: request.grant_authority,
         wire: request.wire,
     };
-    let result = gents_pack::pack::install_flow::install_documents_pack_resolved(
+    gents_pack::pack::install_flow::install_documents_pack_resolved(
         &access,
         &state.node_did,
         &root,
@@ -465,8 +469,6 @@ async fn install_owned(
         &gents_tools::surface::PackRoots,
     )
     .await
-    .map_err(gents_pack::pack::PackChangeError::into_anyhow)?;
-    Ok(result)
 }
 
 #[cfg(test)]

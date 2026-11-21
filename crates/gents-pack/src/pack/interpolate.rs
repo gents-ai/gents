@@ -38,6 +38,14 @@ pub struct UnsetVariables {
     pub names: Vec<String>,
 }
 
+impl UnsetVariables {
+    /// The unset variables a load, preparation or preview stopped on, where
+    /// they are in `error`'s chain.
+    pub fn in_chain<'a>(error: &'a (dyn std::error::Error + 'static)) -> Option<&'a Self> {
+        gents_protocol::error_chain::find_source(error)
+    }
+}
+
 /// The paths and final literal values use the same interpolation parser as installation.
 pub fn inspect_install_variables(
     value: &serde_json::Value,

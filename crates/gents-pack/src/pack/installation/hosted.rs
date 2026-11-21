@@ -49,10 +49,56 @@ pub struct HostedPackStage {
 
 #[derive(Debug, thiserror::Error)]
 pub enum HostedPackStageError {
-    #[error(fmt = gents_protocol::error_chain::held)]
-    Rejected(#[source] anyhow::Error),
+    #[error(transparent)]
+    Rejected(HostedRejection),
     #[error(fmt = gents_protocol::error_chain::held)]
     Unconfirmed(#[source] anyhow::Error),
+}
+
+/// Why a hosted pack's document transaction was refused with nothing
+/// installed. A refusal naming documents keeps its variant, matched from
+/// [`super::PackChangeError`], so the runtime can show it; anything else is
+/// `Other`, whose chain can quote values.
+#[derive(Debug, thiserror::Error)]
+pub enum HostedRejection {
+    #[error(
+        "{}",
+        super::refusal::document_change_message(coordinate, edited, 0, true, super::PackChangeSurface::Hosted)
+    )]
+    Edited {
+        coordinate: String,
+        edited: Vec<String>,
+    },
+    #[error(
+        "{}",
+        super::refusal::document_change_message(coordinate, differing, 0, false, super::PackChangeSurface::Hosted)
+    )]
+    Differing {
+        coordinate: String,
+        differing: Vec<String>,
+    },
+    #[error(fmt = gents_protocol::error_chain::held)]
+    Other(#[source] anyhow::Error),
+}
+
+impl HostedRejection {
+    pub fn of(error: super::PackChangeError) -> Self {
+        match error {
+            super::PackChangeError::Edited { coordinate, edited } => {
+                Self::Edited { coordinate, edited }
+            }
+            super::PackChangeError::Differing {
+                coordinate,
+                differing,
+            } => Self::Differing {
+                coordinate,
+                differing,
+            },
+            other => Self::Other(other.into_anyhow().context(
+                "pack document transaction was rejected; local plugin records were restored",
+            )),
+        }
+    }
 }
 
 pub async fn stage_hosted_pack(
@@ -174,8 +220,8 @@ impl HostedPackStage {
             && scope.pack_digests == self.pack_digests
             && !scope.nonce.is_empty())
         {
-            return Err(HostedPackStageError::Rejected(anyhow::anyhow!(
-                "hosted pack approval scope does not match the staged archive graph"
+            return Err(HostedPackStageError::Rejected(HostedRejection::Other(
+                anyhow::anyhow!("hosted pack approval scope does not match the staged archive graph"),
             )));
         }
         let graph = self.graph.clone();
@@ -208,7 +254,8 @@ impl HostedPackStage {
                                     .map(|plugin| plugin.projected())
                                     .collect::<Vec<_>>(),
                             )
-                            .await?;
+                            .await
+                            .map_err(anyhow::Error::from)?;
                         let reports = super::documents::apply_hosted_document_graph(
                             txn.interpreter(),
                             owner,
@@ -217,8 +264,11 @@ impl HostedPackStage {
                             profile_policy,
                         )
                         .await?;
-                        finish.client_finished(txn.interpreter()).await?;
-                        Ok::<_, anyhow::Error>(reports)
+                        finish
+                            .client_finished(txn.interpreter())
+                            .await
+                            .map_err(anyhow::Error::new)?;
+                        Ok::<_, super::PackChangeError>(reports)
                     })
                 },
             )
@@ -248,11 +298,9 @@ impl HostedPackStage {
         home_result.map_err(HostedPackStageError::Unconfirmed)?;
         result.map_err(|error| {
             if rejected {
-                HostedPackStageError::Rejected(error.error.context(
-                    "pack document transaction was rejected; local plugin records were restored",
-                ))
+                HostedPackStageError::Rejected(HostedRejection::of(error.error))
             } else {
-                HostedPackStageError::Unconfirmed(error.error.context(
+                HostedPackStageError::Unconfirmed(error.error.into_anyhow().context(
                     "pack document outcome was not confirmed; local plugins remain published",
                 ))
             }

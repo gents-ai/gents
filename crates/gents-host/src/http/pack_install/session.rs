@@ -16,7 +16,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
-use super::failure::SessionFailure;
+use super::failure::{RefusalIdentifiers, SessionFailure};
 use super::{decode_install_request, delegated_install_access, refused, InstallRequest, MAX_BODY};
 use gents_protocol::operations::pack::hosted::HostedInstallFailure as Class;
 
@@ -450,6 +450,12 @@ async fn run_inner(
     }
     .await
     .map_err(SessionFailure::not_installed(Class::InvalidRequest))?;
+    let mut identifiers = RefusalIdentifiers::of(
+        &std::iter::once(&received.root)
+            .chain(received.dependencies.iter())
+            .collect::<Vec<_>>(),
+    );
+    let failed = SessionFailure::not_installed::<anyhow::Error>(Class::PreparationFailed);
     let prepare = async {
         let requested =
             gents_pack::operations::pack::parse_inference_slots(&received.request.inference_slots)?;
@@ -461,7 +467,7 @@ async fn run_inner(
         let environment = gents_pack::operations::pack::InstallEnvironment::HostedRuntime(
             std::mem::take(&mut received.request.installer_environment),
         );
-        let mut prepared = gents_pack::pack::prepare_document_pack_archive(
+        let mut prepared = match gents_pack::pack::prepare_document_pack_archive(
             &gents_pack::pack::InstallTarget {
                 access: &access,
                 owner: &state.node_did,
@@ -487,12 +493,23 @@ async fn run_inner(
             },
             gents_pack::pack::InstalledVia::Operator,
         )
-        .await?;
+        .await
+        {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                return Ok(Err(SessionFailure::change(
+                    Class::PreparationFailed,
+                    error,
+                    &identifiers,
+                )))
+            }
+        };
         gents_pack::pack::resolved_pack::ResolvedPack::record_graph_sources(
             &mut prepared,
             &received.root,
             &received.dependencies,
         );
+        identifiers.ship(&prepared)?;
         gents_pack::pack::command_authority::require_command_task_grant(
             &access,
             &state.node_did,
@@ -523,11 +540,10 @@ async fn run_inner(
             received.request.explicit,
         )
         .await?;
-        Ok::<_, anyhow::Error>((received, prepared, stage, planned))
+        Ok::<_, anyhow::Error>(Ok((received, prepared, stage, planned)))
     }
     .await;
-    let (received, prepared, stage, planned) =
-        prepare.map_err(SessionFailure::not_installed(Class::PreparationFailed))?;
+    let (received, prepared, stage, planned) = prepare.map_err(failed)??;
     let installed_plugins = stage.installed_plugins().to_vec();
     let materialized = if received.request.explicit {
         let cache_home = home.clone();
@@ -689,8 +705,8 @@ async fn run_inner(
         )
         .await
         .map_err(|error| match error {
-            gents_pack::pack::HostedPackStageError::Rejected(error) => {
-                SessionFailure::not_installed(Class::ApplyRejected)(error)
+            gents_pack::pack::HostedPackStageError::Rejected(rejection) => {
+                SessionFailure::rejection(rejection, &identifiers)
             }
             gents_pack::pack::HostedPackStageError::Unconfirmed(error) => {
                 SessionFailure::unconfirmed(Class::ApplyUnconfirmed)(error)
