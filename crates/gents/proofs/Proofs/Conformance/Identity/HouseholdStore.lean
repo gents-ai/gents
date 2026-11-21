@@ -75,7 +75,7 @@ def signedCreateCollections : Family CollectionInput SignedCreate where
 @[conformance_family]
 def signedDeleteCollections : Family CollectionInput Bool where
   inputs := (["Node", "Agent", "AgentContext", "Tools", "Schedule", "PackInstallation", "Goal",
-    "GoalCreationClaim", "InferenceBackend", "InferenceBackendMetadata",
+    "GoalCreationClaim", "EventSourceCursor", "InferenceBackend", "InferenceBackendMetadata",
     "InferenceBackendObservation", "BackendCredential", "AgentSession", "NotBundled"] : List String).map
     fun collection => { collection }
   model := fun i => Configuration.clientSignedDeleteCollection i.collection

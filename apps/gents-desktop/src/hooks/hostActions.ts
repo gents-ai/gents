@@ -25,7 +25,8 @@ export function createHostActions({ api }: { api: DesktopApiAdapter }) {
     installPack: (request: PackInstallRequest) => api.installPack(request),
     updatePack: (pack: string, edited: PackEditedChoice) =>
       api.updatePack(pack, edited),
-    removePack: (pack: string) => api.removePack(pack),
+    removePack: (pack: string, edited?: PackEditedChoice) =>
+      api.removePack(pack, edited),
     bindPackPlugin: (plugin: string, profile: string | null) =>
       api.bindPackPlugin(plugin, profile),
     wirePack: (request: PackWireRequest) => api.wirePack(request),

@@ -931,3 +931,146 @@ async fn a_write_verb_is_sent_to_the_write_tool_and_its_grant() {
         }
     }
 }
+
+#[tokio::test]
+async fn find_signer_names_who_wrote_a_document_not_who_it_claims() {
+    let keys = tempfile::tempdir().unwrap();
+    let node_key =
+        gents_store::identity::KeyIdentity::load_or_create(keys.path().join("node.key"), None)
+            .unwrap();
+    let agent = || {
+        gents_store::identity::resolve_agent_identity(
+            &node_key,
+            &gents_store::identity::provision_agent_identity(&node_key).unwrap(),
+        )
+        .unwrap()
+    };
+    let (alice, bob) = (agent(), agent());
+    let did = |a: &dyn gents_store::identity::NodeIdentity| {
+        gents_store::identity::NodeIdentity::did(a).to_owned()
+    };
+    let (alice_did, bob_did) = (did(&*alice), did(&*bob));
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(gents_store::identity::NodeIdentity::did(&node_key).to_owned())
+            .build()
+            .await
+            .unwrap(),
+    );
+    node.add_collection("type Order { login: String }")
+        .await
+        .unwrap();
+    let write = |who: &std::sync::Arc<dyn gents_store::identity::NodeIdentity>,
+                 mutation: String| {
+        let access = gents_store::config_client::ConfigAccess::local_managed_agent(
+            node.clone(),
+            ::identity::Did::new(gents_store::identity::NodeIdentity::did(&**who)).unwrap(),
+            who.as_ref(),
+        )
+        .unwrap();
+        async move {
+            access
+                .transact_write("seed_signed_order", |txn| {
+                    let mutation = &mutation;
+                    Box::pin(async move { txn.execute(mutation).await })
+                })
+                .await
+                .unwrap()
+        }
+    };
+    // Alice writes an order that claims to be bob's.
+    let forged = write(
+        &alice,
+        r#"mutation { add_Order(input: {login: "bob"}) {_docID} }"#.into(),
+    )
+    .await;
+    let forged_id = forged["data"]["add_Order"][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // Bob writes his own, then edits alice's.
+    let own = write(
+        &bob,
+        r#"mutation { add_Order(input: {login: "bob"}) {_docID} }"#.into(),
+    )
+    .await;
+    let own_id = own["data"]["add_Order"][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let update = |id: &str, login: &str| {
+        format!(
+            r#"mutation {{ update_Order(docID: "{id}", input: {{login: "{login}"}}) {{_docID}} }}"#
+        )
+    };
+    write(&bob, update(&forged_id, "bob!")).await;
+    // Alice edits bob's order in between, then bob edits it again: created and
+    // latest both name bob, so only writers shows alice's edit.
+    write(&alice, update(&own_id, "alice")).await;
+    write(&bob, update(&own_id, "bob")).await;
+
+    let tool = DefraQueryTool::new(
+        node.clone(),
+        CollectionScope::restricted(vec!["Order".into()]),
+    );
+    let find: QueryParams = serde_json::from_value(
+        json!({"argv":["find"],"collection":"Order","options":{"fields":["login"],"signer":true}}),
+    )
+    .unwrap();
+    let result: Value = serde_json::from_str(
+        &Tool::call(&tool, find, &gents_loop::tool::ToolCallEnvelope::default())
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let mut signers = result["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| {
+            assert!(
+                row.get("_docID").is_none(),
+                "unselected _docID stays hidden"
+            );
+            assert_eq!(row["_signer"]["unsigned"], false);
+            let writers: std::collections::BTreeSet<String> =
+                serde_json::from_value(row["_signer"]["writers"].clone()).unwrap();
+            (
+                row["login"].as_str().unwrap().to_owned(),
+                row["_signer"]["created"].as_str().unwrap().to_owned(),
+                row["_signer"]["latest"].as_str().unwrap().to_owned(),
+                writers,
+            )
+        })
+        .collect::<Vec<_>>();
+    signers.sort();
+    let both = std::collections::BTreeSet::from([alice_did.clone(), bob_did.clone()]);
+    assert_eq!(
+        signers,
+        vec![
+            // Bob's own order, edited by alice in between.
+            ("bob".into(), bob_did.clone(), bob_did.clone(), both.clone()),
+            // Alice's forged order, edited by bob.
+            ("bob!".into(), alice_did.clone(), bob_did.clone(), both),
+        ]
+    );
+
+    let bad: QueryParams = serde_json::from_value(
+        json!({"argv":["find"],"collection":"Order","options":{"fields":["login"],"signer":"yes"}}),
+    )
+    .unwrap();
+    let error = Tool::call(&tool, bad, &gents_loop::tool::ToolCallEnvelope::default())
+        .await
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("signer must be true or false"));
+
+    let paged: QueryParams = serde_json::from_value(json!({"argv":["find"],"collection":"Order","options":{"fields":["login"],"signer":true,"field_page":{"doc_id":own_id,"field":"login","offset_bytes":0}}}))
+    .unwrap();
+    let error = Tool::call(&tool, paged, &gents_loop::tool::ToolCallEnvelope::default())
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{error:#}").contains("field_page cannot combine with signer"),
+        "a field page never silently drops the requested _signer: {error:#}"
+    );
+}

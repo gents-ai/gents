@@ -7,7 +7,7 @@ use crate::native::ToolSet;
 
 use super::build::{
     build_host_tools, dedupe_agent_targets, dedupe_strings, downgrade_bash, downgrade_file_tools,
-    enabled_mcp_service_ids, measured_available_mcp_service_ids,
+    enabled_mcp_service_ids, measured_available_mcp_service_ids, HostToolsRequest,
 };
 use super::modes::ToolCeiling;
 use super::policy::{EndpointScope, RuntimeToolAvailability, ToolPolicySurface};
@@ -231,20 +231,20 @@ impl AgentToolSurfaceConfig {
         let bash = downgrade_bash(agent_name, requested_bash, static_policy.bash.tool);
         let cli_tool_names = static_policy.filter_cli_names(cli_tool_names);
         let root_was_authored = file_tool_root.is_some();
-        let host_tools = build_host_tools(
+        let host_tools = build_host_tools(HostToolsRequest {
             agent_name,
             file_tools,
             bash,
             command_policy,
-            &static_policy.bash,
-            file_tool_root.as_deref(),
-            &cli_tool_names,
-            &command_output_limits,
-            &timeouts,
+            effective_bash: &static_policy.bash,
+            file_tool_root: file_tool_root.as_deref(),
+            cli_tool_names: &cli_tool_names,
+            output_limits: &command_output_limits,
+            timeouts: &timeouts,
             file_limits,
-            static_policy.lsp,
+            enable_lsp: static_policy.lsp,
             ceiling,
-        )?;
+        })?;
         let root_execution_guard = (file_tools != FileToolMode::Off
             || bash != BashMode::Off
             || !cli_tool_names.is_empty()
@@ -394,6 +394,9 @@ impl AgentToolSurfaceConfig {
                     EndpointScope::All => None,
                     scope => Some(scope.keys().into_iter().collect()),
                 },
+                registry_url: None,
+                plugin_builder: None,
+                ux_preview_assets: None,
             },
             agent_policy,
             ceiling_policy,

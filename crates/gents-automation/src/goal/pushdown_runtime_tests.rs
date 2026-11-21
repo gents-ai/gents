@@ -715,10 +715,12 @@ async fn signed_goal_backed_request(
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         request_id,
-        did,
-        agent.did(),
-        agent.did(),
-        SESSION,
+        gents_protocol::request_admission::RequestScope::new(
+            did,
+            agent.did(),
+            agent.did(),
+            SESSION,
+        ),
         "Begin durable work",
         "interactive",
         "2026-07-15T00:00:00Z",

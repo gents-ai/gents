@@ -539,6 +539,8 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         .env("RUST_LOG", "warn,gents_server::commands::init=info")
         .args(["init", "--store-key-custody", "file", "--home"])
         .arg(&node_home)
+        .arg("--desktop-home")
+        .arg(homes.desktop_home())
         .args([
             "--tool-package",
             if journey.editor_scenario().is_some() {
@@ -1152,13 +1154,15 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     if journey.is_editor(scenario::HISTORY) {
         let options = history.context("history options")?;
         let mut evidence = editor_history::populate(
-            &mut client,
-            &mut id,
-            &access,
-            node_did,
-            session,
+            editor_history::EditorRun {
+                client: &mut client,
+                id: &mut id,
+                access: &access,
+                node: node_did,
+                session,
+                author: &client_did,
+            },
             agent_did,
-            &client_did,
             options,
             root,
         )
@@ -1212,12 +1216,14 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
 
         if options.profile {
             let evidence = editor_history::verify_profile(
-                &mut client,
-                &mut id,
-                &access,
-                node_did,
-                session,
-                &client_did,
+                editor_history::EditorRun {
+                    client: &mut client,
+                    id: &mut id,
+                    access: &access,
+                    node: node_did,
+                    session,
+                    author: &client_did,
+                },
                 options,
                 activity_profile,
             )

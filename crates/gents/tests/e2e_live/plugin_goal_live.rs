@@ -4,9 +4,9 @@ use gents::DocumentRuntimeOptions;
 use gents_protocol::goal_status::GoalStatus;
 use gents_protocol::job::{JobChildState, JobState};
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
-use gents_session::session::tool_call_state::ToolCallState;
+use gents_protocol::tool_call::ToolCallState;
 use gents_store::collection::Collection;
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
@@ -33,10 +33,12 @@ pub(super) async fn submit_with_cwd(
     let mut request = AgentRequestCreate::base(
         RequestPurpose::Normal,
         request_id,
-        node_did,
-        fixture.user.did(),
-        &fixture.binding.agent_did,
-        session,
+        RequestScope::new(
+            node_did,
+            fixture.user.did(),
+            &fixture.binding.agent_did,
+            session,
+        ),
         content,
         "interactive",
         canonical_now(),

@@ -71,6 +71,12 @@ pub(crate) struct UxPreviewArgs {
         help = "Size of the pane the page draws in"
     )]
     pub(crate) viewport: gents_tools::ux_preview::Viewport,
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Built preview page directory, for a build that carries none beside it"
+    )]
+    pub(crate) assets: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]
@@ -130,7 +136,7 @@ pub(crate) struct PluginPublishArgs {
     pub(crate) file: PathBuf,
     #[arg(
         long,
-        help = "Plugin registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
+        help = "Plugin registry base URL. Defaults to the public registry"
     )]
     pub(crate) registry: Option<String>,
     #[arg(
@@ -156,7 +162,7 @@ pub(crate) struct PluginInstallArgs {
     pub(crate) version: Option<String>,
     #[arg(
         long,
-        help = "Plugin registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
+        help = "Plugin registry base URL. Defaults to the public registry"
     )]
     pub(crate) registry: Option<String>,
     #[arg(long, help = "Home to install into; defaults to ~/.gents")]

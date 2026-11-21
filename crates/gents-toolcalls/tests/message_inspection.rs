@@ -49,10 +49,12 @@ async fn trigger_worker_inspection_reads_canonical_output_status_and_goal() {
     let mut opening = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         "read-worker-request",
-        identity.did(),
-        signer.did(),
-        signer.did(),
-        "read-worker",
+        gents_protocol::request_admission::RequestScope::new(
+            identity.did(),
+            signer.did(),
+            signer.did(),
+            "read-worker",
+        ),
         "spawn",
         "interactive",
         "2026-11-04T00:00:00Z",
@@ -114,10 +116,12 @@ async fn trigger_worker_inspection_reads_canonical_output_status_and_goal() {
     let mut queued = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         "read-worker-steering",
-        identity.did(),
-        signer.did(),
-        signer.did(),
-        "read-worker",
+        gents_protocol::request_admission::RequestScope::new(
+            identity.did(),
+            signer.did(),
+            signer.did(),
+            "read-worker",
+        ),
         "continue after verification",
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),

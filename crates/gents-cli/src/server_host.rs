@@ -9,9 +9,10 @@ use crate::cli::{Cli, Command};
 #[derive(Debug, Clone)]
 pub struct ProvisionOptions {
     pub home: PathBuf,
-    /// The caller's desktop root. Provisioning writes the CLI client key that
-    /// becomes the new home's administrator under the root this process
-    /// resolves, so a caller holding another root is refused.
+    /// The caller's desktop root. The CLI client key that becomes the new
+    /// home's administrator is kept in its `cli` folder, which the home
+    /// records (`init --desktop-home`), so every later command given the home
+    /// signs with that key.
     pub desktop_root: PathBuf,
     pub node_name: String,
     pub tool_ceiling: ToolCeilingArg,
@@ -45,20 +46,6 @@ async fn ensure_standard_home_inner(options: ProvisionOptions) -> Result<()> {
         return Ok(());
     }
 
-    let resolved = gents_service::home_state::cli_identity_paths()?;
-    let held = gents_store::client_journal::paths::DesktopPaths::from_root(&options.desktop_root)
-        .cli_client();
-    if resolved.root() != held.root() {
-        anyhow::bail!(
-            "provisioning {} would keep its administrator key in {}, but the caller's desktop root keeps it in {}; start this process with {} set to {}",
-            options.home.display(),
-            resolved.root().display(),
-            held.root().display(),
-            gents_store::client_journal::paths::DESKTOP_HOME_ENV,
-            options.desktop_root.display(),
-        );
-    }
-
     let tool_package = match options.tool_ceiling {
         ToolCeilingArg::MetaOnly => "minimal",
         ToolCeilingArg::Readonly => "readonly",
@@ -77,6 +64,8 @@ async fn ensure_standard_home_inner(options: ProvisionOptions) -> Result<()> {
         "--engineer".to_string(),
         "--inference-url".to_string(),
         crate::DEFAULT_INIT_ENDPOINT.to_string(),
+        "--desktop-home".to_string(),
+        options.desktop_root.display().to_string(),
     ];
     if let Some(tool_root) = options.tool_root {
         argv.push("--tool-root".to_string());

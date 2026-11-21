@@ -2,6 +2,7 @@ use gents::defra_node::Node as EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use gents_store::graphql::escape_graphql_string;
+use gents_store::test_support::snapshot_reader::{SnapshotChanges, SnapshotReader};
 use serde::Deserialize;
 
 pub enum SnapshotChanges {

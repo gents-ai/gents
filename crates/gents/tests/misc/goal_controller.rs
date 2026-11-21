@@ -18,8 +18,8 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use crate::support::mock_subscription::MockUpdateSubscriptionSource;
-use crate::support::snapshots::SnapshotReader;
 use crate::support::{test_db, TestDb};
+use gents_store::test_support::snapshot_reader::SnapshotReader;
 use gents_store::test_support::STALL_CEILING;
 
 const SESSION: &str = "goal-session";
@@ -211,7 +211,8 @@ struct GoalBackgroundHandoff {
     runtime: crate::support::accepted_turn::AcceptedTurnRuntime,
     agent_identity: Arc<dyn NodeIdentity>,
     parent_doc_id: String,
-    background_executions: gents_toolcalls::call::hook::BackgroundExecutionRegistry,
+    background_executions:
+        gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry,
     process_tool_call_id: String,
     release: tokio::net::TcpStream,
 }

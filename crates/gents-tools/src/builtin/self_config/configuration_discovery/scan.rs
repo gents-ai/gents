@@ -166,20 +166,12 @@ impl Scanner {
                     .file_name()
                     .and_then(|name| name.to_str())
                     .unwrap_or("instructions");
-                self.emit(
-                    &mut source,
-                    &relative,
-                    DiscoveryCategory::Instruction,
-                    label,
-                    DiscoveryItemState::Enabled,
-                    DiscoveryFacts::Instruction {
+                self.emit(&mut source, &relative, ItemDraft { category: DiscoveryCategory::Instruction, display_label: label, state: DiscoveryItemState::Enabled, facts: DiscoveryFacts::Instruction {
                         untrusted_excerpt: bounded_sanitized_text(&content),
                         source_bytes: content.len(),
-                    },
-                    MappingSupport::partial(
+                    }, mapping: MappingSupport::partial(
                         "instruction excerpt is inert discovery data and requires explicit review before mapping",
-                    ),
-                );
+                    ) });
             }
         }
         for skill_root in skill_roots {

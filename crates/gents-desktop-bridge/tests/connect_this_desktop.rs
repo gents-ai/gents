@@ -55,6 +55,10 @@ impl gents_host::serve::ServeClient for ReadyReport {
         gents_host::http::version::version_response()
     }
 
+    fn host_executable(&self) -> Option<std::path::PathBuf> {
+        None
+    }
+
     async fn bound_root_agents(
         &self,
         root: &Path,
@@ -75,13 +79,14 @@ fn free_port() -> u16 {
 
 /// A home made by `gents init` (through the provisioning that runs its
 /// `init_home`), listening on its own loopback ports so it never answers for
-/// another node on this machine.
-fn terminal_home(home: &Path) {
+/// another node on this machine. Its administrator key is `desktop`'s CLI
+/// client, which the home records.
+fn terminal_home(home: &Path, desktop: &Path) {
     run(gents_server::server_host::ensure_standard_home(
         tauri::async_runtime::handle().inner(),
         gents_server::server_host::ProvisionOptions {
             home: home.to_path_buf(),
-            desktop_root: DesktopPaths::discover().unwrap().root().to_path_buf(),
+            desktop_root: desktop.to_path_buf(),
             node_name: "Anvil".to_owned(),
             tool_ceiling: gents_service::args::ToolCeilingArg::Readonly,
             tool_root: None,
@@ -344,19 +349,14 @@ fn connect_this_desktop_joins_a_terminal_node_and_reads_its_settings() {
     std::fs::create_dir_all(path("user/.local/share")).unwrap();
     std::fs::create_dir_all(path("user/.config")).unwrap();
     std::env::set_var("HOME", path("user"));
-    std::env::set_var("GENTS_HOME", path("default-home"));
-    std::env::set_var(
-        gents_store::client_journal::paths::DESKTOP_HOME_ENV,
-        path("desktop"),
-    );
     std::env::set_var("XDG_DATA_HOME", path("user/.local/share"));
     std::env::set_var("XDG_CONFIG_HOME", path("user/.config"));
     gents_desktop_bridge::install_runtime();
 
     let served_home = path("anvil");
     let stopped_home = path("stopped");
-    terminal_home(&served_home);
-    terminal_home(&stopped_home);
+    terminal_home(&served_home, &path("desktop"));
+    terminal_home(&stopped_home, &path("desktop"));
     let served = serve(&served_home);
     let agents_before = node_agents(&served_home, &served);
 

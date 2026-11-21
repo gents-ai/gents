@@ -338,7 +338,7 @@ export function ErrorDetail({ error }: { error: string }) {
         <ChevronDown className="size-3 transition-transform duration-150 group-data-open/detail:rotate-180 motion-reduce:transition-none" />
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <p className="mt-1 text-xs wrap-break-word whitespace-pre-wrap text-muted-foreground select-text">
+        <p className="mt-1 max-h-32 overflow-y-auto text-xs wrap-anywhere whitespace-pre-wrap text-muted-foreground select-text">
           {error}
         </p>
       </CollapsibleContent>

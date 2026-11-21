@@ -457,19 +457,12 @@ pub async fn build_backend_client(
                 })
                 .map_err(anyhow::Error::from),
             };
-            let (route, bearer) = built
-                .map(|(route, bearer)| {
-                    (
-                        route.with_backend_id(agent.backend_id.as_deref().unwrap_or("")),
-                        bearer,
-                    )
-                })
-                .with_context(|| {
-                    format!(
-                        "building the {kind} completion client for agent {}",
-                        agent.agent_did
-                    )
-                })?;
+            let (route, bearer) = built.with_context(|| {
+                format!(
+                    "building the {kind} completion client for agent {}",
+                    agent.agent_did
+                )
+            })?;
             Ok(BackendClient::AnthropicApiKey(
                 crate::clients::claude_subscription::ClaudeSubscriptionClient::with_platform(
                     agent.node_did(),
@@ -810,7 +803,7 @@ mod tests {
                 "{}:acct-b",
                 crate::auth::credential::oauth_credential_id(agent.node_did(), provider)
             );
-            let bearer = crate::auth::credential::test_support::bound_bearer(&acct_b)
+            let bearer = crate::auth::credential::test_support::bound_bearer(&node, &acct_b)
                 .unwrap_or_else(|| panic!("{kind:?} {wire:?} did not bind acct-b"));
             assert_eq!(bearer.current_bearer().await.unwrap(), "access-acct-b");
         }
@@ -863,8 +856,9 @@ mod tests {
                 )
                 .await
                 .unwrap_or_else(|error| panic!("{kind:?} {credential_id}: {error:#}"));
-                let bearer = crate::auth::credential::test_support::bound_bearer(&credential_id)
-                    .unwrap_or_else(|| panic!("{kind:?} did not bind {credential_id}"));
+                let bearer =
+                    crate::auth::credential::test_support::bound_bearer(&node, &credential_id)
+                        .unwrap_or_else(|| panic!("{kind:?} did not bind {credential_id}"));
                 assert_eq!(bearer.current_bearer().await.unwrap(), token, "{kind:?}");
             }
         }

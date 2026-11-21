@@ -324,7 +324,7 @@ fn first_party_request(port: u16, body: &str) -> Request<Bytes> {
 }
 
 fn routed(latch: &Arc<AtomicBool>, port: u16) -> ClaudeHttpClient {
-    ClaudeHttpClient::new(None).with_test_route(latch.clone(), "127.0.0.1", port)
+    ClaudeHttpClient::new(None, latch.clone()).with_test_route("127.0.0.1", port)
 }
 
 /// A call whose capture scope is armed, and the count of bodies its sink was given.
@@ -602,7 +602,7 @@ async fn usage_headers_are_observed_on_success_and_on_error() {
         let reporter = UsageReporter::new(cache.clone(), node.clone(), account.clone());
         let latch = Arc::new(AtomicBool::new(false));
         let client =
-            ClaudeHttpClient::new(Some(reporter)).with_test_route(latch, "127.0.0.1", server.port);
+            ClaudeHttpClient::new(Some(reporter), latch).with_test_route("127.0.0.1", server.port);
         let _ = client
             .send_streaming(&Default::default(), first_party_request(server.port, "{}"))
             .await;
@@ -618,7 +618,7 @@ async fn usage_headers_are_observed_on_success_and_on_error() {
 
 #[tokio::test]
 async fn multipart_is_a_typed_error() {
-    let client = ClaudeHttpClient::new(None);
+    let client = ClaudeHttpClient::new(None, Arc::default());
     let request = Request::builder()
         .method("POST")
         .uri("http://127.0.0.1:1/v1/messages")

@@ -481,6 +481,7 @@ fn record_home(node: &ControlNode, home: &Path) -> StoredInitConfig {
         tool_root: None,
         store_encryption: None,
         document_acp: Default::default(),
+        client_identity: None,
     };
     gents_service::home_state::write_init_config(home, &config).unwrap();
     gents_service::home_state::write_runtime_state(

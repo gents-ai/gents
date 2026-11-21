@@ -280,7 +280,7 @@ pub fn resolve_policy(
     app_data_dir: Option<PathBuf>,
 ) -> Result<ResolvedBridgePolicy, String> {
     let desktop_paths = match &config.home {
-        HomePolicy::Default => DesktopPaths::discover().map_err(|e| e.to_string())?,
+        HomePolicy::Default => DesktopPaths::platform_default().map_err(|e| e.to_string())?,
         HomePolicy::AppDataDir { subdirectory } => {
             let base = app_data_dir.ok_or_else(|| {
                 "HomePolicy::AppDataDir requires the host app data directory".to_string()
@@ -309,6 +309,7 @@ pub fn resolve_policy(
         managed_server: config.managed_server,
         client_host: config.client_host,
         store_key_custody: config.store_key_custody,
+        service_executable: config.service_executable.clone(),
     })
 }
 

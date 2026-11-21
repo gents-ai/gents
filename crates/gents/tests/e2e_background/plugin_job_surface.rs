@@ -129,7 +129,7 @@ async fn session_texts(h: &JobHarness) -> Vec<String> {
 }
 
 async fn notification(h: &JobHarness) -> String {
-    use crate::support::snapshots::SnapshotReader;
+    use gents_store::test_support::snapshot_reader::SnapshotReader;
     let marker = format!("<tool-completion tool_call_id=\"{TOOL_CALL}\"");
     let mut changes = h
         .actors

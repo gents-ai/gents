@@ -941,6 +941,7 @@ mod tests {
                 deadline_duration_secs: 60,
                 execution_origin: ExecutionOrigin::Interactive,
                 backend_id: "backend".into(),
+                operator_tool_root: None,
             },
             TriggerLineage::default(),
         )

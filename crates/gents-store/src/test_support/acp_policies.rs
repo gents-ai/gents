@@ -12,10 +12,6 @@ use gents_protocol::schemas::{
 /// (`AGENT_OWNERSHIP_POLICY_ID`, `MAILBOX_POLICY_ID`, `CLIENT_JOURNAL_POLICY_ID`).
 /// Each policy is registered with counter 0, so the ids are the reproducible
 /// ids the schemas reference; a mismatched id is an error.
-///
-/// Mirrors the production installers in `gents-migration`'s `engine.rs`
-/// (`register_identity_policy`, `register_mailbox_policy`,
-/// `register_client_journal_policy`), which are private to that crate.
 pub async fn install_identity_acp_policies(node: &defra_node::Node) -> Result<()> {
     let runtime = node
         .node_identity_did()

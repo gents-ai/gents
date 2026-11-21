@@ -17,7 +17,6 @@ test-fixtures = ["test-home-guard", "gents-store/test-fixtures", "gents-document
 gents-store.workspace = true
 gents-documents.workspace = true
 acp.workspace = true
-schema.workspace = true
 storage.workspace = true
 anyhow.workspace = true
 async-trait = "0.1"
