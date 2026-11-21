@@ -56,7 +56,7 @@ fn trait_bounds_live_in_where_clauses() {
         .collect::<BTreeSet<_>>();
     assert!(
         violations.is_empty(),
-        "where-clause ratchet failed:\n{}",
+        "where-clause rule failed:\n{}",
         violations.into_iter().collect::<Vec<_>>().join("\n")
     );
 }

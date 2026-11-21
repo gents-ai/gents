@@ -1,5 +1,5 @@
 use super::support::{
-    cfg_test, item_cfg_test, production_site_counts, repo_root, shrinking_allowlist, Workspace,
+    cfg_test, item_cfg_test, named_exceptions, production_site_counts, repo_root, Workspace,
 };
 use std::collections::BTreeSet;
 use syn::visit::{self, Visit};
@@ -15,11 +15,9 @@ use syn::visit::{self, Visit};
 /// platform locators `home_dir`, `temp_dir`, `current_dir`, `current_exe` and
 /// `args`, nor build scripts, which Cargo runs with its own environment, nor a
 /// member no production build compiles (`Workspace::test_only`).
-/// Entries name what replaces each remaining read (a flag, a document field,
-/// a test fixture) or why it is legitimately external; the list only shrinks
-/// (#1764).
+/// Each exception names why its reads are legitimately external.
 #[rustfmt::skip]
-const ENVIRONMENT_READ_ALLOWLIST: &[(&str, usize, &str)] = &[
+const ENVIRONMENT_READ_EXCEPTIONS: &[(&str, usize, &str)] = &[
     ("apps/gents-desktop/src-tauri/src/bridge/browser.rs", 1, "HOME: expands a leading ~ in a user-typed path; legitimately external (platform discovery)"),
     ("apps/gents-desktop/src-tauri/src/bridge/links.rs", 1, "APPIMAGE: AppImage probe deciding how links open from a packaged Linux build; legitimately external"),
     ("apps/gents-desktop/src-tauri/src/runner/live_fixture/backend.rs", 1, "the API key variable a live-fixture backend names: the runner checks it is set before seeding a backend the runtime will read it from by name; legitimately external"),
@@ -170,16 +168,16 @@ fn environment_read_sites(syntax: &syn::File) -> usize {
 }
 
 #[test]
-fn runtime_environment_reads_only_shrink() {
+fn runtime_environment_reads_are_named_exceptions() {
     let workspace = Workspace::load(&repo_root());
     let test_only = workspace
         .test_only()
         .iter()
         .map(|name| format!("{}/", workspace.members[name].0))
         .collect::<Vec<_>>();
-    shrinking_allowlist(
+    named_exceptions(
         "runtime environment read",
-        ENVIRONMENT_READ_ALLOWLIST,
+        ENVIRONMENT_READ_EXCEPTIONS,
         &production_site_counts(|relative, syntax| {
             if relative.ends_with("build.rs")
                 || test_only

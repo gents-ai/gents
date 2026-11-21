@@ -413,7 +413,7 @@ fn service_isolation_fence_flags_production_enablement() {
 }
 
 /// The members no production build compiles (`Workspace::test_only`), whose
-/// sources `runtime_environment_reads_only_shrink` skips. Pinned so that one
+/// sources `runtime_environment_reads_are_named_exceptions` skips. Pinned so that one
 /// becoming reachable from a production build, or a new one becoming
 /// test-only, is a visible change.
 const TEST_ONLY_CRATES: &[&str] = &[
@@ -450,7 +450,7 @@ fn test_only_crates_stay_off_production_builds() {
     );
     assert!(
         violations.is_empty(),
-        "test-only crates ratchet failed:\n{}",
+        "test-only crates rule failed:\n{}",
         violations.join("\n")
     );
 }

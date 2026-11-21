@@ -5,23 +5,17 @@ use std::path::Path;
 /// Integration-test targets that link on their own beside their crate's one
 /// integration binary, each with the process-wide state that keeps it apart.
 /// Every other integration test is a module of that binary: each extra target
-/// relinks the crate's whole dependency graph. This allowlist only shrinks.
-const SEPARATE_TEST_TARGETS: &[(&str, &str)] = &[
-    // Its scenarios serialise on the process-global embedded P2P transport.
-    ("gents", "e2e_triggers"),
-    // A source scanner that links no runtime crate; run alone while editing ratchets.
-    ("gents", "write_owner_structure"),
-    // Installs a global allocator.
-    ("gents-cli", "heap_profile"),
-    // The Windows editor job builds and runs it without the CLI suite.
-    ("gents-cli", "port_allocation"),
-    // Sets GENTS_PLUGIN_BUILDER for the process.
-    ("gents-cli", "plugin_build_sandbox"),
-    // Sets HOME and the XDG directories for the process.
-    ("gents-desktop-bridge", "connect_this_desktop"),
-    ("gents-desktop-bridge", "home_isolation"),
-    // Installs the global tracing subscriber and drives its clock.
-    ("gents-session", "log_rate_filter"),
+/// relinks the crate's whole dependency graph.
+#[rustfmt::skip]
+const SEPARATE_TEST_TARGETS: &[(&str, &str, &str)] = &[
+    ("gents", "e2e_triggers", "its scenarios serialise on the process-global embedded P2P transport"),
+    ("gents", "write_owner_structure", "a source scanner that links no runtime crate; run alone while editing the structure rules"),
+    ("gents-cli", "heap_profile", "installs a global allocator"),
+    ("gents-cli", "port_allocation", "the Windows editor job builds and runs it without the CLI suite"),
+    ("gents-cli", "plugin_build_sandbox", "sets GENTS_PLUGIN_BUILDER for the process"),
+    ("gents-desktop-bridge", "connect_this_desktop", "sets HOME and the XDG directories for the process"),
+    ("gents-desktop-bridge", "home_isolation", "sets HOME and the XDG directories for the process"),
+    ("gents-session", "log_rate_filter", "installs the global tracing subscriber and drives its clock"),
 ];
 
 /// Integration-test roots on disk: `tests/*.rs` and `tests/*/main.rs`.
@@ -107,7 +101,7 @@ fn integration_tests_share_one_binary_per_crate() {
         for target in targets {
             match SEPARATE_TEST_TARGETS
                 .iter()
-                .find(|(package, separate)| package == name && *separate == target)
+                .find(|(package, separate, _)| package == name && *separate == target)
             {
                 Some(entry) => {
                     separate_seen.insert(*entry);
@@ -122,9 +116,15 @@ fn integration_tests_share_one_binary_per_crate() {
         }
     }
     for entry in SEPARATE_TEST_TARGETS {
+        let (package, target, reason) = entry;
         if !separate_seen.contains(entry) {
             findings.push(format!(
-                "{entry:?} no longer exists; remove it from SEPARATE_TEST_TARGETS"
+                "({package}, {target}) no longer exists; remove it from SEPARATE_TEST_TARGETS"
+            ));
+        }
+        if reason.trim().is_empty() {
+            findings.push(format!(
+                "({package}, {target}) names no reason to link on its own"
             ));
         }
     }

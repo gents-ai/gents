@@ -111,16 +111,16 @@ wall-clock budget.
 
 ## Enforced rules
 
-Unless noted, the ratchets live in `crates/gents/tests/write_owner_structure.rs`;
-their allowlists only shrink.
+Unless noted, the rules are tests in `crates/gents/tests/write_owner_structure/`;
+an exception names its file, its exact count and its reason.
 
 | Rule | Enforced by |
 | --- | --- |
-| DefraDB access goes through `gents-store`: writes `ConfigAccess::write`/`write_local`, multi-statement or DID-scoped work `ConfigAccess::transact_*`, reads `graphql_with_transaction_retry` or `ConfigAccess::execute`. Never the embedded node, raw HTTP GraphQL, or another retry loop or wrapper. | `production_defradb_writes_have_one_owner`, `production_defradb_node_execution_only_shrinks` |
+| DefraDB access goes through `gents-store`: writes `ConfigAccess::write`/`write_local`, multi-statement or DID-scoped work `ConfigAccess::transact_*`, reads `graphql_with_transaction_retry` or `ConfigAccess::execute`. Never the embedded node, raw HTTP GraphQL, or another retry loop or wrapper. | `production_defradb_writes_have_one_owner`, `production_defradb_node_execution_stays_in_the_store_owners` |
 | A User-signed transaction that can lose its read to a concurrent write uses `transact_signed_conflict_rebuild` (or `_with_finality`); its callback re-reads its inputs and has no outside effects, and only a confirmed abort is rebuilt. | Lean `clientSignedWriteMayRetry` |
 | Queries use `gents_protocol::document_query` with variables; any interpolated string goes through `graphql::escape_graphql_string()`. A mutation never emits `[]`; use `null`. | review |
-| Owner interfaces return `thiserror` enums. An erased error is classified by asking the owner through `error_chain::find_map_source`, and only an owner asks for its own type, in a classifier beside that type; an owner passing an application error through wraps it in `error_chain::PassedThrough`. A store conflict is the typed `TransactionConflict`. Error text is decided, and a third-party error type asked for, only in an adapter classifier whose docstring states its `External premise:`; every other downcast or text decision is debt that only shrinks. | `owner_interfaces_use_thiserror`, `downcast_classifiers_only_shrink`, `error_text_classification_only_shrinks` |
-| Request context (identity, signing, transaction, requester, trace) is an explicit argument, never thread- or task-local. | `ambient_request_context_only_shrinks` |
+| Owner interfaces return `thiserror` enums. An erased error is classified by asking the owner through `error_chain::find_map_source`, and only an owner asks for its own type, in a classifier beside that type; an owner passing an application error through wraps it in `error_chain::PassedThrough`. A store conflict is the typed `TransactionConflict`. Error text is decided, and a third-party error type asked for, only in an adapter classifier whose docstring states its `External premise:`; no other downcast or text decision is admitted. | `owner_interfaces_use_thiserror`, `downcasts_are_asked_only_by_owner_classifiers`, `error_text_is_decided_only_in_adapter_classifiers` |
+| Request context (identity, signing, transaction, requester, trace) is an explicit argument, never thread- or task-local. | `ambient_request_context_is_banned` |
 | One Tokio runtime per process, built at its entry point; handles come from the caller (`DropCleanup::current` in drop guards). Never block a runtime thread: `.await`, `spawn_blocking`, `drive_unsendable`. | `disallowed-methods` in `clippy.toml` |
 | Maps and sets are `rapidhash`; trait bounds live in `where` clauses. | `hash_maps_use_rapidhash`, `trait_bounds_live_in_where_clauses` |
 | Rig types stay behind `gents_loop::rig_compat` and `provider_input`. | `rig_types_stay_behind_their_owners` |
@@ -182,7 +182,7 @@ are fixed in defradb.rs or Regolith, not hidden by a Gents retry.
 **The gate** (`scripts/ci/gate.py`, run by `.github/workflows/ci.yml`) maps a
 change to its crates and their reverse dependents and selects `fmt`, `lint`
 (clippy `-D warnings`, live suites compiled), `contract` (no `sorry`, Lean
-layers and build, generated files current, the consumer scan, the ratchets),
+layers and build, generated files current, the consumer scan, the structure rules),
 the TypeScript jobs, and the test groups `foundation`, `store`, `session`,
 `runtime`, `cli` and `desktop`, each crate built and tested alone.
 

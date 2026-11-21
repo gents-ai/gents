@@ -1,5 +1,4 @@
-use super::support::{item_cfg_test, owned_by, parse_production, production_sources, repo_root};
-use std::collections::BTreeSet;
+use super::support::{item_cfg_test, no_sites, owned_by, production_site_counts};
 use syn::visit::{self, Visit};
 
 const RIG_OWNER_MODULES: &[&str] = &[
@@ -10,12 +9,6 @@ const RIG_OWNER_MODULES: &[&str] = &[
     "crates/gents/src/turn/provider_input",
     "crates/gents/src/runtime/agent/loop_stream",
 ];
-
-/// Files outside the owner modules that still name `rig`. A layer over the
-/// provider exchange implements `rig_compat::http::Transport`, and a model
-/// this workspace implements itself `rig_compat::model::Model`; `rig_compat`
-/// lifts both into Rig's traits. This list stays empty.
-const RIG_PATH_ALLOWLIST: &[&str] = &[];
 
 #[derive(Default)]
 struct RigPathVisitor {
@@ -105,41 +98,26 @@ fn rig_path_sites(syntax: &syn::File) -> usize {
     visitor.sites
 }
 
+/// No file outside the owner modules names `rig`. A layer over the provider
+/// exchange implements `rig_compat::http::Transport`, and a model this
+/// workspace implements itself `rig_compat::model::Model`; `rig_compat` lifts
+/// both into Rig's traits.
 #[test]
 fn rig_types_stay_behind_their_owners() {
-    let root = repo_root();
-    let actual = parse_production(&root, production_sources(&root))
-        .into_iter()
-        .filter(|(relative, _)| {
-            !RIG_OWNER_MODULES
+    no_sites(
+        "rig boundary",
+        &production_site_counts(|relative, syntax| {
+            if RIG_OWNER_MODULES
                 .iter()
                 .any(|owner| owned_by(relative, owner))
-        })
-        .filter(|(_, syntax)| rig_path_sites(syntax) > 0)
-        .map(|(relative, _)| relative)
-        .collect::<BTreeSet<_>>();
-    let allowed = RIG_PATH_ALLOWLIST
-        .iter()
-        .map(|path| path.to_string())
-        .collect::<BTreeSet<_>>();
-    let mut violations = actual
-        .difference(&allowed)
-        .map(|path| format!("{path}: names `rig`; use a native type at the rig_compat boundary"))
-        .collect::<Vec<_>>();
-    violations.extend(
-        allowed
-            .difference(&actual)
-            .map(|path| format!("{path}: no longer names `rig`; remove its allowlist entry")),
-    );
-    let current = actual
-        .iter()
-        .map(|path| format!("    \"{path}\","))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        violations.is_empty(),
-        "rig boundary ratchet failed:\n{}\n\ncurrent files:\n{current}",
-        violations.join("\n")
+            {
+                0
+            } else {
+                rig_path_sites(syntax)
+            }
+        }),
+        "path(s) naming `rig`",
+        "use a native type and cross at `gents_loop::rig_compat` or `provider_input`",
     );
 }
 

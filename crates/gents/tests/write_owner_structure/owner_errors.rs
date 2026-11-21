@@ -140,7 +140,7 @@ fn owner_interfaces_use_thiserror() {
         .collect::<Vec<_>>();
     assert!(
         violations.is_empty(),
-        "owner interface ratchet failed:\n{}",
+        "owner interface rule failed:\n{}",
         violations.join("\n")
     );
 }

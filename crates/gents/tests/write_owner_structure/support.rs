@@ -694,47 +694,89 @@ pub(crate) fn all_rust_sources(root: &Path, output: &mut Vec<PathBuf>) {
     }
 }
 
-/// Compares per-file site counts with a `(path, count, reason)` allowlist
-/// that only shrinks: a file missing from the list, a count above its entry
-/// and a count below it (a stale entry) each fail, and the failure lists the
-/// current sites to copy from.
-pub(crate) fn shrinking_allowlist(
-    ratchet: &str,
-    allowlist: &[(&str, usize, &str)],
+/// The failures of a rule whose exceptions are `(path, count, reason)`: a
+/// file's sites must equal its exception's count exactly, a file without an
+/// exception has none, and every exception carries its reason.
+pub(crate) fn exception_failures(
+    exceptions: &[(&str, usize, &str)],
     actual: &BTreeMap<String, usize>,
     sites: &str,
     remedy: &str,
-) {
-    let mut allowed = BTreeMap::new();
-    let mut violations = Vec::new();
-    for (path, count, _) in allowlist {
-        if allowed.insert(path.to_string(), *count).is_some() {
-            violations.push(format!("{path}: listed twice"));
+) -> Vec<String> {
+    let mut named = BTreeMap::new();
+    let mut failures = Vec::new();
+    for (path, count, reason) in exceptions {
+        if named.insert(path.to_string(), *count).is_some() {
+            failures.push(format!("{path}: listed twice"));
+        }
+        if reason.trim().is_empty() {
+            failures.push(format!("{path}: the exception names no reason"));
         }
     }
-    for path in allowed.keys().chain(actual.keys()).collect::<BTreeSet<_>>() {
+    for path in named.keys().chain(actual.keys()).collect::<BTreeSet<_>>() {
         let found = actual.get(path).copied().unwrap_or_default();
-        match allowed.get(path).copied() {
-            None => violations.push(format!("{path}: {found} new {sites}; {remedy}")),
-            Some(limit) if found > limit => violations.push(format!(
-                "{path}: {found} {sites} exceed the allowlisted {limit}"
-            )),
-            Some(limit) if found < limit => violations.push(format!(
-                "{path}: {found} {sites}; lower the allowlist entry from {limit}"
+        match named.get(path).copied() {
+            None => failures.push(format!("{path}: {found} {sites}; {remedy}")),
+            Some(count) if found != count => failures.push(format!(
+                "{path}: {found} {sites}, its exception names {count}; {remedy}, or correct the exception"
             )),
             Some(_) => {}
         }
     }
+    failures
+}
+
+/// Asserts a rule with named exceptions (`exception_failures`); the failure
+/// lists the current sites with their reasons to copy from.
+pub(crate) fn named_exceptions(
+    rule: &str,
+    exceptions: &[(&str, usize, &str)],
+    actual: &BTreeMap<String, usize>,
+    sites: &str,
+    remedy: &str,
+) {
+    let failures = exception_failures(exceptions, actual, sites, remedy);
     let current = actual
         .iter()
-        .map(|(path, count)| format!("    (\"{path}\", {count}, \"<reason>\"),"))
+        .map(|(path, count)| {
+            let reason = exceptions
+                .iter()
+                .find(|(named, _, _)| named == path)
+                .map_or("<reason>", |(_, _, reason)| reason);
+            format!("    (\"{path}\", {count}, \"{reason}\"),")
+        })
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        violations.is_empty(),
-        "{ratchet} ratchet failed:\n{}\n\ncurrent sites:\n{current}",
-        violations.join("\n")
+        failures.is_empty(),
+        "{rule} rule failed:\n{}\n\ncurrent sites:\n{current}",
+        failures.join("\n")
     );
+}
+
+/// Asserts a rule that admits no site.
+pub(crate) fn no_sites(rule: &str, actual: &BTreeMap<String, usize>, sites: &str, remedy: &str) {
+    let failures = exception_failures(&[], actual, sites, remedy);
+    assert!(
+        failures.is_empty(),
+        "{rule} rule failed:\n{}",
+        failures.join("\n")
+    );
+}
+
+#[test]
+fn named_exceptions_need_a_reason_and_an_exact_count() {
+    let actual = BTreeMap::from([("a.rs".to_owned(), 2)]);
+    let failures = |exceptions: &[(&str, usize, &str)]| {
+        exception_failures(exceptions, &actual, "site(s)", "remedy").len()
+    };
+    assert_eq!(failures(&[("a.rs", 2, "why")]), 0);
+    assert_eq!(failures(&[]), 1);
+    assert_eq!(failures(&[("a.rs", 1, "why")]), 1);
+    assert_eq!(failures(&[("a.rs", 3, "why")]), 1);
+    assert_eq!(failures(&[("a.rs", 2, " ")]), 1);
+    assert_eq!(failures(&[("a.rs", 2, "why"), ("b.rs", 1, "why")]), 1);
+    assert_eq!(failures(&[("a.rs", 2, "why"), ("a.rs", 2, "why")]), 1);
 }
 
 pub(crate) fn production_site_counts(

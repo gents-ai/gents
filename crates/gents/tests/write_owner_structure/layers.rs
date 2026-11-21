@@ -117,7 +117,7 @@ fn crate_dependencies_follow_the_layers() {
     let violations = crate_dependency_violations(&manifests, &inherited);
     assert!(
         violations.is_empty(),
-        "crate layering ratchet failed:\n{}",
+        "crate layering rule failed:\n{}",
         violations.join("\n")
     );
 }

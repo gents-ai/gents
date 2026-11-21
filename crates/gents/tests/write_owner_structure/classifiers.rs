@@ -10,24 +10,13 @@ use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 use syn::{Expr, ExprCall, ExprMethodCall, ItemFn, ItemImpl};
 
-/// Production sites that classify an error by its concrete type and are not
-/// the owner asking for its own type: a downcast (`downcast*`, `is::<T>`) or a
-/// `find_source` call whose type the function's module does not declare and
-/// export, or that sits in a function that is not handed an error. Each is
-/// debt: the producer returns an owner enum whose variants the caller matches,
-/// or the caller asks the owner's classifier. A third-party type is asked
-/// for in an adapter classifier instead. This list only shrinks.
-#[rustfmt::skip]
-const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
-];
-
 /// Owner classifiers: the functions through which an owner asks an erased
 /// error for its own error type. A site is one when its function is
 /// synchronous and takes an error, and the type asked for is an error type
 /// that is declared and exported (any `pub`) in the same file, or, for a file
 /// in `OWNER_MODULES`, in an `OWNER_MODULES` file of the same crate. The chain
-/// walker alone may ask for its own type parameter. These sites are not debt;
-/// a new entry is a reviewed addition.
+/// walker alone may ask for its own type parameter. A new entry is a reviewed
+/// addition.
 #[rustfmt::skip]
 const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-client-host/src/editor_store.rs", &["HistoryUnlockRequired::occurs_in"]),
@@ -94,21 +83,13 @@ const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
 /// it asks for and counts.
 const CHAIN_WALKER: &str = "crates/gents-protocol/src/error_chain.rs";
 
-/// Production decisions on an error's text outside an adapter-boundary
-/// classifier. Each is debt: the fact becomes an owner enum variant that
-/// callers match, or the decision moves into an adapter classifier whose
-/// docstring names the external premise. This list only shrinks.
-#[rustfmt::skip]
-const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
-];
-
 /// Adapter-boundary classifiers: functions that decide on error text, or ask
 /// an erased error for a third-party type, because third-party or persisted
 /// text or a third-party type is the only signal, which their docstring
 /// states on a line starting `External premise:`. A type is third-party when
 /// it is written out, is no type parameter and no `crate`, `self`, `super`
 /// or `gents_*` path, and either no workspace source declares its name or its
-/// path starts at an external crate. Their decisions are not debt; a new
+/// path starts at an external crate. A new
 /// entry is a reviewed addition.
 #[rustfmt::skip]
 const ADAPTER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
@@ -303,7 +284,7 @@ fn names_error_type(ty: &syn::Type) -> bool {
     }
 }
 
-/// The function a classifier site sits in, as the two classifier ratchets
+/// The function a classifier site sits in, as the two classifier rules
 /// judge it: by its signature and its docstring, never by its name.
 struct FnFrame {
     name: String,
@@ -582,7 +563,7 @@ impl DeclaredErrors {
 /// message, and the functions that hold a compliant one.
 #[derive(Default)]
 struct SiteFindings {
-    debt: Vec<String>,
+    violations: Vec<String>,
     compliant: BTreeMap<String, usize>,
 }
 
@@ -677,7 +658,7 @@ impl ClassifierVisitor<'_> {
         } else {
             let asked = asked.map_or_else(|| "an inferred type".to_string(), type_name);
             self.downcasts
-                .debt
+                .violations
                 .push(format!("{line}: {asked} in {function}"));
         }
     }
@@ -687,7 +668,7 @@ impl ClassifierVisitor<'_> {
         if self.frames.last().is_some_and(|frame| frame.premise) {
             *self.texts.compliant.entry(function).or_default() += 1;
         } else {
-            self.texts.debt.push(format!("{line}: in {function}"));
+            self.texts.violations.push(format!("{line}: in {function}"));
         }
     }
 
@@ -951,18 +932,18 @@ fn classifier_sites(
     (visitor.downcasts, visitor.texts)
 }
 
-/// What a classifier ratchet found: the sites that still count, by file, and
+/// What a classifier rule found: the sites that still count, by file, and
 /// the functions whose sites are the compliant form.
 #[derive(Default)]
 struct ClassifierFindings {
-    debt: BTreeMap<String, Vec<String>>,
+    violations: BTreeMap<String, Vec<String>>,
     compliant: BTreeMap<(String, String), usize>,
 }
 
 impl ClassifierFindings {
     fn record(&mut self, path: &str, sites: SiteFindings) {
-        if !sites.debt.is_empty() {
-            self.debt.insert(path.to_string(), sites.debt);
+        if !sites.violations.is_empty() {
+            self.violations.insert(path.to_string(), sites.violations);
         }
         self.compliant.extend(
             sites
@@ -973,7 +954,7 @@ impl ClassifierFindings {
     }
 
     fn sites(&self) -> usize {
-        self.debt.values().map(Vec::len).sum()
+        self.violations.values().map(Vec::len).sum()
     }
 
     fn functions(&self) -> Vec<&str> {
@@ -983,40 +964,20 @@ impl ClassifierFindings {
             .collect()
     }
 
-    /// The counted sites must equal the allowlist, which only shrinks, and the
-    /// compliant functions must equal the registry, which is reviewed.
-    fn failures(
-        &self,
-        allowlist: &[(&str, usize)],
-        registry: &[(&str, &[&str])],
-        advice: &str,
-    ) -> Vec<String> {
-        let allowed = allowlist
+    /// No site counts, and the compliant functions must equal the registry,
+    /// which is reviewed.
+    fn failures(&self, registry: &[(&str, &[&str])], advice: &str) -> Vec<String> {
+        let mut failures = self
+            .violations
             .iter()
-            .map(|(path, count)| (path.to_string(), *count))
-            .collect::<BTreeMap<_, _>>();
-        let mut failures = Vec::new();
-        for path in allowed
-            .keys()
-            .chain(self.debt.keys())
-            .collect::<BTreeSet<_>>()
-        {
-            let sites = self.debt.get(path).cloned().unwrap_or_default();
-            let found = sites.len();
-            let listed = sites.join("\n    ");
-            match allowed.get(path).copied() {
-                None => failures.push(format!(
-                    "{path}: {found} new site(s); {advice}\n    {listed}"
-                )),
-                Some(limit) if found > limit => failures.push(format!(
-                    "{path}: {found} sites exceed the allowlisted {limit}; {advice}\n    {listed}"
-                )),
-                Some(limit) if found < limit => failures.push(format!(
-                    "{path}: {found} sites; lower the allowlist entry from {limit}"
-                )),
-                Some(_) => {}
-            }
-        }
+            .map(|(path, sites)| {
+                format!(
+                    "{path}: {} site(s); {advice}\n    {}",
+                    sites.len(),
+                    sites.join("\n    ")
+                )
+            })
+            .collect::<Vec<_>>();
         let registered = registry
             .iter()
             .flat_map(|(path, functions)| {
@@ -1040,24 +1001,6 @@ impl ClassifierFindings {
     }
 
     fn current(&self) -> String {
-        let debt = self
-            .debt
-            .iter()
-            .map(|(path, sites)| {
-                let what = sites
-                    .iter()
-                    .map(|site| {
-                        site.split_once(": ")
-                            .map_or(site.as_str(), |(_, what)| what)
-                    })
-                    .collect::<BTreeSet<_>>()
-                    .into_iter()
-                    .collect::<Vec<_>>()
-                    .join("; ");
-                format!("    // {what}\n    (\"{path}\", {}),", sites.len())
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
         let mut registry = BTreeMap::<&str, Vec<&str>>::new();
         for (path, function) in self.compliant.keys() {
             registry.entry(path).or_default().push(function);
@@ -1068,9 +1011,7 @@ impl ClassifierFindings {
             .collect::<Vec<_>>()
             .join("\n");
         format!(
-            "current allowlist ({} sites in {} files):\n{debt}\n\ncurrent registry ({} sites in {} functions):\n{registry}",
-            self.sites(),
-            self.debt.len(),
+            "current registry ({} sites in {} functions):\n{registry}",
             self.compliant.values().sum::<usize>(),
             self.compliant.len()
         )
@@ -1100,33 +1041,40 @@ fn production_classifier_findings() -> (ClassifierFindings, ClassifierFindings) 
     )
 }
 
+/// A production site that classifies an error by its concrete type (a
+/// downcast, `is::<T>` or a `find_source` call) is the owner asking for its
+/// own type in a registered owner classifier, or a registered adapter
+/// classifier asking for a third-party type; no other site is admitted. The
+/// producer returns an owner enum whose variants the caller matches, or the
+/// caller asks the owner's classifier.
 #[test]
-fn downcast_classifiers_only_shrink() {
+fn downcasts_are_asked_only_by_owner_classifiers() {
     let (downcasts, _) = production_classifier_findings();
     let failures = downcasts.failures(
-        DOWNCAST_CLASSIFIER_ALLOWLIST,
         OWNER_CLASSIFIER_REGISTRY,
         "return an owner enum and match its variants, or ask the owner's classifier",
     );
     assert!(
         failures.is_empty(),
-        "downcast classifier ratchet failed:\n{}\n\n{}",
+        "downcast classifier rule failed:\n{}\n\n{}",
         failures.join("\n"),
         downcasts.current()
     );
 }
 
+/// A production decision on an error's text sits in a registered adapter
+/// classifier whose docstring names its external premise; no other decision
+/// is admitted. The fact becomes an owner enum variant that callers match.
 #[test]
-fn error_text_classification_only_shrinks() {
+fn error_text_is_decided_only_in_adapter_classifiers() {
     let (_, texts) = production_classifier_findings();
     let failures = texts.failures(
-        ERROR_TEXT_CLASSIFIER_ALLOWLIST,
         ADAPTER_CLASSIFIER_REGISTRY,
         "expose the fact as an owner enum variant and match it, or decide in an adapter classifier whose docstring states its `External premise:`",
     );
     assert!(
         failures.is_empty(),
-        "error text ratchet failed:\n{}\n\n{}",
+        "error text rule failed:\n{}\n\n{}",
         failures.join("\n"),
         texts.current()
     );
@@ -1317,7 +1265,7 @@ fn downcast_fence_exempts_only_the_owner_asking_for_its_own_type() {
             "#[derive(Debug)] pub struct Refused; impl std::error::Error for Refused {} pub fn refused(error: &anyhow::Error) -> bool { error.is::<Refused>() }",
             compliant("refused"),
         ),
-        // A private marker carried through `anyhow` is debt wherever it is asked for.
+        // A private marker carried through `anyhow` counts wherever it is asked for.
         (
             "#[derive(Debug, thiserror::Error)] struct Marker; fn marked(error: &anyhow::Error) -> bool { error.is::<Marker>() }",
             counted(1),
@@ -1457,55 +1405,36 @@ fn downcast_fence_exempts_third_party_types_only_in_adapter_classifiers() {
         adapter("io")
     );
 
-    // The adapter is registered like any other: undocumented it is debt,
+    // The adapter is registered like any other: undocumented it counts,
     // documented and unregistered it fails the registry check.
     let (downcasts, adapters) = snippet_findings(&[(APPLICATION_FILE, full.as_str())]);
-    assert!(downcasts.failures(&[], &[], "advice").is_empty());
-    assert_eq!(adapters.failures(&[], &[], "advice").len(), 1);
+    assert!(downcasts.failures(&[], "advice").is_empty());
+    assert_eq!(adapters.failures(&[], "advice").len(), 1);
     assert!(adapters
-        .failures(&[], &[(APPLICATION_FILE, &["io"])], "advice")
+        .failures(&[(APPLICATION_FILE, &["io"])], "advice")
         .is_empty());
 }
 
 #[test]
-fn classifier_ratchet_checks_the_allowlist_and_the_registry() {
-    let source = format!(
-        "{OWN_ERROR} fn own_error(error: &anyhow::Error) -> bool {{ error.is::<OwnError>() }} fn other(error: &anyhow::Error) -> bool {{ error.is::<std::io::Error>() }}"
+fn classifier_rule_checks_sites_and_the_registry() {
+    let own = format!(
+        "{OWN_ERROR} fn own_error(error: &anyhow::Error) -> bool {{ error.is::<OwnError>() }}"
     );
-    let (downcasts, _) = snippet_findings(&[(APPLICATION_FILE, source.as_str())]);
-    let failures = |allowlist: &[(&str, usize)], registry: &[(&str, &[&str])]| {
-        downcasts.failures(allowlist, registry, "advice").len()
+    let other =
+        format!("{own} fn other(error: &anyhow::Error) -> bool {{ error.is::<std::io::Error>() }}");
+    let failures = |source: &str, registry: &[(&str, &[&str])]| {
+        snippet_findings(&[(APPLICATION_FILE, source)])
+            .0
+            .failures(registry, "advice")
+            .len()
     };
-    assert_eq!(
-        failures(
-            &[(APPLICATION_FILE, 1)],
-            &[(APPLICATION_FILE, &["own_error"])]
-        ),
-        0
-    );
-    // An unlisted site, an entry that is too high or too low.
-    assert_eq!(failures(&[], &[(APPLICATION_FILE, &["own_error"])]), 1);
-    assert_eq!(
-        failures(
-            &[(APPLICATION_FILE, 2)],
-            &[(APPLICATION_FILE, &["own_error"])]
-        ),
-        1
-    );
-    assert_eq!(
-        failures(
-            &[(APPLICATION_FILE, 0)],
-            &[(APPLICATION_FILE, &["own_error"])]
-        ),
-        1
-    );
+    assert_eq!(failures(&own, &[(APPLICATION_FILE, &["own_error"])]), 0);
+    // A counted site.
+    assert_eq!(failures(&other, &[(APPLICATION_FILE, &["own_error"])]), 1);
     // A compliant classifier that is not registered, and a stale registration.
-    assert_eq!(failures(&[(APPLICATION_FILE, 1)], &[]), 1);
+    assert_eq!(failures(&own, &[]), 1);
     assert_eq!(
-        failures(
-            &[(APPLICATION_FILE, 1)],
-            &[(APPLICATION_FILE, &["own_error", "other"])]
-        ),
+        failures(&own, &[(APPLICATION_FILE, &["own_error", "other"])]),
         1
     );
 }

@@ -1,4 +1,4 @@
-use super::support::{all_rust_sources, macro_expressions, repo_root};
+use super::support::{all_rust_sources, macro_expressions, no_sites, repo_root};
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use syn::spanned::Spanned;
@@ -16,15 +16,6 @@ const LEAN_GENERATOR_RUNS: &[&str] = &[
     "run_prepared_generator",
     "run_prepared_generator_with_input",
 ];
-
-/// Async bodies that still run a Lean generator on their runtime thread. On a
-/// `#[tokio::test]` runtime that thread is the only worker: a body holding an
-/// execution lease starves its renewal for the whole run
-/// (`LeaseRenewalStarvation.tla`, `SyncInsideLease`). New code awaits
-/// `gents_lean_vocab::snapshot()`, which loads off the runtime, or runs the
-/// generator inside `spawn_blocking`. This allowlist only shrinks.
-#[rustfmt::skip]
-const LEAN_GENERATOR_ON_RUNTIME_ALLOWLIST: &[(&str, usize)] = &[];
 
 struct LeanGeneratorVisitor {
     imports_owner: bool,
@@ -140,6 +131,12 @@ fn lean_generator_runtime_sites(source: &str, syntax: &syn::File) -> usize {
     visitor.sites
 }
 
+/// No async body runs a Lean generator on its runtime thread. On a
+/// `#[tokio::test]` runtime that thread is the only worker: a body holding an
+/// execution lease starves its renewal for the whole run
+/// (`LeaseRenewalStarvation.tla`, `SyncInsideLease`). Code awaits
+/// `gents_lean_vocab::snapshot()`, which loads off the runtime, or runs the
+/// generator inside `spawn_blocking`.
 #[test]
 fn lean_generator_runs_stay_off_async_runtime_threads() {
     let root = repo_root();
@@ -169,35 +166,11 @@ fn lean_generator_runs_stay_off_async_runtime_threads() {
             (sites > 0).then_some((relative, sites))
         })
         .collect::<BTreeMap<_, _>>();
-    let allowed = LEAN_GENERATOR_ON_RUNTIME_ALLOWLIST
-        .iter()
-        .map(|(path, count)| (path.to_string(), *count))
-        .collect::<BTreeMap<_, _>>();
-    let mut violations = Vec::new();
-    for path in allowed.keys().chain(actual.keys()).collect::<BTreeSet<_>>() {
-        let found = actual.get(path).copied().unwrap_or_default();
-        match allowed.get(path).copied() {
-            None => violations.push(format!(
-                "{path}: {found} Lean generator run(s) on an async runtime thread; await gents_lean_vocab::snapshot() or run it inside spawn_blocking"
-            )),
-            Some(limit) if found > limit => violations.push(format!(
-                "{path}: {found} Lean generator runs on an async runtime thread exceed the allowlisted {limit}"
-            )),
-            Some(limit) if found < limit => violations.push(format!(
-                "{path}: {found} Lean generator runs on an async runtime thread; lower the allowlist entry from {limit}"
-            )),
-            Some(_) => {}
-        }
-    }
-    let current = actual
-        .iter()
-        .map(|(path, count)| format!("    (\"{path}\", {count}),"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        violations.is_empty(),
-        "Lean generator runtime ratchet failed:\n{}\n\ncurrent sites:\n{current}",
-        violations.join("\n")
+    no_sites(
+        "Lean generator runtime",
+        &actual,
+        "Lean generator run(s) on an async runtime thread",
+        "await gents_lean_vocab::snapshot() or run it inside spawn_blocking",
     );
 }
 

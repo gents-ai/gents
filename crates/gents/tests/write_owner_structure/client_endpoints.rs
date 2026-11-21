@@ -169,7 +169,7 @@ fn client_endpoints_are_built_by_their_owner() {
         .collect::<Vec<_>>();
     assert!(
         violations.is_empty(),
-        "client endpoint ratchet failed:\n{}",
+        "client endpoint rule failed:\n{}",
         violations.join("\n")
     );
 }

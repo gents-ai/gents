@@ -408,7 +408,7 @@ fn passed_through_owners(syntax: &syn::File) -> BTreeSet<String> {
 /// so a store conflict or refusal on top is invisible to every classifier
 /// (Lean `AccessClassification.Chain.hidden_passthrough_is_not_found`). The
 /// owners holding `PassedThrough` are `AccessClassification.PassthroughWrapper`,
-/// whose families replay them. The allowlist is empty and only shrinks.
+/// whose families replay them. No site is admitted.
 #[test]
 fn passthrough_variants_keep_their_source() {
     let root = repo_root();
@@ -455,7 +455,7 @@ fn passthrough_variants_keep_their_source() {
     }
     assert!(
         violations.is_empty(),
-        "passthrough ratchet failed:\n{}",
+        "passthrough rule failed:\n{}",
         violations.into_iter().collect::<Vec<_>>().join("\n")
     );
 }

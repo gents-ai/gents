@@ -1,6 +1,6 @@
 use super::support::{
-    cfg_test, item_cfg_test, parse_production, production_site_counts, production_sources,
-    repo_root, shrinking_allowlist,
+    cfg_test, item_cfg_test, named_exceptions, parse_production, production_site_counts,
+    production_sources, repo_root,
 };
 use syn::visit::{self, Visit};
 
@@ -165,7 +165,7 @@ fn process_static_sites(syntax: &syn::File) -> usize {
 /// `disallowed_macros` cannot be allowed at an item-position macro site, so
 /// this test owns the ban: no production site remains and none is admitted.
 #[test]
-fn ambient_request_context_only_shrinks() {
+fn ambient_request_context_is_banned() {
     let root = repo_root();
     let violations = parse_production(&root, production_sources(&root))
         .into_iter()
@@ -232,12 +232,11 @@ fn ambient_context_skips_only_named_documented_statics() {
 /// type is interior-mutable or lazily initialised (`PROCESS_STATE_TYPES`,
 /// `Atomic*`), every `static mut` and every `lazy_static!` static; a plain
 /// constant `static` is not counted. `thread_local!` and `task_local!` belong
-/// to `ambient_request_context_only_shrinks`, which admits none. Entries name
-/// why each remaining static is a genuine process singleton (an immutable
-/// value built once, a process-global resource) or what owner replaces it;
-/// the list only shrinks (#1764).
+/// to `ambient_request_context_is_banned`, which admits none. Each exception
+/// names why its statics are genuine process singletons (an immutable value
+/// built once, a process-global resource).
 #[rustfmt::skip]
-const PROCESS_STATIC_ALLOWLIST: &[(&str, usize, &str)] = &[
+const PROCESS_STATIC_EXCEPTIONS: &[(&str, usize, &str)] = &[
     ("apps/gents-desktop/src-tauri/src/bridge/browser.rs", 2, "the desktop window's one embedded browser and its applied-generation counter: a process-global UI resource; stays"),
     ("apps/gents-desktop/src-tauri/src/bridge/notifications.rs", 1, "count of notification permission waits in the one desktop process; stays"),
     ("apps/gents-desktop/src-tauri/src/bridge/windows.rs", 1, "next window label of the one desktop process; stays"),
@@ -280,10 +279,10 @@ const PROCESS_STATIC_ALLOWLIST: &[(&str, usize, &str)] = &[
 ];
 
 #[test]
-fn process_wide_statics_only_shrink() {
-    shrinking_allowlist(
+fn process_wide_statics_are_named_exceptions() {
+    named_exceptions(
         "process-wide static",
-        PROCESS_STATIC_ALLOWLIST,
+        PROCESS_STATIC_EXCEPTIONS,
         &production_site_counts(|_, syntax| process_static_sites(syntax)),
         "process-wide static(s)",
         "pass the value as an argument or hold it on its owner",

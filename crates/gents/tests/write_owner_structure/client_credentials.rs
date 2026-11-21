@@ -1,9 +1,6 @@
 use super::support::{
-    cfg_test, item_cfg_test, parse_production, path_name, production_site_counts,
-    production_sources, repo_root, shrinking_allowlist,
+    cfg_test, item_cfg_test, named_exceptions, path_name, production_site_counts,
 };
-use std::collections::BTreeMap;
-use std::collections::BTreeSet;
 use syn::visit::{self, Visit};
 use syn::ExprCall;
 
@@ -12,10 +9,9 @@ use syn::ExprCall;
 /// home's status again and is sent once more (`Identity.HeldAudience.resend`),
 /// or inside a transaction through `authorize_in_transaction`, whose
 /// transaction recovers as a unit (`Identity.HeldAudience.resendUnit`).
-/// Entries name why each remaining direct `authorize` stays; the list only
-/// shrinks.
+/// Each exception names why its direct `authorize` is correct.
 #[rustfmt::skip]
-const UNRECOVERED_AUTHORIZE_ALLOWLIST: &[(&str, usize, &str)] = &[
+const DIRECT_AUTHORIZE_EXCEPTIONS: &[(&str, usize, &str)] = &[
     ("crates/gents-store/src/config_client/client_authentication.rs", 1, "correct by design: the body of the authorizer authorize_runtime, whose callers are counted"),
     ("crates/gents-store/src/config_client/graphql.rs", 2, "correct by design: a transaction's commit and discard are never sent alone again; the transaction reruns as a unit and a refused commit is told (Identity.HeldAudience.resendUnit, a_refused_commit_is_never_run_again)"),
     ("crates/gents-store/src/config_client/mod.rs", 1, "correct by design: the body of the authorizer authorize_in_transaction, whose callers recover as a unit (resendUnit)"),
@@ -103,9 +99,9 @@ fn unrecovered_authorize_sites(syntax: &syn::File) -> usize {
 
 #[test]
 fn client_requests_recover_a_refused_credential() {
-    shrinking_allowlist(
+    named_exceptions(
         "refused credential recovery",
-        UNRECOVERED_AUTHORIZE_ALLOWLIST,
+        DIRECT_AUTHORIZE_EXCEPTIONS,
         &production_site_counts(|_, syntax| unrecovered_authorize_sites(syntax)),
         "request(s) authorized outside `send_resolving`",
         "send through it so a refused credential recovers",
@@ -155,8 +151,8 @@ fn credential_recovery_fence_counts_authorize_outside_send_resolving() {
 /// home's node key signed for the read (`Identity.HeldAudience.reportedOfHome`):
 /// what a status's unsigned fields report is read into a report only where
 /// the home signs it, and a client takes a report only from the signed
-/// statement (`home_status::authenticate`). Entries name each reader; the
-/// list only shrinks.
+/// statement (`home_status::authenticate`). Each exception names its reader
+/// and why it is correct.
 #[rustfmt::skip]
 const STATUS_REPORT_READERS: &[(&str, usize, &str)] = &[
     ("crates/gents-protocol/src/home_attestation.rs", 2, "correct by design: the home reading its own status into the statement it signs (HomeStatement::of_status), and the report of a statement whose signature was checked (HomeStatement::reported)"),
@@ -218,36 +214,12 @@ fn status_report_sites(syntax: &syn::File) -> usize {
 
 #[test]
 fn a_client_keeps_only_what_its_home_signed() {
-    let root = repo_root();
-    let actual = parse_production(&root, production_sources(&root))
-        .into_iter()
-        .map(|(relative, syntax)| (relative, status_report_sites(&syntax)))
-        .filter(|(_, sites)| *sites > 0)
-        .collect::<BTreeMap<_, _>>();
-    let allowed = STATUS_REPORT_READERS
-        .iter()
-        .map(|(path, count, _)| (path.to_string(), *count))
-        .collect::<BTreeMap<_, _>>();
-    let mut violations = Vec::new();
-    for path in allowed.keys().chain(actual.keys()).collect::<BTreeSet<_>>() {
-        let found = actual.get(path).copied().unwrap_or_default();
-        match allowed.get(path).copied() {
-            None => violations.push(format!(
-                "{path}: {found} new read(s) of a status's unsigned report; keep only what `home_status::authenticate` returns"
-            )),
-            Some(limit) if found > limit => violations.push(format!(
-                "{path}: {found} reads of a status's unsigned report exceed the allowlisted {limit}"
-            )),
-            Some(limit) if found < limit => violations.push(format!(
-                "{path}: {found} reads of a status's unsigned report; lower the allowlist entry from {limit}"
-            )),
-            Some(_) => {}
-        }
-    }
-    assert!(
-        violations.is_empty(),
-        "signed status ratchet failed:\n{}",
-        violations.join("\n")
+    named_exceptions(
+        "signed status",
+        STATUS_REPORT_READERS,
+        &production_site_counts(|_, syntax| status_report_sites(syntax)),
+        "read(s) of a status's unsigned report",
+        "keep only what `home_status::authenticate` returns",
     );
 }
 

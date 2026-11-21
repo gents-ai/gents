@@ -175,7 +175,7 @@ fn executables_are_never_written_in_process() {
         .collect::<Vec<_>>();
     assert!(
         violations.is_empty(),
-        "executable write ratchet failed:\n{}",
+        "executable write rule failed:\n{}",
         violations.join("\n")
     );
 }
