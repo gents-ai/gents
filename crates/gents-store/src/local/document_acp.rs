@@ -254,6 +254,15 @@ pub fn periodic(provider: DocumentAcp, _: Periodic) -> PeriodicLoop {
     }
 }
 
+/// Whether a watcher on a home whose document access control runs on
+/// `provider` also waits for access changes (`AccessWake.listens`).
+pub fn access_wakes(provider: DocumentAcp) -> bool {
+    match provider {
+        DocumentAcp::Local => false,
+        DocumentAcp::Vera => true,
+    }
+}
+
 /// [`periodic`] for `node`, whose provider is fixed while it runs.
 pub fn node_periodic(node: &defra_node::Node, publication: Periodic) -> PeriodicLoop {
     periodic(provider_of(node), publication)

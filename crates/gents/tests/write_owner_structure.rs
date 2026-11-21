@@ -7045,3 +7045,52 @@ fn home_choice_fence_flags_a_claim_before_the_check() {
         assert_eq!(stores_claimed_before_the_choice(&syntax), flagged, "{source}");
     }
 }
+
+/// The one owner of change subscriptions: a watcher subscribes through it, so
+/// on a home whose access settles after a row commits it is also woken when
+/// the access settles (Lean `AccessWake.listens`, TLA `AccessWake`).
+const CHANGE_SUBSCRIPTION_OWNER: &str = "crates/gents-store/src/subscription_source.rs";
+
+#[derive(Default)]
+struct ChangeSubscriptionSites(usize);
+
+impl<'ast> Visit<'ast> for ChangeSubscriptionSites {
+    fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+        if !cfg_test(&item.attrs) {
+            visit::visit_item_mod(self, item);
+        }
+    }
+
+    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+        if !cfg_test(&item.attrs) {
+            visit::visit_item_fn(self, item);
+        }
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        if call.method == "subscribe_collection_changes" {
+            self.0 += 1;
+        }
+        visit::visit_expr_method_call(self, call);
+    }
+}
+
+#[test]
+fn change_subscriptions_have_one_owner() {
+    let root = repo_root();
+    let violations = parse_production(&root, production_sources(&root))
+        .into_iter()
+        .filter(|(relative, _)| relative != CHANGE_SUBSCRIPTION_OWNER)
+        .filter(|(_, syntax)| {
+            let mut sites = ChangeSubscriptionSites::default();
+            sites.visit_file(syntax);
+            sites.0 > 0
+        })
+        .map(|(relative, _)| relative)
+        .collect::<Vec<_>>();
+    assert!(
+        violations.is_empty(),
+        "subscribe through `gents_store::subscription_source` instead of the node's \
+         `subscribe_collection_changes`, so access changes wake the watcher: {violations:?}"
+    );
+}
