@@ -19,7 +19,7 @@ use serde_json::{json, Map};
 use tokio::time::timeout;
 use uuid::Uuid;
 
-use gents_store::config_client::ConfigAccess;
+use gents_store::config_client::{ConfigAccess, ConfigApplyTxn, ConfigClientError};
 use gents_store::graphql::{escape_graphql_string, rows};
 use gents_store::identity::NodeIdentity;
 
@@ -43,9 +43,8 @@ pub async fn request_renewal_offer(
         node.node_identity_did() == Some(identity.did()),
         "renewal requires the local node identity"
     );
-    let access = ConfigAccess::local_as(node.clone(), ::identity::Did::new(identity.did())?);
     anyhow::ensure!(
-        matches!(network_admin_pins(&access, network_id).await?.as_slice(), [pin] if pin.admin_did == admin_did),
+        admin_pinned(node, network_id, admin_did).await?,
         "renewal owner is not pinned"
     );
     let p2p = crate::node_access::operations(node).context("this node has no P2P transport")?;
@@ -390,30 +389,94 @@ pub async fn sign_enrollment_request_with_name(
 struct AdminPinRow {
     #[serde(rename = "_docID")]
     doc_id: String,
+    network_id: String,
     admin_did: String,
     parent_linked: Option<bool>,
 }
 
-/// The local runtime's admin pins for `network_id`. Pins are `operations`
-/// documents, so they are read as the runtime actor that owns them.
-async fn network_admin_pins(access: &ConfigAccess, network_id: &str) -> Result<Vec<AdminPinRow>> {
+/// The admin pins the runtime natively owns, undecoded: the selection
+/// `Enrollment.runtimePins` makes for renewal, confirm, the member authority
+/// projection and the enrollment listing. Another actor can parent a pin it
+/// owns to the runtime's Node, which makes it readable but not the runtime's
+/// (`Identity.Operations.foreign_pin_is_runtime_readable_not_owned`).
+pub(crate) async fn runtime_admin_pin_rows(
+    txn: &ConfigApplyTxn<'_>,
+    runtime: &::identity::Did,
+    network_id: Option<&str>,
+) -> std::result::Result<Vec<serde_json::Value>, ConfigClientError> {
     use gents_protocol::document_query::{
         fields::network_admin_pin as fields, Filter, Query, Selection,
     };
-    let query = Query::select(
+    let mut query = Query::select(
         Selection::doc_id()
+            .field(fields::NETWORK_ID)
             .field(fields::ADMIN_DID)
             .field(fields::PARENT_LINKED),
-    )
-    .filter(Filter::eq(fields::NETWORK_ID, network_id))
-    .render();
-    let response = access.read(&query).await?;
-    Ok(serde_json::from_value(
-        response
-            .pointer("/data/NetworkAdminPin")
-            .cloned()
-            .context("network admin pin query omitted rows")?,
-    )?)
+    );
+    if let Some(network_id) = network_id {
+        query = query.filter(Filter::eq(fields::NETWORK_ID, network_id));
+    }
+    let response: defra_node::QueryResponse =
+        serde_json::from_value(txn.run(&query.render()).await?)?;
+    let rows: Vec<serde_json::Value> =
+        gents_store::graphql::required_rows(&response, "NetworkAdminPin")?;
+    let ids: Vec<String> = rows
+        .iter()
+        .filter_map(|row| row["_docID"].as_str().map(str::to_owned))
+        .collect();
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let owners = txn.document_owners("NetworkAdminPin", &ids).await?;
+    if owners.len() != ids.len() {
+        return Err(ConfigClientError::InvalidOwnerObservation);
+    }
+    Ok(rows
+        .into_iter()
+        .filter(|row| {
+            owners.iter().any(|owner| {
+                row["_docID"].as_str() == Some(owner.doc_id.as_str())
+                    && owner.visible
+                    && owner.owner.as_ref() == Some(runtime)
+            })
+        })
+        .collect())
+}
+
+async fn network_admin_pins(
+    access: &ConfigAccess,
+    runtime: &::identity::Did,
+    network_id: &str,
+) -> Result<Vec<AdminPinRow>> {
+    let rows = access
+        .transact_readonly("enrollment.read_admin_pins", |txn| {
+            Box::pin(runtime_admin_pin_rows(txn, runtime, Some(network_id)))
+        })
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(serde_json::from_value)
+        .collect::<std::result::Result<_, _>>()?)
+}
+
+/// Whether the runtime's own pins name `admin_did` as the only admin of
+/// `network_id`: `Enrollment.AutoRenewal.mayRequestOffer`.
+async fn admin_pinned(node: &Arc<EmbeddedNode>, network_id: &str, admin_did: &str) -> Result<bool> {
+    let runtime = ::identity::Did::new(
+        node.node_identity_did()
+            .context("network admin pin requires the configured runtime identity")?,
+    )?;
+    let access = ConfigAccess::local_as(node.clone(), runtime.clone());
+    let mut state = super::enrollment::EnrollmentState::default();
+    state.admin_pins = network_admin_pins(&access, &runtime, network_id)
+        .await?
+        .into_iter()
+        .map(|pin| super::enrollment::NetworkAdminPin {
+            network_id: pin.network_id,
+            admin_did: pin.admin_did,
+        })
+        .collect();
+    Ok(state.network_admin_pair_pinned(network_id, admin_did))
 }
 
 /// Pin the offer's admin as the only admin this candidate accepts for its
@@ -428,7 +491,7 @@ pub async fn confirm_network_admin_pin(
     )?;
     let access = ConfigAccess::local_as(node.clone(), runtime.clone());
     let (network_id, admin_did) = (&offer.network_id, &offer.admin_did);
-    let pins = network_admin_pins(&access, network_id).await?;
+    let pins = network_admin_pins(&access, &runtime, network_id).await?;
     match pins.as_slice() {
         [pin] if &pin.admin_did == admin_did => {
             if !pin
@@ -504,7 +567,7 @@ pub async fn confirm_network_admin_pin(
         })
         .await
     {
-        let pins = network_admin_pins(&access, network_id).await?;
+        let pins = network_admin_pins(&access, &runtime, network_id).await?;
         anyhow::ensure!(
             matches!(pins.as_slice(), [pin] if &pin.admin_did == admin_did),
             "admin pin commit was not observably recovered after: {commit_error:#}"
@@ -816,3 +879,7 @@ pub(super) async fn push_enrollment_document(
         ))),
     }
 }
+
+#[cfg(test)]
+#[path = "enrollment_admin_pin_tests.rs"]
+mod admin_pin_tests;

@@ -82,6 +82,41 @@ def offerUnreached : Family IntentInput Offer where
   inputs := intentInputs.filter fun i => i.name ∉ offerScenarioNames
   model := fun i => { allowed := mayOffer i.current.toModel i.intent i.now i.window i.maxValidity }
 
+structure AdminPinWire where
+  owner : String
+  networkId : String
+  adminDid : String
+  deriving ToJson
+
+def AdminPinWire.ofModel (p : Enrollment.OwnedPin) : AdminPinWire :=
+  { owner := p.owner, networkId := p.pin.networkId, adminDid := p.pin.adminDid }
+
+def AdminPinWire.toModel (w : AdminPinWire) : Enrollment.OwnedPin :=
+  { owner := w.owner, pin := { networkId := w.networkId, adminDid := w.adminDid } }
+
+structure OfferRequestInput where
+  name : String
+  runtime : String
+  pins : List AdminPinWire
+  networkId : String
+  adminDid : String
+  deriving ToJson
+
+structure OfferRequest where
+  requested : Bool
+  deriving ToJson
+
+/-- The admin-pin scenario writes each case's pins as documents, the runtime's
+own and a User's parented to the runtime's Node, and asks `admin_pinned`; it
+reaches every case. -/
+@[conformance_family]
+def offerRequest : Family OfferRequestInput OfferRequest where
+  inputs := offerRequestCases.map fun (name, pins) =>
+    { name, runtime := "runtime", pins := pins.map AdminPinWire.ofModel
+      networkId := "network", adminDid := "admin" }
+  model := fun i =>
+    { requested := mayRequestOffer i.runtime (i.pins.map AdminPinWire.toModel) i.networkId i.adminDid }
+
 structure ApprovalCurrent where
   network : String
   member : String
