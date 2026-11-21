@@ -1,6 +1,7 @@
 use std::sync::{Arc, RwLock};
 
 use gents_protocol::client_authentication::ClientAuthentication;
+use gents_protocol::delegation_audience::HeldAudienceChange;
 use gents_protocol::home_attestation::{HomeNonce, HomeStatusRefusal, HOME_NONCE_QUERY};
 use rapidhash::RapidHashMap;
 
@@ -70,11 +71,14 @@ impl GraphqlEndpoint {
         }
     }
 
+    /// Discover the runtime's client authentication again, holding the
+    /// held audience's status lock as every status read does (TLA+
+    /// `HeldAudienceReads`).
     pub async fn refresh_runtime_authentication(&self) -> Result<()> {
         if let EndpointAuthentication::Runtime { node, current } = &*self.client_authentication {
-            let mut current = current.lock().await;
-            *current = None;
-            *current = Some(self.discover_runtime_authentication(node).await?);
+            let _reading = self.delegation_audience.reading().await;
+            *current.lock().await = None;
+            self.discover_runtime_authentication(node).await?;
         }
         Ok(())
     }
@@ -83,36 +87,46 @@ impl GraphqlEndpoint {
         match &*self.client_authentication {
             EndpointAuthentication::Fixed(authentication) => Ok(authentication.clone()),
             EndpointAuthentication::Runtime { node, current } => {
-                let mut current = current.lock().await;
-                if let Some(authentication) = &*current {
-                    return Ok(authentication.clone());
+                let known = current.lock().await.clone();
+                if let Some(authentication) = known {
+                    return Ok(authentication);
                 }
-                let authentication = self.discover_runtime_authentication(node).await?;
-                *current = Some(authentication.clone());
-                Ok(authentication)
+                let _reading = self.delegation_audience.reading().await;
+                let known = current.lock().await.clone();
+                match known {
+                    Some(authentication) => Ok(authentication),
+                    None => self.discover_runtime_authentication(node).await,
+                }
             }
         }
     }
 
+    /// Read the runtime's status and keep it; the caller holds the status
+    /// lock.
     async fn discover_runtime_authentication(&self, node: &str) -> Result<ClientAuthentication> {
         let home = self
             .fetch_runtime_status(node)
             .await?
             .map_err(ConfigClientError::HomeStatusUnauthenticated)?;
-        self.delegation_audience.observe(&home);
+        self.keep_runtime_status(&home).await;
         Ok(home.authentication().clone())
     }
 
-    pub(super) async fn reread_runtime_home(&self) -> Option<Home> {
-        let EndpointAuthentication::Runtime { node, current } = &*self.client_authentication else {
+    /// Keep what a runtime's own status reports: its client authentication,
+    /// then its audience and clock; the caller holds the status lock.
+    pub(super) async fn keep_runtime_status(&self, home: &AuthenticatedHome) -> HeldAudienceChange {
+        if let EndpointAuthentication::Runtime { current, .. } = &*self.client_authentication {
+            *current.lock().await = Some(home.authentication().clone());
+        }
+        self.delegation_audience.observe(home)
+    }
+
+    /// Read a runtime endpoint's home's status, keeping nothing.
+    pub(super) async fn fetch_runtime_home(&self) -> Option<Home> {
+        let EndpointAuthentication::Runtime { node, .. } = &*self.client_authentication else {
             return None;
         };
-        let mut current = current.lock().await;
-        let home = self.fetch_runtime_status(node).await.ok()?;
-        if let Ok(home) = &home {
-            *current = Some(home.authentication().clone());
-        }
-        Some(home)
+        self.fetch_runtime_status(node).await.ok()
     }
 
     async fn fetch_runtime_status(&self, node: &str) -> Result<Home> {

@@ -82,20 +82,24 @@ structure RetrySelectionInput where
   name : String
   parentPublished : Bool
   selected : List Nat
+  arrived : List Nat
   deriving Lean.ToJson
 
 structure RetrySelectionOutput where
   resume : Bool
   answered : List Nat
+  answeredArrival : List Nat
   deriving Lean.ToJson
 
 @[conformance_family]
 def retrySelection : Family RetrySelectionInput RetrySelectionOutput where
   inputs := retrySelectionCases.map fun c =>
-    { name := c.name, parentPublished := c.parentPublished, selected := c.selected }
+    { name := c.name, parentPublished := c.parentPublished, selected := c.selected
+      arrived := c.arrived }
   model := fun i =>
-    let value : RetrySelectionCase := ⟨i.name, i.parentPublished, i.selected⟩
-    { resume := value.resume, answered := value.answered }
+    let value : RetrySelectionCase := ⟨i.name, i.parentPublished, i.selected, i.arrived⟩
+    { resume := value.resume, answered := value.answered
+      answeredArrival := value.answeredArrival }
 
 section Families
 
@@ -354,9 +358,10 @@ def PublicationInput.ofCase (value : String × List Step) : PublicationInput :=
   { name := value.1, head := activeEntry.requestId, selected := selectedEntry.requestId
     steps := value.2.map StepWire.ofModel }
 
-def publicationRun (i : PublicationInput) : Option (List PublicationObservation) := do
-  let steps ← i.steps.mapM StepWire.toModel
-  let observations ← run steps
+def publicationRun (steps : List StepWire) (initial := claimed) :
+    Option (List PublicationObservation) := do
+  let steps ← steps.mapM StepWire.toModel
+  let observations ← run steps initial
   pure (observations.map fun o =>
     { accepted := o.accepted, active := o.active, pending := o.pending, folding := o.folding
       terminal := o.terminal, authoredKeys := o.authoredKeys })
@@ -378,7 +383,7 @@ def unsafePublicationCases : List (String × List Step) :=
 @[conformance_family]
 def publicationScript : Family PublicationInput (Option (List PublicationObservation)) where
   inputs := servedPublicationCases.map PublicationInput.ofCase
-  model := publicationRun
+  model := (publicationRun ·.steps)
 
 structure UnsafeBoundaryObservation where
   accepted : Bool
@@ -388,7 +393,7 @@ structure UnsafeBoundaryObservation where
 def publicationUnsafeBoundary : Family PublicationInput UnsafeBoundaryObservation where
   inputs := unsafePublicationCases.map PublicationInput.ofCase
   model := fun i =>
-    { accepted := ((publicationRun i).bind List.getLast?).map (·.accepted) |>.getD true }
+    { accepted := ((publicationRun i.steps).bind List.getLast?).map (·.accepted) |>.getD true }
 
 /-- model-production-gap: the served writer fixture has no unsafe provider-stream
 boundary and the owned loop has no durable queue, so the per-step queue and
@@ -398,7 +403,7 @@ publication_unsafe_boundary replays their refused intake through the loop. -/
 def publicationUnsafeBoundaryUnreached :
     Family PublicationInput (Option (List PublicationObservation)) where
   inputs := unsafePublicationCases.map PublicationInput.ofCase
-  model := publicationRun
+  model := (publicationRun ·.steps)
 
 example : unsafePublicationCases.map (·.1) =
     ["streaming_boundary_does_not_take_input", "natural_completion_during_stream_refuses"] := by
@@ -426,6 +431,32 @@ example : (steeringCases.find? (·.1 == "natural_completion_intakes_late_input_b
           (finishes[1]?.map (·.terminal.contains activeEntry.requestId)) == some true &&
           (observations.getLast?.map (·.active)) == some none := by
   native_decide
+
+structure BusyTurnSteeringInput where
+  name : String
+  head : Nat
+  steps : List StepWire
+  deriving ToJson
+
+structure BusyTurnSteeringObservation where
+  active : Option Nat
+  pending : List Nat
+  folding : List Nat
+  authoredKeys : List String
+  deriving ToJson
+
+/-- The busy head is claimed alone and both steers queued behind it are
+published into its request; the adapter also binds that one provider dispatch
+carries both steers. -/
+@[conformance_family]
+def steersBehindBusyTurn :
+    Family BusyTurnSteeringInput (Option BusyTurnSteeringObservation) where
+  inputs := busyTurnSteeringCases.map fun (name, steps) =>
+    { name, head := activeEntry.requestId, steps := steps.map StepWire.ofModel }
+  model := fun i => do
+    let last ← (← publicationRun i.steps busyTurnClaimed).getLast?
+    pure { active := last.active, pending := last.pending, folding := last.folding
+           authoredKeys := last.authoredKeys }
 
 end Publication
 
