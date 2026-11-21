@@ -255,8 +255,11 @@ fn resend_unit(
         && rerun_honoured(mode, true, false, dispatched)
 }
 
+/// `presented` is the record the unit's requests were minted from, taken
+/// once it began.
 async fn refused_unit_runs_again(
     txn: &ConfigApplyTxn<'_>,
+    presented: &gents_protocol::delegation_audience::HeldRecord,
     error: Option<&ConfigClientError>,
     stage: UnitStage,
     mode: TransactionMode,
@@ -268,7 +271,7 @@ async fn refused_unit_runs_again(
     ) else {
         return Ok(false);
     };
-    let Some((refusal, record)) = endpoint.reread_after_refusal(answer).await else {
+    let Some((refusal, record)) = endpoint.reread_after_refusal(answer, presented).await else {
         return Ok(false);
     };
     Ok(resend_unit(
@@ -374,6 +377,10 @@ where
                     }
                 }
             };
+            let presented = txn
+                .http_endpoint()
+                .map(|endpoint| endpoint.delegation_audience.record())
+                .unwrap_or_default();
             txn.rerun_notes = rerun_notes.clone();
             txn.drive_owner_staged(owner_staged_plan.as_deref());
             telemetry.cancelled_rollback = match backend {
@@ -539,6 +546,7 @@ where
                             }
                             let _ = refused_unit_runs_again(
                                 &txn,
+                                &presented,
                                 Some(&error),
                                 UnitStage::Commit,
                                 mode,
@@ -600,6 +608,7 @@ where
                     }
                     let runs_again = refused_unit_runs_again(
                         &txn,
+                        &presented,
                         error.config_client_error(),
                         UnitStage::BeforeCommit,
                         mode,

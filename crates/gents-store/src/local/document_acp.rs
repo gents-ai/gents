@@ -69,8 +69,6 @@ pub enum DocumentAcpError {
          keychain key instead"
     )]
     NodeKeyCannotSign { node: String },
-    #[error("this kind of home cannot be opened by this version of Gents yet")]
-    NotYetUsable,
     #[error("make this change from the Gents app or CLI on your own device")]
     HeldUserKey,
     #[error(
@@ -129,7 +127,6 @@ impl DocumentAcpError {
             Self::Switch { .. }
             | Self::Unavailable
             | Self::NodeKeyCannotSign { .. }
-            | Self::NotYetUsable
             | Self::HeldUserKey
             | Self::DelegationRequired
             | Self::TransportGrantsAwaitProvider
@@ -254,6 +251,15 @@ pub fn periodic(provider: DocumentAcp, _: Periodic) -> PeriodicLoop {
     match publication(provider) {
         Publication::Proceeds => PeriodicLoop::Beats,
         Publication::AwaitsTransportGrants => PeriodicLoop::Idle,
+    }
+}
+
+/// Whether a watcher on a home whose document access control runs on
+/// `provider` also waits for access changes (`AccessWake.listens`).
+pub fn access_wakes(provider: DocumentAcp) -> bool {
+    match provider {
+        DocumentAcp::Local => false,
+        DocumentAcp::Vera => true,
     }
 }
 
@@ -449,13 +455,8 @@ pub(crate) fn admit(
     })
 }
 
-fn usable(provider: DocumentAcp) -> Result<DocumentAcp> {
-    match provider {
-        DocumentAcp::Local => Ok(provider),
-        DocumentAcp::Vera => Err(DocumentAcpError::NotYetUsable),
-    }
-}
-
+/// [`admit`] for a home's choice as its init config records it, before
+/// anything is written or a node is built.
 fn enter(
     recorded: Option<DocumentAcp>,
     requested: DocumentAcp,
@@ -465,7 +466,6 @@ fn enter(
     decide(recorded, requested, available, node_key_signs, || {
         "a Secure Enclave node identity".to_owned()
     })
-    .and_then(usable)
 }
 
 pub fn ensure_admissible(

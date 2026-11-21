@@ -91,9 +91,17 @@ async fn native_mailbox_recipient_and_creator_follow_modeled_policy() -> anyhow:
         node.add_nac_actor_relationship_as(&context, permission.as_str(), denied_agent.did())
             .await?;
     }
-    assert_eq!(policy, gents_protocol::schemas::MAILBOX_POLICY_ID);
-    node.add_collection_as(&context, gents_protocol::schemas::MAILBOX_ITEM)
-        .await?;
+    assert_eq!(
+        policy,
+        gents_protocol::schemas::HomePolicyIds::shared()
+            .id(gents_protocol::schemas::BuiltInPolicy::Mailbox)
+    );
+    node.add_collection_as(
+        &context,
+        &gents_protocol::schemas::HomePolicyIds::shared()
+            .render(gents_protocol::schemas::MAILBOX_ITEM),
+    )
+    .await?;
     let access = ConfigAccess::local_managed_agent(
         node.clone(),
         identity::Did::new(agent.did())?,
@@ -391,9 +399,17 @@ async fn mailbox_sweep_uses_held_targets() -> anyhow::Result<()> {
     let policy = node
         .add_dac_policy_with_counter_as(&context, gents_protocol::schemas::MAILBOX_POLICY, 0)
         .await?;
-    assert_eq!(policy, gents_protocol::schemas::MAILBOX_POLICY_ID);
-    node.add_collection_as(&context, gents_protocol::schemas::MAILBOX_ITEM)
-        .await?;
+    assert_eq!(
+        policy,
+        gents_protocol::schemas::HomePolicyIds::shared()
+            .id(gents_protocol::schemas::BuiltInPolicy::Mailbox)
+    );
+    node.add_collection_as(
+        &context,
+        &gents_protocol::schemas::HomePolicyIds::shared()
+            .render(gents_protocol::schemas::MAILBOX_ITEM),
+    )
+    .await?;
     // The runtime reconciles this ordinary index with the collection; the cursor
     // sweep's order is only plannable through it.
     let cursor_index = gents_store::schema::catalog::ORDINARY_INDEXES

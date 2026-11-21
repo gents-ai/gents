@@ -246,6 +246,69 @@ theorem a_record_changes_exactly_when_the_change_says_so (held : Option Record)
     | absent => simp [observe, change, Held.of, Status.reported, Status.names]
     | unavailable => simp [observe, change, Held.of, Status.reported, Status.names]
 
+/-- How the record a client keeps differs from the one it held before:
+`before` and `after` are whether each held an audience, `sameAudience` whether
+both name one audience and `sameClock` whether both put the home's clock at one
+place. -/
+def recordChange (before after : Held) (sameAudience sameClock : Bool) : Change :=
+  match before, after with
+  | .unknown, .unknown => .unchanged
+  | .unknown, .known => .learned
+  | .known, .unknown => .forgotten
+  | .known, .known =>
+    if !sameAudience then .changed else if !sameClock then .reclocked else .unchanged
+
+/-- Decision (gents#3963): a request refused for its credential is resent for
+how the record its client keeps once its status read is kept differs from the
+record its credential was minted from (`presented`), never for what that read
+alone changed. The clones of an endpoint share one record and read the status
+one at a time (TLA+ `HeldAudienceReads`), so a request refused beside another
+can wait while its peer reads and keeps the newer audience; its own read then
+changes nothing, yet its credential was minted for the audience the home left,
+and the newest one held would be taken. A read made alone reports exactly what
+it changed (`a_lone_read_reports_what_it_changed`). A record taken before the
+credential was minted, rather than the one it was minted from, can only be
+older, since the record never returns to one it left; it may resend once a
+request the newer record would have refused anyway, and never resends one more
+time than `resend` allows. -/
+def changeSince (presented kept : Option Record) : Change :=
+  recordChange (Held.of presented) (Held.of kept)
+    (match presented, kept with
+      | some before, some after => before.audience == after.audience
+      | _, _ => false)
+    (match presented, kept with
+      | some before, some after => before.clock == after.clock
+      | _, _ => false)
+
+theorem a_lone_read_reports_what_it_changed (held : Option Record) (status : Status) :
+    changeSince held (observe held status)
+      = change (Held.of held) status.reported (status.names held) (status.moves held) := by
+  cases held with
+  | none =>
+    cases status <;> simp [changeSince, recordChange, observe, change, Held.of, Status.reported,
+      Status.names, Status.moves]
+  | some kept =>
+    cases status with
+    | absent => simp [changeSince, recordChange, observe, change, Held.of, Status.reported]
+    | unavailable =>
+      simp [changeSince, recordChange, observe, change, Held.of, Status.reported, Status.names,
+        Status.moves]
+    | named audience clock =>
+      by_cases same : audience = kept.audience
+      · by_cases moved : clockMoved kept.clock clock = true
+        · have other := a_moved_clock_is_another_clock _ _ moved
+          subst same
+          simp [changeSince, recordChange, observe, change, Held.of, Status.reported, Status.names,
+            Status.moves, moved, Ne.symm other]
+        · subst same
+          simp [changeSince, recordChange, observe, change, Held.of, Status.reported, Status.names,
+            Status.moves, moved]
+      · have differs : (kept.audience == audience) = false := by
+          simpa using Ne.symm same
+        have differs' : (audience == kept.audience) = false := by simpa using same
+        simp [changeSince, recordChange, observe, change, Held.of, Status.reported, Status.names,
+          Status.moves, same, differs, differs']
+
 /-- The credential a record yields at the one minting point
 (`UserDelegation.credential`), for a client holding its User's key. -/
 def recordCredential (held : Option Record) : Credential :=
@@ -489,6 +552,16 @@ theorem an_authenticated_status_recovers_as_before (resent : Bool) (refusal : Re
     subst other
     cases resent <;> simp [resend]
   · split <;> simp_all
+
+/-- A request refused for a credential minted for an audience its home has
+left is sent again once its client keeps the newer audience, whether its own
+read or a peer's read before it kept that audience. -/
+theorem a_request_refused_behind_another_is_sent_again (refusal : Refusal)
+    (before after : Record) (credential : refusal ≠ .other)
+    (moved : before.audience ≠ after.audience) :
+    recovery false refusal true (changeSince (some before) (some after)) = .resend := by
+  have differs : (before.audience == after.audience) = false := by simpa using moved
+  simp [recovery, resend, changeSince, recordChange, Held.of, differs, credential]
 
 theorem a_request_presenting_no_credential_is_never_sent_again (answer : Answer)
     (presented : Credential) (resent : Bool) (record : Change)

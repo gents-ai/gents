@@ -85,7 +85,9 @@ async fn signed_control(
         .unwrap()
 }
 
-async fn published_control(changes: &mut events::DocumentChangeSubscription) -> String {
+async fn published_control(
+    changes: &mut gents_store::subscription_source::ChangeSubscription,
+) -> String {
     loop {
         let batch = changes
             .recv()

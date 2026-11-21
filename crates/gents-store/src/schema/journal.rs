@@ -12,14 +12,17 @@ static COLLECTIONS: LazyLock<Vec<BaselineCollection<'static>>> = LazyLock::new(|
         .map(|entry| entry.sdl)
         .collect::<Vec<_>>()
         .join("\n");
-    let parsed = query::parse_sdl(&sdl).expect("canonical journal catalog must parse");
+    let parsed = query::parse_sdl(&gents_protocol::schemas::HomePolicyIds::shared().render(&sdl))
+        .expect("canonical journal catalog must parse");
     baseline
         .iter()
         .filter(|entry| {
             parsed.iter().any(|collection| {
                 collection.name == entry.name
                     && collection.policy.as_ref().is_some_and(|policy| {
-                        policy.id == gents_protocol::schemas::CLIENT_JOURNAL_POLICY_ID
+                        policy.id
+                            == gents_protocol::schemas::HomePolicyIds::shared()
+                                .id(gents_protocol::schemas::BuiltInPolicy::ClientJournal)
                             && policy.resource_name
                                 == gents_protocol::schemas::CLIENT_JOURNAL_POLICY_RESOURCE
                     })
@@ -94,7 +97,9 @@ mod tests {
         assert!(collections.iter().all(|collection| {
             !collection.is_branchable
                 && collection.policy.as_ref().is_some_and(|policy| {
-                    policy.id == gents_protocol::schemas::CLIENT_JOURNAL_POLICY_ID
+                    policy.id
+                        == gents_protocol::schemas::HomePolicyIds::shared()
+                            .id(gents_protocol::schemas::BuiltInPolicy::ClientJournal)
                         && policy.resource_name
                             == gents_protocol::schemas::CLIENT_JOURNAL_POLICY_RESOURCE
                 })

@@ -807,10 +807,16 @@ mod tests {
     ) -> Result<()> {
         let node = std::sync::Arc::new(gents_store::test_support::node_builder().build().await?);
         gents_store::test_support::acp_policies::install_identity_acp_policies(&node).await?;
-        node.add_collection(gents_protocol::schemas::AGENT_REQUEST)
-            .await?;
-        node.add_collection(gents_protocol::schemas::AGENT_MESSAGE)
-            .await?;
+        node.add_collection(
+            &gents_protocol::schemas::HomePolicyIds::shared()
+                .render(gents_protocol::schemas::AGENT_REQUEST),
+        )
+        .await?;
+        node.add_collection(
+            &gents_protocol::schemas::HomePolicyIds::shared()
+                .render(gents_protocol::schemas::AGENT_MESSAGE),
+        )
+        .await?;
         let access = ConfigAccess::local(node.clone());
         let owner = "did:test:diagnostics\"owner";
         let mut failed = serde_json::json!({

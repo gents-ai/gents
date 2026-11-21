@@ -498,7 +498,7 @@ async fn validate_binding(node: &defra_node::Node) -> Result<()> {
 /// The collection binding alone, for a copy of a store opened without its
 /// node's identity, which [`require_runtime_may_start`] needs.
 pub(crate) async fn validate_policy_binding(node: &defra_node::Node) -> Result<()> {
-    use gents_protocol::schemas::{AGENT_OWNERSHIP_POLICY_ID, INFERENCE_BACKEND_NAME};
+    use gents_protocol::schemas::{BuiltInPolicy, HomePolicyIds, INFERENCE_BACKEND_NAME};
     let current = node
         .get_collection(INFERENCE_BACKEND_NAME)?
         .ok_or(BackendProtectionError::InvalidBinding)?;
@@ -510,7 +510,7 @@ pub(crate) async fn validate_policy_binding(node: &defra_node::Node) -> Result<(
         matched = true;
         if version.is_branchable
             || !version.policy.as_ref().is_some_and(|policy| {
-                policy.id == AGENT_OWNERSHIP_POLICY_ID
+                policy.id == HomePolicyIds::shared().id(BuiltInPolicy::Household)
                     && policy.resource_name == "secret_configuration"
             })
         {

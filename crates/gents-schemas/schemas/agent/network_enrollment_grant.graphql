@@ -7,7 +7,7 @@
 # `restoration_owed_at` owes the relation's restoration after an approval or a
 # deliberate grant took that removal over (`takeOver`). Deliberately NOT
 # branchable: it accounts for this node's own relations only.
-type NetworkEnrollmentGrant @policy(id: "fd59b3cc10193581adb497fd6d55c7e740f4866f720af6f18da780248ce26a5c", resource: "operations") {
+type NetworkEnrollmentGrant @policy(id: "$household", resource: "operations") {
     request_id: String @index(unique: true) @immutable
     member_did: String @index @immutable
     tuples: [String]

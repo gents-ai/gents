@@ -133,7 +133,10 @@ async fn a_live_app_exports_installs_on_a_second_node_and_is_adopted_where_it_ca
     let context_id = format!("{}:context", worker.agent_did);
     let tools_id = format!("{}:tools", worker.agent_did);
     grant_schema(&origin, &origin_user).await;
-    origin_access.add_collection(SDL).await.unwrap();
+    origin_access
+        .add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(SDL))
+        .await
+        .unwrap();
     apply(
         &origin_access,
         vec![
@@ -524,7 +527,10 @@ async fn a_page_and_a_plugin_source_export_with_the_surface_the_page_is_granted(
     .await;
     let owner = origin.node_identity.did().to_owned();
     grant_schema(&origin, &user).await;
-    access.add_collection(SDL).await.unwrap();
+    access
+        .add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(SDL))
+        .await
+        .unwrap();
     access
         .add_collection("type DeskTicket { subject: String }")
         .await

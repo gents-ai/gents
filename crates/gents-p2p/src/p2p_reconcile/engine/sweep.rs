@@ -63,7 +63,7 @@ pub async fn run_pairing_reconciler(
 pub(super) async fn run_pairing_reconciler_loop(
     admin: &dyn RemoteP2pAdmin,
     store: &dyn PairingStateStore,
-    mut subscription: events::DocumentChangeSubscription,
+    mut subscription: gents_store::subscription_source::ChangeSubscription,
     mut connections: events::Subscription,
     sweep_interval: std::time::Duration,
     cancel: &CancellationToken,
@@ -140,7 +140,7 @@ pub(super) async fn run_pairing_reconciler_loop(
                     subscription_open = false;
                     continue;
                 };
-                if batch.resync_required {
+                if gents_store::subscription_source::overflowed(&batch) {
                     tracing::warn!(target: "gents::runtime::agent::p2p_reconcile::engine",
                         updates = batch.updates,
                         "pairing reconciler document-change capacity exceeded; performing authoritative sweep"

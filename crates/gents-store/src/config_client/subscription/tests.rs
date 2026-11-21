@@ -196,10 +196,12 @@ async fn native_subscription_uses_caller_and_observes_nonbranchable_deletion() {
         .unwrap();
     let access = ConfigAccess::local_as(node.clone(), owner.did().parse().unwrap());
     access
-        .add_collection(&format!(
+        .add_collection(
+            &gents_protocol::schemas::HomePolicyIds::shared().render(&format!(
         "type SubscriptionParcel @policy(id: \"{}\", resource: \"parcels\") {{ value: String }}",
         crate::graphql::escape_graphql_string(&policy),
-    ))
+    )),
+        )
         .await
         .unwrap();
     let created = access.write("test.subscription.seed", "mutation { create_SubscriptionParcel(input: [{value:\"visible\"}, {value:\"private\"}]) { _docID } }").await.unwrap();

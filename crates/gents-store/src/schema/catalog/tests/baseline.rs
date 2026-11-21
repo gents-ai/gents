@@ -152,7 +152,7 @@ async fn agent_request_on_its_root_keeps_its_rows_and_ensure_is_idempotent() {
         .iter()
         .find(|entry| entry.name == gents_protocol::schemas::AGENT_REQUEST_NAME)
         .expect("AgentRequest baseline");
-    node.add_collection(baseline.sdl)
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(baseline.sdl))
         .await
         .expect("register request baseline");
 
@@ -283,7 +283,7 @@ async fn rendered_request_reaches_a_pre_existing_store_through_the_baseline() {
         if entry.name == gents_protocol::schemas::RENDERED_REQUEST_NAME {
             continue;
         }
-        node.add_collection(entry.sdl)
+        node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(entry.sdl))
             .await
             .unwrap_or_else(|error| panic!("register {}: {error}", entry.name));
     }
@@ -428,7 +428,7 @@ async fn single_version_unknown_root_is_rejected() {
 
     let authoring_node = fresh_node().await;
     authoring_node
-        .add_collection(EXPECTED_SDL)
+        .add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(EXPECTED_SDL))
         .await
         .expect("register expected root");
     let expected_root = authoring_node
@@ -442,7 +442,7 @@ async fn single_version_unknown_root_is_rejected() {
         .expect("shut down test node");
 
     let node = fresh_node().await;
-    node.add_collection(FOREIGN_SDL)
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(FOREIGN_SDL))
         .await
         .expect("register foreign root");
     let catalog = Catalog {
@@ -479,9 +479,12 @@ async fn fresh_backend_collections_reject_a_foreign_single_root() {
     ] {
         let body = sdl.trim_end().strip_suffix('}').expect("bundled SDL type");
         let node = fresh_node().await;
-        node.add_collection(&format!("{body}    foreign_field: String\n}}"))
-            .await
-            .expect("register foreign root");
+        node.add_collection(
+            &gents_protocol::schemas::HomePolicyIds::shared()
+                .render(&format!("{body}    foreign_field: String\n}}")),
+        )
+        .await
+        .expect("register foreign root");
 
         let err = ensure_runtime(node.as_ref())
             .await
@@ -503,7 +506,7 @@ async fn unknown_lineage_is_rejected_before_the_baseline_writes_the_store() {
 
     let authoring_node = fresh_node().await;
     authoring_node
-        .add_collection(EXPECTED_SDL)
+        .add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(EXPECTED_SDL))
         .await
         .expect("register expected root");
     let expected_root = authoring_node
@@ -517,7 +520,7 @@ async fn unknown_lineage_is_rejected_before_the_baseline_writes_the_store() {
         .expect("shut down test node");
 
     let node = fresh_node().await;
-    node.add_collection(OLD_SDL)
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(OLD_SDL))
         .await
         .expect("register old root");
     let before = node
@@ -597,11 +600,16 @@ async fn unprotected_file_images_are_rejected_without_changing_retained_data() {
     let node = common::fresh_node().await;
     let directive = format!(
         "@policy(id: \"{}\", resource: \"{}\")",
-        gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_ID,
+        gents_protocol::schemas::HomePolicyIds::shared()
+            .id(gents_protocol::schemas::BuiltInPolicy::ToolFileChange),
         gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_RESOURCE
     );
-    let unprotected = gents_protocol::schemas::TOOL_FILE_CHANGE.replace(&directive, "");
-    node.add_collection(&unprotected).await.unwrap();
+    let unprotected = gents_protocol::schemas::HomePolicyIds::shared()
+        .render(gents_protocol::schemas::TOOL_FILE_CHANGE)
+        .replace(&directive, "");
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&unprotected))
+        .await
+        .unwrap();
     let created = node.execute("mutation { create_ToolFileChange(input: { tool_call_doc_id: \"retained-tool\" }) { _docID } }").await;
     assert!(!created.has_errors(), "{:?}", created.errors);
     let before = node
@@ -752,7 +760,11 @@ async fn agent_message_keeps_its_current_schema_and_rows() {
     assert_eq!(fresh_id, canonical);
 
     let node = fresh_node().await;
-    node.add_collection(schemas::AGENT_MESSAGE).await.unwrap();
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared().render(schemas::AGENT_MESSAGE),
+    )
+    .await
+    .unwrap();
     let legacy = node.get_collection("AgentMessage").unwrap().unwrap();
     assert_eq!(legacy.version_id, canonical);
     let created = node
@@ -802,9 +814,13 @@ async fn agent_message_keeps_its_current_schema_and_rows() {
 #[tokio::test]
 async fn runtime_locality_rejects_branchable_metadata_even_when_schema_cid_matches() {
     let node = fresh_node().await;
-    let sdl = schemas::AGENT.replace("type Agent ", "type Agent @branchable ");
+    let sdl = gents_protocol::schemas::HomePolicyIds::shared()
+        .render(schemas::AGENT)
+        .replace("type Agent ", "type Agent @branchable ");
     assert_ne!(sdl, schemas::AGENT);
-    node.add_collection(&sdl).await.unwrap();
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&sdl))
+        .await
+        .unwrap();
     let before = node.get_collection(schemas::AGENT_NAME).unwrap().unwrap();
     let expected = BASELINE
         .iter()
@@ -828,7 +844,9 @@ async fn existing_schema_from_another_version_is_refused_by_type_without_writing
     validate_existing_schema(&node)
         .await
         .expect("an empty store is this build's to take");
-    let branchable = schemas::AGENT.replace("type Agent ", "type Agent @branchable ");
+    let branchable = schemas::HomePolicyIds::shared()
+        .render(schemas::AGENT)
+        .replace("type Agent ", "type Agent @branchable ");
     node.add_collection(&branchable).await.unwrap();
     let error = validate_existing_schema(&node).await.unwrap_err();
     assert!(
@@ -841,12 +859,16 @@ async fn existing_schema_from_another_version_is_refused_by_type_without_writing
     let node = fresh_node().await;
     let directive = format!(
         "@policy(id: \"{}\", resource: \"{}\")",
-        schemas::CLIENT_JOURNAL_POLICY_ID,
+        schemas::HomePolicyIds::shared().id(schemas::BuiltInPolicy::ClientJournal),
         schemas::CLIENT_JOURNAL_POLICY_RESOURCE
     );
-    node.add_collection(&schemas::PENDING_CHAT_SUBMISSION.replace(&directive, ""))
-        .await
-        .unwrap();
+    node.add_collection(
+        &schemas::HomePolicyIds::shared()
+            .render(schemas::PENDING_CHAT_SUBMISSION)
+            .replace(&directive, ""),
+    )
+    .await
+    .unwrap();
     let error = validate_existing_schema(&node).await.unwrap_err();
     assert!(
         matches!(error, SchemaError::IncompatibleIdentityPolicy { ref collection } if collection == schemas::PENDING_CHAT_SUBMISSION_NAME),
@@ -869,11 +891,15 @@ async fn unbound_client_journal_is_rejected_without_changing_data() {
     let node = fresh_node().await;
     let directive = format!(
         "@policy(id: \"{}\", resource: \"{}\")",
-        schemas::CLIENT_JOURNAL_POLICY_ID,
+        schemas::HomePolicyIds::shared().id(schemas::BuiltInPolicy::ClientJournal),
         schemas::CLIENT_JOURNAL_POLICY_RESOURCE
     );
-    let unbound = schemas::PENDING_CHAT_SUBMISSION.replace(&directive, "");
-    node.add_collection(&unbound).await.unwrap();
+    let unbound = gents_protocol::schemas::HomePolicyIds::shared()
+        .render(schemas::PENDING_CHAT_SUBMISSION)
+        .replace(&directive, "");
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&unbound))
+        .await
+        .unwrap();
     let created = node.execute("mutation { create_PendingChatSubmission(input: { request_id: \"retained\", payload: \"data\" }) { _docID } }").await;
     assert!(!created.has_errors(), "{:?}", created.errors);
     let before = node
@@ -897,11 +923,15 @@ async fn unbound_mailbox_is_rejected_without_changing_data() {
     let node = fresh_node().await;
     let directive = format!(
         "@policy(id: \"{}\", resource: \"{}\")",
-        schemas::MAILBOX_POLICY_ID,
+        schemas::HomePolicyIds::shared().id(schemas::BuiltInPolicy::Mailbox),
         schemas::MAILBOX_POLICY_RESOURCE
     );
-    let unbound = schemas::MAILBOX_ITEM.replace(&directive, "");
-    node.add_collection(&unbound).await.unwrap();
+    let unbound = gents_protocol::schemas::HomePolicyIds::shared()
+        .render(schemas::MAILBOX_ITEM)
+        .replace(&directive, "");
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&unbound))
+        .await
+        .unwrap();
     let created = node.execute("mutation { create_MailboxItem(input: { item_key: \"retained\", title: \"data\" }) { _docID } }").await;
     assert!(!created.has_errors(), "{:?}", created.errors);
     let query = "{ MailboxItem { _docID item_key title } }";
@@ -943,14 +973,18 @@ async fn a_store_holding_the_earlier_household_policy_refuses_the_restricted_one
         .expect("earlier policy");
     assert_eq!(
         earlier_id,
-        gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID
+        gents_protocol::schemas::HomePolicyIds::shared()
+            .id(gents_protocol::schemas::BuiltInPolicy::Household)
     );
     let error = ensure_runtime(&node)
         .await
         .expect_err("the restricted policy does not replace the earlier one");
     let error = format!("{error:#}");
     assert!(
-        error.contains(gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID),
+        error.contains(
+            gents_protocol::schemas::HomePolicyIds::shared()
+                .id(gents_protocol::schemas::BuiltInPolicy::Household)
+        ),
         "{error}"
     );
     std::mem::forget(dir);
@@ -971,7 +1005,7 @@ async fn canonical_catalog_pins_for_authoring() {
         )
         .collect::<Vec<_>>();
     for (name, sdl) in &catalog {
-        node.add_collection(sdl)
+        node.add_collection(&schemas::HomePolicyIds::shared().render(sdl))
             .await
             .unwrap_or_else(|error| panic!("register {name} for pin authoring: {error}"));
     }

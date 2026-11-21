@@ -1,0 +1,3 @@
+---- MODULE MCControlDebounceGreen ----
+EXTENDS ControlDebounce
+====

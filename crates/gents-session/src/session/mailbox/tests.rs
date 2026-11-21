@@ -1022,8 +1022,11 @@ async fn remote_client_signs_conditional_mailbox_dismissal() -> anyhow::Result<(
         defra_core::RequestContext::default().with_identity(Some(actor.did().to_owned()));
     node.add_dac_policy_with_counter_as(&owner_context, gents_protocol::schemas::MAILBOX_POLICY, 0)
         .await?;
-    node.add_collection(gents_protocol::schemas::MAILBOX_ITEM)
-        .await?;
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared()
+            .render(gents_protocol::schemas::MAILBOX_ITEM),
+    )
+    .await?;
     let endpoint = gents_store::config_client::GraphqlEndpoint::as_principal(
         format!("http://{address}/api/v0/graphql"),
         actor.did(),
@@ -1120,8 +1123,11 @@ async fn remote_dismissal_rebuilds_after_a_concurrent_item_write() -> anyhow::Re
         defra_core::RequestContext::default().with_identity(Some(actor.did().to_owned()));
     node.add_dac_policy_with_counter_as(&owner_context, gents_protocol::schemas::MAILBOX_POLICY, 0)
         .await?;
-    node.add_collection(gents_protocol::schemas::MAILBOX_ITEM)
-        .await?;
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::shared()
+            .render(gents_protocol::schemas::MAILBOX_ITEM),
+    )
+    .await?;
     let endpoint = gents_store::config_client::GraphqlEndpoint::as_principal(
         format!("http://{address}/api/v0/graphql"),
         actor.did(),

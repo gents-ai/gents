@@ -141,14 +141,15 @@ PACKAGE_FEATURES = {
     "gents-desktop-bridge": "notify/macos_kqueue",
 }
 
-# Tests behind a crate's `vera` feature: package -> libtest name filter for
-# its lib target. The feature brings in a Vera node and changes what other
-# crates see of gents-store, so these run in their own build beside the
-# package's or the archive's, never by enabling it there.
+# Tests behind a crate's `vera` feature: package -> (Cargo target flags,
+# libtest name filter in that target). The feature brings in a Vera node and
+# changes what other crates see of gents-store, so these run in their own
+# build beside the package's or the archive's, never by enabling it there.
 VERA_TESTS = {
-    "gents-store": "local::document_acp::",
-    "gents-tools": "surface::source_policy::embedded_vera_tests::",
-    "gents-toolcalls": "call::lifecycle::recovery::vera_tests::",
+    "gents-store": (("--lib",), "local::document_acp::"),
+    "gents-tools": (("--lib",), "surface::source_policy::embedded_vera_tests::"),
+    "gents-toolcalls": (("--lib",), "call::lifecycle::recovery::vera_tests::"),
+    "gents-cli": (("--test", "integration"), "cli_runtime::cli_home_document_access::"),
 }
 
 # Packages with no test of their own, each with why. The list only shrinks: a
@@ -1009,8 +1010,9 @@ def run_test(selection, name):
         cargo_test(package, ["-p", package, *feature_flags(package)], expect_tests=package not in NO_TESTS,
                    **options)
     for package in entry.get("vera", "").split():
-        cargo_test(f"{package} (vera)", ["-p", package, "--lib", "--features", "vera"],
-                   **{**options, "harness": [VERA_TESTS[package], *options["harness"]]})
+        target, test_filter = VERA_TESTS[package]
+        cargo_test(f"{package} (vera)", ["-p", package, *target, "--features", "vera"],
+                   **{**options, "harness": [test_filter, *options["harness"]]})
 
 
 def target_arguments(package):
@@ -1071,17 +1073,22 @@ def macos_filterset(packages):
 
 def run_vera_tests(packages):
     """The `vera` tests of an archive's packages, built apart from the archive in
-    one `cargo nextest run`: enabling the feature in the archive would build
-    every archived crate against a gents-store with the Vera node."""
+    one `cargo nextest run` per target kind: enabling the feature in the archive
+    would build every archived crate against a gents-store with the Vera node,
+    and naming one package's test target would build every package's."""
     if not packages:
         return
     os.environ.pop("GENTS_TEST_BINARIES_PREBUILT", None)
-    features = ",".join(f"{package}/vera" for package in packages)
-    filterset = " | ".join(f"(binary_id(={package}) & test(~{VERA_TESTS[package]}))" for package in packages)
-    # The archive's profile and target tree: in the `test` profile the feature
-    # build recompiled about 1,083 dependencies the archive had just built.
-    native_tests(f"{' '.join(packages)} --lib (vera)", packages, ["--lib", "--features", features], filterset,
-                 set(packages), profile=os.environ.get("PROFILE") or ARCHIVE_PROFILE)
+    for target in sorted({VERA_TESTS[package][0] for package in packages}):
+        members = [package for package in packages if VERA_TESTS[package][0] == target]
+        features = ",".join(f"{package}/vera" for package in members)
+        filterset = " | ".join(f"(binary_id(={binary_id(package, target)}) & test(~{VERA_TESTS[package][1]}))"
+                               for package in members)
+        # The archive's profile and target tree: in the `test` profile the feature
+        # build recompiled about 1,083 dependencies the archive had just built.
+        native_tests(f"{' '.join(members)} {' '.join(target)} (vera)", members, [*target, "--features", features],
+                     filterset, {binary_id(package, target) for package in members},
+                     profile=os.environ.get("PROFILE") or ARCHIVE_PROFILE)
 
 
 def native_tests(label, packages, flags, filterset, expected, profile=None):
