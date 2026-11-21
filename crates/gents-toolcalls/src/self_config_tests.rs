@@ -3203,10 +3203,6 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
     let caller = fixture.install_sibling("caller").await;
     fixture.grant_sibling_configuration(&lead).await;
     fixture.grant_sibling_configuration(&caller).await;
-    // Lean `AgentTargetAccess.authorized`: selecting the `gatekeeper` target
-    // declares `session_writer` on `lead`, so the Engineer must natively
-    // manage that relation (`engineer_with_authority_applies_the_same_relation`).
-    fixture.grant_agent_administration(&lead).await;
     let owner = fixture.node_did().to_owned();
     let setup_did = fixture.agent_did().to_owned();
     let setup = fixture.core();
@@ -3325,6 +3321,38 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
         );
     }
 
+    let refused = call_config_tool(
+        &tools,
+        command(&[
+            "tools",
+            "edit",
+            "--agent",
+            &caller,
+            "--set",
+            r#"agents={"enabled":true,"target_ids":["gatekeeper"]}"#,
+        ]),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        refused.contains(&format!("administrator on Agent {lead}")),
+        "{refused}"
+    );
+    assert!(
+        refused.contains("held by the Node's owner and the Node's administrators"),
+        "{refused}"
+    );
+    let unchanged =
+        ok(call_config_tool(&tools, command(&["tools", "get", "--agent", &caller])).await);
+    assert_ne!(unchanged["document"]["agents"]["enabled"], true);
+    assert_eq!(
+        unchanged["document"]["agents"]["target_ids"],
+        json!(["gatekeeper"])
+    );
+    // Lean `AgentTargetAccess.authorized`: selecting the `gatekeeper` target
+    // declares `session_writer` on `lead`, so the Engineer must natively
+    // manage that relation (`engineer_with_authority_applies_the_same_relation`).
+    fixture.grant_agent_administration(&lead).await;
     let recovery = ok(call_config_tool(
         &tools,
         command(&[
