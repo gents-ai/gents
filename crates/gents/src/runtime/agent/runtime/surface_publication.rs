@@ -87,18 +87,17 @@ mod tests {
 
     #[test]
     fn recovery_and_startup_decisions_replay_the_lean_owner() {
-        use gents_lean_vocab::families as family;
-        family::runtime_reconcile_surface_publication_send_proposal::replay(|i| {
-            send_proposal(i.changed, i.recovery_pending)
-        });
-        family::runtime_reconcile_surface_publication_retry_after_failure::replay(|i| {
+        gents_lean_vocab::families::runtime_reconcile_surface_publication_send_proposal::replay(
+            |i| send_proposal(i.changed, i.recovery_pending),
+        );
+        gents_lean_vocab::families::runtime_reconcile_surface_publication_retry_after_failure::replay(|i| {
             retry_after_failure(i.settling, i.recovery_pending)
         });
-        family::runtime_reconcile_surface_publication_startup_cause::replay::<StartupCause>(|i| {
-            startup_cause(i.degraded_reason, i.surface_unavailable, i.publication_busy)
-        });
-        family::surface_publication_startup_proceeds::replay::<StartupCause>(|i| {
-            startup_proceeds(usize::try_from(i.runnable).unwrap(), &i.causes)
-        });
+        gents_lean_vocab::families::runtime_reconcile_surface_publication_startup_cause::replay::<
+            StartupCause,
+        >(|i| startup_cause(i.degraded_reason, i.surface_unavailable, i.publication_busy));
+        gents_lean_vocab::families::surface_publication_startup_proceeds::replay::<StartupCause>(
+            |i| startup_proceeds(usize::try_from(i.runnable).unwrap(), &i.causes),
+        );
     }
 }
