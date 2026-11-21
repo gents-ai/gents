@@ -7,8 +7,10 @@ use serde::{Deserialize, Serialize};
 
 use gents_documents::plugin_coordinate::checked_component;
 
+mod lease;
 mod read;
 mod write;
+pub use lease::{next_attempt, retry, wait_for_lease, LEASE_WAIT};
 pub use read::{StoreAbsent, StoreReadIdentity, StoreReadPin};
 
 /// Who writes the plugin store, and so where it may create it: a runtime
@@ -31,9 +33,13 @@ impl StoreWriter {
 
     /// The exclusive writer lease, without blocking.
     pub fn try_lock(&self) -> Result<StoreGuard> {
+        self.try_lock_typed().map_err(Into::into)
+    }
+
+    fn try_lock_typed(&self) -> std::result::Result<StoreGuard, PublishedPluginReadError> {
         match self {
-            Self::Offline(home) => try_lock_store(home),
-            Self::Runtime(pin) => pin.try_exclusive().map_err(Into::into),
+            Self::Offline(home) => write::try_lock_offline(home),
+            Self::Runtime(pin) => pin.try_exclusive(),
         }
     }
 }

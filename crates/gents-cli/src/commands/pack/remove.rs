@@ -139,10 +139,9 @@ pub(crate) async fn ensure_home_plugins_unreferenced(
 }
 
 pub(crate) async fn remove_home_install(home: &Path, coordinate: &str) -> Result<Value> {
-    let lock_home = home.to_owned();
-    let guard =
-        tokio::task::spawn_blocking(move || gents_pack::plugin::store::try_lock_store(&lock_home))
-            .await??;
+    let guard = gents_pack::plugin::store::StoreWriter::Offline(home.to_owned())
+        .lock_until(tokio::time::Instant::now() + gents_pack::plugin::store::LEASE_WAIT)
+        .await?;
     remove_home_install_with_guard(home, coordinate, guard).await
 }
 

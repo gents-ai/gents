@@ -834,10 +834,9 @@ impl<'a> NodePacks<'a> {
             .store
             .context("assets and plugins packs live in the node home")?;
         let home = writer.home();
-        let lock_writer = writer.clone();
-        let guard = tokio::task::spawn_blocking(move || lock_writer.try_lock())
-            .await
-            .context("plugin store lock task did not finish")??;
+        let guard = writer
+            .lock_until(tokio::time::Instant::now() + crate::plugin::store::LEASE_WAIT)
+            .await?;
         let (namespace, _) = registry::split_pack_coordinate(coordinate);
         let plugins: BTreeSet<String> = record
             .plugins

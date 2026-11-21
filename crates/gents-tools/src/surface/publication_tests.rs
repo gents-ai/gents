@@ -1,18 +1,5 @@
 use super::*;
 
-#[test]
-fn publication_retry_replays_the_lean_owner() {
-    let base = Instant::now();
-    let at = |millis: u64| base + Duration::from_millis(millis);
-    gents_lean_vocab::families::plugin_publication_retry::replay(|i| {
-        retry(i.busy, at(i.now), at(i.deadline))
-    });
-    gents_lean_vocab::families::plugin_publication_next_attempt::replay(|i| {
-        let next = next_attempt(at(i.now), at(i.deadline), Duration::from_millis(i.poll));
-        u64::try_from((next - base).as_millis()).unwrap()
-    });
-}
-
 #[tokio::test(start_paused = true)]
 async fn the_wait_is_bounded_and_keeps_the_busy_cause() {
     let mut attempts = 0;

@@ -1,23 +1,15 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents_pack::plugin::store::{PublishedPluginReadError, StoreGuard, StoreReadPin};
+use gents_pack::plugin::store::{
+    next_attempt, retry, wait_for_lease, PublishedPluginReadError, StoreGuard, StoreReadPin,
+};
 use tokio::time::Instant;
 
 pub const PLUGIN_PUBLICATION_WAIT_EVENT_TARGET: &str = "gents_tool_surface_publication";
 
-pub const PUBLICATION_WAIT: Duration = Duration::from_secs(60);
+pub const PUBLICATION_WAIT: Duration = gents_pack::plugin::store::LEASE_WAIT;
 const PUBLICATION_POLL: Duration = Duration::from_millis(100);
-
-/// Lean `ToolPolicy.PluginPublication.retry`.
-fn retry(busy: bool, now: Instant, deadline: Instant) -> bool {
-    busy && now < deadline
-}
-
-/// Lean `ToolPolicy.PluginPublication.nextAttempt`.
-fn next_attempt(now: Instant, deadline: Instant, poll: Duration) -> Instant {
-    deadline.min(now + poll)
-}
 
 /// The store's shared publication lease, taken through the runtime's pinned
 /// identity and waited for while an installer holds the store, until
@@ -30,25 +22,20 @@ pub async fn publication_guard_until(
         return Ok(None);
     };
     let mut waiting = false;
-    loop {
-        match pin.try_shared() {
-            Ok(guard) => return Ok(Some(guard)),
-            Err(error) if retry(error.is_busy(), Instant::now(), deadline) => {
-                if !waiting {
-                    tracing::warn!(target: PLUGIN_PUBLICATION_WAIT_EVENT_TARGET, cause = %error, "waiting for plugin publication before constructing tool surface");
-                    waiting = true;
-                }
-                tokio::time::sleep_until(next_attempt(Instant::now(), deadline, PUBLICATION_POLL))
-                    .await;
-            }
-            Err(error) => return Err(error),
+    wait_for_lease(deadline, || {
+        let lease = pin.try_shared();
+        if !waiting && lease.as_ref().is_err_and(PublishedPluginReadError::is_busy) {
+            tracing::warn!(target: PLUGIN_PUBLICATION_WAIT_EVENT_TARGET, cause = %PublishedPluginReadError::Busy, "waiting for plugin publication before constructing tool surface");
+            waiting = true;
         }
-    }
+        lease
+    })
+    .await
+    .map(Some)
 }
 
-/// The filesystem lock has no cross-process notification, so a construction
-/// that met an installer's lock polls it. Only that typed contention is
-/// retried, never a missing plugin or a pin mismatch.
+/// A construction that met an installer's lock polls it. Only that typed
+/// contention is retried, never a missing plugin or a pin mismatch.
 pub(super) async fn wait<T>(
     deadline: Instant,
     mut construct: impl FnMut() -> Result<T>,

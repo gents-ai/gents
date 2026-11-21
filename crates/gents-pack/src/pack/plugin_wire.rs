@@ -387,11 +387,15 @@ impl WirePlan {
     ) -> Result<Self> {
         let home_for_read = home.to_owned();
         let plugin_name = request.plugin.clone();
+        let guard = match &holder {
+            Some(writer) => Some(
+                writer
+                    .lock_until(tokio::time::Instant::now() + crate::plugin::store::LEASE_WAIT)
+                    .await?,
+            ),
+            None => None,
+        };
         let (store_guard, plugin) = tokio::task::spawn_blocking(move || {
-            let guard = holder
-                .as_ref()
-                .map(crate::plugin::store::StoreWriter::try_lock)
-                .transpose()?;
             let (namespace, name) = split_pack_coordinate(&plugin_name);
             let plugin = read_record(&home_for_read, namespace, name).with_context(|| {
                 format!("{plugin_name} is not installed. Next: gents config pack install <pack>")
