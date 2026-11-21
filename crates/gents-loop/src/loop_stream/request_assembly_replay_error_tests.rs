@@ -1124,3 +1124,67 @@ async fn every_provider_assembly_rechecks_configuration_before_reading_input() {
     );
     assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
+
+/// A dispatch reports the stubs of the rows it sends: once a turn reduction
+/// drops the stubbed row, the rebuilt request reports none.
+#[tokio::test]
+async fn a_reduction_that_drops_a_stubbed_row_drops_its_stub_from_the_dispatch() {
+    use gents_protocol::message::{ToolResult, ToolResultContent};
+    let mut config = replay_assembly_config();
+    config.context_window = 4_000;
+    config.compaction_threshold = 0.1;
+    config.max_tokens = Some(10);
+    config.turn_compactor = Some(Arc::new(|request: TurnCompactionRequest| {
+        Box::pin(async move {
+            Ok(TurnCompactionOutcome::Reduced {
+                messages: vec![request.messages.last().unwrap().clone()],
+                reduction_key: "drop-stub".into(),
+                commit: crate::loop_stream::TurnReductionCommit::new(|| async { Ok(()) }),
+            })
+        })
+    }));
+    let mut history = provider_view_tagged(vec![
+        TaggedMessage::unassociated(Message::user("budget pressure ".repeat(4_000))),
+        TaggedMessage::unassociated(assistant_with(None, Some(("stubbed-call", "{}")))),
+        TaggedMessage::unassociated(Message::User {
+            content: vec![UserContent::ToolResult(ToolResult {
+                id: "stubbed-call".into(),
+                call_id: Some("stubbed-call".into()),
+                content: vec![ToolResultContent::text("x".repeat(4_000))],
+            })],
+        }),
+    ])
+    .unwrap();
+    let mut new_messages = vec![TaggedMessage::unassociated(Message::user("only this"))];
+    assert_eq!(
+        super::tagged_history::dispatched_stubbing(history.iter().chain(new_messages.iter()))
+            .stubbed_results,
+        1
+    );
+
+    let (_, decision) = build_budgeted_request(
+        &TurnInputs {
+            model: &assembly_only(),
+            tools: &[],
+            config: &config,
+            turn_index: 1,
+        },
+        &mut TurnState {
+            history: &mut history,
+            new_messages: &mut new_messages,
+            replay: &mut LoopReplayInput::default(),
+            reduction_chain_keys: &mut Vec::new(),
+            active_reduction_keys: &mut Vec::new(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        decision.reason,
+        gents_protocol::rendered_request::ContextCompactionReason::Compacted
+    );
+    assert_eq!(
+        super::tagged_history::dispatched_stubbing(history.iter().chain(new_messages.iter())),
+        Default::default()
+    );
+}

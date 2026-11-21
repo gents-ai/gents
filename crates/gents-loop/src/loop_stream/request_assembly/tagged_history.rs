@@ -150,6 +150,16 @@ pub fn provider_view_tagged(
     tagged_from_sourced(&rows, sourced)
 }
 
+/// The stubbing a dispatch reports: the receipts on the rows it sends, the
+/// same rows its assembly trace records.
+pub(in crate::loop_stream) fn dispatched_stubbing<'a>(
+    rows: impl IntoIterator<Item = &'a TaggedMessage>,
+) -> gents_protocol::rendered_request::HistoryStubbing {
+    crate::compaction::history::stubbing_figures(
+        rows.into_iter().flat_map(|row| row.stub_receipts.iter()),
+    )
+}
+
 pub fn provider_messages(profile: ProviderInputProfile, rows: &[TaggedMessage]) -> Vec<Message> {
     provider_order(profile, message_values(rows))
 }
