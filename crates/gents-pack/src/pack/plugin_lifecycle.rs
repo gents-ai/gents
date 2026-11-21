@@ -82,14 +82,23 @@ pub async fn install<F>(
 where
     F: Future<Output = std::result::Result<(), super::PluginStoreChangeError>> + Send + 'static,
 {
-    install_final(home, archive, consent, slots, installed_via, source, notify)
-        .await
-        .map_err(InstallError::into_change_error)
+    install_final(
+        &store::StoreWriter::Offline(home.to_owned()),
+        archive,
+        consent,
+        slots,
+        installed_via,
+        source,
+        notify,
+    )
+    .await
+    .map_err(InstallError::into_change_error)
 }
 
-/// [`install`], with a failure that says what it left ([`InstallError`]).
+/// [`install`] by `writer`, with a failure that says what it left
+/// ([`InstallError`]).
 pub async fn install_final<F>(
-    home: &Path,
+    writer: &store::StoreWriter,
     archive: &crate::pack::archive::PackArchive,
     consent: bool,
     slots: PluginSlotBindings<'_>,
@@ -106,7 +115,16 @@ where
     ) {
         return Err(anyhow::anyhow!("expected a plugins or assets pack").into());
     }
-    install_owned(home, archive, consent, slots, installed_via, source, notify).await
+    install_owned(
+        writer,
+        archive,
+        consent,
+        slots,
+        installed_via,
+        source,
+        notify,
+    )
+    .await
 }
 
 pub async fn install_plugin<F>(
@@ -124,7 +142,7 @@ where
         "pack carries no plugins"
     );
     install_owned(
-        home,
+        &store::StoreWriter::Offline(home.to_owned()),
         archive,
         consent,
         PluginSlotBindings {
@@ -140,7 +158,7 @@ where
 }
 
 async fn install_owned<F>(
-    home: &Path,
+    writer: &store::StoreWriter,
     archive: &crate::pack::archive::PackArchive,
     consent: bool,
     slots: PluginSlotBindings<'_>,
@@ -158,6 +176,7 @@ where
     let manifest = archive.manifest().clone();
     let digest = archive.digest().to_owned();
     let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
+    let home = writer.home();
     let (root, cache_lease) = super::materialize::cached(home, archive)?;
     let relative_root = root
         .strip_prefix(home)
@@ -168,13 +187,14 @@ where
     for path in install::stage_asset_paths(&manifest)? {
         assets.insert(path.to_owned(), archive.asset(path)?.to_vec());
     }
-    let home = home.to_owned();
+    let writer = writer.clone();
     let owner = owner.unwrap_or_default().to_owned();
     let bindings = bindings.clone();
     tokio::spawn(async move {
         let _cache_lease = cache_lease;
+        let home = writer.home().to_owned();
         let stage = install::stage_pack_graph(
-            &home,
+            &writer,
             vec![install::PluginStageInput {
                 manifest: manifest.clone(),
                 digest: digest.clone(),
@@ -370,15 +390,20 @@ pub fn published_digests(
 /// Releases the plugin store records `coordinate` still owns at the digests its
 /// node record lists; records another pack or a newer install took over stay.
 pub fn release_plugin_records(
-    home: &Path,
+    writer: &store::StoreWriter,
     coordinate: &str,
     plugins: &[InstalledPackPlugin],
 ) -> Result<Vec<InstalledPackPlugin>> {
     let (namespace, _) = crate::pack::registry::split_pack_coordinate(coordinate);
     let mut released = Vec::new();
     for plugin in plugins {
-        if store::remove_record_if_owned(home, namespace, &plugin.name, coordinate, &plugin.digest)?
-        {
+        if store::remove_record_if_owned(
+            writer,
+            namespace,
+            &plugin.name,
+            coordinate,
+            &plugin.digest,
+        )? {
             released.push(plugin.clone());
         }
     }
@@ -387,9 +412,12 @@ pub fn release_plugin_records(
 
 /// Deletes the artifact bytes of `plugins` that no plugin record uses any
 /// more, and returns the digests released.
-pub fn release_plugin_bytes(home: &Path, plugins: &[InstalledPackPlugin]) -> Result<Vec<String>> {
+pub fn release_plugin_bytes(
+    writer: &store::StoreWriter,
+    plugins: &[InstalledPackPlugin],
+) -> Result<Vec<String>> {
     store::release_unreferenced_bytes(
-        home,
+        writer,
         &plugins.iter().map(|plugin| plugin.digest.clone()).collect(),
     )
 }
@@ -619,7 +647,7 @@ pub mod tests {
         let (_dir, _path, archive) = fixture("1.0.0", false);
         let coordinate = "fixture/native_echo_pack";
         let error = install_final(
-            home.path(),
+            &store::StoreWriter::Runtime(store::StoreReadPin::capture(home.path())),
             &archive,
             false,
             PluginSlotBindings {
@@ -643,7 +671,7 @@ pub mod tests {
         );
         let (_refused_dir, _, refused) = fixture("3.0.0", false);
         let rolled_back = install_final(
-            home.path(),
+            &store::StoreWriter::Runtime(store::StoreReadPin::capture(home.path())),
             &refused,
             false,
             PluginSlotBindings {

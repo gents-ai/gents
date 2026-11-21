@@ -1958,7 +1958,9 @@ async fn self_config_install(archive: &crate::pack::archive::PackArchive, home: 
         &crate::pack::InstallTarget {
             access: &access().await,
             owner: OWNER,
-            plugin_home: home,
+            plugin_home: home
+                .map(|home| crate::plugin::store::StoreWriter::Offline(home.to_owned()))
+                .as_ref(),
         },
         archive,
         &[],
@@ -2017,7 +2019,9 @@ async fn operator_installs_document_pack_ux_with_its_data_plugin() {
         &crate::pack::InstallTarget {
             access: &access().await,
             owner: OWNER,
-            plugin_home: Some(home.path()),
+            plugin_home: Some(&crate::plugin::store::StoreWriter::Offline(
+                home.path().to_owned(),
+            )),
         },
         &archive,
         &[],
@@ -2547,7 +2551,9 @@ async fn prepare_graph(
         &crate::pack::InstallTarget {
             access: &local,
             owner: runtime.did(),
-            plugin_home,
+            plugin_home: plugin_home
+                .map(|home| crate::plugin::store::StoreWriter::Offline(home.to_owned()))
+                .as_ref(),
         },
         root,
         &crate::pack::PackGraphInputs {
@@ -2586,7 +2592,9 @@ async fn install_prepared_graph(
         &crate::pack::InstallTarget {
             access,
             owner: runtime.did(),
-            plugin_home,
+            plugin_home: plugin_home
+                .map(|home| crate::plugin::store::StoreWriter::Offline(home.to_owned()))
+                .as_ref(),
         },
         root,
         prepared,
@@ -3115,7 +3123,9 @@ async fn prepare_naming_plugin(
         &crate::pack::InstallTarget {
             access: &node_access(&node),
             owner: OWNER,
-            plugin_home,
+            plugin_home: plugin_home
+                .map(|home| crate::plugin::store::StoreWriter::Offline(home.to_owned()))
+                .as_ref(),
         },
         manifest,
         &config_naming_plugin("acme/web_search"),
@@ -3736,7 +3746,9 @@ async fn pinned_plugin_references_match_executable_model_before_install_or_updat
                 &crate::pack::InstallTarget {
                     access: &access,
                     owner: OWNER,
-                    plugin_home: Some(home.path()),
+                    plugin_home: Some(&crate::plugin::store::StoreWriter::Offline(
+                        home.path().to_owned(),
+                    )),
                 },
                 archive.manifest(),
                 &config,
@@ -3783,7 +3795,9 @@ async fn failed_transaction_begin_restores_the_previous_plugin_record() {
         &crate::pack::InstallTarget {
             access: &access,
             owner: OWNER,
-            plugin_home: Some(home.path()),
+            plugin_home: Some(&crate::plugin::store::StoreWriter::Offline(
+                home.path().to_owned(),
+            )),
         },
         &manifest,
         &format!("sha256:{}", "1".repeat(64)),
@@ -3800,7 +3814,9 @@ async fn failed_transaction_begin_restores_the_previous_plugin_record() {
         &crate::pack::InstallTarget {
             access: &access,
             owner: OWNER,
-            plugin_home: Some(home.path()),
+            plugin_home: Some(&crate::plugin::store::StoreWriter::Offline(
+                home.path().to_owned(),
+            )),
         },
         &manifest,
         &format!("sha256:{}", "2".repeat(64)),
@@ -3849,7 +3865,9 @@ async fn plugin_update_rolls_back_files_when_surviving_pin_rejects_and_accepts_u
         &crate::pack::InstallTarget {
             access: &access,
             owner,
-            plugin_home: Some(home.path()),
+            plugin_home: Some(&crate::plugin::store::StoreWriter::Offline(
+                home.path().to_owned(),
+            )),
         },
         &manifest,
         &format!("sha256:{}", "1".repeat(64)),
@@ -3882,7 +3900,9 @@ async fn plugin_update_rolls_back_files_when_surviving_pin_rejects_and_accepts_u
         &crate::pack::InstallTarget {
             access: &access,
             owner,
-            plugin_home: Some(home.path()),
+            plugin_home: Some(&crate::plugin::store::StoreWriter::Offline(
+                home.path().to_owned(),
+            )),
         },
         &manifest,
         &format!("sha256:{}", "2".repeat(64)),
@@ -3913,7 +3933,9 @@ async fn plugin_update_rolls_back_files_when_surviving_pin_rejects_and_accepts_u
         &crate::pack::InstallTarget {
             access: &access,
             owner,
-            plugin_home: Some(home.path()),
+            plugin_home: Some(&crate::plugin::store::StoreWriter::Offline(
+                home.path().to_owned(),
+            )),
         },
         &manifest,
         &format!("sha256:{}", "2".repeat(64)),
@@ -3963,7 +3985,9 @@ async fn cancelling_pack_install_caller_does_not_cancel_owned_commit() {
             &crate::pack::InstallTarget {
                 access: &child_access,
                 owner: OWNER,
-                plugin_home: Some(&home_path),
+                plugin_home: Some(&crate::plugin::store::StoreWriter::Offline(
+                    home_path.to_owned(),
+                )),
             },
             &manifest,
             &format!("sha256:{}", "3".repeat(64)),
@@ -4072,7 +4096,9 @@ async fn dependency_and_root_pin_update_commit_as_one_graph() {
             drift: DriftPolicy::Refuse,
             profiles: &gents_inference::resolved::ProviderProfilePolicy,
         },
-        Some(home.path()),
+        Some(&crate::plugin::store::StoreWriter::Offline(
+            home.path().to_owned(),
+        )),
         false,
         None,
     )
@@ -4096,7 +4122,9 @@ async fn dependency_and_root_pin_update_commit_as_one_graph() {
             drift: DriftPolicy::Refuse,
             profiles: &gents_inference::resolved::ProviderProfilePolicy,
         },
-        Some(home.path()),
+        Some(&crate::plugin::store::StoreWriter::Offline(
+            home.path().to_owned(),
+        )),
         false,
         None,
     )
@@ -4194,7 +4222,9 @@ async fn installed_plugin_pin_is_rechecked_at_graph_commit() {
             &crate::pack::InstallTarget {
                 access: &access,
                 owner: OWNER,
-                plugin_home: Some(home.path()),
+                plugin_home: Some(&crate::plugin::store::StoreWriter::Offline(
+                    home.path().to_owned(),
+                )),
             },
             &manifest,
             &format!("sha256:{}", "4".repeat(64)),
@@ -4269,7 +4299,9 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
             &crate::pack::InstallTarget {
                 access: &access_for_install,
                 owner: &install_owner,
-                plugin_home: Some(&home_for_install),
+                plugin_home: Some(&crate::plugin::store::StoreWriter::Offline(
+                    home_for_install.to_owned(),
+                )),
             },
             &manifest,
             &format!("sha256:{}", "3".repeat(64)),
@@ -4548,7 +4580,9 @@ async fn definitive_document_drift_rejection_restores_previously_pinned_plugin()
         &crate::pack::InstallTarget {
             access: &access,
             owner,
-            plugin_home: Some(home.path()),
+            plugin_home: Some(&crate::plugin::store::StoreWriter::Offline(
+                home.path().to_owned(),
+            )),
         },
         &manifest,
         &format!("sha256:{}", "1".repeat(64)),
@@ -4566,7 +4600,9 @@ async fn definitive_document_drift_rejection_restores_previously_pinned_plugin()
         &crate::pack::InstallTarget {
             access: &access,
             owner,
-            plugin_home: Some(home.path()),
+            plugin_home: Some(&crate::plugin::store::StoreWriter::Offline(
+                home.path().to_owned(),
+            )),
         },
         &manifest,
         &format!("sha256:{}", "2".repeat(64)),
@@ -4618,7 +4654,7 @@ async fn committed_ack_timeout_retains_staged_plugin_records() {
         crate::plugin::store::content_digest_hex(&bytes)
     );
     let stage = crate::plugin::install::stage_pack_graph(
-        home.path(),
+        &crate::plugin::store::StoreWriter::Offline(home.path().to_owned()),
         vec![crate::plugin::install::PluginStageInput {
             manifest,
             digest: format!("sha256:{}", "2".repeat(64)),
@@ -4836,7 +4872,9 @@ async fn hosted_plugin_root_preserves_existing_pack_documents() -> Result<()> {
         &crate::pack::InstallTarget {
             access: &access,
             owner: OWNER,
-            plugin_home: Some(home.path()),
+            plugin_home: Some(&crate::plugin::store::StoreWriter::Offline(
+                home.path().to_owned(),
+            )),
         },
         &archive,
         &crate::pack::PackGraphInputs {
@@ -4904,11 +4942,12 @@ async fn a_retirement_the_node_did_not_record_keeps_the_plugin_bytes() {
     .unwrap();
     let digests: std::collections::BTreeSet<String> =
         plugins.iter().map(|plugin| plugin.digest.clone()).collect();
+    let writer = crate::plugin::store::StoreWriter::Offline(home.path().to_owned());
     let packs = crate::pack::node_packs::NodePacks {
         access: &access,
         node_did: OWNER,
         registry_url: crate::pack::registry::DEFAULT_REGISTRY_URL,
-        home: Some(home.path()),
+        store: Some(&writer),
         grants_authority: false,
     };
     // An actor that is not the node's cannot write its record.
@@ -4930,7 +4969,7 @@ async fn a_retirement_the_node_did_not_record_keeps_the_plugin_bytes() {
         "the home record a repeated removal would need was kept"
     );
     assert_eq!(
-        crate::plugin::store::release_unreferenced_bytes(home.path(), &digests)
+        crate::plugin::store::release_unreferenced_bytes(&writer, &digests)
             .unwrap()
             .len(),
         digests.len(),

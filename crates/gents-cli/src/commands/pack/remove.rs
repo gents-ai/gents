@@ -45,8 +45,12 @@ pub(crate) async fn remove(args: PackRemoveArgs) -> Result<(), PackChangeError> 
         )
         .await?;
         let released = if args.scope.graphql.is_none() {
-            gents_pack::pack::home_removal::release_documents_pack(&home, Some(&access), &report)
-                .await?
+            gents_pack::pack::home_removal::release_documents_pack(
+                &gents_pack::plugin::store::StoreWriter::Offline(home.clone()),
+                Some(&access),
+                &report,
+            )
+            .await?
         } else {
             Default::default()
         };

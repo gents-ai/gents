@@ -7,6 +7,7 @@ mod output_budget;
 mod pack_readers;
 mod policy;
 pub mod presets;
+mod publication;
 mod root_admission;
 mod root_publication;
 pub mod root_selection;
@@ -33,6 +34,9 @@ pub(crate) use policy::ToolNodeOperationSource;
 pub use policy::{
     EndpointScope, RuntimeToolAvailability, ToolPolicyBash, ToolPolicySurface, ToolPolicyVersion,
     TOOL_POLICY_V1,
+};
+pub use publication::{
+    publication_guard_until, PLUGIN_PUBLICATION_WAIT_EVENT_TARGET, PUBLICATION_WAIT,
 };
 
 pub(crate) fn configured_node_operation_sources(
@@ -266,6 +270,11 @@ impl ToolSurface {
         &self.allowed_mcp_service_ids
     }
 
+    /// A surface without plugin tools does not depend on plugin publication.
+    pub fn has_plugin_tools(&self) -> bool {
+        !self.plugin_tools.is_empty()
+    }
+
     pub fn plugin_resolutions(
         &self,
     ) -> &[(
@@ -370,6 +379,17 @@ impl ToolSurface {
     }
 
     pub async fn build_tools(&self, runtime: &ToolRuntimeContext) -> Result<Vec<Box<dyn ToolDyn>>> {
+        self.build_tools_until(runtime, tokio::time::Instant::now() + PUBLICATION_WAIT)
+            .await
+    }
+
+    /// [`Self::build_tools`], waiting for an installer that holds the plugin
+    /// store until `publication_deadline`.
+    pub async fn build_tools_until(
+        &self,
+        runtime: &ToolRuntimeContext,
+        publication_deadline: tokio::time::Instant,
+    ) -> Result<Vec<Box<dyn ToolDyn>>> {
         if let Some(guard) = &self.root_execution_guard {
             let agent = runtime
                 .agent_identity
@@ -681,21 +701,24 @@ impl ToolSurface {
             tools.push(Box::new(tool) as Box<dyn ToolDyn>);
         }
         for plugin in &self.plugin_tools {
-            let tool = runtime.plugins.clone().plugin_tool(
-                plugin,
-                self.host_tools
-                    .read_root()
-                    .map(std::path::Path::to_path_buf),
-                self.host_tools
-                    .write_root()
-                    .map(std::path::Path::to_path_buf),
-                runtime.node.clone(),
-                &runtime.node_did,
-                runtime
-                    .agent_identity
-                    .as_ref()
-                    .map(|identity| identity.did()),
-            )?;
+            let tool = publication::wait(publication_deadline, || {
+                runtime.plugins.clone().plugin_tool(
+                    plugin,
+                    self.host_tools
+                        .read_root()
+                        .map(std::path::Path::to_path_buf),
+                    self.host_tools
+                        .write_root()
+                        .map(std::path::Path::to_path_buf),
+                    runtime.node.clone(),
+                    &runtime.node_did,
+                    runtime
+                        .agent_identity
+                        .as_ref()
+                        .map(|identity| identity.did()),
+                )
+            })
+            .await?;
             if !registered_names.insert(tool.name()) {
                 anyhow::bail!(
                     "plugin tool `{}` has the same name as another tool; rename one of them",

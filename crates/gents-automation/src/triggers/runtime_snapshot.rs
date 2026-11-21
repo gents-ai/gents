@@ -49,6 +49,9 @@ pub struct UnavailableAgent {
     pub diagnostic: String,
     pub awaiting_first_probe: bool,
     pub watcher_identity: Option<ResolvedWatcherIdentity>,
+    /// The agent's plugin tools could not be built because an installer held
+    /// the plugin store: a transient cause the runtime recovers from itself.
+    pub publication_busy: bool,
 }
 
 impl UnavailableAgent {
@@ -61,7 +64,13 @@ impl UnavailableAgent {
             diagnostic: diagnostic.into(),
             awaiting_first_probe: false,
             watcher_identity: None,
+            publication_busy: false,
         }
+    }
+
+    pub fn with_publication_busy(mut self, publication_busy: bool) -> Self {
+        self.publication_busy = publication_busy;
+        self
     }
 
     pub fn with_awaiting_first_probe(mut self, awaiting_first_probe: bool) -> Self {

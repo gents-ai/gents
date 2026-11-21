@@ -128,11 +128,11 @@ impl ConfigCommandTool {
         }
         let document = self.plugin_source_document(&id).await?;
         let coordinate = document.coordinate();
-        let home = self
+        let store = self
             .plugins
-            .home()
-            .context("this runtime has no plugin home")?
-            .to_owned();
+            .store_writer()
+            .context("this runtime has no plugin home")?;
+        let home = store.home().to_owned();
         let schemas = self.plugin_source_data_schemas(&id, &document).await?;
         let prepare_home = home.clone();
         let prepared = tokio::task::spawn_blocking(move || {
@@ -196,7 +196,7 @@ impl ConfigCommandTool {
             core: self.core.clone(),
             node: self.node.clone(),
             actor: self.identity.clone(),
-            home: Some(home),
+            store: Some(store),
             envelope: gents_loop::tool::ToolCallEnvelope::default(),
         };
         // A dropped request (an interrupt cancels the tool call's future)
