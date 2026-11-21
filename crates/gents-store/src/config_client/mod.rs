@@ -435,14 +435,17 @@ impl GraphqlEndpoint {
         let Some(capability) = &self.client_signing_capability else {
             return Err(ConfigClientError::ClientAgentSignerRequired);
         };
-        let authorization = match &self.delegation_audience.get() {
-            Some(node) => {
-                let (home, clock) = self.delegation_audience.minting_clock();
-                format!(
-                    "Bearer {}",
-                    delegation::mint(capability, node, home.as_ref(), clock)?
-                )
-            }
+        let record = self.delegation_audience.record();
+        let authorization = match &record.audience {
+            Some(node) => format!(
+                "Bearer {}",
+                delegation::mint(
+                    capability,
+                    node,
+                    record.clock.as_ref(),
+                    self.delegation_audience.device_now()
+                )?
+            ),
             None => crate::identity::defradb_bearer_authorization_with_config(
                 did,
                 &self.audience()?,

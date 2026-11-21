@@ -165,6 +165,30 @@ impl HeldAudienceChange {
     }
 }
 
+/// What a client keeps of its home: the audience it mints for and the home's
+/// clock it mints at (`Identity.HeldAudience.Record`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HeldRecord {
+    pub audience: Option<DelegationAudience>,
+    pub clock: Option<HomeClock>,
+}
+
+/// How the record `kept` after a status read differs from `presented`, the
+/// record a refused request's credential was minted from
+/// (`Identity.HeldAudience.changeSince`).
+pub fn change_since(presented: &HeldRecord, kept: &HeldRecord) -> HeldAudienceChange {
+    match (&presented.audience, &kept.audience) {
+        (None, None) => HeldAudienceChange::Unchanged,
+        (None, Some(audience)) => HeldAudienceChange::Learned(audience.clone()),
+        (Some(_), None) => HeldAudienceChange::Forgotten,
+        (Some(before), Some(after)) if before != after => {
+            HeldAudienceChange::Changed(after.clone())
+        }
+        (Some(_), Some(_)) if presented.clock != kept.clock => HeldAudienceChange::Reclocked,
+        (Some(_), Some(_)) => HeldAudienceChange::Unchanged,
+    }
+}
+
 /// Whether a client reads its home's status again before it mints a
 /// request-bound delegation (`Identity.HeldAudience.rereadBeforeRequestBound`).
 pub fn reread_before_request_bound(held: Option<&DelegationAudience>, clock_known: bool) -> bool {

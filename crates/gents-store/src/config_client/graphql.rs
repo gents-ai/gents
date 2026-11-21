@@ -1,3 +1,4 @@
+use gents_protocol::delegation_audience::HeldRecord;
 use gents_protocol::graphql::{execute_graphql_async, GraphqlRequestOptions};
 use serde_json::Value;
 
@@ -46,10 +47,12 @@ pub(super) async fn auto_commit(
         None => serde_json::json!({"query": mutation}),
     };
     match auto_commit_once(endpoint, &body).await? {
-        (Err(refused), false) if recovers_window(endpoint, &refused).await? => {
+        (Err(refused), false, presented)
+            if recovers_window(endpoint, &refused, &presented).await? =>
+        {
             auto_commit_once(endpoint, &body).await?.0
         }
-        (answered, _) => answered,
+        (answered, _, _) => answered,
     }
 }
 
@@ -57,27 +60,36 @@ pub(super) async fn auto_commit(
 /// endpoint recovers by minting it again at its home's clock and sending the
 /// request once more (`Identity.HeldAudience.resend`). External premise
 /// (defradb.rs#3006): such a write was refused before anything was written.
-async fn recovers_window(endpoint: &GraphqlEndpoint, error: &ConfigClientError) -> Result<bool> {
+async fn recovers_window(
+    endpoint: &GraphqlEndpoint,
+    error: &ConfigClientError,
+    presented: &HeldRecord,
+) -> Result<bool> {
     match error.credential_answer() {
         Some(answer @ gents_protocol::delegation_audience::CredentialAnswer::OutsideWindow) => {
-            endpoint.recovers(answer).await
+            endpoint.recovers(answer, presented).await
         }
         _ => Ok(false),
     }
 }
 
-/// One mutation, sent once more for a refused credential, and whether it was.
+/// One mutation, sent once more for a refused credential, whether it was,
+/// and the record its last sending was minted from.
 async fn auto_commit_once(
     endpoint: &GraphqlEndpoint,
     body: &Value,
-) -> Result<(Result<Value>, bool)> {
+) -> Result<(Result<Value>, bool, HeldRecord)> {
     let client = http_client().await?;
-    let (response, resent) = endpoint
+    let sent = endpoint
         .send_counting_resends(|endpoint| {
             Ok(endpoint.authorize(client.post(endpoint.url()))?.json(body))
         })
         .await?;
-    Ok((answer_mutation(endpoint, response).await, resent))
+    Ok((
+        answer_mutation(endpoint, sent.response).await,
+        sent.resent,
+        sent.presented,
+    ))
 }
 
 async fn answer_mutation(
@@ -119,7 +131,7 @@ pub(super) async fn query_with_options(
     options: GraphqlRequestOptions,
 ) -> Result<Value> {
     ensure_query_document(query)?;
-    let answered = query_once(endpoint, query, variables, options).await;
+    let (answered, presented) = query_once(endpoint, query, variables, options).await;
     let refused = match &answered {
         Err(ConfigClientError::Protocol(error)) => {
             error.transport_error().and_then(reqwest::Error::status)
@@ -127,24 +139,41 @@ pub(super) async fn query_with_options(
         _ => None,
     };
     let recovered = match (refused, &answered) {
-        (Some(status), _) => endpoint.recovers_refusal(status).await?,
-        (None, Err(error)) => recovers_window(endpoint, error).await?,
+        (Some(status), _) => endpoint.recovers_refusal(status, &presented).await?,
+        (None, Err(error)) => recovers_window(endpoint, error, &presented).await?,
         (None, Ok(_)) => false,
     };
     if recovered {
-        query_once(endpoint, query, variables, options).await
+        query_once(endpoint, query, variables, options).await.0
     } else {
         answered
     }
 }
 
+/// One query, and the record its credential was minted from.
 async fn query_once(
     endpoint: &GraphqlEndpoint,
     query: &str,
     variables: Option<&Value>,
     options: GraphqlRequestOptions,
+) -> (Result<Value>, HeldRecord) {
+    if let Err(error) = endpoint.runtime_authentication().await {
+        return (Err(error), endpoint.delegation_audience.record());
+    }
+    let presented = endpoint.delegation_audience.record();
+    (
+        send_query(endpoint, query, variables, options).await,
+        presented,
+    )
+}
+
+async fn send_query(
+    endpoint: &GraphqlEndpoint,
+    query: &str,
+    variables: Option<&Value>,
+    options: GraphqlRequestOptions,
 ) -> Result<Value> {
-    let authorization = endpoint.runtime_authorization().await?;
+    let authorization = endpoint.authorization()?;
     Ok(match variables {
         Some(variables) => {
             gents_protocol::graphql::execute_graphql_with_variables_async(
