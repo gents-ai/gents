@@ -34,14 +34,42 @@ fn messages_only(messages: Vec<SourcedMessage>) -> Vec<Message> {
     messages.into_iter().map(|item| item.message).collect()
 }
 
-pub fn strip_tool_results(messages: Vec<Message>) -> (Vec<Message>, FileActivity) {
-    let (messages, file_activity) = strip_tool_results_sourced(source_messages(messages));
-    (messages_only(messages), file_activity)
+pub fn strip_tool_results(
+    messages: Vec<Message>,
+) -> (Vec<Message>, FileActivity, Vec<StubReceipt>) {
+    let (messages, file_activity, receipts) = strip_tool_results_sourced(source_messages(messages));
+    (messages_only(messages), file_activity, receipts)
+}
+
+/// A stub the reducer reports (Lean `Compaction.reportsStub`): where it
+/// replaced which result, and what it measured. Made only by stripping, so
+/// text shaped like a stub never yields one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StubReceipt {
+    pub source_index: usize,
+    pub result_key: String,
+    pub sizes: StubSizes,
+}
+
+/// The figures of `receipts` (Lean `Compaction.stripFigures`).
+pub fn stubbing_figures<'a>(
+    receipts: impl IntoIterator<Item = &'a StubReceipt>,
+) -> gents_protocol::rendered_request::HistoryStubbing {
+    receipts.into_iter().fold(
+        gents_protocol::rendered_request::HistoryStubbing::default(),
+        |mut figures, receipt| {
+            figures.stubbed_results += 1;
+            figures.original_bytes += receipt.sizes.original_bytes;
+            figures.stub_bytes += receipt.sizes.stub_bytes;
+            figures
+        },
+    )
 }
 
 pub fn strip_tool_results_sourced(
     messages: Vec<SourcedMessage>,
-) -> (Vec<SourcedMessage>, FileActivity) {
+) -> (Vec<SourcedMessage>, FileActivity, Vec<StubReceipt>) {
+    let mut receipts = Vec::new();
     let file_activity = extract_file_activity_iter(messages.iter().map(|item| &item.message));
     let mut stripped_messages = Vec::with_capacity(messages.len());
     let mut tool_calls = RapidHashMap::new();
@@ -74,7 +102,16 @@ pub fn strip_tool_results_sourced(
                     .into_iter()
                     .map(|item| match item {
                         UserContent::ToolResult(tool_result) => {
-                            UserContent::ToolResult(strip_tool_result(tool_result, &tool_calls))
+                            let result_key = tool_result_key(&tool_result);
+                            let (result, sizes) = strip_tool_result(tool_result, &tool_calls);
+                            if sizes.reported() {
+                                receipts.push(StubReceipt {
+                                    source_index,
+                                    result_key,
+                                    sizes,
+                                });
+                            }
+                            UserContent::ToolResult(result)
                         }
                         other => other,
                     })
@@ -96,7 +133,7 @@ pub fn strip_tool_results_sourced(
         }
     }
 
-    (stripped_messages, file_activity)
+    (stripped_messages, file_activity, receipts)
 }
 
 /// The calls a tool result's stub may name: those of the latest assistant
@@ -124,11 +161,13 @@ fn record_tool_calls(
 
 /// What stripping measures for one tool result: the UTF-8 bytes of its
 /// payload (non-text blocks by their JSON encoding) and of the stub that
-/// would replace it. The Lean model's `Compaction.StubSizes`.
+/// would replace it, and whether the payload already has a stub's shape. The
+/// Lean model's `Compaction.StubSizes`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StubSizes {
     pub original_bytes: usize,
     pub stub_bytes: usize,
+    pub stub_shaped: bool,
 }
 
 impl StubSizes {
@@ -136,6 +175,11 @@ impl StubSizes {
     /// replaces a result only when it is strictly smaller.
     pub fn stub_saves_bytes(self) -> bool {
         self.stub_bytes < self.original_bytes
+    }
+
+    /// Lean `Compaction.reportsStub`.
+    pub fn reported(self) -> bool {
+        self.stub_saves_bytes() && !self.stub_shaped
     }
 }
 
@@ -145,10 +189,13 @@ fn measure_tool_result(
     tool_result: &ToolResult,
     tool_calls: &RapidHashMap<String, ToolCallInfo>,
 ) -> (StubSizes, String) {
-    let stub = stub_candidate(tool_result, tool_calls);
+    let existing = parse_stub(tool_result);
+    let stub_shaped = existing.is_some();
+    let stub = stub_candidate(tool_result, existing, tool_calls);
     let sizes = StubSizes {
         original_bytes: tool_result_byte_count(tool_result),
         stub_bytes: stub.len(),
+        stub_shaped,
     };
     (sizes, stub)
 }
@@ -680,22 +727,21 @@ fn parse_stub(tool_result: &ToolResult) -> Option<StubFacts> {
 fn strip_tool_result(
     mut tool_result: ToolResult,
     tool_calls: &RapidHashMap<String, ToolCallInfo>,
-) -> ToolResult {
+) -> (ToolResult, StubSizes) {
     let (sizes, stub) = measure_tool_result(&tool_result, tool_calls);
-    if !sizes.stub_saves_bytes() {
-        return tool_result;
+    if sizes.stub_saves_bytes() {
+        tool_result.content = vec![ToolResultContent::Text(Text { text: stub })];
     }
-    tool_result.content = vec![ToolResultContent::Text(Text { text: stub })];
-    tool_result
+    (tool_result, sizes)
 }
 
 /// The stub that would replace `tool_result`. A result that already is a
 /// stub rebuilds to itself, so it is never replaced again.
 fn stub_candidate(
     tool_result: &ToolResult,
+    existing: Option<StubFacts>,
     tool_calls: &RapidHashMap<String, ToolCallInfo>,
 ) -> String {
-    let existing = parse_stub(tool_result);
     let byte_count = existing
         .as_ref()
         .map_or_else(|| tool_result_byte_count(tool_result), |it| it.byte_count);
@@ -756,7 +802,19 @@ fn tool_call_key(tool_call: &ToolCall) -> String {
         .unwrap_or_else(|| tool_call.id.clone())
 }
 
-fn tool_result_key(tool_result: &ToolResult) -> String {
+/// The keys of the tool results `message` carries.
+pub(crate) fn tool_result_keys(message: &Message) -> impl Iterator<Item = String> + '_ {
+    let content = match message {
+        Message::User { content } => content.as_slice(),
+        _ => &[],
+    };
+    content.iter().filter_map(|item| match item {
+        UserContent::ToolResult(result) => Some(tool_result_key(result)),
+        _ => None,
+    })
+}
+
+pub(crate) fn tool_result_key(tool_result: &ToolResult) -> String {
     tool_result
         .call_id
         .clone()

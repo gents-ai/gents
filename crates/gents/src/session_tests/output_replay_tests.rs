@@ -93,6 +93,7 @@ async fn non_required_signed_history_with_wrong_provider_scope_stays_permissive(
         source: selected[0].source.clone(),
         physical_header: selected[0].physical_header.clone(),
         block_indices: selected[0].block_indices.clone(),
+        stub_receipts: Vec::new(),
     }];
     assert_eq!(projected.len(), 1);
     assert!(projected[0].source.is_none());

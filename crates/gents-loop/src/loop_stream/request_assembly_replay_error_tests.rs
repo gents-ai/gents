@@ -23,6 +23,7 @@ fn replay_prefix_bound_rejects_tagged_non_assistant() {
         source: Some(required.clone()),
         physical_header: None,
         block_indices: Vec::new(),
+        stub_receipts: Vec::new(),
     }];
     assert_eq!(
         replay_compaction_prefix_bound(&rows, &[required]),
@@ -49,6 +50,7 @@ fn provider_projection_composes_original_physical_block_indices() {
         source: Some(tag.clone()),
         physical_header: Some("physical-header".into()),
         block_indices: vec![2, 4],
+        stub_receipts: Vec::new(),
     }];
     let shaped = vec![crate::compaction::history::SourcedMessage {
         source_index: 0,
@@ -91,6 +93,7 @@ fn association_rejects_a_provider_order_applied_before_it() {
         source: Some(provider_tag(0)),
         physical_header: Some("physical-header".into()),
         block_indices: vec![2, 4],
+        stub_receipts: Vec::new(),
     };
     let sourced = crate::compaction::history::normalize_assistant_content_order_sourced(
         ProviderInputProfile::OpenAiResponsesNormalized,
@@ -139,6 +142,7 @@ fn grouped_projection_of_a_projected_row_keeps_persisted_block_identity() {
             source: Some(tag.clone()),
             physical_header: Some("physical-header".into()),
             block_indices: vec![0, 1, 2],
+            stub_receipts: Vec::new(),
         },
         TaggedMessage::unassociated(Message::User {
             content: vec![UserContent::ToolResult(ToolResult {
@@ -675,6 +679,7 @@ fn replay_assembly_history(tag: &ReplayTag) -> Vec<TaggedMessage> {
             source: Some(tag.clone()),
             physical_header: Some("header".into()),
             block_indices: vec![0, 1],
+            stub_receipts: Vec::new(),
         },
     ]
 }
@@ -889,6 +894,7 @@ fn stripping_all_reasoning_keeps_ordinary_blocks_and_their_indices() {
             source: Some(provider_tag(0)),
             physical_header: Some("header".into()),
             block_indices: vec![0, 1, 2],
+            stub_receipts: Vec::new(),
         },
         TaggedMessage::unassociated(Message::user("next")),
     ];

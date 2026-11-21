@@ -401,6 +401,24 @@ impl ContextInputComponents {
     }
 }
 
+/// The history tool outputs stripping replaced with stubs that this dispatch
+/// carries: how many, and the bytes of the outputs and of their stubs. Only
+/// stubs the reducer made from real output count (Lean
+/// `Compaction.providerViewFigures`); this is neither a compaction nor a
+/// provider reduction, and not a running total.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoryStubbing {
+    pub stubbed_results: usize,
+    pub original_bytes: usize,
+    pub stub_bytes: usize,
+}
+
+impl HistoryStubbing {
+    pub fn bytes_removed(&self) -> usize {
+        self.original_bytes.saturating_sub(self.stub_bytes)
+    }
+}
+
 /// Request-bound context accounting persisted with the exact rendered request.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextAccounting {

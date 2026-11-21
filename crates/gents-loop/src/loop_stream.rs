@@ -1664,6 +1664,7 @@ where
                             new_messages.push(TaggedMessage {
                                 message, source: accepted_source.clone(),
                                 physical_header: None, block_indices: Vec::new(),
+                                stub_receipts: Vec::new(),
                             });
                         }
                         new_messages.extend(committed.into_iter().map(|row| TaggedMessage::unassociated(row.message)));
@@ -1684,6 +1685,7 @@ where
                                 source: accepted_source.clone(),
                                 physical_header: None,
                                 block_indices: Vec::new(),
+                                stub_receipts: Vec::new(),
                             });
                         }
                         let reminder = Message::user(
@@ -1706,7 +1708,7 @@ where
                         FinishOrIntake::Continue(inputs) => {
                             if let Some(mut message) = accumulator.take_message() {
                                 turn_ids.stamp(&mut message);
-                                new_messages.push(TaggedMessage { message, source: accepted_source.clone(), physical_header: None, block_indices: Vec::new() });
+                                new_messages.push(TaggedMessage { message, source: accepted_source.clone(), physical_header: None, block_indices: Vec::new(), stub_receipts: Vec::new() });
                             }
                             new_messages.extend(inputs.into_iter().map(|input| TaggedMessage::unassociated(input.message)));
                             continue 'turns;

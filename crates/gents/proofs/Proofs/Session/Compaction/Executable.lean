@@ -17,15 +17,18 @@ tool and path, the call id and that byte count. The replay asserts the real
 measurements equal these inputs, so they are inputs, not expectations. -/
 
 /-- A large output: its stub is smaller. -/
-def largeOutput : StubSizes := ⟨4096, 126⟩
+def largeOutput : StubSizes := ⟨4096, 126, false⟩
 /-- A tiny output: its stub would be larger. -/
-def tinyOutput : StubSizes := ⟨2, 123⟩
+def tinyOutput : StubSizes := ⟨2, 123, false⟩
 /-- An output exactly the size of its stub. -/
-def stubSizedOutput : StubSizes := ⟨125, 125⟩
+def stubSizedOutput : StubSizes := ⟨125, 125, false⟩
 /-- An output one byte larger than its stub. -/
-def oneOverStubOutput : StubSizes := ⟨126, 125⟩
+def oneOverStubOutput : StubSizes := ⟨126, 125, false⟩
 /-- A large output whose call is unknown (an orphaned result). -/
-def largeOrphanOutput : StubSizes := ⟨4096, 99⟩
+def largeOrphanOutput : StubSizes := ⟨4096, 99, false⟩
+/-- Text a tool wrote in a stub's shape, claiming 1 byte: the rebuilt stub is
+smaller, so it is replaced, but it is never reported. -/
+def spoofedStubOutput : StubSizes := ⟨600, 123, true⟩
 
 def resultKeys (msgs : List MessageRow) : List Transcript.ToolResultKey :=
   msgs.filterMap fun row => row.kind.toolResultKey?
@@ -189,6 +192,8 @@ structure CompactionReducerCase where
   reducerIsIdempotent : Bool
   /-- Tool results the reducer replaced with a stub. -/
   stubbedResults      : Nat
+  /-- The stubbing the reducer reports: `stripFigures`, or `providerViewFigures`. -/
+  reported            : StubbingFigures
 
   splitIndex          : Nat
 
@@ -431,6 +436,10 @@ def reducerCase (name group : String) (reducer : Reducer)
     | .providerView => { input with messages := providerViewTurn sizes input.messages }
   let reduced := reduce view
   let reapplied := reduce reduced
+  let reported := match reducer with
+    | .strip => stripFigures sizes source
+    | .providerView => providerViewFigures sizes source
+    | .identity | .summarize => ⟨0, 0, 0⟩
   { name, group, reducer := reducer.name, legal := true
   , inputRows := source
   , inputSizes := table
@@ -454,6 +463,7 @@ def reducerCase (name group : String) (reducer : Reducer)
   , reducerIsIdempotent := decide
       (reapplied.messages = reduced.messages ∧ reapplied.summary = reduced.summary)
   , stubbedResults := stubbedResultCount reduced.messages
+  , reported
   , splitIndex
   , safeBoundary := pairSafeBoundary source splitIndex
   , retainedCount := reduced.messages.length }
@@ -468,6 +478,10 @@ def twoResultTurn : List MessageRow :=
 
 def twoResultTurnSizes : List (Transcript.ToolResultKey × StubSizes) :=
   [(⟨0, 1, 37⟩, tinyOutput), (⟨0, 2, 37⟩, largeOutput)]
+
+/-- The same turn when the first call returned stub-shaped text. -/
+def spoofedTurnSizes : List (Transcript.ToolResultKey × StubSizes) :=
+  [(⟨0, 1, 37⟩, spoofedStubOutput), (⟨0, 2, 37⟩, largeOutput)]
 
 def compactionReducerCases : List CompactionReducerCase :=
   [ reducerCase "identity_reducer_is_no_op" "witness" .identity 0 0
@@ -498,6 +512,10 @@ def compactionReducerCases : List CompactionReducerCase :=
       .providerView 3 0 true none stubSizedOutput
   , reducerCase "strip_decides_each_result_of_a_turn_by_its_own_size" "stub_floor" .strip 0 0
       true (some twoResultTurn) largeOutput (some twoResultTurnSizes)
+  , reducerCase "strip_rebuilds_stub_shaped_output_without_reporting_it" "stub_report" .strip 2 0
+      true none spoofedStubOutput
+  , reducerCase "strip_reports_only_the_real_output_of_a_turn" "stub_report" .strip 0 0
+      true (some twoResultTurn) largeOutput (some spoofedTurnSizes)
   , reducerCase "closed_turn_allows_projection_after_unresolved_history" "projection" .providerView 0 0 true
       (some [⟨0, 0, 0, .assistant, .assistantToolCalls {fixtureCallSymbol}⟩,
              ⟨1, 0, 1, .user, .ordinary⟩])
@@ -508,7 +526,7 @@ def compactionReducerCases : List CompactionReducerCase :=
       (some [⟨0, 0, 0, .assistant, .assistantToolCalls {fixtureCallSymbol}⟩,
              ⟨1, 0, 1, .user, .ordinary⟩]) ]
 
-theorem compactionReducerCases_count : compactionReducerCases.length = 25 := by decide
+theorem compactionReducerCases_count : compactionReducerCases.length = 27 := by decide
 
 theorem stable_published_prefix_gate_opens :
     (reducerCase "allowed" "publication" .summarize 4 2).safeToReduce = true := by
@@ -527,6 +545,21 @@ theorem stub_floor_fixtures :
     (reducerCase "over" "stub_floor" .strip 2 0 true none oneOverStubOutput).stubbedResults = 1 ∧
     (reducerCase "turn" "stub_floor" .strip 0 0 true (some twoResultTurn) largeOutput
       (some twoResultTurnSizes)).stubbedResults = 1 := by
+  decide
+
+/-- Reporting in the fixtures: a stub-shaped output is replaced but not
+reported, a turn reports only its real output, a provider view reports the stub
+it keeps and none for an orphan it drops, and a kept output reports nothing. -/
+theorem stub_report_fixtures :
+    (reducerCase "spoof" "stub_report" .strip 2 0 true none spoofedStubOutput).stubbedResults = 1 ∧
+    (reducerCase "spoof" "stub_report" .strip 2 0 true none spoofedStubOutput).reported
+      = ⟨0, 0, 0⟩ ∧
+    (reducerCase "turn" "stub_report" .strip 0 0 true (some twoResultTurn) largeOutput
+      (some spoofedTurnSizes)).reported = ⟨1, 4096, 126⟩ ∧
+    (reducerCase "view" "provider_view" .providerView 3 0).reported = ⟨1, 4096, 126⟩ ∧
+    (reducerCase "orphan" "provider_view" .providerView 1 0 true none
+      largeOrphanOutput).reported = ⟨0, 0, 0⟩ ∧
+    (reducerCase "tiny" "stub_floor" .strip 2 0 true none tinyOutput).reported = ⟨0, 0, 0⟩ := by
   decide
 
 theorem strip_and_provider_fixtures_idempotent :

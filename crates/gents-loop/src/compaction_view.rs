@@ -3,7 +3,9 @@ use gents_protocol::message::Message;
 use super::{history, CompactionError, ExactReduction, FileActivity};
 use crate::provider_input::ProviderInputProfile;
 
-pub fn strip_tool_results(messages: Vec<Message>) -> (Vec<Message>, FileActivity) {
+pub fn strip_tool_results(
+    messages: Vec<Message>,
+) -> (Vec<Message>, FileActivity, Vec<history::StubReceipt>) {
     history::strip_tool_results(messages)
 }
 
@@ -20,27 +22,52 @@ pub fn sanitize_history_for_provider(
 pub fn provider_view(
     profile: ProviderInputProfile,
     messages: Vec<Message>,
-) -> (Vec<Message>, FileActivity) {
-    let (stripped, activity) = strip_tool_results(messages);
-    (sanitize_history_for_provider(profile, stripped), activity)
+) -> (Vec<Message>, FileActivity, Vec<history::StubReceipt>) {
+    let (sourced, activity, receipts) = provider_view_with_sources(profile, messages);
+    (
+        sourced.into_iter().map(|row| row.message).collect(),
+        activity,
+        receipts,
+    )
 }
 
 pub fn provider_view_with_sources(
     profile: ProviderInputProfile,
     messages: Vec<Message>,
-) -> (Vec<history::SourcedMessage>, FileActivity) {
-    let sourced = history::source_messages(messages);
-    let (stripped, activity) = history::strip_tool_results_sourced(sourced);
-    let sanitized = sanitize_sourced(profile, stripped);
-    (sanitized, activity)
+) -> (
+    Vec<history::SourcedMessage>,
+    FileActivity,
+    Vec<history::StubReceipt>,
+) {
+    let (paired, activity, receipts) = association_view_with_sources(messages);
+    (
+        history::normalize_assistant_content_order_sourced(profile, paired),
+        activity,
+        receipts,
+    )
 }
 
+/// The receipts are those of the results the view keeps (Lean
+/// `Compaction.providerViewFigures`).
 pub fn association_view_with_sources(
     messages: Vec<Message>,
-) -> (Vec<history::SourcedMessage>, FileActivity) {
+) -> (
+    Vec<history::SourcedMessage>,
+    FileActivity,
+    Vec<history::StubReceipt>,
+) {
     let sourced = history::source_messages(messages);
-    let (stripped, activity) = history::strip_tool_results_sourced(sourced);
-    (pair_sourced(stripped), activity)
+    let (stripped, activity, receipts) = history::strip_tool_results_sourced(sourced);
+    let paired = pair_sourced(stripped);
+    let kept = paired
+        .iter()
+        .flat_map(|row| history::tool_result_keys(&row.message).map(|key| (row.source_index, key)))
+        .collect::<rapidhash::RapidHashSet<_>>();
+    let receipts = receipts
+        .into_iter()
+        .filter(|receipt| kept.contains(&(receipt.source_index, receipt.result_key.clone())))
+        .collect();
+    (paired, activity, receipts)
 }
 
 pub fn sanitize_association_with_sources(messages: Vec<Message>) -> Vec<history::SourcedMessage> {
@@ -49,13 +76,6 @@ pub fn sanitize_association_with_sources(messages: Vec<Message>) -> Vec<history:
 
 fn pair_sourced(sourced: Vec<history::SourcedMessage>) -> Vec<history::SourcedMessage> {
     history::drop_unpaired_tool_calls_sourced(history::drop_orphaned_tool_results_sourced(sourced))
-}
-
-fn sanitize_sourced(
-    profile: ProviderInputProfile,
-    sourced: Vec<history::SourcedMessage>,
-) -> Vec<history::SourcedMessage> {
-    history::normalize_assistant_content_order_sourced(profile, pair_sourced(sourced))
 }
 
 pub fn compacted_through_sequence(
@@ -70,7 +90,7 @@ pub fn compacted_through_sequence(
         .iter()
         .map(|(_, message)| message.clone())
         .collect::<Vec<_>>();
-    let (sourced_view, _) = provider_view_with_sources(profile, messages.clone());
+    let (sourced_view, _, _) = provider_view_with_sources(profile, messages.clone());
     if provider_prefix_len > sourced_view.len() {
         return None;
     }
@@ -81,11 +101,11 @@ pub fn compacted_through_sequence(
     if split == 0 {
         return None;
     }
-    let (prefix_view, _) = provider_view(profile, messages[..split].to_vec());
+    let (prefix_view, _, _) = provider_view(profile, messages[..split].to_vec());
     if prefix_view.len() != provider_prefix_len {
         return None;
     }
-    let (suffix_view, _) = provider_view(profile, messages[split..].to_vec());
+    let (suffix_view, _, _) = provider_view(profile, messages[split..].to_vec());
     let full_view = sourced_view
         .iter()
         .map(|item| &item.message)

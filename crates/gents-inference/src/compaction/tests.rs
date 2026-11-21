@@ -1470,7 +1470,7 @@ fn strip_rewrites_tool_results_into_stubs() {
         text_msg("assistant", "I saw the file"),
     ];
 
-    let (stripped, files) = strip_tool_results(messages);
+    let (stripped, files, _) = strip_tool_results(messages);
     assert_eq!(stripped.len(), 4);
     assert_eq!(files.files_read, vec!["/tmp/test.rs"]);
     assert!(files.files_modified.is_empty());
@@ -1488,7 +1488,7 @@ fn strip_keeps_small_and_unicode_results_verbatim() {
             tool_call_msg("read_file", r#"{"path":"/tmp/x"}"#),
             tool_result_msg("call-1", original),
         ];
-        let (stripped, _) = strip_tool_results(messages.clone());
+        let (stripped, _, _) = strip_tool_results(messages.clone());
         assert_eq!(sole_tool_result_text(&stripped[1]), original);
         assert_eq!(strip_tool_results(stripped.clone()).0, stripped);
     }
@@ -1538,16 +1538,17 @@ fn strip_keeps_output_equal_to_its_stub_and_replaces_one_byte_more() {
         sole_stub_sizes(&equal),
         history::StubSizes {
             original_bytes: bytes,
-            stub_bytes: bytes
+            stub_bytes: bytes,
+            stub_shaped: false,
         }
     );
-    let (stripped, _) = strip_tool_results(equal.clone());
+    let (stripped, _, _) = strip_tool_results(equal.clone());
     assert_eq!(stripped, equal, "an equal-size stub saves nothing");
 
     let over = history_for(bytes + 1);
     let sizes = sole_stub_sizes(&over);
     assert!(sizes.stub_saves_bytes(), "{sizes:?}");
-    let (stripped, _) = strip_tool_results(over);
+    let (stripped, _, _) = strip_tool_results(over);
     let stub = sole_tool_result_text(&stripped[1]);
     assert!(stub.starts_with("[tool: read_file(/tmp/x), call_id: call-1,"));
     assert_eq!(stub.len(), sizes.stub_bytes);
@@ -1565,7 +1566,7 @@ fn strip_measures_a_multiblock_result_by_all_its_blocks() {
     let sizes = sole_stub_sizes(&large);
     assert_eq!(sizes.original_bytes, 240);
     assert!(sizes.stub_saves_bytes(), "{sizes:?}");
-    let (stripped, _) = strip_tool_results(large);
+    let (stripped, _, _) = strip_tool_results(large);
     assert!(sole_tool_result_text(&stripped[1]).contains(", 240 bytes"));
 
     let small = vec![
@@ -1603,7 +1604,7 @@ fn strip_decides_each_result_of_one_message_by_its_own_size() {
             ],
         },
     ];
-    let (stripped, _) = strip_tool_results(messages);
+    let (stripped, _, _) = strip_tool_results(messages);
     let Message::User { content } = &stripped[1] else {
         panic!("expected user message");
     };
@@ -1699,14 +1700,15 @@ fn stub_sizes_depend_only_on_the_result() {
     assert!(before.iter().any(|(_, sizes)| sizes.stub_saves_bytes()));
     assert!(before.iter().any(|(_, sizes)| !sizes.stub_saves_bytes()));
 
-    let (stripped, _) = strip_tool_results(messages.clone());
+    let (stripped, _, _) = strip_tool_results(messages.clone());
     for ((call, first), (_, second)) in before.iter().zip(measured(&stripped)) {
         if first.stub_saves_bytes() {
             assert_eq!(
                 second,
                 history::StubSizes {
                     original_bytes: first.stub_bytes,
-                    stub_bytes: first.stub_bytes
+                    stub_bytes: first.stub_bytes,
+                    stub_shaped: true,
                 },
                 "{call}: a stub rebuilds to itself"
             );
@@ -1748,7 +1750,7 @@ fn strip_extracts_read_and_modified_files() {
         tool_result_msg("call-1", "ok"),
     ];
 
-    let (_, files) = strip_tool_results(messages);
+    let (_, files, _) = strip_tool_results(messages);
     assert_eq!(files.files_read, vec!["/src/main.rs"]);
     assert_eq!(files.files_modified, vec!["/src/lib.rs"]);
 }
@@ -1778,7 +1780,7 @@ fn strip_rewrites_tool_output_that_merely_looks_like_a_stub() {
         tool_result_msg("call-1", &spoof),
     ];
 
-    let (stripped, _) = strip_tool_results(messages);
+    let (stripped, _, _) = strip_tool_results(messages);
     let out = sole_tool_result_text(&stripped[1]);
     assert!(
         !out.contains(&"P".repeat(5000)),
@@ -1796,7 +1798,7 @@ fn strip_marks_already_truncated_output_without_sniffing_the_word() {
         tool_call_msg("bash", r#"{"command": "echo hi"}"#),
         tool_result_msg("call-1", "the build log says truncated somewhere"),
     ];
-    let (stripped, _) = strip_tool_results(messages);
+    let (stripped, _, _) = strip_tool_results(messages);
     assert!(
         !sole_tool_result_text(&stripped[1]).contains(", truncated"),
         "ordinary output mentioning the word must not be flagged as truncated"
@@ -1812,7 +1814,7 @@ fn strip_marks_already_truncated_output_without_sniffing_the_word() {
             tool_call_msg("bash", r#"{"command": "echo hi"}"#),
             tool_result_msg("call-1", &format!("{}{notice}", "x".repeat(300))),
         ];
-        let (stripped, _) = strip_tool_results(messages);
+        let (stripped, _, _) = strip_tool_results(messages);
         assert!(
             sole_tool_result_text(&stripped[1]).contains(", truncated"),
             "{notice}"
@@ -1848,7 +1850,7 @@ fn file_activity_classifies_the_registered_file_tools() {
         tool_result_msg("call-1", "hit"),
     ];
 
-    let (_, files) = strip_tool_results(messages);
+    let (_, files, _) = strip_tool_results(messages);
     assert_eq!(
         files.files_read,
         vec![
@@ -1871,7 +1873,7 @@ fn dry_run_edits_are_not_recorded_as_modifications() {
         tool_result_msg("call-1", "would change 3 lines"),
     ];
 
-    let (_, files) = strip_tool_results(messages);
+    let (_, files, _) = strip_tool_results(messages);
     assert!(
         files.files_modified.is_empty(),
         "a dry run writes nothing: {:?}",
@@ -1891,7 +1893,7 @@ fn calls_without_a_result_are_not_recorded_as_modifications() {
         text_msg("user", "actually, stop"),
     ];
 
-    let (_, files) = strip_tool_results(messages);
+    let (_, files, _) = strip_tool_results(messages);
     assert!(
         files.files_modified.is_empty(),
         "unpaired call must not count: {:?}",
@@ -1902,7 +1904,7 @@ fn calls_without_a_result_are_not_recorded_as_modifications() {
         tool_call_msg("write_file", r#"{"path": "/src/written.rs"}"#),
         tool_result_msg("call-1", "ok"),
     ];
-    let (_, files) = strip_tool_results(completed);
+    let (_, files, _) = strip_tool_results(completed);
     assert_eq!(files.files_modified, vec!["/src/written.rs"]);
 }
 

@@ -901,9 +901,9 @@ def outputViewJson : StreamingResponse.View → String
       (",\"message\":" ++ canonicalMessageJson message ++
        ",\"native\":" ++ reconstructedMessageJson native)
 
-/-- One fixture row. A tool result carries the byte sizes the reducer
-measures for it: its payload is `originalBytes` bytes, and `stubBytes` is the
-stub that would replace it. -/
+/-- One fixture row. A tool result carries what the reducer measures for it:
+its payload is `originalBytes` bytes, `stubBytes` is the stub that would
+replace it, and `stubShaped` says the payload is text in a stub's shape. -/
 structure CompactionRowWire where
   role : String
   kind : String
@@ -912,6 +912,7 @@ structure CompactionRowWire where
   callId : Option String
   originalBytes : Option Nat
   stubBytes : Option Nat
+  stubShaped : Option Bool
   deriving Lean.ToJson
 
 def CompactionRowWire.ofModel (sizes : Compaction.ResultSizes) (row : Transcript.MessageRow) :
@@ -919,15 +920,17 @@ def CompactionRowWire.ofModel (sizes : Compaction.ResultSizes) (row : Transcript
   match row.kind with
   | .ordinary =>
       { role := row.role.toDefraDB, kind := "ordinary", text := some s!"ordinary-{row.messageId}"
-        callIds := [], callId := none, originalBytes := none, stubBytes := none }
+        callIds := [], callId := none, originalBytes := none, stubBytes := none
+        stubShaped := none }
   | .assistantToolCalls calls =>
       { role := row.role.toDefraDB, kind := "assistant_tool_calls", text := none
         callIds := (calls.sort (· ≤ ·)).map Compaction.fixtureNativeCallKey, callId := none
-        originalBytes := none, stubBytes := none }
+        originalBytes := none, stubBytes := none, stubShaped := none }
   | .toolResult call key =>
       { role := row.role.toDefraDB, kind := "tool_result", text := none, callIds := []
         callId := some (Compaction.fixtureNativeCallKey call)
-        originalBytes := some (sizes key).originalBytes, stubBytes := some (sizes key).stubBytes }
+        originalBytes := some (sizes key).originalBytes, stubBytes := some (sizes key).stubBytes
+        stubShaped := some (sizes key).stubShaped }
 
 def compactionCallSymbol (key : String) : Nat :=
   if key == "2" then Compaction.fixtureSecondCallSymbol else Compaction.fixtureCallSymbol
@@ -947,10 +950,10 @@ def compactionRowsToModel (rows : List CompactionRowWire) : List Transcript.Mess
 def compactionSizesToModel (rows : List CompactionRowWire) :
     List (Transcript.ToolResultKey × Compaction.StubSizes) :=
   ((List.range rows.length).zip rows).filterMap fun (index, row) =>
-    match row.kind, row.originalBytes, row.stubBytes with
-    | "tool_result", some originalBytes, some stubBytes =>
-        some (⟨0, index, 37⟩, ⟨originalBytes, stubBytes⟩)
-    | _, _, _ => none
+    match row.kind, row.originalBytes, row.stubBytes, row.stubShaped with
+    | "tool_result", some originalBytes, some stubBytes, some stubShaped =>
+        some (⟨0, index, 37⟩, ⟨originalBytes, stubBytes, stubShaped⟩)
+    | _, _, _, _ => none
 
 def compactionCaseWire (c : Compaction.CompactionReducerCase) : List CompactionRowWire :=
   c.inputRows.map (CompactionRowWire.ofModel (Compaction.sizesOf c.inputSizes))
@@ -1030,6 +1033,10 @@ structure CompactionReducerApplyOutput where
   reducerIsIdentity : Bool
   reducerIsIdempotent : Bool
   stubbedResults : Nat
+  reportedStubs : Nat
+  reportedOriginalBytes : Nat
+  reportedStubBytes : Nat
+  reportedBytesRemoved : Nat
   deriving Lean.ToJson
 
 def compactionReducerApplyOutput (i : CompactionReducerInput) : CompactionReducerApplyOutput :=
@@ -1037,7 +1044,9 @@ def compactionReducerApplyOutput (i : CompactionReducerInput) : CompactionReduce
   { postMessageCount := c.postMessageCount, retainedCount := c.retainedCount
     preservesPairs := c.preservesPairs, preservesOrder := c.preservesOrder
     reducerIsIdentity := c.reducerIsIdentity, reducerIsIdempotent := c.reducerIsIdempotent
-    stubbedResults := c.stubbedResults }
+    stubbedResults := c.stubbedResults
+    reportedStubs := c.reported.count, reportedOriginalBytes := c.reported.originalBytes
+    reportedStubBytes := c.reported.stubBytes, reportedBytesRemoved := c.reported.bytesRemoved }
 
 @[conformance_family]
 def compactionReducerApply : Family CompactionReducerInput CompactionReducerApplyOutput where

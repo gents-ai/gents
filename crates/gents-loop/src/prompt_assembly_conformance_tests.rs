@@ -334,6 +334,7 @@ fn generated_mode_sanitize_cases_bind_composed_provider_view() {
                     source: Some(physical_replay_tag(row)),
                     physical_header: Some(format!("header-{row}")),
                     message,
+                    stub_receipts: Vec::new(),
                 },
                 _ => TaggedMessage::unassociated(message),
             })
@@ -619,6 +620,7 @@ fn native_tagged_message(
         source: row.source.as_ref().map(native_replay_tag),
         physical_header: row.physical_header.clone(),
         block_indices: row.block_indices(),
+        stub_receipts: Vec::new(),
     }
 }
 

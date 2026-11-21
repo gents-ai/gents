@@ -39,6 +39,7 @@ pub fn select_tagged_assistant_blocks(
         source: source.source.clone(),
         physical_header: source.physical_header.clone(),
         block_indices,
+        stub_receipts: Vec::new(),
     })
 }
 
@@ -86,6 +87,7 @@ pub(super) fn tagged_from_sourced(
                         source: original.source.clone(),
                         physical_header: None,
                         block_indices: Vec::new(),
+                        stub_receipts: Vec::new(),
                     }
                 } else {
                     if item.block_indices.windows(2).any(|pair| pair[0] >= pair[1]) {
@@ -105,7 +107,15 @@ pub(super) fn tagged_from_sourced(
                 selected.message = item.message;
                 Ok(selected)
             } else {
+                let kept = crate::compaction::history::tool_result_keys(&item.message)
+                    .collect::<rapidhash::RapidHashSet<_>>();
                 Ok(TaggedMessage {
+                    stub_receipts: original
+                        .stub_receipts
+                        .iter()
+                        .filter(|receipt| kept.contains(&receipt.result_key))
+                        .cloned()
+                        .collect(),
                     message: item.message,
                     source: original.source.clone(),
                     physical_header: original.physical_header.clone(),
@@ -130,7 +140,13 @@ pub fn provider_view_tagged(
     rows: Vec<TaggedMessage>,
 ) -> Result<Vec<TaggedMessage>, StreamingError> {
     let messages = rows.iter().map(|row| row.message.clone()).collect();
-    let (sourced, _) = crate::compaction::association_view_with_sources(messages);
+    let (sourced, _, receipts) = crate::compaction::association_view_with_sources(messages);
+    let mut rows = rows;
+    for receipt in receipts {
+        if let Some(row) = rows.get_mut(receipt.source_index) {
+            row.stub_receipts.push(receipt);
+        }
+    }
     tagged_from_sourced(&rows, sourced)
 }
 

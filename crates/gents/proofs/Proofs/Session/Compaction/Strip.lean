@@ -22,11 +22,11 @@ theorem stubEligible_iff (originalBytes candidateBytes : Nat) :
   simp [stubEligible]
 
 /-- What the reducer measures for one tool result: the UTF-8 bytes of the
-payload it would replace (non-text blocks by their JSON encoding) and of the
-stub that would replace it. A separate input, not derived from the
-`ToolResultKey` hash.
+payload it would replace (non-text blocks by their JSON encoding), of the stub
+that would replace it, and whether the payload already has a stub's shape. A
+separate input, not derived from the `ToolResultKey` hash.
 
-External premise: both sizes are a function of the result itself, its payload
+External premise: all three are a function of the result itself, its payload
 and its own call, so they are the same on every pass and whatever other rows
 the sanitizer drops. The model states it by taking sizes as a function of the
 key. Rust enforces it in
@@ -34,6 +34,7 @@ key. Rust enforces it in
 structure StubSizes where
   originalBytes : Nat
   stubBytes : Nat
+  stubShaped : Bool
   deriving DecidableEq, Repr
 
 /-- The sizes measured for each tool result, by its identity. -/
@@ -42,7 +43,7 @@ abbrev ResultSizes := ToolResultKey → StubSizes
 /-- A sizes table given as rows; a result missing from the table measures
 `0` bytes and so is never stubbed. -/
 def sizesOf (table : List (ToolResultKey × StubSizes)) : ResultSizes := fun key =>
-  (table.lookup key).getD ⟨0, 0⟩
+  (table.lookup key).getD ⟨0, 0, false⟩
 
 def stubKey (key : ToolResultKey) : ToolResultKey := { key with payloadHash := 0 }
 
@@ -95,6 +96,88 @@ theorem stripKey_keeps_unless_smaller {sizes : ResultSizes} {key : ToolResultKey
   cases hs : stubs sizes key
   · rfl
   · exact absurd ((stubEligible_iff _ _).mp hs) h
+
+/-- Whether replacing a result is a stub the reducer reports: it replaced the
+result, and the payload was real output rather than text already shaped like
+a stub.
+
+Decision: a stub-shaped payload, an earlier pass's stub or text a tool wrote in
+that shape, may still be rebuilt shorter under the unchanged policy, but the
+bytes it claims to stand for were never measured by this reducer, so it is
+never reported. Reporting changes no projection: `stripKey` alone decides what
+is replaced. -/
+def reportsStub (sizes : ResultSizes) (key : ToolResultKey) : Bool :=
+  stubs sizes key && !(sizes key).stubShaped
+
+theorem stripKey_of_reportsStub {sizes : ResultSizes} {key : ToolResultKey}
+    (h : reportsStub sizes key = true) : stripKey sizes key = stubKey key := by
+  apply stripKey_of_stubs
+  simp only [reportsStub, Bool.and_eq_true] at h
+  exact h.1
+
+theorem reportsStub_of_stubShaped {sizes : ResultSizes} {key : ToolResultKey}
+    (h : (sizes key).stubShaped = true) : reportsStub sizes key = false := by
+  simp [reportsStub, h]
+
+/-- What stripping reports for a history: how many stubs it reported, and the
+bytes of the outputs they replaced and of the stubs. One per result, not per
+content block. -/
+structure StubbingFigures where
+  count : Nat
+  originalBytes : Nat
+  stubBytes : Nat
+  deriving DecidableEq, Repr
+
+def StubbingFigures.bytesRemoved (figures : StubbingFigures) : Nat :=
+  figures.originalBytes - figures.stubBytes
+
+/-- The figures of stripping `msgs`: the sum over the results it reports. -/
+def stripFigures (sizes : ResultSizes) : List MessageRow → StubbingFigures
+  | [] => ⟨0, 0, 0⟩
+  | row :: rest =>
+      let tail := stripFigures sizes rest
+      match row.kind with
+      | .toolResult _ key =>
+          if reportsStub sizes key then
+            ⟨tail.count + 1, tail.originalBytes + (sizes key).originalBytes,
+              tail.stubBytes + (sizes key).stubBytes⟩
+          else tail
+      | _ => tail
+
+/-- Every reported stub saves at least one byte, so the bytes removed are never
+fewer than the stubs reported. -/
+theorem stripFigures_saves_a_byte_per_stub (sizes : ResultSizes) (msgs : List MessageRow) :
+    (stripFigures sizes msgs).stubBytes + (stripFigures sizes msgs).count ≤
+      (stripFigures sizes msgs).originalBytes := by
+  induction msgs with
+  | nil => simp [stripFigures]
+  | cons row rest ih =>
+      cases hk : row.kind with
+      | ordinary => simpa [stripFigures, hk] using ih
+      | assistantToolCalls calls => simpa [stripFigures, hk] using ih
+      | toolResult call key =>
+          simp only [stripFigures, hk]
+          split
+          · rename_i h
+            simp only [reportsStub, Bool.and_eq_true] at h
+            have hlt := stubEligible_no_expansion _ _ h.1
+            dsimp only
+            omega
+          · exact ih
+
+/-- A result the reducer keeps, by the floor, adds nothing to the figures. -/
+theorem stripFigures_cons_kept (sizes : ResultSizes) (row : MessageRow)
+    (rest : List MessageRow) (call : ToolExecution.ToolCallId) (key : ToolResultKey)
+    (hk : row.kind = .toolResult call key) (hkept : stubs sizes key = false) :
+    stripFigures sizes (row :: rest) = stripFigures sizes rest := by
+  simp [stripFigures, hk, reportsStub, hkept]
+
+/-- A stub-shaped result adds nothing to the figures, even when it is rebuilt. -/
+theorem stripFigures_cons_stubShaped (sizes : ResultSizes) (row : MessageRow)
+    (rest : List MessageRow) (call : ToolExecution.ToolCallId) (key : ToolResultKey)
+    (hk : row.kind = .toolResult call key) (hshaped : (sizes key).stubShaped = true) :
+    stripFigures sizes (row :: rest) = stripFigures sizes rest := by
+  simp [stripFigures, hk, reportsStub_of_stubShaped hshaped]
 
 def stripKind (sizes : ResultSizes) : MessageKind → MessageKind
   | .toolResult callId key => .toolResult callId (stripKey sizes key)

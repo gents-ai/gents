@@ -88,6 +88,14 @@ def providerViewGlobal (sizes : ResultSizes) (msgs : List MessageRow) : List Mes
 def providerViewTurn (sizes : ResultSizes) (msgs : List MessageRow) : List MessageRow :=
   sanitizeTurn (strip sizes msgs)
 
+/-- What a provider view reports of its stubbing: the figures of the results the
+view keeps. Decision: a result the sanitizer drops (an orphan, or one whose
+call was dropped) is not dispatched, so its stub is not reported even though
+stripping replaced it. Stripping never changes call ids, so the results kept
+are those of `sanitizeTurn msgs`. -/
+def providerViewFigures (sizes : ResultSizes) (msgs : List MessageRow) : StubbingFigures :=
+  stripFigures sizes (sanitizeTurn msgs)
+
 theorem providerViewTurn_eq_providerViewGlobal {msgs : List MessageRow}
     (huniq : UniqueCallIds msgs) : providerViewTurn sizes msgs = providerViewGlobal sizes msgs :=
   PromptAssembly.sanitizeTurn_eq_sanitizeGlobal (strip_preserves_uniqueCallIds huniq)
