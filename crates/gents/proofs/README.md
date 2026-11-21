@@ -745,6 +745,7 @@ Semantic submodules:
 | `Proofs.Automation.Triggers.SerialSupport` | `Counting`, `Preservation` |
 | `Proofs.Session.Client` | `Types`, `Lifecycle`, `Terminal`, `Replacement`, `Output` |
 | `Proofs.Store.StorageFailure` | typed storage-full classification, retained signed submissions and retry suppression |
+| `Proofs.Store.DecisionRead` | strict reads a decision is taken on: an unanswered access check waits or fails, never decides |
 | `Proofs.Clients.ClientShell` | `Types`, `Submission`, `Transition`, `Projection`, `Timeline`, `PresentationAgreement`, `ObservationOrdering`, `SessionLoad`, `Theorems` |
 | `Proofs.Clients.ClientShell` | `Types`, `Submission`, `OptimisticSend`, `Transition`, `Projection`, `Timeline`, `PresentationAgreement`, `ObservationOrdering`, `Theorems` |
 | `Proofs.Session.CommandPolicy` | `Types`, `Validation`, `Sandbox`, `Env`, `Theorems` |

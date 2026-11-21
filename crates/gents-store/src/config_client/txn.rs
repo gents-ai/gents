@@ -31,6 +31,7 @@ use super::{
 };
 
 pub use apply_txn::ConfigApplyTxn;
+pub(crate) use auto_commit::ReadAccess;
 pub use cursor::ConfigCursor;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use fault_injection::NativeOperationObservation;
