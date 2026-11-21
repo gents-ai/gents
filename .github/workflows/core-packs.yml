@@ -79,7 +79,8 @@ jobs:
     timeout-minutes: 150
     # The portable role of .github/ci-runners.json: the host toolchain, its
     # compiler cache and a kept target tree capped by the role's `target`.
-    runs-on: [self-hosted, Linux, X64, ci-portable]
+    # Never merge queue work, so always outside the queue's reserve (`ci-pr`).
+    runs-on: [self-hosted, Linux, X64, ci-portable, ci-pr]
     env:
       CORE_PACK_TOOL: .core-packs-tool/gents
     defaults:

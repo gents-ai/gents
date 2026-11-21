@@ -1,4 +1,12 @@
 {
+  "reserve": {
+    "label": "ci-pr",
+    "roles": {
+      "portable": 2,
+      "desktop": 1
+    },
+    "comment": "Pull request jobs require `label` beside their role's labels; merge queue and scheduled jobs require only the role's, so a runner without it serves only them. Every runner carries `label` except, per role, that many runners `gate.py runners` picks: on 2026-11-20 queue entries waited up to 66 minutes for portable runners and 46 for macOS ones behind pull request jobs (runs 44844061590, 44846477341). core-packs.yml and adapter-interop.yml never run in the queue and always require it."
+  },
   "roles": {
     "linux": {
       "labels": ["self-hosted", "Linux", "X64", "ci-linux"],
