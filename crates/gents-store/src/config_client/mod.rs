@@ -34,6 +34,10 @@ pub use client_pack_evidence::{
     PackApprovalScope, PackEvidence, PackEvidenceError, PackMutation, PackRelationship,
     PackRelationshipEvidence, PackRelationshipTarget, PackSchemaEvidence,
 };
+mod pack_difference;
+pub use pack_difference::{
+    PackMutationDifference, PackMutationKind, ValueShape, MAX_REPORTED_DIFFERENCES,
+};
 pub use client_request_input::{client_request_input, ClientRequestInputError};
 pub use client_signed_agent::prepare_request_evidence;
 pub use client_signed_agent::ClientSigningCapability;
