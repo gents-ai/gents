@@ -2,6 +2,7 @@ mod agent_resolution;
 mod configuration_admission;
 mod control_watcher;
 mod effective_settings_binding;
+mod plugin_publication;
 mod plugin_readmission;
 mod router;
 mod startup_recovery;

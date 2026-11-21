@@ -13,6 +13,9 @@ use gents_tools::surface::ToolRuntimeContext;
 
 use super::super::document_view;
 use super::super::DocumentResolveContext;
+use super::surface_publication::{epoch_deadline, reconcile, Disposition};
+use gents_pack::plugin::store::{PublishedPluginReadError, StoreAbsent};
+use gents_protocol::error_chain::ErrorChain;
 
 pub(super) const CONTROL_RECONCILE_DEBOUNCE: Duration = Duration::from_secs(5);
 pub(super) const CONTROL_RECONCILE_LOCAL_DEBOUNCE: Duration = Duration::from_millis(250);
@@ -22,6 +25,9 @@ const CONTROL_WATCHER_IDLE_SLEEP: Duration = Duration::from_secs(60 * 60 * 24 * 
 
 #[derive(Clone, Copy)]
 pub(super) struct ControlWatcherTiming {
+    /// How long contention for the plugin store may hold back a reconciled
+    /// configuration (Lean `SurfacePublication.epochDeadline`).
+    pub(super) publication_wait: Duration,
     /// Also the longest a pending change waits for its reconcile after its
     /// first wake (`ControlDebounce.due`).
     pub(super) debounce: Duration,
@@ -32,6 +38,7 @@ pub(super) struct ControlWatcherTiming {
 }
 
 const CONTROL_WATCHER_TIMING: ControlWatcherTiming = ControlWatcherTiming {
+    publication_wait: gents_tools::surface::PUBLICATION_WAIT,
     debounce: CONTROL_RECONCILE_DEBOUNCE,
     local_debounce: CONTROL_RECONCILE_LOCAL_DEBOUNCE,
     settle_retry: CONTROL_RECONCILE_SETTLE_RETRY,
@@ -147,6 +154,8 @@ pub(super) async fn run_control_watcher_with_timing(
     let mut resync_required = false;
     let mut replicated_pending = false;
     let mut pending_since = None;
+    let mut publication_epoch = None;
+    let mut awaiting_release = false;
     let ControlSubscription {
         changes: mut subscription,
         names_by_id,
@@ -221,16 +230,47 @@ pub(super) async fn run_control_watcher_with_timing(
                         .await;
                     phase_transition_pending = false;
                 }
+                let now = tokio::time::Instant::now();
+                let deadline = epoch_deadline(publication_epoch, now, timing.publication_wait);
+                publication_epoch = Some(deadline);
+                let (publication, busy) = match tool_runtime.plugin_store_pin().map(|pin| (pin, pin.try_shared())) {
+                    None => (None, false),
+                    Some((_, Ok(guard))) => (Some(guard), false),
+                    Some((_, Err(PublishedPluginReadError::Busy))) => (None, true),
+                    Some((pin, Err(PublishedPluginReadError::Absent(StoreAbsent::Missing)))) if !pin.is_captured() => (None, false),
+                    Some((_, Err(error @ PublishedPluginReadError::Absent(_)))) => {
+                        tracing::info!(node_did = %node_did, error = %ErrorChain(&error), "stopping control watcher: its plugin store is absent or replaced");
+                        return Ok(());
+                    }
+                    Some((_, Err(error))) => {
+                        tracing::warn!(node_did = %node_did, error = %ErrorChain(&error), "plugin store lease is unreadable; treating it as held");
+                        (None, true)
+                    }
+                };
+                let disposition = reconcile(busy, now, deadline);
+                if disposition == Disposition::KeepPrevious || (busy && awaiting_release) {
+                    if disposition == Disposition::KeepPrevious {
+                        tracing::debug!(node_did = %node_did, "plugin store is held by an installer; keeping the active runtime generation");
+                    }
+                    dirty = true;
+                    sleep.as_mut().reset(next_publication_poll(now, deadline, timing.settle_retry));
+                    continue;
+                }
                 let mut proposed_update = false;
                 let mut resolve_failed = false;
                 match async {
+                    if publication.is_some() {
+                        document_view = document_view::load_document_runtime_view_as(
+                            &node, &node_did, resolve_context.identity.did()
+                        ).await?;
+                    }
                     let mut snapshot = document_view::resolve_document_runtime_snapshot_from_view(
                         &node,
                         &resolve_context,
                         &document_view,
                     )
                     .await?;
-                    super::startup::snapshot::demote_unbuildable_agents(system_log, &tool_runtime, &mut snapshot).await?;
+                    super::startup::snapshot::demote_unbuildable_agents(system_log, &tool_runtime, &mut snapshot, deadline).await?;
                     anyhow::Ok(snapshot)
                 }
                 .await
@@ -260,6 +300,13 @@ pub(super) async fn run_control_watcher_with_timing(
                         runtime_status.publish_error(&format!("{error:#}")).await;
                     }
                 }
+                if let (Some(pin), Some(_)) = (tool_runtime.plugin_store_pin(), publication.as_ref()) {
+                    if let Err(error) = pin.validate() {
+                        tracing::info!(node_did = %node_did, error = %ErrorChain(&error), "stopping control watcher: its plugin store was replaced while it reconciled");
+                        return Ok(());
+                    }
+                }
+                drop(publication);
                 if resolve_failed {
                     if settle_deadline
                         .is_some_and(|deadline| tokio::time::Instant::now() < deadline)
@@ -271,6 +318,8 @@ pub(super) async fn run_control_watcher_with_timing(
                     } else {
                         dirty = false;
                         settle_deadline = None;
+                        publication_epoch = None;
+                        awaiting_release = false;
                         sleep
                             .as_mut()
                             .reset(tokio::time::Instant::now() + timing.idle_sleep);
@@ -282,6 +331,15 @@ pub(super) async fn run_control_watcher_with_timing(
                         .set_reconcile_phase(ReconcilePhase::Idle)
                         .await;
                 }
+                if disposition == Disposition::PublishDemotingBusy {
+                    awaiting_release = true;
+                    dirty = true;
+                    settle_deadline = None;
+                    sleep.as_mut().reset(tokio::time::Instant::now() + timing.settle_retry);
+                    continue;
+                }
+                publication_epoch = None;
+                awaiting_release = false;
                 dirty = false;
                 settle_deadline = None;
                 sleep.as_mut().reset(tokio::time::Instant::now() + timing.idle_sleep);
@@ -293,6 +351,8 @@ pub(super) async fn run_control_watcher_with_timing(
                 );
                 dirty = true;
                 phase_transition_pending = true;
+                publication_epoch = Some(epoch_deadline(publication_epoch, tokio::time::Instant::now(), timing.publication_wait));
+                awaiting_release = false;
                 runtime_status
                     .set_reconcile_phase(ReconcilePhase::Debouncing)
                     .await;
@@ -314,6 +374,8 @@ pub(super) async fn run_control_watcher_with_timing(
                     resync_required = true;
                     dirty = true;
                     phase_transition_pending = true;
+                    publication_epoch = Some(epoch_deadline(publication_epoch, tokio::time::Instant::now(), timing.publication_wait));
+                    awaiting_release = false;
                     settle_deadline =
                         Some(tokio::time::Instant::now() + timing.settle_window);
                     runtime_status
@@ -427,6 +489,8 @@ pub(super) async fn run_control_watcher_with_timing(
                     );
                     dirty = true;
                     phase_transition_pending = true;
+                    publication_epoch = Some(epoch_deadline(publication_epoch, tokio::time::Instant::now(), timing.publication_wait));
+                    awaiting_release = false;
                     settle_deadline =
                         Some(tokio::time::Instant::now() + timing.settle_window);
                     runtime_status
@@ -442,5 +506,19 @@ pub(super) async fn run_control_watcher_with_timing(
                 }
             }
         }
+    }
+}
+
+/// The next look at a held plugin store: one retry interval later, but not
+/// after the publication epoch expires while it is still open.
+fn next_publication_poll(
+    now: tokio::time::Instant,
+    deadline: tokio::time::Instant,
+    retry: Duration,
+) -> tokio::time::Instant {
+    if now < deadline {
+        deadline.min(now + retry)
+    } else {
+        now + retry
     }
 }

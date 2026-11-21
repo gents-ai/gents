@@ -28,11 +28,14 @@ pub(super) fn is_degraded_startup_unavailable_reason(
 /// Demotes each agent whose tool surface fails to build to
 /// `tool_surface_unavailable`. Startup and the control watcher both run it
 /// on every resolved snapshot, so a reconcile cannot bring such an agent back
-/// runnable while its tools still fail to build.
+/// runnable while its tools still fail to build. A build that meets an
+/// installer waits for it until `publication_deadline`, then demotes the
+/// agent with the transient publication cause.
 pub(in crate::runtime::agent::runtime) async fn demote_unbuildable_agents(
     system_log: bool,
     tool_runtime: &ToolRuntimeContext,
     snapshot: &mut ResolvedRuntimeSnapshot,
+    publication_deadline: tokio::time::Instant,
 ) -> Result<()> {
     let mut agent_dids = snapshot.agents.keys().cloned().collect::<Vec<_>>();
     agent_dids.sort();
@@ -47,10 +50,18 @@ pub(in crate::runtime::agent::runtime) async fn demote_unbuildable_agents(
             .get(&agent_did)
             .ok_or_else(|| anyhow!("missing resolved agent {agent_did} during tool admission"))?;
         let tool_runtime = tool_runtime.for_agent(agent);
-        if let Err(error) = tool_surface.build_tools(&tool_runtime).await {
+        if let Err(error) = tool_surface
+            .build_tools_until(&tool_runtime, publication_deadline)
+            .await
+        {
             let reason = UnavailableAgent::new(
                 gents_protocol::node_readiness::AgentReadinessUnavailableReason::ToolSurfaceUnavailable,
                 format!("building tool surface: {error:#}"),
+            )
+            .with_publication_busy(
+                gents_pack::plugin::store::PublishedPluginReadError::error_chain_is_busy(
+                    error.as_ref(),
+                ),
             );
             tracing::error!(
                 agent_did = %agent_did,
@@ -83,7 +94,13 @@ pub(in crate::runtime::agent::runtime) async fn validate_startup_snapshot(
         )
     })?;
 
-    demote_unbuildable_agents(agent.system_log, tool_runtime, snapshot).await?;
+    demote_unbuildable_agents(
+        agent.system_log,
+        tool_runtime,
+        snapshot,
+        tokio::time::Instant::now() + gents_tools::surface::PUBLICATION_WAIT,
+    )
+    .await?;
 
     if snapshot.agents.is_empty() {
         let mut unavailable = snapshot

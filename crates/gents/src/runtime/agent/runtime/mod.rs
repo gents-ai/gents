@@ -2,6 +2,7 @@ mod context;
 mod control_watcher;
 mod router;
 mod startup;
+mod surface_publication;
 
 pub(super) use context::StartupBarrier;
 pub(in crate::runtime::agent) use router::default_hostname;
