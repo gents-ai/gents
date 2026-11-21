@@ -166,7 +166,7 @@ mod tests {
             assert!(
                 cases
                     .iter()
-                    .any(|case| serde_json::to_value(&case.input.failure).unwrap()
+                    .any(|case| serde_json::to_value(case.input.failure).unwrap()
                         == serde_json::to_value(class).unwrap()),
                 "{class} is not a Lean class"
             );

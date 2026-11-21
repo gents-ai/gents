@@ -42,7 +42,7 @@ impl UnsetVariables {
     /// The unset variables a load, preparation or preview stopped on, where
     /// they are in `error`'s chain.
     pub fn in_chain<'a>(error: &'a (dyn std::error::Error + 'static)) -> Option<&'a Self> {
-        gents_protocol::error_chain::find_source(error)
+        gents_protocol::error_chain::find_source::<Self>(error)
     }
 }
 

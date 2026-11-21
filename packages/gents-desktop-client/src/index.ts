@@ -66,6 +66,5 @@ export * from "./capturedContext.js";
 
 export { parseMailboxQuestion } from "./mailboxQuestion.js";
 
-
 export type { PackInstallRefusal } from "./generated/PackInstallRefusal.js";
 export type { PackInstallRefusalClass } from "./generated/PackInstallRefusalClass.js";

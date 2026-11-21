@@ -66,7 +66,8 @@ describe("a typed pack install refusal", () => {
     coordinate: "fixture/root",
     named: ["Tools/literal-tools"],
     unnamed: 2,
-    sentence: "3 of fixture/root's documents were edited since it was installed.",
+    sentence:
+      "3 of fixture/root's documents were edited since it was installed.",
   };
   const payload = {
     code: "unknown",
@@ -86,10 +87,16 @@ describe("a typed pack install refusal", () => {
   });
 
   it("is never read from an error's text or from an unknown class", () => {
-    expect(packInstallRefusal(new Error("--overwrite documents_edited"))).toBeNull();
     expect(
-      packInstallRefusal({ packRefusal: { ...refusal, class: "something_else" } }),
+      packInstallRefusal(new Error("--overwrite documents_edited")),
     ).toBeNull();
-    expect(packInstallRefusal({ packRefusal: { ...refusal, unnamed: -1 } })).toBeNull();
+    expect(
+      packInstallRefusal({
+        packRefusal: { ...refusal, class: "something_else" },
+      }),
+    ).toBeNull();
+    expect(
+      packInstallRefusal({ packRefusal: { ...refusal, unnamed: -1 } }),
+    ).toBeNull();
   });
 });

@@ -1,6 +1,5 @@
 use crate::types::*;
-use futures::TryFutureExt;
-use gents_pack::pack::PackChangeError;
+use gents_pack::pack::{PackChangeError, PackChangeSurface};
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::Value;
 use tauri::State;
@@ -27,12 +26,12 @@ fn failed(error: anyhow::Error) -> BridgeError {
 
 /// An install's refusal as the install review asks about it, matched by
 /// variant; any other failure is its text.
-fn install_failed(error: PackChangeError) -> PackInstallError {
-    use gents_pack::pack::{EditedDocumentRefusal, PackChangeSurface};
+fn install_failed(error: PackChangeError, surface: PackChangeSurface) -> PackInstallError {
+    use gents_pack::pack::EditedDocumentRefusal;
     use gents_protocol::operations::pack::hosted::HostedInstallFailure;
     let edited = |documents: EditedDocumentRefusal| PackInstallRefusal {
         class: PackInstallRefusalClass::DocumentsEdited,
-        sentence: documents.message_for_surface(PackChangeSurface::Desktop),
+        sentence: documents.message_for_surface(surface),
         coordinate: Some(documents.coordinate),
         named: documents.named,
         unnamed: documents.unnamed,
@@ -60,7 +59,7 @@ fn install_failed(error: PackChangeError) -> PackInstallError {
                 Some(documents) => edited(documents.clone()),
                 None => asks(
                     PackInstallRefusalClass::DocumentsEdited,
-                    &refused.message_for_surface(PackChangeSurface::Desktop),
+                    &refused.message_for_surface(surface),
                 ),
             })
         }
@@ -83,34 +82,40 @@ fn install_failed(error: PackChangeError) -> PackInstallError {
         Some(refusal) => refusal.sentence.clone(),
         None => match &error {
             PackChangeError::Differing { .. } | PackChangeError::Hosted(_) => {
-                error.message_for_surface(PackChangeSurface::Desktop)
+                error.message_for_surface(surface)
             }
             _ => format!("{error:#}"),
         },
     };
     PackInstallError {
-        error: BridgeError::untyped(message),
-        pack_refusal: refusal,
+        error: Box::new(BridgeError::untyped(message)),
+        pack_refusal: refusal.map(Box::new),
     }
 }
 
-async fn run_install_on<F, Fut>(
+async fn run_install_on<T, F, Fut>(
     runtime: &tokio::runtime::Handle,
+    surface: PackChangeSurface,
     operation: F,
-) -> Result<PackInstallView, PackInstallError>
+) -> Result<T, PackInstallError>
 where
+    T: DeserializeOwned,
     F: FnOnce() -> Fut + Send + 'static,
     Fut: std::future::Future<Output = Result<Value, PackChangeError>>,
 {
     let report = gents_store::local::storage_backend::drive_unsendable(runtime, operation)
         .await
         .map_err(|error| PackInstallError {
-            error: BridgeError::untyped(format!("the pack operation stopped: {error}")),
+            error: Box::new(BridgeError::untyped(format!(
+                "the pack operation stopped: {error}"
+            ))),
             pack_refusal: None,
         })?
-        .map_err(install_failed)?;
+        .map_err(|error| install_failed(error, surface))?;
     serde_json::from_value(report).map_err(|error| PackInstallError {
-        error: BridgeError::untyped(format!("invalid pack report: {error}")),
+        error: Box::new(BridgeError::untyped(format!(
+            "invalid pack report: {error}"
+        ))),
         pack_refusal: None,
     })
 }
@@ -261,12 +266,14 @@ pub async fn desktop_pack_install(
     state: State<'_, DesktopAppState>,
 ) -> Result<PackInstallView, PackInstallError> {
     let home = home(&state).map_err(|error| PackInstallError {
-        error,
+        error: Box::new(error),
         pack_refusal: None,
     })?;
-    run_install_on(tauri::async_runtime::handle().inner(), move || {
-        packs::install(home, request.into())
-    })
+    run_install_on(
+        tauri::async_runtime::handle().inner(),
+        PackChangeSurface::Desktop,
+        move || packs::install(home, request.into()),
+    )
     .await
 }
 
@@ -276,15 +283,17 @@ pub async fn desktop_pack_update(
     registry: Option<String>,
     edited: Option<EditedDocuments>,
     state: State<'_, DesktopAppState>,
-) -> Result<PackUpdateView, BridgeError> {
-    {
-        let home = home(&state)?;
-        run(move || {
-            packs::update(home, package, registry, edited.unwrap_or_default())
-                .map_err(PackChangeError::into_anyhow)
-        })
-        .await
-    }
+) -> Result<PackUpdateView, PackInstallError> {
+    let home = home(&state).map_err(|error| PackInstallError {
+        error: Box::new(error),
+        pack_refusal: None,
+    })?;
+    run_install_on(
+        tauri::async_runtime::handle().inner(),
+        PackChangeSurface::Local,
+        move || packs::update(home, package, registry, edited.unwrap_or_default()),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -292,15 +301,17 @@ pub async fn desktop_pack_remove(
     package: String,
     edited: Option<EditedDocuments>,
     state: State<'_, DesktopAppState>,
-) -> Result<PackRemoveView, BridgeError> {
-    {
-        let home = home(&state)?;
-        run(move || {
-            packs::remove(home, package, edited.unwrap_or_default())
-                .map_err(PackChangeError::into_anyhow)
-        })
-        .await
-    }
+) -> Result<PackRemoveView, PackInstallError> {
+    let home = home(&state).map_err(|error| PackInstallError {
+        error: Box::new(error),
+        pack_refusal: None,
+    })?;
+    run_install_on(
+        tauri::async_runtime::handle().inner(),
+        PackChangeSurface::Local,
+        move || packs::remove(home, package, edited.unwrap_or_default()),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -456,7 +467,7 @@ mod tests {
 
     #[tokio::test]
     async fn local_and_hosted_edited_refusals_reach_the_review_typed() {
-        use gents_pack::pack::{EditedDocumentRefusal, HostedRefusal, PackChangeSurface};
+        use gents_pack::pack::{EditedDocumentRefusal, HostedRefusal};
         use gents_protocol::operations::pack::hosted::{
             HostedInstallFailure, HostedInstallOutcome,
         };
@@ -480,9 +491,13 @@ mod tests {
                     edited: documents.named.clone(),
                 }
             };
-            let failure = run_install_on(&runtime_handle(), move || async { Err(input) })
-                .await
-                .unwrap_err();
+            let failure = run_install_on::<PackInstallView, _, _>(
+                &runtime_handle(),
+                PackChangeSurface::Desktop,
+                move || async { Err(input) },
+            )
+            .await
+            .unwrap_err();
             let refusal = failure.pack_refusal.as_ref().unwrap();
             assert_eq!(refusal.class, PackInstallRefusalClass::DocumentsEdited);
             assert_eq!(
@@ -502,17 +517,23 @@ mod tests {
 
     #[test]
     fn a_refusal_is_classified_by_variant_never_by_its_text() {
-        let failure = install_failed(PackChangeError::Other(anyhow::anyhow!(
-            "--overwrite documents_edited not the expected --grant-authority"
-        )));
+        let failure = install_failed(
+            PackChangeError::Other(anyhow::anyhow!(
+                "--overwrite documents_edited not the expected --grant-authority"
+            )),
+            PackChangeSurface::Desktop,
+        );
         assert!(failure.pack_refusal.is_none());
-        let digest = install_failed(PackChangeError::Refused {
-            error: gents_protocol::operations::pack::PackOperationError::DigestChanged {
-                expected: "sha256:a".into(),
-                resolved: "sha256:b".into(),
+        let digest = install_failed(
+            PackChangeError::Refused {
+                error: gents_protocol::operations::pack::PackOperationError::DigestChanged {
+                    expected: "sha256:a".into(),
+                    resolved: "sha256:b".into(),
+                },
+                next: "preview".into(),
             },
-            next: "preview".into(),
-        });
+            PackChangeSurface::Desktop,
+        );
         assert_eq!(
             digest.pack_refusal.unwrap().class,
             PackInstallRefusalClass::DigestChanged

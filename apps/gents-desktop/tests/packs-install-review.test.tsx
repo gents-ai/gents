@@ -94,7 +94,7 @@ type Request = {
 /* the bridge's install: a preview reports `previewed`, an install runs
    `install` (which may refuse) */
 /** An install refusal as the bridge types it. */
-function refused(
+function refusal(
   kind: "documents_edited" | "authority_required" | "digest_changed",
   sentence: string,
   documents: { coordinate: string; named: string[]; unnamed: number } = {
@@ -495,7 +495,7 @@ describe("the install review", () => {
     const installPack = bridge(undefined, () => {
       if (!refused) {
         refused = true;
-        throw refused(
+        throw refusal(
           "authority_required",
           "Allow the requested access in this install review.",
         );
@@ -546,7 +546,7 @@ describe("the install review", () => {
     const installPack = bridge(undefined, () => {
       if (!refused) {
         refused = true;
-        throw refused(
+        throw refusal(
           "documents_edited",
           "1 of acme/docs's documents were edited since it was installed: Agent/writer. Overwrite replaces them with the pack's versions; keep leaves them as edited. Choose Overwrite or Keep in this install review",
           { coordinate: "acme/docs", named: ["Agent/writer"], unnamed: 0 },
@@ -570,13 +570,17 @@ describe("the install review", () => {
 
   it("reads a refusal from its type, never from words in its text", async () => {
     const installPack = bridge(undefined, () => {
-      throw new Error("use --overwrite or --keep, or --grant-authority; not the expected digest");
+      throw new Error(
+        "use --overwrite or --keep, or --grant-authority; not the expected digest",
+      );
     });
     show(installPack);
     const { user, review } = await openRegistryReview();
     await waitFor(() => expect(installButton(review)).toBeEnabled());
     await user.click(installButton(review));
-    expect(await within(review).findByRole("alert")).toHaveTextContent("Couldn't install:");
+    expect(await within(review).findByRole("alert")).toHaveTextContent(
+      "Couldn't install:",
+    );
     expect(within(review).queryByRole("region", { name: "Your edits" })).toBeNull();
   });
 
@@ -658,7 +662,7 @@ describe("the install review", () => {
 
   it("refuses a pack that changed since it was reviewed, and reviews it again", async () => {
     const installPack = bridge(undefined, () => {
-      throw refused(
+      throw refusal(
         "digest_changed",
         "The pack changed since it was reviewed. Review it again.",
       );
@@ -916,7 +920,7 @@ describe("a pack link", () => {
   it("says on the pack's page when the pack isn't the one the link names, and offers no install", async () => {
     const linked = `sha256:${"1".repeat(64)}`;
     const installPack = bridge(() => {
-      throw refused(
+      throw refusal(
         "digest_changed",
         "The pack changed since it was reviewed. Review it again.",
       );

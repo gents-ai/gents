@@ -481,6 +481,6 @@ pub struct PackInstallRefusal {
 #[serde(rename_all = "camelCase")]
 pub struct PackInstallError {
     #[serde(flatten)]
-    pub error: gents_store::client_error::BridgeError,
-    pub pack_refusal: Option<PackInstallRefusal>,
+    pub error: Box<gents_store::client_error::BridgeError>,
+    pub pack_refusal: Option<Box<PackInstallRefusal>>,
 }

@@ -627,7 +627,7 @@ pub async fn install_remote(
     if let Err(error) = applied {
         return Err(match replay.inner.lock().await.refusal.take() {
             Some(refusal) => refusal.into(),
-            None => anyhow::Error::from(error).into(),
+            None => error.into(),
         });
     }
     replay.result().await.map_err(refused)
