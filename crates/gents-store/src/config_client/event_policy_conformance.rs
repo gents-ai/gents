@@ -46,23 +46,24 @@ async fn modeled_event_configuration_grants_use_native_permissions() -> anyhow::
         .await?;
     assert_eq!(
         policy,
-        gents_protocol::schemas::HomePolicyIds::shared()
+        gents_protocol::schemas::HomePolicyIds::node_store()
             .id(gents_protocol::schemas::BuiltInPolicy::Household)
     );
     owner
         .add_collection(
-            &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::NODE),
+            &gents_protocol::schemas::HomePolicyIds::node_store()
+                .render(gents_protocol::schemas::NODE),
         )
         .await?;
     owner
         .add_collection(
-            &gents_protocol::schemas::HomePolicyIds::shared()
+            &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_protocol::schemas::TRIGGER),
         )
         .await?;
     owner
         .add_collection(
-            &gents_protocol::schemas::HomePolicyIds::shared()
+            &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_protocol::schemas::EVENT_SOURCE),
         )
         .await?;
@@ -172,7 +173,7 @@ async fn modeled_event_configuration_grants_use_native_permissions() -> anyhow::
     }
     owner
         .add_collection(
-            &gents_protocol::schemas::HomePolicyIds::shared()
+            &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_protocol::schemas::EVENT_SOURCE_CURSOR),
         )
         .await?;

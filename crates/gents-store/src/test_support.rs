@@ -402,7 +402,7 @@ pub async fn client_journal_node(
             .await?,
     );
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared().render(&unbound_journal_schema()),
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(&unbound_journal_schema()),
     )
     .await?;
     Ok(node)

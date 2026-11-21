@@ -44,7 +44,7 @@ pub async fn fresh_node() -> Arc<EmbeddedNode> {
             .add_dac_policy_with_counter_as(&node_context(&node), policy.definition(), 0)
             .await
             .expect("fixture policy");
-        assert_eq!(actual, HomePolicyIds::shared().id(policy));
+        assert_eq!(actual, HomePolicyIds::node_store().id(policy));
     }
     std::mem::forget(dir);
     Arc::new(node)

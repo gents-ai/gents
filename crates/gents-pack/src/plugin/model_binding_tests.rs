@@ -41,15 +41,15 @@ async fn plugin_profile_follows_the_immediate_callers_selection() -> anyhow::Res
         gents_protocol::schemas::INFERENCE_PROFILE,
         gents_protocol::schemas::INFERENCE_BACKEND_METADATA,
     ] {
-        node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(
-            &schema.replace(
+        node.add_collection(
+            &gents_protocol::schemas::HomePolicyIds::node_store().render(&schema.replace(
                 gents_protocol::schemas::BuiltInPolicy::Household.placeholder(),
                 &policy,
-            ),
-        ))
+            )),
+        )
         .await?;
     }
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&format!(
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&format!(
         "type PluginProfileAgent @policy(id: \"{policy}\", resource: \"agents\") {{ label: String }}"
     )))
     .await?;

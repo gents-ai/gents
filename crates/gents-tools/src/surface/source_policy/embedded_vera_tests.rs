@@ -54,7 +54,7 @@ async fn reads_document(
         .check_doc_access(
             &acp::Identity::Authenticated(actor.clone()),
             acp::DocumentPermission::Read,
-            HomePolicyIds::shared().id(BuiltInPolicy::Household),
+            gents_store::local::document_acp::node_policy_ids(&node).id(BuiltInPolicy::Household),
             RESOURCE,
             document,
         )
@@ -63,13 +63,21 @@ async fn reads_document(
 
 async fn holds_the_node_policies(node: &defra_node::Node, owner: &str) -> anyhow::Result<()> {
     let context = defra_core::RequestContext::default().with_identity(Some(owner.to_owned()));
-    let ids = HomePolicyIds::shared();
+    let ids = gents_store::local::document_acp::node_policy_ids(node);
     for policy in BuiltInPolicy::ALL {
-        assert_eq!(
-            node.add_dac_policy_with_counter_as(&context, policy.definition(), 0)
-                .await?,
-            ids.id(policy)
-        );
+        let held = match gents_store::local::document_acp::provider_of(node) {
+            DocumentAcp::Local => {
+                node.add_dac_policy_with_counter_as(&context, policy.definition(), 0)
+                    .await?
+            }
+            DocumentAcp::Vera => {
+                node.get_dac_policy_as(&context, ids.id(policy))
+                    .await?
+                    .expect("a Vera deployment holds every built-in policy from its first block")
+                    .id
+            }
+        };
+        assert_eq!(held, ids.id(policy));
     }
     Ok(())
 }
@@ -99,13 +107,13 @@ async fn an_opted_in_home_decides_document_access_through_its_vera_node_across_a
         .clone();
     assert!(node.vera_acp().is_some());
     holds_the_node_policies(&node, owner.as_str()).await?;
-    for entry in gents_store::schema::catalog::BASELINE.iter() {
+    for entry in gents_store::schema::catalog::baseline(HomePolicyIds::embedded_vera()) {
         assert!(node.get_collection(entry.name)?.is_some(), "{}", entry.name);
     }
     node.document_acp()
         .register_doc_object(
             &owner,
-            HomePolicyIds::shared().id(BuiltInPolicy::Household),
+            gents_store::local::document_acp::node_policy_ids(&node).id(BuiltInPolicy::Household),
             RESOURCE,
             DOCUMENT,
         )
@@ -118,7 +126,7 @@ async fn an_opted_in_home_decides_document_access_through_its_vera_node_across_a
     node.document_acp()
         .register_doc_object(
             &agent,
-            HomePolicyIds::shared().id(BuiltInPolicy::Household),
+            gents_store::local::document_acp::node_policy_ids(&node).id(BuiltInPolicy::Household),
             RESOURCE,
             AGENT_DOCUMENT,
         )
@@ -197,7 +205,7 @@ async fn opted_in_home_with_a_document(root: &Path, name: &str) -> anyhow::Resul
     node.document_acp()
         .register_doc_object(
             &owner,
-            HomePolicyIds::shared().id(BuiltInPolicy::Household),
+            gents_store::local::document_acp::node_policy_ids(&node).id(BuiltInPolicy::Household),
             RESOURCE,
             DOCUMENT,
         )
@@ -362,7 +370,7 @@ async fn owner_on_vera(
         .vera_acp()
         .expect("the node decides document access through Vera")
         .get_doc_owner(
-            HomePolicyIds::shared().id(BuiltInPolicy::Household),
+            gents_store::local::document_acp::node_policy_ids(&node).id(BuiltInPolicy::Household),
             TASK_RESOURCE,
             document,
         )
@@ -379,7 +387,7 @@ async fn reads_task(
         .check_doc_access(
             &acp::Identity::Authenticated(actor.clone()),
             acp::DocumentPermission::Read,
-            HomePolicyIds::shared().id(BuiltInPolicy::Household),
+            gents_store::local::document_acp::node_policy_ids(&node).id(BuiltInPolicy::Household),
             TASK_RESOURCE,
             document,
         )
@@ -535,9 +543,15 @@ async fn create_task_in_process(
         collection: "Task".into(),
         input: serde_json::json!({ "task_id": task }),
     };
-    let evidence = prepare_pack_evidence_from_history(user, &scope, &mutation, None)
-        .await
-        .map_err(|error| ConfigClientError::PackEvidence(Box::new(error)))?;
+    let evidence = prepare_pack_evidence_from_history(
+        user,
+        &scope,
+        &mutation,
+        None,
+        HomePolicyIds::embedded_vera(),
+    )
+    .await
+    .map_err(|error| ConfigClientError::PackEvidence(Box::new(error)))?;
     let user_did =
         identity::Did::new(user.did()).map_err(ConfigClientError::RelationshipTargetIdentity)?;
     let access =

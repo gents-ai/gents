@@ -18,15 +18,15 @@ pub async fn install_identity_acp_policies(node: &defra_node::Node) -> Result<()
     for (policy, expected_id) in [
         (
             AGENT_OWNERSHIP_POLICY,
-            HomePolicyIds::shared().id(BuiltInPolicy::Household),
+            HomePolicyIds::node_store().id(BuiltInPolicy::Household),
         ),
         (
             MAILBOX_POLICY,
-            HomePolicyIds::shared().id(BuiltInPolicy::Mailbox),
+            HomePolicyIds::node_store().id(BuiltInPolicy::Mailbox),
         ),
         (
             CLIENT_JOURNAL_POLICY,
-            HomePolicyIds::shared().id(BuiltInPolicy::ClientJournal),
+            HomePolicyIds::node_store().id(BuiltInPolicy::ClientJournal),
         ),
     ] {
         let id = node

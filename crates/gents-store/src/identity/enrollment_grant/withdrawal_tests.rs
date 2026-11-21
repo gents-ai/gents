@@ -1,9 +1,7 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use defra_node::{
-    EmbeddedVeraActor, EmbeddedVeraConfig, EmbeddedVeraDeployment, EmbeddedVeraPolicy,
-};
+use defra_node::{EmbeddedVeraActor, EmbeddedVeraConfig, EmbeddedVeraDeployment};
 use identity::RawIdentity;
 use serde_json::json;
 
@@ -49,11 +47,9 @@ fn vera(
                 "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798".into(),
             ],
             created: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
-            policies: vec![EmbeddedVeraPolicy {
-                definition: gents_protocol::schemas::AGENT_OWNERSHIP_POLICY.into(),
-                nonce: defra_node::PolicyNonce::default(),
-                creator: runtime.did().into(),
-            }],
+            policies: vec![crate::schema::catalog::vera_seed::seed(
+                &gents_protocol::schemas::BuiltInPolicy::Household,
+            )],
         },
         listen: "127.0.0.1:0".parse()?,
         start_deadline: Duration::from_secs(60),
@@ -176,7 +172,7 @@ async fn home(provider: Provider) -> anyhow::Result<Home> {
         gents_protocol::schemas::NETWORK_ENROLLMENT_GRANT,
     ] {
         runtime_access
-            .add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(schema))
+            .add_collection(&crate::local::document_acp::node_policy_ids(&node).render(schema))
             .await?;
     }
     crate::identity::GrantSet::OperatorUser
@@ -256,7 +252,7 @@ impl Home {
             .check_named_permission(
                 member,
                 "administrator",
-                gents_protocol::schemas::HomePolicyIds::shared()
+                crate::local::document_acp::node_policy_ids(&self.node)
                     .id(gents_protocol::schemas::BuiltInPolicy::Household),
                 "nodes",
                 &self.node_doc,

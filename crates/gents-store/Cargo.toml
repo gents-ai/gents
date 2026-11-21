@@ -84,4 +84,5 @@ gents-workspace-hack = { workspace = true }
 axum = { version = "0.8", features = ["ws"] }
 gents-lean-contract.workspace = true
 gents-lean-vocab.workspace = true
+vera-modules.workspace = true
 tokio-util.workspace = true

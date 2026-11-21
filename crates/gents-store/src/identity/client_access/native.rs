@@ -4,9 +4,7 @@ use crate::config_client::{
     ClientSigningCapability,
 };
 use anyhow::Context;
-use defra_node::{
-    EmbeddedVeraActor, EmbeddedVeraConfig, EmbeddedVeraDeployment, EmbeddedVeraPolicy,
-};
+use defra_node::{EmbeddedVeraActor, EmbeddedVeraConfig, EmbeddedVeraDeployment};
 use gents_protocol::client_authentication::ClientAuthentication;
 use identity::{FullIdentity as _, RawIdentity};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -122,6 +120,7 @@ async fn vera_runtime() -> anyhow::Result<VeraRuntime> {
             .with_document_projector(crate::local::document_projector(
                 runtime.clone(),
                 Arc::new(NoToolSources),
+                gents_protocol::schemas::HomePolicyIds::embedded_vera(),
             )?)
             .with_node_acp_owner(runtime.did())
             .with_signing_key(defra_node::SigningKey::Ed25519(
@@ -141,11 +140,9 @@ async fn vera_runtime() -> anyhow::Result<VeraRuntime> {
                         "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798".into(),
                     ],
                     created: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
-                    policies: vec![EmbeddedVeraPolicy {
-                        definition: gents_protocol::schemas::AGENT_OWNERSHIP_POLICY.into(),
-                        nonce: defra_node::PolicyNonce::default(),
-                        creator: runtime.did().into(),
-                    }],
+                    policies: vec![crate::schema::catalog::vera_seed::seed(
+                        &gents_protocol::schemas::BuiltInPolicy::Household,
+                    )],
                 },
                 listen: "127.0.0.1:0".parse()?,
                 start_deadline: Duration::from_secs(60),
@@ -176,7 +173,7 @@ async fn vera_runtime() -> anyhow::Result<VeraRuntime> {
         gents_protocol::schemas::PEER_REGISTRY,
     ] {
         runtime_access
-            .add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(schema))
+            .add_collection(&crate::local::document_acp::node_policy_ids(&node).render(schema))
             .await?;
     }
     crate::identity::GrantSet::OperatorUser
@@ -386,7 +383,7 @@ async fn client_held_vera_access_can_be_approved_revoked_and_requested_again() -
             .check_named_permission(
                 &candidate.did().parse()?,
                 "administrator",
-                gents_protocol::schemas::HomePolicyIds::shared()
+                crate::local::document_acp::node_policy_ids(&node)
                     .id(gents_protocol::schemas::BuiltInPolicy::Household),
                 "nodes",
                 &node_doc,
@@ -438,7 +435,7 @@ async fn client_held_vera_access_can_be_approved_revoked_and_requested_again() -
             .check_named_permission(
                 &candidate.did().parse()?,
                 "administrator",
-                gents_protocol::schemas::HomePolicyIds::shared()
+                crate::local::document_acp::node_policy_ids(&node)
                     .id(gents_protocol::schemas::BuiltInPolicy::Household),
                 "nodes",
                 &node_doc,
@@ -460,7 +457,7 @@ async fn client_held_vera_access_can_be_approved_revoked_and_requested_again() -
             .check_named_permission(
                 &candidate.did().parse()?,
                 "administrator",
-                gents_protocol::schemas::HomePolicyIds::shared()
+                crate::local::document_acp::node_policy_ids(&node)
                     .id(gents_protocol::schemas::BuiltInPolicy::Household),
                 "nodes",
                 &node_doc,
@@ -524,7 +521,7 @@ async fn a_failed_approval_leaves_no_access_and_a_retry_approves() -> anyhow::Re
             .check_named_permission(
                 &member,
                 "administrator",
-                gents_protocol::schemas::HomePolicyIds::shared()
+                crate::local::document_acp::node_policy_ids(&fixture.node)
                     .id(gents_protocol::schemas::BuiltInPolicy::Household),
                 "nodes",
                 &fixture.node_doc,

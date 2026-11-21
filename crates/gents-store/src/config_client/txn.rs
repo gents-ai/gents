@@ -8,6 +8,7 @@ mod execute;
 mod fault_injection;
 mod finalize;
 mod gate;
+mod home_provider;
 mod native;
 mod owner_staged;
 mod pack_interpreter;

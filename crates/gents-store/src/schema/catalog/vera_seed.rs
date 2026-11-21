@@ -32,16 +32,20 @@ pub fn seed(policy: &BuiltInPolicy) -> EmbeddedVeraPolicy {
 
 #[cfg(test)]
 mod tests {
-    use gents_protocol::schemas::{BuiltInPolicy, HomePolicyIds, Provider};
+    use gents_protocol::schemas::BuiltInPolicy;
+
+    use crate::local::document_acp::{home_policy_ids, DocumentAcp};
 
     /// The IDs a Vera home names its built-in policies by are the IDs vera.rs
     /// derives for the policies its deployment is seeded with.
     #[test]
     fn a_vera_homes_ids_are_its_seeded_policies() {
-        let ids = HomePolicyIds::for_home(Provider::EmbeddedVera);
+        let ids = home_policy_ids(DocumentAcp::Vera);
         for policy in BuiltInPolicy::ALL {
             assert_eq!(
-                super::seed(&policy).id().expect("a built-in policy compiles"),
+                super::seed(&policy)
+                    .id()
+                    .expect("a built-in policy compiles"),
                 ids.id(policy),
                 "{policy:?}"
             );

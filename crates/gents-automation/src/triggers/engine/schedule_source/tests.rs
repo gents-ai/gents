@@ -33,7 +33,7 @@ async fn modeled_cached_schedule_requires_runtime_visibility() -> anyhow::Result
         .await?;
     assert_eq!(
         policy,
-        gents_protocol::schemas::HomePolicyIds::shared()
+        gents_protocol::schemas::HomePolicyIds::node_store()
             .id(gents_protocol::schemas::BuiltInPolicy::Household)
     );
     node.add_nac_actor_relationship_as(
@@ -61,15 +61,17 @@ async fn modeled_cached_schedule_requires_runtime_visibility() -> anyhow::Result
     )
     .await?;
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::NODE),
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(gents_protocol::schemas::NODE),
     )
     .await?;
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::SCHEDULE),
+        &gents_protocol::schemas::HomePolicyIds::node_store()
+            .render(gents_protocol::schemas::SCHEDULE),
     )
     .await?;
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::TRIGGER),
+        &gents_protocol::schemas::HomePolicyIds::node_store()
+            .render(gents_protocol::schemas::TRIGGER),
     )
     .await?;
     for (name, schema) in gents_protocol::schemas::RUNTIME_COLLECTION_NAMES
@@ -86,8 +88,10 @@ async fn modeled_cached_schedule_requires_runtime_visibility() -> anyhow::Result
                 .iter()
                 .any(|collection| collection.graphql_type() == *name)
         {
-            node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(schema))
-                .await?;
+            node.add_collection(
+                &gents_protocol::schemas::HomePolicyIds::node_store().render(schema),
+            )
+            .await?;
         }
     }
     let endpoint =
