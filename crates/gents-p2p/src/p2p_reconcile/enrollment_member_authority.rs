@@ -4,6 +4,7 @@ use anyhow::Result;
 use gents_store::graphql::rows;
 use serde_json::Value;
 
+use super::enrollment_candidate::runtime_admin_pin_rows;
 use super::enrollment_projection::{
     project_desktop_approval, DesktopApprovalRows, DurableEnrollmentRows, LocalPeer,
 };
@@ -32,15 +33,20 @@ pub async fn load_status_enrollment_approvals(
         node.node_identity_did() == Some(principal.did()),
         "member enrollment requires its configured local identity"
     );
-    let response: defra_node::QueryResponse = serde_json::from_value(
-        gents_store::config_client::ConfigAccess::local_as(
-            node.clone(),
-            identity::Did::new(principal.did())?,
-        )
-        .execute(STATUS_ENROLLMENT_QUERY)
-        .await?,
-    )?;
-    project_status_enrollment_response(&response, principal, local_peer_id).await
+    let runtime = identity::Did::new(principal.did())?;
+    let (response, pins) =
+        gents_store::config_client::ConfigAccess::local_as(node.clone(), runtime.clone())
+            .transact_readonly("p2p.status_enrollment_approvals", |txn| {
+                let runtime = &runtime;
+                Box::pin(async move {
+                    let response = txn.execute(STATUS_ENROLLMENT_QUERY).await?;
+                    let pins = runtime_admin_pin_rows(txn, runtime, None).await?;
+                    Ok::<_, gents_store::config_client::ConfigClientError>((response, pins))
+                })
+            })
+            .await?;
+    let response: defra_node::QueryResponse = serde_json::from_value(response)?;
+    project_status_enrollment_response(&response, pins, principal, local_peer_id).await
 }
 
 pub async fn load_status_enrollment_approvals_in_txn(
@@ -51,7 +57,8 @@ pub async fn load_status_enrollment_approvals_in_txn(
     BTreeMap<String, EnrollmentAuthorityOutcome>,
     BTreeSet<String>,
 )> {
-    txn.validate_runtime_actor(&identity::Did::new(principal.did())?)?;
+    let runtime = identity::Did::new(principal.did())?;
+    txn.validate_runtime_actor(&runtime)?;
     for collection in [
         "NetworkAdminPin",
         "NetworkEnrollmentRequest",
@@ -63,11 +70,13 @@ pub async fn load_status_enrollment_approvals_in_txn(
     }
     let response: defra_node::QueryResponse =
         serde_json::from_value(txn.execute(STATUS_ENROLLMENT_QUERY).await?)?;
-    project_status_enrollment_response(&response, principal, local_peer_id).await
+    let pins = runtime_admin_pin_rows(txn, &runtime, None).await?;
+    project_status_enrollment_response(&response, pins, principal, local_peer_id).await
 }
 
 async fn project_status_enrollment_response(
     response: &defra_node::QueryResponse,
+    admin_pins: Vec<Value>,
     principal: &dyn NodeIdentity,
     local_peer_id: &str,
 ) -> Result<(
@@ -164,7 +173,7 @@ async fn project_status_enrollment_response(
         },
     );
     let mut pins = BTreeMap::<String, Vec<String>>::new();
-    for raw in rows::<Value>(response, "NetworkAdminPin")? {
+    for raw in admin_pins {
         let Some(network_id) = raw_string(&raw, "network_id").map(str::to_string) else {
             continue;
         };
