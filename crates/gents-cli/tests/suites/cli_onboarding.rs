@@ -623,10 +623,25 @@ async fn desktop_first_run_without_inference_sets_up_the_engineer() -> Result<()
     Ok(())
 }
 
-async fn provision_as_the_desktop(home: PathBuf, desktop_root: PathBuf) -> Result<()> {
+#[test]
+fn a_desktop_first_run_without_core_pack_archives_is_refused() -> Result<()> {
+    let tempdir = tempfile::tempdir()?;
+    first_run_step(
+        tempdir.path(),
+        &tempdir.path().join(".gents"),
+        "no-archives",
+        "",
+    )
+}
+
+async fn provision_as_the_desktop(
+    home: PathBuf,
+    desktop_root: PathBuf,
+    archives: &'static [(&'static str, &'static [u8])],
+) -> Result<()> {
     let root = home.with_file_name("root");
     fs::create_dir_all(&root)?;
-    gents_server::server_host::ensure_standard_home(
+    gents_server::server_host::ensure_standard_home_with_core_packs(
         &gents_store::test_support::runtime_handle(),
         gents_server::server_host::ProvisionOptions {
             home,
@@ -637,8 +652,22 @@ async fn provision_as_the_desktop(home: PathBuf, desktop_root: PathBuf) -> Resul
             store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
             default_packs: true,
         },
+        archives,
     )
     .await
+}
+
+fn core_pack_archives() -> &'static [(&'static str, &'static [u8])] {
+    let archives: Vec<_> = gents_pack::test_support::skill_only_core_pack_archives()
+        .into_iter()
+        .map(|(coordinate, bytes)| {
+            (
+                &*Box::leak(coordinate.into_boxed_str()),
+                &*Box::leak(bytes.into_boxed_slice()),
+            )
+        })
+        .collect();
+    Box::leak(archives.into_boxed_slice())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -650,7 +679,24 @@ async fn desktop_first_run_in_fixture_home() -> Result<()> {
         home.with_file_name("selected-desktop"),
     );
     if step == "provision" {
-        return provision_as_the_desktop(home, selected.root().to_path_buf()).await;
+        return provision_as_the_desktop(home, selected.root().to_path_buf(), core_pack_archives())
+            .await;
+    }
+    if step == "no-archives" {
+        let refusal = provision_as_the_desktop(home.clone(), selected.root().to_path_buf(), &[])
+            .await
+            .unwrap_err();
+        anyhow::ensure!(
+            format!("{refusal:#}")
+                .ends_with("this desktop dev build is incomplete; run `make desktop-native-dev`"),
+            "unexpected desktop refusal: {refusal:#}"
+        );
+        anyhow::ensure!(
+            gents_service::home_state::read_init_config(&home)?.is_none(),
+            "a refused first run initialized the home"
+        );
+        return provision_as_the_desktop(home, selected.root().to_path_buf(), core_pack_archives())
+            .await;
     }
     let graphql = std::env::var(FIRST_RUN_GRAPHQL_ENV).context("fixture graphql")?;
     let stored = gents_service::home_state::read_init_config(&home)?.context("initialized home")?;
