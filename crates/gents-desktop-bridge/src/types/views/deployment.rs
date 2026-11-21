@@ -41,6 +41,9 @@ pub enum AgentUnavailableReasonView {
     InferenceProfileInvalid,
     ToolConfigurationInvalid,
     ToolSurfaceUnavailable,
+    /// The Agent's host tools read a published WorkspaceRoot it holds no
+    /// `reader` on, so its tool surface cannot be admitted.
+    WorkspaceRootReaderMissing,
     ExecutorStartFailed,
 }
 

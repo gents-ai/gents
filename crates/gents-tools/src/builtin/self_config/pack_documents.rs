@@ -136,7 +136,7 @@ impl PackInstaller {
             let published = (reader.action
                 == gents_protocol::operations::pack::ReaderAction::ReportGrantStep)
                 .then_some(reader.root.as_str());
-            crate::surface::reader_grant_step(&reader.agent, published, prior.is_none())
+            crate::surface::reader_grant_step(&reader.agent, published, None, prior.is_none())
         })
         .collect::<Vec<_>>();
         if let Some(record) = effective.as_object_mut() {

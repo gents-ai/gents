@@ -390,6 +390,7 @@ where
             EffectiveAgentAdmission::Unavailable {
                 public_reason,
                 diagnostic,
+                rejection_text,
             } => {
                 tracing::warn!(
                     request_id = %request.request_id,
@@ -405,7 +406,7 @@ where
                     node_did.as_str(),
                     request,
                     resolution.agent_did.as_str(),
-                    public_reason.public_message(),
+                    rejection_text,
                 )
                 .await?;
             }
