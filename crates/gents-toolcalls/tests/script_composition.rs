@@ -10,10 +10,20 @@ use gents_toolcalls::call::hook::*;
 
 use gents_loop::SessionHook;
 use gents_toolcalls::test_support::script_composition::*;
-#[tokio::test]
-async fn composed_agent_new_keeps_its_asynchronous_receipt() {
+
+struct ComposedAgentNew {
+    fixture: gents_toolcalls::test_support::background_hook::BudgetHookFixture,
+    target: gents_protocol::session::SessionScope,
+    parent: gents_protocol::session::SessionScope,
+    receipt: serde_json::Value,
+    child: String,
+    effect_doc: String,
+    script_doc: String,
+}
+
+async fn composed_agent_new(name: &str) -> ComposedAgentNew {
     let fixture = gents_toolcalls::test_support::background_hook::budget_hook_fixture(
-        "script-agent-new",
+        name,
         Default::default(),
         Default::default(),
         gents_session::test_support::no_lifecycle_plugins(),
@@ -90,6 +100,258 @@ async fn composed_agent_new_keeps_its_asynchronous_receipt() {
         .unwrap(),
         receipt
     );
+    let opening = gents_session::request::binding::load_agent_request_by_doc_id_with_access(
+        &fixture.access,
+        receipt["request_doc_id"].as_str().unwrap(),
+    )
+    .await
+    .unwrap()
+    .expect("the child's opening request is visible to its starter");
+    let parent = gents_protocol::session::SessionScope {
+        node_did: fixture.db.node_identity.did().to_owned(),
+        session_id: fixture.session_id.clone(),
+        requester_did: Some(fixture.user.did().to_owned()),
+    };
+    let target = gents_protocol::session::SessionScope::of_request(&opening);
+    assert_eq!(
+        gents_session::session::origin::verified_agent_new_creation(
+            &fixture.access,
+            &target,
+            &parent
+        )
+        .await
+        .unwrap(),
+        Ok(gents_session::session::origin::VerifiedCreation::CallResult),
+        "{receipt}"
+    );
+    let script_doc = gents_toolcalls::test_support::background_hook::tool_row(
+        &fixture.access,
+        &fixture.session_id,
+        "script",
+    )
+    .await["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ComposedAgentNew {
+        effect_doc: row["_docID"].as_str().unwrap().to_owned(),
+        child,
+        fixture,
+        target,
+        parent,
+        receipt,
+        script_doc,
+    }
+}
+
+async fn effect_lifecycle(
+    composed: &ComposedAgentNew,
+) -> gents_toolcalls::call::lifecycle::ToolCallLifecycle {
+    let fixture = &composed.fixture;
+    fixture
+        .access
+        .transact_readonly("test.effect.load", |txn| {
+            let node = fixture.db.node.clone();
+            let row_id = composed.effect_doc.clone();
+            let node_did = fixture.db.node_identity.did().to_owned();
+            let session = fixture.session_id.clone();
+            let requester = fixture.user.did().to_owned();
+            Box::pin(async move {
+                let mut lifecycle =
+                    gents_toolcalls::call::lifecycle::ToolCallLifecycle::load_by_doc_id_in_txn(
+                        txn,
+                        node,
+                        &row_id,
+                        &node_did,
+                        &session,
+                        Some(&requester),
+                    )
+                    .await?
+                    .unwrap();
+                lifecycle.bind_agent_signer(txn.managed_agent_signer())?;
+                Ok::<_, anyhow::Error>(lifecycle)
+            })
+        })
+        .await
+        .unwrap()
+}
+
+async fn starter_verdict(
+    composed: &ComposedAgentNew,
+) -> gents_session::session::origin::CreationVerdict {
+    gents_session::session::origin::verified_agent_new_creation(
+        &composed.fixture.access,
+        &composed.target,
+        &composed.parent,
+    )
+    .await
+    .unwrap()
+}
+
+async fn can_interrupt(composed: &ComposedAgentNew, id: &str) -> bool {
+    let target_session = composed.receipt["session_id"].as_str().unwrap();
+    let listed = control(&composed.fixture, id, "agent_session_list", json!({})).await;
+    listed["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["session_id"] == target_session)
+        .expect("the child is listed to its starter")["can_interrupt"]
+        == true
+}
+
+#[tokio::test]
+async fn composed_agent_new_keeps_its_asynchronous_receipt() {
+    let composed = composed_agent_new("script-agent-new").await;
+    let target_session = composed.receipt["session_id"].as_str().unwrap().to_owned();
+    effect_lifecycle(&composed)
+        .await
+        .cancel_during_run(gents_session::session::tool_call_state::CancelCause::Interrupted)
+        .await
+        .unwrap();
+    let fixture = &composed.fixture;
+    let cancelled = gents_toolcalls::test_support::background_hook::tool_row(
+        &fixture.access,
+        &fixture.session_id,
+        &composed.child,
+    )
+    .await;
+    assert_eq!(cancelled["lifecycle_state"], "cancelled");
+    assert_eq!(
+        starter_verdict(&composed).await,
+        Ok(gents_session::session::origin::VerifiedCreation::EffectAcceptance)
+    );
+    assert!(can_interrupt(&composed, "list-before-message").await);
+    let message = control(
+        fixture,
+        "queue-worker",
+        "agent_message",
+        json!({"session_id": target_session, "message": "continue", "delivery": "queue"}),
+    )
+    .await;
+    assert_eq!(message["ok"], true, "{message}");
+    assert_eq!(message["delivery"], "request", "{message}");
+    assert!(starter_verdict(&composed).await.is_ok());
+    assert!(can_interrupt(&composed, "list-after-message").await);
+    let interrupted = control(
+        fixture,
+        "interrupt-worker",
+        "agent_interrupt",
+        json!({"session_id": target_session}),
+    )
+    .await;
+    assert_eq!(interrupted["ok"], true, "{interrupted}");
+    let stop = control(
+        fixture,
+        "stop-worker",
+        "agent_stop",
+        json!({"session_id": target_session}),
+    )
+    .await;
+    assert_eq!(stop["ok"], true, "{stop}");
+    let unrelated = gents_protocol::session::SessionScope {
+        session_id: "different-session".into(),
+        ..composed.parent.clone()
+    };
+    assert_eq!(
+        gents_session::session::origin::verified_agent_new_creation(
+            &fixture.access,
+            &composed.target,
+            &unrelated
+        )
+        .await
+        .unwrap(),
+        Err(gents_session::session::origin::CreationDenial::CallerSessionNotFound)
+    );
+    fixture.db.node.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_completed_agent_new_effect_keeps_its_starter() {
+    let composed = composed_agent_new("script-agent-new-completed").await;
+    effect_lifecycle(&composed)
+        .await
+        .complete("the child finished: all work done")
+        .await
+        .unwrap();
+    let fixture = &composed.fixture;
+    let completed = gents_toolcalls::test_support::background_hook::tool_row(
+        &fixture.access,
+        &fixture.session_id,
+        &composed.child,
+    )
+    .await;
+    assert_eq!(completed["lifecycle_state"], "completed", "{completed}");
+    assert_eq!(
+        starter_verdict(&composed).await,
+        Ok(gents_session::session::origin::VerifiedCreation::EffectAcceptance)
+    );
+    assert!(can_interrupt(&composed, "list-completed").await);
+    let interrupted = control(
+        fixture,
+        "interrupt-completed",
+        "agent_interrupt",
+        json!({"session_id": composed.receipt["session_id"]}),
+    )
+    .await;
+    assert_eq!(interrupted["ok"], true, "{interrupted}");
+    fixture.db.node.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_withheld_effect_parent_is_denied_by_name() {
+    use gents_session::session::origin::CreationDenial;
+    let composed = composed_agent_new("script-agent-new-withheld-parent").await;
+    let fixture = &composed.fixture;
+    let script = gents_store::graphql::escape_graphql_string(&composed.script_doc);
+    let refusal = || async {
+        gents_session::session::message::interrupt_refusal(
+            &fixture.db.node,
+            fixture.agent.did(),
+            &composed.parent,
+            &composed.target,
+        )
+        .await
+        .unwrap()
+        .expect("the starter is refused without an accepted effect parent")
+    };
+    fixture
+        .access
+        .write(
+            "test.script_composition.unbind_parent",
+            &format!(
+                r#"mutation {{ update_AgentToolCall(docID: "{script}", input: {{tool_call_id: "rebound-script"}}) {{ _docID }} }}"#
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        starter_verdict(&composed).await,
+        Err(CreationDenial::ParentUnreadable)
+    );
+    let unreadable = refusal().await;
+    assert!(
+        unreadable.contains(&CreationDenial::ParentUnreadable.to_string()),
+        "{unreadable}"
+    );
+    fixture
+        .access
+        .write(
+            "test.script_composition.delete_parent",
+            &format!(r#"mutation {{ delete_AgentToolCall(docID: "{script}") {{ _docID }} }}"#),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        starter_verdict(&composed).await,
+        Err(CreationDenial::ParentMissing)
+    );
+    let missing = refusal().await;
+    assert!(
+        missing.contains(&CreationDenial::ParentMissing.to_string()),
+        "{missing}"
+    );
+    assert!(!can_interrupt(&composed, "list-withheld").await);
     fixture.db.node.shutdown().await.unwrap();
 }
 
