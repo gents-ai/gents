@@ -118,6 +118,16 @@ pub fn workspace_root_list_call(home: &std::path::Path) -> String {
     format!("gents config workspace-root list --home {}", home.display())
 }
 
+/// What an Agent does with a reader-grant step: hand the User its command, and
+/// the separate target guidance only when the step carries one.
+pub fn reader_grant_how_to_proceed(target_guidance: bool) -> &'static str {
+    if target_guidance {
+        "Keep these Tools and give the User user_command and target_guidance to run it from their own client; no config or policy call, and no change to your own Tools, can grant it."
+    } else {
+        "Keep these Tools and give the User user_command to run from their own client; no config or policy call, and no change to your own Tools, can grant it."
+    }
+}
+
 /// The cause of an Agent's host tools not being admitted, when the runtime knows
 /// the root and its own home: the grant, with the home it applies to.
 pub fn workspace_root_reader_missing_message(agent_did: &str, path: &str, home: &str) -> String {

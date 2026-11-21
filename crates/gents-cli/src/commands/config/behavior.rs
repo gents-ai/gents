@@ -197,6 +197,8 @@ fn target_host_root_receipt(
     if let Some(Value::String(command)) = receipt.pointer_mut("/host_root_access/user_command") {
         *command = with_target(command, home, graphql);
         receipt["host_root_access"]["target_guidance"] = Value::Null;
+        receipt["host_root_access"]["how_to_proceed"] =
+            gents_protocol::node_readiness::reader_grant_how_to_proceed(false).into();
     }
     Ok(())
 }
@@ -495,7 +497,7 @@ pub(super) async fn agent_show(args: AgentShowArgs) -> Result<()> {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn targeted_root_receipts_do_not_append_targets_to_unknown_home_prose() {
+    fn targeted_root_receipts_drop_target_guidance_and_unknown_targets_keep_it() {
         let original = serde_json::json!({
             "agent_did": "did:key:helper",
             "host_root_access": {
@@ -514,6 +516,10 @@ mod tests {
             super::target_host_root_receipt(&mut receipt, home, graphql).unwrap();
             assert_eq!(receipt["host_root_access"]["user_command"], expected);
             assert!(receipt["host_root_access"]["target_guidance"].is_null());
+            assert!(!receipt["host_root_access"]["how_to_proceed"]
+                .as_str()
+                .unwrap()
+                .contains("target_guidance"));
         }
         let mut unknown = original.clone();
         super::target_host_root_receipt(&mut unknown, None, None).unwrap();

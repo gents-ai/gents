@@ -5,6 +5,10 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use axum::{routing::get, Json, Router};
+use gents::support::live_inference::rows_when;
+use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
+use gents_protocol::row::{decode_node_readiness_snapshot, NodeReadinessRow};
+use gents_store::config_client::ConfigAccess;
 use serde_json::{json, Value};
 
 fn document_pack(
@@ -221,8 +225,7 @@ async fn remote_pack_install_update_and_diagnose_keep_plugin_failures_isolated()
             &graphql,
         ],
     )?;
-    let after_grant_generation =
-        wait_for_runtime_quiescence(&graphql, &owner, 2, Duration::from_millis(200)).await?;
+    wait_for_runtime_quiescence(&graphql, &owner, 2, Duration::from_millis(200)).await?;
     let selection = graphql_query(
         &graphql,
         &format!(
@@ -270,35 +273,31 @@ async fn remote_pack_install_update_and_diagnose_keep_plugin_failures_isolated()
             &graphql,
         ],
     )?;
-    wait_for_runtime_quiescence(
-        &graphql,
-        &owner,
-        after_grant_generation + 1,
-        Duration::from_millis(200),
-    )
-    .await?;
-    // A stable earlier generation may still precede the Tools edit. Observe
-    // this agent's demotion rather than assuming quiescence means it reloaded.
-    let deadline = std::time::Instant::now() + Duration::from_secs(20);
-    let diagnosed = loop {
-        let snapshot = run_cli_json(&home, &["runtime", "diagnose", "--graphql", &graphql])?;
-        let demoted = snapshot
-            .pointer("/checks/runtime_node_readiness/unavailable_agents")
-            .and_then(Value::as_array)
-            .is_some_and(|agents| {
-                agents
-                    .iter()
-                    .any(|agent| agent["agent_did"] == broken_agent.as_str())
-            });
-        if demoted {
-            break snapshot;
-        }
-        anyhow::ensure!(
-            std::time::Instant::now() < deadline,
-            "edited Tools never demoted the agent; last diagnose: {snapshot}"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    };
+    // Wait on the node's readiness rows for the edit's demotion of this agent;
+    // a quiescent earlier generation may still precede the Tools edit.
+    let readiness = ConfigAccess::Graphql(crate::support::graphql::served_endpoint(&graphql));
+    let query = format!(
+        r#"{{ NodeReadiness(filter: {{node_did: {{_eq: "{}"}}}}) {{node_did snapshot_json updated_at}} }}"#,
+        escape_graphql_string(&owner)
+    );
+    rows_when(&readiness, "NodeReadiness", &query, |data| {
+        data["NodeReadiness"].as_array().is_some_and(|rows| {
+            rows.iter().any(|value| {
+                serde_json::from_value::<NodeReadinessRow>(value.clone())
+                    .ok()
+                    .and_then(|row| decode_node_readiness_snapshot(&row, &owner).ok())
+                    .is_some_and(|snapshot| {
+                        snapshot.agents.iter().any(|agent| {
+                            agent.agent_did == broken_agent
+                                && agent.reason
+                                    == Some(AgentReadinessUnavailableReason::ToolSurfaceUnavailable)
+                        })
+                    })
+            })
+        })
+    })
+    .await;
+    let diagnosed = run_cli_json(&home, &["runtime", "diagnose", "--graphql", &graphql])?;
     let unavailable = diagnosed
         .pointer("/checks/runtime_node_readiness/unavailable_agents")
         .and_then(Value::as_array)

@@ -754,7 +754,9 @@ pub(crate) fn reader_grant_step(
         "published_root": published_root,
         "answer": answer,
         "user_command": user_command,
-        "how_to_proceed": "Keep these Tools and give the User user_command and target_guidance to run it from their own client; no config or policy call, and no change to your own Tools, can grant it.",
+        "how_to_proceed": gents_protocol::node_readiness::reader_grant_how_to_proceed(
+            target_guidance.is_some()
+        ),
     })
 }
 
@@ -951,10 +953,14 @@ mod tests {
                 assert!(!command.contains('('));
                 assert!(!command.contains("Add --home"));
                 assert_eq!(step["target_guidance"].is_null(), home.is_some());
-                assert!(step["how_to_proceed"]
-                    .as_str()
-                    .unwrap()
-                    .contains("target_guidance"));
+                assert_eq!(
+                    step["how_to_proceed"]
+                        .as_str()
+                        .unwrap()
+                        .contains("target_guidance"),
+                    home.is_none(),
+                    "the step names target_guidance only when it carries one"
+                );
                 if home.is_some() {
                     assert!(command.contains("--home /node/home"));
                 }
