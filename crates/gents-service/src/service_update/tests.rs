@@ -653,8 +653,6 @@ fn write_receipt(directory: &Path, phase: Phase) -> Receipt {
     let receipt = Receipt {
         operation_id: uuid::Uuid::new_v4(),
         node_did: "node".into(),
-        session_id: None,
-        request_id: None,
         phase,
         message: String::new(),
         updated_at: String::new(),
