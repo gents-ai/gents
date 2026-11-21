@@ -10,16 +10,39 @@ use crate::cli::args::PluginRunArgs;
 
 use super::store::{self, InstalledPlugin};
 
+#[derive(Debug, thiserror::Error)]
+enum PluginRunLookupError {
+    #[error("no plugins are installed in this home ({home}); plugin {coordinate} is not installed; install it with `gents config pack plugin install {coordinate}`")]
+    NoPluginsInstalled {
+        home: std::path::PathBuf,
+        coordinate: String,
+    },
+}
+
+fn installed_record(home: &Path, namespace: &str, name: &str) -> Result<InstalledPlugin> {
+    let coordinate = format!("{namespace}/{name}");
+    match PluginExecutor::new(Some(home.to_owned())).resolve(&coordinate, None) {
+        Ok(record) => Ok(record),
+        Err(error) if error.store_absent() == Some(store::StoreAbsent::Missing) => {
+            Err(PluginRunLookupError::NoPluginsInstalled {
+                home: home.to_owned(),
+                coordinate,
+            }
+            .into())
+        }
+        Err(error) => Err(error).with_context(|| {
+            format!(
+                "{coordinate} is not installed or could not be read under {}; install it with `gents config pack plugin install {coordinate}`",
+                home.display()
+            )
+        }),
+    }
+}
+
 pub(crate) async fn run(args: PluginRunArgs) -> Result<()> {
     let (namespace, name) = gents_pack::pack::registry::split_pack_coordinate(&args.name);
     let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
-    let record = store::read_record(&home, namespace, name).with_context(|| {
-        format!(
-            "{namespace}/{name} is not installed under {}; run `gents config pack plugin install {name}` \
-             first",
-            home.display()
-        )
-    })?;
+    let record = installed_record(&home, namespace, name)?;
     let input = match &args.input {
         Some(raw) => serde_json::from_str::<serde_json::Value>(raw)
             .with_context(|| format!("--input is not valid JSON: {raw:?}"))?,
@@ -82,12 +105,7 @@ async fn call_installed_inner(
     ux: bool,
     context: &gents_loop::tool::ToolCallEnvelope,
 ) -> Result<serde_json::Value> {
-    let record = store::read_record(home, namespace, name).with_context(|| {
-        format!(
-            "{namespace}/{name} is not installed under {}",
-            home.display()
-        )
-    })?;
+    let record = installed_record(home, namespace, name)?;
     let mut executor = PluginExecutor::new(Some(home.to_owned()));
     if record.declaration.model_slot.is_some() && record.model_binding.is_some() {
         let (access, _) = crate::resolve_config_access(Some(home), None).await?;
@@ -443,6 +461,7 @@ mod tests {
     #[tokio::test]
     async fn running_a_plugin_that_is_not_installed_names_it() {
         let home = tempfile::tempdir().unwrap();
+        store::bootstrap_store(home.path()).unwrap();
         let error = run(PluginRunArgs {
             name: "gents/does_not_exist".to_owned(),
             input: None,
@@ -454,6 +473,44 @@ mod tests {
         let message = format!("{error:#}");
         assert!(message.contains("gents/does_not_exist"), "{message}");
         assert!(message.contains("not installed"), "{message}");
+        assert!(
+            message.contains(
+                "install it with `gents config pack plugin install gents/does_not_exist`"
+            ),
+            "{message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_fresh_home_names_the_missing_plugin_once_and_creates_no_store() {
+        let root = tempfile::tempdir().unwrap();
+        for home in [root.path().to_owned(), root.path().join("nonexistent")] {
+            let error = run(PluginRunArgs {
+                name: "gents/missing".into(),
+                input: None,
+                home: Some(home.clone()),
+                bind_dir: None,
+            })
+            .await
+            .unwrap_err();
+            assert_eq!(error.chain().count(), 1);
+            let message = format!("{error:#}");
+            assert_eq!(
+                message
+                    .matches("no plugins are installed in this home")
+                    .count(),
+                1
+            );
+            assert!(
+                message
+                    .contains("install it with `gents config pack plugin install gents/missing`"),
+                "{message}"
+            );
+            assert!(!home
+                .join(gents_store::local::home::PLUGINS_DIR_NAME)
+                .exists());
+        }
+        assert!(!root.path().join("nonexistent").exists());
     }
 
     #[tokio::test]

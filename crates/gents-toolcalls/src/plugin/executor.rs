@@ -196,6 +196,18 @@ impl PluginResolutionError {
     pub fn is_busy(&self) -> bool {
         matches!(self, Self::Busy { .. })
     }
+
+    /// The home has no published store: never bootstrapped, removed, or
+    /// replaced since it was read.
+    pub fn store_absent(&self) -> Option<store::StoreAbsent> {
+        match self {
+            Self::NotInstalled {
+                source: store::PublishedPluginReadError::Absent(absent),
+                ..
+            } => Some(*absent),
+            _ => None,
+        }
+    }
 }
 
 fn json_digest(value: &serde_json::Value) -> String {

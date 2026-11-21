@@ -7,8 +7,15 @@ use serde::{Deserialize, Serialize};
 
 use gents_documents::plugin_coordinate::checked_component;
 
+mod read;
+pub use read::{StoreAbsent, StoreReadIdentity};
+
 fn plugins_root(home: &Path) -> PathBuf {
     home.join(gents_store::local::home::PLUGINS_DIR_NAME)
+}
+
+fn lock_path(home: &Path) -> PathBuf {
+    plugins_root(home).join(".store.lock")
 }
 
 fn store_dir(home: &Path) -> PathBuf {
@@ -239,6 +246,7 @@ pub fn grant_on_install(
 
 pub fn store_bytes(home: &Path, digest_hex: &str, bytes: &[u8]) -> Result<()> {
     let path = store_path(home, digest_hex)?;
+    bootstrap_store(home)?;
     let dir = store_dir(home);
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     crate::pack::registry::stage_and_persist(&dir, &path, bytes)
@@ -296,39 +304,54 @@ impl StoreGuard {
     }
 }
 
-/// The shared install lock and exclusive release lock prevent deleting bytes
-/// after a concurrent install writes them but before its record is visible.
-pub fn lock_store(home: &Path, exclusive: bool) -> Result<StoreGuard> {
-    let path = plugins_root(home).join(".store.lock");
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating {}", parent.display()))?;
-    }
+/// The blocking writer lease: an installer's exclusive lock, held until the
+/// guard drops.
+pub fn lock_store(home: &Path) -> Result<StoreGuard> {
+    bootstrap_store(home)?;
+    let path = lock_path(home);
     let file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
-        .create(true)
-        .truncate(false)
         .open(&path)
         .with_context(|| format!("opening {}", path.display()))?;
-    let lock = if exclusive {
-        gents_store::local::file_lock::FileLock::exclusive(file)
-    } else {
-        gents_store::local::file_lock::FileLock::shared(file)
-    }
-    .with_context(|| format!("locking {}", path.display()))?;
+    let lock = gents_store::local::file_lock::FileLock::exclusive(file)
+        .with_context(|| format!("locking {}", path.display()))?;
     Ok(StoreGuard {
         home: home.to_owned(),
         _lock: lock,
     })
 }
 
+/// Creates the store directory and its lock file, and nothing else. Node
+/// start and installers are the only callers: a read never creates the store,
+/// so a reader of a removed home cannot recreate it.
+pub fn bootstrap_store(home: &Path) -> std::result::Result<(), PublishedPluginReadError> {
+    std::fs::create_dir_all(plugins_root(home))
+        .map_err(|error| PublishedPluginReadError::Read(error.into()))?;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(lock_path(home))
+        .map_err(|error| PublishedPluginReadError::Read(error.into()))?;
+    Ok(())
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum PublishedPluginReadError {
     #[error("plugin store is busy; retry this pack operation")]
     Busy,
+    #[error(fmt = gents_protocol::error_chain::held)]
+    Absent(#[source] StoreAbsent),
     #[error("reading the published plugin store")]
     Read(#[source] anyhow::Error),
+}
+
+impl From<StoreAbsent> for PublishedPluginReadError {
+    fn from(absent: StoreAbsent) -> Self {
+        Self::Absent(absent)
+    }
 }
 
 impl PublishedPluginReadError {
@@ -346,39 +369,27 @@ impl PublishedPluginReadError {
 
 /// Async mutation owners use a nonblocking lock attempt to avoid parking a Tokio worker.
 pub fn try_lock_store(home: &Path) -> Result<StoreGuard> {
-    try_lock_store_mode(home, true).map_err(Into::into)
+    try_lock_store_writer(home).map_err(Into::into)
 }
 
+/// A read of the published store. It never creates the store: a home whose
+/// store was never bootstrapped, or was removed, is [`StoreAbsent`].
 pub fn try_lock_store_shared(
     home: &Path,
 ) -> std::result::Result<StoreGuard, PublishedPluginReadError> {
-    try_lock_store_mode(home, false)
+    StoreReadIdentity::capture(home)?.try_shared()
 }
 
-fn try_lock_store_mode(
-    home: &Path,
-    exclusive: bool,
-) -> std::result::Result<StoreGuard, PublishedPluginReadError> {
-    let path = plugins_root(home).join(".store.lock");
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating {}", parent.display()))
-            .map_err(PublishedPluginReadError::Read)?;
-    }
+fn try_lock_store_writer(home: &Path) -> std::result::Result<StoreGuard, PublishedPluginReadError> {
+    bootstrap_store(home)?;
+    let path = lock_path(home);
     let file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
-        .create(true)
-        .truncate(false)
         .open(&path)
         .with_context(|| format!("opening {}", path.display()))
         .map_err(PublishedPluginReadError::Read)?;
-    let result = if exclusive {
-        gents_store::local::file_lock::FileLock::try_exclusive(file)
-    } else {
-        gents_store::local::file_lock::FileLock::try_shared(file)
-    };
-    let lock = match result {
+    let lock = match gents_store::local::file_lock::FileLock::try_exclusive(file) {
         Ok(lock) => lock,
         Err(std::fs::TryLockError::WouldBlock) => return Err(PublishedPluginReadError::Busy),
         Err(std::fs::TryLockError::Error(error)) => {
@@ -433,6 +444,7 @@ pub fn release_unreferenced_bytes(home: &Path, digests: &BTreeSet<String>) -> Re
 
 pub fn write_record(home: &Path, record: &InstalledPlugin) -> Result<()> {
     let path = record_path(home, &record.namespace, &record.name)?;
+    bootstrap_store(home)?;
     let parent = path
         .parent()
         .context("installed-plugin record has no parent")?;

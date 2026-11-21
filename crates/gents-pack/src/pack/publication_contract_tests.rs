@@ -121,7 +121,7 @@ async fn generated_local_publication_survives_notification_outcomes() {
                 let guard = tokio::time::timeout(
                     std::time::Duration::from_secs(20),
                     tokio::task::spawn_blocking(move || {
-                        crate::plugin::store::lock_store(&wait_home, true)
+                        crate::plugin::store::lock_store(&wait_home)
                     }),
                 )
                 .await
