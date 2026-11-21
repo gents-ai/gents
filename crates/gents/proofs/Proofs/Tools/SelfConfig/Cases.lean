@@ -560,29 +560,34 @@ def scenarios : List CaseRow := examplesToRows ++
   , { name := "tools_job_ceiling_narrowing_accepted"
     , target := .tools, guarded := false, validates := true
     , doc := [("self_config", "{\"enable_self_config\":true}"),
+        ("agents", "{\"target_ids\":[\"target\"]}"),
         ("integrations", jobIntegrations 8 "check")]
     , patch := [("integrations", some (jobIntegrations 4 "check"))] }
   , { name := "tools_job_ceiling_widening_with_held_accepted"
     , target := .tools, guarded := false, validates := true
     , held := { Grants.bot with packInstall := true }
     , doc := [("self_config", "{\"enable_self_config\":true}"),
+        ("agents", "{\"target_ids\":[\"target\"]}"),
         ("integrations", jobIntegrations 4 "check")]
     , patch := [("integrations", some (jobIntegrations 8 "check"))] }
   , { name := "tools_job_policy_edit_accepted"
     , target := .tools, guarded := false, validates := true
     , doc := [("self_config", "{\"enable_self_config\":true}"),
+        ("agents", "{\"target_ids\":[\"target\"]}"),
         ("integrations", jobIntegrations 4 "check")]
     , patch := [("integrations", some (jobIntegrations 4 "off"))] }
   , { name := "tools_job_block_added_accepted"
     , target := .tools, guarded := false, validates := true
-    , doc := [("self_config", "{\"enable_self_config\":true}")]
+    , doc := [("self_config", "{\"enable_self_config\":true}"),
+        ("agents", "{\"target_ids\":[\"target\"]}")]
     , patch := [("integrations", some (jobIntegrations 4 "check"))] }
   , { name := "context_select_job_tools_from_none_with_held_accepted"
     , target := .agentContext, guarded := false, validates := true
     , held := { Grants.bot with packInstall := true }
     , doc := [("context_id", "ctx")]
     , patch := [("tools_id", some "jobbed")]
-    , tools := [("jobbed", plainTools ++ [("integrations", jobIntegrations 4 "check")])] }
+    , tools := [("jobbed", plainTools ++ [("agents", "{\"target_ids\":[\"target\"]}"),
+        ("integrations", jobIntegrations 4 "check")])] }
   ]
 
 def selfConfigCases : List CaseWitness :=
