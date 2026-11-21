@@ -54,7 +54,7 @@ async fn reads_document(
         .check_doc_access(
             &acp::Identity::Authenticated(actor.clone()),
             acp::DocumentPermission::Read,
-            gents_store::local::document_acp::node_policy_ids(&node).id(BuiltInPolicy::Household),
+            gents_store::local::document_acp::node_policy_ids(node).id(BuiltInPolicy::Household),
             RESOURCE,
             document,
         )
@@ -370,7 +370,7 @@ async fn owner_on_vera(
         .vera_acp()
         .expect("the node decides document access through Vera")
         .get_doc_owner(
-            gents_store::local::document_acp::node_policy_ids(&node).id(BuiltInPolicy::Household),
+            gents_store::local::document_acp::node_policy_ids(node).id(BuiltInPolicy::Household),
             TASK_RESOURCE,
             document,
         )
@@ -387,7 +387,7 @@ async fn reads_task(
         .check_doc_access(
             &acp::Identity::Authenticated(actor.clone()),
             acp::DocumentPermission::Read,
-            gents_store::local::document_acp::node_policy_ids(&node).id(BuiltInPolicy::Household),
+            gents_store::local::document_acp::node_policy_ids(node).id(BuiltInPolicy::Household),
             TASK_RESOURCE,
             document,
         )

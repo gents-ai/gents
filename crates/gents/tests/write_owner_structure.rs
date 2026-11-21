@@ -3145,7 +3145,7 @@ const PROCESS_STATIC_ALLOWLIST: &[(&str, usize, &str)] = &[
     ("crates/gents-store/src/config_client/subscription.rs", 1, "the shared reqwest client, a connection pool built once; stays"),
     ("crates/gents-store/src/identity/request_receipt.rs", 1, "the default request input: an immutable value built once on first use, the same for every node and Agent; stays"),
     ("crates/gents-store/src/node_extension.rs", 1, "the node extension table, the one owner of per-node attachments and per-node state keyed by node address; stays"),
-    ("crates/gents-store/src/schema/catalog.rs", 4, "baseline schemas and the runtime catalog: an immutable value built once on first use, the same for every node and Agent; stays"),
+    ("crates/gents-store/src/schema/catalog.rs", 3, "baseline schemas and the runtime catalog of each set of policy IDs: immutable values built once on first use, the same for every node and Agent; stays"),
     ("crates/gents-store/src/schema/catalog/install.rs", 1, "lock serialising schema ensure across the desktop and runtime paths of one process; stays"),
     ("crates/gents-store/src/schema/journal.rs", 1, "journal baseline collections: an immutable value built once on first use, the same for every node and Agent; stays"),
     ("crates/gents-store/src/service.rs", 1, "the build identifier: an immutable value built once on first use, the same for every node and Agent; stays"),

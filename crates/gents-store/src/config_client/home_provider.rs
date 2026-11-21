@@ -14,10 +14,17 @@ impl GraphqlEndpoint {
     /// home reported. Only a home on a Vera node names one
     /// (`document_acp::status_reports`).
     pub(crate) async fn home_provider(&self) -> Result<DocumentAcp> {
+        match self.authenticated_provider().await? {
+            DocumentAcp::Local if self.delegation_audience.get().is_some() => Ok(DocumentAcp::Vera),
+            provider => Ok(provider),
+        }
+    }
+
+    /// The provider as the runtime says it authenticates this endpoint's
+    /// client alone, which an endpoint opened with a fixed authentication
+    /// reports as the node's own store whatever its home.
+    pub(crate) async fn authenticated_provider(&self) -> Result<DocumentAcp> {
         match self.runtime_authentication().await? {
-            ClientAuthentication::Local if self.delegation_audience.get().is_some() => {
-                Ok(DocumentAcp::Vera)
-            }
             ClientAuthentication::Local => Ok(DocumentAcp::Local),
             ClientAuthentication::Vera { .. } => Ok(DocumentAcp::Vera),
             ClientAuthentication::Unavailable => {
