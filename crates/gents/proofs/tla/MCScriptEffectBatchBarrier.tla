@@ -1,0 +1,3 @@
+---- MODULE MCScriptEffectBatchBarrier ----
+EXTENDS ScriptEffectBatch
+====
