@@ -94,6 +94,7 @@ mod tests {
         let tokens = serde_json::to_vec(&body["messages"]).unwrap().len() / 4;
         let accounting = serde_json::from_value(json!({
             "accounting_version":gents_protocol::rendered_request::CONTEXT_ACCOUNTING_VERSION,
+            "history_stubbing":{"stubbed_results":0,"original_bytes":0,"stub_bytes":0},
             "turn_index":0, "attempt":0, "estimator":"openai_chat_wire_json_bytes_div_4_v1",
             "components":{"messages":tokens,"documents":0,"tool_schemas":0,"additional_parameters":0,"output_schema":0},
             "estimated_input_tokens":tokens, "context_window":10000,

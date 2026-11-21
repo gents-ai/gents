@@ -95,8 +95,9 @@ pub(super) fn compaction_reducers_follow_the_lean_model() {
             _,
             Vec<gents_lean_vocab::families::contracts_compaction_reducer_gate::CompactionRowWire>,
         >(&case.input.input_rows));
-        let reduced = apply_compaction_reducer(&case.input.reducer, input.clone());
-        let reapplied = apply_compaction_reducer(&case.input.reducer, reduced.clone());
+        let (reduced, receipts) = apply_compaction_reducer(&case.input.reducer, input.clone());
+        let (reapplied, _) = apply_compaction_reducer(&case.input.reducer, reduced.clone());
+        let reported = gents_inference::compaction::history::stubbing_figures(&receipts);
         if case.input.name == "reapply_preserves_view_coherent" {
             assert!(
                 pair_closed(&reapplied),
@@ -119,6 +120,11 @@ pub(super) fn compaction_reducers_follow_the_lean_model() {
                 ),
                 reducer_is_identity: reduced == input,
                 reducer_is_idempotent: reapplied == reduced,
+                stubbed_results: stubbed_results(&input, &reduced),
+                reported_stubs: reported.stubbed_results as u64,
+                reported_original_bytes: reported.original_bytes as u64,
+                reported_stub_bytes: reported.stub_bytes as u64,
+                reported_bytes_removed: reported.bytes_removed() as u64,
             },
         );
     }
@@ -141,18 +147,18 @@ fn compaction_cursor_follows_the_lean_model() {
             compacted,
         );
         if let Some(cursor) = actual {
-            let (full, _) = gents_inference::compaction::provider_view(
+            let (full, _, _) = gents_inference::compaction::provider_view(
                 GROUPED_PROFILE,
                 rows.iter().map(|(_, message)| message.clone()).collect(),
             );
-            let (filtered, _) = gents_inference::compaction::provider_view(
+            let (filtered, _, _) = gents_inference::compaction::provider_view(
                 GROUPED_PROFILE,
                 rows.iter()
                     .filter(|(sequence, _)| *sequence > cursor)
                     .map(|(_, message)| message.clone())
                     .collect(),
             );
-            let (prefix, _) = gents_inference::compaction::provider_view(
+            let (prefix, _, _) = gents_inference::compaction::provider_view(
                 GROUPED_PROFILE,
                 rows.iter()
                     .filter(|(sequence, _)| *sequence <= cursor)
@@ -176,12 +182,19 @@ fn compaction_cursor_follows_the_lean_model() {
     }
 }
 
-fn apply_compaction_reducer(reducer: &str, input: Vec<Message>) -> Vec<Message> {
-    match reducer {
-        "strip" => gents_inference::compaction::strip_tool_results(input).0,
-        "provider_view" => gents_inference::compaction::provider_view(GROUPED_PROFILE, input).0,
+fn apply_compaction_reducer(
+    reducer: &str,
+    input: Vec<Message>,
+) -> (
+    Vec<Message>,
+    Vec<gents_inference::compaction::history::StubReceipt>,
+) {
+    let (messages, _, receipts) = match reducer {
+        "strip" => gents_inference::compaction::strip_tool_results(input),
+        "provider_view" => gents_inference::compaction::provider_view(GROUPED_PROFILE, input),
         other => panic!("unsupported compaction reducer {other:?}"),
-    }
+    };
+    (messages, receipts)
 }
 
 fn is_subsequence(needle: &[String], haystack: &[String]) -> bool {
@@ -194,7 +207,8 @@ fn is_subsequence(needle: &[String], haystack: &[String]) -> bool {
 fn compaction_messages_for_rows(
     rows: &[gents_lean_vocab::families::contracts_compaction_reducer_gate::CompactionRowWire],
 ) -> Vec<Message> {
-    rows.iter()
+    let messages = rows
+        .iter()
         .map(|row| match row.kind.as_str() {
             "ordinary" => compaction_text_message(&row.role, row.text.as_deref().unwrap()),
             "assistant_tool_calls" => {
@@ -214,14 +228,77 @@ fn compaction_messages_for_rows(
             }
             "tool_result" => {
                 assert_eq!(row.role, "user");
-                compaction_tool_result_message(
-                    row.call_id.as_deref().unwrap(),
-                    "large tool payload",
-                )
+                let bytes = usize::try_from(row.original_bytes.expect("measured size")).unwrap();
+                let call_id = row.call_id.as_deref().unwrap();
+                let payload = if row.stub_shaped.expect("measured shape") {
+                    stub_shaped_payload(call_id, bytes)
+                } else {
+                    "x".repeat(bytes)
+                };
+                compaction_tool_result_message(call_id, &payload)
             }
             other => panic!("unsupported compaction row kind {other:?}"),
         })
-        .collect()
+        .collect::<Vec<_>>();
+    // The model decides stubbing from these sizes, so they must be what the
+    // production reducer really measures for these messages.
+    let fixture_sizes = rows
+        .iter()
+        .filter(|row| row.kind == "tool_result")
+        .map(|row| gents_inference::compaction::history::StubSizes {
+            original_bytes: usize::try_from(row.original_bytes.unwrap()).unwrap(),
+            stub_bytes: usize::try_from(row.stub_bytes.expect("measured stub size")).unwrap(),
+            stub_shaped: row.stub_shaped.unwrap(),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        gents_inference::compaction::history::tool_result_stub_sizes(&messages),
+        fixture_sizes,
+        "fixture sizes are the reducer's real measurements: {rows:?}"
+    );
+    messages
+}
+
+/// Text a tool wrote in a stub's shape, claiming one byte, `bytes` long.
+fn stub_shaped_payload(call_id: &str, bytes: usize) -> String {
+    let shaped = |name: &str| {
+        format!("[tool: {name}, call_id: {call_id}, 1 bytes — full output: sessions {{}}]")
+    };
+    let padding = bytes
+        .checked_sub(shaped("").len())
+        .expect("a stub-shaped fixture output fits its frame");
+    shaped(&"s".repeat(padding))
+}
+
+/// Tool results the reducer replaced: those whose content differs from the
+/// input result with the same call id.
+fn stubbed_results(input: &[Message], reduced: &[Message]) -> u64 {
+    let results = |messages: &[Message]| {
+        messages
+            .iter()
+            .flat_map(|message| match message {
+                Message::User { content } => content
+                    .iter()
+                    .filter_map(|item| match item {
+                        UserContent::ToolResult(result) => Some(result.clone()),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            })
+            .collect::<Vec<_>>()
+    };
+    let before = results(input);
+    results(reduced)
+        .iter()
+        .filter(|after| {
+            let original = before
+                .iter()
+                .find(|result| tool_result_id(result) == tool_result_id(after))
+                .expect("a reduced result comes from the input");
+            original.content != after.content
+        })
+        .count() as u64
 }
 
 fn with_leading_reasoning(messages: &[Message]) -> Vec<Message> {

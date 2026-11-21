@@ -88,6 +88,7 @@ use provider_idle::{within_provider_idle, ProviderAttemptFailure};
 use request_assembly::dispatch::{context_accounting_for_request, prepare_dispatch_attempt};
 use request_assembly::message_values;
 use request_assembly::repair::repair_and_rebuild_request;
+use request_assembly::tagged_history::dispatched_stubbing;
 use request_assembly::turn_budget::{
     build_budgeted_request, rebuild_after_provider_overflow, RejectedProviderInput, TurnInputs,
     TurnState,
@@ -473,6 +474,7 @@ where
                             attempt,
                             compaction_reason,
                             pre_compaction_input_tokens,
+                            dispatched_stubbing(history.iter().chain(new_messages.iter())),
                         ));
                         on_rendered_request(
                             &config.provider_call,
@@ -1664,6 +1666,7 @@ where
                             new_messages.push(TaggedMessage {
                                 message, source: accepted_source.clone(),
                                 physical_header: None, block_indices: Vec::new(),
+                                stub_receipts: Vec::new(),
                             });
                         }
                         new_messages.extend(committed.into_iter().map(|row| TaggedMessage::unassociated(row.message)));
@@ -1684,6 +1687,7 @@ where
                                 source: accepted_source.clone(),
                                 physical_header: None,
                                 block_indices: Vec::new(),
+                                stub_receipts: Vec::new(),
                             });
                         }
                         let reminder = Message::user(
@@ -1706,7 +1710,7 @@ where
                         FinishOrIntake::Continue(inputs) => {
                             if let Some(mut message) = accumulator.take_message() {
                                 turn_ids.stamp(&mut message);
-                                new_messages.push(TaggedMessage { message, source: accepted_source.clone(), physical_header: None, block_indices: Vec::new() });
+                                new_messages.push(TaggedMessage { message, source: accepted_source.clone(), physical_header: None, block_indices: Vec::new(), stub_receipts: Vec::new() });
                             }
                             new_messages.extend(inputs.into_iter().map(|input| TaggedMessage::unassociated(input.message)));
                             continue 'turns;
