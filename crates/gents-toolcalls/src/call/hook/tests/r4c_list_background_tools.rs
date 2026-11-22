@@ -16,6 +16,9 @@ struct StaticTool {
 }
 
 impl ToolDyn for StaticTool {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         self.name.to_string()
     }
@@ -44,6 +47,9 @@ struct PendingTool;
 struct GatedTool(std::sync::Arc<tokio::sync::Semaphore>);
 
 impl ToolDyn for GatedTool {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         "gated_tool".to_owned()
     }
@@ -148,6 +154,9 @@ async fn background_wait_recovers_after_the_change_feed_closes() {
 }
 
 impl ToolDyn for PendingTool {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         "slow_tool".to_string()
     }

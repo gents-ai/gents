@@ -1,3 +1,5 @@
+mod effect_batch;
+
 use super::*;
 use crate::tool::ToolCallEnvelope;
 use crate::tool_call_lifecycle::runtime::{
@@ -70,104 +72,28 @@ where
         ordinal: u32,
         name: &'a str,
         arguments: &'a str,
-    ) -> crate::tool::BoxFuture<'a, Result<ToolOutcome, crate::tool_effects::ToolEffectError>> {
+    ) -> crate::tool::BoxFuture<'a, crate::tool_effects::EffectResult> {
         Box::pin(async move {
-            use crate::tool_effects::ToolEffectError::{Fatal, Unavailable};
-            self.composed
-                .store(true, std::sync::atomic::Ordering::Release);
-            let result = async {
-                let child = child_envelope(parent).ok_or_else(|| {
-                    Unavailable("tool effects require a request execution scope".to_owned())
-                })?;
-                let child = &child;
-                async {
-                    let internal_id = self
-                        .hook
-                        .admit_tool_effect(
-                            &self.parent_internal_id,
-                            ordinal,
-                            name,
-                            arguments,
-                            child,
-                        )
-                        .await
-                        .map_err(Unavailable)?;
-                    if let Some(outcome) =
-                        admit_tool_effect(self.tools.as_slice(), name, arguments, child)
-                    {
-                        let result = match self
-                            .hook
-                            .on_tool_admission_rejected(
-                                name,
-                                None,
-                                &internal_id,
-                                arguments,
-                                &outcome,
-                            )
-                            .await
-                        {
-                            HookAction::Continue => Ok(outcome),
-                            HookAction::Terminate { reason } => Err(Fatal(reason)),
-                        };
-                        let cancelled = ToolOutcome::Cancelled;
-                        self.hook
-                            .finish_tool_effect(
-                                &internal_id,
-                                result.as_ref().err().map(|_| &cancelled),
-                            )
-                            .await
-                            .map_err(Fatal)?;
-                        return result;
-                    }
-                    let result = match self
-                        .hook
-                        .on_tool_call(name, None, &internal_id, arguments, child)
-                        .await
-                    {
-                        ToolCallHookAction::Terminate { reason } => Err(Fatal(reason)),
-                        ToolCallHookAction::Skip { reason } => Ok(ToolOutcome::Completed(reason)),
-                        ToolCallHookAction::Continue => {
-                            // Once the before hook commits, await the effect to preserve ordering.
-                            let writer =
-                                self.hook.foreground_live_output_writer(&internal_id).await;
-                            let session = self.hook.session_id().await;
-                            let outcome = dispatch_tool(
-                                self.tools.as_slice(),
-                                name,
-                                arguments.to_owned(),
-                                Some(writer),
-                                session,
-                                child,
-                            )
-                            .await;
-                            match self
-                                .hook
-                                .on_tool_result(name, None, &internal_id, arguments, &outcome)
-                                .await
-                            {
-                                HookAction::Continue => Ok(outcome),
-                                HookAction::Terminate { reason } => Err(Fatal(reason)),
-                            }
-                        }
-                    };
-                    let cancelled = ToolOutcome::Cancelled;
-                    self.hook
-                        .finish_tool_effect(&internal_id, result.as_ref().err().map(|_| &cancelled))
-                        .await
-                        .map_err(Fatal)?;
-                    result
-                }
-                .await
+            let call = crate::tool_effects::ToolEffectCall {
+                ordinal,
+                name: name.to_owned(),
+                arguments: arguments.to_owned(),
+            };
+            match self.effect_batch(parent, vec![call]).await.pop() {
+                Some(result) => result,
+                None => Err(crate::tool_effects::ToolEffectError::Fatal(
+                    "the tool batch did not settle its call".to_owned(),
+                )),
             }
-            .await;
-            if let Err(Fatal(reason)) = &result {
-                self.fatal
-                    .lock()
-                    .await
-                    .get_or_insert_with(|| reason.clone());
-            }
-            result
         })
+    }
+
+    fn batch<'a>(
+        &'a self,
+        parent: &'a ToolCallEnvelope,
+        calls: Vec<crate::tool_effects::ToolEffectCall>,
+    ) -> crate::tool::BoxFuture<'a, Vec<crate::tool_effects::EffectResult>> {
+        Box::pin(self.effect_batch(parent, calls))
     }
 
     fn definitions<'a>(&'a self) -> crate::tool::BoxFuture<'a, Vec<crate::tool::ToolDefinition>> {
@@ -208,10 +134,13 @@ pub(super) fn admit_tool(
     args: &str,
     context: &ToolCallEnvelope,
 ) -> Option<ToolOutcome> {
-    let tool = tools.iter().find(|tool| tool.name() == name)?;
-    tool.admit(args, context)
-        .err()
-        .map(|error| ToolOutcome::from_dispatch(name, Err(error)))
+    admit_from(
+        tools,
+        name,
+        args,
+        context,
+        crate::tool_policy::presentation::Origin::Provider,
+    )
 }
 
 fn admit_tool_effect(
@@ -220,16 +149,29 @@ fn admit_tool_effect(
     args: &str,
     context: &ToolCallEnvelope,
 ) -> Option<ToolOutcome> {
-    if !tools.iter().any(|tool| tool.name() == name) {
-        return Some(ToolOutcome::from_dispatch(
-            name,
-            Err(crate::tool::ToolError::ReportedFailure {
-                class: crate::tool_call_lifecycle::FailureClass::PolicyDenied,
-                text: format!("tool '{name}' is not in this request's granted tool surface"),
-            }),
-        ));
+    admit_from(
+        tools,
+        name,
+        args,
+        context,
+        crate::tool_policy::presentation::Origin::Composition,
+    )
+}
+
+fn admit_from(
+    tools: &[Box<dyn ToolDyn>],
+    name: &str,
+    args: &str,
+    context: &ToolCallEnvelope,
+    origin: crate::tool_policy::presentation::Origin,
+) -> Option<ToolOutcome> {
+    if let Err(refusal) = crate::tool_policy::presentation::admit(tools, name, origin) {
+        return Some(ToolOutcome::from_dispatch(name, Err(refusal.into())));
     }
-    admit_tool(tools, name, args, context)
+    let tool = tools.iter().find(|tool| tool.name() == name)?;
+    tool.admit(args, context)
+        .err()
+        .map(|error| ToolOutcome::from_dispatch(name, Err(error)))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -264,21 +206,31 @@ pub(super) fn settle_ready(
 /// request execution scope.
 pub fn child_envelope(parent: &ToolCallEnvelope) -> Option<ToolCallEnvelope> {
     let scope = parent.runtime()?;
+    Some(child_envelope_under(
+        parent,
+        &scope,
+        scope.cancellation_token.clone(),
+    ))
+}
+
+pub(super) fn child_envelope_under(
+    parent: &ToolCallEnvelope,
+    scope: &CurrentToolRuntimeContext,
+    cancellation_token: tokio_util::sync::CancellationToken,
+) -> ToolCallEnvelope {
     let runtime = CurrentToolRuntimeContext::entered_with_session(
-        Some(&scope),
+        Some(scope),
         None,
         scope.deadline_at,
-        scope.cancellation_token.clone(),
+        cancellation_token,
         scope.workspace_cwd.clone(),
         None,
         scope.session_id.clone(),
     );
-    Some(
-        parent
-            .clone()
-            .with_runtime(Some(runtime))
-            .with_effects(None),
-    )
+    parent
+        .clone()
+        .with_runtime(Some(runtime))
+        .with_effects(None)
 }
 
 /// The envelope one dispatched tool runs under inside `context`'s scope.
@@ -876,6 +828,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_hidden_tool_is_refused_to_the_model_and_called_for_a_plugin() {
+        use crate::tool_effects::ToolEffectDispatcher;
+        let hook = Arc::new(EffectHook {
+            invoked: AtomicBool::new(false),
+            rejected: AtomicBool::new(false),
+            block_before: false,
+            cleanup_fails: false,
+            cleaned: AtomicBool::new(false),
+            parent_settled: AtomicBool::new(false),
+            terminate_before: false,
+        });
+        let tools: Vec<Box<dyn ToolDyn>> = vec![
+            Box::new(AdmissionGate {
+                name: "script",
+                admitted: true,
+            }),
+            Box::new(ParseOnlyTool),
+        ];
+        let tools = Arc::new(crate::tool_policy::presentation::present_tools(
+            tools,
+            &["parse".into()],
+        ));
+        let args = r#"{"text":"valid"}"#;
+        let refused = admit_tool(&tools, "parse", args, &ToolCallEnvelope::default()).unwrap();
+        let ToolOutcome::Failed { class, text, .. } = refused else {
+            panic!("a hidden tool was admitted for the model");
+        };
+        assert_eq!(
+            class,
+            crate::tool_call_lifecycle::FailureClass::PolicyDenied
+        );
+        assert!(text.contains("`script`"), "{text}");
+        assert!(admit_tool(&tools, "unlisted", "{}", &ToolCallEnvelope::default()).is_none());
+        let dispatcher = EffectDispatcher {
+            tools,
+            hook: hook.clone(),
+            parent_internal_id: "parent".into(),
+            fatal: tokio::sync::Mutex::new(None),
+            composed: Default::default(),
+        };
+        let names: Vec<_> = dispatcher
+            .definitions()
+            .await
+            .into_iter()
+            .map(|definition| definition.name)
+            .collect();
+        assert_eq!(names, ["script", "parse"]);
+        let scope_call = crate::tool_call_lifecycle::runtime::ToolScopeEntry::new(
+            None,
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .call();
+        let outcome = dispatcher
+            .call(&scope_call, 1, "parse", args)
+            .await
+            .unwrap();
+        assert_eq!(outcome.model_facing_text(), "specialized side effect");
+        assert!(hook.invoked.load(Ordering::SeqCst));
+        assert!(!hook.rejected.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
     async fn unselected_specialized_tool_never_reaches_before_hook() {
         use crate::tool_effects::ToolEffectDispatcher;
         let hook = Arc::new(EffectHook {
@@ -1012,6 +1026,9 @@ mod tests {
     }
 
     impl ToolDyn for ReadyAfterWallDeadline {
+        fn hidden(&self) -> bool {
+            false
+        }
         fn name(&self) -> String {
             "ready_after_wall_deadline".into()
         }
@@ -1057,6 +1074,9 @@ mod tests {
     }
 
     impl ToolDyn for AdmissionGate {
+        fn hidden(&self) -> bool {
+            false
+        }
         fn name(&self) -> String {
             self.name.into()
         }

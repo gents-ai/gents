@@ -4,6 +4,9 @@ use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 struct PendingTool;
 
 impl ToolDyn for PendingTool {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         "slow_tool".into()
     }

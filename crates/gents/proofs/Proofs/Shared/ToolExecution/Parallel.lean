@@ -23,6 +23,19 @@ def takeReads (limit : Nat) (seen : List Nat) : List Call → List Call
     if limit = 0 ∨ c.footprint = .barrier ∨ c.key ∈ seen then []
     else c :: takeReads (limit - 1) (c.key :: seen) rest
 
+/-- Whether the next call joins the read group being built: a fresh read while
+the group is below its bound. -/
+def joinsGroup (footprint : Footprint) (duplicate full : Bool) : Bool :=
+  decide (footprint = .read) && !duplicate && !full
+
+theorem take_reads_cons (limit : Nat) (seen : List Nat) (c : Call) (rest : List Call) :
+    takeReads limit seen (c :: rest) =
+      if joinsGroup c.footprint (decide (c.key ∈ seen)) (decide (limit = 0)) = true then
+        c :: takeReads (limit - 1) (c.key :: seen) rest
+      else [] := by
+  cases hf : c.footprint <;> by_cases hk : c.key ∈ seen <;> by_cases hl : limit = 0 <;>
+    simp [takeReads, joinsGroup, hf, hk, hl]
+
 inductive Admission where
   | run | skip | terminate
   deriving Repr, BEq, DecidableEq
@@ -213,5 +226,44 @@ theorem a_cancelled_hook_starts_no_call (actions : List Admission) :
     (hookBatch actions true).started = 0 := by
   unfold hookBatch
   split <;> rfl
+
+/-- The bound on concurrently started read calls, shared by the model-facing
+loop and a composing plugin's batches. -/
+def maxParallelReads : Nat := 4
+
+/-- How many calls at the head of a composing plugin's batch run together: the
+loop's read prefix, and otherwise the first call alone. An empty batch starts
+nothing. -/
+def effectWidth (limit : Nat) (calls : List Call) : Nat :=
+  if calls.isEmpty then 0 else max 1 (takeReads limit [] calls).length
+
+theorem effect_width_empty (limit : Nat) : effectWidth limit [] = 0 := by
+  simp [effectWidth]
+
+theorem effect_width_barrier_runs_alone (limit key : Nat) (rest : List Call) :
+    effectWidth limit (⟨key, .barrier⟩ :: rest) = 1 := by
+  simp [effectWidth, takeReads]
+
+theorem effect_width_refines_reads (limit : Nat) (calls : List Call)
+    (h : 0 < (takeReads limit [] calls).length) :
+    effectWidth limit calls = (takeReads limit [] calls).length := by
+  cases calls with
+  | nil => simp [takeReads] at h
+  | cons c rest =>
+    simp only [effectWidth, List.isEmpty_cons, Bool.false_eq_true, ↓reduceIte]
+    exact Nat.max_eq_right (by omega)
+
+theorem effect_width_bounded (limit : Nat) (calls : List Call) :
+    effectWidth limit calls ≤ max 1 limit := by
+  unfold effectWidth
+  split
+  · omega
+  · have := take_reads_bounded limit [] calls
+    omega
+
+theorem effect_width_progresses (limit : Nat) (c : Call) (rest : List Call) :
+    0 < effectWidth limit (c :: rest) := by
+  simp only [effectWidth, List.isEmpty_cons, Bool.false_eq_true, ↓reduceIte]
+  exact Nat.lt_of_lt_of_le Nat.one_pos (Nat.le_max_left _ _)
 
 end ToolExecution.Parallel
