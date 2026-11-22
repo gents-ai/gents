@@ -40,6 +40,8 @@ def observe (state : State) (read : Read) : State :=
 
 def permits (assigned bodyVerified : Bool) : Bool := assigned && bodyVerified
 
+def retry (unavailable overtaken : Bool) : Bool := unavailable || overtaken
+
 def mayRun (state : State) (id : String) (bodyVerified : Bool) : Bool :=
   permits (state.assigned.contains id) bodyVerified
 

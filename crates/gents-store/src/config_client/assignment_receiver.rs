@@ -108,6 +108,23 @@ impl TransactionFailure for ReceiverError {
     }
 }
 
+impl ReceiverError {
+    fn retryable(&self) -> bool {
+        let unavailable = matches!(
+            self,
+            Self::Store(ConfigClientError::DecisionReadUnanswered)
+                | Self::Provider(AssignmentReadError::Provider(defra_node::Error::DacPolicy(
+                    db::DacPolicyError::Assignments(acp::AssignmentReadError::Unavailable(_)),
+                )))
+        );
+        retry(unavailable, matches!(self, Self::Overtaken))
+    }
+}
+
+fn retry(unavailable: bool, overtaken: bool) -> bool {
+    unavailable || overtaken
+}
+
 fn scope_key(subject: &str, scope: &AssignmentScope) -> String {
     let mut hash = blake3::Hasher::new();
     for value in [
@@ -289,16 +306,27 @@ impl ConfigAccess {
             return Err(ReceiverError::Provider(AssignmentReadError::Unsupported));
         };
         let mut changes = crate::subscription_source::subscribe(local.node(), collection_ids);
+        let mut heights = local
+            .node()
+            .subscribe(&[events::EventName::AcpHeightAdvanced]);
         loop {
             if *shutdown.borrow() {
                 return Ok(());
             }
-            self.refresh_assignments(scope, runtime).await?;
+            while heights.try_recv().is_ok() {}
+            let retry = match self.refresh_assignments(scope, runtime).await {
+                Ok(_) => false,
+                Err(error) if error.retryable() => true,
+                Err(error) => return Err(error),
+            };
             tokio::select! {
                 changed = shutdown.changed() => {
                     if changed.is_err() || *shutdown.borrow() { return Ok(()); }
                 }
                 event = changes.recv() => {
+                    if event.is_none() { return Err(ReceiverError::SubscriptionEnded); }
+                }
+                event = heights.recv(), if retry => {
                     if event.is_none() { return Err(ReceiverError::SubscriptionEnded); }
                 }
             }
@@ -423,7 +451,28 @@ mod tests {
     }
 
     #[test]
+    fn only_temporary_assignment_failures_are_retried() {
+        let unavailable = ReceiverError::Provider(AssignmentReadError::Provider(
+            defra_node::Error::DacPolicy(db::DacPolicyError::Assignments(
+                acp::AssignmentReadError::Unavailable("offline".into()),
+            )),
+        ));
+        let invalid = ReceiverError::Provider(AssignmentReadError::Provider(
+            defra_node::Error::DacPolicy(db::DacPolicyError::Assignments(
+                acp::AssignmentReadError::Invalid("invalid proof".into()),
+            )),
+        ));
+        assert!(unavailable.retryable());
+        assert!(ReceiverError::Overtaken.retryable());
+        assert!(!invalid.retryable());
+        assert!(!ReceiverError::Provider(AssignmentReadError::Unsupported).retryable());
+    }
+
+    #[test]
     fn assignment_admission_matches_the_model() {
+        gents_lean_vocab::families::assignment_receiver_retry::replay(|input| {
+            retry(input.unavailable, input.overtaken)
+        });
         gents_lean_vocab::families::assignment_receiver_permits::replay(|input| {
             permits(input.assigned, input.body_verified)
         });
