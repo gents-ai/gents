@@ -137,20 +137,21 @@ def sameUsageRow (left right : UsageRow) : Bool :=
     left.persisted.call.backend = right.persisted.call.backend ∧
     left.persisted.call.state = right.persisted.call.state ∧
     left.persisted.terminalStamp = right.persisted.terminalStamp ∧
-    left.persisted.usage = right.persisted.usage)
+    left.persisted.usage = right.persisted.usage ∧
+    left.persisted.providerLimit = right.persisted.providerLimit)
 
 theorem sameUsageRow_sound (left right : UsageRow)
     (same : sameUsageRow left right = true) : left = right := by
   simp only [sameUsageRow, decide_eq_true_eq] at same
-  rcases same with ⟨hphysical, hcallId, hrequestId, hbackend, hstate, hstamp, husage⟩
+  rcases same with ⟨hphysical, hcallId, hrequestId, hbackend, hstate, hstamp, husage, hlimit⟩
   cases left with
   | mk leftPhysical leftPersisted =>
     cases right with
     | mk rightPhysical rightPersisted =>
       cases leftPersisted with
-      | mk leftCall leftStamp leftUsage =>
+      | mk leftCall leftStamp leftUsage leftLimit =>
         cases rightPersisted with
-        | mk rightCall rightStamp rightUsage =>
+        | mk rightCall rightStamp rightUsage rightLimit =>
           cases leftCall with
           | mk leftId leftRequest leftBackend leftState =>
             cases rightCall with
@@ -162,6 +163,7 @@ theorem sameUsageRow_sound (left right : UsageRow)
               cases hstate
               cases hstamp
               cases husage
+              cases hlimit
               rfl
 
 def coherentCheck (records : List (Nat × UsageRow))

@@ -1,0 +1,34 @@
+name: Record a gate pass
+description: >-
+  Record that a unit of the gate plan passed here, under its input key
+  (scripts/ci/reuse.py), so a later plan with an identical key skips it.
+  Call it last, under `if: success()`. Only this repository's runs record:
+  the plan also refuses a record whose run's head repository is a fork.
+
+inputs:
+  unit:
+    description: The plan unit that passed (a job, or a matrix entry's `unit`).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Write the pass record
+      id: record
+      if: >-
+        github.event_name != 'pull_request' ||
+        github.event.pull_request.head.repo.full_name == github.repository
+      shell: bash
+      env:
+        UNIT: ${{ inputs.unit }}
+      run: python3 scripts/ci/gate.py record "${UNIT}"
+
+    - name: Upload the pass record
+      if: steps.record.outputs.name
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ steps.record.outputs.name }}
+        path: ${{ steps.record.outputs.path }}
+        if-no-files-found: error
+        overwrite: true
+        retention-days: 7

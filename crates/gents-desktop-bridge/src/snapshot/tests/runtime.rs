@@ -439,7 +439,6 @@ fn task_recent_runs_view_consumes_generated_trigger_dispatch_lineage_contract_ca
                 claimed_at: None,
                 deadline: None,
                 retry_count: Some(0),
-                max_retries: Some(3),
                 caused_by_trigger_id: Some(trigger_id.to_string()),
                 caused_by_trigger_kind: Some(trigger_kind.to_string()),
                 caused_by_correlation: None,

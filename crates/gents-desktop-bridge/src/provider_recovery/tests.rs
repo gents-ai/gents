@@ -144,11 +144,20 @@ impl Fixture {
         // children, as the admission owner persists them, and the request
         // lifecycle owner ends the turn failed with the provider's reason.
         let engineer_did = engineer.agent_did.clone();
+        let (recorded_reason, limit) =
+            gents_inference::admission::recovery_fixtures::recorded_failure(
+                reason,
+                chrono::Utc::now(),
+                gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT,
+            );
         let calls = [
             json!({"call_id": "failed-call", "request_id": "stopped", "request_doc_id": request_doc,
                 "session_id": "session", "node_did": owner, "agent_did": engineer_did,
                 "backend_id": "main", "call_kind": "inference", "call_state": "failed", "attempt": 1,
-                "failure_reason": reason, "ended_at": "2026-10-23T12:00:00Z"}),
+                "failure_reason": recorded_reason,
+                "provider_limit": limit.map(|limit| limit.verdict.as_str()),
+                "provider_limit_resets_at": limit.and_then(|limit| limit.resets_at).map(|at| at.to_rfc3339()),
+                "ended_at": "2026-10-23T12:00:00Z"}),
             json!({"call_id": "foreign-call", "request_id": "stopped", "request_doc_id": request_doc,
                 "session_id": "session", "node_did": "did:key:foreign", "agent_did": engineer_did,
                 "backend_id": "foreign", "call_kind": "inference", "call_state": "failed", "attempt": 2,

@@ -1,5 +1,10 @@
 pub const DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS: u64 = 120;
 pub const DEFAULT_DEADLINE_DURATION_SECS: u64 = 86_400;
+/// Unset `InferenceExecution.max_request_retries`: the successor budget a
+/// request's first claim pins (Lean
+/// `Request.PinnedRetryBudget.defaultMaxRequestRetries`). Provider transport
+/// retries are `InferenceRetryPolicy`'s.
+pub const DEFAULT_REQUEST_MAX_RETRIES: u64 = 3;
 pub const DEFAULT_MAX_CONCURRENT: i64 = 1;
 pub const DEFAULT_MAX_QUEUE_DEPTH: i64 = 100;
 pub const DEFAULT_CONNECT_TIMEOUT_SECS: i64 = 10;

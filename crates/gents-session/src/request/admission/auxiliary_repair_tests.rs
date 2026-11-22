@@ -162,7 +162,6 @@ async fn modeled_auxiliary_child_repair_requires_signed_exact_parent_and_native_
             "2026-10-21T00:00:00Z",
             AgentRequestAdmissionRecord::runtime_local_control(agent.did(), &parent_id),
         );
-        aux.max_retries = 0;
         aux.caused_by_parent_request_id = Some(parent_id);
         aux.caused_by_parent_request_doc_id = Some(parent_doc);
         crate::request::admission::sign_agent_request_create(agent.as_ref(), &mut aux)

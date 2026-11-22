@@ -629,6 +629,7 @@ Provider-input assembly for Claude: the body's `system[]` blocks (attribution, i
 | `Proofs/Session/Enrollment/RequestAdmission.lean` | Signed request provenance and final claim: enrollment, local-self, runtime-internal (local control, automated trigger) and `peer` branches. A peer request is signed by its requester, targets another node and is authorized by the target's `PeerAdmissionAuthority` ACP. Admission enforces the target's causal-hop cap when configured. Title requests are runtime-internal local control with parent-only provenance |
 | `Proofs/Session/Request/CausalHop.lean` | Causal-hop attribution between agents: `nextHop` (roots 0, tool-caused +1, continuations copy), and `admitHop` (no cap or within the configured cap). Finite caps imply `admitted_chain_sends_le_max`. A plugin job's completion wake is a continuation (`job_completion_wake_is_continuation`) |
 | `Proofs/Session/SessionRecovery.lean` | Retry/reissue using authoritative scoped request rows |
+| `Proofs/Session/PinnedRetryBudget.lean` | The successor budget a request's first claim pins: the claiming Agent's resolved `InferenceExecution.max_request_retries` (`resolveConfigured`, default 3) for a lineage's first claimed request, the parent's pin for later successors, zero for auxiliary purposes; a reclaim writes no pin, so configuration changed mid-request never reaches it. The pin is its own Node-written, Node-signed document (`Proofs/Store/Identity/RequestRetryBudget.lean`: resource `request_retry_budgets`, no update or delete for the working Agent); `readPin` accepts only Node-signed pins and takes the least. `successorBudgetRemains` decides reissue and background redrive, including rows never pinned. Families `request_pinned_retry_budget_{configured_budgets,claim_pins,successor_budgets,read_pins_cases}` |
 | `Proofs/Observe/FileInventory/FileInventory/` | Native file inventory of one session: the source facts (`Source`), the authorized canonical closure the snapshot enumerates, accepted-tool projection publication, fork copies, per-request coverage, bounded pages and resource ordering. Direct reads use the authenticated reader and native reader-bound observations; the owner read requires the exact owned physical root. Images are read through native document ACP. P2P does not replicate or hydrate sessions or serve inventory pages: session data never travels on a route. Fences: `file_inventory::{closure,selection,snapshot,order}::tests`. |
 | `Proofs/Runtime/CompletionRetry.lean` | Barrel for per-completion retry state, transitions, executable semantics, and budget/deadline/effects properties |
 | `Proofs/Shared/AccountRotation.lean` | Claude subscription account rotation: tiered selection (`select_live`, `select_best_tier`, `select_sticky`, `select_no_overage_unless_allowed`), limit observation, and the in-attempt rotation (`attempt_nodup`, `attempt_empty_exhausted`). Cases replay Claude Code's rate-limit simulator scenarios. Fences: `gents_claude::rotation::tests::generated_rotation_{select,attempt,observe}_cases_*`; the runtime pool that applies the policy lands with the transport. |
@@ -1087,11 +1088,24 @@ path to a non-slot-holding terminal state.
 
 `Proofs/Inference/InferenceCall/Persistence.lean` refines the database writer guards:
 start requires the current row to be queued; completion/failure require running;
-cancellation accepts queued/running. A terminal winner preserves its outcome
-and stamp against later lifecycle writes, while late provider usage can update
-the usage observation without reopening the call. Usage observation does not
-itself charge the aggregate budget. These laws support the admission persistence
+cancellation accepts queued/running. A terminal winner preserves its outcome,
+stamp and provider-limit verdict against later lifecycle writes; the verdict
+lands in the write that installs the failure (`failure_installs_its_verdict`)
+and only a failure carries one. Late provider usage can update the usage
+observation without reopening the call. Usage observation does not itself
+charge the aggregate budget. These laws support the admission persistence
 reverse-race regressions; no new legal lifecycle transitions are introduced.
+
+`Proofs/Inference/InferenceCall/ProviderLimit.lean` is the verdict the admission
+permit records on a failed call (#3923): a throttle whose wake lies beyond the
+admitted model's rate-limit wait cap (`InferenceRetryPolicy.max_rate_limit_wait_ms`,
+`CompletionRetry.Budget.maxWait`) is the provider's usage limit, resetting at
+that wake. Under the cap the owned loop holds, a recorded usage limit is exactly
+a failure the loop does not retry
+(`recorded_usage_limit_is_the_loops_permanent_failure`,
+`recorded_throttle_is_held_by_the_loop`). Goal readers read the recorded verdict,
+never the failure text. Fence: family `inference_provider_limit_verdicts` and
+vocabulary `inference_call_provider_limit_verdict_vocabulary`.
 
 ### Session Recovery
 

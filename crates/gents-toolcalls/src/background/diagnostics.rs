@@ -165,7 +165,17 @@ async fn load_background_completion_diagnostics_scoped(
                 .into_iter()
                 .map(|(session_id, head)| (session_id, head.observed.request_doc_id))
                 .collect::<BTreeMap<_, _>>();
-                Ok(summarize(wakes, notifications, heads, Utc::now()))
+                let wake_doc_ids = wakes
+                    .iter()
+                    .filter_map(|wake| wake.doc_id.as_deref())
+                    .collect::<Vec<_>>();
+                let pins = gents_session::request::retry_budget::read_pins_in_txn(
+                    txn,
+                    node_did,
+                    &wake_doc_ids,
+                )
+                .await?;
+                Ok(summarize(wakes, notifications, heads, pins, Utc::now()))
             })
         })
         .await
@@ -202,7 +212,7 @@ fn diagnostics_query(node_did: &str, session_id: Option<&str>) -> String {
             }}, order: [{{ created_at: DESC }}, {{ request_id: DESC }}], limit: {WAKE_SCAN_LIMIT}) {{
                 _docID request_id session_id retry_root_request input lifecycle_state
                 failure_reason created_at claimed_at terminalized_at
-                retry_count max_retries background_completion_input_through_sequence
+                retry_count background_completion_input_through_sequence
                 background_completion_notification_keys_json
             }}
             {notifications}
@@ -234,6 +244,7 @@ fn summarize(
     wakes: Vec<AgentRequestRow>,
     notifications: Vec<NotificationRow>,
     latest_request_by_session: BTreeMap<String, String>,
+    retry_pins: BTreeMap<String, i64>,
     now: DateTime<Utc>,
 ) -> BackgroundCompletionDiagnostics {
     let scanned_wakes = wakes.len();
@@ -350,7 +361,13 @@ fn summarize(
             .flatten()
             .map(|created_at| now.signed_duration_since(created_at).num_seconds().max(0));
         let retry_count = latest.retry_count.unwrap_or_default().max(0);
-        let max_retries = latest.max_retries.unwrap_or_default().max(0);
+        let max_retries = latest
+            .doc_id
+            .as_ref()
+            .and_then(|doc_id| retry_pins.get(doc_id))
+            .copied()
+            .unwrap_or_default()
+            .max(0);
         let latest_failed = request_failed(latest);
         let retry_is_latest = latest_request_by_session
             .get(latest.session_id.as_deref().expect("validated session_id"))
@@ -532,7 +549,6 @@ mod tests {
         root: Option<&str>,
         state: &str,
         retry_count: i64,
-        max_retries: i64,
     ) -> AgentRequestRow {
         AgentRequestRow {
             request_id: request_id.to_string(),
@@ -549,13 +565,20 @@ mod tests {
             claimed_at: (state != "pending").then(|| "2026-08-12T00:00:03Z".to_string()),
             terminalized_at: (state == "failed").then(|| "2026-08-12T00:00:05Z".to_string()),
             retry_count: Some(retry_count),
-            max_retries: Some(max_retries),
             background_completion_input_through_sequence: Some(1),
             background_completion_notification_keys_json: Some(
                 r#"["background-completion-notification:child-1:agent"]"#.to_string(),
             ),
             ..Default::default()
         }
+    }
+
+    /// The pins `summarize` reads, every listed wake pinned at `max_retries`.
+    fn budget(request_ids: &[&str], max_retries: i64) -> BTreeMap<String, i64> {
+        request_ids
+            .iter()
+            .map(|id| (format!("physical-{id}"), max_retries))
+            .collect()
     }
 
     fn notification(request_id: &str, suffix: &str) -> NotificationRow {
@@ -591,8 +614,8 @@ mod tests {
         let now = DateTime::parse_from_rfc3339("2026-08-12T00:00:06Z")
             .unwrap()
             .with_timezone(&Utc);
-        let target = wake("wake-1", None, "failed", 0, 3);
-        let mut unrelated = wake("wake-elsewhere", None, "failed", 0, 3);
+        let target = wake("wake-1", None, "failed", 0);
+        let mut unrelated = wake("wake-elsewhere", None, "failed", 0);
         unrelated.session_id = Some("session-2".to_owned());
         let notifications = vec![
             notification("wake-1", "child-1"),
@@ -606,9 +629,16 @@ mod tests {
             vec![target.clone(), unrelated],
             notifications.clone(),
             heads,
+            budget(&["wake-1", "wake-elsewhere"], 3),
             now,
         );
-        let scoped = summarize(vec![target], notifications, head("wake-1"), now);
+        let scoped = summarize(
+            vec![target],
+            notifications,
+            head("wake-1"),
+            budget(&["wake-1"], 3),
+            now,
+        );
         let matching_full_epochs = full
             .epochs
             .into_iter()
@@ -625,9 +655,10 @@ mod tests {
         let mut wrong = notification("wake-1", "foreign");
         wrong.request_doc_id = Some("wake-1".into());
         let diagnostics = summarize(
-            vec![wake("wake-1", None, "failed", 0, 3)],
+            vec![wake("wake-1", None, "failed", 0)],
             vec![notification("wake-1", "child-1"), wrong],
             head("wake-1"),
+            budget(&["wake-1"], 3),
             now,
         );
         assert_eq!(diagnostics.scanned_notifications, 2);
@@ -642,11 +673,12 @@ mod tests {
             .with_timezone(&Utc);
         let diagnostics = summarize(
             vec![
-                wake("wake-1", None, "failed", 0, 3),
-                wake("wake-2", Some("wake-1"), "completed", 1, 3),
+                wake("wake-1", None, "failed", 0),
+                wake("wake-2", Some("wake-1"), "completed", 1),
             ],
             vec![notification("wake-1", "child-1")],
             head("wake-2"),
+            budget(&["wake-1", "wake-2"], 3),
             now,
         );
 
@@ -665,8 +697,8 @@ mod tests {
         let now = DateTime::parse_from_rfc3339("2026-08-12T00:01:00Z")
             .unwrap()
             .with_timezone(&Utc);
-        let first = wake("wake-1", None, "failed", 0, 3);
-        let mut successor = wake("wake-2", None, "completed", 0, 3);
+        let first = wake("wake-1", None, "failed", 0);
+        let mut successor = wake("wake-2", None, "completed", 0);
         successor.background_completion_notification_keys_json = Some(
             serde_json::to_string(&vec![
                 "background-completion-notification:child-1:agent",
@@ -681,6 +713,7 @@ mod tests {
                 notification("wake-2", "child-2"),
             ],
             head("wake-2"),
+            budget(&["wake-1", "wake-2"], 3),
             now,
         );
 
@@ -699,13 +732,7 @@ mod tests {
     #[test]
     fn epoch_matches_lean() {
         gents_lean_vocab::families::background_diagnostics_epoch::replay::<String>(|case| {
-            let mut failed = wake(
-                "wake-1",
-                None,
-                "failed",
-                case.retry_count as i64,
-                case.max_retries as i64,
-            );
+            let mut failed = wake("wake-1", None, "failed", case.retry_count as i64);
             failed.failure_reason = Some(case.failure_reason.clone());
             let created = DateTime::parse_from_rfc3339(failed.created_at.as_deref().unwrap())
                 .unwrap()
@@ -723,7 +750,13 @@ mod tests {
             } else {
                 "later-interactive-request"
             };
-            let diagnostics = summarize(vec![failed], notifications, head(head_request), now);
+            let diagnostics = summarize(
+                vec![failed],
+                notifications,
+                head(head_request),
+                budget(&["wake-1"], case.max_retries as i64),
+                now,
+            );
             let epoch = &diagnostics.epochs[0];
             gents_lean_vocab::families::background_diagnostics_epoch::EpochOutput {
                 state: epoch.state.clone(),
@@ -769,12 +802,15 @@ mod tests {
                     None,
                     "failed",
                     i64::try_from(case.retry_count).unwrap(),
-                    i64::try_from(case.max_retries).unwrap(),
                 );
                 let diagnostics = summarize(
                     vec![failed],
                     vec![notification("same-logical-id", "child-1")],
                     heads,
+                    budget(
+                        &["same-logical-id"],
+                        i64::try_from(case.max_retries).unwrap(),
+                    ),
                     now,
                 );
                 let epoch = &diagnostics.epochs[0];
@@ -789,11 +825,12 @@ mod tests {
 
     #[test]
     fn scan_limits_remain_visible_even_when_non_wake_requests_are_filtered() {
-        let mut ordinary = wake("ordinary", None, "pending", 0, 3);
+        let mut ordinary = wake("ordinary", None, "pending", 0);
         ordinary.input = None;
         let diagnostics = summarize(
             vec![ordinary; WAKE_SCAN_LIMIT],
             vec![],
+            BTreeMap::new(),
             BTreeMap::new(),
             Utc::now(),
         );
@@ -805,7 +842,9 @@ mod tests {
     #[tokio::test]
     async fn diagnostics_reads_actual_scoped_head_across_requesters_without_session_cache(
     ) -> Result<()> {
-        let node = std::sync::Arc::new(gents_store::test_support::node_builder().build().await?);
+        use gents_store::identity::NodeIdentity as _;
+        let (builder, runtime) = gents_store::test_support::keyed_node_builder();
+        let node = std::sync::Arc::new(builder.build().await?);
         gents_store::test_support::acp_policies::install_identity_acp_policies(&node).await?;
         node.add_collection(
             &gents_protocol::schemas::HomePolicyIds::node_store()
@@ -817,14 +856,19 @@ mod tests {
                 .render(gents_protocol::schemas::AGENT_MESSAGE),
         )
         .await?;
+        node.add_collection(
+            &gents_protocol::schemas::HomePolicyIds::node_store()
+                .render(gents_protocol::schemas::AGENT_REQUEST_RETRY_BUDGET),
+        )
+        .await?;
         let access = ConfigAccess::local(node.clone());
-        let owner = "did:test:diagnostics\"owner";
+        let owner = runtime.did();
         let mut failed = serde_json::json!({
             "node_did":owner, "requester_did":"requester-a", "request_id":"wake", "session_id":"shared-session",
             "purpose":"normal",
             "agent_did":"general", "input":input(), "execution_origin":"scheduled",
             "lifecycle_state":"failed", "created_at":"2026-08-12T00:00:00Z",
-            "terminalized_at":"2026-08-12T00:00:05Z", "retry_count":0, "max_retries":3
+            "terminalized_at":"2026-08-12T00:00:05Z", "retry_count":0
         });
         let mut wake_doc_id = None;
         for value in [
@@ -852,9 +896,18 @@ mod tests {
                 )?);
             }
         }
+        let wake_doc_id = wake_doc_id.context("wake not created")?;
+        gents_session::request::retry_budget::write_pin(
+            node.clone(),
+            runtime.clone(),
+            owner,
+            &wake_doc_id,
+            3,
+        )
+        .await?;
         access.write("test.diagnostic.notification", &format!("mutation {{ create_AgentMessage(input:{}){{_docID}} }}", gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
             "node_did":owner,"session_id":"shared-session","message_key":"background-completion-notification:child:agent",
-            "request_doc_id":wake_doc_id.context("wake not created")?,"role":"user","sequence":1,"created_at":"2026-08-12T00:00:01Z"
+            "request_doc_id":wake_doc_id,"role":"user","sequence":1,"created_at":"2026-08-12T00:00:01Z"
         }))?)).await?;
         let diagnostics = load_background_completion_diagnostics(&access, owner).await?;
         assert_eq!(diagnostics.epochs.len(), 1);

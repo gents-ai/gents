@@ -32,7 +32,7 @@ async fn seed(
     create(
         node,
         format!(
-            r#"mutation {{ create_AgentRequest(input: {{ purpose: "normal", request_id: "{request_id}", node_did: "did:test:node", requester_did: "did:test:node", agent_did: "worker", session_id: "{session_id}", {cause} content: "work", lifecycle_state: "completed", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{created_at}", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#
+            r#"mutation {{ create_AgentRequest(input: {{ purpose: "normal", request_id: "{request_id}", node_did: "did:test:node", requester_did: "did:test:node", agent_did: "worker", session_id: "{session_id}", {cause} content: "work", lifecycle_state: "completed", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{created_at}", retry_count: 0 }}) {{ _docID }} }}"#
         ),
         "AgentRequest",
     )
@@ -158,7 +158,7 @@ async fn caused_requests_match_the_lean_projection() {
             create(
                 &node,
                 format!(
-                    r#"mutation {{ create_AgentRequest(input: {{ purpose: "normal", request_id: "{}", node_did: "did:test:node", requester_did: "did:test:node", agent_did: "worker", session_id: "child", caused_by_parent_request_id: "p1", caused_by_parent_request_doc_id: "bae-parent", caused_by_parent_tool_call_id: "{}", caused_by_parent_tool_call_doc_id: "{}", content: "work", lifecycle_state: "completed", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "2026-09-26T00:00:01Z", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#,
+                    r#"mutation {{ create_AgentRequest(input: {{ purpose: "normal", request_id: "{}", node_did: "did:test:node", requester_did: "did:test:node", agent_did: "worker", session_id: "child", caused_by_parent_request_id: "p1", caused_by_parent_request_doc_id: "bae-parent", caused_by_parent_tool_call_id: "{}", caused_by_parent_tool_call_doc_id: "{}", content: "work", lifecycle_state: "completed", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "2026-09-26T00:00:01Z", retry_count: 0 }}) {{ _docID }} }}"#,
                     request.request_id, request.call, request.call
                 ),
                 "AgentRequest",
