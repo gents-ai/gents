@@ -78,6 +78,7 @@ import Proofs.Conformance.UsageWrite
 import Proofs.Conformance.SessionMessageKill
 import Proofs.Conformance.InferenceObservationRegistry
 import Proofs.Conformance.EagerStreaming
+import Proofs.Conformance.ToolResultText
 import Proofs.Conformance.BackendHealthRetention
 import Proofs.Conformance.BackendProbeSchedule
 import Proofs.Conformance.BackendHealthAdmission

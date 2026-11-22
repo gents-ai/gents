@@ -1915,6 +1915,7 @@ fn assemble_rig_chat_history(
             crate::provider_input::captured_context_for_provider(message).map_err(|error| {
                 StreamingError::Completion(CompletionError::RequestError(error.into()))
             })?;
+        let message = crate::provider_input::tool_result_text::for_provider(message);
         projected.push(rig_compat::to_rig_message(&message));
     }
     for message in &mut projected {
