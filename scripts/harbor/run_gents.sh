@@ -506,7 +506,7 @@ esac
   --model-name "${GENTS_MODEL}" \
   --max-concurrent 1 \
   --max-queue-depth 1 \
-  --tool-package write \
+  --tool-package yolo \
   --tool-root "${GENTS_TOOL_ROOT}" \
   >"${init_log}"
 
@@ -707,6 +707,13 @@ tools_id=$(sed -n 's/^[[:space:]]*"tools_id": "\([^"]*\)",*$/\1/p' "${init_log}"
 agent_did=$(sed -n 's/^[[:space:]]*"default_agent_did": "\([^"]*\)",*$/\1/p' "${init_log}" | head -1)
 if [ -z "${node_did}" ] || [ -z "${tools_id}" ] || [ -z "${agent_did}" ]; then
   echo "Gents init output did not contain node_did, default_agent_did, and tools_id" >&2
+  exit 1
+fi
+# The benchmark container is the isolation boundary, so the agent's bash is
+# unrestricted inside it; a run without a shell would score as task failures.
+command_execution=$(sed -n 's/^[[:space:]]*"command_execution": "\([^"]*\)",*$/\1/p' "${init_log}" | head -1)
+if [ "${command_execution}" != "unrestricted" ]; then
+  echo "Gents init granted command_execution=${command_execution:-<missing>}, not unrestricted; refusing to run the task without a shell" >&2
   exit 1
 fi
 

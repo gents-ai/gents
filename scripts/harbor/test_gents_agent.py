@@ -210,6 +210,47 @@ class RunnerSupervisionTest(unittest.TestCase):
             persisted = json.loads((logs / "request-persisted.json").read_text())
             self.assertEqual(persisted["request"]["seed"], 1234)
 
+    def test_init_without_unrestricted_commands_refuses_the_task(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            home = root / "home"
+            instruction = root / "instruction.md"
+            fake_gents = root / "gents"
+            instruction.write_text("finish the task")
+            fake_gents.write_text(_FAKE_GENTS)
+            fake_gents.chmod(0o755)
+
+            env = {
+                **os.environ,
+                "FAKE_COMMAND_EXECUTION": "off",
+                "GENTS_BINARY": str(fake_gents),
+                "GENTS_HOME": str(home),
+                "GENTS_INSTRUCTION_FILE": str(instruction),
+                "GENTS_INFERENCE_URL": "http://127.0.0.1:8000/v1",
+                "GENTS_MODEL": "fake-model",
+                "GENTS_MAX_TOTAL": "100000",
+                "GENTS_SEED": "1234",
+                "GENTS_TOOL_ROOT": str(root),
+                "GENTS_LOGS_DIR": str(root / "logs"),
+                "GENTS_SERVER_STARTUP_TIMEOUT_SECS": "5",
+            }
+            result = subprocess.run(
+                ["sh", str(_REPO_ROOT / "scripts/harbor/run_gents.sh")],
+                env=env,
+                text=True,
+                capture_output=True,
+                timeout=15,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "Gents init granted command_execution=off, not unrestricted",
+                result.stderr,
+            )
+            invocations = (home / "invocations.jsonl").read_text()
+            self.assertNotIn('["server"', invocations)
+
     def test_server_signal_cancels_waiter_and_preserves_diagnostics(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -272,8 +313,8 @@ class RunnerSupervisionTest(unittest.TestCase):
             ]
             init = next(args for args in invocations if args[:1] == ["init"])
             self.assertIn("--tool-package", init)
-            self.assertEqual(init[init.index("--tool-package") + 1], "write")
-            self.assertNotIn("--yolo", init)
+            self.assertEqual(init[init.index("--tool-package") + 1], "yolo")
+            self.assertNotIn("--write", init)
 
             profile = next(
                 args
@@ -347,6 +388,7 @@ if args[:1] == ["init"]:
         "default_agent_did": "did:key:fake:default",
         "inference_profile_id": "profile-1",
         "tools_id": "did:key:fake:tools",
+        "command_execution": os.environ.get("FAKE_COMMAND_EXECUTION", "unrestricted"),
     }, indent=2))
 elif args[:1] == ["server"]:
     count_file = home / "server-count"

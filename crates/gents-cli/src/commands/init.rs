@@ -2151,6 +2151,16 @@ mod tests {
             command_execution(ToolPackageArg::Yolo),
             CommandExecution::Unrestricted
         );
+        assert_eq!(
+            [
+                CommandExecution::Off,
+                CommandExecution::ReadOnly,
+                CommandExecution::Sandboxed,
+                CommandExecution::Unrestricted,
+            ]
+            .map(|grant| serde_json::to_value(grant).unwrap()),
+            ["off", "read_only", "sandboxed", "unrestricted"].map(serde_json::Value::from)
+        );
     }
 
     #[tokio::test]

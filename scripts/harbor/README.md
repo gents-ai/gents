@@ -5,6 +5,10 @@ The Gents process sees the same `/app` working tree as the verifier, uses native
 write and shell tools, persists the complete request lifecycle, and writes an
 ATIF v1.7 trajectory to `/logs/agent/trajectory.json`.
 
+The task container is the isolation boundary, so the adapter initialises Gents
+with the unrestricted tool package (`--tool-package yolo`) and stops before the
+task if init's receipt does not report `command_execution: "unrestricted"`.
+
 Run commands from the Gents repository root so Harbor can import
 `scripts.harbor.gents_agent:GentsAgent`.
 
