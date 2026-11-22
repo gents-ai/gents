@@ -820,7 +820,8 @@ theorem readiness_empty_runtime_cannot_repair (state : ParentPublication) (embed
     (grantSucceeded markSucceeded : Bool) :
     repairReadiness state "" embeddedRuntime parentRegistered nativeOwner recordedParent currentParent
       grantSucceeded markSucceeded = state := by
-  simp [repairReadiness, readinessRecoveryEligible]
+  have empty : ("" : String).isEmpty = true := rfl
+  simp [repairReadiness, readinessRecoveryEligible, empty]
 
 theorem failed_readiness_grant_cannot_mark_complete :
     (repairReadiness beginParentPublication "runtime" "runtime" true (some "runtime")
