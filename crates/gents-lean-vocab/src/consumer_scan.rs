@@ -377,7 +377,9 @@ mod tests {
 
     impl Scan {
         fn consumed(&self, family: &str) -> bool {
-            self.sites.get(family).is_some_and(|found| !found.is_empty())
+            self.sites
+                .get(family)
+                .is_some_and(|found| !found.is_empty())
         }
     }
 
@@ -493,7 +495,12 @@ mod tests {
         let allowed: BTreeSet<String> = OPEN
             .iter()
             .copied()
-            .chain(ledger.boundaries.iter().map(|boundary| boundary.name.as_str()))
+            .chain(
+                ledger
+                    .boundaries
+                    .iter()
+                    .map(|boundary| boundary.name.as_str()),
+            )
             .filter_map(|name| ledger_family(name, &scan.families))
             .collect();
         let prefix = format!("{DERIVED_FAMILIES}/");
