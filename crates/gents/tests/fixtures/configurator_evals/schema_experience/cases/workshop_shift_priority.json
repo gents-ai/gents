@@ -1,0 +1,574 @@
+{
+  "case_id": "workshop-shift-priority",
+  "split": "validation",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type WorkshopShift { shift: String @index(unique: true) station: String manual_priority: Boolean }",
+      "type WorkshopQueue { line: String @index(unique: true) shift: String urgent: Boolean }",
+      "type WorkshopStation { station: String @index(unique: true) display: String }"
+    ],
+    "documents": [
+      {
+        "collection": "WorkshopShift",
+        "document": {
+          "shift": "WS-14",
+          "station": "press",
+          "manual_priority": false
+        }
+      },
+      {
+        "collection": "WorkshopShift",
+        "document": {
+          "shift": "WS-18",
+          "station": "bench"
+        }
+      },
+      {
+        "collection": "WorkshopShift",
+        "document": {
+          "shift": "WS-21",
+          "station": "press"
+        }
+      },
+      {
+        "collection": "WorkshopShift",
+        "document": {
+          "shift": "WS-30",
+          "station": "paint",
+          "manual_priority": true
+        }
+      },
+      {
+        "collection": "WorkshopQueue",
+        "document": {
+          "line": "Q1",
+          "shift": "WS-14",
+          "urgent": true
+        }
+      },
+      {
+        "collection": "WorkshopQueue",
+        "document": {
+          "line": "Q2",
+          "shift": "WS-18",
+          "urgent": false
+        }
+      },
+      {
+        "collection": "WorkshopQueue",
+        "document": {
+          "line": "Q3",
+          "shift": "WS-21",
+          "urgent": true
+        }
+      },
+      {
+        "collection": "WorkshopQueue",
+        "document": {
+          "line": "Q4",
+          "shift": "WS-21",
+          "urgent": false
+        }
+      },
+      {
+        "collection": "WorkshopQueue",
+        "document": {
+          "line": "Q5",
+          "shift": "WS-30",
+          "urgent": false
+        }
+      },
+      {
+        "collection": "WorkshopStation",
+        "document": {
+          "station": "press",
+          "display": "Brake press"
+        }
+      },
+      {
+        "collection": "WorkshopStation",
+        "document": {
+          "station": "bench",
+          "display": "Repair bench"
+        }
+      },
+      {
+        "collection": "WorkshopStation",
+        "document": {
+          "station": "paint",
+          "display": "Paint booth"
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "access",
+      "prompt": "I keep application records in WorkshopShift, WorkshopQueue and WorkshopStation. Enable your general read access only to those collections, and general create/update/delete access only to WorkshopShift if your native tools support it. Keep shell execution off and leave all other collection permissions alone. Inspect the available fields before working with records. Set up only the access now; do not change any records or collection definitions until I send the change request.",
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "schema",
+            "sdl": "type WorkshopShift { shift: String @index(unique: true) station: String manual_priority: Boolean }\ntype WorkshopQueue { line: String @index(unique: true) shift: String urgent: Boolean }\ntype WorkshopStation { station: String @index(unique: true) display: String }",
+            "exact_nullability": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "agents": {
+              "agents": "agents",
+              "contexts": "contexts",
+              "tools": "tools",
+              "expect": [
+                {
+                  "agent_did": "gents:agent-slot:engineer",
+                  "tools": [
+                    {
+                      "field": "host.bash.mode",
+                      "matches": "^(null|Off)$"
+                    },
+                    {
+                      "field": "datastore.write_collections",
+                      "equals": [
+                        "WorkshopShift"
+                      ]
+                    },
+                    {
+                      "field": "datastore.defra_query_collections",
+                      "contains": "\"WorkshopShift\""
+                    },
+                    {
+                      "field": "datastore.defra_query_collections",
+                      "contains": "\"WorkshopQueue\""
+                    },
+                    {
+                      "field": "datastore.defra_query_collections",
+                      "contains": "\"WorkshopStation\""
+                    }
+                  ]
+                }
+              ]
+            },
+            "present": [
+              {
+                "capture": "WorkshopShift",
+                "min": 4,
+                "max": 4
+              },
+              {
+                "capture": "WorkshopQueue",
+                "min": 5,
+                "max": 5
+              },
+              {
+                "capture": "WorkshopStation",
+                "min": 3,
+                "max": 3
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name",
+            "context_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "contexts",
+          "collection": "AgentContext",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "context_id",
+            "tools_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "tools",
+          "collection": "Tools",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "tools_id",
+            "host",
+            "datastore"
+          ]
+        },
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "WorkshopShift",
+            "WorkshopQueue",
+            "WorkshopStation"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "WorkshopShift",
+          "collection": "WorkshopShift",
+          "filter": {},
+          "fields": [
+            "shift",
+            "station",
+            "manual_priority"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "WorkshopQueue",
+          "collection": "WorkshopQueue",
+          "filter": {},
+          "fields": [
+            "line",
+            "shift",
+            "urgent"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "WorkshopStation",
+          "collection": "WorkshopStation",
+          "filter": {},
+          "fields": [
+            "station",
+            "display"
+          ]
+        }
+      ]
+    },
+    {
+      "stage_id": "migrate",
+      "prompt": "Add an optional Boolean priority to WorkshopShift. Keep an existing manual_priority, including false. Otherwise use the matching WorkshopQueue urgent flag if all of that shift's entries agree. If they disagree or there is no value, leave priority unset. Preserve the old shift records, queue and stations. Reply with one JSON object whose \"unresolved\" array lists the shift values.",
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "bash"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "schema",
+            "sdl": "type WorkshopShift { shift: String @index(unique: true) station: String manual_priority: Boolean priority: Boolean }\ntype WorkshopQueue { line: String @index(unique: true) shift: String urgent: Boolean }\ntype WorkshopStation { station: String @index(unique: true) display: String }",
+            "exact_nullability": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "WorkshopShift",
+                "min": 4,
+                "max": 4
+              },
+              {
+                "capture": "WorkshopQueue",
+                "min": 5,
+                "max": 5
+              },
+              {
+                "capture": "WorkshopStation",
+                "min": 3,
+                "max": 3
+              }
+            ],
+            "rows": [
+              {
+                "capture": "WorkshopShift",
+                "key": "shift",
+                "id": "WS-14",
+                "expect": [
+                  {
+                    "field": "station",
+                    "equals": "press"
+                  },
+                  {
+                    "field": "manual_priority",
+                    "equals": false
+                  },
+                  {
+                    "field": "priority",
+                    "equals": false
+                  }
+                ]
+              },
+              {
+                "capture": "WorkshopShift",
+                "key": "shift",
+                "id": "WS-18",
+                "expect": [
+                  {
+                    "field": "station",
+                    "equals": "bench"
+                  },
+                  {
+                    "field": "manual_priority",
+                    "equals": null
+                  },
+                  {
+                    "field": "priority",
+                    "equals": false
+                  }
+                ]
+              },
+              {
+                "capture": "WorkshopShift",
+                "key": "shift",
+                "id": "WS-21",
+                "expect": [
+                  {
+                    "field": "station",
+                    "equals": "press"
+                  },
+                  {
+                    "field": "manual_priority",
+                    "equals": null
+                  },
+                  {
+                    "field": "priority",
+                    "equals": null
+                  }
+                ]
+              },
+              {
+                "capture": "WorkshopShift",
+                "key": "shift",
+                "id": "WS-30",
+                "expect": [
+                  {
+                    "field": "station",
+                    "equals": "paint"
+                  },
+                  {
+                    "field": "manual_priority",
+                    "equals": true
+                  },
+                  {
+                    "field": "priority",
+                    "equals": true
+                  }
+                ]
+              },
+              {
+                "capture": "WorkshopQueue",
+                "key": "line",
+                "id": "Q1",
+                "expect": [
+                  {
+                    "field": "shift",
+                    "equals": "WS-14"
+                  },
+                  {
+                    "field": "urgent",
+                    "equals": true
+                  }
+                ]
+              },
+              {
+                "capture": "WorkshopQueue",
+                "key": "line",
+                "id": "Q2",
+                "expect": [
+                  {
+                    "field": "shift",
+                    "equals": "WS-18"
+                  },
+                  {
+                    "field": "urgent",
+                    "equals": false
+                  }
+                ]
+              },
+              {
+                "capture": "WorkshopQueue",
+                "key": "line",
+                "id": "Q3",
+                "expect": [
+                  {
+                    "field": "shift",
+                    "equals": "WS-21"
+                  },
+                  {
+                    "field": "urgent",
+                    "equals": true
+                  }
+                ]
+              },
+              {
+                "capture": "WorkshopQueue",
+                "key": "line",
+                "id": "Q4",
+                "expect": [
+                  {
+                    "field": "shift",
+                    "equals": "WS-21"
+                  },
+                  {
+                    "field": "urgent",
+                    "equals": false
+                  }
+                ]
+              },
+              {
+                "capture": "WorkshopQueue",
+                "key": "line",
+                "id": "Q5",
+                "expect": [
+                  {
+                    "field": "shift",
+                    "equals": "WS-30"
+                  },
+                  {
+                    "field": "urgent",
+                    "equals": false
+                  }
+                ]
+              },
+              {
+                "capture": "WorkshopStation",
+                "key": "station",
+                "id": "press",
+                "expect": [
+                  {
+                    "field": "display",
+                    "equals": "Brake press"
+                  }
+                ]
+              },
+              {
+                "capture": "WorkshopStation",
+                "key": "station",
+                "id": "bench",
+                "expect": [
+                  {
+                    "field": "display",
+                    "equals": "Repair bench"
+                  }
+                ]
+              },
+              {
+                "capture": "WorkshopStation",
+                "key": "station",
+                "id": "paint",
+                "expect": [
+                  {
+                    "field": "display",
+                    "equals": "Paint booth"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\"unresolved\"\\s*:\\s*\\[\\s*(?:\"WS-21\")\\s*\\]"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "WorkshopShift",
+            "WorkshopQueue",
+            "WorkshopStation"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "WorkshopShift",
+          "collection": "WorkshopShift",
+          "filter": {},
+          "fields": [
+            "shift",
+            "station",
+            "manual_priority",
+            "priority"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "WorkshopQueue",
+          "collection": "WorkshopQueue",
+          "filter": {},
+          "fields": [
+            "line",
+            "shift",
+            "urgent"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "WorkshopStation",
+          "collection": "WorkshopStation",
+          "filter": {},
+          "fields": [
+            "station",
+            "display"
+          ]
+        }
+      ]
+    }
+  ]
+}
