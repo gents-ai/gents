@@ -355,6 +355,171 @@ fn file_capture_refuses_parent_components() {
     assert!(outside.is_empty());
 }
 
+#[test]
+fn file_capture_retains_text_only_for_utf8_files_within_the_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path();
+    let limit = FILE_TEXT_LIMIT_BYTES as usize;
+    std::fs::write(workspace.join("a-small.txt"), "héllo\n").unwrap();
+    std::fs::write(workspace.join("b-binary.txt"), [0xff, 0xfe, 0x00]).unwrap();
+    std::fs::write(workspace.join("c-at-limit.txt"), "x".repeat(limit)).unwrap();
+    std::fs::write(workspace.join("d-over-limit.txt"), "x".repeat(limit + 1)).unwrap();
+
+    let (files, _) = captured(workspace, "*.txt");
+    let retained: Vec<(&str, u64, Option<usize>)> = files
+        .iter()
+        .map(|file| {
+            (
+                file.path.as_str(),
+                file.bytes,
+                file.text.as_ref().map(String::len),
+            )
+        })
+        .collect();
+    assert_eq!(
+        retained,
+        [
+            ("a-small.txt", 7, Some(7)),
+            ("b-binary.txt", 3, None),
+            ("c-at-limit.txt", limit as u64, Some(limit)),
+            ("d-over-limit.txt", limit as u64 + 1, None),
+        ]
+    );
+    assert_eq!(files[0].text.as_deref(), Some("héllo\n"));
+    assert_eq!(
+        files[3].sha256,
+        format!("{:x}", Sha256::digest("x".repeat(limit + 1))),
+        "an unretained file is still graded by its digest"
+    );
+}
+
+fn write_tree(workspace: &Path, files: &[(&str, &str)]) {
+    for (path, contents) in files {
+        let path = workspace.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, contents).unwrap();
+    }
+}
+
+#[test]
+fn captured_files_match_names_paths_outside_a_glob_exactly_as_the_capture_walk_skips_them() {
+    use crate::checks::captured_files_match::CapturedFilesMatch;
+    use crate::checks::Check;
+
+    let dir = tempfile::tempdir().unwrap();
+    let paths = [
+        "a.txt",
+        ".hidden.txt",
+        ".cache/e.txt",
+        "dir/b.txt",
+        "dir/sub/c.json",
+        "dir/sub/d.txt",
+        "out/x/y.md",
+    ];
+    write_tree(dir.path(), &paths.map(|path| (path, "x")));
+    let params = json!({"name": "files", "expect": paths
+        .iter()
+        .map(|path| json!({"path": path, "exists": true}))
+        .collect::<Vec<_>>()});
+    for glob in [
+        "*.txt",
+        "?.txt",
+        "**/*.txt",
+        "**/*",
+        "*/*.txt",
+        "[ad]*/*.txt",
+        "dir/*",
+        "dir/**/*.json",
+        "dir/sub/c.json",
+        "out/**",
+    ] {
+        let (files, _) = captured(dir.path(), glob);
+        let held: BTreeSet<&str> = files.iter().map(|file| file.path.as_str()).collect();
+        let stage: gents_documents::EvalStage = serde_json::from_value(json!({
+            "stage_id": "s",
+            "prompt": "p",
+            "capture": [{"kind": "file", "name": "files", "glob": glob}],
+        }))
+        .unwrap();
+        let problems = CapturedFilesMatch.conformance(&params, &stage);
+        let reachable: BTreeSet<&str> = if problems.iter().any(|p| p.contains("ends in **")) {
+            BTreeSet::new()
+        } else {
+            paths
+                .into_iter()
+                .filter(|path| {
+                    !problems
+                        .iter()
+                        .any(|problem| problem.contains(&format!("{path:?} is outside")))
+                })
+                .collect()
+        };
+        assert_eq!(reachable, held, "{glob}: {problems:?}");
+    }
+}
+
+#[test]
+fn a_file_capture_grades_host_file_content_and_untouched_seeds() {
+    let dir = tempfile::tempdir().unwrap();
+    let seed = "id,qty\n1,2\n";
+    write_tree(
+        dir.path(),
+        &[
+            ("config/app.toml", "[server]\nport = 8080\n"),
+            ("run/status.json", r#"{"state": "running", "pid": 4242}"#),
+            ("seed/input.csv", seed),
+        ],
+    );
+    let params = json!({"name": "workspace", "expect": [
+        {"path": "config/app.toml", "contains": "port = 8080"},
+        {"path": "run/status.json", "pointer": "/state", "equals": "running"},
+        {"path": "seed/input.csv", "equals": seed},
+        {"path": "seed/input.csv.bak", "exists": false}
+    ]});
+    let registry = crate::checks::CheckRegistry::builtin();
+    let grade = || {
+        let (files, outside_workspace) = captured(dir.path(), "**/*");
+        let mut stage =
+            crate::runner::ScriptedExecutor::passed_evidence("did:x", "s", "rows", vec![])
+                .stages
+                .remove(0);
+        stage.captures.insert(
+            "workspace".into(),
+            CaptureResult::Files {
+                files,
+                outside_workspace,
+            },
+        );
+        registry
+            .evaluate_bound("captured_files_match", &params, &stage)
+            .unwrap()
+    };
+    let verdict = grade();
+    assert_eq!(
+        (verdict.kind, verdict.score_bp),
+        (OutcomeKind::Passed, Some(10_000)),
+        "{:?}",
+        verdict.feedback
+    );
+
+    std::fs::write(dir.path().join("seed/input.csv"), "id,qty\n1,3\n").unwrap();
+    std::fs::write(dir.path().join("seed/input.csv.bak"), seed).unwrap();
+    let verdict = grade();
+    assert_eq!(
+        (verdict.kind, verdict.score_bp),
+        (OutcomeKind::ModelAcceptance, Some(5_000))
+    );
+    let feedback = verdict.feedback.unwrap_or_default();
+    assert!(
+        feedback.contains(r#"seed/input.csv: expected text equal to "id,qty\n1,2\n", got line 2 "1,3" where "1,2" was expected"#),
+        "{feedback}"
+    );
+    assert!(
+        feedback.contains("seed/input.csv.bak: expected absent, got a file of 11 bytes"),
+        "{feedback}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn file_capture_does_not_follow_a_symlink_out_of_the_workspace() {

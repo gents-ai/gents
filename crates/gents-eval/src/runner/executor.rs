@@ -225,11 +225,17 @@ pub enum CaptureResult {
     },
 }
 
+/// Evidence is held in memory for grading, so a captured file's text is retained only up to this size.
+pub const FILE_TEXT_LIMIT_BYTES: u64 = 64 * 1024;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileRef {
     pub path: String,
     pub sha256: String,
     pub bytes: u64,
+    /// Present when the file is UTF-8 and at most `FILE_TEXT_LIMIT_BYTES`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

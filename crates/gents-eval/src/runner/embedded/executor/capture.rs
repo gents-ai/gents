@@ -8,7 +8,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::checks::captured_fields_match::{test, Expectation};
-use crate::runner::executor::{Capture, CaptureResult, FileRef};
+use crate::runner::executor::{Capture, CaptureResult, FileRef, FILE_TEXT_LIMIT_BYTES};
 #[cfg(test)]
 use gents::defra_node::Node as EmbeddedNode;
 #[cfg(test)]
@@ -540,10 +540,14 @@ fn collect_files(workspace: &Path, glob: &str) -> Result<(Vec<FileRef>, Vec<Stri
             continue;
         }
         let bytes = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+        let size = bytes.len() as u64;
         files.push(FileRef {
             path: relative,
             sha256: format!("{:x}", Sha256::digest(&bytes)),
-            bytes: bytes.len() as u64,
+            bytes: size,
+            text: (size <= FILE_TEXT_LIMIT_BYTES)
+                .then(|| String::from_utf8(bytes).ok())
+                .flatten(),
         });
     }
     files.sort_by(|left, right| left.path.cmp(&right.path));
