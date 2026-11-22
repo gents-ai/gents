@@ -11,7 +11,7 @@ mod lease;
 mod read;
 mod write;
 pub use lease::{next_attempt, retry, wait_for_lease, LEASE_WAIT};
-pub use read::{StoreAbsent, StoreReadIdentity, StoreReadPin};
+pub use read::{ReadOutcome, StoreAbsent, StoreReadIdentity, StoreReadPin};
 
 /// Who writes the plugin store, and so where it may create it: a runtime
 /// writes only into the home it pinned when it started
@@ -418,6 +418,17 @@ impl From<StoreAbsent> for PublishedPluginReadError {
 impl PublishedPluginReadError {
     pub fn is_busy(&self) -> bool {
         matches!(self, Self::Busy)
+    }
+
+    /// What the refused read observed; `None` when it could not observe the
+    /// store at all.
+    pub fn outcome(&self) -> Option<ReadOutcome> {
+        match self {
+            Self::Busy => Some(ReadOutcome::Busy),
+            Self::Absent(StoreAbsent::Missing) => Some(ReadOutcome::Missing),
+            Self::Absent(StoreAbsent::Replaced) => Some(ReadOutcome::Replaced),
+            Self::Read(_) => None,
+        }
     }
 
     pub fn error_chain_is_busy(error: &(dyn std::error::Error + 'static)) -> bool {

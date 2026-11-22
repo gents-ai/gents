@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use gents_pack::plugin::store::ReadOutcome;
 use tokio::time::Instant;
 
 /// Lean `RuntimeReconcile.SurfacePublication.epochDeadline`.
@@ -35,6 +36,25 @@ pub(super) fn send_proposal(changed: bool, recovery_pending: bool) -> bool {
 /// Lean `RuntimeReconcile.SurfacePublication.retryAfterFailure`.
 pub(super) fn retry_after_failure(settling: bool, recovery_pending: bool) -> bool {
     settling || recovery_pending
+}
+
+/// Lean `RuntimeReconcile.SurfacePublication.StoreWatch`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum StoreWatch {
+    Reconcile,
+    Contended,
+    Stop,
+}
+
+/// Lean `RuntimeReconcile.SurfacePublication.watchStore`.
+pub(super) fn watch_store(captured: bool, observed: ReadOutcome) -> StoreWatch {
+    match observed {
+        ReadOutcome::Acquired => StoreWatch::Reconcile,
+        ReadOutcome::Busy => StoreWatch::Contended,
+        ReadOutcome::Missing if !captured => StoreWatch::Reconcile,
+        ReadOutcome::Missing | ReadOutcome::Replaced => StoreWatch::Stop,
+    }
 }
 
 /// Lean `RuntimeReconcile.SurfacePublication.StartupCause`.
@@ -99,5 +119,13 @@ mod tests {
         gents_lean_vocab::families::surface_publication_startup_proceeds::replay::<StartupCause>(
             |i| startup_proceeds(usize::try_from(i.runnable).unwrap(), &i.causes),
         );
+    }
+
+    #[test]
+    fn the_watchers_store_decision_replays_the_lean_owner() {
+        gents_lean_vocab::families::runtime_reconcile_surface_publication_watch_store::replay::<
+            ReadOutcome,
+            StoreWatch,
+        >(|i| watch_store(i.captured, i.observed));
     }
 }

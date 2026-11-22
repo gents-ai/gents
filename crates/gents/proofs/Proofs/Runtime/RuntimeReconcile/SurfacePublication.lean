@@ -1,3 +1,5 @@
+import Proofs.Store.PluginStoreHome
+
 /-! How the runtime's control watcher publishes a reconciled configuration
 while an installer in another process holds the plugin store. The watcher
 builds a proposal only under the store's shared lease, so a proposal never
@@ -31,6 +33,34 @@ def reconcile (busy : Bool) (now deadline : Nat) : Disposition :=
 def closesEpoch : Disposition → Bool
   | .publish => true
   | _ => false
+
+inductive StoreWatch where
+  | reconcile | contended | stop
+  deriving DecidableEq, Repr
+
+/-- What the control watcher does with one observation of its plugin store,
+given whether it has captured that store yet. Stopping the watcher stops the
+runtime, so it stops only for a store that is really gone: one it captured
+that is now missing, or a home replaced at its path. A store not captured yet
+is one setup or a first install may still be creating (its directory before
+its lock file); it reads as missing until both exist, and the watcher
+reconciles without it. Contention keeps the previous generation through
+`reconcile`. -/
+def watchStore (captured : Bool) (observed : PluginStoreHome.Outcome) : StoreWatch :=
+  match observed with
+  | .acquired => .reconcile
+  | .busy => .contended
+  | .missing => if captured then .stop else .reconcile
+  | .replaced => .stop
+
+theorem the_watcher_stops_only_for_a_gone_or_replaced_store
+    (captured : Bool) (observed : PluginStoreHome.Outcome) :
+    watchStore captured observed = .stop ↔
+      observed = .replaced ∨ (observed = .missing ∧ captured = true) := by
+  cases captured <;> cases observed <;> decide
+
+theorem a_store_still_being_created_never_stops_the_watcher :
+    watchStore false .missing = .reconcile := rfl
 
 theorem an_open_epoch_is_never_extended (deadline now budget : Nat) :
     epochDeadline (some deadline) now budget = deadline := rfl

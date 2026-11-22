@@ -7,7 +7,7 @@ use super::*;
 
 #[test]
 fn read_admission_replays_the_lean_owner() {
-    gents_lean_vocab::families::plugin_store_home_acquire::replay::<Outcome>(|i| {
+    gents_lean_vocab::families::plugin_store_home_acquire::replay::<ReadOutcome>(|i| {
         acquire(i.same_home, i.store_present, i.lock_present, i.contended)
     });
 }

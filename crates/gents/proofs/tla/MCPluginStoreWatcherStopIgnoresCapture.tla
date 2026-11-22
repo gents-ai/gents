@@ -1,0 +1,3 @@
+---- MODULE MCPluginStoreWatcherStopIgnoresCapture ----
+EXTENDS PluginStoreWatcherStop
+====

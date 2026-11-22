@@ -22,4 +22,18 @@ sendProposal_table ==
 sendProposal(changed, recovery_pending) ==
   sendProposal_table[<<changed, recovery_pending>>]
 
+\* Lean `RuntimeReconcile.SurfacePublication.watchStore`.
+watchStore_table ==
+  (((<<FALSE, "acquired">> :> "reconcile"
+     @@ <<FALSE, "missing">> :> "reconcile")
+    @@ (<<FALSE, "replaced">> :> "stop"
+        @@ <<FALSE, "busy">> :> "contended"))
+   @@ ((<<TRUE, "acquired">> :> "reconcile"
+        @@ <<TRUE, "missing">> :> "stop")
+       @@ (<<TRUE, "replaced">> :> "stop"
+           @@ <<TRUE, "busy">> :> "contended")))
+
+watchStore(captured, observed) ==
+  watchStore_table[<<captured, observed>>]
+
 ====

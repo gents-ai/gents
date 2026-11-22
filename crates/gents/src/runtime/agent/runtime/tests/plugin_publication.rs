@@ -233,6 +233,98 @@ async fn a_watcher_whose_home_is_replaced_stops_without_writing_into_it() {
     assert_eq!(std::fs::read_dir(&home).unwrap().count(), 0);
 }
 
+/// The runtime started before its plugin store existed; setup then creates
+/// the store's directory and, later, its lock file. The watcher reconciles
+/// through each stage and never stops, since nothing it captured is gone.
+#[tokio::test]
+async fn a_store_created_after_the_watcher_started_never_stops_it() {
+    let endpoint = crate::support::mock_endpoint::MockModelEndpoint::start("default").unwrap();
+    let fixture = plugin_runtime_fixture(
+        "publication-created-store",
+        "backend-publication-created-store",
+        endpoint.endpoint(),
+    )
+    .await
+    .unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    std::fs::create_dir(&home).unwrap();
+    let agent = crate::Gents::from_default_agent_documents(
+        fixture.node.clone(),
+        fixture.runtime.clone(),
+        crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
+            tool_ceiling: ToolCeiling::meta_only(),
+            plugin_home: Some(home.clone()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let store_dir = home.join(gents_store::local::home::PLUGINS_DIR_NAME);
+    assert!(!store_dir.exists(), "the runtime created its store itself");
+    let context = agent.document_runtime_context().cloned().unwrap();
+    let node_did = fixture.runtime.did().to_owned();
+    let runtime_status = RuntimeStatusHandle::new(fixture.node.clone(), &node_did);
+    runtime_status
+        .initialize_startup(agent.default_agent_did())
+        .await
+        .unwrap();
+    let tool_runtime = gents_tools::surface::ToolRuntimeContext::new_with_node_did(
+        fixture.node.clone(),
+        gents_tools::mcp::pool::McpPool::default(),
+        gents_tools::mcp::health::ServiceHealthMap::default(),
+        "localhost",
+        None,
+        &node_did,
+        Some(context.identity.clone()),
+    )
+    .with_plugins(context.plugins.clone());
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (proposal_tx, mut proposal_rx) = mpsc::channel(4);
+    let (health_tx, health_rx) = mpsc::channel(1);
+    let mut watcher = tokio::spawn(run_control_watcher_with_timing(
+        ControlWatcherInputs {
+            node: fixture.node.clone(),
+            backend_admission: fixture.admission(),
+            subscription: subscribe_control_changes(&fixture.node).unwrap(),
+            node_did,
+            resolve_context: context,
+            tool_runtime,
+            system_log: false,
+            proposals_tx: proposal_tx,
+            runtime_status,
+            health_events_rx: health_rx,
+            shutdown: shutdown_rx,
+        },
+        ControlWatcherTiming {
+            debounce: Duration::from_millis(1),
+            local_debounce: Duration::from_millis(1),
+            ..super::control_watcher::TEST_CONTROL_WATCHER_TIMING
+        },
+    ));
+    let stages: [&dyn Fn(); 3] = [
+        &|| {},
+        &|| std::fs::create_dir(&store_dir).unwrap(),
+        &|| gents_pack::plugin::store::bootstrap_store(&home).unwrap(),
+    ];
+    for create in stages {
+        create();
+        health_tx.send(()).await.unwrap();
+        tokio::select! {
+            proposal = proposal_rx.recv() => assert!(proposal.is_some()),
+            finished = &mut watcher => panic!("the watcher stopped while its store was being created: {finished:?}"),
+            () = tokio::time::sleep(STALL_CEILING) => panic!("the watcher proposed nothing after a health event"),
+        }
+    }
+    shutdown_tx.send(true).unwrap();
+    tokio::time::timeout(STALL_CEILING, watcher)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+}
+
 /// Every agent selects a plugin and an installer holds the store through
 /// startup's wait: the node starts degraded instead of failing, and the agent
 /// comes back once the installer releases, with no configuration change.

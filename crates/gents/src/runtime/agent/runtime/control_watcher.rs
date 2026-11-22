@@ -14,9 +14,10 @@ use gents_tools::surface::ToolRuntimeContext;
 use super::super::document_view;
 use super::super::DocumentResolveContext;
 use super::surface_publication::{
-    epoch_deadline, reconcile, retry_after_failure, send_proposal, Disposition,
+    epoch_deadline, reconcile, retry_after_failure, send_proposal, watch_store, Disposition,
+    StoreWatch,
 };
-use gents_pack::plugin::store::{PublishedPluginReadError, StoreAbsent};
+use gents_pack::plugin::store::{PublishedPluginReadError, ReadOutcome, StoreReadPin};
 use gents_protocol::error_chain::ErrorChain;
 
 pub(super) const CONTROL_RECONCILE_DEBOUNCE: Duration = Duration::from_secs(5);
@@ -244,18 +245,21 @@ pub(super) async fn run_control_watcher_with_timing(
                 let now = tokio::time::Instant::now();
                 let deadline = epoch_deadline(publication_epoch, now, timing.publication_wait);
                 publication_epoch = Some(deadline);
-                let (publication, busy) = match tool_runtime.plugin_store_pin().map(|pin| (pin, pin.try_shared())) {
+                let (publication, busy) = match tool_runtime.plugin_store_pin() {
                     None => (None, false),
-                    Some((_, Ok(guard))) => (Some(guard), false),
-                    Some((_, Err(PublishedPluginReadError::Busy))) => (None, true),
-                    Some((pin, Err(PublishedPluginReadError::Absent(StoreAbsent::Missing)))) if !pin.is_captured() => (None, false),
-                    Some((_, Err(error @ PublishedPluginReadError::Absent(_)))) => {
-                        tracing::info!(node_did = %node_did, error = %ErrorChain(&error), "stopping control watcher: its plugin store is absent or replaced");
-                        return Ok(());
-                    }
-                    Some((_, Err(error))) => {
-                        tracing::warn!(node_did = %node_did, error = %ErrorChain(&error), "plugin store lease is unreadable; treating it as held");
-                        (None, true)
+                    Some(pin) => {
+                        let (guard, observed) = match pin.try_shared() {
+                            Ok(guard) => (Some(guard), ReadOutcome::Acquired),
+                            Err(error) => (None, observed_store(&node_did, &error)),
+                        };
+                        match watch_store(pin.is_captured(), observed) {
+                            StoreWatch::Reconcile => (guard, false),
+                            StoreWatch::Contended => (None, true),
+                            StoreWatch::Stop => {
+                                tracing::info!(node_did = %node_did, ?observed, "stopping control watcher: its plugin store is gone or replaced");
+                                return Ok(());
+                            }
+                        }
                     }
                 };
                 let disposition = reconcile(busy, now, deadline);
@@ -315,8 +319,8 @@ pub(super) async fn run_control_watcher_with_timing(
                     }
                 }
                 if let (Some(pin), Some(_)) = (tool_runtime.plugin_store_pin(), publication.as_ref()) {
-                    if let Err(error) = pin.validate() {
-                        tracing::info!(node_did = %node_did, error = %ErrorChain(&error), "stopping control watcher: its plugin store was replaced while it reconciled");
+                    if store_is_gone(&node_did, pin) {
+                        tracing::info!(node_did = %node_did, "stopping control watcher: its plugin store was removed or replaced while it reconciled");
                         return Ok(());
                     }
                 }
@@ -547,4 +551,21 @@ fn next_publication_poll(
     } else {
         now + retry
     }
+}
+
+/// A store the watcher could not observe at all is weighed as held: an I/O
+/// failure is no evidence the store is gone.
+fn observed_store(node_did: &str, error: &PublishedPluginReadError) -> ReadOutcome {
+    error.outcome().unwrap_or_else(|| {
+        tracing::warn!(node_did = %node_did, error = %ErrorChain(error), "plugin store lease is unreadable; treating it as held");
+        ReadOutcome::Busy
+    })
+}
+
+fn store_is_gone(node_did: &str, pin: &StoreReadPin) -> bool {
+    let observed = match pin.validate() {
+        Ok(()) => ReadOutcome::Acquired,
+        Err(error) => observed_store(node_did, &error),
+    };
+    watch_store(pin.is_captured(), observed) == StoreWatch::Stop
 }

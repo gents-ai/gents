@@ -1,13 +1,14 @@
 import Proofs.Runtime.RuntimeReconcile.SurfacePublication
 import Proofs.Conformance.Family
+import Proofs.Conformance.PluginStoreHome
 
 namespace Conformance.SurfacePublication
 
 open Lean RuntimeReconcile.SurfacePublication
 
-deriving instance ToJson for Disposition, StartupCause
+deriving instance ToJson for Disposition, StartupCause, StoreWatch
 
-attribute [conformance_function] startupCause sendProposal recreateSlot retryAfterFailure
+attribute [conformance_function] startupCause sendProposal recreateSlot retryAfterFailure watchStore
 
 structure EpochInput where
   opened : Option Nat

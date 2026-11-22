@@ -16,9 +16,10 @@ pub enum StoreAbsent {
     Replaced,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+/// Lean `PluginStoreHome.Outcome`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(super) enum Outcome {
+pub enum ReadOutcome {
     Acquired,
     Missing,
     Replaced,
@@ -30,15 +31,15 @@ pub(super) fn acquire(
     store_present: bool,
     lock_present: bool,
     contended: bool,
-) -> Outcome {
+) -> ReadOutcome {
     if !same_home {
-        Outcome::Replaced
+        ReadOutcome::Replaced
     } else if !store_present || !lock_present {
-        Outcome::Missing
+        ReadOutcome::Missing
     } else if contended {
-        Outcome::Busy
+        ReadOutcome::Busy
     } else {
-        Outcome::Acquired
+        ReadOutcome::Acquired
     }
 }
 
@@ -59,10 +60,10 @@ fn admit(
         observation.lock_present,
         contended,
     ) {
-        Outcome::Acquired => Ok(()),
-        Outcome::Busy => Err(PublishedPluginReadError::Busy),
-        Outcome::Replaced => Err(StoreAbsent::Replaced.into()),
-        Outcome::Missing => Err(StoreAbsent::Missing.into()),
+        ReadOutcome::Acquired => Ok(()),
+        ReadOutcome::Busy => Err(PublishedPluginReadError::Busy),
+        ReadOutcome::Replaced => Err(StoreAbsent::Replaced.into()),
+        ReadOutcome::Missing => Err(StoreAbsent::Missing.into()),
     }
 }
 

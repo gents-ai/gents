@@ -670,6 +670,15 @@ See `../README.md` for how this fits the broader formal-verification model.
   through a transient reconcile failure (Lean `retryAfterFailure`) and past
   fingerprint deduplication (`sendProposal`); `DropsRecovery` does neither and
   violates `RecoversWithoutNewEvent`.
+- `PluginStoreWatcherStop` — the control watcher, whose stop stops the
+  runtime, against setup or a first install creating the store (directory,
+  then lock file) after the runtime started, an installer holding it, and a
+  person removing or replacing the home. The watcher captures the store at
+  the first read that finds it complete and decides each tick from Lean
+  `PluginStoreHome.acquire` and `SurfacePublication.watchStore`.
+  `StopsOnlyForAGoneStore` holds; `IgnoresCapture` treats a store not yet
+  captured as a captured one, so a store still being created stops the
+  runtime, and violates it.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## Checking
