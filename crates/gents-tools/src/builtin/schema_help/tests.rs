@@ -433,6 +433,17 @@ async fn schema_view_and_materialization_use_managed_agent_authority() {
             .await
             .unwrap();
     }
+    for scratch in ["AgentScratch", "AgentScratchKept"] {
+        let result = owner
+            .execute(&format!("{{ {scratch} {{ _docID name }} }}"))
+            .await
+            .unwrap();
+        assert_eq!(
+            result["data"][scratch].as_array().unwrap().len(),
+            1,
+            "{result}"
+        );
+    }
     let actor_did = identity::Did::new(agent.did()).unwrap();
     let access =
         ConfigAccess::local_managed_agent(node.clone(), actor_did.clone(), agent.as_ref()).unwrap();
@@ -479,7 +490,31 @@ async fn schema_view_and_materialization_use_managed_agent_authority() {
         .await
         .unwrap();
     assert!(permissions.contains(&NodePermission::CollectionTruncate));
+    let kept_before_truncate = owner
+        .execute("{ AgentScratchKept { _docID name } }")
+        .await
+        .unwrap();
+    assert_eq!(
+        kept_before_truncate["data"]["AgentScratchKept"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1,
+        "before truncate: {kept_before_truncate}"
+    );
     access.truncate_collection("AgentScratch").await.unwrap();
+    let kept_after_truncate = owner
+        .execute("{ AgentScratchKept { _docID name } }")
+        .await
+        .unwrap();
+    assert_eq!(
+        kept_after_truncate["data"]["AgentScratchKept"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1,
+        "{kept_after_truncate}"
+    );
     access
         .remove_collections(&["AgentScratch".to_owned()])
         .await

@@ -132,7 +132,7 @@ async fn a_vera_home_reads_only_its_own_certified_assignments() -> anyhow::Resul
         not_before: None,
     };
     let certified = access.certified_assignments(query.clone()).await?;
-    assert_eq!(certified.object_ids, [home.node_doc.clone()]);
+    assert_eq!(certified.object_ids, std::slice::from_ref(&home.node_doc));
     access
         .add_collection(
             &crate::local::document_acp::node_policy_ids(&home.node)
@@ -198,7 +198,7 @@ async fn a_vera_home_reads_only_its_own_certified_assignments() -> anyhow::Resul
             ..query
         })
         .await?;
-    assert_eq!(withdrawn.object_ids, [replacement.clone()]);
+    assert_eq!(withdrawn.object_ids, std::slice::from_ref(&replacement));
     assert!(withdrawn.position.height > certified.position.height);
     running
         .fail_stop

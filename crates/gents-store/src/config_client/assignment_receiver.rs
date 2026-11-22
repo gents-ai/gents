@@ -1,15 +1,14 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{
-    collections::HashMap,
-    error::Error,
-    sync::{Arc, Mutex, OnceLock, Weak},
-};
+use std::error::Error;
+use std::time::Duration;
 
 use super::{
     assignments::AssignmentReadError, ConfigAccess, ConfigApplyTxn, ConfigClientError,
     TransactionFailure,
 };
+
+const RETRY_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone)]
 pub struct AssignmentScope {
@@ -50,9 +49,9 @@ pub enum ReceiverError {
     Overtaken,
     #[error(transparent)]
     Provider(#[from] AssignmentReadError),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Store(#[from] ConfigClientError),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Response(#[from] crate::graphql::GraphqlResponseError),
     #[error("assignment runtime failed")]
     Runtime(#[source] Box<dyn Error + Send + Sync>),
@@ -71,31 +70,6 @@ pub trait AssignmentRuntime: Send + Sync {
     async fn stop(&self, id: &str) -> Result<(), Box<dyn Error + Send + Sync>>;
     async fn has_verified_body(&self, id: &str) -> Result<bool, Box<dyn Error + Send + Sync>>;
     async fn start_if_verified(&self, id: &str) -> Result<bool, Box<dyn Error + Send + Sync>>;
-}
-
-type ScopeLocks = Mutex<HashMap<(usize, String), Weak<tokio::sync::Mutex<()>>>>;
-static SCOPE_LOCKS: OnceLock<ScopeLocks> = OnceLock::new();
-
-fn scope_lock(
-    access: &ConfigAccess,
-    key: &str,
-) -> Result<Arc<tokio::sync::Mutex<()>>, ReceiverError> {
-    let ConfigAccess::Local(local) = access else {
-        return Err(ReceiverError::Provider(AssignmentReadError::Unsupported));
-    };
-    let node = Arc::as_ptr(local.node()) as usize;
-    let mut locks = SCOPE_LOCKS
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    locks.retain(|_, lock| lock.strong_count() > 0);
-    let entry = locks.entry((node, key.to_owned())).or_default();
-    if let Some(lock) = entry.upgrade() {
-        return Ok(lock);
-    }
-    let lock = Arc::new(tokio::sync::Mutex::new(()));
-    *entry = Arc::downgrade(&lock);
-    Ok(lock)
 }
 
 impl TransactionFailure for ReceiverError {
@@ -295,13 +269,16 @@ async fn create_state(
 }
 
 impl ConfigAccess {
-    pub async fn watch_assignments<R: AssignmentRuntime>(
+    pub async fn watch_assignments<R>(
         &self,
         scope: &AssignmentScope,
         runtime: &R,
         collection_ids: Vec<String>,
         mut shutdown: tokio::sync::watch::Receiver<bool>,
-    ) -> Result<(), ReceiverError> {
+    ) -> Result<(), ReceiverError>
+    where
+        R: AssignmentRuntime,
+    {
         let ConfigAccess::Local(local) = self else {
             return Err(ReceiverError::Provider(AssignmentReadError::Unsupported));
         };
@@ -329,6 +306,7 @@ impl ConfigAccess {
                 event = heights.recv(), if retry => {
                     if event.is_none() { return Err(ReceiverError::SubscriptionEnded); }
                 }
+                _ = tokio::time::sleep(RETRY_INTERVAL), if retry => {}
             }
         }
     }
@@ -348,14 +326,20 @@ impl ConfigAccess {
         .await
     }
 
-    pub async fn refresh_assignments<R: AssignmentRuntime>(
+    pub async fn refresh_assignments<R>(
         &self,
         scope: &AssignmentScope,
         runtime: &R,
-    ) -> Result<AssignmentState, ReceiverError> {
+    ) -> Result<AssignmentState, ReceiverError>
+    where
+        R: AssignmentRuntime,
+    {
         let subject = self.actor_did().ok_or(ReceiverError::MissingIdentity)?;
         let key = scope_key(&subject, scope);
-        let lock = scope_lock(self, &key)?;
+        let ConfigAccess::Local(local) = self else {
+            return Err(ReceiverError::Provider(AssignmentReadError::Unsupported));
+        };
+        let lock = local.assignment_lock(&key);
         let _guard = lock.lock().await;
         let previous = self.load_assignments(scope).await?;
         let query = defra_node::AssignmentQuery {
