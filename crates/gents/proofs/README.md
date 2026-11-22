@@ -697,6 +697,7 @@ Provider-input assembly for Claude: the body's `system[]` blocks (attribution, i
 | `Proofs/Session/PromptAssembly/ReplayFrontier.lean` | Reasoning replay acceptance and frontier: `prefix_is_leading_reasoning_removal` (equal ordinary items plus a suffix of anchored capture reasoning is exactly leading-run removal), `maxAdmissibleSuffix_maximal`, `admissible_of_suffix`, `kept_turn_prefix_is_leading_removal`, `kept_before_items_in_capture` (no resurrection). ClaudeMap `restoreHistoricalReasoningSuffix` applies it per accepted turn. Fences: `tests/conformance/prompt_assembly.rs::generated_{reasoning_suffix,replay_prefix}_cases_*`; scenario acceptance is `native_decide`d in `ContractCases/PromptAssembly.lean`. |
 | `Proofs/P2P/PairingReconcile/OverlayBinding.lean` | When an Agent's application-collection pairing overlay contributes: bound to the enrollment it was applied under (`bindingCurrent`; a renewal keeps it, a revocation, lapse, other member or re-created network ends it for good, `ended_binding_never_revives`), and only while its author is an enabled Agent holding the `p2p-pairing` grant and wrote every commit (`decideOverlay`, first failed precondition in a fixed order). Generated `application_pairing_binding_cases` and `application_pairing_contribution_cases` drive `gents_p2p::p2p_reconcile::overlay_binding`. |
 | `Proofs/P2P/PairingReconcile/ApplicationRoute.lean` | The route an enrolled peer receives: the base route plus exactly the named collections of a contributing overlay (`route_carries_only_base_and_named`, `added_collection_is_named_and_admitted`); a withdrawn grant, a disabled author or an ended enrollment leaves only the base route (`withdrawn_grant_stops_replication`, `disabled_author_stops_replication`, `ended_enrollment_stops_replication`). |
+| `Proofs/Store/Identity/ProviderUsageEvidence.lean` | Who sees that a provider refused work for usage: the evidence is the failed `InferenceCall` documents themselves, no copy, and every view reads it as its viewer. An Agent sees only its own calls and those in a session shared with it, the User sees the union, and document ACP grants the runtime's node key none. Generated `provider_usage_evidence_cases` replay against the native ACP engine. |
 | `Proofs/Store/Identity/ApplicationPairingAccess.lean` | Document ACP of the `application_pairings` resource: the author reads, updates and deletes its overlay, only the author updates it, Node administration reads and deletes it, the runtime reader only reads, siblings and catalog holders see nothing, the resource reaches no other document and opting in changes no other access. Generated `application_pairing_access_cases` replay against the native ACP engine. |
 | `Proofs/P2P/P2PBackpressure.lean` | Obligation model (no conformance bridge): success-ack backing, pending-DAG capacity, strict push-slot release on timeout |
 | `Proofs/P2P/PeerRegistryDiscovery/DirectoryProjection.lean` | Agent directory projection (machine index v1): source-owned membership, foreign-row preservation, idempotent convergence, write-free settled fixpoint, retraction soundness. Fence: `crates/gents-p2p/src/directory_projection.rs`. |
@@ -1104,7 +1105,17 @@ a failure the loop does not retry
 (`recorded_usage_limit_is_the_loops_permanent_failure`,
 `recorded_throttle_is_held_by_the_loop`). Goal readers read the recorded verdict,
 never the failure text. Fence: family `inference_provider_limit_verdicts` and
-vocabulary `inference_call_provider_limit_verdict_vocabulary`.
+vocabulary `inference_call_provider_limit_verdict_vocabulary`. A usage limit
+also records what the provider stated of it (`Statement`: window, tokens used
+and the token limit, each only when stated); a throttle states nothing
+(`a_throttle_states_no_limit`).
+
+`Proofs/Inference/InferenceCall/UsageRefusal.lean` decides whether the latest
+usage-limited call on a backend and model still stands (`stands`): until the
+reported reset passes, or a call on the same backend and model queued strictly
+after it completes; an unreported reset never lapses by time alone. Fence:
+family `provider_usage_refusal_standing`. Who reads the evidence is
+`Proofs/Store/Identity/ProviderUsageEvidence.lean`.
 
 ### Session Recovery
 

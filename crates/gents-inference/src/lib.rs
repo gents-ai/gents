@@ -15,6 +15,7 @@ pub mod resolved;
 pub mod test_support;
 pub mod trace_context;
 pub mod usage_observation;
+pub mod usage_refusal;
 pub mod views;
 
 #[cfg(test)]

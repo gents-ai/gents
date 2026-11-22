@@ -17,6 +17,9 @@ type InferenceCall @policy(id: "$household", resource: "children") {
     failure_reason: String
     provider_limit: String
     provider_limit_resets_at: String
+    provider_limit_window_minutes: Int
+    provider_limit_tokens_used: Int
+    provider_limit_tokens_limit: Int
 
     queued_at: String
     started_at: String

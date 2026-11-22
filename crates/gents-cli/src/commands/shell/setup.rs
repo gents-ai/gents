@@ -590,6 +590,7 @@ mod tests {
             account_ref: Some(account_ref.to_string()),
             backend_id: None,
             profiles: Vec::new(),
+            refusals: Vec::new(),
             usage: None,
             read: None,
         }

@@ -11,11 +11,21 @@ namespace InferenceCall.ProviderLimit
 
 open CompletionRetry
 
+/-- What a usage refusal says about the limit it hit, each part only when the
+provider states it: the window the limit counts over, in minutes, the tokens
+counted in that window and the limit on them. -/
+structure Statement where
+  windowMinutes : Option Nat := none
+  tokensUsed : Option Nat := none
+  tokensLimit : Option Nat := none
+  deriving DecidableEq, Repr
+
 /-- A provider limit one attempt reported, before any retry policy reads it:
-the provider's usage exhausted (resetting when it reports a reset), or a
-throttle (retryable at the wake it reports, when it reports one). -/
+the provider's usage exhausted (resetting when it reports a reset, and saying
+what it states of the limit), or a throttle (retryable at the wake it reports,
+when it reports one). -/
 inductive Report where
-  | usageExhausted (resetsAt : Option Time)
+  | usageExhausted (resetsAt : Option Time) (statement : Statement)
   | throttled (wake : Option Time)
   deriving DecidableEq, Repr
 
@@ -42,30 +52,44 @@ theorem fromDefraDB_toDefraDB (verdict : Verdict) :
 end Verdict
 
 /-- The verdict a failed call's row records with its failure reason. Only a
-usage limit carries a reset time; InferenceCall knows nothing of who reads it. -/
+usage limit carries a reset time and a statement; InferenceCall knows nothing
+of who reads it. -/
 structure Recorded where
   verdict : Verdict
   resetsAt : Option Time
+  statement : Statement := {}
   deriving DecidableEq, Repr
 
 /-- The report under a rate-limit wait cap: a throttle whose wake lies beyond
-the cap is the provider's usage limit, resetting at that wake. -/
+the cap is the provider's usage limit, resetting at that wake. A throttle
+states nothing about a usage limit, so such a limit records an empty
+statement. -/
 def verdict (now : Time) (maxWait : Option Time) : Report → Recorded
-  | .usageExhausted resetsAt => ⟨.usageLimited, resetsAt⟩
-  | .throttled none => ⟨.throttled, none⟩
+  | .usageExhausted resetsAt statement => ⟨.usageLimited, resetsAt, statement⟩
+  | .throttled none => ⟨.throttled, none, {}⟩
   | .throttled (some wake) =>
-      if withinMaxWait now wake maxWait then ⟨.throttled, none⟩
-      else ⟨.usageLimited, some wake⟩
+      if withinMaxWait now wake maxWait then ⟨.throttled, none, {}⟩
+      else ⟨.usageLimited, some wake, {}⟩
 
-theorem a_usage_exhaustion_keeps_its_reset (now : Time) (maxWait : Option Time)
-    (resetsAt : Option Time) :
-    verdict now maxWait (.usageExhausted resetsAt) = ⟨.usageLimited, resetsAt⟩ := rfl
+theorem a_usage_exhaustion_keeps_its_reset_and_statement (now : Time) (maxWait : Option Time)
+    (resetsAt : Option Time) (statement : Statement) :
+    verdict now maxWait (.usageExhausted resetsAt statement) =
+      ⟨.usageLimited, resetsAt, statement⟩ := rfl
+
+/-- Only a usage refusal states its limit: whatever a throttle's wake, its
+row carries an empty statement. -/
+theorem a_throttle_states_no_limit (now : Time) (maxWait : Option Time)
+    (wake : Option Time) :
+    (verdict now maxWait (.throttled wake)).statement = {} := by
+  cases wake with
+  | none => rfl
+  | some wake => by_cases hw : withinMaxWait now wake maxWait <;> simp [verdict, hw]
 
 theorem a_throttle_records_no_reset (now : Time) (maxWait : Option Time)
     (report : Report) (h : (verdict now maxWait report).verdict = .throttled) :
     (verdict now maxWait report).resetsAt = none := by
   cases report with
-  | usageExhausted resetsAt => simp [verdict] at h
+  | usageExhausted resetsAt statement => simp [verdict] at h
   | throttled wake =>
       cases wake with
       | none => rfl

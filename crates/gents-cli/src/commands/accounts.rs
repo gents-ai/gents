@@ -10,6 +10,7 @@ use gents_inference::backends::provider::BackendProviderOauthExt;
 use gents_inference::usage_observation::{
     usage_view, AccountUsageRead, UsageRead, UsageTrigger, UsageView,
 };
+use gents_inference::usage_refusal::{standing_refusals, UsageRefusal};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -31,6 +32,7 @@ pub(crate) struct AccountRow {
     pub(crate) account_ref: Option<String>,
     pub(crate) backend_id: Option<String>,
     pub(crate) profiles: Vec<String>,
+    pub(crate) refusals: Vec<UsageRefusal>,
     pub(crate) usage: Option<UsageView>,
     pub(crate) read: Option<UsageRead>,
 }
@@ -51,13 +53,14 @@ pub(crate) async fn dispatch(command: AccountsCommand) -> Result<()> {
             let (access, home_dir) =
                 resolve_config_access(target.home.as_deref(), target.graphql.as_deref()).await?;
             let did = resolve_node_did(Some(&home_dir), target.node_did.as_deref())?;
+            let now = chrono::Utc::now();
             let rows = list_with_usage(
                 &access,
                 &home_dir,
                 &did,
                 target.provider.as_deref(),
                 refresh,
-                chrono::Utc::now(),
+                now,
                 &mut std::io::stderr(),
             )
             .await?;
@@ -66,7 +69,7 @@ pub(crate) async fn dispatch(command: AccountsCommand) -> Result<()> {
             {
                 OutputFormat::Json => print_json(&serde_json::to_value(rows)?),
                 _ => {
-                    print!("{}", render_table(&rows));
+                    print!("{}", render_table(&rows, now));
                     Ok(())
                 }
             }
@@ -184,9 +187,8 @@ impl Snapshot {
             .collect()
     }
 
-    fn account_profiles(&self, account: &AccountSummary) -> Vec<String> {
-        let serving: Vec<_> = self
-            .backends
+    fn account_backends(&self, account: &AccountSummary) -> Vec<&str> {
+        self.backends
             .iter()
             .filter(|backend| {
                 backend_account(backend, &self.accounts)
@@ -194,8 +196,11 @@ impl Snapshot {
                     .is_some_and(|found| found.credential_id == account.credential_id)
             })
             .map(|backend| backend.backend_id.as_str())
-            .collect();
-        self.profiles_on(&serving)
+            .collect()
+    }
+
+    fn account_profiles(&self, account: &AccountSummary) -> Vec<String> {
+        self.profiles_on(&self.account_backends(account))
     }
 
     pub(crate) fn pick(&self, needle: &str, provider: Option<&str>) -> Result<&AccountSummary> {
@@ -248,6 +253,14 @@ pub(crate) async fn account_rows(
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<Vec<AccountRow>> {
     let snapshot = snapshot(access, node_did).await?;
+    let refusals = standing_refusals(access, node_did, &snapshot.profiles, now).await?;
+    let refused_on = |backend_ids: &[&str]| {
+        refusals
+            .iter()
+            .filter(|refusal| backend_ids.contains(&refusal.backend_id.as_str()))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
     let mut rows = Vec::new();
     for account in snapshot
         .accounts
@@ -276,6 +289,7 @@ pub(crate) async fn account_rows(
             account_ref: account.account_ref.clone(),
             backend_id: None,
             profiles: snapshot.account_profiles(account),
+            refusals: refused_on(&snapshot.account_backends(account)),
             usage,
             read: None,
         });
@@ -306,6 +320,7 @@ pub(crate) async fn account_rows(
             account_ref: backend.auth.oauth_account_ref().map(str::to_owned),
             backend_id: Some(backend.backend_id.clone()),
             profiles: snapshot.profiles_on(&[backend.backend_id.as_str()]),
+            refusals: refused_on(&[backend.backend_id.as_str()]),
             usage,
             read: None,
         });
@@ -507,7 +522,44 @@ fn usage_cells(row: &AccountRow) -> Vec<[String; 5]> {
         .collect()
 }
 
-pub(crate) fn render_table(rows: &[AccountRow]) -> String {
+/// A standing refusal first, in the usage columns: the refused model and the
+/// window the provider stated, its counter, its reset, and how long ago it
+/// refused.
+fn refusal_cells(row: &AccountRow, now: chrono::DateTime<chrono::Utc>) -> Vec<[String; 5]> {
+    row.refusals
+        .iter()
+        .map(|refusal| {
+            let window = match refusal.statement.window_minutes {
+                Some(minutes) => format!(
+                    "{} ({})",
+                    refusal.model,
+                    short_duration(i64::try_from(minutes).unwrap_or(i64::MAX / 60) * 60)
+                ),
+                None => refusal.model.clone(),
+            };
+            let used = match (
+                refusal.statement.tokens_used,
+                refusal.statement.tokens_limit,
+            ) {
+                (Some(used), Some(limit)) => format!("{used}/{limit} tokens"),
+                _ => "refused".to_owned(),
+            };
+            let resets = refusal.resets_at.map_or_else(
+                || "not reported".to_owned(),
+                |at| at.format("%Y-%m-%d %H:%MZ").to_string(),
+            );
+            [
+                window,
+                used,
+                resets,
+                "usage limit".to_owned(),
+                short_duration((now - refusal.refused_at).num_seconds()),
+            ]
+        })
+        .collect()
+}
+
+pub(crate) fn render_table(rows: &[AccountRow], now: chrono::DateTime<chrono::Utc>) -> String {
     let headers = [
         "PROVIDER", "LABEL", "IDENTITY", "PLAN", "STATUS", "DEFAULT", "PROFILES", "WINDOW", "USED",
         "RESETS", "SOURCE", "AGE",
@@ -529,7 +581,8 @@ pub(crate) fn render_table(rows: &[AccountRow]) -> String {
             if row.default { "yes" } else { "-" }.to_owned(),
             cell(Some(&row.profiles.join(","))),
         ];
-        for (index, usage) in usage_cells(row).into_iter().enumerate() {
+        let cells = refusal_cells(row, now).into_iter().chain(usage_cells(row));
+        for (index, usage) in cells.enumerate() {
             let lead = if index == 0 {
                 account.clone()
             } else {

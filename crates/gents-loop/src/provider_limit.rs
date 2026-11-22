@@ -2,7 +2,9 @@ use std::fmt;
 use std::time::Duration;
 
 use chrono::{DateTime, SecondsFormat, TimeZone, Utc};
-use gents_protocol::provider_limit::{ProviderLimitVerdict, RecordedProviderLimit};
+use gents_protocol::provider_limit::{
+    ProviderLimitStatement, ProviderLimitVerdict, RecordedProviderLimit,
+};
 
 /// The default `max_rate_limit_wait_ms`: the longest provider throttle the
 /// owned loop holds before the throttle is the provider's usage limit
@@ -26,6 +28,16 @@ const USAGE_NEEDLES: &[&str] = &[
     "free-usage-exhausted",
     "billing hard limit",
     "credit balance",
+    "included free usage",
+];
+
+/// The label before the counter a usage refusal states, `USED/LIMIT`.
+const TOKEN_COUNTER_LABEL: &str = "tokens (actual/limit):";
+/// Window lengths a usage refusal states as `N-UNIT window`, in minutes per unit.
+const STATED_WINDOWS: &[(&str, u64)] = &[
+    ("-minute window", 1),
+    ("-hour window", 60),
+    ("-day window", 24 * 60),
 ];
 
 const THROTTLE_NEEDLES: &[&str] = &["rate_limit", "rate limit", "too many requests"];
@@ -201,6 +213,7 @@ pub fn recorded_failure_reason(text: &str, limit: Option<&ProviderLimit>) -> Str
 pub struct UsageLimit {
     pub resets_at: Option<DateTime<Utc>>,
     pub detail: String,
+    pub statement: ProviderLimitStatement,
 }
 
 impl UsageLimit {
@@ -211,6 +224,7 @@ impl UsageLimit {
         Self {
             resets_at,
             detail: provider_detail(body, embedded_json(body).as_ref()),
+            statement: ProviderLimitStatement::default(),
         }
     }
 }
@@ -241,10 +255,12 @@ impl ProviderLimit {
             Self::Throttled { .. } => RecordedProviderLimit {
                 verdict: ProviderLimitVerdict::Throttled,
                 resets_at: None,
+                statement: ProviderLimitStatement::default(),
             },
             Self::UsageExhausted(limit) => RecordedProviderLimit {
                 verdict: ProviderLimitVerdict::UsageLimited,
                 resets_at: limit.resets_at,
+                statement: limit.statement,
             },
         }
     }
@@ -282,6 +298,7 @@ pub fn classify_attempt_provider_limit(text: &str, now: DateTime<Utc>) -> Option
         return Some(ProviderLimit::UsageExhausted(UsageLimit {
             resets_at,
             detail: provider_detail(body, body_json.as_ref()),
+            statement: stated_limit(&lower),
         }));
     }
 
@@ -290,6 +307,38 @@ pub fn classify_attempt_provider_limit(text: &str, now: DateTime<Utc>) -> Option
         .or_else(|| try_again_in(&lower).and_then(|wait| delay_after(now, wait.as_secs_f64())));
     let retry_after = retry_at.map(|at| (at - now).to_std().unwrap_or(Duration::ZERO));
     Some(ProviderLimit::Throttled { retry_after })
+}
+
+/// What a usage refusal's text states about the limit it hit.
+///
+/// External premise: xAI's free-tier refusal names its window as
+/// `rolling N-hour window` and its counter as
+/// `tokens (actual/limit): USED/LIMIT`; no other provider states either in
+/// its refusal text, and a part a refusal does not state stays unknown.
+fn stated_limit(lower: &str) -> ProviderLimitStatement {
+    let window_minutes = STATED_WINDOWS.iter().find_map(|(unit, minutes)| {
+        let before = &lower[..lower.find(unit)?];
+        let digits = &before[before.trim_end_matches(|c: char| c.is_ascii_digit()).len()..];
+        digits.parse::<u64>().ok()?.checked_mul(*minutes)
+    });
+    let counter = lower.find(TOKEN_COUNTER_LABEL).and_then(|at| {
+        let rest = lower[at + TOKEN_COUNTER_LABEL.len()..].trim_start();
+        let (used, rest) = leading_number(rest)?;
+        let (limit, _) = leading_number(rest.strip_prefix('/')?)?;
+        Some((used, limit))
+    });
+    ProviderLimitStatement {
+        window_minutes,
+        tokens_used: counter.map(|(used, _)| used),
+        tokens_limit: counter.map(|(_, limit)| limit),
+    }
+}
+
+fn leading_number(text: &str) -> Option<(u64, &str)> {
+    let end = text
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(text.len());
+    Some((text[..end].parse().ok()?, &text[end..]))
 }
 
 #[derive(PartialEq)]

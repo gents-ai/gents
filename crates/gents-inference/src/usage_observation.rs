@@ -799,6 +799,15 @@ pub struct ProviderLimitsTool {
     pub node: Arc<EmbeddedNode>,
     pub node_did: String,
     pub cache: Arc<UsageCache>,
+    /// The calling Agent's own signed access: it reads the usage refusals
+    /// as that Agent (Lean `Identity.ProviderUsageEvidence`).
+    pub evidence: ConfigAccess,
+}
+
+#[derive(Serialize)]
+struct ProviderLimitsOutput<'a> {
+    refusals: Vec<crate::usage_refusal::AgentUsageRefusal<'a>>,
+    accounts: Vec<Value>,
 }
 
 #[derive(Deserialize)]
@@ -818,7 +827,7 @@ impl gents_loop::tool::Tool for ProviderLimitsTool {
     async fn definition(&self, _prompt: String) -> gents_loop::tool::ToolDefinition {
         gents_loop::tool::ToolDefinition {
             name: Self::NAME.into(),
-            description: "Read this node's provider limits, resets and freshness. Contacts usage endpoints when the last read is older than five minutes; selects no account.".into(),
+            description: "Read the provider usage refusals still stopping your profiles, each with its reset when the provider reported one and the call that moves the profile, then this node's provider limits, resets and freshness. Contacts usage endpoints when the last read is older than five minutes; selects no account.".into(),
             parameters: serde_json::json!({"type":"object", "properties":{}, "additionalProperties":false}),
         }
     }
@@ -828,6 +837,20 @@ impl gents_loop::tool::Tool for ProviderLimitsTool {
         _args: Self::Args,
         _context: &gents_loop::tool::ToolCallEnvelope,
     ) -> Result<String, Self::Error> {
+        let now = Utc::now();
+        let profiles: Vec<_> = gents_store::views::read_view(
+            &self.evidence,
+            &crate::views::profiles::ProfileList::new(&self.node_did),
+        )
+        .await
+        .map_err(anyhow::Error::from)?
+        .into_iter()
+        .map(|row| row.profile)
+        .collect();
+        let refusals =
+            crate::usage_refusal::standing_refusals(&self.evidence, &self.node_did, &profiles, now)
+                .await
+                .map_err(anyhow::Error::from)?;
         let reads = read_node_usage(
             &self.cache,
             self.node.clone(),
@@ -835,7 +858,7 @@ impl gents_loop::tool::Tool for ProviderLimitsTool {
             UsageTrigger::Open,
             None,
             self.cache.endpoints(),
-            Utc::now(),
+            now,
         )
         .await?;
         let accounts: Vec<_> = reads
@@ -846,8 +869,14 @@ impl gents_loop::tool::Tool for ProviderLimitsTool {
                 })
             })
             .collect();
-        serde_json::to_string(&serde_json::json!({"accounts": accounts}))
-            .map_err(|error| ProviderLimitsError(error.into()))
+        serde_json::to_string(&ProviderLimitsOutput {
+            refusals: refusals
+                .iter()
+                .map(crate::usage_refusal::UsageRefusal::for_agent)
+                .collect(),
+            accounts,
+        })
+        .map_err(|error| ProviderLimitsError(error.into()))
     }
 }
 
