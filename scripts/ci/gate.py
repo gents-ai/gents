@@ -1037,6 +1037,17 @@ def report():
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
             summary.write(table + "\n")
+            # W53: machine-readable latency block for cross-run tracking.
+            latency = {
+                "steps": [
+                    {"step": label, "seconds": round(seconds, 1)}
+                    for label, _, _, seconds in results
+                ],
+                "total_seconds": round(sum(seconds for *_, seconds in results), 1),
+            }
+            summary.write(
+                "\n```json\n" + json.dumps(latency, indent=2) + "\n```\n"
+            )
     return all(verdict == "ok" for _, verdict, _, _ in results)
 
 
