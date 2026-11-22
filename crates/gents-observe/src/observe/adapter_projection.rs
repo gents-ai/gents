@@ -25,6 +25,7 @@ pub use atif::{
 pub use build::{build_adapter_projection, build_external_adapter_projection};
 pub use eval::adapter_projection_eval_jsonl_records;
 pub use jsonl::{adapter_projection_jsonl_records, adapter_projection_native_json};
+pub use redaction::redact_conversation;
 pub use schema::{
     adapter_projection_eval_jsonl_record_schema, adapter_projection_json_schema,
     adapter_projection_jsonl_record_schema, adapter_projection_native_json_schema,
@@ -74,8 +75,9 @@ pub struct AdapterProjectionEnvelope {
     pub redaction_mode: ProjectionRedactionMode,
     pub provenance: ProjectionProvenance,
     /// Never bodies: the timeline never selects `request_json`, so a captured
-    /// body cannot reach this envelope in any redaction mode; the one body read
-    /// in the system is the CLI's explicit `--include-body`.
+    /// body cannot reach this envelope in any redaction mode; bodies are read
+    /// only by the CLI's explicit `--include-body` and by a retained eval
+    /// trial's transcript export.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rendered_captures: Vec<TimelineRenderedRequestEvent>,
     pub output: AdapterProjection,

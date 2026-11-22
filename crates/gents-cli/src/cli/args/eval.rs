@@ -34,6 +34,11 @@ pub(crate) enum EvalCommand {
     Show(EvalShowArgs),
     #[command(about = "Show one slot's latest attempt with its stages and verdicts")]
     Trial(EvalTrialArgs),
+    #[command(
+        about = "Write each finished trial's provider transcripts as JSONL, read from its retained home",
+        after_help = EVAL_EXPORT_AFTER_HELP
+    )]
+    Export(EvalExportArgs),
     #[command(about = "Ask the process hosting a run to stop at its next check")]
     Cancel(EvalRunIdArgs),
     #[command(about = "Invalidate a run as this home; its documents stay")]
@@ -73,6 +78,7 @@ impl EvalCommand {
             Self::List(args) => &args.scope,
             Self::Show(args) => &args.scope,
             Self::Trial(args) => &args.scope,
+            Self::Export(args) => &args.scope,
             Self::Cancel(args) => &args.scope,
             Self::Invalidate(args) => &args.scope,
             Self::Rm(args) => &args.scope,
@@ -129,6 +135,38 @@ pub(crate) struct EvalTrialArgs {
     pub(crate) requests: bool,
     #[command(flatten)]
     pub(crate) scope: EvalScopeArgs,
+}
+
+const EVAL_EXPORT_AFTER_HELP: &str = "One JSON line per finished trial (its slot's latest attempt): the run, case and trial, its class, score and report usage, and per stage its verdicts and transcript. A stage's transcript holds the exact provider request body of its last inference call (every provider call with --calls all), whose messages and tools are what the model saw, and its final assistant message as that provider's history renders it, beside the request's usage, tool calls, compactions and the tool outputs its history carries as stubs. Requests a stage caused, a background tool's completion or a delegated agent's request, carry transcripts of their own under child_requests. Requires the evaluator identity that created the run. --redaction training-safe or public blanks every message, reasoning and tool argument or result string, keeping roles, part kinds, ids and tool names; it is not for fine-tuning text.";
+
+#[derive(clap::Args)]
+pub(crate) struct EvalExportArgs {
+    pub(crate) run_id: String,
+    /// Only this cell.
+    #[arg(long)]
+    pub(crate) cell: Option<String>,
+    /// Only this case; repeatable.
+    #[arg(long = "case")]
+    pub(crate) cases: Vec<String>,
+    /// Only this trial index.
+    #[arg(long)]
+    pub(crate) trial: Option<u32>,
+    /// Each stage's last inference call, or every provider call it made.
+    #[arg(long, value_enum, default_value_t = EvalExportCallsArg::Final)]
+    pub(crate) calls: EvalExportCallsArg,
+    #[arg(long, value_enum, default_value_t = super::TraceProjectionRedactionArg::Full)]
+    pub(crate) redaction: super::TraceProjectionRedactionArg,
+    /// Write the JSONL here instead of stdout.
+    #[arg(long)]
+    pub(crate) output_file: Option<PathBuf>,
+    #[command(flatten)]
+    pub(crate) scope: EvalScopeArgs,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub(crate) enum EvalExportCallsArg {
+    Final,
+    All,
 }
 
 #[derive(clap::Args)]

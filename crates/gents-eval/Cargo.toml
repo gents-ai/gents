@@ -20,6 +20,7 @@ gents = { path = "../gents" }
 gents-store = { workspace = true }
 gents-documents = { workspace = true }
 gents-inference = { workspace = true }
+gents-loop = { workspace = true, features = ["native"] }
 gents-pack = { workspace = true }
 gents-session = { workspace = true }
 gents-tools = { workspace = true }
@@ -57,7 +58,6 @@ gents-workspace-hack = { workspace = true }
 proptest = "1"
 gents = { path = "../gents", features = ["test-fixtures", "typescript"] }
 acp.workspace = true
-gents-loop.workspace = true
 gents-lean-contract.workspace = true
 gents-lean-vocab.workspace = true
 db.workspace = true
