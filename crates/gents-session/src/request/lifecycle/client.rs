@@ -2049,7 +2049,7 @@ mod tests {
         let agent = gents_store::identity::provision_agent_identity(&runtime).unwrap();
         let access = db.client_access(&user);
         seed_owned_agent(&access, runtime.did(), &agent).await;
-        let mut create = AgentRequestCreate::base(
+        let mut template = AgentRequestCreate::base(
             RequestPurpose::Normal,
             "retry",
             RequestScope::new(runtime.did(), user.did(), &agent.agent_did, "retry-session"),
@@ -2058,33 +2058,48 @@ mod tests {
             "2026-11-04T00:00:00Z",
             AgentRequestAdmissionRecord::client(user.did()),
         );
-        let (session, agent_doc) = reserve_client_targets(&access, &create).await.unwrap();
-        create.session_doc_id = Some(session);
-        create.agent_doc_id = Some(agent_doc);
-        create.retry_parent_request = Some("parent".into());
-        create.retry_parent_request_doc_id = Some("parent-doc".into());
-        create.retry_root_request = Some("parent".into());
-        create.retry_key = Some("retry:doc:parent-doc".into());
-        crate::request::admission::sign_agent_request_create(&user, &mut create)
-            .await
-            .unwrap();
-        let mut input = gents_store::config_client::client_request_input(&create).unwrap();
-        input["relationships_pending"] = true.into();
-        access
-            .transact_write("test.retry.pending", |txn| {
-                let input = &input;
-                Box::pin(async move {
-                    txn.execute_client_signed_create(
-                        "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",
-                        &serde_json::json!({"input": input}),
-                        gents_protocol::schemas::AGENT_REQUEST,
-                    )
-                    .await?;
-                    Ok::<_, anyhow::Error>(())
-                })
-            })
-            .await
-            .unwrap();
+        let (session, agent_doc) = reserve_client_targets(&access, &template).await.unwrap();
+        template.session_doc_id = Some(session);
+        template.agent_doc_id = Some(agent_doc);
+        let publish_pending = |name: String, matching_signature: bool| {
+            let mut create = template.clone();
+            let (access, user) = (&access, &user);
+            async move {
+                let parent_doc = format!("parent-{name}");
+                create.request_id = name.clone();
+                create.retry_parent_request = Some(format!("parent-{name}-request"));
+                create.retry_parent_request_doc_id = Some(parent_doc.clone());
+                create.retry_root_request = create.retry_parent_request.clone();
+                create.retry_key = Some(format!("retry:doc:{parent_doc}"));
+                crate::request::admission::sign_agent_request_create(user, &mut create)
+                    .await
+                    .unwrap();
+                if !matching_signature {
+                    create.content.push_str(" after signing");
+                }
+                let mut input = gents_store::config_client::client_request_input(&create).unwrap();
+                input["relationships_pending"] = true.into();
+                access
+                    .transact_write("test.retry.pending", |txn| {
+                        let input = &input;
+                        Box::pin(async move {
+                            let created = txn.execute_client_signed_create(
+                                "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",
+                                &serde_json::json!({"input": input}),
+                                gents_protocol::schemas::AGENT_REQUEST,
+                            )
+                            .await?;
+                            Ok::<_, anyhow::Error>(gents_store::graphql::created_doc_id(
+                                &created,
+                                "AgentRequest",
+                            )?)
+                        })
+                    })
+                    .await
+                    .unwrap();
+                parent_doc
+            }
+        };
         // The other actor and the Agent are authenticated node readers; only
         // document ACP decides whether each can observe this user's retry.
         for reader in [other.did(), agent.agent_did.as_str()] {
@@ -2097,68 +2112,84 @@ mod tests {
                 .unwrap();
         }
         let wrong = ConfigAccess::local_as(node.clone(), other.did().parse().unwrap());
-        assert!(reconcile_client_retry(
-            &access,
-            runtime.did(),
-            "retry-session",
-            "other-requester",
-            "parent-doc"
-        )
-        .await
-        .is_err());
-        let agent_access = ConfigAccess::local_as(node.clone(), agent.agent_did.parse().unwrap());
+        let working_agent = identity::Did::new(&agent.agent_did).unwrap();
+        let observe = |name: String| {
+            let (access, working_agent) = (&access, &working_agent);
+            async move {
+                let rows = access
+                    .execute(&format!(
+                        r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{ _docID relationships_pending }} }}"#,
+                        gents_store::graphql::escape_graphql_string(&name)
+                    ))
+                    .await
+                    .unwrap();
+                let row = &rows["data"]["AgentRequest"][0];
+                let doc = row["_docID"].as_str().unwrap().to_owned();
+                let grants = access
+                    .list_document_relationships("AgentRequest", &doc)
+                    .await
+                    .unwrap()
+                    .iter()
+                    .any(|relationship| {
+                        relationship.relation == "working_agent"
+                            && relationship.subject == working_agent.as_str()
+                    });
+                (
+                    doc,
+                    gents_lean_vocab::families::session_child_client_request_recovery::ClientRequestOutput {
+                        pending: row["relationships_pending"].as_bool().unwrap(),
+                        grants,
+                    },
+                )
+            }
+        };
         for case in gents_lean_vocab::families::session_child_client_request_recovery::cases() {
-            let recovered = reconcile_client_retry(
-                if case.input.same_signer {
-                    &access
-                } else {
-                    &wrong
-                },
-                runtime.did(),
-                "retry-session",
-                user.did(),
-                "parent-doc",
-            )
-            .await
-            .unwrap();
+            let input = &case.input;
+            let name = input.name.clone();
+            let parent_doc = publish_pending(name.clone(), input.matching_signature).await;
+            if !input.initial_pending {
+                reconcile_client_retry(&access, runtime.did(), "retry-session", user.did(), &parent_doc)
+                    .await
+                    .unwrap();
+                let (doc, _) = observe(name.clone()).await;
+                access
+                    .delete_actor_relationship("AgentRequest", &doc, "working_agent", &working_agent)
+                    .await
+                    .unwrap();
+            }
+            let (_, start) = observe(name.clone()).await;
             assert_eq!(
-                recovered.as_deref(),
-                case.input.same_signer.then_some("retry")
+                (start.pending, start.grants),
+                (input.initial_pending, false),
+                "{name} starts from its modeled state"
             );
-            let rows = access
-                .execute("{ AgentRequest { relationships_pending } }")
-                .await
-                .unwrap();
-            let visible = agent_access
-                .execute("{ AgentRequest { request_id } }")
-                .await
-                .unwrap();
-            case.check(
-                gents_lean_vocab::families::session_child_client_request_recovery::ClientRequestOutput {
-                    pending: rows["data"]["AgentRequest"][0]["relationships_pending"]
-                        .as_bool()
-                        .unwrap(),
-                    grants: visible["data"]["AgentRequest"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .any(|row| row["request_id"] == "retry"),
-                },
-            );
-        }
-        assert_eq!(
-            reconcile_client_retry(
+            assert!(reconcile_client_retry(
                 &access,
                 runtime.did(),
                 "retry-session",
-                user.did(),
-                "parent-doc"
+                "other-requester",
+                &parent_doc
             )
             .await
-            .unwrap()
-            .as_deref(),
-            Some("retry")
-        );
+            .is_err());
+            let recovered = reconcile_client_retry(
+                if input.same_signer { &access } else { &wrong },
+                runtime.did(),
+                "retry-session",
+                user.did(),
+                &parent_doc,
+            )
+            .await;
+            if input.matching_signature {
+                assert_eq!(
+                    recovered.unwrap().as_deref(),
+                    input.same_signer.then_some(name.as_str())
+                );
+            } else {
+                assert!(recovered.is_err(), "{name} recovers a request whose signature differs");
+            }
+            case.check(observe(name).await.1);
+        }
         node.shutdown().await.expect("shut down test node");
     }
 

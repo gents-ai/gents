@@ -114,24 +114,21 @@ example : (clientRequestCases.find? (·.name == "wrong_signer")).map
     (fun c => (recoverClientRequest c.initial c.matchingSignature c.sameSigner c.grantsOk c.markOk).pending) =
     some true := by decide
 
-def servedClientRequestNames : List String := ["wrong_signer", "grant_succeeded"]
-
-/-- One served retry fixture holds a committed, pending client request: another
-actor's recovery leaves it untouched, then its signer recovers it, in that
-order. Grant or marker failures, a mismatched signature and a completed
-publication cannot be produced on that fixture. -/
+/-- The retry fixture holds one committed, signed client retry per case in one
+session: another actor recovers one, its signer recovers one, its signer
+recovers one whose admission signature does not verify, and its signer
+recovers one it completed and whose working Agent grant it then revoked. -/
 @[conformance_family]
 def clientRequestRecovery : Family ClientRequestInput ClientRequestOutput where
-  inputs := servedClientRequestNames.filterMap fun name =>
-    (clientRequestCases.find? (·.name == name)).map .ofCase
+  inputs := (clientRequestCases.filter (·.name != "grant_failed")).map .ofCase
   model := recoveredClientRequest
 
-/-- model-production-gap: the served retry fixture cannot fail the working
-Agent grant or the marker write, sign a mismatched request, or start from a
-completed publication whose grant was revoked. -/
+/-- Recovery stages the working Agent grant in the transaction that clears the
+marker, and the store's fault seams count only document mutations, so no
+fixture fails that grant while its marker write succeeds. -/
 @[conformance_family]
 def clientRequestRecoveryUnreached : Family ClientRequestInput ClientRequestOutput where
-  inputs := (clientRequestCases.filter fun c => c.name ∉ servedClientRequestNames).map .ofCase
+  inputs := (clientRequestCases.filter (·.name == "grant_failed")).map .ofCase
   model := recoveredClientRequest
 
 deriving instance ToJson for Identity.SessionChild.ClientRequestPublication

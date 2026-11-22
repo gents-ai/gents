@@ -4,8 +4,8 @@ use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurp
 
 use super::{AgentRequestAdmissionVerifier, ClientClaimAdmission, ClientClaimAuthorization};
 use crate::request::lifecycle::{
-    build_signed_client_request, ClaimOutcome, ExecutionOrigin, RequestIdentity, RequestLifecycle,
-    RequestSigner, RequestSpec,
+    build_signed_client_request, submit_client_request, ClaimOutcome, ExecutionOrigin,
+    RequestIdentity, RequestLifecycle, RequestSigner, RequestSpec,
 };
 use gents_protocol::row::AgentRequest;
 use gents_store::config_client::{ConfigAccess, NodePermission};
@@ -123,6 +123,68 @@ async fn observe_readiness(
         }
         .into(),
     }
+}
+
+/// Publishes a local-self request the managed Agent signs through the
+/// production writer, verifies it for claim and commits the claim, which holds
+/// no client admission.
+async fn claim_local_self_request(
+    node: &Arc<defra_node::Node>,
+    node_did: &str,
+    agent_did: &str,
+    agent: &dyn NodeIdentity,
+    verifier: &AgentRequestAdmissionVerifier,
+) -> Option<super::ClaimedClientProvenance> {
+    let access =
+        ConfigAccess::local_managed_agent(node.clone(), agent_did.parse().unwrap(), agent).unwrap();
+    let create = build_signed_client_request(
+        &access,
+        RequestSpec::new(
+            RequestPurpose::Normal,
+            RequestIdentity {
+                request_id: "readiness-local-self".into(),
+                node_did: node_did.into(),
+                requester_did: Some(agent_did.into()),
+                agent_did: agent_did.into(),
+                session_id: "readiness-local-self-session".into(),
+                content: "work".into(),
+                execution_origin: ExecutionOrigin::Interactive,
+                created_at: "2026-11-04T00:00:00Z".into(),
+            },
+            AgentRequestAdmissionRecord::local_self(agent_did),
+        ),
+        RequestSigner::Identity(agent),
+    )
+    .await
+    .unwrap();
+    submit_client_request(&access, &create).await.unwrap();
+    let rows = access
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{request_id: {{_eq: "readiness-local-self"}}}}) {{ {} }} }}"#,
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
+        ))
+        .await
+        .unwrap();
+    let row: gents_protocol::row::AgentRequestRow =
+        serde_json::from_value(rows["data"]["AgentRequest"][0].clone()).unwrap();
+    let (request, admission) = verifier
+        .verify_fresh_for_claim(&AgentRequest::try_from(row).unwrap(), agent_did)
+        .await
+        .unwrap();
+    assert!(admission.is_none(), "a local-self claim has no client admission");
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        node.clone(),
+        request,
+        60,
+        ExecutionOrigin::Interactive,
+        String::new(),
+    );
+    lifecycle.bind_managed_agent(agent).unwrap();
+    assert!(matches!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        ClaimOutcome::Claimed
+    ));
+    lifecycle.claimed_client_provenance()
 }
 
 async fn exercise_readiness(same_agent: bool, cases: Vec<ReadinessCase>) {
@@ -473,6 +535,14 @@ async fn exercise_readiness(same_agent: bool, cases: Vec<ReadinessCase>) {
         ));
     }
     let admitted_after = lifecycle.claimed_client_provenance();
+    let unattended_after = claim_local_self_request(
+        &node,
+        runtime.did(),
+        &binding.agent_did,
+        selected_identity.as_ref(),
+        &verifier,
+    )
+    .await;
     let label = |actual: &str, fixture: &str, modeled: &str| {
         if actual == fixture {
             modeled.to_owned()
@@ -480,15 +550,15 @@ async fn exercise_readiness(same_agent: bool, cases: Vec<ReadinessCase>) {
             actual.to_owned()
         }
     };
-    for case in gents_lean_vocab::families::mailbox_access_claimed_recipient_served::cases() {
+    for case in gents_lean_vocab::families::mailbox_access_claimed_recipient_provenance::cases() {
         let observed = match (case.input.present, case.input.committed) {
             (false, false) => &unadmitted_before,
+            (false, true) => &unattended_after,
             (true, false) => &admitted_before,
             (true, true) => &admitted_after,
-            (false, true) => panic!("the readiness fixture commits only admitted claims"),
         };
         case.check(
-            gents_lean_vocab::families::mailbox_access_claimed_recipient_served::RecipientOutput {
+            gents_lean_vocab::families::mailbox_access_claimed_recipient_provenance::RecipientOutput {
                 signer: observed
                     .as_ref()
                     .map(|retained| label(&retained.signer_did, signer.did(), "delegate")),

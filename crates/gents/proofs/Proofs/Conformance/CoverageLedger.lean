@@ -2123,15 +2123,9 @@ def caseCoverage : List CoverageEntry :=
       "workspace_root_completeness"
       "Checks root projection for incomplete views; an ACL-bound authoritative root publication contract remains separate.")
       "identity-permission" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
+  , tagged (consumerCoverage
       "family"
-      "mailbox_access_claimed_recipient_served"
-      "Connects a native User-authored client claim to the mailbox tool and recipient relationship; unattended provenance remains unavailable.")
-      "identity-permission" [Surface.runtimeInternal]
-  , tagged (boundaryCoverage
-      "family"
-      "mailbox_access_claimed_recipient_unreached"
-      "model-production-gap: no served fixture commits a client claim without its verified admission; mailbox_access_claimed_recipient_served replays the unadmitted lifecycle before its claim.")
+      "mailbox_access_claimed_recipient_provenance")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -4125,7 +4119,7 @@ def caseCoverage : List CoverageEntry :=
       "model-production-gap: no production path reaches these emitted cases yet (every case except paired_title_segment, missing_parent, invalid_parent_signature, foreign_native_owner and completed_then_revoked: the served repair fixture cannot fail a native grant or marker write, leave the child uncommitted, or forge binding fields of signed rows)")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (followUpCoverage "family" "session_child_client_request_recovery_unreached"
-      "model-production-gap: no production path reaches these emitted cases yet (grant_failed, wrong_signature, already_completed_revoked: the served retry fixture cannot fail the working Agent grant or marker, sign a mismatched request, or start from a completed publication whose grant was revoked)")
+      "grant_failed: recovery stages the working Agent grant in the transaction that clears the marker, and the store's fault seams count only document mutations, so no fixture fails that grant alone.")
       "identity-permission" [Surface.runtimeInternal]
   ]
 
