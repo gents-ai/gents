@@ -354,7 +354,7 @@ pub(super) async fn install_documents_report(
                 }
             }
         }
-        if !args.wire.is_empty() && !args.preview && args.scope.graphql.is_none() {
+        if !args.wire.is_empty() && args.scope.graphql.is_none() {
             output["wired"] = wire_pack_batch(
                 &access,
                 &owner,
@@ -364,7 +364,10 @@ pub(super) async fn install_documents_report(
                     approval: None,
                 },
                 &args.wire,
-                WireBatchOptions::default(),
+                WireBatchOptions {
+                    preview: args.preview,
+                    ..WireBatchOptions::default()
+                },
                 gents_host::http::pack_wire_client::SIGNERS,
             )
             .await?
@@ -455,6 +458,33 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError
                     plugin_inference_needs(&args.scope, pack.manifest(), &requested).await
                 {
                     preview["inference_needs"] = needs;
+                }
+                if !args.wire.is_empty() {
+                    let (access, owner) = resolve_scope_owner(&args.scope).await?;
+                    let home =
+                        gents_service::home_state::resolve_home_dir(args.scope.home.as_deref());
+                    let wired = wire_pack_batch(
+                        &access,
+                        &owner,
+                        &home,
+                        SentPack {
+                            archive: &pack,
+                            approval: None,
+                        },
+                        &args.wire,
+                        WireBatchOptions {
+                            preview: true,
+                            ..WireBatchOptions::default()
+                        },
+                        gents_host::http::pack_wire_client::SIGNERS,
+                    )
+                    .await;
+                    if let Some(node) = access.local_node() {
+                        if let Err(error) = node.shutdown().await {
+                            tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
+                        }
+                    }
+                    preview["wired"] = wired?.into();
                 }
                 return Ok(crate::print_json(&preview)?);
             }

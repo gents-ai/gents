@@ -22,7 +22,7 @@ describe("enabling a pack's plugin for an agent", () => {
     const wirePack = vi.fn(async ({ preview }: { preview: boolean }) => {
       if (preview)
         return {
-          report: { job: null, next_call: null, warnings: [] },
+          report: { job: null, next_call: null, warnings: [], policy_warnings: [] },
           authority: null,
         };
       throw new Error(REFUSAL);
@@ -57,7 +57,7 @@ describe("enabling a pack's plugin for an agent", () => {
     const refusing = vi.fn(async ({ preview }: { preview: boolean }) => {
       if (preview)
         return {
-          report: { job: null, next_call: null, warnings: [] },
+          report: { job: null, next_call: null, warnings: [], policy_warnings: [] },
           authority: null,
         };
       throw new Error(REFUSAL);
@@ -78,7 +78,7 @@ describe("enabling a pack's plugin for an agent", () => {
     });
     cleanup();
     const wirePack = vi.fn(async () => ({
-      report: { job: null, next_call: null, warnings: [] },
+      report: { job: null, next_call: null, warnings: [], policy_warnings: [] },
       authority: null,
     }));
     renderIn(
@@ -94,6 +94,82 @@ describe("enabling a pack's plugin for an agent", () => {
       screen.queryByText(/can’t be enabled from the app while this node is running/),
     ).toBeNull();
     await vi.waitFor(() => expect(wirePack).toHaveBeenCalled());
+    await vi.waitFor(() =>
+      expect(screen.getByRole("button", { name: "Enable" })).toBeEnabled(),
+    );
+  });
+
+  it("says a preview it cannot plan yet in words, and keeps Enable off", async () => {
+    const wirePack = vi.fn(async () => ({
+      skipped: true as const,
+      preview: true as const,
+      agent: deployment.agents[0].agentDid,
+      plugin: "demo/hello_plugin",
+      slot: "demo-worker",
+      reason: "agent_identity_pending" as const,
+      next: "install the pack, which creates the agent of slot demo-worker, then wire demo/hello_plugin",
+    }));
+    renderIn(
+      testApp({ api: { wirePack } }),
+      <WirePackDialog
+        plugin="demo/hello_plugin"
+        agents={deployment.agents}
+        targetsFrom={[]}
+        onClose={() => {}}
+      />,
+    );
+    expect(
+      await screen.findByText(/its pack creates the agent “demo-worker”/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Install the pack first/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Enable" })).toBeDisabled();
+  });
+
+  it("says the agent's own dynamic-script setting was kept and how to change it", async () => {
+    const policy = (dynamic: "off" | "check" | "run", targets: string[]) => ({
+      dynamic,
+      dynamic_targets: targets,
+      trusted_packs: [],
+    });
+    const wirePack = vi.fn(async () => ({
+      plugin: "demo/hello_plugin",
+      agent: deployment.agents[0].agentDid,
+      preview: true,
+      authority: null,
+      report: {
+        changed: [],
+        job: null,
+        warnings: [],
+        next_call: null,
+        policy_warnings: [
+          {
+            code: "dynamic_mode_kept" as const,
+            plugin: "demo/hello_plugin",
+            tools_id: "engineer-tools",
+            requested: policy("check", ["wf-a"]),
+            kept: policy("run", ["wf-b", "wf-a"]),
+            previous_digest: null,
+            installed_digest: "sha256:aa",
+            remedy: "gents config tools show engineer-tools",
+          },
+        ],
+      },
+    }));
+    renderIn(
+      testApp({ api: { wirePack } }),
+      <WirePackDialog
+        plugin="demo/hello_plugin"
+        agents={deployment.agents}
+        targetsFrom={[]}
+        onClose={() => {}}
+      />,
+    );
+    const warning = await screen.findByTestId("wire-policy-warning");
+    expect(warning).toHaveTextContent(
+      "Your dynamic-script setting is kept: run for wf-b, wf-a. The pack asks for check for wf-a.",
+    );
+    expect(warning).toHaveTextContent("engineer-tools");
+    expect(warning).not.toHaveTextContent("gents config");
     await vi.waitFor(() =>
       expect(screen.getByRole("button", { name: "Enable" })).toBeEnabled(),
     );

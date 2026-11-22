@@ -35,16 +35,48 @@ export type WireReport = {
   changed: string[];
   job: PluginJobSettings | null;
   warnings: string[];
+  /** What the pack asked of the dynamic policy that the kept policy does not give. */
+  policy_warnings: WirePolicyWarning[];
   next_call: string | null;
 };
 
+/** Wiring kept the dynamic policy already on the agent's Tools. */
+export type WirePolicyWarning = {
+  code: "dynamic_mode_kept" | "dynamic_targets_kept" | "dynamic_run_repinned";
+  plugin: string;
+  /** the Tools document whose job block holds the kept policy */
+  tools_id: string;
+  requested: PluginJobSettings["policy"] | null;
+  kept: PluginJobSettings["policy"];
+  previous_digest: string | null;
+  installed_digest: string;
+  /** the command-line remedy */
+  remedy: string;
+};
+
 export type PackWireResult = {
+  skipped?: false;
   plugin: string;
   agent: string;
   preview: boolean;
   authority: string | null;
   report: WireReport;
 };
+
+/** A pair a preview plans nothing for: the pack authors an agent its install
+    creates, so the pair is wired after the install. */
+export type PackWireSkipped = {
+  skipped: true;
+  preview: true;
+  agent: string;
+  plugin: string;
+  slot: string;
+  reason: "agent_identity_pending";
+  next: string;
+};
+
+/** One entry of a wiring preview or receipt. */
+export type PackWireEntry = PackWireResult | PackWireSkipped;
 
 export type PackWireSources = {
   plugins: { plugin: string; pack: string | null; job: boolean }[];

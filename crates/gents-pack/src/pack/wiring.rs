@@ -86,6 +86,20 @@ pub enum ReviewedJob {
     /// the pack the caller approved yields (`Configuration.wireReviewedJob`);
     /// `None` when the approval could not derive it.
     Approved(Option<Option<gents_protocol::job::PluginJobSettings>>),
+    /// The job the archive a preview installs yields, which its install
+    /// writes to the node before the wire reads it.
+    Archive(Option<gents_protocol::job::PluginJobSettings>),
+}
+
+/// What [`apply_batch`] does with the documents its plans leave.
+#[derive(Debug, Clone, Copy)]
+pub enum BatchWrite<'a> {
+    Apply,
+    /// Validates the write and makes none, beside the documents of a pack
+    /// the preview installs first.
+    Preview {
+        installing: Option<&'a gents_documents::PackConfig>,
+    },
 }
 
 impl PluginWiring {
@@ -188,10 +202,11 @@ impl PluginWiring {
                 &self.targets_from,
             )?
         } else {
-            let job = self.reviewed_job(txn).await?;
             let job = match &self.reviewed {
-                ReviewedJob::Read => job,
+                ReviewedJob::Read => self.reviewed_job(txn).await?,
+                ReviewedJob::Archive(job) => job.clone(),
                 ReviewedJob::Approved(approved) => {
+                    let job = self.reviewed_job(txn).await?;
                     crate::pack::wire_subject::wire_reviewed_job(
                         approved.as_ref().map(Option::as_ref),
                         job.as_ref(),
@@ -252,12 +267,12 @@ impl PluginWiring {
 }
 
 /// Applies `plans` in order, each over the Tools and Context the ones before
-/// it left, and writes every document they change once, in `txn`. With
-/// `preview` the write is validated and not made. One report per plan.
+/// it left, and writes every document they change once, in `txn`, as `write`
+/// says. One report per plan.
 pub async fn apply_batch(
     txn: &ConfigApplyTxn<'_>,
     plans: &[&PluginWiring],
-    preview: bool,
+    write: BatchWrite<'_>,
     profile_policy: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
 ) -> Result<Vec<WireReport>> {
     let mut tools_by_id = BTreeMap::<String, Tools>::new();
@@ -291,18 +306,40 @@ pub async fn apply_batch(
         add: value.clone(),
         update: value,
     };
-    let mut documents = Vec::with_capacity(tools_by_id.len() + contexts_by_id.len());
+    let mut documents = match write {
+        BatchWrite::Preview {
+            installing: Some(config),
+        } => {
+            let mut config = config.clone();
+            config
+                .tools
+                .retain(|tools| !tools_by_id.contains_key(&tools.tools_id));
+            config
+                .contexts
+                .retain(|context| !contexts_by_id.contains_key(&context.context_id));
+            DesiredStateApplyPlan::from_pack_config(&config)?
+                .documents()
+                .to_vec()
+        }
+        _ => Vec::with_capacity(tools_by_id.len() + contexts_by_id.len()),
+    };
     for tools in tools_by_id.values() {
         documents.push(document(Collection::Tools, serde_json::to_value(tools)?));
     }
     for context in contexts_by_id.values() {
-        documents.push(document(Collection::AgentContext, serde_json::to_value(context)?));
+        documents.push(document(
+            Collection::AgentContext,
+            serde_json::to_value(context)?,
+        ));
     }
     let desired = DesiredStateApplyPlan::new(documents)?;
-    if preview {
-        validate_desired_state_plan(txn, &desired, profile_policy).await?;
-    } else {
-        apply_desired_state_plan(txn, &desired, profile_policy).await?;
+    match write {
+        BatchWrite::Apply => {
+            apply_desired_state_plan(txn, &desired, profile_policy).await?;
+        }
+        BatchWrite::Preview { .. } => {
+            validate_desired_state_plan(txn, &desired, profile_policy).await?;
+        }
     }
     Ok(reports)
 }

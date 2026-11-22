@@ -60,7 +60,9 @@ pub(super) async fn run(
             let (wire, approver) = (&wire, &approver);
             Box::pin(async move {
                 let interpreter = txn.approved_interpreter()?;
-                let reports = wire.apply(interpreter, false).await?;
+                let reports = wire
+                    .apply(interpreter, gents_pack::pack::wiring::BatchWrite::Apply)
+                    .await?;
                 approver.client_finished(interpreter).await?;
                 Ok::<_, anyhow::Error>(reports)
             })

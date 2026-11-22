@@ -46,6 +46,7 @@ pub mod rooted_paths;
 pub mod schema_apply;
 pub mod store;
 mod ux;
+pub mod wire_preview;
 pub mod wire_subject;
 pub mod wiring;
 pub use gents_documents::{is_valid_ux_data_tool_name, UxDataSurface, MAX_UX_DATA_SURFACE_ID_LEN};

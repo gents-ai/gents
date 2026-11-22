@@ -20,6 +20,7 @@ use serde_json::{json, Value};
 use crate::pack::installed_pack_documents;
 use crate::pack::registry::split_pack_coordinate;
 use crate::pack::resolved_pack::ResolvedPack;
+use crate::pack::wiring::BatchWrite;
 use crate::pack::WireReport;
 use crate::plugin::authority::describe_plugin_authority;
 use crate::plugin::store::read_record;
@@ -290,7 +291,10 @@ async fn wire_batch_owned(
         access
             .transact_readonly("cli.pack.wire.preview", |txn| {
                 let plan = &plan;
-                Box::pin(async move { plan.apply(txn, true).await })
+                Box::pin(async move {
+                    plan.apply(txn, BatchWrite::Preview { installing: None })
+                        .await
+                })
             })
             .await?
     } else if matches!(access, ConfigAccess::Local(_)) {
@@ -311,7 +315,10 @@ async fn wire_batch_owned(
         access
             .transact_verified_pack_with_approver("cli.pack.wire", scope, approver, |txn| {
                 let plan = &plan;
-                Box::pin(async move { plan.apply(txn.approved_interpreter()?, false).await })
+                Box::pin(async move {
+                    plan.apply(txn.approved_interpreter()?, BatchWrite::Apply)
+                        .await
+                })
             })
             .await
             .map_err(|failure| {
@@ -327,7 +334,7 @@ async fn wire_batch_owned(
         access
             .transact_write("cli.pack.wire", |txn| {
                 let plan = &plan;
-                Box::pin(async move { plan.apply(txn, false).await })
+                Box::pin(async move { plan.apply(txn, BatchWrite::Apply).await })
             })
             .await?
     };
@@ -446,7 +453,10 @@ impl WirePlan {
         hold: bool,
     ) -> Result<Self> {
         let home_for_read = home.to_owned();
-        let names: Vec<String> = requests.iter().map(|request| request.plugin.clone()).collect();
+        let names: Vec<String> = requests
+            .iter()
+            .map(|request| request.plugin.clone())
+            .collect();
         let (store_guard, plugins) = tokio::task::spawn_blocking(move || {
             let guard = hold
                 .then(|| crate::plugin::store::try_lock_store(&home_for_read))
@@ -529,14 +539,18 @@ impl WirePlan {
         digests
     }
 
-    /// Applies every wire in `txn` in one write; `preview` writes nothing.
-    pub async fn apply(&self, txn: &ConfigApplyTxn<'_>, preview: bool) -> Result<Vec<WireReport>> {
+    /// Applies every wire in `txn` in one write, as `write` says.
+    pub async fn apply(
+        &self,
+        txn: &ConfigApplyTxn<'_>,
+        write: crate::pack::wiring::BatchWrite<'_>,
+    ) -> Result<Vec<WireReport>> {
         let plans: Vec<&crate::pack::wiring::PluginWiring> =
             self.wires.iter().map(|wire| &wire.plan).collect();
         crate::pack::wiring::apply_batch(
             txn,
             &plans,
-            preview,
+            write,
             &gents_inference::resolved::ProviderProfilePolicy,
         )
         .await
@@ -554,11 +568,14 @@ impl WirePlan {
 
 /// What a wiring batch is given besides its pack and agents: the node
 /// owner's consent, when its install was approved, to calls to each agent's
-/// own tools. No wiring raises a dynamic policy
-/// (Lean `PluginWiring.wire_never_enables`).
+/// own tools, and whether it only previews. No wiring raises a dynamic
+/// policy (Lean `PluginWiring.wire_never_enables`).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WireBatchOptions {
     pub tool_calls_consent: bool,
+    /// Plans from the pack's archive and writes nothing
+    /// ([`crate::pack::wire_preview::preview_pack_wiring`]).
+    pub preview: bool,
 }
 
 /// A pack the client sent, with its approval of the pack: with one, a wire
@@ -581,6 +598,16 @@ pub async fn wire_pack_batch(
     options: WireBatchOptions,
     signers: WireSigners,
 ) -> Result<Vec<Value>> {
+    if options.preview {
+        return crate::pack::wire_preview::preview_pack_wiring(
+            access,
+            owner,
+            pack.archive,
+            agents,
+            options,
+        )
+        .await;
+    }
     let sent = crate::pack::wire_subject::WireSubject::of_sent_pack(pack.archive)?;
     let approvals = pack.approval.map(|approval| vec![approval.clone()]);
     let mut wires = Vec::with_capacity(agents.len() * sent.len());

@@ -40,7 +40,10 @@ pub fn wire_as_client(
         access
             .transact_write("pack.wire.replay", |txn| {
                 let plan = &plan;
-                Box::pin(async move { plan.apply(txn, false).await })
+                Box::pin(async move {
+                    plan.apply(txn, gents_pack::pack::wiring::BatchWrite::Apply)
+                        .await
+                })
             })
             .await?;
         Ok(serde_json::from_value(replay.result().await?)?)

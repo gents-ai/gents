@@ -314,8 +314,15 @@ fn a_kept_policy_warning_names_what_was_asked_and_each_surfaces_own_calls() {
     let plugin = installed(true, None);
     let (tools, context, _) =
         wire_plugin(&tools, &context, &plugin, Some(&operator), &[], &[]).unwrap();
-    let (_, _, report) =
-        wire_plugin(&tools, &context, &plugin, Some(&pack_block(&["a"])), &[], &[]).unwrap();
+    let (_, _, report) = wire_plugin(
+        &tools,
+        &context,
+        &plugin,
+        Some(&pack_block(&["a"])),
+        &[],
+        &[],
+    )
+    .unwrap();
     let [warning] = report.policy_warnings.as_slice() else {
         panic!("one kept-mode warning: {:?}", report.policy_warnings);
     };
@@ -335,7 +342,10 @@ fn a_kept_policy_warning_names_what_was_asked_and_each_surfaces_own_calls() {
         "{}",
         warning.remedy
     );
-    let tool = warning.clone().rendered_for(RemedySurface::ConfigTool).remedy;
+    let tool = warning
+        .clone()
+        .rendered_for(RemedySurface::ConfigTool)
+        .remedy;
     assert!(
         tool.contains(r#"config {"argv":["tools","get"],"target_id":"engineer-tools"}"#)
             && tool.contains(r#"["tools","edit"]"#)

@@ -59,13 +59,27 @@ impl PackInstaller {
         let reports = if commit {
             access
                 .transact_write("self_config.pack_wire", |txn| {
-                    Box::pin(guarded_batch(txn, owner, agent, holds_catalog_grant, plans, false))
+                    Box::pin(guarded_batch(
+                        txn,
+                        owner,
+                        agent,
+                        holds_catalog_grant,
+                        plans,
+                        gents_pack::pack::wiring::BatchWrite::Apply,
+                    ))
                 })
                 .await?
         } else {
             access
                 .transact_readonly("self_config.pack_wire.preview", |txn| {
-                    Box::pin(guarded_batch(txn, owner, agent, holds_catalog_grant, plans, true))
+                    Box::pin(guarded_batch(
+                        txn,
+                        owner,
+                        agent,
+                        holds_catalog_grant,
+                        plans,
+                        gents_pack::pack::wiring::BatchWrite::Preview { installing: None },
+                    ))
                 })
                 .await?
         };
@@ -109,20 +123,20 @@ impl PackInstaller {
     }
 }
 
-/// `plans` in one write under [`guard_shared_wiring`]; `preview` writes nothing.
+/// `plans` in one write under [`guard_shared_wiring`], as `write` says.
 async fn guarded_batch(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     owner: &str,
     agent: &str,
     holds_catalog_grant: bool,
     plans: &[&PluginWiring],
-    preview: bool,
+    write: gents_pack::pack::wiring::BatchWrite<'_>,
 ) -> anyhow::Result<Vec<gents_pack::pack::WireReport>> {
     guard_shared_wiring(txn, owner, agent, holds_catalog_grant).await?;
     gents_pack::pack::wiring::apply_batch(
         txn,
         plans,
-        preview,
+        write,
         &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await

@@ -381,10 +381,7 @@ type Installed = (
 );
 
 /// The job plugins the installed `record` ships, from their plugin records.
-fn job_plugins(
-    home: &Path,
-    record: &gents_pack::pack::HomePackInstall,
-) -> Result<Vec<String>> {
+fn job_plugins(home: &Path, record: &gents_pack::pack::HomePackInstall) -> Result<Vec<String>> {
     let (namespace, _) = gents_pack::pack::registry::split_pack_coordinate(&record.coordinate);
     let mut jobs = Vec::new();
     for shipped in &record.plugins {
@@ -470,8 +467,7 @@ pub(crate) async fn status(home: &Path, archives: Archives<'_>) -> Result<Vec<Pa
             let (state, version, reason) = match installed {
                 Some((record, Ok(observed))) => {
                     let reason = interface_refusal(home, pack, &record).or_else(|| {
-                        (!observed.agents_active
-                            && core_packs::enabled_wiring(pack).agents_active)
+                        (!observed.agents_active && core_packs::enabled_wiring(pack).agents_active)
                             .then(|| "an agent it ships is disabled".to_owned())
                     });
                     (
@@ -710,6 +706,7 @@ async fn apply(
                 &[engineer.to_owned()],
                 gents_pack::pack::plugin_wire::WireBatchOptions {
                     tool_calls_consent: wiring.tool_calls,
+                    preview: false,
                 },
                 gents_host::http::pack_wire_client::SIGNERS,
             )
@@ -1350,9 +1347,14 @@ mod tests {
         let (access, owner) = command::resolve_scope_owner(&scope(home.path()))
             .await
             .unwrap();
-        set_pack_agents_active(&access, &owner, CorePack::DynamicWorkflows.coordinate(), false)
-            .await
-            .unwrap();
+        set_pack_agents_active(
+            &access,
+            &owner,
+            CorePack::DynamicWorkflows.coordinate(),
+            false,
+        )
+        .await
+        .unwrap();
         release(access).await;
         let workflows = state_of(
             &status(home.path(), &archives).await.unwrap(),

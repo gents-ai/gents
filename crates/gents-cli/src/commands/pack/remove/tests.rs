@@ -1110,8 +1110,7 @@ async fn a_refused_pair_leaves_every_pair_of_its_batch_unwritten() {
             let (owner, agent) = (&owner, &agent);
             Box::pin(async move {
                 Ok::<_, anyhow::Error>(serde_json::to_value(
-                    gents_documents::load_agent_context_and_tools_in_txn(txn, owner, agent)
-                        .await?,
+                    gents_documents::load_agent_context_and_tools_in_txn(txn, owner, agent).await?,
                 )?)
             })
         })

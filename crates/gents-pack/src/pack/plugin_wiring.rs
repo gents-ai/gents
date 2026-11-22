@@ -55,7 +55,9 @@ impl PolicyWarning {
             PolicyWarningCode::DynamicRunRepinned => format!(
                 "{plugin} now runs {} under the job.policy.dynamic run decided for {}.",
                 self.installed_digest,
-                self.previous_digest.as_deref().unwrap_or("another artifact")
+                self.previous_digest
+                    .as_deref()
+                    .unwrap_or("another artifact")
             ),
             PolicyWarningCode::DynamicModeKept | PolicyWarningCode::DynamicTargetsKept => {
                 format!("Wiring kept the job.policy of {plugin} and changed nothing in it.")
@@ -196,7 +198,9 @@ pub fn wire_plugin(
     let agents = tools.agents.get_or_insert_with(Default::default);
     let targets_before = agents.target_ids.clone();
     let mut job = plugins[index].job.clone();
-    let repinned_under_run = prior_digest.as_ref().is_some_and(|prior| *prior != plugin.digest)
+    let repinned_under_run = prior_digest
+        .as_ref()
+        .is_some_and(|prior| *prior != plugin.digest)
         && job
             .as_ref()
             .is_some_and(|job| job.policy.dynamic == gents_protocol::job::DynamicMode::Run);
