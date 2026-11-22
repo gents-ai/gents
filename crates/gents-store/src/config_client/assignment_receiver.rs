@@ -61,10 +61,11 @@ pub enum ReceiverError {
 }
 
 #[async_trait::async_trait]
-/// One assignment scope. Implementations verify the body and issuer signatures
-/// before reporting it available, make start and stop safe to repeat, and leave
-/// no delayed effects after a call returns or is cancelled. Starting must bind
-/// the verified body and its issuer signatures to the work actually started.
+/// One assignment scope. `active` must include all work running in the scope,
+/// even when another adapter started it. Implementations verify the body and
+/// issuer signatures before reporting it available, make start and stop safe to
+/// repeat, and leave no delayed effects after a call returns or is cancelled.
+/// Starting must bind the verified body and signatures to the work started.
 pub trait AssignmentRuntime: Send + Sync {
     async fn active(&self) -> Result<Vec<String>, Box<dyn Error + Send + Sync>>;
     async fn stop(&self, id: &str) -> Result<(), Box<dyn Error + Send + Sync>>;
