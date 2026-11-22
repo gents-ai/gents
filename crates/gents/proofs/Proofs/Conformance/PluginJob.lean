@@ -1667,6 +1667,18 @@ def policyValidity : Family PolicyValidInput PolicyValidOutput where
     { name := c.name, agentTargets := c.agentTargets, policy := PolicyWire.ofModel c.policy }
   model := fun i => { valid := i.policy.toModel.valid i.agentTargets }
 
+structure JobTargetsInput where
+  callerTargets : List String
+  jobTargets : List String
+  deriving ToJson
+
+@[conformance_family]
+def configuredJobTargets : Family JobTargetsInput Bool where
+  inputs := [([], []), ([], ["a"]), (["a"], ["a"]), (["a", "b"], ["b"]), (["a"], ["a", "b"]),
+    (["b"], ["a"]), (["a", "b"], ["b", "a"]), (["a"], [])].map fun (caller, job) =>
+      { callerTargets := caller, jobTargets := job }
+  model := fun i => PluginJob.jobTargetsConfigured i.callerTargets i.jobTargets
+
 structure TargetWire where
   node : String
   agent : String

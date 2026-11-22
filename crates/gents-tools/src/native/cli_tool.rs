@@ -26,6 +26,9 @@ impl CliTool {
 }
 
 impl ToolDyn for CliTool {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         self.config.name.clone()
     }

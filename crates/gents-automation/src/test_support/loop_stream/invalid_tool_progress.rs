@@ -2,6 +2,9 @@ use super::*;
 pub struct InvalidProgressProbe;
 
 impl ToolDyn for InvalidProgressProbe {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         "invalid_progress_probe".into()
     }

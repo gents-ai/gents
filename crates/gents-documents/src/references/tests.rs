@@ -296,3 +296,29 @@ fn publication_refuses_a_command_trigger_whose_every_fire_is_refused() {
     let error = format!("{:#}", validate(event).unwrap_err());
     assert!(error.contains("not an event Trigger"), "{error}");
 }
+
+#[test]
+fn a_stored_tools_document_is_held_to_write_rules_only_when_it_is_written() {
+    let tools = json!({"node_did":"owner", "tools_id":"tools",
+        "agents":{"target_ids":["listed"]},
+        "integrations":{"plugins":[{"plugin":"ns/runner","job":{"agent_targets":["unlisted"]}}]}});
+    let target = json!({"node_did":"owner", "target_id":"listed", "name":"listed",
+        "target_node_did":"peer", "agent_did":"did:key:peer-agent"});
+    let references = ConfigReferences::from_documents(
+        "owner",
+        [
+            (Collection::Tools, tools),
+            (Collection::AgentTarget, target),
+        ],
+    )
+    .unwrap();
+    assert!(references
+        .validate_affected(&BTreeSet::from([(
+            Collection::AgentTarget,
+            "listed".to_owned()
+        )]))
+        .is_ok());
+    assert!(references
+        .validate_affected(&BTreeSet::from([(Collection::Tools, "tools".to_owned())]))
+        .is_err());
+}
