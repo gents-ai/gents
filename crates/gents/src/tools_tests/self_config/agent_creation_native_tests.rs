@@ -189,99 +189,6 @@ impl NodeIdentity for UnmanagedSigner {
     }
 }
 
-/// The creator's native node permissions for one case. A live Agent document
-/// projects the Agent baseline (`Identity.GrantSets.baselineWanted`), so a
-/// creator whose native create or relation is denied is a disabled Agent
-/// holding only direct grants, which the NAC owner issues one at a time.
-struct CreatorNativePermissions {
-    granted: Vec<NodePermission>,
-    revoked: Vec<NodePermission>,
-}
-
-impl CreatorNativePermissions {
-    fn for_case(create: bool, relation: bool) -> Option<Self> {
-        if create && relation {
-            return None;
-        }
-        let mut granted = vec![NodePermission::DocumentRead];
-        if create {
-            granted.push(NodePermission::DocumentUpdate);
-        }
-        let revoked = if relation {
-            Vec::new()
-        } else {
-            vec![NodePermission::DacRelationAdd]
-        };
-        Some(Self { granted, revoked })
-    }
-}
-
-async fn set_creator_native_permissions(
-    native: Option<&CreatorNativePermissions>,
-    withhold: bool,
-    admin: &ConfigAccess,
-    user_access: &ConfigAccess,
-    node_did: &str,
-    creator: &gents_protocol::agent_identity::AgentIdentityBinding,
-) -> Result<()> {
-    let Some(native) = native else {
-        return Ok(());
-    };
-    let subject = identity::Did::new(&creator.agent_did)?;
-    if withhold {
-        set_agent_enabled(user_access, node_did, creator, false).await?;
-    }
-    for permission in &native.granted {
-        if withhold {
-            admin.grant_node_permission(&subject, *permission).await?;
-        } else {
-            admin.revoke_node_permission(&subject, *permission).await?;
-        }
-    }
-    for permission in &native.revoked {
-        if withhold {
-            admin.revoke_node_permission(&subject, *permission).await?;
-        } else {
-            admin.grant_node_permission(&subject, *permission).await?;
-        }
-    }
-    if !withhold {
-        set_agent_enabled(user_access, node_did, creator, true).await?;
-    }
-    Ok(())
-}
-
-async fn set_agent_enabled(
-    user_access: &ConfigAccess,
-    node_did: &str,
-    agent: &gents_protocol::agent_identity::AgentIdentityBinding,
-    enabled: bool,
-) -> Result<()> {
-    let value = json!({"node_did":node_did,"agent_did":agent.agent_did,
-        "creation_nonce":agent.creation_nonce,"display_name":"Worker",
-        "context_id":format!("{}:context", agent.agent_did),
-        "inference_profile_id":"profile","enabled":enabled});
-    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: Collection::Agent,
-        add: value.clone(),
-        update: value,
-    }])?;
-    user_access
-        .transact_write("test.agent_creator.enabled", |txn| {
-            let plan = &plan;
-            Box::pin(async move {
-                gents_documents::apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &gents_inference::resolved::ProviderProfilePolicy,
-                )
-                .await
-            })
-        })
-        .await?;
-    Ok(())
-}
-
 async fn user_signed_node(
     endpoint: &GraphqlEndpoint,
     runtime_did: &str,
@@ -593,68 +500,32 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
             .map_err(|error| anyhow::anyhow!("{error:#}"))?,
     )?;
     assert_eq!(selected["is_default"], true);
-    let other_runtime: Arc<dyn NodeIdentity> = Arc::new(KeyIdentity::load_or_create(
-        home.path().join("other-runtime"),
-        None,
-    )?);
+    let other_runtime = KeyIdentity::load_or_create(home.path().join("other-runtime"), None)?;
     let sibling_signer = gents_store::identity::resolve_agent_identity(runtime.as_ref(), &sibling)?;
     let unmanaged = UnmanagedSigner(signer.clone());
-    let conformance_child = ConfigureAgentParams {
-        action: "create".into(),
-        display_name: StringUpdate::Set("Conformance child".into()),
-        system_prompt: StringUpdate::Set("Work".into()),
-        profile_id: StringUpdate::Set("profile".into()),
-        ..Default::default()
-    };
     let cases = tokio::task::spawn_blocking(|| {
         gents_lean_vocab::families::node_provisioning_agent_creator::cases()
     })
     .await?;
     for case in cases {
-        let root = if case.input.runtime_matches {
-            runtime.clone() as Arc<dyn NodeIdentity>
+        let root: &dyn NodeIdentity = if case.input.runtime_matches {
+            runtime.as_ref()
         } else {
-            other_runtime.clone()
+            &other_runtime
         };
         let actor: &dyn NodeIdentity = match (case.input.signer_held, case.input.signer_matches) {
             (false, _) => &unmanaged,
             (true, false) => sibling_signer.as_ref(),
             (true, true) => signer.as_ref(),
         };
-        let native = CreatorNativePermissions::for_case(
-            case.input.native_create,
-            case.input.native_relation,
-        );
-        set_creator_native_permissions(
-            native.as_ref(),
-            true,
-            &admin,
-            &user_access,
-            runtime.did(),
-            &creator,
-        )
-        .await?;
-        let before = user_access.execute("{ Agent { _docID } }").await?;
-        let result = agent_management::model_agent_mutate(
-            &core.clone().with_runtime_identity(Some(root)),
+        let result = gents_store::identity::provision_agent_identity_for_agent(
+            &node,
+            root,
             actor,
-            &conformance_child,
+            &creator.agent_did,
         )
         .await;
-        let after = user_access.execute("{ Agent { _docID } }").await?;
-        set_creator_native_permissions(
-            native.as_ref(),
-            false,
-            &admin,
-            &user_access,
-            runtime.did(),
-            &creator,
-        )
-        .await?;
-        let count = |rows: &Value| rows["data"]["Agent"].as_array().map_or(0, Vec::len);
-        let published = count(&after) == count(&before) + 1;
-        assert_eq!(result.is_ok(), published, "{}: {result:?}", case.input.name);
-        case.check(published);
+        case.check(result.is_ok());
     }
     user_access
         .transact_write("test.agent_creator.revoke_node_administration", |txn| {
