@@ -1800,7 +1800,7 @@ resources:
         .await
         .unwrap();
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared().render(&format!(
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(&format!(
         "type IdentityFact @policy(id: \"{policy_id}\", resource: \"facts\") {{ value: String }}"
     )),
     )
@@ -1942,7 +1942,7 @@ async fn embedded_reader_owner_observations_do_not_inherit_the_node_identity() {
         .await
         .unwrap();
     ConfigAccess::local(Arc::clone(&node))
-        .add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&format!(
+        .add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&format!(
             "type IndependentReadFact @policy(id: \"{policy}\", resource: \"facts\") {{ requester_did: String }}"
         )))
         .await

@@ -278,6 +278,7 @@ async fn physical_session_agent(
 
 async fn verified_graphs(
     command: &SessionInputEdit,
+    ids: &'static gents_protocol::schemas::HomePolicyIds,
 ) -> Result<Result<Vec<Arc<db::block::builder::VerifiedClientCreate>>, String>> {
     let mut result = Vec::with_capacity(command.replacements.len());
     for (create, evidence) in command
@@ -289,19 +290,17 @@ async fn verified_graphs(
             Ok(input) => input,
             Err(_) => return Ok(Err("invalid replacement input".into())),
         };
-        let graph = match gents_store::config_client::verify_request_evidence(
-            input,
-            evidence.clone(),
-        )
-        .await
-        {
-            Ok(graph) => graph,
-            Err(
-                gents_store::config_client::ConfigClientError::ClientAgentGraph(_)
-                | gents_store::config_client::ConfigClientError::Json(_),
-            ) => return Ok(Err("invalid replacement evidence".into())),
-            Err(error) => return Err(error.into()),
-        };
+        let graph =
+            match gents_store::config_client::verify_request_evidence(input, evidence.clone(), ids)
+                .await
+            {
+                Ok(graph) => graph,
+                Err(
+                    gents_store::config_client::ConfigClientError::ClientAgentGraph(_)
+                    | gents_store::config_client::ConfigClientError::Json(_),
+                ) => return Ok(Err("invalid replacement evidence".into())),
+                Err(error) => return Err(error.into()),
+            };
         if graph.signer_did() != command.requester_did {
             return Ok(Err("replacement signer differs from edit author".into()));
         }
@@ -447,7 +446,7 @@ pub(crate) async fn process_command(
                 "edit command owner unavailable or ambiguous");
             let owner_matches = owner.as_str() == command.requester_did;
             let graphs = if intrinsic.is_none() && owner_matches {
-                Some(verified_graphs(&command).await?)
+                Some(verified_graphs(&command, txn.home_policy_ids().await?).await?)
             } else { None };
             let (outcome, reason, request_doc_ids) = if let Some(reason) = intrinsic {
                 (SessionInputEditOutcome::Rejected, reason, Vec::new())
@@ -545,6 +544,7 @@ async fn test_signed_replacement_fields(
             gents_store::config_client::prepare_request_evidence(
                 signer,
                 gents_store::config_client::client_request_input(create).unwrap(),
+                gents_protocol::schemas::HomePolicyIds::node_store(),
             )
             .await
             .unwrap(),

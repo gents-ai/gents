@@ -17,7 +17,7 @@ async fn title_transitions_preserve_session_and_request_observation() {
         .await
         .unwrap();
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared()
+        &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::AGENT_SESSION),
     )
     .await
@@ -197,7 +197,7 @@ async fn generated_user_title_cases_drive_the_shared_session_owner() {
             .await
             .unwrap();
         node.add_collection(
-            &gents_protocol::schemas::HomePolicyIds::shared()
+            &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_protocol::schemas::AGENT_SESSION),
         )
         .await

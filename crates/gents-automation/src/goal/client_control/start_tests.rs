@@ -478,6 +478,7 @@ async fn drive_start(case: &StartInput<String>) -> bool {
         request: gents_store::config_client::prepare_request_evidence(
             &user,
             gents_store::config_client::client_request_input(initial).unwrap(),
+            gents_protocol::schemas::HomePolicyIds::node_store(),
         )
         .await
         .unwrap(),
@@ -860,6 +861,7 @@ async fn drive_start(case: &StartInput<String>) -> bool {
         let expected_graph = gents_store::config_client::verify_request_evidence(
             gents_store::config_client::client_request_input(initial).unwrap(),
             command.native_evidence.as_ref().unwrap().request.clone(),
+            gents_protocol::schemas::HomePolicyIds::node_store(),
         )
         .await
         .unwrap();
@@ -1084,6 +1086,7 @@ async fn client_goal_control_cannot_publish_user_graph_as_the_agent() {
             let request_graph = gents_store::config_client::prepare_request_evidence(
                 requester,
                 gents_store::config_client::client_request_input(&initial).unwrap(),
+                gents_protocol::schemas::HomePolicyIds::node_store(),
             )
             .await
             .unwrap();
@@ -1277,14 +1280,21 @@ async fn client_goal_control_cannot_publish_user_graph_as_the_agent() {
                 Some(user.did())
             );
             let input = gents_store::config_client::client_request_input(&request).unwrap();
-            let evidence =
-                gents_store::config_client::prepare_request_evidence(&user, input.clone())
-                    .await
-                    .unwrap();
+            let evidence = gents_store::config_client::prepare_request_evidence(
+                &user,
+                input.clone(),
+                gents_protocol::schemas::HomePolicyIds::node_store(),
+            )
+            .await
+            .unwrap();
             let graph = Arc::new(
-                gents_store::config_client::verify_request_evidence(input.clone(), evidence)
-                    .await
-                    .unwrap(),
+                gents_store::config_client::verify_request_evidence(
+                    input.clone(),
+                    evidence,
+                    gents_protocol::schemas::HomePolicyIds::node_store(),
+                )
+                .await
+                .unwrap(),
             );
             let foreign_doc = agent_access.transact_write("test.foreign_goal_request", |txn| {
                 let input = input.clone();

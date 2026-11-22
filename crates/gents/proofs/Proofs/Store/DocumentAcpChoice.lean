@@ -185,4 +185,30 @@ theorem every_refused_reopening_is_an_incompatible_home
       = (reopen present sameIdentity sameKey != .served) := by
   cases present <;> cases sameIdentity <;> cases sameKey <;> rfl
 
+/-- Which IDs a home names its built-in policies by (`HomePolicyIds`).
+External premises: the node's own store derives a policy's ID from the
+definition and the counter it is added under, which is 0 on every home
+(`counter`); vera.rs derives it from the definition, a nonce and the
+creator, and every embedded Vera deployment is seeded with the built-in
+policies under vera.rs' genesis creator and a fixed nonce per policy
+(`seeded`). The two sets differ, so the bundled SDL is rendered with the
+home's set wherever it is loaded, and every check of a binding compares
+against that set. -/
+inductive PolicyIds where
+  | counter
+  | seeded
+  deriving DecidableEq, Repr
+
+/-- Decision (gents#3831): a home's policy IDs follow its provider. -/
+def policyIds : Provider → PolicyIds
+  | .nodeStore => .counter
+  | .embeddedVera => .seeded
+
+/-- A home on the node's own store names the IDs every such home named
+before; every Vera home names the seeded ones. -/
+theorem a_vera_home_names_its_seeded_policies : policyIds .embeddedVera = .seeded := rfl
+
+theorem a_node_store_home_keeps_its_counter_ids : policyIds .nodeStore = .counter := rfl
+
 end DocumentAcpChoice
+

@@ -47,6 +47,24 @@ where
     unreachable!("bounded receipt loop returns on its final attempt")
 }
 
+/// Whether a read is one a decision is taken on (`DecisionRead`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReadAccess {
+    /// A row whose access check had no answer is left out.
+    Partial,
+    /// A row whose access check had no answer fails the read.
+    Strict,
+}
+
+impl ReadAccess {
+    fn context(self, context: defra_core::RequestContext) -> defra_core::RequestContext {
+        match self {
+            Self::Partial => context,
+            Self::Strict => context.with_strict_access_reads(),
+        }
+    }
+}
+
 impl ConfigAccess {
     pub(crate) fn claimed_for_node(node: &EmbeddedNode) -> Option<Self> {
         let gate = existing_mutation_write_gate(node)?;
@@ -69,9 +87,11 @@ impl ConfigAccess {
         document: &str,
         variables: Option<&Value>,
         operation: &str,
+        access: ReadAccess,
     ) -> Result<defra_node::QueryResponse> {
         graphql::ensure_query_document(document)?;
-        Self::read_local_response_owned_validated(local, document, variables, operation).await
+        Self::read_local_response_owned_validated(local, document, variables, operation, access)
+            .await
     }
 
     async fn read_local_response_owned_validated(
@@ -79,6 +99,7 @@ impl ConfigAccess {
         document: &str,
         variables: Option<&Value>,
         operation: &str,
+        access: ReadAccess,
     ) -> Result<defra_node::QueryResponse> {
         #[cfg(any(test, feature = "test-fixtures"))]
         if let Some(reached) = SUCCESSFUL_MUTATION_FAULT
@@ -98,7 +119,7 @@ impl ConfigAccess {
         let document = document.to_owned();
         let variables = variables.cloned();
         let operation = operation.to_owned();
-        let context = local.request_context();
+        let context = access.context(local.request_context());
         let managed_agent = local.agent_signer().is_some();
         local
             .run_owned(move |node| async move {
@@ -119,8 +140,9 @@ impl ConfigAccess {
         node: &EmbeddedNode,
         document: &str,
         operation: &str,
+        access: ReadAccess,
     ) -> Result<defra_node::QueryResponse> {
-        Self::read_local_response_with_variables(node, document, None, operation).await
+        Self::read_local_response_with_variables(node, document, None, operation, access).await
     }
 
     pub(crate) async fn read_local_response_with_variables(
@@ -128,11 +150,12 @@ impl ConfigAccess {
         document: &str,
         variables: Option<&Value>,
         operation: &str,
+        access: ReadAccess,
     ) -> Result<defra_node::QueryResponse> {
         graphql::ensure_query_document(document)?;
         if let Some(Self::Local(local)) = Self::claimed_for_node(node) {
             return Self::read_local_response_owned_validated(
-                &local, document, variables, operation,
+                &local, document, variables, operation, access,
             )
             .await;
         }
@@ -156,7 +179,7 @@ impl ConfigAccess {
             document,
             variables.cloned(),
             operation,
-            defra_core::RequestContext::default().with_bearer(None, None),
+            access.context(defra_core::RequestContext::default().with_bearer(None, None)),
             false,
         )
         .await

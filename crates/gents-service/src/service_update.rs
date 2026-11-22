@@ -396,7 +396,7 @@ async fn check_metadata(home: Option<PathBuf>) -> Result<serde_json::Value> {
         .into_iter()
         .map(serde_json::from_value)
         .collect::<std::result::Result<Vec<gents::defra_node::CollectionVersion>, _>>()?;
-    gents_store::schema::catalog::check_lineages(&versions)?;
+    gents_store::schema::catalog::check_lineages(&versions, access.home_policy_ids().await?)?;
     Ok(metadata(true))
 }
 

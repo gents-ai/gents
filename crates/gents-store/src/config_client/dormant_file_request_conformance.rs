@@ -54,7 +54,7 @@ async fn native_node_scoped_file_requests_match_modeled_access() -> anyhow::Resu
         .await?;
     assert_eq!(
         policy,
-        gents_protocol::schemas::HomePolicyIds::shared()
+        gents_protocol::schemas::HomePolicyIds::node_store()
             .id(gents_protocol::schemas::BuiltInPolicy::Household)
     );
     for key in [&runtime, &agent, &other] {
@@ -69,7 +69,7 @@ async fn native_node_scoped_file_requests_match_modeled_access() -> anyhow::Resu
     }
     node.add_collection_as(
         &context,
-        &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::NODE),
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(gents_protocol::schemas::NODE),
     )
     .await?;
     let url = format!("http://{address}/api/v0/graphql");
@@ -92,10 +92,10 @@ async fn native_node_scoped_file_requests_match_modeled_access() -> anyhow::Resu
         gents_protocol::schemas::FILE_INVENTORY_REQUEST,
     )];
     for (name, schema) in schemas {
-        let schema = &gents_protocol::schemas::HomePolicyIds::shared().render(schema);
+        let schema = &gents_protocol::schemas::HomePolicyIds::node_store().render(schema);
         let binding = format!(
             "type {name} @policy(id: \"{}\", resource: \"configuration\") {{",
-            gents_protocol::schemas::HomePolicyIds::shared()
+            gents_protocol::schemas::HomePolicyIds::node_store()
                 .id(gents_protocol::schemas::BuiltInPolicy::Household)
         );
         assert!(
@@ -104,7 +104,7 @@ async fn native_node_scoped_file_requests_match_modeled_access() -> anyhow::Resu
         );
         node.add_collection_as(
             &context,
-            &gents_protocol::schemas::HomePolicyIds::shared().render(schema),
+            &gents_protocol::schemas::HomePolicyIds::node_store().render(schema),
         )
         .await?;
         let input = json!({"request_key": format!("request-{name}"), "requester_did": user.did(), "node_did":runtime.did(), "session_id":"session", "status":"pending"});
@@ -195,7 +195,7 @@ async fn native_node_scoped_file_requests_match_modeled_access() -> anyhow::Resu
                 .check_doc_access(
                     &defra_node::AcpIdentity::Authenticated(key.did().parse()?),
                     permission_of(&case.input.permission),
-                    gents_protocol::schemas::HomePolicyIds::shared()
+                    gents_protocol::schemas::HomePolicyIds::node_store()
                         .id(gents_protocol::schemas::BuiltInPolicy::Household),
                     "configuration",
                     &doc,
@@ -306,7 +306,7 @@ async fn native_node_scoped_file_requests_match_modeled_access() -> anyhow::Resu
                     .check_doc_access(
                         &defra_node::AcpIdentity::Authenticated(key.did().parse()?),
                         permission_of(&case.input.permission),
-                        gents_protocol::schemas::HomePolicyIds::shared()
+                        gents_protocol::schemas::HomePolicyIds::node_store()
                             .id(gents_protocol::schemas::BuiltInPolicy::Household),
                         "configuration",
                         &doc,
