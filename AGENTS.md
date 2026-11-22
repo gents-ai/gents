@@ -193,13 +193,16 @@ make gate-run JOB=test:session  # one job
 ```
 
 A draft tests the crates it changes; a ready pull request and the merge queue
-add their dependents; a push to `main` runs everything (a newer push cancels the run
-in progress), and main's completed runs are the measurement for flakes and speed. Native changes pass `make gate` before
+add their dependents; main is not run on push: changes land through the merge queue,
+whose runs test them, and the nightly run of `main` runs everything; those
+completed runs are the measurement for flakes and speed. Native changes pass `make gate` before
 pushing: a lower crate is not verified until its consumers, clients included,
 pass.
 
 **Runners** are chosen by role from `.github/ci-runners.json` (capability
 labels, never host names); a machine joins by registering with a role's labels.
+Pull request jobs also require `ci-pr`; the few runners without it
+(`gate.py runners`) serve only the merge queue and the nightly run.
 A fork pull request never runs on a self-hosted runner; a maintainer pushes it
 to a branch here to test it.
 

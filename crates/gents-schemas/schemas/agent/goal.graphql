@@ -1,4 +1,4 @@
-type Goal @policy(id: "d323c1bbd2491661b9fbe4667b64d6d7a596f4ddc57346a41d90c10733ab3961", resource: "children") {
+type Goal @policy(id: "$household", resource: "children") {
     goal_id: String @index
     session_id: String @index
     session_doc_id: String @index @immutable

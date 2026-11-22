@@ -32,7 +32,10 @@ type TxnAtomicityNote @index(fields: ["chain_root_doc_id", "note_id"], unique: t
 
 async fn disposable_node() -> Result<Arc<EmbeddedNode>> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
-    node.add_collection(ATOMICITY_SCHEMA).await?;
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(ATOMICITY_SCHEMA),
+    )
+    .await?;
     Ok(node)
 }
 
@@ -533,7 +536,7 @@ async fn node() -> Result<(tempfile::TempDir, Arc<EmbeddedNode>)> {
             .await?,
     );
     ConfigAccess::local(node.clone())
-        .add_collection(SCHEMA)
+        .add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(SCHEMA))
         .await?;
     Ok((home, node))
 }

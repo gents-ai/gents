@@ -19,9 +19,9 @@ mod input;
 mod pin_tests {
     use super::*;
     use crate::request::lifecycle::test_support::{
-        hints, normalize_pin_fields, pin_fixed_signing_identity, pin_parent_request,
-        wake_queue_input,
+        hints, normalize_pin_fields, pin_parent_request, wake_queue_input,
     };
+    use gents_store::test_support::pin_fixed_signing_identity;
 
     /// The fixed pin root cannot mint a managed Agent signer, so the Agent is a
     /// fresh derivation under it. Expectations substitute that Agent DID for

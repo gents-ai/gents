@@ -280,7 +280,7 @@ inductive StoreWrapper where
   | agentProvisionErrorAccess
   | agentAdmissionObservationErrorAccess
   | remoteAgentProvisionErrorAuthorization
-  | runtimeMigrationErrorConfig
+  | runtimeSchemaErrorConfig
   | authoredDocumentCreateErrorPublication
   | authoredDocumentCreateErrorUnconfirmed
   | enrollmentApprovalErrorNodeRead
@@ -298,6 +298,8 @@ inductive StoreWrapper where
   | journalSchemaErrorAccess
   | outboxErrorAccess
   | outboxErrorResponse
+  | receiverErrorStore
+  | receiverErrorResponse
   | clientAccessErrorAccess
   | runtimeAccessErrorConfiguration
   | ownGrantErrorUnanswered

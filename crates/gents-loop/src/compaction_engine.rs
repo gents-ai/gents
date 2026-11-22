@@ -8,7 +8,9 @@ use super::history::{
     split_messages_for_summary_with_counter_bounded,
 };
 use super::reduction::ReductionResultState;
-use super::rolling::{deadline_elapsed, largest_fitting_summary_chunk, summarize_checkpoint};
+use super::rolling::{
+    deadline_elapsed, largest_fitting_summary_chunk, summarize_checkpoint, RollingSummaryWindow,
+};
 use super::summary::{compaction_prompt, format_summary, ContinuationCheckpoint};
 use super::{
     apply_reduction_decision, bounded_summary, merge_optional_params, provider_view,
@@ -198,7 +200,8 @@ where
                 .estimate_message_request(&messages)
                 .map_err(CompactionError::ProjectOriginal)?;
 
-            let (stripped_messages, stripped_activity) = provider_view(counter.profile(), messages);
+            let (stripped_messages, stripped_activity, _) =
+                provider_view(counter.profile(), messages);
 
             let stripped_token_estimate = counter
                 .estimate_message_request(&stripped_messages)
@@ -325,10 +328,12 @@ where
                         remaining,
                         max_chunk_messages,
                         rolling_summary.as_deref(),
-                        &summary_config,
-                        options,
                         consumed,
-                        context_window,
+                        &RollingSummaryWindow {
+                            summary_config: &summary_config,
+                            options,
+                            context_window,
+                        },
                     )
                     .await?;
                     let chunk = pretruncate_tool_results(

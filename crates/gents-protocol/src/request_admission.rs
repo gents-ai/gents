@@ -411,6 +411,20 @@ pub struct AgentRequestAdmissionRecord {
     pub runtime_source_kind: Option<RuntimeInternalSourceKind>,
 }
 
+pub struct AgentRequestAdmissionWire<'a> {
+    pub kind: Option<&'a str>,
+    pub signer_did: Option<&'a str>,
+    pub signature: Option<&'a str>,
+    pub enrollment_request_id: Option<&'a str>,
+    pub enrollment_request_digest: Option<&'a str>,
+    pub enrollment_admin_did: Option<&'a str>,
+    pub enrollment_authorization_sequence: Option<i64>,
+    pub enrollment_authorization_expires_at: Option<&'a str>,
+    pub runtime_issuer_did: Option<&'a str>,
+    pub runtime_source_request_id: Option<&'a str>,
+    pub runtime_source_kind: Option<&'a str>,
+}
+
 impl AgentRequestAdmissionRecord {
     pub fn local_self(signer_did: impl Into<String>) -> Self {
         Self {
@@ -485,7 +499,6 @@ impl AgentRequestAdmissionRecord {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn enrollment(
         signer_did: impl Into<String>,
         request_id: impl Into<String>,
@@ -509,20 +522,20 @@ impl AgentRequestAdmissionRecord {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn from_wire_fields(
-        kind: Option<&str>,
-        signer_did: Option<&str>,
-        signature: Option<&str>,
-        enrollment_request_id: Option<&str>,
-        enrollment_request_digest: Option<&str>,
-        enrollment_admin_did: Option<&str>,
-        enrollment_authorization_sequence: Option<i64>,
-        enrollment_authorization_expires_at: Option<&str>,
-        runtime_issuer_did: Option<&str>,
-        runtime_source_request_id: Option<&str>,
-        runtime_source_kind: Option<&str>,
-    ) -> Result<Self, &'static str> {
+    pub fn from_wire(wire: AgentRequestAdmissionWire<'_>) -> Result<Self, &'static str> {
+        let AgentRequestAdmissionWire {
+            kind,
+            signer_did,
+            signature,
+            enrollment_request_id,
+            enrollment_request_digest,
+            enrollment_admin_did,
+            enrollment_authorization_sequence,
+            enrollment_authorization_expires_at,
+            runtime_issuer_did,
+            runtime_source_request_id,
+            runtime_source_kind,
+        } = wire;
         let kind = kind
             .ok_or("request admission kind is missing")
             .and_then(AgentRequestAdmissionKind::try_from)?;
@@ -989,29 +1002,54 @@ pub struct AgentRequestCreate {
     pub admission: AgentRequestAdmissionRecord,
 }
 
-impl AgentRequestCreate {
-    #[allow(clippy::too_many_arguments)]
-    pub fn base(
-        purpose: RequestPurpose,
-        request_id: impl Into<String>,
+pub struct RequestScope {
+    pub node_did: String,
+    pub requester_did: String,
+    pub agent_did: String,
+    pub session_id: String,
+}
+
+impl RequestScope {
+    pub fn new(
         node_did: impl Into<String>,
         requester_did: impl Into<String>,
         agent_did: impl Into<String>,
         session_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            node_did: node_did.into(),
+            requester_did: requester_did.into(),
+            agent_did: agent_did.into(),
+            session_id: session_id.into(),
+        }
+    }
+}
+
+impl AgentRequestCreate {
+    pub fn base(
+        purpose: RequestPurpose,
+        request_id: impl Into<String>,
+        scope: RequestScope,
         content: impl Into<String>,
         execution_origin: impl Into<String>,
         created_at: impl Into<String>,
         admission: AgentRequestAdmissionRecord,
     ) -> Self {
         let request_id = request_id.into();
+        let RequestScope {
+            node_did,
+            requester_did,
+            agent_did,
+            session_id,
+        } = scope;
         Self {
             retry_root_request: Some(request_id.clone()),
             request_id,
             purpose,
-            node_did: node_did.into(),
-            requester_did: requester_did.into(),
-            agent_did: agent_did.into(),
-            session_id: session_id.into(),
+            node_did,
+            requester_did,
+            agent_did,
+            session_id,
             session_doc_id: None,
             agent_doc_id: None,
             retry_parent_request: None,

@@ -15,6 +15,7 @@ pub use agent_bindings::{
     PackAgentBindings, AGENT_SLOT_REFERENCE_PREFIX,
 };
 pub mod authoring;
+pub mod command_authority;
 pub mod core_packs;
 pub mod home_install;
 pub mod home_removal;

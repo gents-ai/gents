@@ -24,7 +24,9 @@ fn publish_watcher_update(bus: &events::ChannelBus, collection_id: &str, doc_id:
 async fn unrelated_changes_do_not_wake_or_postpone_the_request_scan() {
     use events::Bus;
     let bus = events::ChannelBus::new();
-    let mut subscription = bus.subscribe_collection_changes(vec!["requests".into()]);
+    let mut subscription: gents_store::subscription_source::ChangeSubscription = bus
+        .subscribe_collection_changes(vec!["requests".into()])
+        .into();
     let wait = wait_for_request_change(&mut subscription);
     tokio::pin!(wait);
     for _ in 0..30 {
@@ -46,7 +48,9 @@ async fn unrelated_changes_do_not_wake_or_postpone_the_request_scan() {
 async fn request_changes_wake_without_waiting_for_the_fallback() {
     use events::Bus;
     let bus = events::ChannelBus::new();
-    let mut subscription = bus.subscribe_collection_changes(vec!["requests".into()]);
+    let mut subscription: gents_store::subscription_source::ChangeSubscription = bus
+        .subscribe_collection_changes(vec!["requests".into()])
+        .into();
     publish_watcher_update(&bus, "output", "first");
     publish_watcher_update(&bus, "requests", "second");
     let started = tokio::time::Instant::now();
@@ -63,7 +67,9 @@ async fn request_changes_wake_without_waiting_for_the_fallback() {
 async fn a_closed_request_change_feed_stops_the_watcher_wait() {
     use events::Bus;
     let bus = events::ChannelBus::new();
-    let mut subscription = bus.subscribe_collection_changes(vec!["requests".into()]);
+    let mut subscription: gents_store::subscription_source::ChangeSubscription = bus
+        .subscribe_collection_changes(vec!["requests".into()])
+        .into();
     bus.close();
     assert!(wait_for_request_change(&mut subscription)
         .await
@@ -77,7 +83,9 @@ async fn closed_feed_reopens_only_at_fallback_and_wait_is_cancellable() {
     use std::cell::Cell;
 
     let bus = events::ChannelBus::new();
-    let mut subscription = bus.subscribe_collection_changes(vec!["requests".into()]);
+    let mut subscription: gents_store::subscription_source::ChangeSubscription = bus
+        .subscribe_collection_changes(vec!["requests".into()])
+        .into();
     bus.close();
     let attempts = Cell::new(0);
     let mut first = Box::pin(wait_for_change_or_resubscribe(&mut subscription, || {
@@ -98,7 +106,9 @@ async fn closed_feed_reopens_only_at_fallback_and_wait_is_cancellable() {
 
     let mut second = Box::pin(wait_for_change_or_resubscribe(&mut subscription, || {
         attempts.set(attempts.get() + 1);
-        Ok(bus.subscribe_collection_changes(vec!["requests".into()]))
+        Ok(bus
+            .subscribe_collection_changes(vec!["requests".into()])
+            .into())
     }));
     assert!(futures::poll!(second.as_mut()).is_pending());
     tokio::time::advance(GOSSIP_FALLBACK_POLL - Duration::from_millis(1)).await;
@@ -118,7 +128,9 @@ async fn closed_feed_reopens_only_at_fallback_and_wait_is_cancellable() {
 
     let mut cancelled = Box::pin(wait_for_change_or_resubscribe(&mut subscription, || {
         attempts.set(attempts.get() + 1);
-        Ok(bus.subscribe_collection_changes(vec!["requests".into()]))
+        Ok(bus
+            .subscribe_collection_changes(vec!["requests".into()])
+            .into())
     }));
     assert!(futures::poll!(cancelled.as_mut()).is_pending());
     drop(cancelled);

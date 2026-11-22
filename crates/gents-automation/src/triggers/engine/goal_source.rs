@@ -69,7 +69,7 @@ pub struct GoalSource {
     snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
     node: Arc<EmbeddedNode>,
     subscription_source: Arc<dyn UpdateSubscriptionSource>,
-    subscription: Option<events::DocumentChangeSubscription>,
+    subscription: Option<gents_store::subscription_source::ChangeSubscription>,
     cancel: CancellationToken,
     rescan_tick: tokio::time::Interval,
     runtime_status: Option<Arc<dyn GoalReconcileSettled>>,
@@ -131,10 +131,7 @@ impl GoalSource {
                 tracing::warn!(%error, "goal source rescans on its interval only");
                 Vec::new()
             });
-            self.subscription = Some(
-                self.subscription_source
-                    .subscribe_collection_changes(collection_ids),
-            );
+            self.subscription = Some(self.subscription_source.subscribe_changes(collection_ids));
             tracing::info!("goal source opened coalesced document-change subscription");
         }
     }
@@ -693,6 +690,7 @@ impl GoalSource {
             goal_token_budget: None,
             output_schema_ref: None,
             hooks: Vec::new(),
+            command: None,
         };
         let goal_id = goal.goal_id.clone();
         let parent_request_id = parent.request_id.clone();
@@ -719,7 +717,9 @@ impl GoalSource {
             pre_materialized_request_id: Some(child.request_id),
             event_source_generation: None,
             on_result: Box::new(move |result| match result {
-                FireResult::Fired { request_id } | FireResult::Duplicate { request_id } => {
+                FireResult::Fired { request_id }
+                | FireResult::Duplicate { request_id }
+                | FireResult::CommandStarted { run_id: request_id } => {
                     tracing::info!(
                         %request_id,
                         %goal_id,

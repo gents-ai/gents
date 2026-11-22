@@ -420,9 +420,12 @@ async fn modeled_inference_selection_changes_stage_shared_native_edges() -> anyh
                 .await?;
         }
     }
-    let previous_policy = gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID;
-    node.add_collection(&gents_protocol::schemas::AGENT.replace(previous_policy, &policy))
-        .await?;
+    let previous_policy = gents_protocol::schemas::BuiltInPolicy::Household.placeholder();
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::node_store()
+            .render(&gents_protocol::schemas::AGENT.replace(previous_policy, &policy)),
+    )
+    .await?;
     for schema in [
         gents_protocol::schemas::INFERENCE_PROFILE,
         gents_protocol::schemas::INFERENCE_SAMPLING,
@@ -430,8 +433,11 @@ async fn modeled_inference_selection_changes_stage_shared_native_edges() -> anyh
         gents_protocol::schemas::INFERENCE_RETRY_POLICY,
     ] {
         assert!(schema.contains(previous_policy));
-        node.add_collection(&schema.replace(previous_policy, &policy))
-            .await?;
+        node.add_collection(
+            &gents_protocol::schemas::HomePolicyIds::node_store()
+                .render(&schema.replace(previous_policy, &policy)),
+        )
+        .await?;
     }
     let access = ConfigAccess::local_as(node.clone(), identity::Did::new(owner.did())?);
     let did = gents_store::graphql::escape_graphql_string(owner.did());

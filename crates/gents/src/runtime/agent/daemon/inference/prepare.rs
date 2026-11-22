@@ -399,7 +399,7 @@ where
         ));
         // Lean `CurrentInput.answersSelection`: a resumed retry
         // publishes no authored input, so steered messages stay
-        // queued for their own turn instead of folding into it.
+        // queued for a later turn instead of folding into it.
         let hook = if resume_from_history {
             hook
         } else {

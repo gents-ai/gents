@@ -9,7 +9,7 @@ use crate::local::storage_backend::{incompatible_store, incompatible_store_kind}
 use crate::local::store_key::{home_key_file, StoreKeyError};
 
 /// Written by a node that opened and validated its store with this build's
-/// collections, policies and migrations. Its content is [`fingerprint`]; a
+/// collections and policies. Its content is [`fingerprint`]; a
 /// store whose stamp matches is not checked again.
 pub const COMPATIBILITY_STAMP: &str = ".gents-store-compatibility";
 
@@ -48,35 +48,26 @@ pub enum StoreCompatibilityError {
     },
 }
 
-/// The collections, migrations and access policies this build serves. Any
-/// change to them changes the fingerprint, and the next start checks the
-/// store again.
-pub fn fingerprint() -> String {
-    use gents_protocol::schemas::{
-        AGENT_OWNERSHIP_POLICY_ID, CLIENT_JOURNAL_POLICY_ID, MAILBOX_POLICY_ID,
-        TOOL_FILE_CHANGE_POLICY_ID,
-    };
-    let registry = &*gents_migration::DEFAULT_REGISTRY;
+/// The collections and access policies this build serves. Any change to them
+/// changes the fingerprint, and the next start checks the store again.
+pub fn fingerprint(ids: &gents_protocol::schemas::HomePolicyIds) -> String {
+    use gents_protocol::schemas::BuiltInPolicy;
     let mut digest = Sha256::new();
     for policy in [
-        AGENT_OWNERSHIP_POLICY_ID,
-        CLIENT_JOURNAL_POLICY_ID,
-        MAILBOX_POLICY_ID,
-        TOOL_FILE_CHANGE_POLICY_ID,
+        BuiltInPolicy::Household,
+        BuiltInPolicy::ClientJournal,
+        BuiltInPolicy::Mailbox,
+        BuiltInPolicy::ToolFileChange,
     ] {
-        digest.update(policy.as_bytes());
+        digest.update(ids.id(policy).as_bytes());
         digest.update([0]);
     }
-    for collection in registry.baseline {
+    for collection in crate::schema::catalog::baseline(ids) {
         digest.update(collection.name.as_bytes());
         digest.update([0]);
-        digest.update(collection.sdl.as_bytes());
+        digest.update(ids.render(collection.sdl).as_bytes());
         digest.update([0]);
         digest.update(collection.expected_version.unwrap_or_default().as_bytes());
-        digest.update([0]);
-    }
-    for step in registry.steps {
-        digest.update(step.id().as_bytes());
         digest.update([0]);
     }
     digest
@@ -90,16 +81,19 @@ fn stamp_path(data: &Path) -> PathBuf {
     data.join(COMPATIBILITY_STAMP)
 }
 
-pub(crate) fn stamped(data: &Path) -> bool {
-    std::fs::read_to_string(stamp_path(data)).is_ok_and(|stamp| stamp.trim() == fingerprint())
+pub(crate) fn stamped(data: &Path, ids: &gents_protocol::schemas::HomePolicyIds) -> bool {
+    std::fs::read_to_string(stamp_path(data)).is_ok_and(|stamp| stamp.trim() == fingerprint(ids))
 }
 
 /// Records that this build opened and validated the store at `data`. Called
 /// only by the owner holding the store's lock after its own checks passed.
-pub fn record_compatible(data: &Path) -> std::io::Result<()> {
+pub fn record_compatible(
+    data: &Path,
+    ids: &gents_protocol::schemas::HomePolicyIds,
+) -> std::io::Result<()> {
     let path = stamp_path(data);
     let staging = data.join(format!("{COMPATIBILITY_STAMP}.tmp"));
-    std::fs::write(&staging, fingerprint())?;
+    std::fs::write(&staging, fingerprint(ids))?;
     std::fs::rename(&staging, &path)
 }
 
@@ -143,7 +137,14 @@ pub async fn check_home_store(home: &Path) -> Result<StoreCompatibility, StoreCo
     if !marker.try_exists().map_err(io(&marker))? {
         return Ok(refused(IncompatibleStoreKind::UnknownLineage, data));
     }
-    if stamped(&data) {
+    let provider = crate::local::document_acp::recorded(&data).map_err(|error| {
+        StoreCompatibilityError::Check {
+            path: data.clone(),
+            source: Box::new(error),
+        }
+    })?;
+    let ids = crate::local::document_acp::home_policy_ids(provider);
+    if stamped(&data, ids) {
         return Ok(StoreCompatibility::Compatible);
     }
     let Some(config) = read_init_config::<serde_json::Value, serde_json::Value>(home)? else {
@@ -161,7 +162,7 @@ pub async fn check_home_store(home: &Path) -> Result<StoreCompatibility, StoreCo
             }
         }
     };
-    Ok(match check_copy(&data, &key).await? {
+    Ok(match check_copy(&data, &key, ids).await? {
         None => StoreCompatibility::Compatible,
         Some(kind) => refused(kind, data),
     })
@@ -173,6 +174,7 @@ pub async fn check_home_store(home: &Path) -> Result<StoreCompatibility, StoreCo
 pub(crate) async fn check_copy(
     data: &Path,
     key: &crate::local::store_key::StoreKey,
+    ids: &gents_protocol::schemas::HomePolicyIds,
 ) -> Result<Option<IncompatibleStoreKind>, StoreCompatibilityError> {
     let data = data.to_path_buf();
     let io = |path: &Path| {
@@ -205,7 +207,8 @@ pub(crate) async fn check_copy(
     .build()
     .await
     .map_err(opened)?;
-    let verdict = match crate::local::backend_protection::validate_policy_binding(&node).await {
+    let verdict = match crate::local::backend_protection::validate_policy_binding(&node, ids).await
+    {
         Err(BackendProtectionError::InvalidBinding) => {
             Ok(Some(IncompatibleStoreKind::OtherVersionSchema))
         }
@@ -213,7 +216,7 @@ pub(crate) async fn check_copy(
             path: data.clone(),
             source: Box::new(error),
         }),
-        Ok(()) => match gents_migration::validate_existing_schema(&node).await {
+        Ok(()) => match crate::schema::catalog::validate_existing_schema(&node, ids).await {
             Ok(()) => Ok(None),
             Err(source) => match incompatible_store(&source, &data) {
                 Some(store) => Ok(Some(store.kind)),

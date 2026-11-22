@@ -76,6 +76,9 @@ struct InstallRequest {
     /// agents. The serving runtime's environment never binds one.
     #[serde(default)]
     bind_agents: Vec<String>,
+    /// The installer's environment value of each variable the packs read: the
+    /// only environment the runtime plans this install from.
+    installer_environment: std::collections::BTreeMap<String, String>,
     overwrite: bool,
     keep: bool,
     preview: bool,
@@ -177,6 +180,17 @@ pub async fn encode_install_request(
     owner: &str,
     explicit: bool,
 ) -> Result<serde_json::Value> {
+    let supplied = gents_pack::pack::install_flow::supplied_variables(
+        &args.dependency_variables,
+        &args.bind_agents,
+    )?;
+    let packs = std::iter::once(pack)
+        .chain(dependencies.iter())
+        .collect::<Vec<_>>();
+    let installer_environment =
+        gents_pack::pack::install_flow::installer_environment(&packs, &supplied, &|name| {
+            args.environment.value(name)
+        })?;
     let root = pack.shared_archive();
     let root_source = pack.provenance();
     let dependency_sources = dependencies
@@ -209,6 +223,7 @@ pub async fn encode_install_request(
             inference_slots,
             dependency_variables,
             bind_agents,
+            installer_environment,
             overwrite,
             keep,
             preview,
@@ -423,6 +438,9 @@ async fn install_owned(
     } = received;
     let explicit = request.explicit;
     let args = DocumentsInstallRequest {
+        environment: gents_pack::operations::pack::InstallEnvironment::HostedRuntime(
+            request.installer_environment,
+        ),
         home: home.clone(),
         remote: false,
         inference_slots: request.inference_slots,

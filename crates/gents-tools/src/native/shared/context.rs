@@ -3,17 +3,19 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
 
-use crate::native::CommandPolicyDenial;
+use crate::native::{CommandPolicyDenial, NativeExecutables};
 use gents_loop::tool_call_lifecycle::FailureClass;
 use gents_pack::pack::rooted_paths::{ensure_within, normalize_for_creation};
 
-/// The configured tool root and base, and the call whose workspace root and
-/// working directory override them while it is served.
+/// The configured tool root and base, the call whose workspace root and
+/// working directory override them while it is served, and the executables
+/// its native filesystem runners start.
 #[derive(Clone)]
 pub struct ToolContext {
     root: Arc<PathBuf>,
     base: Arc<PathBuf>,
     call: gents_loop::tool::ToolCallEnvelope,
+    native_executables: Arc<NativeExecutables>,
     #[cfg(test)]
     runner_blocker: Option<Arc<gents_fs_runner::TraversalBlocker>>,
 }
@@ -116,9 +118,19 @@ impl ToolContext {
             root: Arc::new(canonical),
             base: Arc::new(base),
             call: gents_loop::tool::ToolCallEnvelope::default(),
+            native_executables: Arc::default(),
             #[cfg(test)]
             runner_blocker: None,
         })
+    }
+
+    pub(crate) fn with_native_executables(mut self, executables: NativeExecutables) -> Self {
+        self.native_executables = Arc::new(executables);
+        self
+    }
+
+    pub(crate) fn native_executables(&self) -> Arc<NativeExecutables> {
+        Arc::clone(&self.native_executables)
     }
 
     /// Native filesystem runners spawned from this context pause their scan

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use crate::test_support::vera_test_home::{as_user, client_key, home, serve, Home};
 use gents_protocol::delegation_audience::{DelegationAudience, ReportedDelegationAudience};
 use gents_protocol::operations::install_repair::IncompatibleStoreKind;
-use gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID;
+use gents_protocol::schemas::{BuiltInPolicy, HomePolicyIds};
 use gents_store::config_client::user_write::{PresentedDelegation, UserWriteRefusal};
 use gents_store::config_client::{
     prepare_pack_evidence_from_history, ConfigClientError, PackApprovalScope, PackMutation,
@@ -54,7 +54,7 @@ async fn reads_document(
         .check_doc_access(
             &acp::Identity::Authenticated(actor.clone()),
             acp::DocumentPermission::Read,
-            AGENT_OWNERSHIP_POLICY_ID,
+            gents_store::local::document_acp::node_policy_ids(node).id(BuiltInPolicy::Household),
             RESOURCE,
             document,
         )
@@ -63,12 +63,21 @@ async fn reads_document(
 
 async fn holds_the_node_policies(node: &defra_node::Node, owner: &str) -> anyhow::Result<()> {
     let context = defra_core::RequestContext::default().with_identity(Some(owner.to_owned()));
-    for policy in &gents_migration::NODE_POLICIES {
-        assert_eq!(
-            node.add_dac_policy_with_counter_as(&context, policy.definition, 0)
-                .await?,
-            policy.id
-        );
+    let ids = gents_store::local::document_acp::node_policy_ids(node);
+    for policy in BuiltInPolicy::ALL {
+        let held = match gents_store::local::document_acp::provider_of(node) {
+            DocumentAcp::Local => {
+                node.add_dac_policy_with_counter_as(&context, policy.definition(), 0)
+                    .await?
+            }
+            DocumentAcp::Vera => {
+                node.get_dac_policy_as(&context, ids.id(policy))
+                    .await?
+                    .expect("a Vera deployment holds every built-in policy from its first block")
+                    .id
+            }
+        };
+        assert_eq!(held, ids.id(policy));
     }
     Ok(())
 }
@@ -98,11 +107,16 @@ async fn an_opted_in_home_decides_document_access_through_its_vera_node_across_a
         .clone();
     assert!(node.vera_acp().is_some());
     holds_the_node_policies(&node, owner.as_str()).await?;
-    for entry in gents_migration::DEFAULT_BASELINE.iter() {
+    for entry in gents_store::schema::catalog::baseline(HomePolicyIds::embedded_vera()) {
         assert!(node.get_collection(entry.name)?.is_some(), "{}", entry.name);
     }
     node.document_acp()
-        .register_doc_object(&owner, AGENT_OWNERSHIP_POLICY_ID, RESOURCE, DOCUMENT)
+        .register_doc_object(
+            &owner,
+            gents_store::local::document_acp::node_policy_ids(&node).id(BuiltInPolicy::Household),
+            RESOURCE,
+            DOCUMENT,
+        )
         .await?;
     assert!(reads(&node, &owner).await?);
     assert!(!reads(&node, &stranger).await?);
@@ -110,7 +124,12 @@ async fn an_opted_in_home_decides_document_access_through_its_vera_node_across_a
         &gents_store::identity::provision_agent_identity(home.node.as_ref())?.agent_did,
     )?;
     node.document_acp()
-        .register_doc_object(&agent, AGENT_OWNERSHIP_POLICY_ID, RESOURCE, AGENT_DOCUMENT)
+        .register_doc_object(
+            &agent,
+            gents_store::local::document_acp::node_policy_ids(&node).id(BuiltInPolicy::Household),
+            RESOURCE,
+            AGENT_DOCUMENT,
+        )
         .await?;
     assert!(reads_document(&node, &agent, AGENT_DOCUMENT).await?);
     assert!(!reads_document(&node, &stranger, AGENT_DOCUMENT).await?);
@@ -184,7 +203,12 @@ async fn opted_in_home_with_a_document(root: &Path, name: &str) -> anyhow::Resul
         .await?;
     let node = start(&home, DocumentAcp::Vera).await?;
     node.document_acp()
-        .register_doc_object(&owner, AGENT_OWNERSHIP_POLICY_ID, RESOURCE, DOCUMENT)
+        .register_doc_object(
+            &owner,
+            gents_store::local::document_acp::node_policy_ids(&node).id(BuiltInPolicy::Household),
+            RESOURCE,
+            DOCUMENT,
+        )
         .await?;
     assert!(reads(&node, &owner).await?);
     node.shutdown().await?;
@@ -345,7 +369,11 @@ async fn owner_on_vera(
     Ok(node
         .vera_acp()
         .expect("the node decides document access through Vera")
-        .get_doc_owner(AGENT_OWNERSHIP_POLICY_ID, TASK_RESOURCE, document)
+        .get_doc_owner(
+            gents_store::local::document_acp::node_policy_ids(node).id(BuiltInPolicy::Household),
+            TASK_RESOURCE,
+            document,
+        )
         .await?)
 }
 
@@ -359,7 +387,7 @@ async fn reads_task(
         .check_doc_access(
             &acp::Identity::Authenticated(actor.clone()),
             acp::DocumentPermission::Read,
-            AGENT_OWNERSHIP_POLICY_ID,
+            gents_store::local::document_acp::node_policy_ids(node).id(BuiltInPolicy::Household),
             TASK_RESOURCE,
             document,
         )
@@ -515,9 +543,15 @@ async fn create_task_in_process(
         collection: "Task".into(),
         input: serde_json::json!({ "task_id": task }),
     };
-    let evidence = prepare_pack_evidence_from_history(user, &scope, &mutation, None)
-        .await
-        .map_err(|error| ConfigClientError::PackEvidence(Box::new(error)))?;
+    let evidence = prepare_pack_evidence_from_history(
+        user,
+        &scope,
+        &mutation,
+        None,
+        HomePolicyIds::embedded_vera(),
+    )
+    .await
+    .map_err(|error| ConfigClientError::PackEvidence(Box::new(error)))?;
     let user_did =
         identity::Did::new(user.did()).map_err(ConfigClientError::RelationshipTargetIdentity)?;
     let access =
@@ -664,6 +698,7 @@ async fn a_client_signed_create_in_the_runtime_process_on_the_node_store_is_unch
     Ok(())
 }
 
+mod access_wake;
 mod client_request;
 mod configuration_readers;
 mod enrollment_root;

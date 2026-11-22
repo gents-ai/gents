@@ -725,6 +725,12 @@ async fn plugin_run_composes_through_the_dispatcher_of_the_config_call() {
             self.0.lock().unwrap().push(name.to_owned());
             Box::pin(async { Ok(ToolOutcome::Completed(json!({"rows": []}).to_string())) })
         }
+
+        fn definitions<'a>(
+            &'a self,
+        ) -> gents_loop::tool::BoxFuture<'a, Vec<gents_loop::tool::ToolDefinition>> {
+            Box::pin(async { Vec::new() })
+        }
     }
 
     let request =

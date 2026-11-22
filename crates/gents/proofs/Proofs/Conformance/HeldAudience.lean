@@ -9,7 +9,7 @@ deriving instance Lean.ToJson for Held, Change, Refusal, Answer, Told, UnitStage
   Advertised, Reconciled
 
 attribute [conformance_function] change resend refusalOf told resendUnit rereadBeforeRequestBound
-  recovery reconcile
+  recovery reconcile recordChange
 
 end Identity.HeldAudience
 
@@ -122,5 +122,39 @@ def clockMoves : Conformance.Family ClockReadInput Bool where
       ⟨some ⟨1_000, 900⟩, some ⟨1_130, 1_000⟩⟩, ⟨some ⟨1_000, 900⟩, some ⟨1_070, 1_000⟩⟩,
       ⟨some ⟨1_000, 900⟩, some ⟨1_131, 1_000⟩⟩, ⟨some ⟨1_000, 900⟩, some ⟨1_069, 1_000⟩⟩ ]
   model := fun input => clockMoved (ClockReading.clock input.held) (ClockReading.clock input.read)
+
+end Identity.HeldAudience
+
+namespace Identity.HeldAudience
+
+/-- A record as a case states it: the fixed worker at `deployment`, and the
+home's clock as read. -/
+structure RecordCase where
+  deployment : Nat
+  clock : Option ClockReading
+  deriving Lean.ToJson
+
+def RecordCase.record (case : RecordCase) : Record :=
+  ⟨⟨"worker", case.deployment, none⟩, ClockReading.clock case.clock⟩
+
+structure RecordChangeInput where
+  presented : Option RecordCase
+  kept : Option RecordCase
+  deriving Lean.ToJson
+
+/-- A request minted with no audience or with one, against a kept record with
+none, the same one, the same audience at another clock, and another audience:
+what a peer's read kept since the request was minted. -/
+@[conformance_family]
+def changesSince : Conformance.Family RecordChangeInput Change where
+  inputs :=
+    let at1 : Option ClockReading := some ⟨1_000, 900⟩
+    let at2 : Option ClockReading := some ⟨2_000, 1_000⟩
+    [ ⟨none, none⟩, ⟨none, some ⟨1, at1⟩⟩, ⟨some ⟨1, at1⟩, none⟩,
+      ⟨some ⟨1, at1⟩, some ⟨1, at1⟩⟩, ⟨some ⟨1, none⟩, some ⟨1, none⟩⟩,
+      ⟨some ⟨1, at1⟩, some ⟨1, at2⟩⟩, ⟨some ⟨1, none⟩, some ⟨1, at1⟩⟩,
+      ⟨some ⟨1, at1⟩, some ⟨2, at1⟩⟩, ⟨some ⟨1, at1⟩, some ⟨2, at2⟩⟩ ]
+  model := fun input =>
+    changeSince (input.presented.map RecordCase.record) (input.kept.map RecordCase.record)
 
 end Identity.HeldAudience

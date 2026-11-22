@@ -39,7 +39,7 @@ import {
 } from "../src/ui/screens/packs/model";
 import { resetDefaultPacks } from "../src/ui/screens/packs/useDefaultPacks";
 import { bareOriginCount, packSettings } from "../src/ui/screens/agent/packContents";
-import { renderIn, testApp, withFlags } from "./app-fixture";
+import { renderIn, testApp } from "./app-fixture";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 
 const windows = vi.hoisted(() => ({ can: false, opened: [] as string[] }));
@@ -99,7 +99,6 @@ afterEach(() => {
 });
 
 function show(item?: string, api: Record<string, unknown> = {}) {
-  withFlags({ packs: true });
   rememberPacksView("installed");
   rememberPacksQuery("");
   rememberPacksAuthor(null);
@@ -376,6 +375,58 @@ describe("the Packs page", () => {
     );
   });
 
+  it("describes each installed pack from the list itself, asking the registry for none", async () => {
+    const packInfo = vi.fn(async () => ({ description: "From its own page" }));
+    show(undefined, {
+      listInstalledPacks: async () => ({
+        packs: [
+          {
+            ...research,
+            description: "Searches the web and writes a cited summary.",
+            owner: "me",
+          },
+          { ...research, pack: "acme/notes", outdated: false, owner: "acme" },
+        ],
+      }),
+      readPackAccount: async () => ({ account: { username: "me" } }),
+      packInfo,
+    });
+    const installed = await screen.findByRole("list", { name: "Installed packs" });
+    const rows = within(installed).getAllByRole("listitem");
+    expect(rows).toHaveLength(2);
+    expect(
+      within(rows[0]!).getByText("Searches the web and writes a cited summary."),
+    ).toBeInTheDocument();
+    expect(await within(rows[0]!).findByText("Yours")).toBeInTheDocument();
+    expect(within(rows[1]!).queryByText("Yours")).toBeNull();
+    await act(async () => {});
+    expect(packInfo).not.toHaveBeenCalled();
+  });
+
+  it("updates every pack that has an update, one after another", async () => {
+    const updated: string[] = [];
+    let running = 0;
+    show(undefined, {
+      listInstalledPacks: async () => ({
+        packs: [
+          research,
+          { ...research, pack: "acme/notes" },
+          { ...research, pack: "acme/current", latest: "1.0.0", outdated: false },
+        ],
+      }),
+      updatePack: async (pack: string) => {
+        expect(running).toBe(0);
+        running += 1;
+        await Promise.resolve();
+        updated.push(pack);
+        running -= 1;
+      },
+    });
+    await screen.findByRole("list", { name: "Installed packs" });
+    fireEvent.click(screen.getByRole("button", { name: "Update all" }));
+    await waitFor(() => expect(updated).toEqual([RESEARCH, "acme/notes"]));
+  });
+
   it("says a registry pack has no version yet, in place of Install", async () => {
     show(undefined, {
       searchPacks: async () => ({
@@ -389,6 +440,18 @@ describe("the Packs page", () => {
     expect(within(registry).queryByRole("button", { name: "Install" })).toBeNull();
   });
 
+  it("names the list each tab shows as that tab's panel", async () => {
+    show();
+    for (const name of ["Installed", "Registry"]) {
+      const tab = await screen.findByRole("tab", { name: new RegExp(`^${name}`) });
+      fireEvent.click(tab);
+      await waitFor(() => expect(tab).toHaveAttribute("aria-selected", "true"));
+      const panel = document.getElementById(tab.getAttribute("aria-controls") ?? "");
+      expect(panel).toHaveAttribute("role", "tabpanel");
+      expect(panel).toHaveAttribute("aria-labelledby", tab.id);
+    }
+  });
+
   it("returns to the list and search it left, while the app runs", async () => {
     const app = show();
     fireEvent.click(await screen.findByRole("tab", { name: "Registry" }));
@@ -396,7 +459,6 @@ describe("the Packs page", () => {
       target: { value: "doc" },
     });
     cleanup();
-    withFlags({ packs: true });
     renderIn(app, <PacksScreen />);
     expect(screen.getByRole("tab", { name: "Registry" })).toHaveAttribute(
       "aria-selected",
@@ -565,7 +627,6 @@ describe("the Packs page", () => {
   });
 
   it("only browses on a node whose packs are installed on that machine", async () => {
-    withFlags({ packs: true });
     const listInstalledPacks = vi.fn(async () => ({ packs: [research] }));
     const app = testApp({
       api: {
@@ -586,6 +647,25 @@ describe("the Packs page", () => {
       await within(registry).findByRole("button", { name: "Install" }),
     ).toBeDisabled();
   });
+
+  it("lists a pack's versions without Install on a node it can't install on", async () => {
+    const app = testApp({
+      api: {
+        installPack: async () => {
+          throw new Error("not previewed in this test");
+        },
+        packInfo: async () => ({
+          latest: "1.1.0",
+          versions: [{ version: "1.0.0" }, { version: "1.1.0" }],
+        }),
+      },
+      deployments: [{ ...node, nodeDid: "did:key:remote", local: false }],
+    });
+    renderIn(app, <PacksScreen item="acme/docs" />);
+    const versions = await screen.findByRole("region", { name: "Versions" });
+    expect(within(versions).getByText("1.0.0")).toBeInTheDocument();
+    expect(within(versions).queryByRole("button")).toBeNull();
+  });
 });
 
 describe("where Packs is reached", () => {
@@ -601,7 +681,7 @@ describe("where Packs is reached", () => {
     }
   });
 
-  it("offers Go to packs and the node's packs in search only while the feature is on", async () => {
+  it("offers Go to packs and the node's packs in search", async () => {
     const app = testApp({
       api: { listInstalledPacks: async () => ({ packs: [research] }) },
       snapshot: { bootstrap, client: { deployments: [node] } },
@@ -609,9 +689,6 @@ describe("where Packs is reached", () => {
     renderIn(app, <SearchPalette />);
     act(() => openSearch());
     const input = screen.getByRole("combobox", { name: "Search" });
-    fireEvent.change(input, { target: { value: "packs" } });
-    expect(screen.queryByRole("option", { name: /Go to packs/ })).toBeNull();
-    act(() => withFlags({ packs: true }));
     fireEvent.change(input, { target: { value: "go to packs" } });
     expect(
       await screen.findByRole("option", { name: /Go to packs/ }),

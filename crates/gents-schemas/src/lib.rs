@@ -1,3 +1,6 @@
+mod policy_ids;
+pub use policy_ids::{BuiltInPolicy, HomePolicyIds};
+
 pub const NODE_NAME: &str = "Node";
 pub const NODE: &str = include_str!("../schemas/agent/node.graphql");
 pub const DEFAULT_AGENT_SELECTION_NAME: &str = "DefaultAgentSelection";
@@ -34,8 +37,6 @@ pub const AGENT_SESSION_NAME: &str = "AgentSession";
 pub const AGENT_SESSION: &str = include_str!("../schemas/agent/agent_session.graphql");
 pub const AGENT_OWNERSHIP_POLICY: &str =
     include_str!("../schemas/agent/agent_ownership_policy.yaml");
-pub const AGENT_OWNERSHIP_POLICY_ID: &str =
-    "d323c1bbd2491661b9fbe4667b64d6d7a596f4ddc57346a41d90c10733ab3961";
 pub const SESSION_POLICY_RESOURCE: &str = "sessions";
 pub const GOAL_NAME: &str = "Goal";
 pub const GOAL: &str = include_str!("../schemas/agent/goal.graphql");
@@ -46,8 +47,6 @@ pub const GOAL_CREATION_CLAIM: &str = include_str!("../schemas/agent/goal_creati
 pub const MAILBOX_ITEM_NAME: &str = "MailboxItem";
 pub const MAILBOX_ITEM: &str = include_str!("../schemas/agent/mailbox_item.graphql");
 pub const MAILBOX_POLICY: &str = include_str!("../schemas/agent/mailbox_policy.yaml");
-pub const MAILBOX_POLICY_ID: &str =
-    "10f15ba2901821f2265d8dccc2cc49878960a5d99a489e1c6a03a7c0767dc0f2";
 pub const MAILBOX_POLICY_RESOURCE: &str = "mailbox_items";
 pub const AGENT_TOOL_CALL_NAME: &str = "AgentToolCall";
 pub const AGENT_TOOL_CALL: &str = include_str!("../schemas/agent/agent_tool_call.graphql");
@@ -64,8 +63,6 @@ pub const TOOL_FILE_INVENTORY_NAME: &str = "ToolFileInventory";
 pub const TOOL_FILE_INVENTORY: &str = include_str!("../schemas/agent/tool_file_inventory.graphql");
 pub const TOOL_FILE_CHANGE_POLICY: &str =
     include_str!("../schemas/agent/tool_file_change_policy.yaml");
-pub const TOOL_FILE_CHANGE_POLICY_ID: &str =
-    "2e14bb0746cf90a5e955db6b9bb5d9098f6aa0776849c8bcb68db4dd1e67ea82";
 pub const TOOL_FILE_CHANGE_POLICY_RESOURCE: &str = "file_images";
 pub const AGENT_OUTPUT_SEGMENT_NAME: &str = "AgentOutputSegment";
 pub const AGENT_OUTPUT_SEGMENT: &str =
@@ -95,8 +92,6 @@ pub const DATASTORE_TOOL_SURFACE_NAME: &str = "DatastoreToolSurface";
 pub const DATASTORE_TOOL_SURFACE: &str =
     include_str!("../schemas/agent/datastore_tool_surface.graphql");
 pub const CLIENT_JOURNAL_POLICY: &str = include_str!("../schemas/agent/client_journal_policy.yaml");
-pub const CLIENT_JOURNAL_POLICY_ID: &str =
-    "0db680be49781d06d5793ca0eecc8fad2b1a5d05467c535325ddeb148f679b9c";
 pub const CLIENT_JOURNAL_POLICY_RESOURCE: &str = "journals";
 pub const CLIENT_OUTBOX_SEQUENCE_NAME: &str = "ClientOutboxSequence";
 pub const CLIENT_OUTBOX_SEQUENCE: &str =
@@ -122,6 +117,9 @@ pub const WORKSPACE_RECEIPT_NAME: &str = "WorkspaceReceipt";
 pub const WORKSPACE_RECEIPT: &str = include_str!("../schemas/agent/workspace_receipt.graphql");
 pub const EVENT_SOURCE_CURSOR_NAME: &str = "EventSourceCursor";
 pub const EVENT_SOURCE_CURSOR: &str = include_str!("../schemas/agent/event_source_cursor.graphql");
+pub const CERTIFIED_ASSIGNMENT_STATE_NAME: &str = "CertifiedAssignmentState";
+pub const CERTIFIED_ASSIGNMENT_STATE: &str =
+    include_str!("../schemas/agent/certified_assignment_state.graphql");
 pub const TRIGGER_FIRE_NAME: &str = "TriggerFire";
 pub const TRIGGER_FIRE: &str = include_str!("../schemas/agent/trigger_fire.graphql");
 pub const FIRE_OUTCOME_NAME: &str = "FireOutcome";
@@ -253,6 +251,7 @@ pub const ALL: &[&str] = &[
     EVENT_SOURCE,
     TRIGGER,
     EVENT_SOURCE_CURSOR,
+    CERTIFIED_ASSIGNMENT_STATE,
     TRIGGER_FIRE,
     FIRE_OUTCOME,
     CALLBACK_MODULE,
@@ -342,6 +341,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     EVENT_SOURCE_NAME,
     TRIGGER_NAME,
     EVENT_SOURCE_CURSOR_NAME,
+    CERTIFIED_ASSIGNMENT_STATE_NAME,
     TRIGGER_FIRE_NAME,
     FIRE_OUTCOME_NAME,
     CALLBACK_MODULE_NAME,

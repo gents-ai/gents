@@ -118,6 +118,7 @@ impl ClientHost {
                 managed_server: ManagedServerPolicy::Disabled,
                 client_host: false,
                 store_key_custody: core.options().store_key_custody,
+                service_executable: None,
             },
             pending_oauth_credentials: Arc::default(),
             retirement: std::sync::Mutex::new(None),
@@ -235,7 +236,7 @@ impl ClientHost {
                 let signed = crate::accounts::login::sign_in(&self.pending_oauth_credentials,
                     || self.core.operator_graphql(&request.node_did).map(gents_store::config_client::ConfigAccess::Graphql)
                         .ok_or_else(|| anyhow::anyhow!("Connect this local runtime before managing its accounts.")),
-                    &request.node_did, request.method, provider, request.label.as_deref(), &cancel,
+                    crate::accounts::login::SignInRequest { node_did: &request.node_did, method: request.method, credential_provider: provider, label: request.label.as_deref() }, &cancel,
                     async |url| crate::host_browser::open_url(url).await.map_err(|_| BridgeError::untyped("Could not open the sign-in page. Check your default browser and try again.")),
                 ).await?;
                 if self.core.refresh_node(&request.node_did).await.is_err() {
@@ -647,21 +648,20 @@ impl ClientHost {
             ClientCommand::SessionContextDetails { request } => {
                 encode(crate::commands::session_context_details(&self.core, request).await?)
             }
-            ClientCommand::SessionLiveDelta(args) => encode(
-                crate::snapshot::build_session_live_delta(
-                    &self.core,
-                    &args.session_id,
-                    Some(&args.node_did),
-                    &args.request_id,
-                    &args.base_live_cursor,
-                    args.base_content_byte_len,
-                    &args.base_content_hash,
-                    args.base_reasoning_byte_len,
-                    &args.base_reasoning_hash,
+            ClientCommand::SessionLiveDelta(args) => {
+                let request = crate::types::SessionLiveDeltaRequest::from(args);
+                encode(
+                    crate::snapshot::build_session_live_delta(
+                        &self.core,
+                        &request.session_id,
+                        request.node_did.as_deref(),
+                        &request.request_id,
+                        request.base(),
+                    )
+                    .await
+                    .map_err(backend_error)?,
                 )
-                .await
-                .map_err(backend_error)?,
-            ),
+            }
             ClientCommand::Send { request } => encode(
                 crate::commands::send_chat_message(&self.core, request)
                     .await

@@ -109,6 +109,7 @@ fn modeled_event_source_generations_match_resolved_projection() {
                 goal_token_budget: None,
                 output_schema_ref: None,
                 hooks: Default::default(),
+                command: None,
             },
             source_collection: generation["collection"].as_str().unwrap().into(),
             event_kind: generation["event_kind"].as_str().unwrap().into(),
@@ -190,7 +191,9 @@ async fn modeled_group_clock_is_owned_by_selected_agent_and_linked_once() -> any
         gents_protocol::schemas::AGENT,
         gents_protocol::schemas::EVENT_GROUP_STATE,
     ] {
-        owner.add_collection(schema).await?;
+        owner
+            .add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(schema))
+            .await?;
     }
     let created = owner
         .write(

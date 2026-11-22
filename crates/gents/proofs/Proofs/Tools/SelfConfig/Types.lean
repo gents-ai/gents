@@ -60,9 +60,13 @@ abbrev allFields := ConfigDocuments.Collection.fields
 
 /-- Identity/provenance and module material are operator-managed; nested auth
 references stay editable and raw-key/OAuth-account protection is enforced by
-the Rust `validate` typed auth guard. -/
+the Rust `validate` typed auth guard. A Task's `command` is host code the Node
+runs on a timer, so only the operator authors it: an Agent cannot edit one, and
+a pack that ships one installs only under the operator's authority grant
+(`--grant-authority`, or the pack authority it gave the installing Agent), as
+a pack plugin does. -/
 def protectedKey (t : Target) (k : FieldKey) : Bool :=
-  (t == .task && k == "agent_did") || (t == .agent && k == "creation_nonce") ||
+  (t == .task && (k == "agent_did" || k == "command")) || (t == .agent && k == "creation_nonce") ||
     k == t.uniqueField || ["node_did", "created_at", "updated_at", "created_by",
     "artifact_bytes", "canonical_args", "signer_did", "provenance"].contains k
 

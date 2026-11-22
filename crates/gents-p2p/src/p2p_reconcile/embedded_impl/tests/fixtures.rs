@@ -75,8 +75,12 @@ async fn p2p_node_with_options(
     }
     if let Some(identity) = projector {
         builder = builder.with_document_projector(
-            gents_store::local::document_projector(identity, no_tool_sources())
-                .expect("document projector"),
+            gents_store::local::document_projector(
+                identity,
+                no_tool_sources(),
+                gents_protocol::schemas::HomePolicyIds::node_store(),
+            )
+            .expect("document projector"),
         );
     }
     let node = Arc::new(builder.build().await.expect("embedded p2p node"));
@@ -93,7 +97,7 @@ async fn p2p_node() -> TestNode {
 pub(super) async fn test_node() -> TestNode {
     let test = p2p_node().await;
     test.node
-        .add_collection(TEST_SCHEMA)
+        .add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(TEST_SCHEMA))
         .await
         .expect("test schema");
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -189,7 +193,10 @@ pub(in crate::p2p_reconcile) async fn runtime_http_test_node_with_schema(
         .unwrap();
     let test = p2p_node_with_options(Some(identity.did()), Some(address), None, None).await;
     if let Some(schema) = initial_schema {
-        test.node.add_collection(schema).await.unwrap();
+        test.node
+            .add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(schema))
+            .await
+            .unwrap();
     }
     ensure_runtime_schemas(&test.node).await.unwrap();
     let endpoint = format!("http://{address}/api/v0/graphql");
@@ -205,196 +212,6 @@ pub(in crate::p2p_reconcile) async fn runtime_http_test_node_with_schema(
     .await
     .expect("native HTTP endpoint becomes ready");
     (test, endpoint)
-}
-
-fn bs58_sig(signature: &[u8]) -> String {
-    bs58::encode(signature).into_string()
-}
-
-pub(in crate::p2p_reconcile) async fn authorize_enrollment_peer(
-    node: Arc<EmbeddedNode>,
-    admin_identity: Arc<dyn NodeIdentity>,
-    member_identity: Arc<dyn NodeIdentity>,
-    member_peer: &str,
-    member_ticket: &str,
-) -> String {
-    let issued = chrono::Utc::now();
-    let issued_at = issued.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let expires_at =
-        (issued + chrono::Duration::minutes(5)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let existing_network = GraphqlEnrollmentStore::new(node.clone(), admin_identity.clone())
-        .load_projection()
-        .await
-        .expect("load enrollment fixture network")
-        .network_id;
-    let network_id = existing_network
-        .clone()
-        .unwrap_or_else(|| format!("network-{}", uuid::Uuid::new_v4()));
-    if existing_network.is_none() {
-        let mut network = NetworkRecord {
-            network_id: network_id.clone(),
-            admin_did: admin_identity.did().to_string(),
-            display_name: "final admission test".to_string(),
-            default_template: "conversation".to_string(),
-            created_at: issued_at.clone(),
-            sig: Vec::new(),
-        };
-        network.sig = admin_identity
-            .sign(&network.signing_payload())
-            .await
-            .expect("sign test network");
-        let response = node
-            .execute(&format!(
-                r#"mutation {{ create_Network(input: {{
-                network_id: "{}", admin_did: "{}", display_name: "{}",
-                default_template: "{}", created_at: "{}", admin_sig: "{}"
-            }}) {{ _docID }} }}"#,
-                escape_graphql_string(&network.network_id),
-                escape_graphql_string(&network.admin_did),
-                escape_graphql_string(&network.display_name),
-                escape_graphql_string(&network.default_template),
-                escape_graphql_string(&network.created_at),
-                escape_graphql_string(&bs58_sig(&network.sig)),
-            ))
-            .await;
-        assert!(
-            !response.has_errors(),
-            "create signed Network: {:?}",
-            response.errors
-        );
-    }
-
-    let p2p = node.p2p().expect("admin P2P enabled");
-    let server_peer = p2p.local_peer_id().await.expect("admin peer id");
-    let server_ticket = p2p
-        .shareable_address()
-        .await
-        .expect("admin ticket lookup")
-        .expect("admin shareable ticket");
-    let challenge = format!("challenge-{}", uuid::Uuid::new_v4());
-    let offer_id = format!(
-        "offer-{}",
-        derive_enrollment_id(
-            "gents-enrollment-offer-v1",
-            &[
-                &network_id,
-                admin_identity.did(),
-                &server_peer,
-                &challenge,
-                &issued_at,
-            ],
-        )
-    );
-    let mut offer = EnrollmentOfferRecord {
-        version: ENROLLMENT_PROTOCOL_VERSION,
-        offer_id,
-        challenge,
-        network_id: network_id.clone(),
-        admin_did: admin_identity.did().to_string(),
-        server_peer,
-        server_ticket,
-        owner_node_did: admin_identity.did().to_string(),
-        profile: "client".to_string(),
-        schema_fingerprint: enrollment_schema_fingerprint(),
-        live_schema_digest: gents_protocol::peer_schema::replicated_schema_digest(
-            crate::p2p_reconcile::CLIENT_COLLECTIONS,
-            &crate::p2p_reconcile::read_client_replicated_schema(node.clone())
-                .await
-                .unwrap(),
-        )
-        .unwrap(),
-        issued_at: issued_at.clone(),
-        expires_at: expires_at.clone(),
-        admin_sig: Vec::new(),
-    };
-    offer.admin_sig = admin_identity
-        .sign(&offer.signing_payload())
-        .await
-        .expect("sign enrollment offer");
-    let offer_token = encode_offer(&offer).expect("encode enrollment offer");
-    let client_nonce = format!("nonce-{}", uuid::Uuid::new_v4());
-    let request_id = format!(
-        "enroll-{}",
-        derive_enrollment_id(
-            "gents-enrollment-request-id-v1",
-            &[
-                &offer.offer_id,
-                member_identity.did(),
-                member_peer,
-                &client_nonce,
-            ],
-        )
-    );
-    let mut request = EnrollmentRequestRecord {
-        protocol_version: ENROLLMENT_PROTOCOL_VERSION,
-        request_id,
-        request_digest: String::new(),
-        offer_id: offer.offer_id.clone(),
-        offer_token,
-        challenge: offer.challenge.clone(),
-        network_id,
-        admin_did: admin_identity.did().to_string(),
-        server_peer: offer.server_peer.clone(),
-        candidate_did: member_identity.did().to_string(),
-        candidate_peer: member_peer.to_string(),
-        candidate_name: None,
-        candidate_ticket: member_ticket.to_string(),
-        owner_node_did: offer.owner_node_did.clone(),
-        profile: offer.profile.clone(),
-        client_nonce,
-        issued_at,
-        expires_at,
-        candidate_sig: Vec::new(),
-    };
-    request.request_digest = request.computed_digest();
-    request.candidate_sig = member_identity
-        .sign(&request.signing_payload())
-        .await
-        .expect("sign enrollment request");
-    request
-        .validate_against_offer(&offer)
-        .expect("validate enrollment request");
-
-    let response = node
-        .execute(&format!(
-            r#"mutation {{ create_NetworkEnrollmentRequest(input: {{
-                protocol_version: {}, request_id: "{}", request_digest: "{}",
-                offer_id: "{}", offer_token: "{}", challenge: "{}",
-                network_id: "{}", admin_did: "{}", server_peer: "{}",
-                candidate_did: "{}", candidate_peer: "{}", candidate_ticket: "{}",
-                owner_node_did: "{}", profile: "{}", client_nonce: "{}",
-                issued_at: "{}", expires_at: "{}", candidate_sig: "{}"
-            }}) {{ _docID }} }}"#,
-            request.protocol_version,
-            escape_graphql_string(&request.request_id),
-            escape_graphql_string(&request.request_digest),
-            escape_graphql_string(&request.offer_id),
-            escape_graphql_string(&request.offer_token),
-            escape_graphql_string(&request.challenge),
-            escape_graphql_string(&request.network_id),
-            escape_graphql_string(&request.admin_did),
-            escape_graphql_string(&request.server_peer),
-            escape_graphql_string(&request.candidate_did),
-            escape_graphql_string(&request.candidate_peer),
-            escape_graphql_string(&request.candidate_ticket),
-            escape_graphql_string(&request.owner_node_did),
-            escape_graphql_string(&request.profile),
-            escape_graphql_string(&request.client_nonce),
-            escape_graphql_string(&request.issued_at),
-            escape_graphql_string(&request.expires_at),
-            escape_graphql_string(&bs58_sig(&request.candidate_sig)),
-        ))
-        .await;
-    assert!(
-        !response.has_errors(),
-        "create signed enrollment request: {:?}",
-        response.errors
-    );
-    GraphqlEnrollmentStore::new(node, admin_identity)
-        .decide_request(&request.request_id, EnrollmentDecisionKind::Approved)
-        .await
-        .expect("approve live enrollment request");
-    request.request_id
 }
 
 pub(in crate::p2p_reconcile) async fn wait_for_peer_info(

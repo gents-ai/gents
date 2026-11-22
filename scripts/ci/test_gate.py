@@ -283,8 +283,66 @@ class Shards(unittest.TestCase):
         build, run = captured
         self.assertNotIn("--partition", build)
         self.assertEqual(run[run.index("--partition") + 1], f"hash:2/{ROLES['portable']['partitions']}")
+        self.assertEqual(run[run.index("--test-threads") + 1], "8")
         with self.assertRaises(SystemExit):
             gate.run_build(selection, "portable", ROLES["portable"]["partitions"] + 1)
+
+    def test_the_build_jobs_slice_runs_from_its_build_without_an_archive(self):
+        selection = sharded(1, everything=True)
+        captured, listed, prebuilt = [], [], []
+
+        def run(arguments, **options):
+            captured.append((arguments, options))
+            prebuilt.append(os.environ.get("GENTS_TEST_BINARIES_PREBUILT"))
+            return True
+
+        def listing(arguments, source):
+            listed.append((arguments, source))
+            return {package: (0 if package in gate.NO_TESTS else 1, 0) for package in self.PORTABLE}, []
+
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.dict(os.environ, {"GATE_ARCHIVE_DIR": directory, "GITHUB_ACTIONS": "true",
+                                             "RUNNER_TEMP": directory}), \
+                mock.patch.object(gate, "nextest", run), \
+                mock.patch.object(gate, "sh", lambda *_: self.fail("the in-job build adds no worktree")), \
+                mock.patch.object(gate, "system_preflight", lambda: True), \
+                mock.patch.object(gate.LeanContract, "start", classmethod(lambda cls: None)), \
+                mock.patch.object(gate, "listed_tests", listing), \
+                mock.patch.object(gate, "results", []), contextlib.redirect_stdout(io.StringIO()):
+            os.environ.pop("GENTS_TEST_BINARIES_PREBUILT", None)
+            try:
+                gate.run(selection, "build:portable:2")
+            finally:
+                os.environ.pop("GENTS_TEST_BINARIES_PREBUILT", None)
+            self.assertEqual(list(Path(directory).iterdir()), [])
+        (build, build_options), (test, test_options) = captured
+        selected = gate.build_arguments(self.PORTABLE)
+        self.assertIn("gents-fs-runner", selected)
+        self.assertEqual(selected[selected.index("--cargo-profile") + 1], gate.ARCHIVE_PROFILE)
+        self.assertEqual(build[:len(selected) + 1], ["list", *selected])
+        self.assertEqual(test[:len(selected) + 1], ["run", *selected])
+        self.assertEqual(test[len(selected) + 1:len(selected) + 3], ["--profile", "ci"])
+        self.assertEqual(listed, [(selected, gate.ROOT)])
+        self.assertNotIn("cwd", build_options)
+        self.assertNotIn("cwd", test_options)
+        self.assertEqual(prebuilt, [None, "1"])
+        for arguments in (build, test):
+            self.assertFalse({"--archive-file", "--workspace-remap"} & set(arguments))
+
+    def test_a_package_breaking_no_tests_stops_the_build_jobs_run(self):
+        selection = sharded(1, everything=True)
+        captured = []
+        tests = {package: (1, 0) for package in self.PORTABLE}
+        with mock.patch.object(gate, "nextest", lambda arguments, **_: captured.append(arguments[0]) or True), \
+                mock.patch.object(gate, "system_preflight", lambda: True), \
+                mock.patch.object(gate.LeanContract, "start", classmethod(lambda cls: None)), \
+                mock.patch.object(gate, "listed_tests", lambda *_: (tests, [])), \
+                mock.patch.object(gate, "results", []) as results, contextlib.redirect_stdout(io.StringIO()):
+            os.environ.pop("GITHUB_ACTIONS", None)
+            gate.run(selection, "build:portable:2")
+            [check] = [result for result in results if result[0] == "check portable build"]
+        self.assertEqual(captured, ["list"])
+        self.assertIn("listed in NO_TESTS", check[1])
 
     def test_the_build_waits_for_the_lean_contract_before_its_tests(self):
         events = []
@@ -310,7 +368,7 @@ class Shards(unittest.TestCase):
                         {package: (0 if package in gate.NO_TESTS else 1, 0) for package in self.PORTABLE}, [])):
                 os.environ.pop("GITHUB_ACTIONS", None)
                 gate.run(selection, "build:portable:1")
-            self.assertEqual(events, ["archive", "wait", "run", "stop"] if built else ["archive", "wait", "stop"])
+            self.assertEqual(events, ["list", "wait", "run", "stop"] if built else ["list", "wait", "stop"])
         workflow = workflow_jobs(CI)["build"]
         self.assertIn("lean-contract: deferred", workflow)
 
@@ -412,28 +470,38 @@ def with_event(event, run):
 class VeraTests(unittest.TestCase):
     def test_each_named_crate_has_the_feature_and_the_tests_its_filter_names(self):
         metadata = gate.workspace_metadata()
-        for package, test_filter in gate.VERA_TESTS.items():
+        for package, (flags, test_filter) in gate.VERA_TESTS.items():
             info = next(entry for entry in metadata["packages"] if entry["name"] == package)
             self.assertIn("vera", info["features"], package)
-            lib = next(target for target in info["targets"] if "lib" in target["kind"])
-            module = Path(lib["src_path"]).parent.joinpath(*test_filter.strip(":").split("::"))
-            self.assertTrue(module.with_suffix(".rs").is_file() or module.is_dir(), test_filter)
+            if flags == ("--lib",):
+                lib = next(target for target in info["targets"] if "lib" in target["kind"])
+                module = Path(lib["src_path"]).parent.joinpath(*test_filter.strip(":").split("::"))
+                self.assertTrue(module.with_suffix(".rs").is_file() or module.is_dir(), test_filter)
+                continue
+            self.assertEqual(flags[0], "--test", package)
+            test = next(target for target in info["targets"]
+                        if "test" in target["kind"] and target["name"] == flags[1])
+            sources = "\n".join(path.read_text() for path in Path(test["src_path"]).parent.glob("*.rs"))
+            for module in test_filter.strip(":").split("::"):
+                self.assertRegex(sources, rf"\bmod {module};", test_filter)
 
     def test_the_groups_holding_the_crates_run_their_vera_tests(self):
         selection = with_event("push", lambda: select(everything=True))
         vera = {entry["job"]: entry["vera"] for entry in selection["matrix"]}
         self.assertEqual(vera.pop("test:store"), "gents-store")
         self.assertEqual(vera.pop("test:session"), "gents-tools gents-toolcalls")
+        self.assertEqual(vera.pop("test:cli"), "gents-cli")
         self.assertEqual(set(vera.values()), {""})
 
     def test_the_archive_runs_the_vera_tests_of_the_crates_it_holds(self):
         for count in (1, 3):
             selection = with_event("merge_group", lambda: sharded(count, everything=True))
-            self.assertEqual(selection["archives"][0]["vera"], "gents-store gents-tools gents-toolcalls")
+            self.assertEqual(selection["archives"][0]["vera"],
+                             "gents-store gents-tools gents-toolcalls gents-cli")
         draft = with_event("push", lambda: sharded(1, "crates/gents-store/src/graphql.rs", tier="draft"))
         self.assertEqual(draft["archives"][0]["vera"], "gents-store")
         client = with_event("push", lambda: sharded(1, "crates/gents-cli/src/lib.rs"))
-        self.assertEqual(client["archives"][0]["vera"], "")
+        self.assertEqual(client["archives"][0]["vera"], "gents-cli")
 
     def test_a_pull_request_leaves_them_to_the_merge_queue(self):
         self.assertEqual(with_event("pull_request", lambda: sharded(1, everything=True))["archives"][0]["vera"], "")
@@ -455,22 +523,25 @@ class VeraTests(unittest.TestCase):
                 mock.patch.object(gate, "results", []), contextlib.redirect_stdout(io.StringIO()):
             os.environ.pop("GITHUB_ACTIONS", None)
             gate.run_build(selection, "portable")
-        self.assertEqual(len(calls), 2)
-        archive, vera = calls
+        self.assertEqual(len(calls), 3)
+        archive, vera, cli = calls
         self.assertEqual(archive[0], "archive")
         self.assertNotIn("vera", " ".join(archive))
         self.assertEqual(vera[:9], ["run", "-p", "gents-store", "-p", "gents-tools", "-p", "gents-toolcalls", "--lib",
                                     "--features"])
         self.assertEqual(vera[9], "gents-store/vera,gents-tools/vera,gents-toolcalls/vera")
-        filterset = vera[vera.index("-E") + 1]
+        self.assertEqual(cli[:6], ["run", "-p", "gents-cli", "--test", "integration", "--features"])
+        self.assertEqual(cli[6], "gents-cli/vera")
+        filtersets = vera[vera.index("-E") + 1] + cli[cli.index("-E") + 1]
         for package in entry["vera"].split():
-            self.assertIn(f"(binary_id(={package}) & test(~{gate.VERA_TESTS[package]}))", filterset)
+            target, test_filter = gate.VERA_TESTS[package]
+            self.assertIn(f"(binary_id(={gate.binary_id(package, target)}) & test(~{test_filter}))", filtersets)
 
     def test_they_wait_for_the_lean_contract(self):
         selection = with_event("push", lambda: sharded(3, everything=True))
         tests = {package: (1, 0) for package in selection["archives"][0]["packages"].split()
                  if package not in gate.NO_TESTS}
-        for built, expected in ((True, ["archive", "run"]), (False, ["archive"])):
+        for built, expected in ((True, ["archive", "run", "run"]), (False, ["archive"])):
             contract = mock.Mock(**{"wait.return_value": built})
             calls = []
             with tempfile.TemporaryDirectory() as directory, \
@@ -738,11 +809,13 @@ class Runners(unittest.TestCase):
         for path in sorted((gate.ROOT / ".github/workflows").glob("*.yml")):
             for job, value in runs_on_values(path.read_text()):
                 for literal in re.findall(r"fromJSON\('(\[[^']*\])'\)", value):
-                    self.assertEqual(json.loads(literal), ROLES["linux"]["labels"], f"{path.name} {job}")
+                    self.assertIn(json.loads(literal), [ROLES["linux"]["labels"], gate.shared(ROLES["linux"]["labels"])],
+                                  f"{path.name} {job}")
 
     def test_no_workflow_selects_a_runner_by_host(self):
-        vocabulary = {"self-hosted"} | {label for entry in ROLES.values() for label in entry["labels"]}
-        role_sets = [entry["labels"] for entry in ROLES.values()]
+        vocabulary = {"self-hosted", gate.reserve_label()} | {label for entry in ROLES.values()
+                                                               for label in entry["labels"]}
+        role_sets = [labels for entry in ROLES.values() for labels in (entry["labels"], gate.shared(entry["labels"]))]
         for path in sorted((gate.ROOT / ".github/workflows").glob("*.yml")):
             text = path.read_text()
             self.assertNotRegex(text, r"runner\.name\s*(==|!=)", path.name)
@@ -767,12 +840,73 @@ class Runners(unittest.TestCase):
                     continue
                 with self.subTest(workflow=path.name, job=job):
                     self.assertEqual(len(roles), 1, roles)
-                    self.assertEqual(sorted(labels_of(value)), sorted(ROLES[roles.pop()]["labels"]), value)
+                    role = ROLES[roles.pop()]["labels"]
+                    self.assertIn(sorted(labels_of(value)), [sorted(role), sorted(gate.shared(role))], value)
 
     def test_actionlint_knows_exactly_the_inventory_labels(self):
         config = (gate.ROOT / ".github/actionlint.yaml").read_text()
         listed = set(re.findall(r"^    - (\S+)$", config.split("paths:")[0], flags=re.M))
-        self.assertEqual(listed, {label for entry in ROLES.values() for label in entry["labels"]} - {"self-hosted"})
+        self.assertEqual(listed, ({label for entry in ROLES.values() for label in entry["labels"]} - {"self-hosted"})
+                         | {gate.reserve_label()})
+
+    def test_a_pull_request_stays_off_the_merge_queues_reserved_runners(self):
+        label = gate.reserve_label()
+        group = ROLES["portable"]["host_groups"][0]
+        pull = gate.placement("portable", fork=False, fallback=False, host_group=group, event="pull_request")
+        self.assertEqual(pull["runs_on"], [*ROLES["portable"]["labels"], label, group])
+        for event in ("merge_group", "schedule", "workflow_dispatch"):
+            self.assertEqual(gate.runner("macos", fork=False, fallback=False, event=event), ROLES["macos"]["labels"])
+        self.assertEqual(gate.runner("macos", fork=True, fallback=False, event="pull_request"), ROLES["macos"]["hosted"])
+        self.assertEqual(gate.runner("linux", fork=False, fallback=True, event="pull_request"), "ubuntu-latest")
+        self.assertEqual(gate.runner("portable", fork=False, fallback=True, event="pull_request"),
+                         [*ROLES["macos"]["labels"], label])
+        with mock.patch.dict(os.environ, {"GATE_EVENT": "pull_request"}):
+            selection = select(everything=True)
+        self.assertTrue(all(label in entry["runs_on"] for entry in selection["matrix"] + selection["archives"]))
+        self.assertTrue(all(label in labels for labels in selection["runs_on"].values() if isinstance(labels, list)))
+
+    def test_the_plan_job_routes_a_pull_request_as_the_plan_does(self):
+        plan = workflow_jobs(CI)["plan"]
+        literals = [json.loads(literal) for literal in re.findall(r"fromJSON\('(\[[^']*\])'\)", plan)]
+        self.assertEqual(literals, [gate.shared(ROLES["linux"]["labels"]), ROLES["linux"]["labels"]])
+        self.assertIn("github.event_name == 'pull_request' && fromJSON", plan)
+
+
+class Reservation(unittest.TestCase):
+    """The merge queue's reserve: which runners keep only the roles' labels."""
+
+    @staticmethod
+    def fleet(*runners):
+        return [{"name": name, "labels": [{"name": label} for label in labels]} for name, labels in runners]
+
+    PORTABLE = ["self-hosted", "Linux", "X64", "ci-portable"]
+    MACOS = ["self-hosted", "macOS", "ARM64", "ci-macos", "ci-desktop"]
+
+    def test_the_reserve_spreads_over_host_groups_and_spares_multi_role_runners(self):
+        runners = self.fleet(
+            ("p-a1", [*self.PORTABLE, "ci-portable-a"]), ("p-a2", [*self.PORTABLE, "ci-portable-a"]),
+            ("p-a3", [*self.PORTABLE, "ci-portable-a"]), ("p-b1", [*self.PORTABLE, "ci-portable-b"]),
+            ("p-b2", [*self.PORTABLE, "ci-portable-b"]), ("p-b3", [*self.PORTABLE, "ci-portable-b"]),
+            ("p-c1", [*self.PORTABLE, "ci-portable-c"]), ("p-c2", [*self.PORTABLE, "ci-portable-c"]),
+            ("m1", [*self.MACOS, "ci-runtime", "ci-cli"]), ("m2", [*self.MACOS, "ci-cli"]), ("m3", self.MACOS),
+            ("l1", ["self-hosted", "Linux", "X64", "ci-linux"]))
+        reserved, unreserved = gate.reservation(runners, {"portable": 2, "desktop": 1})
+        self.assertEqual(reserved, ["m3", "p-a3", "p-b3"])
+        self.assertEqual(set(reserved) | set(unreserved), {runner["name"] for runner in runners})
+        self.assertFalse(set(reserved) & set(unreserved))
+
+    def test_a_role_keeps_a_runner_for_pull_requests(self):
+        runners = self.fleet(("m1", self.MACOS), ("m2", self.MACOS))
+        reserved, unreserved = gate.reservation(runners, {"desktop": 1})
+        self.assertEqual((len(reserved), len(unreserved)), (1, 1))
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            gate.reservation(runners, {"desktop": 2})
+
+    def test_the_inventory_reserves_only_known_roles(self):
+        reserve = gate.inventory()["reserve"]
+        self.assertTrue(reserve["label"].startswith("ci-"))
+        self.assertLessEqual(set(reserve["roles"]), set(ROLES))
+        self.assertFalse(any(reserve["label"] in entry["labels"] for entry in ROLES.values()))
 
 
 class HostGroups(unittest.TestCase):

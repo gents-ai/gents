@@ -103,6 +103,15 @@ pub(crate) struct JobPromoteArgs {
         help = "Agent to wire the tool into; defaults to the agent that ran the workflow"
     )]
     pub(crate) agent: Option<String>,
+    #[arg(long, help = "Pack registry base URL. Defaults to the public registry")]
+    pub(crate) registry: Option<String>,
+    #[arg(
+        long,
+        value_name = "PATH",
+        default_value = "javy",
+        help = "The javy compiler promotion builds with; defaults to javy on PATH"
+    )]
+    pub(crate) javy: String,
     #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
     pub(crate) output: OutputFormat,
 }

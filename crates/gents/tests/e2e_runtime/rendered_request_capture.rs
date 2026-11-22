@@ -1039,6 +1039,19 @@ async fn per_turn_compaction_is_captured_and_governs_later_turns() {
             Some(actual_tokens as u64),
             "turn {index} pre-dispatch estimate must describe its actual HTTP request"
         );
+        let stubbing = &accounting["history_stubbing"];
+        assert_eq!(
+            stubbing["stubbed_results"].as_u64(),
+            Some(u64::from(index > 0)),
+            "turn {index} reports the stubs it carries, not a running total"
+        );
+        if index > 0 {
+            assert_eq!(
+                stubbing["original_bytes"].as_u64(),
+                Some((BIG_MARKER.len() + BIG_OUTPUT_CHARS) as u64)
+            );
+            assert!(stubbing["stub_bytes"].as_u64() < stubbing["original_bytes"].as_u64());
+        }
         assert!(
             actual_tokens <= input_budget,
             "turn {index} dispatched {actual_tokens} input tokens above budget {input_budget}"
@@ -1090,6 +1103,42 @@ async fn per_turn_compaction_is_captured_and_governs_later_turns() {
             .await
             .is_empty(),
         "reducing a closed tool pair must not advance the session-prefix cursor"
+    );
+
+    let budget = gents_tools::native::load_context_budget_snapshot(
+        &fixture.node,
+        &gents_tools::native::ContextBudgetScope {
+            node_did: fixture.node_did.clone(),
+            agent_did: fixture.agent_did.clone(),
+            session_id: "session-capture-compaction".into(),
+        },
+    )
+    .await
+    .expect("context budget");
+    let stubbed = budget
+        .history_tool_outputs_stubbed_this_dispatch
+        .expect("the latest dispatch reports its stubbing");
+    let recorded = &parse_json(&rows[2]["provenance_json"])["assembly_trace"]["context_accounting"]
+        ["history_stubbing"];
+    assert_eq!(
+        Some(stubbed.count as u64),
+        recorded["stubbed_results"].as_u64()
+    );
+    assert_eq!(
+        Some(stubbed.bytes_removed as u64),
+        recorded["original_bytes"]
+            .as_u64()
+            .zip(recorded["stub_bytes"].as_u64())
+            .map(|(original, stub)| original - stub)
+    );
+    assert_eq!(
+        (
+            budget.compaction_count,
+            budget.session_compaction_count,
+            budget.request_reduction_count
+        ),
+        (0, 0, 0),
+        "stubbing is neither a compaction nor a reduction"
     );
 
     fixture.runtime.shutdown().await;
@@ -1782,7 +1831,7 @@ async fn rolling_chunk_failure_does_not_advance_session_and_retry_commits_once()
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal_state(&actors, &failed_doc, STALL_CEILING).await,
+        wait_for_request_terminal_state(&actors, &failed_doc).await,
         RequestLifecycleState::Failed
     );
     assert!(

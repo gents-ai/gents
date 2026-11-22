@@ -1,4 +1,4 @@
-type FileInventoryRequest @policy(id: "d323c1bbd2491661b9fbe4667b64d6d7a596f4ddc57346a41d90c10733ab3961", resource: "configuration") {
+type FileInventoryRequest @policy(id: "$household", resource: "configuration") {
     request_key: String @index(unique: true) @immutable
     peer_id: String @immutable
     requester_did: String @index @immutable

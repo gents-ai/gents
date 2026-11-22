@@ -62,18 +62,31 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
             0,
         )
         .await?;
-        node.add_collection(schema).await?;
-        node.add_collection(gents_protocol::schemas::NETWORK_ENROLLMENT_DECISION)
+        node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(schema))
             .await?;
+        node.add_collection(
+            &gents_protocol::schemas::HomePolicyIds::node_store()
+                .render(gents_protocol::schemas::NETWORK_ENROLLMENT_DECISION),
+        )
+        .await?;
     }
     for node in [candidate_node, admin_node] {
-        node.add_collection(gents_protocol::schemas::AGENT_SESSION)
-            .await?;
-        node.add_collection(gents_protocol::schemas::PEER_REGISTRY)
-            .await?;
+        node.add_collection(
+            &gents_protocol::schemas::HomePolicyIds::node_store()
+                .render(gents_protocol::schemas::AGENT_SESSION),
+        )
+        .await?;
+        node.add_collection(
+            &gents_protocol::schemas::HomePolicyIds::node_store()
+                .render(gents_protocol::schemas::PEER_REGISTRY),
+        )
+        .await?;
     }
     admin_node
-        .add_collection(gents_protocol::schemas::NODE)
+        .add_collection(
+            &gents_protocol::schemas::HomePolicyIds::node_store()
+                .render(gents_protocol::schemas::NODE),
+        )
         .await?;
     let candidate_local =
         ConfigAccess::local_as(candidate_node.clone(), identity::Did::new(candidate.did())?);
@@ -255,6 +268,16 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         1,
         "signed genesis must retain its actual creator on the receiver"
     );
+    assert_eq!(
+        gents_store::provenance::document_signers(&receiver_author, &doc).await?,
+        gents_store::provenance::DocumentSigners {
+            created: Some(candidate.did().to_owned()),
+            latest: Some(candidate.did().to_owned()),
+            writers: std::collections::BTreeSet::from([candidate.did().to_owned()]),
+            unsigned: false,
+        },
+        "the receiver must name the writer from the synced signature"
+    );
     let offer_b = issuer.mint().await?;
     let request_b = crate::p2p_reconcile::enrollment_candidate::sign_enrollment_request(
         &candidate,
@@ -320,7 +343,8 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         admin_node
             .document_acp()
             .get_doc_owner(
-                gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
+                gents_protocol::schemas::HomePolicyIds::node_store()
+                    .id(gents_protocol::schemas::BuiltInPolicy::Household),
                 "enrollment_records",
                 &doc
             )
@@ -757,6 +781,7 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
             .with_document_projector(gents_store::local::document_projector(
                 Arc::new(KeyIdentity::load_or_create(&admin_path, None)?),
                 super::fixtures::no_tool_sources(),
+                gents_protocol::schemas::HomePolicyIds::node_store(),
             )?)
             .with_http(defra_node::HttpConfig::with_addr(reopened_address))
             .build()

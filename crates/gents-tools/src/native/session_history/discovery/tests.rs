@@ -1,7 +1,7 @@
 use super::*;
 use gents_loop::tool::Tool;
-use gents_session::request::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
 use gents_store::identity::{KeyIdentity, NodeIdentity};
+use gents_store::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
 use std::sync::Arc;
 
 async fn seed(
@@ -62,13 +62,18 @@ resources:
         .await
         .unwrap();
     ConfigAccess::local(node.clone())
-        .add_collection(&gents_store::schema::AGENT_SESSION_SCHEMA.replace(
-            &format!(
-                "@policy(id: \"{}\", resource: \"sessions\")",
-                gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID
-            ),
-            &format!("@policy(id: \"{policy}\", resource: \"sessions\")"),
-        ))
+        .add_collection(
+            &gents_protocol::schemas::HomePolicyIds::node_store()
+                .render(gents_store::schema::AGENT_SESSION_SCHEMA)
+                .replace(
+                    &format!(
+                        "@policy(id: \"{}\", resource: \"sessions\")",
+                        gents_protocol::schemas::HomePolicyIds::node_store()
+                            .id(gents_protocol::schemas::BuiltInPolicy::Household)
+                    ),
+                    &format!("@policy(id: \"{policy}\", resource: \"sessions\")"),
+                ),
+        )
         .await
         .unwrap();
     let owner_did = owner.did().to_owned();

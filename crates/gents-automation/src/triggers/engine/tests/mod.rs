@@ -444,6 +444,7 @@ fn resolved_task(prompt_template: &str) -> ResolvedTask {
         goal_token_budget: None,
         output_schema_ref: None,
         hooks: Vec::new(),
+        command: None,
     }
 }
 
@@ -740,6 +741,7 @@ pub(super) fn snapshot_with_agent_and_schedules(
     Arc::new(resolved.activate(1, RapidHashMap::new()))
 }
 
+mod command_task;
 mod dispatch;
 mod dispatch_contract;
 mod event_source;

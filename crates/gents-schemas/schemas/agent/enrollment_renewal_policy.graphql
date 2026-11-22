@@ -1,6 +1,6 @@
 # Local operator policy; deliberately NOT branchable, so it is never learned
 # from a peer.
-type EnrollmentRenewalPolicy @policy(id: "d323c1bbd2491661b9fbe4667b64d6d7a596f4ddc57346a41d90c10733ab3961", resource: "operations") {
+type EnrollmentRenewalPolicy @policy(id: "$household", resource: "operations") {
     network_id: String @index(unique: true)
     enabled: Boolean
     lease_seconds: Int

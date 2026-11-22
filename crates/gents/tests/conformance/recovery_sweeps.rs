@@ -118,7 +118,7 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
                 .calls_recovered,
             0
         );
-        let registry = gents_toolcalls::call::hook::BackgroundExecutionRegistry::default();
+        let registry = gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry::default();
         let live =
             gents_toolcalls::call::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
                 &db.node,

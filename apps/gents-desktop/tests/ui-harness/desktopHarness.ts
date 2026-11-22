@@ -10,7 +10,7 @@ import type {
   FileImage,
   RequestAttachment,
 } from "@source-inc/gents-desktop-client";
-import type { BackendHealth } from "@source-inc/gents-desktop-client";
+import type { BackendHealth, DefaultPack } from "@source-inc/gents-desktop-client";
 import { deriveDisplayState } from "@source-inc/gents-desktop-operations";
 import type {
   AllowedFolder,
@@ -843,6 +843,7 @@ export type DesktopUiHarnessScenario =
   | "answered"
   | "notices"
   | "startup-port-in-use"
+  | "starter-packs"
   | SharingScenario;
 
 export type DesktopUiHarnessOptions = {
@@ -852,6 +853,8 @@ export type DesktopUiHarnessOptions = {
   compactionAt?: number;
   /* list that compaction in the meter but draw no marker for it */
   compactionUnmarked?: boolean;
+  /* offer the starter packs in a scenario that has none of its own */
+  starterPacks?: boolean;
 };
 
 export type MobilePerformanceBridgeCall = {
@@ -1005,6 +1008,8 @@ export function createDesktopUiHarness(
   options: DesktopUiHarnessOptions = {},
 ): DesktopUiHarness {
   const scenario = normalizeScenario(options.scenario);
+  let starterPacks: DefaultPack[] =
+    scenario === "starter-packs" || options.starterPacks ? STARTER_PACKS : [];
   const sessionIndexCount =
     options.sessionIndexCount ?? MOBILE_PERFORMANCE_FIXTURE.sessionIndexCount;
   if (
@@ -2404,10 +2409,14 @@ export function createDesktopUiHarness(
       return { plugins: [], target_packs: [] };
     },
     async listDefaultPacks() {
-      return { packs: [] };
+      return { packs: starterPacks };
     },
-    async approveDefaultPacks() {
-      return { packs: [], failed: [] };
+    async approveDefaultPacks(asked: { pack: string }[]) {
+      const approved = new Set(asked.map((one) => one.pack));
+      starterPacks = starterPacks.map((pack) =>
+        approved.has(pack.pack) ? { ...pack, state: "installed" as const } : pack,
+      );
+      return { packs: starterPacks, failed: [] };
     },
     async listDynamicWorkflows() {
       return { workflows: [], installed: [] };
@@ -3110,8 +3119,8 @@ export function createDesktopUiHarness(
             taskId: document.task_id,
             name: document.display_name ?? null,
             description: document.description ?? null,
-            agentDid: document.agent_did,
-            promptTemplate: document.prompt_template,
+            agentDid: document.agent_did ?? "",
+            promptTemplate: document.prompt_template ?? "",
             emitOutcome: document.emit_outcome,
             goalObjectiveTemplate: document.goal_objective_template ?? null,
             goalTokenBudget: document.goal_token_budget ?? null,
@@ -3590,8 +3599,8 @@ export function createDesktopUiHarness(
           taskId,
           name: document.display_name?.trim() || taskId,
           description: document.description ?? null,
-          agentDid: document.agent_did,
-          promptTemplate: document.prompt_template,
+          agentDid: document.agent_did ?? "",
+          promptTemplate: document.prompt_template ?? "",
           emitOutcome: document.emit_outcome,
           goalObjectiveTemplate: document.goal_objective_template ?? null,
           goalTokenBudget: document.goal_token_budget ?? null,
@@ -4983,6 +4992,45 @@ function clone<T>(value: T): T {
   return structuredClone(value);
 }
 
+/* the starter packs as a release carries them: each missing until installed,
+   and dynamic_workflows installed and off until turned on */
+const starterPack = (
+  name: string,
+  purpose: string,
+  without: string,
+  state: DefaultPack["state"] = "missing",
+): DefaultPack => ({
+  pack: `gents/${name}`,
+  purpose,
+  without,
+  state,
+  version: "1.0.0",
+  reason: null,
+});
+const STARTER_PACKS: DefaultPack[] = [
+  starterPack(
+    "web",
+    "searching and reading the web",
+    "Without it the Engineer cannot search or read the web.",
+  ),
+  starterPack(
+    "dynamic_workflows",
+    "workflows that put several agents on one job",
+    "Without it the Engineer cannot run workflows.",
+    "not_enabled",
+  ),
+  starterPack(
+    "charts",
+    "charts on the pages it builds",
+    "Without it the Engineer's pages have no charts.",
+  ),
+  starterPack(
+    "script",
+    "short scripts over its own tools: waiting, trying logic, bulk changes",
+    "Without it the Engineer makes every tool call one at a time.",
+  ),
+];
+
 function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
   switch (value) {
     case "active-nodes":
@@ -5003,6 +5051,7 @@ function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
     case "discovery-offline":
     case "storage-recovery":
     case "startup-port-in-use":
+    case "starter-packs":
     case "days":
     case "automated-inputs":
     case "background":

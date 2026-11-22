@@ -18,7 +18,7 @@ struct CompactionFixture {
 impl CompactionFixture {
     async fn new(name: &str, request_id: &str, session_id: &str) -> Self {
         use gents_protocol::request_admission::{
-            AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+            AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
         };
         use gents_store::identity::NodeIdentity;
         let (db, user, client, binding) = crate::test_support::root::signed_test_node(name).await;
@@ -28,10 +28,7 @@ impl CompactionFixture {
         let create = AgentRequestCreate::base(
             RequestPurpose::Normal,
             request_id,
-            db.node_identity.did(),
-            user.did(),
-            agent.did(),
-            session_id,
+            RequestScope::new(db.node_identity.did(), user.did(), agent.did(), session_id),
             "compaction",
             "interactive",
             chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -334,7 +331,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         "the final published ordinary turn closes the prefix"
     );
     let durable_before = history.clone();
-    let (provider_history, _) = provider_view(GROUPED_PROFILE, history);
+    let (provider_history, _, _) = provider_view(GROUPED_PROFILE, history);
     let result = compactor
         .reduce(
             provider_history,
@@ -433,7 +430,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
     assert!(next_request_history
         .iter()
         .all(|row| row.sequence > compacted_through_sequence));
-    let (resumed_history, _) = provider_view(
+    let (resumed_history, _, _) = provider_view(
         GROUPED_PROFILE,
         next_request_history
             .into_iter()

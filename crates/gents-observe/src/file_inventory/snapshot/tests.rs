@@ -49,10 +49,9 @@ async fn reserve_inventory_session(
     let create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         format!("reserve-inventory-{session_id}"),
-        node_did,
-        &requester,
-        agent_did,
-        session_id,
+        gents_protocol::request_admission::RequestScope::new(
+            node_did, &requester, agent_did, session_id,
+        ),
         "inventory",
         "interactive",
         created_at,
@@ -637,10 +636,12 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
             gents_protocol::request_admission::AgentRequestCreate::base(
                 gents_protocol::request_admission::RequestPurpose::Normal,
                 request_id,
-                &did,
-                &requester,
-                signer.did(),
-                &parent,
+                gents_protocol::request_admission::RequestScope::new(
+                    &did,
+                    &requester,
+                    signer.did(),
+                    &parent,
+                ),
                 "spawn",
                 "interactive",
                 chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),

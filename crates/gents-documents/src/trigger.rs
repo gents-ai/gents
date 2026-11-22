@@ -77,8 +77,9 @@ impl Trigger {
             .unwrap_or(DEFAULT_MAX_FIRES_PER_HOUR)
     }
 
-    /// Lean: `Triggers.SessionKey.configValid` and `Triggers.FireBudget.configValid`.
-    pub fn validate_options(&self) -> anyhow::Result<()> {
+    /// Lean: `Triggers.SessionKey.configValid` and `Triggers.FireBudget.configValid`;
+    /// `command_task` is whether the Trigger's Task runs a host command.
+    pub fn validate_options(&self, command_task: bool) -> anyhow::Result<()> {
         anyhow::ensure!(
             self.create_session != Some(true) || self.session_id_template.is_some(),
             "create_session requires session_id_template: render the session key to get or create"
@@ -90,8 +91,9 @@ impl Trigger {
         anyhow::ensure!(
             self.max_fires_per_hour.is_none()
                 || matches!(self.source, TriggerSource::Event { .. })
-                || self.session_id_template.is_some(),
-            "max_fires_per_hour needs an event source or a scheduled session_id_template; an untargeted schedule is limited by its cadence"
+                || self.session_id_template.is_some()
+                || command_task,
+            "max_fires_per_hour needs an event source, a scheduled session_id_template or a command Task; an untargeted schedule of an Agent's Task is limited by its cadence"
         );
         Ok(())
     }
@@ -117,6 +119,37 @@ pub struct TriggerObservation {
     pub last_status: Option<String>,
     pub last_error: Option<String>,
     pub fire_count: Option<i64>,
+}
+
+/// One run of a command Task, as the Node records it on the Trigger that
+/// fired it (`Trigger.last_run`): written when the command starts and again
+/// when it ends.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CommandRun {
+    pub run_id: String,
+    pub state: CommandRunState,
+    /// The process exit status; absent until it exits, or when a signal ended it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i64>,
+    /// The end of the captured stdout and stderr, at most 4 KiB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tail: Option<String>,
+    pub started_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandRunState {
+    Running,
+    /// Exited with status 0.
+    Succeeded,
+    /// Exited nonzero, by a signal, or could not be launched.
+    Failed,
+    TimedOut,
+    /// Stopped by a newer `latest_only` fire or by shutdown.
+    Interrupted,
 }
 
 /// Shared concurrency vocabulary for all task-trigger entry points.

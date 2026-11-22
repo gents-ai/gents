@@ -18,9 +18,9 @@ use gents_store::graphql::escape_graphql_string;
 use tokio_util::sync::CancellationToken;
 
 use crate::support::live_inference::rows_when;
-use crate::support::snapshots::SnapshotReader;
 use crate::support::{self, TestDb};
 use gents_p2p::test_support::enrollment::{authorize_enrollment_generation, EnrollmentGeneration};
+use gents_store::test_support::snapshot_reader::SnapshotReader;
 use gents_store::test_support::STALL_CEILING;
 
 struct Stop(CancellationToken);
@@ -72,6 +72,7 @@ async fn opted_in_members_renew_over_authenticated_routes() {
     use gents_p2p::p2p_reconcile::enrollment_member_authority::{
         load_status_enrollment_approvals, EnrollmentAuthorityOutcome,
     };
+    use gents_store::identity::NodeIdentity as _;
 
     let mut offered = std::collections::BTreeMap::new();
     let server = support::test_p2p_db("automatic-renewal-server").await;
@@ -233,6 +234,50 @@ async fn opted_in_members_renew_over_authenticated_routes() {
             panic!("member did not observe the initial signed route; its enrollment documents stalled for {STALL_CEILING:?}");
         }
     }
+    let user = support::load_managed_fixture_user(&member).await;
+    let user_access = ConfigAccess::Graphql(
+        gents_store::config_client::GraphqlEndpoint::as_principal(
+            member.client_endpoint(),
+            user.did(),
+        )
+        .with_client_signing_capability(user.client_signing_capability().unwrap())
+        .unwrap(),
+    );
+    let nodes = user_access
+        .execute(&format!(
+            r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}) {{_docID}} }}"#,
+            escape_graphql_string(member.node_identity.did())
+        ))
+        .await
+        .unwrap();
+    let member_node = nodes["data"]["Node"][0]["_docID"].as_str().unwrap();
+    let foreign = user_access
+        .write(
+            "test.renewal.foreign_pin",
+            &format!(
+                r#"mutation {{ create_NetworkAdminPin(input: {{pin_key:"foreign-renewal-pin", network_id:"{}", admin_did:"did:test:foreign-admin", offer_id:"foreign-renewal-pin", confirmed_at:"2026-01-01T00:00:00Z", parent_linked:false}}) {{_docID}} }}"#,
+                escape_graphql_string(&first.network_id)
+            ),
+        )
+        .await
+        .unwrap();
+    let foreign =
+        gents_protocol::graphql::extract_mutation_doc_id(&foreign, "NetworkAdminPin").unwrap();
+    user_access
+        .add_resource_relationship("NetworkAdminPin", &foreign, "parent", "nodes", member_node)
+        .await
+        .unwrap();
+    let (outcomes, _) =
+        load_status_enrollment_approvals(&member.node, member.node_identity.as_ref(), &member_peer)
+            .await
+            .unwrap();
+    assert!(
+        matches!(
+            outcomes.get(&server_peer),
+            Some(EnrollmentAuthorityOutcome::Current(_))
+        ),
+        "a foreign admin pin conflicted the member's authority: {outcomes:?}"
+    );
     let (member_owner, _member_authority) = enrollment_authority_channel();
     let member_task = tokio::spawn(run_enrollment_reconciler(
         member.node.clone(),

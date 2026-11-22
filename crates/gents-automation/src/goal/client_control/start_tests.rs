@@ -5,6 +5,7 @@ use gents_lean_vocab::families::goal_client_start_contracts_starts::{StartInput,
 use gents_protocol::goal_control::{GoalRevision, SESSION_GOAL_CONTROL_VERSION};
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 use gents_protocol::request_admission::RequestPurpose;
+use gents_protocol::request_admission::RequestScope;
 use gents_protocol::request_input::{QueueDelivery, RequestInput};
 use gents_protocol::session::SessionTitle;
 use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
@@ -368,10 +369,7 @@ async fn drive_start(case: &StartInput<String>) -> bool {
         let mut busy = AgentRequestCreate::base(
             RequestPurpose::Normal,
             "busy",
-            identity.did(),
-            user.did(),
-            &requested_agent,
-            SESSION,
+            RequestScope::new(identity.did(), user.did(), &requested_agent, SESSION),
             "Earlier work",
             "interactive",
             time(2),
@@ -390,13 +388,15 @@ async fn drive_start(case: &StartInput<String>) -> bool {
     let mut initial = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "first",
-        identity.did(),
-        session_before
-            .as_ref()
-            .and_then(|session| session.session.requester_did.as_deref())
-            .unwrap_or(user.did()),
-        &signed_agent,
-        SESSION,
+        RequestScope::new(
+            identity.did(),
+            session_before
+                .as_ref()
+                .and_then(|session| session.session.requester_did.as_deref())
+                .unwrap_or(user.did()),
+            &signed_agent,
+            SESSION,
+        ),
         "Work on this goal",
         "interactive",
         time(case.requested.created_at),
@@ -478,6 +478,7 @@ async fn drive_start(case: &StartInput<String>) -> bool {
         request: gents_store::config_client::prepare_request_evidence(
             &user,
             gents_store::config_client::client_request_input(initial).unwrap(),
+            gents_protocol::schemas::HomePolicyIds::node_store(),
         )
         .await
         .unwrap(),
@@ -860,6 +861,7 @@ async fn drive_start(case: &StartInput<String>) -> bool {
         let expected_graph = gents_store::config_client::verify_request_evidence(
             gents_store::config_client::client_request_input(initial).unwrap(),
             command.native_evidence.as_ref().unwrap().request.clone(),
+            gents_protocol::schemas::HomePolicyIds::node_store(),
         )
         .await
         .unwrap();
@@ -1084,6 +1086,7 @@ async fn client_goal_control_cannot_publish_user_graph_as_the_agent() {
             let request_graph = gents_store::config_client::prepare_request_evidence(
                 requester,
                 gents_store::config_client::client_request_input(&initial).unwrap(),
+                gents_protocol::schemas::HomePolicyIds::node_store(),
             )
             .await
             .unwrap();
@@ -1277,14 +1280,21 @@ async fn client_goal_control_cannot_publish_user_graph_as_the_agent() {
                 Some(user.did())
             );
             let input = gents_store::config_client::client_request_input(&request).unwrap();
-            let evidence =
-                gents_store::config_client::prepare_request_evidence(&user, input.clone())
-                    .await
-                    .unwrap();
+            let evidence = gents_store::config_client::prepare_request_evidence(
+                &user,
+                input.clone(),
+                gents_protocol::schemas::HomePolicyIds::node_store(),
+            )
+            .await
+            .unwrap();
             let graph = Arc::new(
-                gents_store::config_client::verify_request_evidence(input.clone(), evidence)
-                    .await
-                    .unwrap(),
+                gents_store::config_client::verify_request_evidence(
+                    input.clone(),
+                    evidence,
+                    gents_protocol::schemas::HomePolicyIds::node_store(),
+                )
+                .await
+                .unwrap(),
             );
             let foreign_doc = agent_access.transact_write("test.foreign_goal_request", |txn| {
                 let input = input.clone();

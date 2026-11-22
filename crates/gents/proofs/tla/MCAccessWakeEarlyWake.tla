@@ -1,0 +1,3 @@
+---- MODULE MCAccessWakeEarlyWake ----
+EXTENDS AccessWake
+====

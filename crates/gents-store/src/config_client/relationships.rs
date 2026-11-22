@@ -453,7 +453,7 @@ mod tests {
             .await
             .unwrap();
         let access = ConfigAccess::local_as(node.clone(), owner.clone());
-        access.add_collection(&format!("type Parent @policy(id: \"{policy}\", resource: \"parents\") {{ name: String }}\ntype Child @policy(id: \"{policy}\", resource: \"children\") {{ name: String }}")).await.unwrap();
+        access.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&format!("type Parent @policy(id: \"{policy}\", resource: \"parents\") {{ name: String }}\ntype Child @policy(id: \"{policy}\", resource: \"children\") {{ name: String }}"))).await.unwrap();
         let created = access.write("test.relationships.create", "mutation { add_Parent(input: {name: \"parent\"}) { _docID } add_Child(input: {name: \"child\"}) { _docID } }").await.unwrap();
         let parent = created["data"]["add_Parent"][0]["_docID"].as_str().unwrap();
         let child = created["data"]["add_Child"][0]["_docID"].as_str().unwrap();
@@ -489,6 +489,128 @@ mod tests {
         }
         let hidden = denied.execute("{ Child { _docID } }").await.unwrap();
         assert!(hidden["data"]["Child"].as_array().unwrap().is_empty());
+        node.shutdown().await.expect("node shutdown");
+    }
+
+    /// The access the offline operator CLI builds: a Local client whose endpoint
+    /// holds the client signing key of the identity that owns the node -- one key
+    /// in the home, proven by its DID, managing what it published.
+    fn operator_access(
+        node: &std::sync::Arc<defra_node::Node>,
+        identity: &crate::identity::KeyIdentity,
+    ) -> (ConfigAccess, identity::Did) {
+        use crate::identity::NodeIdentity as _;
+        let capability = identity
+            .client_signing_capability()
+            .expect("a held local key makes a capability");
+        let did = identity.did().to_owned();
+        let endpoint =
+            super::super::GraphqlEndpoint::as_principal("http://127.0.0.1:1/api/v0/graphql", &did)
+                .with_client_signing_capability(capability)
+                .expect("the endpoint's principal is the key's owner");
+        let access = ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(&did).expect("a key identity makes a DID"),
+        )
+        .with_client_signed_writes_through(endpoint)
+        .expect("the client key proves the access's actor");
+        (
+            access,
+            identity::Did::new(&did).expect("a key identity makes a DID"),
+        )
+    }
+
+    /// The unsigned relationship read is a proof of operator, not the absence
+    /// of an Agent signer: a signer-less Local client the runtime or session
+    /// side built must be refused, and only the access the offline CLI builds --
+    /// a Local one holding the endpoint with the client signing key -- may read
+    /// relationships without one.
+    #[tokio::test]
+    async fn only_a_client_signed_local_access_reads_relationships_unsigned() {
+        let (builder, node_key) = crate::test_support::keyed_node_builder();
+        let node = std::sync::Arc::new(builder.build().await.unwrap());
+        let owner = identity::Did::new(
+            node.node_identity_did()
+                .expect("fixture node has an identity"),
+        )
+        .unwrap();
+        let yaml = "name: Relationship reader proof\nresources:\n  - name: parents\n    relations:\n      - name: reader\n        types: [actor]\n    permissions:\n      - name: read\n        expr: reader\n      - name: update\n      - name: delete\n  - name: children\n    relations:\n      - name: parent\n        types: [parents]\n    permissions:\n      - name: read\n        expr: parent->read\n      - name: update\n      - name: delete\n";
+        let policy = node
+            .add_dac_policy_as(
+                &defra_core::RequestContext::default().with_identity(Some(owner.to_string())),
+                yaml,
+            )
+            .await
+            .unwrap();
+        let owner_access = ConfigAccess::local_as(node.clone(), owner.clone());
+        owner_access
+            .add_collection(&format!(
+                "type Parent @policy(id: \"{policy}\", resource: \"parents\") {{ name: String }}\ntype Child @policy(id: \"{policy}\", resource: \"children\") {{ name: String }}"
+            ))
+            .await
+            .unwrap();
+        let created = owner_access
+            .write(
+                "test.relationships.proof",
+                "mutation { add_Parent(input: {name: \"parent\"}) { _docID } }",
+            )
+            .await
+            .unwrap();
+        let parent = created["data"]["add_Parent"][0]["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let reader = identity::Did::new("did:key:reader").unwrap();
+        owner_access
+            .add_actor_relationship("Parent", &parent, "reader", &reader)
+            .await
+            .unwrap();
+
+        // A signer-less Local access with an asserted identity, of the shape the
+        // runtime and session side build: no client signing key backs it, so it
+        // must not inherit the operator's unsigned read.
+        let asserted =
+            ConfigAccess::local_with_optional_agent_signer(node.clone(), reader.clone(), None)
+                .unwrap();
+        let ConfigAccess::Local(asserted_local) = &asserted else {
+            panic!("the fixture access is local");
+        };
+        assert!(
+            asserted_local.client_endpoint().is_none(),
+            "no client signing key backs this access"
+        );
+        assert!(matches!(
+            asserted
+                .list_document_relationships_as_node("Parent", &parent)
+                .await,
+            Err(ConfigClientError::ManagedAgentSignerRequired)
+        ));
+
+        // The operator's access is the one the offline CLI builds: Local, with
+        // the endpoint holding a client signing key for its own actor.
+        // The CLI's client identity is the node's owner: one key, held by the
+        // home, whose DID the endpoint proves and whose resources it manages.
+        let (operator, operator_did) = operator_access(&node, &node_key);
+        let ConfigAccess::Local(operator_local) = &operator else {
+            panic!("the operator access is local");
+        };
+        assert!(
+            operator_local.client_endpoint().is_some(),
+            "the offline CLI's access holds the client signing key"
+        );
+        assert_eq!(operator_did.as_str(), owner.as_str());
+        // The read itself is Local: the endpoint is the proof, not the transport
+        // for reads, so it needs no server to answer.
+        let relationships = operator
+            .list_document_relationships_as_node("Parent", &parent)
+            .await
+            .unwrap();
+        assert!(
+            relationships
+                .iter()
+                .any(|relationship| relationship.subject == reader.as_str()),
+            "the proof-present access reads the grant: {relationships:?}"
+        );
         node.shutdown().await.expect("node shutdown");
     }
 

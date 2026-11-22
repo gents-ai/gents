@@ -792,10 +792,10 @@ const OTHER_VERSION_SCHEMA: [(&str, &str); 2] = [
 ];
 
 /// A client store with another version's schema, written through the
-/// migration owner with that version's declarations. `enrolled` adds the
+/// schema owner with that version's declarations. `enrolled` adds the
 /// enrollment row onboarding wrote, which this build's document projector
 /// refuses while the store opens; without it the store opens and the
-/// migration owner refuses it. `encrypted` records a file-custody key first,
+/// schema owner refuses it. `encrypted` records a file-custody key first,
 /// as a store this build's upgrade already encrypted.
 pub async fn write_other_version_client_store(
     paths: &gents_store::client_journal::paths::DesktopPaths,
@@ -832,18 +832,19 @@ pub async fn write_other_version_client_store(
         builder = key.encrypt(builder);
     }
     let node = builder.build().await.unwrap();
-    let baseline = OTHER_VERSION_SCHEMA.map(|(name, sdl)| gents_migration::BaselineCollection {
-        name,
-        sdl,
-        expected_version: None,
-        expected_state: gents_migration::CollectionExpectation::dag_only(),
-    });
-    let registry = gents_migration::Registry {
+    let baseline =
+        OTHER_VERSION_SCHEMA.map(
+            |(name, sdl)| gents_store::schema::catalog::BaselineCollection {
+                name,
+                sdl,
+                expected_version: None,
+            },
+        );
+    let catalog = gents_store::schema::catalog::Catalog {
         baseline: &baseline,
-        steps: &[],
         ordinary_indexes: &[],
     };
-    gents_migration::ensure_migrations_with_registry(&node, &registry)
+    gents_store::schema::catalog::ensure(&node, &catalog)
         .await
         .unwrap();
     if enrolled {

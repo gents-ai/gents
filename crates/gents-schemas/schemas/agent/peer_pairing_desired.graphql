@@ -1,4 +1,4 @@
-type PeerPairingDesired @policy(id: "d323c1bbd2491661b9fbe4667b64d6d7a596f4ddc57346a41d90c10733ab3961", resource: "pairing_observations") {
+type PeerPairingDesired @policy(id: "$household", resource: "pairing_observations") {
     peer_id: String @index(unique: true)
     node_did: String @index
     actor_did: String @index @immutable

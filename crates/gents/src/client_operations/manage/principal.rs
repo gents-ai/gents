@@ -183,7 +183,9 @@ pub(crate) async fn observe_agent_patches(
     if agents.is_empty() {
         return Ok(None);
     }
-    crate::operations::agent::observe(access, node_did, &agents)
+    // The plan's caller runs against its own home, which the reader-grant
+    // step names when it reports one.
+    crate::operations::agent::observe(access, node_did, &agents, None)
         .await
         .map(Some)
         .map_err(agent_failure)
@@ -651,6 +653,7 @@ mod tests {
                 &access,
                 owner,
                 std::slice::from_ref(&binding.agent_did),
+                None,
             )
             .await?;
             let outcome = access

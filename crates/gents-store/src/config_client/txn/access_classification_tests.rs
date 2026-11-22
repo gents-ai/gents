@@ -12,7 +12,7 @@ use crate::identity::{
     AgentAdmissionObservationError, AgentProvisionError, EnrollmentApprovalError,
     EnrollmentGrantError, GrantSetError, RemoteAgentProvisionError,
 };
-use crate::schema::migration::RuntimeMigrationError;
+use crate::schema::catalog::RuntimeSchemaError;
 use crate::schema::LegacyBackendPreflightError;
 use crate::views::ViewError;
 
@@ -32,6 +32,14 @@ fn wrapped(wrapper: &str, failure: AccessFailure, erasure: Erasure) -> AccessCla
         "outbox_error_response" => classify_erased(
             erasure,
             crate::client_journal::outbox::OutboxError::Response(response()),
+        ),
+        "receiver_error_store" => classify_erased(
+            erasure,
+            crate::config_client::assignment_receiver::ReceiverError::Store(access),
+        ),
+        "receiver_error_response" => classify_erased(
+            erasure,
+            crate::config_client::assignment_receiver::ReceiverError::Response(response()),
         ),
         "client_access_error_access" => classify_erased(
             erasure,
@@ -68,8 +76,8 @@ fn wrapped(wrapper: &str, failure: AccessFailure, erasure: Erasure) -> AccessCla
         "remote_agent_provision_error_authorization" => {
             classify_erased(erasure, RemoteAgentProvisionError::Authorization(access))
         }
-        "runtime_migration_error_config" => {
-            classify_erased(erasure, RuntimeMigrationError::Config(access))
+        "runtime_schema_error_config" => {
+            classify_erased(erasure, RuntimeSchemaError::Config(access))
         }
         "authored_document_create_error_publication" => classify_erased(
             erasure,

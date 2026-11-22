@@ -10,7 +10,8 @@ use gents_pack::pack::PackChangeError;
 use gents_pack::plugin::authority::GrantError;
 use gents_protocol::output::MessageRole;
 use gents_protocol::row::AgentRequestRow;
-use gents_shell::app::{App, ChatLine};
+use gents_shell::app::transcript::ChatLine;
+use gents_shell::app::App;
 use gents_shell::keys::KeySet;
 use gents_shell::sample::{MenuId, Opens, RunState, Running, Tone, View};
 use gents_shell::source::{
@@ -209,7 +210,8 @@ impl ChatNode {
         let policy = node.add_dac_policy_with_counter_as(&as_runtime, mailbox, 0);
         assert_eq!(
             policy.await.unwrap(),
-            gents_protocol::schemas::MAILBOX_POLICY_ID
+            gents_protocol::schemas::HomePolicyIds::node_store()
+                .id(gents_protocol::schemas::BuiltInPolicy::Mailbox)
         );
         gents_store::schema::ensure_runtime_schemas(&node)
             .await
@@ -2404,6 +2406,7 @@ pub(super) fn home_serving(
                     tool_root: None,
                     store_encryption: None,
                     document_acp: Default::default(),
+                    client_identity: None,
                 },
             )
             .unwrap();

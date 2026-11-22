@@ -166,6 +166,7 @@ impl SelfConfigCore {
                 root_access = crate::surface::reader_grant_step(
                     self.agent_did(),
                     published.as_deref(),
+                    self.node_home(),
                     false,
                 );
             }

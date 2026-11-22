@@ -1,7 +1,7 @@
 use rapidhash::{HashMapExt, RapidHashMap};
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
+use std::sync::{Arc, Mutex as StdMutex, Weak};
 use std::time::{Duration, Instant};
 
 use defra_node::Node as EmbeddedNode;
@@ -20,6 +20,7 @@ pub(super) struct MutationWriteGate {
     pub(super) pending_acquires: StdMutex<RapidHashMap<u64, PendingWriteAcquire>>,
     next_pending_acquire_id: AtomicU64,
     pub(super) store_claim: StdMutex<Option<Arc<StoreClaim>>>,
+    assignment_locks: StdMutex<RapidHashMap<String, Weak<tokio::sync::Mutex<()>>>>,
 }
 
 pub(super) const MUTATION_WRITE_GATE_CAPACITY: usize = 64;
@@ -52,6 +53,22 @@ pub struct LocalConfigAccess {
 }
 
 impl LocalConfigAccess {
+    pub(crate) fn assignment_lock(&self, key: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut locks = self
+            .gate
+            .assignment_locks
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        let entry = locks.entry(key.to_owned()).or_default();
+        if let Some(lock) = entry.upgrade() {
+            return lock;
+        }
+        let lock = Arc::new(tokio::sync::Mutex::new(()));
+        *entry = Arc::downgrade(&lock);
+        lock
+    }
+
     pub(crate) fn new(node: Arc<EmbeddedNode>) -> Self {
         let gate = mutation_write_gate(&node);
         Self {
@@ -400,6 +417,7 @@ impl MutationWriteGate {
             pending_acquires: StdMutex::new(RapidHashMap::new()),
             next_pending_acquire_id: AtomicU64::new(1),
             store_claim: StdMutex::new(None),
+            assignment_locks: StdMutex::new(RapidHashMap::new()),
         }
     }
 
@@ -605,32 +623,29 @@ impl MutationWriteGate {
     }
 }
 
-fn mutation_write_gates() -> &'static StdMutex<RapidHashMap<usize, Weak<MutationWriteGate>>> {
-    static GATES: OnceLock<StdMutex<RapidHashMap<usize, Weak<MutationWriteGate>>>> =
-        OnceLock::new();
-    GATES.get_or_init(|| StdMutex::new(RapidHashMap::new()))
-}
+/// The node's current write gate. Held weakly: the gate's store claim keeps
+/// the node and its store lock, which go with the gate's last owner.
+#[derive(Default)]
+struct MutationWriteGateSlot(StdMutex<Weak<MutationWriteGate>>);
 
-pub(super) fn mutation_write_gate(node: &EmbeddedNode) -> Arc<MutationWriteGate> {
-    let node_key = node as *const EmbeddedNode as usize;
-    let mut gates = mutation_write_gates()
+pub(super) fn mutation_write_gate(node: &Arc<EmbeddedNode>) -> Arc<MutationWriteGate> {
+    let slot = crate::node_extension::attached_or_default::<MutationWriteGateSlot>(node);
+    let mut current = slot
+        .0
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some(gate) = gates.get(&node_key).and_then(Weak::upgrade) {
+    if let Some(gate) = current.upgrade() {
         return gate;
     }
-
-    gates.retain(|_, gate| gate.strong_count() > 0);
     let gate = Arc::new(MutationWriteGate::new());
-    gates.insert(node_key, Arc::downgrade(&gate));
+    *current = Arc::downgrade(&gate);
     gate
 }
 
 pub(super) fn existing_mutation_write_gate(node: &EmbeddedNode) -> Option<Arc<MutationWriteGate>> {
-    let node_key = node as *const EmbeddedNode as usize;
-    mutation_write_gates()
+    crate::node_extension::attached::<MutationWriteGateSlot>(node)?
+        .0
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .get(&node_key)
-        .and_then(Weak::upgrade)
+        .upgrade()
 }

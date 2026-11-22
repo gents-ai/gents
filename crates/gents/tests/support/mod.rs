@@ -171,44 +171,12 @@ pub async fn load_managed_fixture_user(db: &TestDb) -> gents_store::identity::Ke
 }
 
 pub async fn managed_agent_fixture(db: &TestDb) -> ManagedAgentFixture {
-    use gents_documents::apply_desired_state_plan;
-    use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-
     let user = managed_fixture_user(db).await;
-    let user_did = identity::Did::new(user.did()).expect("valid user DID");
     let runtime = db.node_identity.as_ref();
     assert_ne!(user.did(), runtime.did());
-    let admin = gents_store::config_client::ConfigAccess::local_as(
-        db.node.clone(),
-        identity::Did::new(runtime.did()).expect("valid runtime DID"),
-    );
-    // An enrolled User's grants bound what its Agent creation may project.
-    gents_store::identity::GrantSet::OperatorUser
-        .grant(&admin, &user_did)
-        .await
-        .expect("grant test user operator access");
     let access = db.client_access(&user);
-    let node = serde_json::json!({"node_did": runtime.did()});
-    let node_plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: gents_store::collection::Collection::Node,
-        add: node.clone(),
-        update: node,
-    }])
-    .expect("render test Node");
-    access
-        .transact_write("test.managed_agent.node", |txn| {
-            let plan = &node_plan;
-            Box::pin(async move {
-                apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &gents_inference::resolved::ProviderProfilePolicy,
-                )
-                .await
-            })
-        })
-        .await
-        .expect("install test Node as user");
+    // An enrolled User's grants bound what its Agent creation may project.
+    gents_documents::test_support::enroll_test_user(&db.node, runtime, &user, &access).await;
     let (agent, binding) = install_managed_agent(db, &access, &user, "Test agent").await;
     ManagedAgentFixture {
         user,
@@ -402,43 +370,14 @@ pub async fn test_p2p_db_without_node(name: &str, admission: TestP2pAdmission) -
 /// visible local Node before they publish, and later fixture configuration by
 /// the same User updates this document instead of racing a second owner.
 async fn install_runtime_node(db: &TestDb) {
-    use gents_documents::apply_desired_state_plan;
-    use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-
-    let runtime = db.node_identity.as_ref();
-    let admin = gents_store::config_client::ConfigAccess::local_as(
-        db.node.clone(),
-        identity::Did::new(runtime.did()).expect("valid runtime DID"),
-    );
     let user = managed_fixture_user(db).await;
-    gents_store::identity::GrantSet::OperatorUser
-        .grant(
-            &admin,
-            &identity::Did::new(user.did()).expect("valid user DID"),
-        )
-        .await
-        .expect("grant fixture User operator access");
-    let node = serde_json::json!({"node_did": runtime.did()});
-    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: gents_store::collection::Collection::Node,
-        add: node.clone(),
-        update: node,
-    }])
-    .expect("render runtime Node");
-    db.client_access(&user)
-        .transact_write("test.p2p.runtime_node", |txn| {
-            let plan = &plan;
-            Box::pin(async move {
-                apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &gents_inference::resolved::ProviderProfilePolicy,
-                )
-                .await
-            })
-        })
-        .await
-        .expect("install runtime Node as its User");
+    gents_documents::test_support::enroll_test_user(
+        &db.node,
+        db.node_identity.as_ref(),
+        &user,
+        &db.client_access(&user),
+    )
+    .await;
 }
 
 pub async fn exact_request_doc_id(node: &EmbeddedNode, request_id: &str) -> String {

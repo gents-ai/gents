@@ -458,12 +458,30 @@ impl ConfigReferences {
             }
             Collection::Trigger => {
                 let doc: Trigger = decode(value)?;
-                doc.validate_options()?;
                 let task: Task = decode(
                     self.documents
                         .get(&(Collection::Task, doc.task_id.clone()))
                         .context("trigger task missing")?,
                 )?;
+                doc.validate_options(task.command.is_some())?;
+                if task.command.is_some() {
+                    let kind = match &doc.source {
+                        TriggerSource::Schedule { .. } => {
+                            crate::task_delivery::TriggerKind::Schedule
+                        }
+                        TriggerSource::Event { .. } => crate::task_delivery::TriggerKind::Event,
+                    };
+                    crate::task_delivery::validate_command_delivery(
+                        kind,
+                        doc.session_id_template.is_some(),
+                    )
+                    .with_context(|| {
+                        format!(
+                            "trigger {} fires command Task {}",
+                            doc.trigger_id, task.task_id
+                        )
+                    })?;
+                }
                 let forbidden: &[&str] = match &doc.source {
                     TriggerSource::Schedule { .. } => {
                         // The fire-time owner, so publication refuses exactly
@@ -680,7 +698,9 @@ pub fn references_of(
         }
         Collection::Task => {
             let doc: Task = decode(value)?;
-            push(Collection::Agent, &doc.agent_did, "agent_did");
+            if doc.command.is_none() {
+                push(Collection::Agent, &doc.agent_did, "agent_did");
+            }
             for reader in &doc.outcome_readers {
                 push(
                     Collection::Agent,

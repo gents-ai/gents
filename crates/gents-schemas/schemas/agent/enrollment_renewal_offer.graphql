@@ -1,5 +1,5 @@
 # Owner-signed fresh offer answering one renewal intent.
-type EnrollmentRenewalOffer @policy(id: "d323c1bbd2491661b9fbe4667b64d6d7a596f4ddc57346a41d90c10733ab3961", resource: "enrollment_records") @branchable {
+type EnrollmentRenewalOffer @policy(id: "$household", resource: "enrollment_records") @branchable {
     initial_reader_did: String @immutable
     intent_id: String @index(unique: true) @immutable
     member_did: String @index @immutable

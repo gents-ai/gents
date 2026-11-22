@@ -23,6 +23,7 @@ fn replay_prefix_bound_rejects_tagged_non_assistant() {
         source: Some(required.clone()),
         physical_header: None,
         block_indices: Vec::new(),
+        stub_receipts: Vec::new(),
     }];
     assert_eq!(
         replay_compaction_prefix_bound(&rows, &[required]),
@@ -49,6 +50,7 @@ fn provider_projection_composes_original_physical_block_indices() {
         source: Some(tag.clone()),
         physical_header: Some("physical-header".into()),
         block_indices: vec![2, 4],
+        stub_receipts: Vec::new(),
     }];
     let shaped = vec![crate::compaction::history::SourcedMessage {
         source_index: 0,
@@ -91,6 +93,7 @@ fn association_rejects_a_provider_order_applied_before_it() {
         source: Some(provider_tag(0)),
         physical_header: Some("physical-header".into()),
         block_indices: vec![2, 4],
+        stub_receipts: Vec::new(),
     };
     let sourced = crate::compaction::history::normalize_assistant_content_order_sourced(
         ProviderInputProfile::OpenAiResponsesNormalized,
@@ -139,6 +142,7 @@ fn grouped_projection_of_a_projected_row_keeps_persisted_block_identity() {
             source: Some(tag.clone()),
             physical_header: Some("physical-header".into()),
             block_indices: vec![0, 1, 2],
+            stub_receipts: Vec::new(),
         },
         TaggedMessage::unassociated(Message::User {
             content: vec![UserContent::ToolResult(ToolResult {
@@ -675,6 +679,7 @@ fn replay_assembly_history(tag: &ReplayTag) -> Vec<TaggedMessage> {
             source: Some(tag.clone()),
             physical_header: Some("header".into()),
             block_indices: vec![0, 1],
+            stub_receipts: Vec::new(),
         },
     ]
 }
@@ -889,6 +894,7 @@ fn stripping_all_reasoning_keeps_ordinary_blocks_and_their_indices() {
             source: Some(provider_tag(0)),
             physical_header: Some("header".into()),
             block_indices: vec![0, 1, 2],
+            stub_receipts: Vec::new(),
         },
         TaggedMessage::unassociated(Message::user("next")),
     ];
@@ -999,15 +1005,19 @@ async fn turn_rebuild_matches_the_lean_model() {
                 estimated_input_tokens: 1,
             });
         let result = build_budgeted_request(
-            &assembly_only(),
-            &mut history,
-            &mut new_messages,
-            &[],
-            &config,
-            &mut replay,
-            3,
-            &mut chain_keys,
-            &mut active_keys,
+            &TurnInputs {
+                model: &assembly_only(),
+                tools: &[],
+                config: &config,
+                turn_index: 3,
+            },
+            &mut TurnState {
+                history: &mut history,
+                new_messages: &mut new_messages,
+                replay: &mut replay,
+                reduction_chain_keys: &mut chain_keys,
+                active_reduction_keys: &mut active_keys,
+            },
         )
         .await;
         let rebuild = match result {
@@ -1113,4 +1123,68 @@ async fn every_provider_assembly_rechecks_configuration_before_reading_input() {
         "denied assembly must not consume pending inputs"
     );
     assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+/// A dispatch reports the stubs of the rows it sends: once a turn reduction
+/// drops the stubbed row, the rebuilt request reports none.
+#[tokio::test]
+async fn a_reduction_that_drops_a_stubbed_row_drops_its_stub_from_the_dispatch() {
+    use gents_protocol::message::{ToolResult, ToolResultContent};
+    let mut config = replay_assembly_config();
+    config.context_window = 4_000;
+    config.compaction_threshold = 0.1;
+    config.max_tokens = Some(10);
+    config.turn_compactor = Some(Arc::new(|request: TurnCompactionRequest| {
+        Box::pin(async move {
+            Ok(TurnCompactionOutcome::Reduced {
+                messages: vec![request.messages.last().unwrap().clone()],
+                reduction_key: "drop-stub".into(),
+                commit: crate::loop_stream::TurnReductionCommit::new(|| async { Ok(()) }),
+            })
+        })
+    }));
+    let mut history = provider_view_tagged(vec![
+        TaggedMessage::unassociated(Message::user("budget pressure ".repeat(4_000))),
+        TaggedMessage::unassociated(assistant_with(None, Some(("stubbed-call", "{}")))),
+        TaggedMessage::unassociated(Message::User {
+            content: vec![UserContent::ToolResult(ToolResult {
+                id: "stubbed-call".into(),
+                call_id: Some("stubbed-call".into()),
+                content: vec![ToolResultContent::text("x".repeat(4_000))],
+            })],
+        }),
+    ])
+    .unwrap();
+    let mut new_messages = vec![TaggedMessage::unassociated(Message::user("only this"))];
+    assert_eq!(
+        super::tagged_history::dispatched_stubbing(history.iter().chain(new_messages.iter()))
+            .stubbed_results,
+        1
+    );
+
+    let (_, decision) = build_budgeted_request(
+        &TurnInputs {
+            model: &assembly_only(),
+            tools: &[],
+            config: &config,
+            turn_index: 1,
+        },
+        &mut TurnState {
+            history: &mut history,
+            new_messages: &mut new_messages,
+            replay: &mut LoopReplayInput::default(),
+            reduction_chain_keys: &mut Vec::new(),
+            active_reduction_keys: &mut Vec::new(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        decision.reason,
+        gents_protocol::rendered_request::ContextCompactionReason::Compacted
+    );
+    assert_eq!(
+        super::tagged_history::dispatched_stubbing(history.iter().chain(new_messages.iter())),
+        Default::default()
+    );
 }

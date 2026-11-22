@@ -12,7 +12,7 @@ use gents_documents::ConfigurationNodeBinding;
 use gents_loop::tool::{ToolDyn, ToolError};
 use gents_store::config_client::{ConfigAccess, NodePermission};
 use gents_store::identity::NodeIdentity;
-use gents_tools::builtin::self_config::build_self_config_tools_with_runtime;
+use gents_tools::builtin::self_config::{build_self_config_tools_with_runtime, SelfConfigRuntime};
 use gents_tools::surface::SelfConfigToolConfig;
 
 /// A signed node whose Engineer is the fixture Agent, reached through the
@@ -133,16 +133,21 @@ impl PolicyFixture {
             process_ceiling: Default::default(),
             selected_plugins: Vec::new(),
             ceiling_plugins: None,
+            registry_url: None,
+            plugin_builder: None,
+            ux_preview_assets: None,
         };
         build_self_config_tools_with_runtime(
-            Arc::default(),
-            self.db.node.clone(),
-            self.db.node_identity.did().to_owned(),
-            Some(self.agent.clone()),
-            Some(self.db.node_identity.clone()),
+            SelfConfigRuntime {
+                usage_cache: Arc::default(),
+                node: self.db.node.clone(),
+                node_did: self.db.node_identity.did().to_owned(),
+                identity: Some(self.agent.clone()),
+                runtime_identity: Some(self.db.node_identity.clone()),
+                plugins: Arc::new(crate::plugin::executor::PluginExecutor::default()),
+                tasks: Arc::new(gents_tools::task_run::NoTaskRunService),
+            },
             &config,
-            Arc::new(crate::plugin::executor::PluginExecutor::default()),
-            Arc::new(gents_tools::task_run::NoTaskRunService),
             Some(self.node_binding.clone()),
         )
     }

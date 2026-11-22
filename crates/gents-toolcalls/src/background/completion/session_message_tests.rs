@@ -65,10 +65,12 @@ async fn folded_session_message_waits_for_exact_head_and_replays_once() {
     let mut head = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         &head_id,
-        did,
-        &caused_requester,
-        &caused_agent,
-        &session,
+        gents_protocol::request_admission::RequestScope::new(
+            did,
+            &caused_requester,
+            &caused_agent,
+            &session,
+        ),
         "head",
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),

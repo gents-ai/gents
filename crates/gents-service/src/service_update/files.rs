@@ -6,15 +6,20 @@ use std::io::Read as _;
 use std::os::unix::fs::PermissionsExt as _;
 
 pub(super) fn lock(path: &Path) -> Result<File> {
+    try_lock(path)?.context("another updater owns this operation")
+}
+pub(super) fn try_lock(path: &Path) -> std::io::Result<Option<File>> {
     let file = fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .read(true)
         .write(true)
         .open(path)?;
-    file.try_lock()
-        .context("another updater owns this operation")?;
-    Ok(file)
+    match file.try_lock() {
+        Ok(()) => Ok(Some(file)),
+        Err(fs::TryLockError::WouldBlock) => Ok(None),
+        Err(fs::TryLockError::Error(error)) => Err(error),
+    }
 }
 pub(super) fn submission_lock(path: &Path) -> Result<File> {
     let file = fs::OpenOptions::new()
@@ -249,12 +254,6 @@ pub(super) struct Changes {
 }
 impl Changes {
     pub(super) async fn watch(path: &Path) -> Result<Self> {
-        Self::watch_mode(path, false).await
-    }
-    pub(super) async fn operations(path: &Path) -> Result<Self> {
-        Self::watch_mode(path, true).await
-    }
-    async fn watch_mode(path: &Path, operations: bool) -> Result<Self> {
         use notify::Watcher as _;
         let path = path.to_owned();
         tokio::task::spawn_blocking(move || -> Result<Self> {
@@ -270,19 +269,6 @@ impl Changes {
                     let _ = send.try_send(event);
                 })?;
             watcher.watch(&path, notify::RecursiveMode::NonRecursive)?;
-            if operations {
-                for entry in fs::read_dir(&path)? {
-                    let entry = entry?;
-                    if entry
-                        .file_name()
-                        .to_str()
-                        .is_some_and(|s| uuid::Uuid::parse_str(s).is_ok())
-                        && entry.path().is_dir()
-                    {
-                        watcher.watch(&entry.path(), notify::RecursiveMode::NonRecursive)?;
-                    }
-                }
-            }
             Ok(Self {
                 _watcher: watcher,
                 receive,

@@ -161,6 +161,7 @@ fn assemble_request_context_message(
 
 async fn await_with_request_deadline<F, T>(
     deadline: RequestDeadline,
+    driven: Option<&tokio::sync::Notify>,
     future: F,
     context: &str,
 ) -> Result<T>
@@ -168,6 +169,13 @@ where
     F: IntoFuture<Output = T>,
 {
     let future = future.into_future();
+    if let Some(cut) = driven {
+        return tokio::select! {
+            biased;
+            item = future => Ok(item),
+            () = cut.notified() => Err(request_deadline_error(deadline, context)),
+        };
+    }
     match request_deadline_remaining(deadline) {
         None => Ok(future.await),
         Some(remaining) if remaining.is_zero() => Err(request_deadline_error(deadline, context)),
@@ -401,6 +409,7 @@ where
                             request_id: &request_id,
                             session_id: &session_id,
                             request_deadline,
+                            driven_deadline: self.driven_deadline(),
                             terminal_failure_reason: &terminal_failure_reason,
                             max_turns_provenance,
                             capture,
@@ -463,9 +472,8 @@ pub(super) mod tests {
     use gents_loop::tool::ToolDyn;
     use gents_protocol::row::AgentRequest;
     use gents_store::identity::{NodeIdentity, RuntimeNode};
-    use gents_toolcalls::call::hook::{
-        BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy,
-    };
+    use gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry;
+    use gents_toolcalls::call::hook::{BackgroundToolRegistry, FailurePolicy};
     use gents_tools::surface::AgentToolSurfaceConfig;
     use rig::completion::CompletionRequest;
     use std::sync::{atomic::Ordering, Arc};
@@ -517,16 +525,26 @@ pub(super) mod tests {
 
     /// Answers the title owner and the main turn by request shape, failing a
     /// request whose shape and preamble disagree; the first main turn first
-    /// completes `successor`.
-    fn wake_input_model(successor: Option<WakeSuccessor>) -> ScriptedProvider {
+    /// signals `pause.0` and waits for `pause.1`, then completes `successor`.
+    fn wake_input_model(
+        successor: Option<WakeSuccessor>,
+        pause: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
+    ) -> ScriptedProvider {
         let successor = Arc::new(std::sync::Mutex::new(successor));
+        let pause = Arc::new(std::sync::Mutex::new(pause));
         ScriptedProvider::new([])
             .respond_async(move |dispatch| {
                 let successor = successor.clone();
+                let pause = pause.clone();
                 async move {
                     match wake_request_shape(&dispatch.request) {
                         (true, true) => Reply::text("background-completion-review"),
                         (false, false) => {
+                            let held = pause.lock().expect("wake pause").take();
+                            if let Some((entered, release)) = held {
+                                entered.notify_one();
+                                release.notified().await;
+                            }
                             let first = successor.lock().expect("wake successor").take();
                             if let Some(WakeSuccessor {
                                 node,
@@ -600,7 +618,7 @@ pub(super) mod tests {
     ) -> serde_json::Value {
         let response = access
             .execute(&format!(
-                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state failure_reason terminal_output }} }}"#,
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state failure_reason terminal_output superseded_by_request_doc_id }} }}"#,
                 gents_store::graphql::escape_graphql_string(doc_id)
             ))
             .await
@@ -812,10 +830,12 @@ pub(super) mod tests {
         let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             format!("request-{suffix}"),
-            agent_config.node_did(),
-            member.did(),
-            &agent_config.agent_did,
-            format!("session-{suffix}"),
+            gents_protocol::request_admission::RequestScope::new(
+                agent_config.node_did(),
+                member.did(),
+                &agent_config.agent_did,
+                format!("session-{suffix}"),
+            ),
             "run enrolled request",
             "interactive",
             chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -905,7 +925,7 @@ pub(super) mod tests {
                         data: gents_inference::llm::message::DocumentSourceKind::String(
                             "fn main() {}".into(),
                         ),
-                        media_type: Some(gents_inference::llm::message::DocumentMediaType::TXT),
+                        media_type: Some(gents_inference::llm::message::DocumentMediaType::Txt),
                         additional_params: Some(
                             serde_json::json!({ "captured_context": { "kind": "selection" } }),
                         ),
@@ -1231,13 +1251,16 @@ pub(super) mod tests {
             &[],
         );
         let preamble = prompt_builder.preamble().to_string();
-        let model = wake_input_model(successor.map(|request_id| WakeSuccessor {
-            node: node.clone(),
-            request_id,
-            did: admission.node_did.clone(),
-            signer: signer.clone(),
-            runtime: admission.runtime.clone(),
-        }));
+        let model = wake_input_model(
+            successor.map(|request_id| WakeSuccessor {
+                node: node.clone(),
+                request_id,
+                did: admission.node_did.clone(),
+                signer: signer.clone(),
+                runtime: admission.runtime.clone(),
+            }),
+            None,
+        );
         let request_identity = agent_config.node_identity().clone();
         let mut daemon = AgentDaemon::new(AgentDaemonInit {
             node: node.clone(),
@@ -1528,6 +1551,7 @@ pub(super) mod tests {
             agent_did: agent_config.agent_did.clone(),
             selected_root: Some(selected.clone()),
             ceiling_root: Some(selected.clone()),
+            node_home: None,
         }));
         let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 

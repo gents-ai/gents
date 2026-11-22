@@ -3,7 +3,7 @@
 # identifiers and the event's scalars only; a redrive rebuilds the event from
 # core's rows and runs as `runner_did`, never as the runtime: the Agent owning
 # the subject session for a must-commit staging, `actor_did` otherwise.
-type OwedDelivery @policy(id: "d323c1bbd2491661b9fbe4667b64d6d7a596f4ddc57346a41d90c10733ab3961", resource: "owed_deliveries") {
+type OwedDelivery @policy(id: "$household", resource: "owed_deliveries") {
     delivery_key: String @index(unique: true) @immutable
     node_did: String @index @immutable
     node_doc_id: String

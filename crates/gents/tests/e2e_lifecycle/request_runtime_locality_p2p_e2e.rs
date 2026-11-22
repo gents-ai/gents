@@ -309,7 +309,8 @@ async fn discovery_replicates_while_request_documents_remain_runtime_local() {
         .document_acp()
         .register_doc_object(
             &fixture.peer.node_identity.did().parse().unwrap(),
-            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
+            gents_protocol::schemas::HomePolicyIds::node_store()
+                .id(gents_protocol::schemas::BuiltInPolicy::Household),
             "delivered_requests",
             &doc,
         )

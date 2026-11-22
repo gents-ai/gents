@@ -43,7 +43,7 @@ struct CaptureFixture {
 impl CaptureFixture {
     async fn new() -> Self {
         use gents_protocol::request_admission::{
-            AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+            AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
         };
         let (db, user, client, binding) = gents_inference::test_support::signed_test_node(
             "rendered-capture",
@@ -56,10 +56,7 @@ impl CaptureFixture {
         let create = AgentRequestCreate::base(
             RequestPurpose::Normal,
             "request",
-            db.node_identity.did(),
-            user.did(),
-            agent.did(),
-            "session",
+            RequestScope::new(db.node_identity.did(), user.did(), agent.did(), "session"),
             "capture",
             "interactive",
             chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -183,7 +180,9 @@ async fn failed_capture_publication_rolls_back_bound_blocks_and_record() {
                 1,
             )
         };
-        node.add_collection(&bound).await.unwrap();
+        node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&bound))
+            .await
+            .unwrap();
     }
     gents_store::schema::ensure_runtime_schemas(node.as_ref())
         .await
@@ -400,6 +399,7 @@ async fn capture_and_context_accounting_commit_together() {
         );
         rendered.assembly_trace.context_accounting = Some(ContextAccounting {
             accounting_version: CONTEXT_ACCOUNTING_VERSION,
+            history_stubbing: Default::default(),
             turn_index: turn,
             attempt: 0,
             estimator: "serialized_json_bytes_div_4_v1".into(),

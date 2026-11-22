@@ -68,17 +68,6 @@ pub struct ReportedHome {
     pub provider_time: Option<u64>,
 }
 
-impl ReportedHome {
-    pub fn observe(status: &Value) -> Self {
-        Self {
-            audience: ReportedDelegationAudience::observe(status),
-            provider_time: status
-                .get(STATUS_PROVIDER_TIME_FIELD)
-                .and_then(Value::as_u64),
-        }
-    }
-}
-
 /// The code the edge of a Vera home answers a User's identity token with
 /// (`Identity.UserDelegation.edge`).
 pub const DELEGATION_REQUIRED_CODE: &str = "delegationRequired";
@@ -173,6 +162,30 @@ impl HeldAudienceChange {
             Self::Learned(audience) | Self::Changed(audience) => Some(audience),
             Self::Forgotten => None,
         }
+    }
+}
+
+/// What a client keeps of its home: the audience it mints for and the home's
+/// clock it mints at (`Identity.HeldAudience.Record`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HeldRecord {
+    pub audience: Option<DelegationAudience>,
+    pub clock: Option<HomeClock>,
+}
+
+/// How the record `kept` after a status read differs from `presented`, the
+/// record a refused request's credential was minted from
+/// (`Identity.HeldAudience.changeSince`).
+pub fn change_since(presented: &HeldRecord, kept: &HeldRecord) -> HeldAudienceChange {
+    match (&presented.audience, &kept.audience) {
+        (None, None) => HeldAudienceChange::Unchanged,
+        (None, Some(audience)) => HeldAudienceChange::Learned(audience.clone()),
+        (Some(_), None) => HeldAudienceChange::Forgotten,
+        (Some(before), Some(after)) if before != after => {
+            HeldAudienceChange::Changed(after.clone())
+        }
+        (Some(_), Some(_)) if presented.clock != kept.clock => HeldAudienceChange::Reclocked,
+        (Some(_), Some(_)) => HeldAudienceChange::Unchanged,
     }
 }
 

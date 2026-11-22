@@ -170,6 +170,16 @@ where
         })
     }
 
+    fn definitions<'a>(&'a self) -> crate::tool::BoxFuture<'a, Vec<crate::tool::ToolDefinition>> {
+        Box::pin(async move {
+            let mut definitions = Vec::with_capacity(self.tools.len());
+            for tool in self.tools.iter() {
+                definitions.push(tool.definition(String::new()).await);
+            }
+            definitions
+        })
+    }
+
     fn settle_stopped<'a>(
         &'a self,
         stop: &'a ToolOutcome,
@@ -800,6 +810,69 @@ mod tests {
             None
         }
         async fn register_stream_tool_call_identity(&self, _: &str, _: &str, _: Option<&str>) {}
+    }
+
+    #[tokio::test]
+    async fn definitions_are_exactly_the_admitted_tool_surface() {
+        use crate::tool_effects::ToolEffectDispatcher;
+        let hook = Arc::new(EffectHook {
+            invoked: AtomicBool::new(false),
+            rejected: AtomicBool::new(false),
+            block_before: false,
+            cleanup_fails: false,
+            cleaned: AtomicBool::new(false),
+            parent_settled: AtomicBool::new(false),
+            terminate_before: false,
+        });
+        let dispatcher = EffectDispatcher {
+            tools: Arc::new(vec![
+                Box::new(ParseOnlyTool),
+                Box::new(ReadyAfterWallDeadline {
+                    deadline_at: Utc::now(),
+                    called: Arc::new(AtomicBool::new(false)),
+                    fails: false,
+                }),
+            ]),
+            hook: hook.clone(),
+            parent_internal_id: "parent".into(),
+            fatal: Default::default(),
+            composed: Default::default(),
+        };
+        let definitions = dispatcher.definitions().await;
+        let names: Vec<_> = definitions.iter().map(|tool| tool.name.as_str()).collect();
+        assert_eq!(names, ["parse", "ready_after_wall_deadline"]);
+        for (name, args) in [
+            ("parse", r#"{"text":"valid"}"#),
+            ("ready_after_wall_deadline", "{}"),
+        ] {
+            assert!(names.contains(&name));
+            assert!(admit_tool_effect(
+                dispatcher.tools.as_slice(),
+                name,
+                args,
+                &ToolCallEnvelope::default()
+            )
+            .is_none());
+        }
+        assert!(admit_tool_effect(
+            dispatcher.tools.as_slice(),
+            "unlisted",
+            "{}",
+            &ToolCallEnvelope::default()
+        )
+        .is_some());
+        let scope_call = crate::tool_call_lifecycle::runtime::ToolScopeEntry::new(
+            None,
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .call();
+        let outcome = dispatcher
+            .call(&scope_call, 1, "unlisted", "{}")
+            .await
+            .unwrap();
+        assert!(matches!(outcome, ToolOutcome::Failed { .. }));
+        assert!(hook.rejected.load(Ordering::SeqCst));
+        assert!(!hook.invoked.load(Ordering::SeqCst));
     }
 
     #[tokio::test]

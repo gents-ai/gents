@@ -140,6 +140,10 @@ pub struct SelfConfigCore {
     process_ceiling: SelfConfigProcessCeiling,
     held_grants: OperatorGrants,
     node_binding: Option<gents_documents::ConfigurationNodeBinding>,
+    /// The node home this runtime runs under, so a reader-grant step names the
+    /// `--home` it must run against. Several nodes run on one machine.
+    node_home: Option<std::path::PathBuf>,
+    registry_url: String,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -267,6 +271,8 @@ impl SelfConfigCore {
             process_ceiling: SelfConfigProcessCeiling::default(),
             held_grants: OperatorGrants::default(),
             node_binding: None,
+            node_home: None,
+            registry_url: gents_pack::pack::registry::DEFAULT_REGISTRY_URL.to_owned(),
         })
     }
 
@@ -274,7 +280,19 @@ impl SelfConfigCore {
         self.agent_signer = source.agent_signer.clone();
         self.runtime_identity = source.runtime_identity.clone();
         self.node_binding = source.node_binding.clone();
+        self.node_home = source.node_home.clone();
+        self.registry_url = source.registry_url.clone();
         self
+    }
+
+    /// The registry the host serves with; `None` is the public registry.
+    pub fn with_registry_url(mut self, registry_url: Option<&str>) -> Self {
+        self.registry_url = gents_pack::pack::registry::resolve_registry_url(registry_url);
+        self
+    }
+
+    pub fn registry_url(&self) -> &str {
+        &self.registry_url
     }
 
     pub fn with_agent_signer(
@@ -418,6 +436,16 @@ impl SelfConfigCore {
 
     pub fn node_did(&self) -> &str {
         &self.node_did
+    }
+
+    /// The node home this runtime runs under, when it knows one.
+    pub fn node_home(&self) -> Option<&std::path::Path> {
+        self.node_home.as_deref()
+    }
+
+    pub fn with_node_home(mut self, home: Option<std::path::PathBuf>) -> Self {
+        self.node_home = home;
+        self
     }
 
     pub fn agent_did(&self) -> &str {

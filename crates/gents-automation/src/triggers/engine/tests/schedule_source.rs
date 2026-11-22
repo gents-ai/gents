@@ -374,6 +374,7 @@ async fn schedule_source_next_fire_emits_intent_when_schedule_is_due() {
         goal_token_budget: None,
         output_schema_ref: None,
         hooks: Vec::new(),
+        command: None,
     };
     let schedule = ResolvedSchedule {
         session_id_template: None,
@@ -466,6 +467,7 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
         goal_token_budget: None,
         output_schema_ref: None,
         hooks: Vec::new(),
+        command: None,
     };
     let schedule = ResolvedSchedule {
         session_id_template: None,
@@ -764,6 +766,7 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
         goal_token_budget: None,
         output_schema_ref: None,
         hooks: Vec::new(),
+        command: None,
     };
     let schedule = ResolvedSchedule {
         session_id_template: None,
@@ -943,6 +946,7 @@ async fn schedule_source_seeds_null_next_run_at_and_fires_on_first_tick() {
         goal_token_budget: None,
         output_schema_ref: None,
         hooks: Vec::new(),
+        command: None,
     };
     let schedule = ResolvedSchedule {
         session_id_template: None,
@@ -1028,6 +1032,7 @@ async fn schedule_source_seeds_cron_next_run_at_without_immediate_fire() {
         goal_token_budget: None,
         output_schema_ref: None,
         hooks: Vec::new(),
+        command: None,
     };
     let schedule = ResolvedSchedule {
         session_id_template: None,

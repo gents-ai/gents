@@ -8,7 +8,7 @@ pub mod waits;
 pub use fs::{
     assert_json_schema_valid, assert_manifest_node_dids, assert_runtime_init_state, copy_dir_all,
     manifest_contains, parse_jsonl, read_json_file, read_runtime_state_json, read_workspace_json,
-    rewrite_manifest_node_dids, write_json_file,
+    rewrite_manifest_node_dids, write_json_file, ExpectedBackend, ExpectedModes,
 };
 pub use gents::support::ports::{allocate_port, graphql_url};
 pub use graphql::{
@@ -173,6 +173,7 @@ impl UserSeededHome {
             .with_document_projector(gents_store::local::document_projector(
                 runtime.clone(),
                 std::sync::Arc::new(ceiling),
+                gents_protocol::schemas::HomePolicyIds::node_store(),
             )?)
             .with_node_identity_did(node_did)
             .with_node_acp_enabled()

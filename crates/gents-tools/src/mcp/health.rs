@@ -185,7 +185,6 @@ impl ServiceModelInternal {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProbeEvent {
     ProbeSuccess { stale: bool },
@@ -290,11 +289,22 @@ impl ServiceHealthMap {
         self.set(service_id.into(), health).await;
     }
 
-    async fn retain_services(&self, service_ids: &RapidHashSet<String>) {
-        self.inner
-            .write()
-            .await
-            .retain(|service_id, _| service_ids.contains(service_id));
+    async fn retain_services(
+        &self,
+        service_ids: &RapidHashSet<String>,
+        now: DateTime<Utc>,
+        options: &HealthCheckerOptions,
+    ) {
+        self.inner.write().await.retain(|service_id, entry| {
+            service_ids.contains(service_id)
+                || step_service(
+                    entry.model.clone(),
+                    ProbeEvent::RegistryAbsent,
+                    now,
+                    options,
+                )
+                .is_some()
+        });
     }
 }
 
@@ -403,41 +413,67 @@ impl McpHealthCheckService {
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "public signature called from other crates"
-)]
-pub fn spawn_health_checker(
-    node: Arc<EmbeddedNode>,
-    mcp_pool: McpPool,
-    health_map: ServiceHealthMap,
-    local_hostname: String,
-    local_subnet: Option<String>,
-    cancel: CancellationToken,
-    options: HealthCheckerOptions,
-    node_did: String,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        let persistence = HealthPersistenceContext {
-            node: &node,
-            node_did: node_did.as_str(),
-        };
-        if let Err(error) = run_health_check_with_cancel(
-            node.as_ref(),
-            &mcp_pool,
-            &health_map,
-            &local_hostname,
-            local_subnet.as_deref(),
-            &options,
-            Some(persistence),
-            Some(&cancel),
+pub struct HealthCheckerRuntime {
+    pub node: Arc<EmbeddedNode>,
+    pub node_did: String,
+    pub mcp_pool: McpPool,
+    pub health_map: ServiceHealthMap,
+    pub local_hostname: String,
+    pub local_subnet: Option<String>,
+    pub options: HealthCheckerOptions,
+}
+
+impl HealthCheckerRuntime {
+    fn scope(&self) -> HealthCycleScope<'_> {
+        HealthCycleScope {
+            mcp_pool: &self.mcp_pool,
+            health_map: &self.health_map,
+            local: LocalNetwork {
+                hostname: &self.local_hostname,
+                subnet: self.local_subnet.as_deref(),
+            },
+            options: &self.options,
+        }
+    }
+
+    async fn run_cycle(&self, cancel: &CancellationToken) -> Result<()> {
+        run_health_check_with_cancel(
+            self.node.as_ref(),
+            self.scope(),
+            Some(HealthPersistenceContext {
+                node: &self.node,
+                node_did: self.node_did.as_str(),
+            }),
+            Some(cancel),
         )
         .await
-        {
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct LocalNetwork<'a> {
+    pub hostname: &'a str,
+    pub subnet: Option<&'a str>,
+}
+
+#[derive(Clone, Copy)]
+pub struct HealthCycleScope<'a> {
+    pub mcp_pool: &'a McpPool,
+    pub health_map: &'a ServiceHealthMap,
+    pub local: LocalNetwork<'a>,
+    pub options: &'a HealthCheckerOptions,
+}
+
+pub fn spawn_health_checker(
+    runtime: HealthCheckerRuntime,
+    cancel: CancellationToken,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        if let Err(error) = runtime.run_cycle(&cancel).await {
             tracing::warn!(error = %error, "initial health check cycle failed");
         }
 
-        let mut ticker = tokio::time::interval(options.cycle_interval);
+        let mut ticker = tokio::time::interval(runtime.options.cycle_interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         ticker.tick().await;
 
@@ -448,20 +484,7 @@ pub fn spawn_health_checker(
                     return;
                 }
                 _ = ticker.tick() => {
-                    let persistence = HealthPersistenceContext {
-                        node: &node,
-                        node_did: node_did.as_str(),
-                    };
-                    if let Err(error) = run_health_check_with_cancel(
-                        node.as_ref(),
-                        &mcp_pool,
-                        &health_map,
-                        &local_hostname,
-                        local_subnet.as_deref(),
-                        &options,
-                        Some(persistence),
-                        Some(&cancel),
-                    ).await {
+                    if let Err(error) = runtime.run_cycle(&cancel).await {
                         tracing::warn!(error = %error, "health check cycle failed");
                     }
                 }
@@ -473,37 +496,15 @@ pub fn spawn_health_checker(
 #[cfg(test)]
 async fn run_health_check(
     node: &EmbeddedNode,
-    mcp_pool: &McpPool,
-    health_map: &ServiceHealthMap,
-    local_hostname: &str,
-    local_subnet: Option<&str>,
-    options: &HealthCheckerOptions,
+    scope: HealthCycleScope<'_>,
     persistence: Option<HealthPersistenceContext<'_>>,
 ) -> Result<()> {
-    run_health_check_with_cancel(
-        node,
-        mcp_pool,
-        health_map,
-        local_hostname,
-        local_subnet,
-        options,
-        persistence,
-        None,
-    )
-    .await
+    run_health_check_with_cancel(node, scope, persistence, None).await
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "registry health inputs and explicit shutdown scope"
-)]
 async fn run_health_check_with_cancel(
     node: &EmbeddedNode,
-    mcp_pool: &McpPool,
-    health_map: &ServiceHealthMap,
-    local_hostname: &str,
-    local_subnet: Option<&str>,
-    options: &HealthCheckerOptions,
+    scope: HealthCycleScope<'_>,
     persistence: Option<HealthPersistenceContext<'_>>,
     cancel: Option<&CancellationToken>,
 ) -> Result<()> {
@@ -525,16 +526,15 @@ async fn run_health_check_with_cancel(
             .filter(|service| service.enabled)
             .map(McpHealthCheckService::from)
             .collect();
-    let mcp_pool = mcp_pool.for_agent(owner);
+    let mcp_pool = scope.mcp_pool.for_agent(owner);
 
     run_health_check_cycle_with_cancel(
         services,
         Utc::now(),
-        &mcp_pool,
-        health_map,
-        local_hostname,
-        local_subnet,
-        options,
+        HealthCycleScope {
+            mcp_pool: &mcp_pool,
+            ..scope
+        },
         persistence,
         persistence.as_ref().map(|context| context.node_did),
         cancel,
@@ -542,28 +542,16 @@ async fn run_health_check_with_cancel(
     .await
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "public signature called from other crates"
-)]
 pub async fn run_health_check_cycle(
     services: Vec<McpHealthCheckService>,
     now: DateTime<Utc>,
-    mcp_pool: &McpPool,
-    health_map: &ServiceHealthMap,
-    local_hostname: &str,
-    local_subnet: Option<&str>,
-    options: &HealthCheckerOptions,
+    scope: HealthCycleScope<'_>,
     persistence: Option<HealthPersistenceContext<'_>>,
 ) -> Result<()> {
     run_health_check_cycle_with_cancel(
         services,
         now,
-        mcp_pool,
-        health_map,
-        local_hostname,
-        local_subnet,
-        options,
+        scope,
         persistence,
         persistence.as_ref().map(|context| context.node_did),
         None,
@@ -573,54 +561,32 @@ pub async fn run_health_check_cycle(
 
 /// A client probe sends its authenticated caller DID only when the service
 /// opts in; the client never substitutes a runtime's Node identity.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "client probe inputs are explicit"
-)]
 pub async fn run_health_check_cycle_for_actor(
     services: Vec<McpHealthCheckService>,
     now: DateTime<Utc>,
-    mcp_pool: &McpPool,
-    health_map: &ServiceHealthMap,
-    local_hostname: &str,
-    local_subnet: Option<&str>,
-    options: &HealthCheckerOptions,
+    scope: HealthCycleScope<'_>,
     actor: &str,
 ) -> Result<()> {
     identity::Did::new(actor)?;
-    run_health_check_cycle_with_cancel(
-        services,
-        now,
-        mcp_pool,
-        health_map,
-        local_hostname,
-        local_subnet,
-        options,
-        None,
-        Some(actor),
-        None,
-    )
-    .await
+    run_health_check_cycle_with_cancel(services, now, scope, None, Some(actor), None).await
 }
 
 /// Cancelling a remote observation is not evidence of a failed service. Persisted
 /// observations already being written drain through their existing owner.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "scoped health-cycle inputs and shutdown signal"
-)]
 async fn run_health_check_cycle_with_cancel(
     services: Vec<McpHealthCheckService>,
     now: DateTime<Utc>,
-    mcp_pool: &McpPool,
-    health_map: &ServiceHealthMap,
-    local_hostname: &str,
-    local_subnet: Option<&str>,
-    options: &HealthCheckerOptions,
+    scope: HealthCycleScope<'_>,
     persistence: Option<HealthPersistenceContext<'_>>,
     outbound_actor: Option<&str>,
     cancel: Option<&CancellationToken>,
 ) -> Result<()> {
+    let HealthCycleScope {
+        mcp_pool,
+        health_map,
+        local,
+        options,
+    } = scope;
     let mut online_service_ids = RapidHashSet::new();
 
     for service in services {
@@ -657,8 +623,10 @@ async fn run_health_check_cycle_with_cancel(
         if backoff_is_active(&previous_model, now, options) {
             continue;
         }
+        let previous_model = step_service(previous_model, ProbeEvent::BackoffExpiry, now, options)
+            .expect("backoffExpiry must preserve the service model");
 
-        let endpoint = match service.endpoint(local_hostname, local_subnet) {
+        let endpoint = match service.endpoint(local.hostname, local.subnet) {
             Ok(endpoint) => endpoint,
             Err(error) => {
                 apply_probe_failure(
@@ -807,7 +775,9 @@ async fn run_health_check_cycle_with_cancel(
     if cancel.is_some_and(CancellationToken::is_cancelled) {
         return Ok(());
     }
-    health_map.retain_services(&online_service_ids).await;
+    health_map
+        .retain_services(&online_service_ids, now, options)
+        .await;
 
     if let Some(persistence) = persistence {
         let snapshot = health_map.snapshot_full(options.failure_threshold_k).await;
@@ -1287,8 +1257,9 @@ mod tests {
 
     use super::{
         backoff_duration, run_health_check, run_health_check_cycle, step_service,
-        HealthCheckerOptions, HealthPersistenceContext, HealthStateInternal, McpAuthRefusal,
-        McpHealthCheckService, ProbeEvent, ServiceHealth, ServiceHealthMap, ServiceModelInternal,
+        HealthCheckerOptions, HealthCycleScope, HealthPersistenceContext, HealthStateInternal,
+        LocalNetwork, McpAuthRefusal, McpHealthCheckService, ProbeEvent, ServiceHealth,
+        ServiceHealthMap, ServiceModelInternal,
     };
     use crate::mcp::pool::McpPool;
     use gents_store::config_client::ConfigAccess;
@@ -1330,9 +1301,16 @@ mod tests {
             0,
         )
         .await?;
-        node.add_collection(gents_protocol::schemas::NODE).await?;
-        node.add_collection(gents_protocol::schemas::TOOL_SERVICE_HEALTH_STATE)
-            .await?;
+        node.add_collection(
+            &gents_protocol::schemas::HomePolicyIds::node_store()
+                .render(gents_protocol::schemas::NODE),
+        )
+        .await?;
+        node.add_collection(
+            &gents_protocol::schemas::HomePolicyIds::node_store()
+                .render(gents_protocol::schemas::TOOL_SERVICE_HEALTH_STATE),
+        )
+        .await?;
         let access = |actor: &gents_store::identity::KeyIdentity| -> anyhow::Result<ConfigAccess> {
             Ok(ConfigAccess::Graphql(
                 GraphqlEndpoint::as_principal(
@@ -1776,11 +1754,15 @@ mod tests {
             run_health_check_cycle(
                 vec![registry_entry(SERVICE_ID)],
                 cycle_now,
-                &pool,
-                &health_map,
-                "local-host",
-                None,
-                &options,
+                HealthCycleScope {
+                    mcp_pool: &pool,
+                    health_map: &health_map,
+                    local: LocalNetwork {
+                        hostname: "local-host",
+                        subnet: None,
+                    },
+                    options: &options,
+                },
                 None,
             )
             .await
@@ -1805,11 +1787,15 @@ mod tests {
         run_health_check_cycle(
             vec![registry_entry(SERVICE_ID)],
             during_backoff,
-            &pool,
-            &health_map,
-            "local-host",
-            None,
-            &options,
+            HealthCycleScope {
+                mcp_pool: &pool,
+                health_map: &health_map,
+                local: LocalNetwork {
+                    hostname: "local-host",
+                    subnet: None,
+                },
+                options: &options,
+            },
             None,
         )
         .await
@@ -1824,11 +1810,15 @@ mod tests {
         run_health_check_cycle(
             vec![registry_entry(SERVICE_ID)],
             expired,
-            &pool,
-            &health_map,
-            "local-host",
-            None,
-            &options,
+            HealthCycleScope {
+                mcp_pool: &pool,
+                health_map: &health_map,
+                local: LocalNetwork {
+                    hostname: "local-host",
+                    subnet: None,
+                },
+                options: &options,
+            },
             None,
         )
         .await
@@ -1846,11 +1836,15 @@ mod tests {
         run_health_check_cycle(
             vec![registry_entry(SERVICE_ID)],
             recovered,
-            &pool,
-            &health_map,
-            "local-host",
-            None,
-            &options,
+            HealthCycleScope {
+                mcp_pool: &pool,
+                health_map: &health_map,
+                local: LocalNetwork {
+                    hostname: "local-host",
+                    subnet: None,
+                },
+                options: &options,
+            },
             None,
         )
         .await
@@ -1899,11 +1893,15 @@ mod tests {
         run_health_check_cycle(
             vec![service],
             now,
-            &pool,
-            &health_map,
-            "local-host",
-            None,
-            &HealthCheckerOptions::default(),
+            HealthCycleScope {
+                mcp_pool: &pool,
+                health_map: &health_map,
+                local: LocalNetwork {
+                    hostname: "local-host",
+                    subnet: None,
+                },
+                options: &HealthCheckerOptions::default(),
+            },
             None,
         )
         .await
@@ -1935,11 +1933,15 @@ mod tests {
         run_health_check_cycle(
             vec![registry_entry("long-gap")],
             now,
-            &pool,
-            &health_map,
-            "local-host",
-            None,
-            &HealthCheckerOptions::default(),
+            HealthCycleScope {
+                mcp_pool: &pool,
+                health_map: &health_map,
+                local: LocalNetwork {
+                    hostname: "local-host",
+                    subnet: None,
+                },
+                options: &HealthCheckerOptions::default(),
+            },
             None,
         )
         .await
@@ -1967,11 +1969,15 @@ mod tests {
         run_health_check_cycle(
             Vec::new(),
             now,
-            &McpPool::new(),
-            &health_map,
-            "local-host",
-            None,
-            &HealthCheckerOptions::default(),
+            HealthCycleScope {
+                mcp_pool: &McpPool::new(),
+                health_map: &health_map,
+                local: LocalNetwork {
+                    hostname: "local-host",
+                    subnet: None,
+                },
+                options: &HealthCheckerOptions::default(),
+            },
             None,
         )
         .await
@@ -2007,11 +2013,15 @@ mod tests {
             let did = node.node_identity_did().unwrap();
             run_health_check(
                 node,
-                &pool,
-                &ServiceHealthMap::new(),
-                "local-host",
-                None,
-                &HealthCheckerOptions::default(),
+                HealthCycleScope {
+                    mcp_pool: &pool,
+                    health_map: &ServiceHealthMap::new(),
+                    local: LocalNetwork {
+                        hostname: "local-host",
+                        subnet: None,
+                    },
+                    options: &HealthCheckerOptions::default(),
+                },
                 Some(HealthPersistenceContext {
                     node,
                     node_did: did,
@@ -2048,11 +2058,15 @@ mod tests {
         access.write("test.health.disable", r#"mutation { update_ToolServiceRegistry(filter: {service_id:{_eq:"observability-mcp"}}, input: {enabled:false}) {_docID} }"#).await.unwrap();
         run_health_check(
             &node_a,
-            &pool,
-            &ServiceHealthMap::new(),
-            "local-host",
-            None,
-            &HealthCheckerOptions::default(),
+            HealthCycleScope {
+                mcp_pool: &pool,
+                health_map: &ServiceHealthMap::new(),
+                local: LocalNetwork {
+                    hostname: "local-host",
+                    subnet: None,
+                },
+                options: &HealthCheckerOptions::default(),
+            },
             Some(HealthPersistenceContext {
                 node: &node_a,
                 node_did: did,
@@ -2106,11 +2120,15 @@ mod tests {
             super::run_health_check_cycle_with_cancel(
                 services,
                 chrono::Utc::now(),
-                &pool,
-                &ServiceHealthMap::new(),
-                "local",
-                None,
-                &HealthCheckerOptions::default(),
+                HealthCycleScope {
+                    mcp_pool: &pool,
+                    health_map: &ServiceHealthMap::new(),
+                    local: LocalNetwork {
+                        hostname: "local",
+                        subnet: None,
+                    },
+                    options: &HealthCheckerOptions::default(),
+                },
                 Some(HealthPersistenceContext {
                     node: &node,
                     node_did: did,
@@ -2160,11 +2178,15 @@ mod tests {
         super::run_health_check_cycle_for_actor(
             vec![service.clone()],
             chrono::Utc::now(),
-            &McpPool::new(),
-            &ServiceHealthMap::new(),
-            "local",
-            None,
-            &options,
+            HealthCycleScope {
+                mcp_pool: &McpPool::new(),
+                health_map: &ServiceHealthMap::new(),
+                local: LocalNetwork {
+                    hostname: "local",
+                    subnet: None,
+                },
+                options: &options,
+            },
             client.did(),
         )
         .await
@@ -2182,11 +2204,15 @@ mod tests {
         assert!(super::run_health_check_cycle(
             vec![service.clone()],
             chrono::Utc::now(),
-            &McpPool::new(),
-            &ServiceHealthMap::new(),
-            "local",
-            None,
-            &options,
+            HealthCycleScope {
+                mcp_pool: &McpPool::new(),
+                health_map: &ServiceHealthMap::new(),
+                local: LocalNetwork {
+                    hostname: "local",
+                    subnet: None
+                },
+                options: &options
+            },
             None
         )
         .await
@@ -2197,11 +2223,15 @@ mod tests {
         super::run_health_check_cycle_for_actor(
             vec![opt_out],
             chrono::Utc::now(),
-            &McpPool::new(),
-            &ServiceHealthMap::new(),
-            "local",
-            None,
-            &options,
+            HealthCycleScope {
+                mcp_pool: &McpPool::new(),
+                health_map: &ServiceHealthMap::new(),
+                local: LocalNetwork {
+                    hostname: "local",
+                    subnet: None,
+                },
+                options: &options,
+            },
             client.did(),
         )
         .await
@@ -2362,14 +2392,16 @@ mod tests {
                     cancel.cancel();
                     let node = gents_inference::auth::credential::test_support::test_node().await;
                     let handle = super::spawn_health_checker(
-                        node.clone(),
-                        pool,
-                        health.clone(),
-                        "local-host".into(),
-                        None,
+                        super::HealthCheckerRuntime {
+                            node: node.clone(),
+                            node_did: "did:key:owner".into(),
+                            mcp_pool: pool,
+                            health_map: health.clone(),
+                            local_hostname: "local-host".into(),
+                            local_subnet: None,
+                            options,
+                        },
                         cancel,
-                        options,
-                        "did:key:owner".into(),
                     );
                     tokio::time::timeout(std::time::Duration::from_secs(1), handle)
                         .await
@@ -2389,11 +2421,15 @@ mod tests {
                         super::run_health_check_cycle_with_cancel(
                             registry,
                             now,
-                            &pool,
-                            &run_health,
-                            "local-host",
-                            None,
-                            &options,
+                            HealthCycleScope {
+                                mcp_pool: &pool,
+                                health_map: &run_health,
+                                local: LocalNetwork {
+                                    hostname: "local-host",
+                                    subnet: None,
+                                },
+                                options: &options,
+                            },
                             None,
                             None,
                             Some(&run_cancel),
@@ -2449,11 +2485,15 @@ mod tests {
         super::run_health_check_cycle_with_cancel(
             vec![registry_entry("pending")],
             chrono::Utc::now(),
-            &pool,
-            &health,
-            "local-host",
-            None,
-            &HealthCheckerOptions::default(),
+            HealthCycleScope {
+                mcp_pool: &pool,
+                health_map: &health,
+                local: LocalNetwork {
+                    hostname: "local-host",
+                    subnet: None,
+                },
+                options: &HealthCheckerOptions::default(),
+            },
             None,
             None,
             Some(&cancel),
@@ -2594,11 +2634,15 @@ mod tests {
         run_health_check_cycle(
             vec![service],
             chrono::Utc::now(),
-            &crate::mcp::pool::McpPool::new(),
-            &health_map,
-            "local",
-            None,
-            &HealthCheckerOptions::default(),
+            HealthCycleScope {
+                mcp_pool: &crate::mcp::pool::McpPool::new(),
+                health_map: &health_map,
+                local: LocalNetwork {
+                    hostname: "local",
+                    subnet: None,
+                },
+                options: &HealthCheckerOptions::default(),
+            },
             None,
         )
         .await

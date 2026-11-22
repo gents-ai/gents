@@ -12,9 +12,7 @@ use crate::{
     triggers::engine::TriggerSource, triggers::runtime_snapshot::ActiveRuntimeSnapshot,
 };
 use defra_node::Node as EmbeddedNode;
-use events::{
-    Bus, ChannelBus, DocumentChangeSubscription, EventName, Message, Subscription, Update,
-};
+use events::{Bus, ChannelBus, EventName, Message, Subscription, Update};
 use gents_inference::backends::provider::BackendProviderKind;
 use gents_inference::resolved::ResolvedAgent;
 use gents_inference::test_support::TestDb;
@@ -312,14 +310,14 @@ impl UpdateSubscriptionSource for MockUpdateSubscriptionSource {
         subscription
     }
 
-    fn subscribe_collection_changes(
+    fn subscribe_changes(
         &self,
         collection_ids: Vec<String>,
-    ) -> DocumentChangeSubscription {
+    ) -> gents_store::subscription_source::ChangeSubscription {
         let subscription = self.bus.subscribe_collection_changes(collection_ids);
         self.subscriber_count.fetch_add(1, Ordering::SeqCst);
         self.subscriber_notify.notify_waiters();
-        subscription
+        subscription.into()
     }
 }
 
@@ -718,10 +716,12 @@ async fn signed_goal_backed_request(
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         request_id,
-        did,
-        agent.did(),
-        agent.did(),
-        SESSION,
+        gents_protocol::request_admission::RequestScope::new(
+            did,
+            agent.did(),
+            agent.did(),
+            SESSION,
+        ),
         "Begin durable work",
         "interactive",
         "2026-07-15T00:00:00Z",

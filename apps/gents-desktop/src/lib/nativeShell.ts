@@ -35,6 +35,23 @@ export async function closePluginWindow(pluginId: string) {
 export const PLUGIN_WINDOW_EVENT = "desktop://plugin-window";
 export type PluginWindowChange = { pluginId: string; open: boolean };
 
+/** Sent to the main view with the place a plugin's page, in a window of its
+    own, asked to go to (`PLUGIN_NAVIGATE_EVENT` in `bridge/plugin_window.rs`). */
+export const PLUGIN_NAVIGATE_EVENT = "desktop://plugin-navigate";
+export type PluginNavigation = { path: string };
+
+/** From a plugin's own window: opens `path` in the main view, which comes
+    forward. */
+export function navigateMainWindow(path: string) {
+  return invoke<void>("desktop_plugin_window_navigate", { path });
+}
+
+/** From the main view, when a plugin's question is waiting: comes forward if
+    a plugin's own window has focus, where the person would not see it. */
+export function bringPluginPromptForward() {
+  return invoke<boolean>("desktop_plugin_prompt_to_main");
+}
+
 export function sendAppOpened() {
   if (inNativeShell() && windowLabel() === "main") {
     void invoke("product_telemetry_app_opened").catch(() => {});
@@ -72,6 +89,22 @@ export function onMaximizedChange(handler: (maximized: boolean) => void): () => 
   void sync();
   void appWindow
     .onResized(() => void sync())
+    .then((stop) => (stopped ? stop() : (unlisten = stop)));
+  return () => {
+    stopped = true;
+    unlisten?.();
+  };
+}
+
+/** The native window gaining focus. Focus moving between the shell and a
+    plugin's frame inside it is not this, unlike the DOM's window focus. */
+export function onWindowFocused(handler: () => void): () => void {
+  let unlisten: (() => void) | undefined;
+  let stopped = false;
+  void getCurrentWindow()
+    .onFocusChanged(({ payload: focused }) => {
+      if (focused) handler();
+    })
     .then((stop) => (stopped ? stop() : (unlisten = stop)));
   return () => {
     stopped = true;

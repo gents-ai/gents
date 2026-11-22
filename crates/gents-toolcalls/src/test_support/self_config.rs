@@ -23,6 +23,9 @@ pub fn config(categories: &[&str]) -> SelfConfigToolConfig {
         process_ceiling: Default::default(),
         selected_plugins: Vec::new(),
         ceiling_plugins: None,
+        registry_url: None,
+        plugin_builder: None,
+        ux_preview_assets: None,
     }
 }
 
@@ -567,7 +570,7 @@ impl SelfConfigFixture {
             self.db.node.clone(),
             identity::Did::new(self.db.node_identity.did()).unwrap(),
         )
-        .add_collection(sdl)
+        .add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(sdl))
         .await
         .unwrap();
     }
@@ -590,14 +593,16 @@ impl SelfConfigFixture {
     ) -> Vec<Box<dyn ToolDyn>> {
         assert_eq!(grants.agent_did, self.agent_did);
         build_self_config_tools_with_runtime(
-            Arc::default(),
-            self.db.node.clone(),
-            self.db.node_identity.did().to_owned(),
-            Some(self.agent.clone()),
-            Some(self.db.node_identity.clone()),
+            SelfConfigRuntime {
+                usage_cache: Arc::default(),
+                node: self.db.node.clone(),
+                node_did: self.db.node_identity.did().to_owned(),
+                identity: Some(self.agent.clone()),
+                runtime_identity: Some(self.db.node_identity.clone()),
+                plugins,
+                tasks: Arc::new(gents_tools::task_run::NoTaskRunService),
+            },
             grants,
-            plugins,
-            Arc::new(gents_tools::task_run::NoTaskRunService),
             Some(self.node_binding.clone()),
         )
     }

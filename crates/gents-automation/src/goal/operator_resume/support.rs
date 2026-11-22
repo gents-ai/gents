@@ -3,7 +3,9 @@ use gents_documents::{apply_desired_state_plan, write_inference_backend_document
 use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
 use gents_inference::auth::credential::{preset_account_backend, store_sign_in};
-use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
+use gents_protocol::request_admission::{
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestScope,
+};
 use gents_store::collection::Collection;
 use gents_store::config_client::ConfigAccess;
 use gents_store::identity::request_receipt::verify_request_receipt_signature;
@@ -312,10 +314,7 @@ impl Fixture {
             let mut request = AgentRequestCreate::base(
                 gents_protocol::request_admission::RequestPurpose::Normal,
                 request_id,
-                identity.did(),
-                user.did(),
-                &binding.agent_did,
-                &session,
+                RequestScope::new(identity.did(), user.did(), &binding.agent_did, &session),
                 "Earlier work",
                 "interactive",
                 "2010-01-01T00:00:00Z",
@@ -336,10 +335,7 @@ impl Fixture {
         let mut create = AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             &parent_id,
-            identity.did(),
-            user.did(),
-            &binding.agent_did,
-            &session,
+            RequestScope::new(identity.did(), user.did(), &binding.agent_did, &session),
             "Original context",
             "interactive",
             "2020-01-01T00:00:00Z",
@@ -568,10 +564,12 @@ impl Fixture {
         let mut create = AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             id,
-            self.identity.did(),
-            self.user.did(),
-            &self.parent.agent_did,
-            &self.session,
+            RequestScope::new(
+                self.identity.did(),
+                self.user.did(),
+                &self.parent.agent_did,
+                &self.session,
+            ),
             "Other work",
             "interactive",
             date,

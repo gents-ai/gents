@@ -37,7 +37,15 @@ structure Config where
   deriving Repr
 
 /-- The target ids the Agent may start a session on: every `targetIds` entry
-for an enabled group, and otherwise those a plugin job block also names. -/
+for an enabled group, and otherwise those a plugin job block also names.
+
+Decision (#3626): this list is the plugin-job grant, so every target a plugin
+job can spawn into is in it, whether or not the AgentTools group is enabled
+(`PluginJob.TargetGrant.job_spawn_target_is_startable`). The grant is the
+`session_writer` relation behind native `invoke`, so with the group disabled
+ACP admits the Agent's `invoke` on a local target's Agent (declared by
+`writers`) whatever path asks; only the tool surface keeps `agent_new` and
+`agent_message` off. -/
 def startable (selection : Selection) : List String :=
   if selection.enabled then selection.targetIds
   else selection.targetIds.filter selection.jobTargetIds.contains

@@ -26,6 +26,9 @@ pub struct TriggerRow {
     pub last_status: Option<String>,
     pub last_error: Option<String>,
     pub fire_count: Option<i64>,
+    /// The last run of a command Task this Trigger fired.
+    #[serde(default)]
+    pub last_run: Option<crate::CommandRun>,
 }
 
 impl TriggerRow {
@@ -118,6 +121,7 @@ impl View for TaskList {
                 .field(f::DESCRIPTION)
                 .field(f::AGENT_DID)
                 .field(f::PROMPT_TEMPLATE)
+                .field(f::COMMAND)
                 .field(f::EMIT_OUTCOME)
                 .field(f::OUTCOME_READERS)
                 .field(f::GOAL_OBJECTIVE_TEMPLATE)
@@ -202,6 +206,7 @@ impl View for TriggerList {
                 .field(f::LAST_STATUS)
                 .field(f::LAST_ERROR)
                 .field(f::FIRE_COUNT)
+                .field(f::LAST_RUN)
                 .field(f::CREATED_AT)
                 .field(f::UPDATED_AT)
                 .field(f::TAGS),

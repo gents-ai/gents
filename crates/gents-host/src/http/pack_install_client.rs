@@ -219,8 +219,10 @@ impl PackInstallSession {
             }
             _ => bail!("runtime pack graph differs from the client's installation plan"),
         };
+        let ids = self.endpoint.home_policy_ids().await?;
         let evidence =
-            prepare_pack_evidence_from_history(&self.actor, &self.scope, expected, history).await?;
+            prepare_pack_evidence_from_history(&self.actor, &self.scope, expected, history, ids)
+                .await?;
         self.send(json!({"type": "graph_evidence", "id": id, "evidence": evidence}))
             .await?;
         self.applied(id).await
@@ -488,6 +490,7 @@ pub async fn install_remote(
                 gents_pack::operations::pack::install_value(
                     gents_protocol::operations::pack::PackActor::User,
                     &supplied,
+                    &args.environment,
                     name,
                 )
             },

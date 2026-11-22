@@ -194,10 +194,12 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         "workspace-recovery-parent",
-        did,
-        agent_did,
-        agent_did,
-        "workspace-recovery-session",
+        gents_protocol::request_admission::RequestScope::new(
+            did,
+            agent_did,
+            agent_did,
+            "workspace-recovery-session",
+        ),
         "resume durable work",
         "interactive",
         "2026-09-01T00:00:00Z",

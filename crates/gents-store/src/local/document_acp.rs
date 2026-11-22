@@ -69,8 +69,6 @@ pub enum DocumentAcpError {
          keychain key instead"
     )]
     NodeKeyCannotSign { node: String },
-    #[error("this kind of home cannot be opened by this version of Gents yet")]
-    NotYetUsable,
     #[error("make this change from the Gents app or CLI on your own device")]
     HeldUserKey,
     #[error(
@@ -129,7 +127,6 @@ impl DocumentAcpError {
             Self::Switch { .. }
             | Self::Unavailable
             | Self::NodeKeyCannotSign { .. }
-            | Self::NotYetUsable
             | Self::HeldUserKey
             | Self::DelegationRequired
             | Self::TransportGrantsAwaitProvider
@@ -257,14 +254,52 @@ pub fn periodic(provider: DocumentAcp, _: Periodic) -> PeriodicLoop {
     }
 }
 
+/// Whether a watcher on a home whose document access control runs on
+/// `provider` also waits for access changes (`AccessWake.listens`).
+pub fn access_wakes(provider: DocumentAcp) -> bool {
+    match provider {
+        DocumentAcp::Local => false,
+        DocumentAcp::Vera => true,
+    }
+}
+
 /// [`periodic`] for `node`, whose provider is fixed while it runs.
 pub fn node_periodic(node: &defra_node::Node, publication: Periodic) -> PeriodicLoop {
     periodic(provider_of(node), publication)
 }
 
+/// `DocumentAcpChoice.PolicyIds`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyIds {
+    Counter,
+    Seeded,
+}
+
+/// `DocumentAcpChoice.policyIds`.
+pub fn policy_ids(provider: DocumentAcp) -> PolicyIds {
+    match provider {
+        DocumentAcp::Local => PolicyIds::Counter,
+        DocumentAcp::Vera => PolicyIds::Seeded,
+    }
+}
+
+/// The IDs a home on `provider` names its built-in policies by.
+pub fn home_policy_ids(provider: DocumentAcp) -> &'static gents_protocol::schemas::HomePolicyIds {
+    match policy_ids(provider) {
+        PolicyIds::Counter => gents_protocol::schemas::HomePolicyIds::node_store(),
+        PolicyIds::Seeded => gents_protocol::schemas::HomePolicyIds::embedded_vera(),
+    }
+}
+
+/// [`home_policy_ids`] of the home `node` serves.
+pub fn node_policy_ids(node: &defra_node::Node) -> &'static gents_protocol::schemas::HomePolicyIds {
+    home_policy_ids(provider_of(node))
+}
+
 /// Where `node` decides document access.
 pub fn provider_of(node: &defra_node::Node) -> DocumentAcp {
-    #[cfg(feature = "vera")]
+    #[cfg(any(test, feature = "vera"))]
     {
         if node.vera_acp().is_some() {
             return DocumentAcp::Vera;
@@ -329,7 +364,8 @@ fn recorded_deployment(data: &Path) -> Result<Option<Deployment>> {
         .map_err(|source| DocumentAcpError::Record { path, source })
 }
 
-fn recorded(data: &Path) -> Result<DocumentAcp> {
+/// The provider the store at `data` was created with.
+pub(crate) fn recorded(data: &Path) -> Result<DocumentAcp> {
     Ok(match recorded_deployment(data)? {
         Some(_) => DocumentAcp::Vera,
         None => DocumentAcp::Local,
@@ -449,13 +485,8 @@ pub(crate) fn admit(
     })
 }
 
-fn usable(provider: DocumentAcp) -> Result<DocumentAcp> {
-    match provider {
-        DocumentAcp::Local => Ok(provider),
-        DocumentAcp::Vera => Err(DocumentAcpError::NotYetUsable),
-    }
-}
-
+/// [`admit`] for a home's choice as its init config records it, before
+/// anything is written or a node is built.
 fn enter(
     recorded: Option<DocumentAcp>,
     requested: DocumentAcp,
@@ -465,7 +496,6 @@ fn enter(
     decide(recorded, requested, available, node_key_signs, || {
         "a Secure Enclave node identity".to_owned()
     })
-    .and_then(usable)
 }
 
 pub fn ensure_admissible(

@@ -1090,6 +1090,7 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
             deadline_duration_secs: DEADLINE_SECS,
             execution_origin: ExecutionOrigin::Scheduled,
             backend_id: BACKEND_ID.into(),
+            operator_tool_root: None,
         },
         TriggerLineage::default(),
     )
@@ -1176,6 +1177,7 @@ async fn materialized_lineage_follows_the_lean_model() {
                 deadline_duration_secs: DEADLINE_SECS,
                 execution_origin: origin,
                 backend_id: BACKEND_ID.into(),
+                operator_tool_root: None,
             },
             lineage,
         )

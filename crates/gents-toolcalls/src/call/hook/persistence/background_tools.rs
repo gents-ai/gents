@@ -310,7 +310,7 @@ impl DefraSessionHook {
                                 executions.set_stop_receipt(
                                     &execution_call_id,
                                     &execution_tool_doc_id,
-                                    crate::call::hook::RetainedStopReceipt::from_outcome(outcome),
+                                    crate::call::hook::background_executions::RetainedStopReceipt::from_outcome(outcome),
                                 );
                             }
                             executions

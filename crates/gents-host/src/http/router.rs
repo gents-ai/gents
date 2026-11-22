@@ -14,7 +14,7 @@ use serde_json::json;
 use tokio::sync::{watch, OnceCell};
 
 use crate::http::enrollment::{EnrollmentDecisionServiceHandle, EnrollmentOfferIssuerHandle};
-use crate::http::prometheus::{P2pMetricsSnapshot, StoreSizeCache};
+use crate::http::prometheus::{p2p::P2pMetricsSnapshot, StoreSizeCache};
 use crate::http::version::version_response;
 use accounts::{
     account_usage_read_handler, enrollment_decision_handler, enrollment_pending_handler,
@@ -22,7 +22,7 @@ use accounts::{
 use gents_service::state::P2pAdmissionState;
 use metrics::{healthz_handler, metrics_handler};
 use status::status_route;
-pub use status::BACKEND_PROBES_STATUS_FIELD;
+pub use status::{BACKEND_PROBES_STATUS_FIELD, NATIVE_EXECUTORS_STATUS_FIELD};
 use views::{fleet_handler, fleet_slots_handler, mcp_pool_handler, self_handler, sessions_handler};
 
 mod accounts;
@@ -60,6 +60,7 @@ pub struct RuntimeHttpState {
     /// The home's node key, which signs its status before the runtime that
     /// holds it too has started.
     pub node_identity: Option<Arc<dyn gents_store::identity::NodeIdentity>>,
+    pub pack_watch_slots: Arc<tokio::sync::Semaphore>,
 }
 
 impl RuntimeHttpState {
@@ -163,6 +164,7 @@ pub fn runtime_contract_router(
     enrollment: EnrollmentHandles,
     activation: RuntimeActivation,
     backend_health: Option<gents_inference::backends::health::BackendHealthMap>,
+    pack_watch_limit: u32,
 ) -> RuntimeRouters {
     let RouterIdentity {
         graphql,
@@ -218,6 +220,7 @@ pub fn runtime_contract_router(
         serve_lifecycle,
         document_acp,
         node_identity,
+        pack_watch_slots: Arc::new(tokio::sync::Semaphore::new(pack_watch_limit as usize)),
     };
 
     let operator_routes = Router::new()

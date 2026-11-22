@@ -1215,6 +1215,12 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
     node.shutdown().await.expect("node shutdown");
 }
 
+/// The deadline is the property here, so the test drives the cut itself
+/// (TLA+ `WallClockBound` `"driven"`): it waits until the received reasoning
+/// is committed, then reaches the request deadline, which the clock never
+/// does. A 3 s wall-clock deadline instead raced the steps from the claim to
+/// the provider call and, on a loaded host, cut the request before the
+/// provider was called, leaving no prefix to close.
 #[tokio::test]
 async fn deadline_closes_received_openai_reasoning_without_another_provider_call() {
     use gents_protocol::output::reconstruction::{reconstruct_stream, ObservedSegment};
@@ -1224,11 +1230,13 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
     let (db, user, access, mut agent_config) = held_daemon_fixture("daemon-lease").await;
     let node = db.node.clone();
     let agent_access = held_daemon_agent_access(&db, &agent_config);
+    let unreached = gents_store::test_support::UNREACHED_DEADLINE;
+    let cut = Arc::new(tokio::sync::Notify::new());
     {
         let agent_config = Arc::get_mut(&mut agent_config).unwrap();
-        agent_config.deadline_duration = Duration::from_secs(3);
-        agent_config.stream_liveness_timeout = Duration::from_secs(8);
-        agent_config.provider_idle_timeout = Duration::from_secs(8);
+        agent_config.deadline_duration = unreached;
+        agent_config.stream_liveness_timeout = unreached;
+        agent_config.provider_idle_timeout = unreached;
     }
     let node_did = agent_config.node_did().to_owned();
     let identity = agent_config.node_identity().clone();
@@ -1271,21 +1279,40 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
             gents_p2p::p2p_reconcile::enrollment_authority_channel().1,
         ),
     })
-    .unwrap();
+    .unwrap()
+    .with_driven_deadline(cut.clone());
     let request =
         create_held_routed_request(&db, &user, &access, &agent_config, Some("lease regression"))
             .await;
     let doc_id = request.doc_id.clone();
-    let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    tokio::time::timeout(
-        Duration::from_secs(10),
-        daemon.process_request(request, shutdown_rx),
-    )
-    .await
-    .expect("request deadline must stop the nonterminal provider")
-    .expect("deadline request handling completes");
-
     let escaped = gents_store::graphql::escape_graphql_string(&doc_id);
+    let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let process = daemon.process_request(request, shutdown_rx);
+    tokio::pin!(process);
+    tokio::select! {
+        outcome = &mut process => panic!("the request ended before its deadline: {outcome:?}"),
+        () = gents_store::test_support::read_when_changed(
+            &node,
+            "AgentOutputSegment",
+            "the received reasoning is committed before the cut",
+            async || {
+                let result = held_daemon_query(&agent_access, &format!(
+                    r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{escaped}" }} }}) {{ payload }} }}"#
+                ))
+                .await;
+                let payloads = result.data.as_ref().map(|data| data["AgentOutputSegment"].to_string());
+                match payloads {
+                    Some(payloads) if payloads.contains("received deadline reasoning") => Ok(()),
+                    _ => Err(format!("{:?} {:?}", result.data, result.errors)),
+                }
+            },
+        ) => {}
+    }
+    cut.notify_one();
+    process
+        .await
+        .expect("deadline request handling completes");
+
     let response = held_daemon_query(&agent_access, &format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ lifecycle_state }} }}"#
         ))

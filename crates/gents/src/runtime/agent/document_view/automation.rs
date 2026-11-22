@@ -42,6 +42,16 @@ pub(super) fn resolve_automation(
             unavailable_triggers.insert(trigger_id.clone());
             continue;
         }
+        if task.command.is_some() {
+            // The Node runs a command Task from its schedule; an event source
+            // reads documents as the Task's Agent, and a command Task has none.
+            if matches!(trigger.source, gents_documents::TriggerSource::Event { .. }) {
+                unavailable_triggers.insert(trigger_id.clone());
+            } else {
+                trigger_tasks.insert(trigger_id, resolved_task_from(task));
+            }
+            continue;
+        }
         let agent_did = task.agent_did.as_str();
         let Some(behavior_record) = view.agents.get(agent_did) else {
             unavailable_triggers.insert(trigger_id.clone());

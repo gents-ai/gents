@@ -847,6 +847,25 @@ impl ConfigApplyTxn<'_> {
     /// arbitrary keys and nested empty arrays; ordinary nillable list fields
     /// remain the caller's responsibility.
     pub async fn execute_with_variables(&self, document: &str, variables: &Value) -> Result<Value> {
+        self.execute_with_access(document, variables, false).await
+    }
+
+    pub async fn execute_for_decision(&self, document: &str, variables: &Value) -> Result<Value> {
+        graphql::ensure_query_document(document)?;
+        if !matches!(self.backend, TxnBackend::Embedded { .. }) {
+            return Err(ConfigClientError::EmbeddedAccessRequired);
+        }
+        super::super::decision_read::decided(
+            self.execute_with_access(document, variables, true).await,
+        )
+    }
+
+    async fn execute_with_access(
+        &self,
+        document: &str,
+        variables: &Value,
+        strict: bool,
+    ) -> Result<Value> {
         if !variables.is_object() {
             return Err(ConfigClientError::VariablesNotObject);
         }
@@ -913,10 +932,16 @@ impl ConfigApplyTxn<'_> {
             } => {
                 let started = Instant::now();
                 let node = Arc::clone(node);
+                let context = self.request_context(identity.clone());
+                let context = if strict {
+                    context.with_strict_access_reads()
+                } else {
+                    context
+                };
                 let request = QueryRequest::new(document)
                     .with_variables(variables.clone())
                     .with_identity(identity.clone())
-                    .with_context(self.request_context(identity.clone()));
+                    .with_context(context);
                 let handle = handle.clone();
                 let agent_signer = agent_signer.as_deref().cloned();
                 let result = execute_owned_native(

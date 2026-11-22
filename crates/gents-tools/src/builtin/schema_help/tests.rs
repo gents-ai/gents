@@ -419,7 +419,10 @@ async fn schema_view_and_materialization_use_managed_agent_authority() {
         .unwrap();
     for scratch in ["AgentScratch", "AgentScratchKept"] {
         owner
-            .add_collection(&format!("type {scratch} {{ name: String }}"))
+            .add_collection(
+                &gents_protocol::schemas::HomePolicyIds::node_store()
+                    .render(&format!("type {scratch} {{ name: String }}")),
+            )
             .await
             .unwrap();
         owner
@@ -429,6 +432,17 @@ async fn schema_view_and_materialization_use_managed_agent_authority() {
             )
             .await
             .unwrap();
+    }
+    for scratch in ["AgentScratch", "AgentScratchKept"] {
+        let result = owner
+            .execute(&format!("{{ {scratch} {{ _docID name }} }}"))
+            .await
+            .unwrap();
+        assert_eq!(
+            result["data"][scratch].as_array().unwrap().len(),
+            1,
+            "{result}"
+        );
     }
     let actor_did = identity::Did::new(agent.did()).unwrap();
     let access =
@@ -476,7 +490,31 @@ async fn schema_view_and_materialization_use_managed_agent_authority() {
         .await
         .unwrap();
     assert!(permissions.contains(&NodePermission::CollectionTruncate));
+    let kept_before_truncate = owner
+        .execute("{ AgentScratchKept { _docID name } }")
+        .await
+        .unwrap();
+    assert_eq!(
+        kept_before_truncate["data"]["AgentScratchKept"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1,
+        "before truncate: {kept_before_truncate}"
+    );
     access.truncate_collection("AgentScratch").await.unwrap();
+    let kept_after_truncate = owner
+        .execute("{ AgentScratchKept { _docID name } }")
+        .await
+        .unwrap();
+    assert_eq!(
+        kept_after_truncate["data"]["AgentScratchKept"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1,
+        "{kept_after_truncate}"
+    );
     access
         .remove_collections(&["AgentScratch".to_owned()])
         .await
@@ -668,13 +706,20 @@ async fn schema_recovery_help_and_grant_are_independent_of_config() {
     assert!(error.to_string().contains("Gents-managed"));
 }
 
+/// A lens module whose `transform` returns `lens.next()`, so every record
+/// passes through the host's lens path unchanged; `alloc` always answers
+/// offset 1024 of its one page of memory.
+const IDENTITY_LENS_WASM: &[u8] = &[
+    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x0a, 0x02, 0x60, 0x00, 0x01, 0x7f, 0x60,
+    0x01, 0x7f, 0x01, 0x7f, 0x02, 0x0d, 0x01, 0x04, b'l', b'e', b'n', b's', 0x04, b'n', b'e', b'x',
+    b't', 0x00, 0x00, 0x03, 0x03, 0x02, 0x01, 0x00, 0x05, 0x03, 0x01, 0x00, 0x01, 0x07, 0x1e, 0x03,
+    0x06, b'm', b'e', b'm', b'o', b'r', b'y', 0x02, 0x00, 0x05, b'a', b'l', b'l', b'o', b'c', 0x00,
+    0x01, 0x09, b't', b'r', b'a', b'n', b's', b'f', b'o', b'r', b'm', 0x00, 0x02, 0x0a, 0x0c, 0x02,
+    0x05, 0x00, 0x41, 0x80, 0x08, 0x0b, 0x04, 0x00, 0x10, 0x00, 0x0b,
+];
+
 #[tokio::test]
-async fn inline_lens_migration_transforms_existing_rows_through_native_owner() {
-    let wasm = gents_store::schema::migration::fixture_lens_wasm();
-    assert!(
-        wasm.len() > 16,
-        "schema migration coverage requires the fixture lens build"
-    );
+async fn inline_lens_migration_carries_existing_rows_through_native_owner() {
     let db = node().await;
     let node = db.node.clone();
     let tool = runtime_owned_tool(&node);
@@ -719,19 +764,25 @@ async fn inline_lens_migration_transforms_existing_rows_through_native_owner() {
     let lens = defra_node::LensConfig::new(
         &source,
         &dest,
-        defra_node::LensModule::from_bytes(wasm.to_vec()),
+        defra_node::LensModule::from_bytes(IDENTITY_LENS_WASM.to_vec()),
     );
     let registered = apply(
         &tool,
         json!({"argv":["migration","set"],"options":{"config":lens}}),
     )
     .await;
-    assert!(registered["result"]["lensId"].is_string());
+    assert!(registered["result"]["lensId"].is_string(), "{registered}");
     apply(
         &tool,
         json!({"argv":["version","activate"],"target_id":dest}),
     )
     .await;
+    let active = access
+        .collection_version("FixtureDoc")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(active["VersionID"], dest.as_str(), "{active}");
     apply(
         &tool,
         json!({"argv":["collection","materialize"],"target_id":"FixtureDoc"}),
@@ -741,7 +792,11 @@ async fn inline_lens_migration_transforms_existing_rows_through_native_owner() {
         .execute("{ FixtureDoc { name label } }")
         .await
         .unwrap();
-    assert_eq!(rows["data"]["FixtureDoc"][0]["label"], "ALICE");
+    assert_eq!(
+        rows["data"]["FixtureDoc"],
+        json!([{"name": "alice", "label": null}]),
+        "{rows}"
+    );
     let path_lens = defra_node::LensConfig::new(
         &source,
         &dest,

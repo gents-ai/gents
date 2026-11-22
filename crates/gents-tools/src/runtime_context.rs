@@ -46,7 +46,6 @@ pub struct CurrentToolRuntimeContext {
     pub requester_did: Option<String>,
     pub node_did: Option<String>,
     pub agent_did: Option<String>,
-    pub(crate) request_id: Option<String>,
 }
 
 /// The per-request host values the tool surface reads. The default, every value
@@ -126,7 +125,6 @@ fn with_workspace(
         requester_did: scope.requester_did,
         node_did: scope.node_did,
         agent_did: scope.agent_did,
-        request_id: scope.request_id,
     }
 }
 

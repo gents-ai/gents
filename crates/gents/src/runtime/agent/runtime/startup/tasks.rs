@@ -16,7 +16,7 @@ use gents_automation::triggers::runtime_snapshot::{
 };
 use gents_inference::admission::AdmissionRegistry;
 use gents_p2p::p2p_reconcile::{EnrollmentAuthorityHandle, EnrollmentAuthorityOwner};
-use gents_tools::mcp::health::{spawn_health_checker, ServiceHealthMap};
+use gents_tools::mcp::health::{spawn_health_checker, HealthCheckerRuntime, ServiceHealthMap};
 use gents_tools::surface::ToolRuntimeContext;
 
 #[derive(Clone, Copy)]
@@ -81,14 +81,16 @@ pub(super) fn spawn_health_probes(
     mpsc::Receiver<()>,
 ) {
     let health_checker = AbortOnDropHandle::new(spawn_health_checker(
-        agent.node.clone(),
-        agent.mcp_pool.clone(),
-        health_map.clone(),
-        agent.local_hostname.clone(),
-        agent.local_subnet.clone(),
+        HealthCheckerRuntime {
+            node: agent.node.clone(),
+            node_did: agent.node_did().to_string(),
+            mcp_pool: agent.mcp_pool.clone(),
+            health_map: health_map.clone(),
+            local_hostname: agent.local_hostname.clone(),
+            local_subnet: agent.local_subnet.clone(),
+            options: agent.health_checker_options.clone(),
+        },
         cancel.child_token(),
-        agent.health_checker_options.clone(),
-        agent.node_did().to_string(),
     ));
     let (backend_health_events_tx, backend_health_events_rx) = mpsc::channel::<()>(1);
     let backend_prober =
@@ -163,6 +165,10 @@ pub(super) fn spawn_trigger_engine(startup: StartupTasks<'_>) -> AbortOnDropHand
     let trigger_engine_node_did = agent.node_did().to_string();
     let trigger_engine_runtime_observer = agent.runtime_snapshot_observer.clone();
     let trigger_engine_runtime_status = runtime_status.clone();
+    let trigger_engine_tool_root = agent
+        .document_runtime_context()
+        .and_then(|context| context.tool_ceiling.root())
+        .map(std::path::Path::to_path_buf);
     let trigger_engine_handle = AbortOnDropHandle::new(tokio::spawn(async move {
         tokio::select! {
             _ = trigger_engine_cancel.cancelled() => return,
@@ -213,6 +219,7 @@ pub(super) fn spawn_trigger_engine(startup: StartupTasks<'_>) -> AbortOnDropHand
             trigger_engine_node,
             trigger_engine_materializer_snapshot_rx,
             sources,
+            trigger_engine_tool_root,
             trigger_engine_cancel,
         )
         .await;
@@ -234,7 +241,6 @@ pub(super) fn spawn_callback_engine(startup: StartupTasks<'_>) -> AbortOnDropHan
         .document_runtime_context()
         .and_then(|context| context.tool_ceiling.root())
         .map(std::path::Path::to_path_buf);
-    gents_session::workspace::install_process_operator_tool_root(callback_ceiling.clone());
     let callback_plugins = agent.plugins().clone();
     let callback_cancel = cancel.child_token();
     let callback_snapshots = active_snapshot_rx.clone();

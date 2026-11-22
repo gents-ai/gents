@@ -3,7 +3,7 @@ use super::*;
 use gents_lean_vocab::families::fold_queue_contracts_input_edit_atomic as atomic;
 use gents_lean_vocab::QueueImage;
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_protocol::request_input::{
     QueueDelivery, QueuePolicy, QueueSource, RequestInput, RequestQueue,
@@ -112,10 +112,12 @@ impl Fixture {
         let mut create = AgentRequestCreate::base(
             RequestPurpose::Normal,
             "original",
-            fixture.identity.did(),
-            fixture.identity.did(),
-            &fixture.agent_did,
-            SESSION,
+            RequestScope::new(
+                fixture.identity.did(),
+                fixture.identity.did(),
+                &fixture.agent_did,
+                SESSION,
+            ),
             "original content",
             "interactive",
             "2026-10-10T00:00:00Z",
@@ -315,10 +317,7 @@ impl ModeledQueue {
             AgentRequestCreate::base(
                 RequestPurpose::Normal,
                 id.to_string(),
-                &did,
-                &did,
-                &queue.fixture.agent_did,
-                SESSION,
+                RequestScope::new(&did, &did, &queue.fixture.agent_did, SESSION),
                 format!("message {id}"),
                 origin,
                 format!("2026-10-10T00:00:{arrival:02}Z"),
@@ -881,6 +880,7 @@ async fn valid_author_signature_cannot_install_replacement_with_wrong_admission_
     command.replacement_evidence = vec![gents_store::config_client::prepare_request_evidence(
         fixture.identity.as_ref(),
         gents_store::config_client::client_request_input(&command.replacements[0]).unwrap(),
+        gents_protocol::schemas::HomePolicyIds::node_store(),
     )
     .await
     .unwrap()];

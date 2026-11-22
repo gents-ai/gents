@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::Result;
+use gents_protocol::operations::task::{TaskPresence, TaskRunDecision};
 use serde_json::{json, Value};
 
 use crate::cli::{TaskCommand, TaskListArgs, TaskShowArgs};
@@ -72,6 +73,7 @@ impl TaskInventory {
             "display_name": task.get("display_name").cloned().unwrap_or(Value::Null),
             "description": task.get("description").cloned().unwrap_or(Value::Null),
             "agent_did": agent_did,
+            "command": task.get("command").cloned().unwrap_or(Value::Null),
             "goal_objective_template": task.get("goal_objective_template").cloned().unwrap_or(Value::Null),
             "goal_token_budget": task.get("goal_token_budget").cloned().unwrap_or(Value::Null),
             "enabled": bool_field(task, "enabled").unwrap_or(false),
@@ -241,18 +243,15 @@ fn agent_summary(agent: &Value) -> Option<Value> {
     }))
 }
 
-fn runnable_status(task: &Value, agent: Option<&Value>) -> (bool, Option<&'static str>) {
-    if !bool_field(task, "enabled").unwrap_or(false) {
-        return (false, Some("task_disabled"));
+fn runnable_status(task: &Value, agent: Option<&Value>) -> (bool, Option<TaskRunDecision>) {
+    let enabled = |row: &Value| bool_field(row, "enabled").unwrap_or(false);
+    match gents_automation::operations::task::run_decision(
+        TaskPresence::of(Some(enabled(task))),
+        TaskPresence::of(agent.map(enabled)),
+        task.get("command")
+            .is_some_and(|command| !command.is_null()),
+    ) {
+        TaskRunDecision::Run => (true, None),
+        refused => (false, Some(refused)),
     }
-    if string_field(task, "agent_did").is_none() {
-        return (false, Some("missing_agent_did"));
-    }
-    let Some(agent) = agent else {
-        return (false, Some("agent_missing"));
-    };
-    if !bool_field(agent, "enabled").unwrap_or(false) {
-        return (false, Some("agent_disabled"));
-    }
-    (true, None)
 }

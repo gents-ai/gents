@@ -106,10 +106,12 @@ impl Fixture {
         let mut request = gents_protocol::request_admission::AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             "stopped",
-            &owner,
-            identity.did(),
-            &engineer.agent_did,
-            "session",
+            gents_protocol::request_admission::RequestScope::new(
+                &owner,
+                identity.did(),
+                &engineer.agent_did,
+                "session",
+            ),
             "Finish the work",
             "interactive",
             "2026-10-23T11:00:00Z",

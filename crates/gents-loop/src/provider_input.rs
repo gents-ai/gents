@@ -135,7 +135,7 @@ pub fn captured_context_for_provider(
     if let Message::User { content } = &mut message {
         for part in content {
             if let UserContent::Document(document) = part {
-                if document.media_type == Some(gents_protocol::message::DocumentMediaType::TXT)
+                if document.media_type == Some(gents_protocol::message::DocumentMediaType::Txt)
                     && document
                         .additional_params
                         .as_ref()

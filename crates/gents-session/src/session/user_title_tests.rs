@@ -16,9 +16,12 @@ async fn title_transitions_preserve_session_and_request_observation() {
     gents_store::test_support::acp_policies::install_identity_acp_policies(&node)
         .await
         .unwrap();
-    node.add_collection(gents_protocol::schemas::AGENT_SESSION)
-        .await
-        .unwrap();
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::node_store()
+            .render(gents_protocol::schemas::AGENT_SESSION),
+    )
+    .await
+    .unwrap();
     let response = node.execute(r#"mutation { create_AgentSession(input: {
             session_id: "title-session", node_did: "owner", agent_did: "agent",
             created_at: "2026-01-01T00:00:00Z", closed_at: "2026-01-02T00:00:00Z",
@@ -193,9 +196,12 @@ async fn generated_user_title_cases_drive_the_shared_session_owner() {
         gents_store::test_support::acp_policies::install_identity_acp_policies(&node)
             .await
             .unwrap();
-        node.add_collection(gents_protocol::schemas::AGENT_SESSION)
-            .await
-            .unwrap();
+        node.add_collection(
+            &gents_protocol::schemas::HomePolicyIds::node_store()
+                .render(gents_protocol::schemas::AGENT_SESSION),
+        )
+        .await
+        .unwrap();
         gents_store::config_client::ConfigAccess::transact_local_write(&node, None, "test.seed_model_title", |txn| {
                 let before = before.clone();
                 Box::pin(async move {

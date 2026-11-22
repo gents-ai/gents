@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 
 use gents_inference::llm::message::Message;
 use gents_loop::claude_messages_body::{prepare_replay_checkpoint, ReplayTag, TaggedAssistantRow};
+use gents_loop::compaction::history::StubReceipt;
 use gents_loop::loop_stream::TaggedMessage;
 use gents_protocol::transcript::{SourceBoundary, TranscriptFactRef};
 use gents_store::graphql::escape_graphql_string;
@@ -24,6 +25,10 @@ pub struct ReplayRowAssociation {
     pub source: Option<ReplayTag>,
     pub physical_header: Option<String>,
     pub block_indices: Vec<usize>,
+    /// The row's stub receipts while its reduction is staged. Never persisted,
+    /// so a later replay of the reduction reports no stub it did not make.
+    #[serde(skip)]
+    pub stub_receipts: Vec<StubReceipt>,
 }
 
 impl ReplayRowAssociation {
@@ -32,6 +37,7 @@ impl ReplayRowAssociation {
             source: row.source.clone(),
             physical_header: row.physical_header.clone(),
             block_indices: row.block_indices.clone(),
+            stub_receipts: row.stub_receipts.clone(),
         }
     }
 
@@ -41,6 +47,7 @@ impl ReplayRowAssociation {
             source: self.source,
             physical_header: self.physical_header,
             block_indices: self.block_indices,
+            stub_receipts: self.stub_receipts,
         }
     }
 }
@@ -216,6 +223,7 @@ fn tagged_checkpoint(
 #[derive(Debug)]
 pub struct StagedProviderContextReduction {
     intended: IntendedReduction,
+    retained_receipts: Vec<Vec<StubReceipt>>,
 }
 
 impl StagedProviderContextReduction {
@@ -225,14 +233,19 @@ impl StagedProviderContextReduction {
 
     pub(crate) fn checkpoint_tagged_messages(&self) -> Result<Vec<TaggedMessage>> {
         let intended = &self.intended;
-        tagged_checkpoint(
+        let mut messages = tagged_checkpoint(
             &intended.compacted_prefix_json,
             &intended.retained_suffix_json,
             &intended.replay_associations_json,
             &intended.checkpoint_messages_json,
             &intended.summary,
             &intended.request_doc_id,
-        )
+        )?;
+        let suffix = messages.len() - self.retained_receipts.len();
+        for (row, receipts) in messages[suffix..].iter_mut().zip(&self.retained_receipts) {
+            row.stub_receipts.clone_from(receipts);
+        }
+        Ok(messages)
     }
 
     /// The loop's turn outcome for this staged reduction: the checkpoint is
@@ -543,6 +556,12 @@ pub fn stage(input: NewProviderContextReduction<'_>) -> Result<StagedProviderCon
     )?;
     Ok(StagedProviderContextReduction {
         intended: IntendedReduction::from_input(&input, reduction_key)?,
+        retained_receipts: input
+            .replay_associations
+            .retained_rows
+            .iter()
+            .map(|row| row.stub_receipts.clone())
+            .collect(),
     })
 }
 
@@ -1202,6 +1221,7 @@ mod tests {
             source: None,
             physical_header: None,
             block_indices: Vec::new(),
+            stub_receipts: Vec::new(),
         }
     }
 
@@ -1210,7 +1230,71 @@ mod tests {
             source: Some(source),
             physical_header: Some("fixture-header".into()),
             block_indices: vec![0],
+            stub_receipts: Vec::new(),
         }
+    }
+
+    /// Receipts ride with a staged reduction's retained rows into the
+    /// dispatch it rebuilds, and are never stored with the row.
+    #[test]
+    fn a_staged_checkpoint_keeps_its_stub_receipts_and_its_stored_row_drops_them() {
+        let (retained, _, receipts) =
+            gents_loop::compaction::history::strip_tool_results(vec![Message::User {
+                content: vec![UserContent::ToolResult(ToolResult {
+                    id: "call".into(),
+                    call_id: Some("call".into()),
+                    content: vec![ToolResultContent::Text(Text {
+                        text: "x".repeat(4_000),
+                    })],
+                })],
+            }]);
+        assert_eq!(receipts.len(), 1);
+        let prefix = vec![Message::user("old")];
+        let checkpoint = checkpoint_from_suffix(&retained, "summary");
+        let mut retained_row = unassociated_row();
+        retained_row.stub_receipts = receipts.clone();
+        let associations = ReplayAssociations {
+            required: Vec::new(),
+            prefix_rows: vec![unassociated_row()],
+            retained_rows: vec![retained_row],
+        };
+        let staged = stage(NewProviderContextReduction {
+            agent_did: "did:key:agent",
+            node_did: "did:key:node",
+            requester_did: None,
+            session_id: "session",
+            request_id: "request",
+            request_doc_id: "request-doc",
+            request_commit_cid: "request-cid",
+            reduction_index: 1,
+            turn_index: 1,
+            parent_reduction_key: None,
+            producer_call: None,
+            source_boundary: &boundary("request-doc"),
+            compacted_prefix: &prefix,
+            retained_suffix: &retained,
+            checkpoint_messages: &checkpoint,
+            replay_associations: &associations,
+            summary: "summary",
+            original_tokens: 100,
+            compacted_tokens: 20,
+        })
+        .unwrap();
+        let dispatched = staged.checkpoint_tagged_messages().unwrap();
+        assert_eq!(dispatched.last().unwrap().stub_receipts, receipts);
+
+        let intended = &staged.intended;
+        let replayed = tagged_checkpoint(
+            &intended.compacted_prefix_json,
+            &intended.retained_suffix_json,
+            &intended.replay_associations_json,
+            &intended.checkpoint_messages_json,
+            &intended.summary,
+            &intended.request_doc_id,
+        )
+        .unwrap();
+        assert_eq!(replayed.len(), dispatched.len());
+        assert!(replayed.iter().all(|row| row.stub_receipts.is_empty()));
     }
 
     #[test]
@@ -1854,7 +1938,7 @@ mod tests {
             None,
         )
         .unwrap();
-        crate::test_support::grant_operator_user(
+        gents_store::test_support::grant_operator_user(
             &node,
             &gents_store::test_support::held_runtime_identity(&node_did),
             &outsider,

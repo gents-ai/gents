@@ -4,6 +4,7 @@ use gents_lean_vocab::families::goal_client_start_contracts_replacements::{
     ReplacedWire, ReplacementInput, ReplacementOutput,
 };
 use gents_protocol::request_admission::RequestPurpose;
+use gents_protocol::request_admission::RequestScope;
 use std::sync::Arc;
 
 #[tokio::test]
@@ -136,10 +137,12 @@ async fn drive_replacement(c: &ReplacementInput<String, String>) -> ReplacementO
     let mut initial = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "replacement-first",
-        identity.did(),
-        fixture.user.did(),
-        &fixture.parent.agent_did,
-        SESSION,
+        RequestScope::new(
+            identity.did(),
+            fixture.user.did(),
+            &fixture.parent.agent_did,
+            SESSION,
+        ),
         &start.objective,
         "interactive",
         Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -285,6 +288,7 @@ async fn drive_replacement(c: &ReplacementInput<String, String>) -> ReplacementO
         request: gents_store::config_client::prepare_request_evidence(
             fixture.user.as_ref(),
             gents_store::config_client::client_request_input(initial).unwrap(),
+            gents_protocol::schemas::HomePolicyIds::node_store(),
         )
         .await
         .unwrap(),

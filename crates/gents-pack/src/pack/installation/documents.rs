@@ -779,7 +779,9 @@ async fn prepare_document_pack_archive_inputs(
         },
     )
     .await?;
-    let mut root = root.with_variables(captured.into_inner().unwrap_or_else(|e| e.into_inner()));
+    let mut root = root.with_variables(super::super::agent_bindings::recorded_variables(
+        captured.into_inner().unwrap_or_else(|e| e.into_inner()),
+    ));
     let mut config = loaded.config;
     root.installer_root_tools = default_host_tool_roots(
         access,
@@ -1071,9 +1073,11 @@ async fn load_dependency(
         bindings,
     )
     .await;
-    let variables = resolver
-        .finish()
-        .with_context(|| format!("preparing dependency {coordinate}"))?;
+    let variables = super::super::agent_bindings::recorded_variables(
+        resolver
+            .finish()
+            .with_context(|| format!("preparing dependency {coordinate}"))?,
+    );
     let mut bound = bound?;
     let installer_root_tools = default_host_tool_roots(
         access,
@@ -1552,9 +1556,21 @@ pub async fn install_prepared_document_pack(
 ) -> Result<InstallReport> {
     let InstallTarget {
         access,
+        owner,
         plugin_home,
-        ..
     } = *target;
+    crate::pack::command_authority::require_command_task_grant(
+        access,
+        owner,
+        &format!(
+            "{}/{}",
+            archive.manifest().metadata.namespace,
+            archive.manifest().name
+        ),
+        prepared,
+        grant_authority,
+    )
+    .await?;
     anyhow::ensure!(
         document_ux_install_allowed(
             !archive.manifest().metadata.ux.is_empty(),

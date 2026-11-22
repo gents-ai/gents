@@ -8,6 +8,7 @@ mod execute;
 mod fault_injection;
 mod finalize;
 mod gate;
+mod home_provider;
 mod native;
 mod owner_staged;
 mod pack_interpreter;
@@ -31,6 +32,7 @@ use super::{
 };
 
 pub use apply_txn::ConfigApplyTxn;
+pub(crate) use auto_commit::ReadAccess;
 pub use cursor::ConfigCursor;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use fault_injection::NativeOperationObservation;

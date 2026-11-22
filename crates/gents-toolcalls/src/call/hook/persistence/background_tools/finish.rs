@@ -39,8 +39,8 @@ struct FinishIdentity {
 #[derive(Clone, Copy)]
 struct FinishCtx<'a> {
     node: &'a std::sync::Arc<defra_node::Node>,
-    live_outputs: &'a crate::call::hook::BackgroundLiveOutputState,
-    executions: &'a crate::call::hook::BackgroundExecutionRegistry,
+    live_outputs: &'a crate::call::hook::background_executions::BackgroundLiveOutputState,
+    executions: &'a crate::call::hook::background_executions::BackgroundExecutionRegistry,
     ids: &'a FinishIdentity,
 }
 
@@ -49,7 +49,7 @@ type BackgroundExecutionResult =
 
 fn resolve_execution(
     lifecycle: &ToolCallLifecycle,
-    executions: &crate::call::hook::BackgroundExecutionRegistry,
+    executions: &crate::call::hook::background_executions::BackgroundExecutionRegistry,
     execution: BackgroundExecutionResult,
 ) -> BackgroundExecutionResult {
     let execution = if let Some(doc) = lifecycle.doc_id() {
@@ -64,8 +64,12 @@ fn resolve_execution(
         let outcome = execution.as_ref().ok();
         if gents_session::exec::ownership::native_terminal_needs_confirmation(outcome) {
             let receipt = match outcome {
-                Some(outcome) => crate::call::hook::RetainedStopReceipt::from_outcome(outcome),
-                None => crate::call::hook::RetainedStopReceipt::Failure(
+                Some(outcome) => {
+                    crate::call::hook::background_executions::RetainedStopReceipt::from_outcome(
+                        outcome,
+                    )
+                }
+                None => crate::call::hook::background_executions::RetainedStopReceipt::Failure(
                     gents_loop::tool_call_lifecycle::ToolOutcome::tool_returned_error(
                         "native command panicked",
                     ),
@@ -82,7 +86,7 @@ fn resolve_execution(
 async fn settle_native_terminal(
     ctx: FinishCtx<'_>,
     lifecycle: ToolCallLifecycle,
-    execution_reservation: crate::call::hook::BackgroundExecutionReservation,
+    execution_reservation: crate::call::hook::background_executions::BackgroundExecutionReservation,
     execution: BackgroundExecutionResult,
 ) {
     let FinishCtx {
@@ -108,18 +112,18 @@ async fn settle_native_terminal(
     };
     let receipt = match execution.as_ref().ok() {
         Some(gents_loop::tool_call_lifecycle::ToolOutcome::Cancelled) => {
-            crate::call::hook::RetainedStopReceipt::Cancel(
-                gents_session::session::tool_call_state::CancelCause::Interrupted,
+            crate::call::hook::background_executions::RetainedStopReceipt::Cancel(
+                gents_protocol::tool_call::CancelCause::Interrupted,
                 executions.cancellation_reason(execution_call_id, execution_tool_doc_id),
             )
         }
         Some(gents_loop::tool_call_lifecycle::ToolOutcome::TimedOut { .. }) => {
-            crate::call::hook::RetainedStopReceipt::Timeout
+            crate::call::hook::background_executions::RetainedStopReceipt::Timeout
         }
         Some(outcome @ gents_loop::tool_call_lifecycle::ToolOutcome::Failed { .. }) => {
-            crate::call::hook::RetainedStopReceipt::Failure(outcome.clone())
+            crate::call::hook::background_executions::RetainedStopReceipt::Failure(outcome.clone())
         }
-        None => crate::call::hook::RetainedStopReceipt::Failure(
+        None => crate::call::hook::background_executions::RetainedStopReceipt::Failure(
             gents_loop::tool_call_lifecycle::ToolOutcome::tool_returned_error(
                 "native command panicked",
             ),
@@ -487,9 +491,9 @@ async fn finish_panicked(
 pub(in crate::call::hook::persistence) async fn finish_background_execution(
     mut lifecycle: ToolCallLifecycle,
     node: std::sync::Arc<defra_node::Node>,
-    live_outputs: crate::call::hook::BackgroundLiveOutputState,
-    executions: crate::call::hook::BackgroundExecutionRegistry,
-    execution_reservation: crate::call::hook::BackgroundExecutionReservation,
+    live_outputs: crate::call::hook::background_executions::BackgroundLiveOutputState,
+    executions: crate::call::hook::background_executions::BackgroundExecutionRegistry,
+    execution_reservation: crate::call::hook::background_executions::BackgroundExecutionReservation,
     execution: Result<gents_loop::tool_call_lifecycle::ToolOutcome, Box<dyn std::any::Any + Send>>,
 ) {
     let execution = resolve_execution(&lifecycle, &executions, execution);

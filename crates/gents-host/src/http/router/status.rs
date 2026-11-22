@@ -12,7 +12,7 @@ use tokio::sync::OnceCell;
 use super::metrics::P2P_METRICS_FETCH_BUDGET;
 use super::RuntimeHttpState;
 use crate::http::healthz::render_healthz_payload;
-use crate::http::prometheus::{load_metrics_core_data, with_local_native_executors};
+use crate::http::prometheus::store::{load_metrics_core_data, with_local_native_executors};
 use crate::http::self_view::load_self_view;
 use crate::http::version::version_response;
 
@@ -107,6 +107,7 @@ pub(super) async fn status_handler(
             "runtimes": [],
             "backends": [],
             "p2p": p2p.clone(),
+            NATIVE_EXECUTORS_STATUS_FIELD: gents_session::exec::status::active_native_executors(),
             "error": error.to_string(),
         }),
         Err(_) => json!({
@@ -128,6 +129,7 @@ pub(super) async fn status_handler(
             "runtimes": [],
             "backends": [],
             "p2p": p2p.clone(),
+            NATIVE_EXECUTORS_STATUS_FIELD: gents_session::exec::status::active_native_executors(),
             "error": "runtime metrics were not ready",
         }),
     };
@@ -174,6 +176,11 @@ async fn attest_status(
     });
     gents_store::identity::home_status::attest(identity.as_deref(), nonce, body).await;
 }
+
+/// This process's native executors, in a status whose store reads missed
+/// their budget and so carries no `liveness`: they are in memory, so no store
+/// budget withholds them (`tla/RuntimeStatusLiveness.tla`, `BudgetedExecutors`).
+pub const NATIVE_EXECUTORS_STATUS_FIELD: &str = "native_executors";
 
 /// This node's measured backend probes; the replicated `InferenceBackend`
 /// document never carries them (#640), so a failed probe's reason is read here.
@@ -305,10 +312,6 @@ async fn append_status_contracts(state: &RuntimeHttpState, body: &mut Value) {
             replicated_schema_status(&state.replicated_schema),
         );
         map.insert(
-            "non_canonical_lineages".to_string(),
-            non_canonical_lineages_status(&state.replicated_schema),
-        );
-        map.insert(
             gents_protocol::serve_lifecycle::STATUS_LIFECYCLE_FIELD.to_string(),
             json!(state.serve_lifecycle.current()),
         );
@@ -333,22 +336,6 @@ async fn append_status_contracts(state: &RuntimeHttpState, body: &mut Value) {
             );
         }
     }
-}
-
-/// Replicated collections whose active version differs from the canonical one, so peers
-/// and apps on the canonical lineage cannot sync them with this node.
-fn non_canonical_lineages_status(
-    replicated_schema: &OnceCell<gents_protocol::peer_schema::ReplicatedSchema>,
-) -> Value {
-    let Some(schema) = replicated_schema.get() else {
-        return Value::Null;
-    };
-    gents_store::schema::migration::non_canonical_lineages(
-        schema
-            .iter()
-            .map(|(name, identity)| (name.as_str(), identity.version_id.as_str())),
-    )
-    .map_or(Value::Null, |mismatches| json!(mismatches))
 }
 
 fn replicated_schema_status(

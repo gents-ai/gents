@@ -1467,7 +1467,6 @@ fn wire_sources_lists_job_plugins_and_target_packs() -> Result<()> {
             "--nocapture",
         ])
         .env("HOME", fixture.tempdir.path())
-        .env_remove(gents_store::client_journal::paths::DESKTOP_HOME_ENV)
         .env(WIRE_SOURCES_HOME_ENV, &fixture.home)
         .output()?;
     anyhow::ensure!(
@@ -1625,7 +1624,6 @@ fn starter_step(fixture: &std::path::Path, home: &std::path::Path, step: &str) -
             "--nocapture",
         ])
         .env("HOME", fixture)
-        .env_remove(gents_store::client_journal::paths::DESKTOP_HOME_ENV)
         .env(STARTER_HOME_ENV, home)
         .env(STARTER_STEP_ENV, step)
         .env(STARTER_ARCHIVES_ENV, starter_archives(fixture))
@@ -1736,7 +1734,7 @@ async fn core_packs_are_enabled_around_a_running_runtime() -> Result<()> {
         CorePack,
         Reason,
     >() {
-        if case.input.core_pack == CorePack::DynamicWorkflows && case.input.host_tools {
+        if case.input.core_pack == CorePack::DynamicWorkflows {
             case.check(serde_json::from_value::<Option<Reason>>(
                 reason.clone().unwrap_or_default(),
             )?);
@@ -1756,7 +1754,7 @@ async fn core_packs_are_enabled_around_a_running_runtime() -> Result<()> {
         CorePack,
         Reason,
     >() {
-        if case.input.core_pack == CorePack::DynamicWorkflows && case.input.host_tools {
+        if case.input.core_pack == CorePack::DynamicWorkflows {
             case.check(serde_json::from_value::<Option<Reason>>(
                 reason.clone().unwrap_or_default(),
             )?);

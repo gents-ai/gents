@@ -1,7 +1,7 @@
 use super::*;
 
-use rapidhash::{HashMapExt, RapidHashMap};
-use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
+use rapidhash::RapidHashMap;
+use std::sync::{Arc, Mutex as StdMutex, Weak};
 
 use tokio::sync::Mutex;
 
@@ -14,30 +14,30 @@ pub struct ToolNotificationPublication {
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct BackgroundCompletionGateKey {
-    node: usize,
     session_id: String,
     node_did: String,
     queue_key: String,
 }
 
+#[derive(Default)]
+struct BackgroundCompletionGates(
+    StdMutex<RapidHashMap<BackgroundCompletionGateKey, Weak<BackgroundCompletionGate>>>,
+);
+
 pub fn background_completion_gate(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     session_id: &str,
     node_did: &str,
     queue_key: &str,
 ) -> Arc<BackgroundCompletionGate> {
-    static GATES: OnceLock<
-        StdMutex<RapidHashMap<BackgroundCompletionGateKey, Weak<BackgroundCompletionGate>>>,
-    > = OnceLock::new();
-
     let key = BackgroundCompletionGateKey {
-        node: node as *const EmbeddedNode as usize,
         session_id: session_id.to_string(),
         node_did: node_did.to_string(),
         queue_key: queue_key.to_string(),
     };
-    let mut gates = GATES
-        .get_or_init(|| StdMutex::new(RapidHashMap::new()))
+    let gates = gents_store::node_extension::attached_or_default::<BackgroundCompletionGates>(node);
+    let mut gates = gates
+        .0
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(gate) = gates.get(&key).and_then(Weak::upgrade) {

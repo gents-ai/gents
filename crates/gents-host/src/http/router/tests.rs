@@ -16,7 +16,7 @@ use super::metrics::{
 };
 use super::status::{status_handler, STATUS_PROBE_BUDGET};
 use super::*;
-use crate::http::prometheus::MetricsRuntimeRow;
+use crate::http::prometheus::store::MetricsRuntimeRow;
 
 fn desktop_endpoint(
     url: impl Into<String>,
@@ -63,6 +63,7 @@ pub(crate) fn state() -> RuntimeHttpState {
         serve_lifecycle: Default::default(),
         document_acp: Default::default(),
         node_identity: None,
+        pack_watch_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(16)),
     }
 }
 
@@ -697,6 +698,7 @@ async fn a_client_wires_a_plugin_through_the_runtime_signing_each_write_itself()
                 serve_lifecycle: Default::default(),
             },
             None,
+            16,
         )
         .contract
         .route(

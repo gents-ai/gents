@@ -1,6 +1,7 @@
 import Proofs.Conformance.ClientDelegation
 import Proofs.Conformance.BackendPreflight
 import Proofs.Conformance.Identity.SessionChild
+import Proofs.Conformance.Identity.GenesisReadAccess
 import Proofs.Conformance.RemoteDelivery
 import Proofs.Conformance.StagedPermissionObjects
 import Proofs.Conformance.SessionStopAdmission
@@ -144,6 +145,8 @@ import Proofs.Conformance.AdmissionHandoff
 import Proofs.Conformance.Contracts.Json.TerminalSelection
 import Proofs.Conformance.WorkspaceCommandGrants
 import Proofs.Conformance.StorageFailure
+import Proofs.Conformance.DecisionRead
+import Proofs.Conformance.AssignmentReceiver
 import Proofs.Conformance.ClientAgentReadiness
 import Proofs.Conformance.RequestPatchPublicationCases
 import Proofs.Conformance.ClientSessionDeliveryCases
@@ -248,6 +251,8 @@ import Proofs.Conformance.ReceiptRecovery
 import Proofs.Conformance.HomeRetirement
 import Proofs.Conformance.StoreHandoff
 import Proofs.Conformance.StoreKeyCustody
+import Proofs.Conformance.AccessWake
+import Proofs.Conformance.ControlDebounce
 import Proofs.Conformance.DocumentAcpChoice
 import Proofs.Conformance.UserDelegation
 import Proofs.Conformance.OwedRegistration

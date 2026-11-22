@@ -469,12 +469,14 @@ async fn settle_case(input: &serde_json::Value) -> Vec<service::ServiceAction> {
     let settled = super::settle(
         &choice,
         &facts,
-        repair.busy,
-        asked,
-        None,
-        None,
-        None,
         &program,
+        super::Settling {
+            busy: repair.busy,
+            asked,
+            refusal: None,
+            manager: None,
+            serving_home: None,
+        },
         &mut steps,
     )
     .await;

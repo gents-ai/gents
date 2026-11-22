@@ -1,6 +1,6 @@
 # Logical workspace identity. Replicated. Host paths live on local placement
 # rows; remotes and git-common-dir are never stored.
-type IsolatedWorkspace @policy(id: "d323c1bbd2491661b9fbe4667b64d6d7a596f4ddc57346a41d90c10733ab3961", resource: "workspaces") @index(fields: ["owner_node_did", "workspace_id"], unique: true) {
+type IsolatedWorkspace @policy(id: "$household", resource: "workspaces") @index(fields: ["owner_node_did", "workspace_id"], unique: true) {
     workspace_id: String @index @immutable
     work_unit_id: String @index @immutable
     repository_id: String @index @immutable

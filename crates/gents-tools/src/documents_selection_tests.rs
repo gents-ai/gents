@@ -37,21 +37,29 @@ async fn modeled_skill_selection_and_revocation_follow_native_source_edges() -> 
                 .await?;
         }
     }
-    let previous_policy = gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID;
+    let previous_policy = gents_protocol::schemas::BuiltInPolicy::Household.placeholder();
     for schema in [
         gents_protocol::schemas::AGENT,
         gents_protocol::schemas::AGENT_CONTEXT,
         gents_protocol::schemas::TOOLS,
     ] {
-        node.add_collection(&schema.replace(previous_policy, &policy))
-            .await?;
+        node.add_collection(
+            &gents_protocol::schemas::HomePolicyIds::node_store()
+                .render(&schema.replace(previous_policy, &policy)),
+        )
+        .await?;
     }
-    let skill_schema = gents_protocol::schemas::SKILL.replacen(
-        "type Skill ",
-        &format!("type Skill @policy(id: \"{policy}\", resource: \"configuration\") "),
-        1,
-    );
-    node.add_collection(&skill_schema).await?;
+    let skill_schema = gents_protocol::schemas::HomePolicyIds::node_store()
+        .render(gents_protocol::schemas::SKILL)
+        .replacen(
+            "type Skill ",
+            &format!("type Skill @policy(id: \"{policy}\", resource: \"configuration\") "),
+            1,
+        );
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(&skill_schema),
+    )
+    .await?;
     let access = ConfigAccess::local_as(node.clone(), identity::Did::new(owner.did())?);
     let did = gents_store::graphql::escape_graphql_string(owner.did());
     let agent = gents_store::graphql::escape_graphql_string(selected.did());

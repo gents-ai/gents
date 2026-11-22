@@ -75,7 +75,11 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
         gents_protocol::schemas::INFERENCE_BACKEND_OBSERVATION,
         gents_protocol::schemas::BACKEND_CREDENTIAL,
     ] {
-        node.add_collection_as(&context, schema).await?;
+        node.add_collection_as(
+            &context,
+            &gents_protocol::schemas::HomePolicyIds::node_store().render(schema),
+        )
+        .await?;
     }
     // Configuration reference loading reads every configuration collection
     // on each apply, so the node must declare them all.
@@ -93,7 +97,11 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
                 .iter()
                 .any(|collection| collection.graphql_type() == *name)
         {
-            node.add_collection_as(&context, schema).await?;
+            node.add_collection_as(
+                &context,
+                &gents_protocol::schemas::HomePolicyIds::node_store().render(schema),
+            )
+            .await?;
         }
     }
     for permission in [

@@ -129,9 +129,7 @@ fn manifest_allows_tool(listing: &UxListing, surface: &str, tool: &str) -> bool 
 /// A Gents-managed collection is never signed for a page.
 async fn page_create_schema(access: &ConfigAccess, collection: &str) -> Result<String> {
     anyhow::ensure!(
-        !gents_store::schema::migration::DEFAULT_REGISTRY
-            .managed_names()
-            .any(|managed| managed == collection),
+        !gents_store::schema::catalog::is_runtime_collection(collection),
         "a page writes application collections only; {collection} is managed by Gents"
     );
     gents_pack::pack::authoring::export::collection_sdl(access, collection).await
@@ -263,7 +261,7 @@ pub struct UxDataWatch {
     access: ConfigAccess,
     request: UxDataCall,
     declaration: QueryToolDecl,
-    changes: events::DocumentChangeSubscription,
+    changes: gents_store::subscription_source::ChangeSubscription,
     last: Value,
     closed: bool,
 }

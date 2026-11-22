@@ -1,25 +1,34 @@
 use std::sync::{Arc, LazyLock};
 
+use super::catalog::{BaselineCollection, Catalog, SchemaError};
 use defra_node::Node;
-use gents_migration::{BaselineCollection, Registry};
 
 use crate::config_client::{ConfigAccess, ConfigClientError};
 
+/// A client's journal is a store of its own on the client, so its policies
+/// are always the node store's (`DocumentAcpChoice.PolicyIds.counter`).
+fn journal_ids() -> &'static gents_protocol::schemas::HomePolicyIds {
+    crate::local::document_acp::home_policy_ids(crate::local::document_acp::DocumentAcp::Local)
+}
+
 static COLLECTIONS: LazyLock<Vec<BaselineCollection<'static>>> = LazyLock::new(|| {
-    let baseline = &gents_migration::DEFAULT_BASELINE;
+    let baseline = super::catalog::baseline(journal_ids());
     let sdl = baseline
         .iter()
         .map(|entry| entry.sdl)
         .collect::<Vec<_>>()
         .join("\n");
-    let parsed = query::parse_sdl(&sdl).expect("canonical journal catalog must parse");
+    let parsed = query::parse_sdl(&journal_ids().render(&sdl))
+        .expect("canonical journal catalog must parse");
     baseline
         .iter()
         .filter(|entry| {
             parsed.iter().any(|collection| {
                 collection.name == entry.name
                     && collection.policy.as_ref().is_some_and(|policy| {
-                        policy.id == gents_protocol::schemas::CLIENT_JOURNAL_POLICY_ID
+                        policy.id
+                            == journal_ids()
+                                .id(gents_protocol::schemas::BuiltInPolicy::ClientJournal)
                             && policy.resource_name
                                 == gents_protocol::schemas::CLIENT_JOURNAL_POLICY_RESOURCE
                     })
@@ -36,7 +45,7 @@ pub enum JournalSchemaError {
     #[error("reading the client journal schema")]
     Read(#[source] defra_node::Error),
     #[error("initializing the client journal schema")]
-    Initialize(#[source] gents_migration::Error),
+    Initialize(#[source] SchemaError),
     #[error(fmt = gents_protocol::error_chain::held)]
     Access(#[from] ConfigClientError),
 }
@@ -58,14 +67,12 @@ pub async fn ensure_journal_schemas(node: Arc<Node>) -> Result<(), JournalSchema
                     });
                 }
             }
-            let registry = Registry {
+            let catalog = Catalog {
                 baseline: COLLECTIONS.as_slice(),
-                steps: &[],
                 ordinary_indexes: &[],
             };
-            gents_migration::ensure_migrations_with_registry(node.as_ref(), &registry)
+            super::catalog::ensure(node.as_ref(), &catalog)
                 .await
-                .map(|_| ())
                 .map_err(JournalSchemaError::Initialize)
         })
         .await
@@ -96,7 +103,9 @@ mod tests {
         assert!(collections.iter().all(|collection| {
             !collection.is_branchable
                 && collection.policy.as_ref().is_some_and(|policy| {
-                    policy.id == gents_protocol::schemas::CLIENT_JOURNAL_POLICY_ID
+                    policy.id
+                        == gents_protocol::schemas::HomePolicyIds::node_store()
+                            .id(gents_protocol::schemas::BuiltInPolicy::ClientJournal)
                         && policy.resource_name
                             == gents_protocol::schemas::CLIENT_JOURNAL_POLICY_RESOURCE
                 })

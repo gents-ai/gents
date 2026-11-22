@@ -1,4 +1,4 @@
-type EventSource @policy(id: "d323c1bbd2491661b9fbe4667b64d6d7a596f4ddc57346a41d90c10733ab3961", resource: "configuration") @index(fields: ["node_did", "event_source_id"], unique: true) {
+type EventSource @policy(id: "$household", resource: "configuration") @index(fields: ["node_did", "event_source_id"], unique: true) {
     event_source_id: String
     node_did: String @index
     display_name: String

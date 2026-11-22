@@ -313,11 +313,12 @@ impl<'a> ProtectedBackendStore<'a> {
         document_acp: DocumentAcp,
     ) -> Result<PreflightProtectedBackendStore<'a>> {
         let did = node_did(node)?;
-        let stamped = super::store_compat::stamped(&self.data);
+        let ids = document_acp::home_policy_ids(document_acp::recorded(&self.data)?);
+        let stamped = super::store_compat::stamped(&self.data, ids);
         if !stamped {
             checked_copy(
                 &self.data,
-                super::store_compat::check_copy(&self.data, key).await,
+                super::store_compat::check_copy(&self.data, key, ids).await,
             )?;
         }
         let builder = super::store_key::persistent_builder(
@@ -343,7 +344,7 @@ impl<'a> ProtectedBackendStore<'a> {
         })?;
         shutdown?;
         if !stamped {
-            super::store_compat::record_compatible(&self.data)?;
+            super::store_compat::record_compatible(&self.data, ids)?;
         }
         Ok(PreflightProtectedBackendStore {
             store: self,
@@ -406,9 +407,13 @@ impl PreflightProtectedBackendStore<'_> {
         policy: Arc<dyn super::ToolSourcePolicy>,
         plugins: Vec<super::ProjectedPlugin>,
     ) -> Result<(Arc<defra_node::Node>, BackendAdmission)> {
-        let projection =
-            super::document_projector_with_installed_plugins(runtime.clone(), policy, plugins)
-                .map_err(|error| BackendProtectionError::Schema(error.into()))?;
+        let projection = super::document_projector_with_installed_plugins(
+            runtime.clone(),
+            policy,
+            plugins,
+            document_acp::home_policy_ids(self.document_acp),
+        )
+        .map_err(|error| BackendProtectionError::Schema(error.into()))?;
         let builder =
             super::store_key::persistent_builder(&self.store.data, key, self.block_cache_bytes)
                 .map_err(|error| BackendProtectionError::Schema(error.into()))?
@@ -492,13 +497,17 @@ async fn require_runtime_may_start(node: &defra_node::Node) -> Result<()> {
 
 async fn validate_binding(node: &defra_node::Node) -> Result<()> {
     require_runtime_may_start(node).await?;
-    validate_policy_binding(node).await
+    validate_policy_binding(node, document_acp::node_policy_ids(node)).await
 }
 
-/// The collection binding alone, for a copy of a store opened without its
-/// node's identity, which [`require_runtime_may_start`] needs.
-pub(crate) async fn validate_policy_binding(node: &defra_node::Node) -> Result<()> {
-    use gents_protocol::schemas::{AGENT_OWNERSHIP_POLICY_ID, INFERENCE_BACKEND_NAME};
+/// The collection binding alone, against the home's policy `ids`, for a copy
+/// of a store opened without its node's identity, which
+/// [`require_runtime_may_start`] needs.
+pub(crate) async fn validate_policy_binding(
+    node: &defra_node::Node,
+    ids: &gents_protocol::schemas::HomePolicyIds,
+) -> Result<()> {
+    use gents_protocol::schemas::{BuiltInPolicy, INFERENCE_BACKEND_NAME};
     let current = node
         .get_collection(INFERENCE_BACKEND_NAME)?
         .ok_or(BackendProtectionError::InvalidBinding)?;
@@ -510,7 +519,7 @@ pub(crate) async fn validate_policy_binding(node: &defra_node::Node) -> Result<(
         matched = true;
         if version.is_branchable
             || !version.policy.as_ref().is_some_and(|policy| {
-                policy.id == AGENT_OWNERSHIP_POLICY_ID
+                policy.id == ids.id(BuiltInPolicy::Household)
                     && policy.resource_name == "secret_configuration"
             })
         {

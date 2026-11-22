@@ -22,7 +22,7 @@ enum Provider {
     EmbeddedVera,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum Admission {
     NodeStore,
@@ -30,17 +30,6 @@ enum Admission {
     SwitchRefused,
     VeraUnavailable,
     NodeKeyCannotSign,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum Entry {
-    NodeStore,
-    EmbeddedVera,
-    SwitchRefused,
-    VeraUnavailable,
-    NodeKeyCannotSign,
-    NotYetUsable,
 }
 
 fn document_acp(provider: Provider) -> DocumentAcp {
@@ -100,42 +89,29 @@ fn admission_matches_the_lean_model() {
                 node.as_ref(),
                 input.available,
             );
-            match admitted {
+            let entered = enter(
+                match input.store {
+                    Record::Fresh => None,
+                    Record::CreatedOnNodeStore => Some(DocumentAcp::Local),
+                    Record::CreatedOnEmbeddedVera => Some(DocumentAcp::Vera),
+                },
+                document_acp(input.requested),
+                input.available,
+                input.node_key_signs,
+            );
+            let [admitted, entered] = [admitted, entered].map(|decided| match decided {
                 Ok(DocumentAcp::Local) => Admission::NodeStore,
                 Ok(DocumentAcp::Vera) => Admission::EmbeddedVera,
                 Err(DocumentAcpError::Switch { .. }) => Admission::SwitchRefused,
                 Err(DocumentAcpError::Unavailable) => Admission::VeraUnavailable,
                 Err(DocumentAcpError::NodeKeyCannotSign { .. }) => Admission::NodeKeyCannotSign,
                 Err(error) => panic!("{input:?}: {error}"),
-            }
-        },
-    );
-}
-
-#[test]
-fn entering_a_home_matches_the_lean_model() {
-    gents_lean_vocab::families::document_acp_choice_enter::replay::<Entry, Provider, Record>(
-        |input| {
-            let recorded = match input.store {
-                Record::Fresh => None,
-                Record::CreatedOnNodeStore => Some(DocumentAcp::Local),
-                Record::CreatedOnEmbeddedVera => Some(DocumentAcp::Vera),
-            };
-            let entered = enter(
-                recorded,
-                document_acp(input.requested),
-                input.available,
-                input.node_key_signs,
+            });
+            assert_eq!(
+                admitted, entered,
+                "{input:?}: the init config's choice is entered as its store admits it"
             );
-            match entered {
-                Ok(DocumentAcp::Local) => Entry::NodeStore,
-                Ok(DocumentAcp::Vera) => Entry::EmbeddedVera,
-                Err(DocumentAcpError::Switch { .. }) => Entry::SwitchRefused,
-                Err(DocumentAcpError::Unavailable) => Entry::VeraUnavailable,
-                Err(DocumentAcpError::NodeKeyCannotSign { .. }) => Entry::NodeKeyCannotSign,
-                Err(DocumentAcpError::NotYetUsable) => Entry::NotYetUsable,
-                Err(error) => panic!("{input:?}: {error}"),
-            }
+            admitted
         },
     );
 }
@@ -308,6 +284,13 @@ enum Loop {
 }
 
 #[test]
+fn access_wakes_match_the_lean_model() {
+    gents_lean_vocab::families::access_wake_listens::replay::<Provider>(|input| {
+        super::access_wakes(document_acp(input.provider))
+    });
+}
+
+#[test]
 fn periodic_publication_matches_the_lean_model() {
     gents_lean_vocab::families::identity_node_publication_periodic::replay::<
         Loop,
@@ -389,7 +372,6 @@ fn what_a_person_reads_names_no_internals() {
         DocumentAcpError::NodeKeyCannotSign {
             node: "did:key:z6Mk".into(),
         },
-        DocumentAcpError::NotYetUsable,
         DocumentAcpError::HeldUserKey,
         DocumentAcpError::DelegationRequired,
         DocumentAcpError::TransportGrantsAwaitProvider,
@@ -429,4 +411,11 @@ fn what_a_person_reads_names_no_internals() {
         }
         assert!(!lowered.contains("access control"), "{text:?}");
     }
+}
+
+#[test]
+fn policy_ids_match_the_lean_model() {
+    gents_lean_vocab::families::document_acp_choice_policy_ids::replay::<super::PolicyIds, Provider>(
+        |input| super::policy_ids(document_acp(input.provider)),
+    );
 }

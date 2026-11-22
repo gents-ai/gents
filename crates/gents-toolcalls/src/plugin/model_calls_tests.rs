@@ -10,7 +10,7 @@ use crate::plugin::rounds::{drive, HostCalls, Round};
 use futures::future::BoxFuture;
 use gents_documents::InferenceProfile;
 use gents_pack::plugin::model_binding::{
-    endpoint_for, AccessModels, ModelBinding, ModelEndpoint, ModelResolver,
+    endpoint_for, AccessModels, ModelBinding, ModelCallLimiters, ModelEndpoint, ModelResolver,
 };
 use gents_pack::plugin::store::{self, InstalledPlugin};
 use gents_pack::plugin::test_fixtures::{asking_plugin_wat, installed_plugin};
@@ -40,6 +40,7 @@ struct Fake {
     seen: Arc<Mutex<Vec<Seen>>>,
     in_flight: Arc<AtomicUsize>,
     max_in_flight: Arc<AtomicUsize>,
+    limiters: Arc<ModelCallLimiters>,
 }
 
 impl Fake {
@@ -120,6 +121,7 @@ impl Fake {
             seen: shared.seen.clone(),
             in_flight: shared.in_flight.clone(),
             max_in_flight: shared.max_in_flight.clone(),
+            limiters: Arc::default(),
         };
         let app = axum::Router::new()
             .route("/v1/chat/completions", post(handle))
@@ -139,7 +141,7 @@ impl Fake {
             api_key: Some(KEY.to_owned()),
             model: "chandra".to_owned(),
             max_concurrent,
-            backend_key: self.url.clone(),
+            limiter: self.limiters.limiter(&self.url, max_concurrent),
             connect_timeout: Duration::from_secs(2),
             request_timeout: Duration::from_secs(30),
             max_output_tokens: None,
@@ -559,17 +561,48 @@ async fn modeled_plugin_profile_uses_immediate_actor_and_rechecks_each_request()
                 .await?;
         }
     }
-    assert!(gents_protocol::schemas::INFERENCE_PROFILE
-        .contains(gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID));
-    let profile_schema = gents_protocol::schemas::INFERENCE_PROFILE
-        .replace(gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID, &policy);
-    node.add_collection_as(&ctx, &profile_schema).await?;
-    let backend_schema = gents_protocol::schemas::INFERENCE_BACKEND_METADATA
-        .replace(gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID, &policy);
-    node.add_collection_as(&ctx, &backend_schema).await?;
-    let credential_schema = gents_protocol::schemas::BACKEND_CREDENTIAL
-        .replace(gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID, &policy);
-    node.add_collection_as(&ctx, &credential_schema).await?;
+    assert!(gents_protocol::schemas::HomePolicyIds::node_store()
+        .render(gents_protocol::schemas::INFERENCE_PROFILE)
+        .contains(
+            gents_protocol::schemas::HomePolicyIds::node_store()
+                .id(gents_protocol::schemas::BuiltInPolicy::Household)
+        ));
+    let profile_schema = gents_protocol::schemas::HomePolicyIds::node_store()
+        .render(gents_protocol::schemas::INFERENCE_PROFILE)
+        .replace(
+            gents_protocol::schemas::HomePolicyIds::node_store()
+                .id(gents_protocol::schemas::BuiltInPolicy::Household),
+            &policy,
+        );
+    node.add_collection_as(
+        &ctx,
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(&profile_schema),
+    )
+    .await?;
+    let backend_schema = gents_protocol::schemas::HomePolicyIds::node_store()
+        .render(gents_protocol::schemas::INFERENCE_BACKEND_METADATA)
+        .replace(
+            gents_protocol::schemas::HomePolicyIds::node_store()
+                .id(gents_protocol::schemas::BuiltInPolicy::Household),
+            &policy,
+        );
+    node.add_collection_as(
+        &ctx,
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(&backend_schema),
+    )
+    .await?;
+    let credential_schema = gents_protocol::schemas::HomePolicyIds::node_store()
+        .render(gents_protocol::schemas::BACKEND_CREDENTIAL)
+        .replace(
+            gents_protocol::schemas::HomePolicyIds::node_store()
+                .id(gents_protocol::schemas::BuiltInPolicy::Household),
+            &policy,
+        );
+    node.add_collection_as(
+        &ctx,
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(&credential_schema),
+    )
+    .await?;
     let access = ConfigAccess::Graphql(
         gents_store::config_client::GraphqlEndpoint::as_principal(
             format!("http://{address}/api/v0/graphql"),

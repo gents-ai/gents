@@ -18,12 +18,12 @@ use serde_json::{json, Value};
 
 use crate::support::fixtures::bind_default_agent_backend;
 use crate::support::mock_endpoint::MockModelEndpoint;
-use crate::support::snapshots::SnapshotReader;
 use crate::support::{install_managed_agent, load_managed_fixture_user, test_p2p_db, TestDb};
 use gents_p2p::test_support::enrollment::{
     authorize_enrollment_generation, authorize_enrollment_peer, wait_for_peer_identity,
     EnrollmentGeneration,
 };
+use gents_store::test_support::snapshot_reader::SnapshotReader;
 
 const NETWORK_ID: &str = "net-app-collection-pairing";
 const NETWORK_NAME: &str = "App Collection Pairing Net";
@@ -137,7 +137,7 @@ async fn signed_invitation_delivers_request_without_http() {
 
 async fn add_collection(node: &Arc<EmbeddedNode>, sdl: &str) {
     ConfigAccess::local(node.clone())
-        .add_collection(sdl)
+        .add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(sdl))
         .await
         .unwrap_or_else(|error| panic!("add_collection {sdl}: {error}"));
 }
@@ -161,7 +161,8 @@ async fn register_guarded_change_schema(node: &Arc<EmbeddedNode>) {
         node,
         &format!(
             r#"type GuardedChange @policy(id: "{}", resource: "configuration") {{ text: String }}"#,
-            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID
+            gents_protocol::schemas::HomePolicyIds::node_store()
+                .id(gents_protocol::schemas::BuiltInPolicy::Household)
         ),
     )
     .await;

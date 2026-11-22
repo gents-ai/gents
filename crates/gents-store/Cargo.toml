@@ -11,7 +11,7 @@ default = ["defra-node/native"]
 typescript = ["gents-loop/typescript", "gents-protocol/typescript"]
 # Carries the single-validator Vera node a home may decide document access
 # through. It runs on a runtime of its own; see AGENTS.md.
-vera = ["defra-node/embedded-vera", "dep:vera-embedded", "dep:vera-node"]
+vera = ["defra-node/embedded-vera", "dep:vera-embedded", "dep:vera-modules", "dep:vera-node"]
 live-e2e = []
 test-home-guard = []
 test-fixtures = ["test-home-guard", "axum/ws"]
@@ -39,7 +39,6 @@ defra-http.workspace = true
 gents-loop = { workspace = true, features = ["native"] }
 gents-protocol.workspace = true
 gents-schemas.workspace = true
-gents-migration = { path = "../gents-migration" }
 defra-node.workspace = true
 dirs.workspace = true
 events.workspace = true
@@ -69,6 +68,7 @@ vera-crypto.workspace = true
 vera-delegation.workspace = true
 hex = "0.4"
 vera-embedded = { workspace = true, optional = true, features = ["node"] }
+vera-modules = { workspace = true, optional = true }
 vera-node = { workspace = true, optional = true }
 reqwest = { workspace = true, features = ["stream"] }
 tempfile = "3"
@@ -84,4 +84,5 @@ gents-workspace-hack = { workspace = true }
 axum = { version = "0.8", features = ["ws"] }
 gents-lean-contract.workspace = true
 gents-lean-vocab.workspace = true
+vera-modules.workspace = true
 tokio-util.workspace = true

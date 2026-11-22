@@ -14,7 +14,11 @@ pub(super) fn ensure_launchable_here<R>(
 where
     R: Runtime,
 {
-    let executable = resolve_service_executable(app, state.policy.desktop_paths.root())?;
+    let executable = resolve_service_executable(
+        app,
+        state.policy.desktop_paths.root(),
+        state.policy.service_executable.as_deref(),
+    )?;
     ensure_installable_location(executable.service_path())
 }
 
@@ -52,7 +56,11 @@ where
             "managed server requires a local node home",
         )
     })?;
-    let executable = resolve_service_executable(app, state.policy.desktop_paths.root())?;
+    let executable = resolve_service_executable(
+        app,
+        state.policy.desktop_paths.root(),
+        state.policy.service_executable.as_deref(),
+    )?;
     if install_runtime {
         ensure_installable_location(executable.service_path())?;
         executable.install()?;

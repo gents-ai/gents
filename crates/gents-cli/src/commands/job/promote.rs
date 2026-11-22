@@ -67,7 +67,7 @@ impl std::fmt::Display for JavyMissing {
         write!(
             f,
             "javy is not runnable ({}); promotion builds the workflow with javy 8.1.1, which \
-             .github/scripts/setup-afterburner-toolchains.sh installs (or set JAVY to its path)",
+             .github/scripts/setup-afterburner-toolchains.sh installs (or pass its path as --javy)",
             self.0
         )
     }
@@ -139,11 +139,6 @@ fn reserve_promoted_dir(home: &Path, name: &str) -> Result<PathBuf> {
     Ok(dir)
 }
 
-/// The javy command promotion checks: `JAVY` when set, otherwise `javy` on PATH.
-pub fn javy_command() -> String {
-    std::env::var("JAVY").unwrap_or_else(|_| "javy".into())
-}
-
 fn javy_version(javy: &str) -> Result<String, JavyMissing> {
     match gents_session::exec::native_spawn::output_std(
         std::process::Command::new(javy).arg("--version"),
@@ -165,6 +160,9 @@ pub struct PromoteRequest<'a> {
     pub selector: &'a str,
     pub name: Option<&'a str>,
     pub agent: Option<&'a str>,
+    /// Where the promoted pack's dependencies resolve; `None` is the public
+    /// registry.
+    pub registry: Option<&'a str>,
 }
 
 /// Promotes the dynamic run `selector` names (its address
@@ -184,6 +182,7 @@ pub async fn promote(
         selector,
         name,
         agent,
+        registry,
     } = *request;
     report(PromoteStep::Javy);
     let javy = javy_version(javy)?;
@@ -267,7 +266,7 @@ pub async fn promote(
         },
         output: OutputFormat::Json,
         force_rebind_concrete_did: false,
-        registry: None,
+        registry: registry.map(str::to_owned),
         drift: PackDriftArgs::default(),
         grant_authority: true,
         wire: Vec::new(),
@@ -276,9 +275,12 @@ pub async fn promote(
         explicit: true,
     };
     let installed = async {
-        let source =
-            gents_pack::pack::resolved_pack::resolve_pack_source(&install.package, None, home)
-                .await?;
+        let source = gents_pack::pack::resolved_pack::resolve_pack_source(
+            &install.package,
+            install.registry.as_deref(),
+            home,
+        )
+        .await?;
         crate::commands::pack::install_documents_pack(access, actor, &source, &install, true)
             .await
             .map_err(gents_pack::pack::PackChangeError::into_anyhow)
@@ -389,6 +391,7 @@ mod tests {
                 selector: "no-such-job",
                 name: None,
                 agent: None,
+                registry: None,
             },
             "/nonexistent/javy",
             &mut |step| steps.push(step),

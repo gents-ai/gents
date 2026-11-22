@@ -18,6 +18,7 @@ async fn node(identity: Arc<KeyIdentity>, directory: &std::path::Path) -> Arc<de
                 gents_store::local::document_projector(
                     identity.clone(),
                     std::sync::Arc::new(gents_tools::surface::ToolCeiling::meta_only()),
+                    gents_protocol::schemas::HomePolicyIds::node_store(),
                 )
                 .unwrap(),
             )

@@ -1,4 +1,4 @@
-type PackInstallation @policy(id: "d323c1bbd2491661b9fbe4667b64d6d7a596f4ddc57346a41d90c10733ab3961", resource: "configuration") @index(fields: ["node_did", "coordinate"], unique: true) {
+type PackInstallation @policy(id: "$household", resource: "configuration") @index(fields: ["node_did", "coordinate"], unique: true) {
     node_did: String @index @immutable
     coordinate: String @index @immutable
     version: String

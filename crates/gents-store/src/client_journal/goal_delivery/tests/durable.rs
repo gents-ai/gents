@@ -124,8 +124,11 @@ async fn competing_goal_reservations_and_acknowledgement_survive_reopen() -> Res
             Ok::<_, anyhow::Error>(node)
         };
         let node = open().await?;
-        node.add_collection(&crate::test_support::unbound_journal_schema())
-            .await?;
+        node.add_collection(
+            &gents_protocol::schemas::HomePolicyIds::node_store()
+                .render(&crate::test_support::unbound_journal_schema()),
+        )
+        .await?;
         let (left, right) = tokio::join!(
             records::goal::reserve(&node, &proposal),
             records::goal::reserve(&node, &proposal)

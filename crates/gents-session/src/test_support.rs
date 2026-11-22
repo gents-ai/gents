@@ -368,7 +368,7 @@ pub async fn fixture(
 }
 
 use gents_store::config_client::ConfigAccess;
-use gents_store::identity::{KeyIdentity, NodeIdentity};
+use gents_store::identity::KeyIdentity;
 
 pub async fn publish_provider_message(
     writer: &crate::request::streaming::DefraStreamWriter,
@@ -569,21 +569,6 @@ pub async fn serve_client_node(
     let db = gents_inference::test_support::test_db(name, composition).await;
     let runtime = gents_store::test_support::held_runtime_identity(db.node_identity.did());
     (db, runtime)
-}
-
-/// Grants the user the `OperatorUser` set as the runtime admin, as
-/// `signed_test_node` does. Without it, seeding the user's client-signed
-/// Node and Agent ends in an incomplete signing conversation.
-pub async fn grant_operator_user(
-    node: &Arc<defra_node::Node>,
-    runtime: &dyn NodeIdentity,
-    user: &KeyIdentity,
-) {
-    let admin = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
-    gents_store::identity::GrantSet::OperatorUser
-        .grant(&admin, &identity::Did::new(user.did()).unwrap())
-        .await
-        .unwrap();
 }
 
 pub async fn sequenced_history_on(

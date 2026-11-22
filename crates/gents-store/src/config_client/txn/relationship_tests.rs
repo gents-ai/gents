@@ -64,7 +64,7 @@ async fn modeled_native_entity_sets_preserve_selection_sources() -> anyhow::Resu
         node.add_nac_actor_relationship_as(&context, permission.as_str(), profile_owner.did())
             .await?;
     }
-    node.add_collection(&format!("type SetAgent @policy(id: \"{policy}\", resource: \"agents\") {{ label: String }}\ntype SetProfile @policy(id: \"{policy}\", resource: \"configuration\") {{ label: String }}\ntype SetBackendMetadata @policy(id: \"{policy}\", resource: \"configuration\") {{ label: String }}\ntype SetBackendObservation @policy(id: \"{policy}\", resource: \"configuration\") {{ label: String }}\ntype SetSampling @policy(id: \"{policy}\", resource: \"configuration\") {{ label: String }}\ntype SetExecution @policy(id: \"{policy}\", resource: \"configuration\") {{ label: String }}\ntype SetRetry @policy(id: \"{policy}\", resource: \"configuration\") {{ label: String }}")).await?;
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&format!("type SetAgent @policy(id: \"{policy}\", resource: \"agents\") {{ label: String }}\ntype SetProfile @policy(id: \"{policy}\", resource: \"configuration\") {{ label: String }}\ntype SetBackendMetadata @policy(id: \"{policy}\", resource: \"configuration\") {{ label: String }}\ntype SetBackendObservation @policy(id: \"{policy}\", resource: \"configuration\") {{ label: String }}\ntype SetSampling @policy(id: \"{policy}\", resource: \"configuration\") {{ label: String }}\ntype SetExecution @policy(id: \"{policy}\", resource: \"configuration\") {{ label: String }}\ntype SetRetry @policy(id: \"{policy}\", resource: \"configuration\") {{ label: String }}"))).await?;
     let owner = ConfigAccess::local_as(node.clone(), identity::Did::new(root.did())?);
     let profile_access = ConfigAccess::local_managed_agent(
         node.clone(),
@@ -782,9 +782,11 @@ async fn embedded_relationship_grants_and_revocations_follow_transaction_finalit
         &defra_core::RequestContext::default().with_identity(Some(owner_did.clone())),
         "name: TxnRelationships\nresources:\n  - name: rows\n    relations:\n      - name: reader\n    permissions:\n      - name: read\n        expr: reader\n      - name: update\n      - name: delete\n",
     ).await.unwrap();
-    node.add_collection(&format!(
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(&format!(
         "type TxnRelationshipRow @policy(id: \"{policy}\", resource: \"rows\") {{ value: String }}"
-    ))
+    )),
+    )
     .await
     .unwrap();
     let owner = identity::Did::new(owner_did.as_str()).unwrap();
@@ -902,11 +904,14 @@ async fn modeled_node_owners_and_administrators_manage_only_their_selected_relat
                 .await?;
         }
     }
-    node.add_collection_as(&owner_context, gents_protocol::schemas::NODE)
-        .await?;
-    node.add_collection_as(&owner_context, &format!(
+    node.add_collection_as(
+        &owner_context,
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(gents_protocol::schemas::NODE),
+    )
+    .await?;
+    node.add_collection_as(&owner_context, &gents_protocol::schemas::HomePolicyIds::node_store().render(&format!(
         "type ManagerConfig @policy(id: \"{policy}\", resource: \"configuration\") {{ label: String }}\ntype ManagerRoot @policy(id: \"{policy}\", resource: \"workspace_roots\") {{ label: String }}\ntype ManagerAgent @policy(id: \"{policy}\", resource: \"agents\") {{ label: String }}"
-    )).await?;
+    ))).await?;
     let client = |key: &dyn NodeIdentity| -> anyhow::Result<ConfigAccess> {
         Ok(ConfigAccess::Graphql(
             GraphqlEndpoint::as_principal(&endpoint, key.did())

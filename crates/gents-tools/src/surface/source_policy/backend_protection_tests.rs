@@ -33,13 +33,16 @@ async fn create_unbound_legacy_store(
     key: &StoreKey,
     did: &str,
 ) -> anyhow::Result<()> {
-    let unbound = gents_protocol::schemas::INFERENCE_BACKEND.replace(
-        &format!(
-            " @policy(id: \"{}\", resource: \"secret_configuration\")",
-            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID
-        ),
-        "",
-    );
+    let unbound = gents_protocol::schemas::HomePolicyIds::node_store()
+        .render(gents_protocol::schemas::INFERENCE_BACKEND)
+        .replace(
+            &format!(
+                " @policy(id: \"{}\", resource: \"secret_configuration\")",
+                gents_protocol::schemas::HomePolicyIds::node_store()
+                    .id(gents_protocol::schemas::BuiltInPolicy::Household)
+            ),
+            "",
+        );
     let node = gents_store::local::store_key::persistent_builder(
         data,
         key,
@@ -48,7 +51,8 @@ async fn create_unbound_legacy_store(
     .with_node_identity_did(did.to_owned())
     .build()
     .await?;
-    node.add_collection(&unbound).await?;
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&unbound))
+        .await?;
     let created = node.execute(r#"mutation { create_InferenceBackend(input:{node_did:"legacy", backend_id:"b", name:"old", provider_kind:"OpenAiCompatible", endpoint:"https://provider.example", auth:{kind:"api_key",key:"legacy-secret"}}) {_docID} }"#).await;
     anyhow::ensure!(
         !created.has_errors(),
@@ -164,7 +168,11 @@ async fn only_the_fresh_store_and_its_key_can_reopen_protected_backend() -> anyh
                         )
                         .await?;
                     gents_store::schema::ensure_runtime_schemas(&node).await?;
-                    for entry in gents_migration::DEFAULT_BASELINE.iter() {
+                    for entry in gents_store::schema::catalog::baseline(
+                        gents_protocol::schemas::HomePolicyIds::node_store(),
+                    )
+                    .iter()
+                    {
                         let collection = node.get_collection(entry.name)?.with_context(|| {
                             format!("missing fresh baseline collection {}", entry.name)
                         })?;

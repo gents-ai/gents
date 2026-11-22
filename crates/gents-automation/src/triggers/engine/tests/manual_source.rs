@@ -11,6 +11,7 @@ fn resolved_task_for_test(task_id: &str, agent_did: &str, prompt_template: &str)
         goal_token_budget: None,
         output_schema_ref: None,
         hooks: Vec::new(),
+        command: None,
     }
 }
 

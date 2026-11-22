@@ -110,7 +110,7 @@ pub(super) async fn seeded_request(
     request_id: &str,
 ) -> AgentRequest {
     use gents_protocol::request_admission::{
-        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
     };
 
     let actor: identity::Did = signer.did().parse().unwrap();
@@ -124,10 +124,7 @@ pub(super) async fn seeded_request(
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         request_id,
-        signer.node_did(),
-        signer.did(),
-        signer.did(),
-        &session_id,
+        RequestScope::new(signer.node_did(), signer.did(), signer.did(), &session_id),
         "hello",
         "interactive",
         "2026-04-15T00:00:00Z",
@@ -461,17 +458,14 @@ async fn await_call_rows(
     awaited: &str,
     ready: impl Fn(&[Value]) -> bool,
 ) -> Vec<Value> {
-    let mut changes =
-        gents_store::subscription_source::subscribe_collections(node, ["InferenceCall"]).unwrap();
-    loop {
+    gents_store::test_support::read_when_changed(node, "InferenceCall", awaited, async || {
         let rows = call_rows(node, signer).await;
         if ready(&rows) {
-            return rows;
+            return Ok(rows);
         }
-        if changes.recv().await.is_none() {
-            panic!("InferenceCall changes closed while awaiting {awaited}, last rows={rows:?}");
-        }
-    }
+        Err(Value::Array(rows))
+    })
+    .await
 }
 
 async fn wait_for_call_row_count(

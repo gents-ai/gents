@@ -2,9 +2,9 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
-use gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID;
+use gents_protocol::schemas::{BuiltInPolicy, HomePolicyIds};
 use gents_store::config_client::owed::settle_owed_while_online;
 use gents_store::config_client::user_write::UserWriteRefusal;
 use gents_store::config_client::{
@@ -82,10 +82,7 @@ async fn request(
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         id,
-        home.node.did(),
-        user.did(),
-        agent,
-        "stored-create-session",
+        RequestScope::new(home.node.did(), user.did(), agent, "stored-create-session"),
         "hello",
         "interactive",
         chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
@@ -105,12 +102,20 @@ struct Prepared {
 
 async fn prepare(user: &ClientUser, create: AgentRequestCreate) -> anyhow::Result<Prepared> {
     let input = gents_store::config_client::client_request_input(&create)?;
-    let evidence =
-        gents_store::config_client::prepare_request_evidence(user, input.clone()).await?;
-    let doc_id = gents_store::config_client::verify_request_evidence(input, evidence.clone())
-        .await?
-        .doc_id()
-        .to_owned();
+    let evidence = gents_store::config_client::prepare_request_evidence(
+        user,
+        input.clone(),
+        HomePolicyIds::embedded_vera(),
+    )
+    .await?;
+    let doc_id = gents_store::config_client::verify_request_evidence(
+        input,
+        evidence.clone(),
+        HomePolicyIds::embedded_vera(),
+    )
+    .await?
+    .doc_id()
+    .to_owned();
     Ok(Prepared {
         create,
         evidence,
@@ -148,6 +153,7 @@ where
                         gents_store::config_client::verify_request_evidence(
                             gents_store::config_client::client_request_input(&prepared.create)?,
                             prepared.evidence.clone(),
+                            HomePolicyIds::embedded_vera(),
                         )
                         .await?,
                     );
@@ -181,7 +187,11 @@ async fn owner(node: &defra_node::Node, document: &str) -> anyhow::Result<Option
     Ok(node
         .vera_acp()
         .expect("the node decides document access through Vera")
-        .get_doc_owner(AGENT_OWNERSHIP_POLICY_ID, REQUEST_RESOURCE, document)
+        .get_doc_owner(
+            gents_store::local::document_acp::node_policy_ids(node).id(BuiltInPolicy::Household),
+            REQUEST_RESOURCE,
+            document,
+        )
         .await?)
 }
 
@@ -195,7 +205,7 @@ async fn working_agent_reads(
         .check_doc_access(
             &acp::Identity::Authenticated(identity::Did::new(agent)?),
             acp::DocumentPermission::Read,
-            AGENT_OWNERSHIP_POLICY_ID,
+            gents_store::local::document_acp::node_policy_ids(node).id(BuiltInPolicy::Household),
             REQUEST_RESOURCE,
             document,
         )
@@ -273,8 +283,12 @@ async fn a_stored_create_runs_under_the_request_bound_credentials_its_client_sig
     );
 
     let foreign = prepare(&user, request(&home, &user, agent.did(), "foreign").await?).await?;
-    let strangers = StoredCreateCommands::of_request(&foreign.create, &foreign.doc_id)?
-        .mint(&stranger.0, &audience)?;
+    let strangers = StoredCreateCommands::of_request(
+        &foreign.create,
+        &foreign.doc_id,
+        HomePolicyIds::embedded_vera(),
+    )?
+    .mint(&stranger.0, &audience)?;
     assert_eq!(
         stage(&node, &agent, &foreign, &strangers, nothing_before_commit).await?,
         Err(UserWriteRefusal::IssuerNotSigner)
@@ -349,8 +363,12 @@ async fn a_stored_create_whose_credentials_lapse_before_it_is_sent_is_settled_by
     let prepared = prepare(&user, request(&home, &user, agent.did(), "lapsed").await?).await?;
     let lifetime = Duration::from_secs(2);
     let minted = SystemTime::now();
-    let credentials = StoredCreateCommands::of_request(&prepared.create, &prepared.doc_id)?
-        .mint_with_lifetime_for_test(&user.0, &audience, lifetime)?;
+    let credentials = StoredCreateCommands::of_request(
+        &prepared.create,
+        &prepared.doc_id,
+        HomePolicyIds::embedded_vera(),
+    )?
+    .mint_with_lifetime_for_test(&user.0, &audience, lifetime)?;
     let created = stage(&node, &agent, &prepared, &credentials, || async {
         let lapsed = minted + lifetime + Duration::from_secs(2);
         while SystemTime::now() <= lapsed {

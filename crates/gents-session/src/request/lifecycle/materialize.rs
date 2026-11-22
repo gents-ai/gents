@@ -336,10 +336,12 @@ pub fn build_request(
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         purpose,
         identity.request_id,
-        identity.node_did,
-        identity.requester_did.unwrap_or(acting_agent),
-        identity.agent_did,
-        identity.session_id,
+        gents_protocol::request_admission::RequestScope::new(
+            identity.node_did,
+            identity.requester_did.unwrap_or(acting_agent),
+            identity.agent_did,
+            identity.session_id,
+        ),
         identity.content,
         identity.execution_origin.as_str(),
         identity.created_at,
@@ -653,12 +655,13 @@ pub async fn activate_workspace_bound_request_with_identity(
     Ok(())
 }
 
-/// How a materialized request runs: its deadline, its origin and the backend
-/// it is bound to.
+/// How a materialized request runs: its deadline, its origin, the backend it
+/// is bound to and the operator tool root that bounds its working directory.
 pub struct ExecutionBinding {
     pub deadline_duration_secs: u64,
     pub execution_origin: ExecutionOrigin,
     pub backend_id: String,
+    pub operator_tool_root: Option<std::path::PathBuf>,
 }
 
 impl RequestLifecycle {
@@ -765,6 +768,7 @@ impl RequestLifecycle {
             deadline_duration_secs,
             execution_origin,
             backend_id,
+            operator_tool_root,
         } = binding;
         let node_did = identity.did().to_string();
         let agent_did = agent_did.to_string();
@@ -868,6 +872,7 @@ impl RequestLifecycle {
             identity.as_ref(),
             &queued_request,
             &agent_did,
+            operator_tool_root.as_deref(),
         )
         .await?;
         let mut lifecycle = Self::new_with_execution_binding(
@@ -1297,7 +1302,7 @@ async fn project_refused_request_onto_session_in_txn(
 #[cfg(test)]
 mod session_message_tests {
     use super::*;
-    use crate::request::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
+    use gents_store::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
 
     #[tokio::test]
     async fn session_message_request_carries_the_cwd() {

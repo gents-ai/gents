@@ -90,3 +90,42 @@ fn provider_view_call_keys_match_the_lean_turn_model() {
         },
     );
 }
+
+/// A tagged provider view carries the stubs it reported on their rows, none
+/// for an orphan it drops; projecting or sanitizing it again neither adds nor
+/// loses one.
+#[test]
+fn tagged_projection_carries_each_reported_stub_once() {
+    use crate::loop_stream::{provider_view_tagged, sanitize_tagged_history, TaggedMessage};
+    let large = |id: u64| Message::User {
+        content: vec![UserContent::ToolResult(ToolResult {
+            id: id.to_string(),
+            call_id: Some(id.to_string()),
+            content: vec![ToolResultContent::Text(Text {
+                text: "x".repeat(2_000),
+            })],
+        })],
+    };
+    let rows = vec![
+        large(9),
+        Message::Assistant {
+            request_id: None,
+            id: None,
+            content: vec![scoped_call(1)],
+        },
+        large(1),
+    ]
+    .into_iter()
+    .map(TaggedMessage::unassociated)
+    .collect();
+    let receipts = |rows: &[TaggedMessage]| {
+        rows.iter()
+            .map(|row| row.stub_receipts.len())
+            .sum::<usize>()
+    };
+    let once = provider_view_tagged(rows).unwrap();
+    assert_eq!(receipts(&once), 1);
+    let twice = provider_view_tagged(once.clone()).unwrap();
+    assert_eq!(twice, once);
+    assert_eq!(receipts(&sanitize_tagged_history(twice).unwrap()), 1);
+}

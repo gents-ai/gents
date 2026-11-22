@@ -23,6 +23,7 @@ async fn projection_node() -> anyhow::Result<(
                 &path, None,
             )?),
             Arc::new(crate::surface::ToolCeiling::meta_only()),
+            gents_protocol::schemas::HomePolicyIds::node_store(),
         )?,
     );
     let node = Arc::new(
@@ -262,6 +263,7 @@ async fn http_non_admin_tools_writer_cannot_grant_managed_agent_schema_authority
                 &path, None,
             )?),
             Arc::new(crate::surface::ToolCeiling::meta_only()),
+            gents_protocol::schemas::HomePolicyIds::node_store(),
         )?,
     );
     let node = Arc::new(
@@ -403,6 +405,7 @@ async fn user_signed_configuration_cannot_grant_schema_to_foreign_identity() -> 
                 &path, None,
             )?),
             Arc::new(crate::surface::ToolCeiling::meta_only()),
+            gents_protocol::schemas::HomePolicyIds::node_store(),
         )?,
     );
     let node = Arc::new(
@@ -657,10 +660,10 @@ async fn configured_delete_sources_grant_revoke_and_preserve_independent_permiss
     ] {
         owner.grant_node_permission(&agent, permission).await?;
     }
-    node.add_collection(&format!(
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&format!(
         "type DeleteProjectionProbe @policy(id: \"{}\", resource: \"configuration\") {{ name: String }}",
-        gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
-    )).await?;
+        gents_protocol::schemas::HomePolicyIds::node_store().id(gents_protocol::schemas::BuiltInPolicy::Household),
+    ))).await?;
     let node_value = escape_graphql_string(runtime.did());
     let agent_value = escape_graphql_string(&binding.agent_did);
     let nonce = escape_graphql_string(&binding.creation_nonce);
@@ -1690,10 +1693,13 @@ async fn plugin_delete_sources_follow_installed_roots_and_selections() -> anyhow
 async fn session_tool_reads_follow_the_node_grant_and_session_acp() -> anyhow::Result<()> {
     for case in gents_lean_vocab::families::household_session_tool_access::cases() {
         let (_directory, runtime, node) = projection_node().await?;
-        node.add_collection(&format!(
+        node.add_collection(
+            &gents_protocol::schemas::HomePolicyIds::node_store().render(&format!(
             "type ToolSessionProbe @policy(id: \"{}\", resource: \"sessions\") {{ name: String }}",
-            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
-        ))
+            gents_protocol::schemas::HomePolicyIds::node_store()
+                .id(gents_protocol::schemas::BuiltInPolicy::Household),
+        )),
+        )
         .await?;
         let owner = gents_store::config_client::ConfigAccess::local_as(
             node.clone(),

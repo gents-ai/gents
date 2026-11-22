@@ -5,7 +5,7 @@ use std::time::Duration;
 use gents_documents::{TaskHook, TaskHookPhase};
 use gents_session::request::lifecycle::{ExecutionOrigin, RequestLifecycle, TriggerLineage};
 use gents_store::identity::{KeyIdentity, NodeIdentity};
-use gents_toolcalls::call::hook::BackgroundExecutionRegistry;
+use gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry;
 use gents_toolcalls::call::task_hooks::{
     recover_task_hook_records, HookCommandResult, RecordedHookAttempt, TaskHookRecord,
     TaskHookRecordStore,
@@ -82,6 +82,7 @@ impl Fixture {
                 deadline_duration_secs: 60,
                 execution_origin: ExecutionOrigin::Interactive,
                 backend_id: "task-hook-recovery".into(),
+                operator_tool_root: None,
             },
             TriggerLineage::default(),
             Some(self.agent_identity.clone()),
@@ -239,6 +240,7 @@ fn hooks_admitted(task_id: &str, hooks: &[TaskHook]) -> bool {
         goal_objective_template: None,
         goal_token_budget: None,
         hooks: hooks.to_vec(),
+        command: None,
         enabled: true,
         output_schema_ref: None,
         created_at: None,
@@ -672,6 +674,7 @@ async fn recovered_cleanup_outside_an_admitted_root_is_refused() {
                 agent_did: fixture.agent_identity.did().to_owned(),
                 selected_root: Some(dir.path().to_path_buf()),
                 ceiling_root: Some(ceiling.path().to_path_buf()),
+                node_home: None,
             }),
         ),
     ];

@@ -5,15 +5,20 @@ import { useApp } from "@/app/AppContext";
 import { refreshRuntimePackUxPlugins } from "@/contrib/runtime-door";
 import { errorText } from "../../../lib/errorText";
 import type { PackReviewRequest } from "@/lib/packReview";
+import type { NodeView } from "../../../hooks/fleetStore";
 import { forgetSetAsideReview } from "../packs/preview";
-
-/** An install or update that would replace documents someone edited stops and
-    names them; the person chooses keep or overwrite. Read from the error's
-    words, since the install reports no typed refusal: replace with typed
-    errors from core. */
-function editedChoice(error: unknown): boolean {
-  return errorText(error).includes("--overwrite");
-}
+import { shortName } from "../packs/model";
+import { refusalOf } from "../packs/review";
+import {
+  editedQuestion,
+  failedWithDetails,
+  packUses,
+  refusedRemoval,
+  removalQuestion,
+  stillSelected,
+  takenOut,
+  type PackUse,
+} from "../packs/removal";
 
 /** What the person chose in an install's review. */
 export type PackInstallChoice = {
@@ -100,7 +105,9 @@ export function usePackActions(refresh: () => Promise<void>) {
       await refresh();
       void refreshPages(pack);
     } catch (error) {
-      if (editedChoice(error)) {
+      /* an update that would replace documents someone edited stops and
+         names them; the person chooses keep or overwrite */
+      if (refusalOf(errorText(error)) === "edited") {
         const overwrite = window.confirm(
           `${errorText(error)}\n\nOK replaces them, Cancel keeps your edits.`,
         );
@@ -112,18 +119,96 @@ export function usePackActions(refresh: () => Promise<void>) {
     }
   }
 
-  /** whether the pack was removed */
-  async function remove(pack: string): Promise<boolean> {
-    if (!window.confirm(`Remove ${pack} and everything it installed?`)) return false;
-    setBusy(pack);
+  /** The agents on `node` whose tools select the pack's plugins. Unknown
+      when the plugins can't be listed: the removal then goes ahead as it
+      did, and a refusal names who uses them. */
+  async function usesOf(pack: string, node: NodeView | null): Promise<PackUse[]> {
+    if (!node) return [];
     try {
-      await actions.removePack(pack);
+      return packUses(node, await actions.listPackWireSources(), pack);
+    } catch {
+      return [];
+    }
+  }
+
+  /** Takes each of `uses`' plugins out of its agent's tools, recording in
+      `out` each one taken out; the one that couldn't be, or null. */
+  async function takeOut(uses: readonly PackUse[], out: PackUse[]) {
+    for (const use of uses) {
+      for (const plugin of use.plugins) {
+        try {
+          await actions.wirePack({
+            plugin,
+            agent: use.agentDid,
+            targetsFrom: [],
+            remove: true,
+            preview: false,
+          });
+        } catch (error) {
+          return { use, plugin, error: errorText(error) };
+        }
+        const taken = out.find((u) => u.agentDid === use.agentDid);
+        if (taken) taken.plugins.push(plugin);
+        else out.push({ ...use, plugins: [plugin] });
+      }
+    }
+    return null;
+  }
+
+  /** Whether the pack was removed. Agents whose tools select its plugins
+      are named before it's removed. The runtime is asked first, so a pack
+      another requires, or whose own edited documents the person keeps,
+      stops before any agent's tools change; only its refusal to retire a
+      plugin those tools select takes the plugins out, then asks again. A
+      stop after that says what was taken out. */
+  async function remove(pack: string, node: NodeView | null): Promise<boolean> {
+    setBusy(pack);
+    const out: PackUse[] = [];
+    const saying = (message: string) =>
+      [message, takenOut(out)].filter(Boolean).join(" ");
+    const name = shortName(pack);
+    try {
+      const uses = await usesOf(pack, node);
+      if (!window.confirm(removalQuestion(pack, uses))) return false;
+      let edited: PackEditedChoice = "refuse";
+      let unwired = false;
+      for (;;) {
+        try {
+          await actions.removePack(pack, edited);
+          break;
+        } catch (error) {
+          const text = errorText(error);
+          if (edited === "refuse" && refusalOf(text) === "edited") {
+            if (!window.confirm(editedQuestion(pack, text))) {
+              if (out.length > 0) toast.error(saying(`${name} wasn't removed.`));
+              return false;
+            }
+            edited = "overwrite";
+          } else if (!unwired && uses.length > 0 && stillSelected(text)) {
+            unwired = true;
+            const failed = await takeOut(uses, out);
+            if (failed) {
+              failedWithDetails(
+                saying(
+                  `Couldn't take ${shortName(failed.plugin)} out of ${failed.use.name}'s tools, so ${name} wasn't removed.`,
+                ),
+                failed.error,
+              );
+              return false;
+            }
+          } else throw error;
+        }
+      }
       toast.success(`Removed ${pack}`);
       await refresh();
       void refreshPages(pack);
       return true;
     } catch (error) {
-      toast.error(errorText(error));
+      const text = errorText(error);
+      const refused = refusedRemoval(pack, text, node);
+      if (refused || out.length > 0)
+        failedWithDetails(saying(refused ?? `Couldn't remove ${name}.`), text);
+      else toast.error(text);
       return false;
     } finally {
       setBusy(null);

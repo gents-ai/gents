@@ -97,7 +97,7 @@ impl CapturedContext {
         metadata.remove("content");
         Ok(crate::message::Document {
             data: crate::message::DocumentSourceKind::String(self.content.clone()),
-            media_type: Some(crate::message::DocumentMediaType::TXT),
+            media_type: Some(crate::message::DocumentMediaType::Txt),
             additional_params: Some(serde_json::json!({ "captured_context": metadata })),
         })
     }
@@ -117,7 +117,7 @@ impl CapturedContext {
         }
         if !matches!(
             document.media_type,
-            Some(crate::message::DocumentMediaType::TXT)
+            Some(crate::message::DocumentMediaType::Txt)
         ) {
             return Err(RequestInputError::RequiresTextDocument);
         }

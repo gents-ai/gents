@@ -33,6 +33,7 @@ pub(super) struct StreamDrive<'a> {
     pub(super) request_id: &'a String,
     pub(super) session_id: &'a String,
     pub(super) request_deadline: RequestDeadline,
+    pub(super) driven_deadline: Option<&'a tokio::sync::Notify>,
     pub(super) terminal_failure_reason: &'a std::sync::Arc<std::sync::Mutex<Option<String>>>,
     pub(super) max_turns_provenance: MaxTurnsProvenance,
     pub(super) capture:
@@ -61,6 +62,7 @@ where
         request_id,
         session_id,
         request_deadline,
+        driven_deadline,
         terminal_failure_reason,
         capture,
         ..
@@ -176,6 +178,7 @@ where
             }
             result = await_with_request_deadline(
                 request_deadline,
+                driven_deadline,
                 stream.next(),
                 "waiting for inference stream item",
             ) => {

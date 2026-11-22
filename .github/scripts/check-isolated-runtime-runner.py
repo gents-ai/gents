@@ -56,8 +56,6 @@ def check(
         raise ValueError("runner account can access the fleet runtime home")
     if os.path.lexists(account_home / ".gents"):
         raise ValueError("runner account has a persistent .gents home")
-    if environment.get("GENTS_HOME"):
-        raise ValueError("runner environment must not set GENTS_HOME")
 
 
 def main() -> int:

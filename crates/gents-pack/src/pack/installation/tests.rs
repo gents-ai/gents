@@ -1151,14 +1151,20 @@ async fn read_installed_pack_fails_loudly_on_more_than_one_record() {
     )
     .await
     .unwrap();
-    node.add_collection(gents_protocol::schemas::NODE)
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(gents_protocol::schemas::NODE),
+    )
+    .await
+    .unwrap();
+    let schema = gents_protocol::schemas::HomePolicyIds::node_store()
+        .render(gents_protocol::schemas::PACK_INSTALLATION)
+        .replace(
+            r#"@index(fields: ["node_did", "coordinate"], unique: true)"#,
+            "",
+        );
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&schema))
         .await
         .unwrap();
-    let schema = gents_protocol::schemas::PACK_INSTALLATION.replace(
-        r#"@index(fields: ["node_did", "coordinate"], unique: true)"#,
-        "",
-    );
-    node.add_collection(&schema).await.unwrap();
     let runtime_access =
         ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
     let user_did = identity::Did::new(user.did()).unwrap();
@@ -2085,6 +2091,87 @@ async fn documents_pack_shipping_workflows_is_materialized_with_no_plugin_instal
     assert!(root.join("workflows/hello.rhai").is_file());
 }
 
+/// An Agent's self-config install reaches the shared install owner, so a
+/// command Task needs the grant there as it does on the operator's routes.
+#[tokio::test]
+async fn a_prepared_install_ships_a_command_task_only_under_the_grant() {
+    let access = access().await;
+    let archive = documents_archive_shipping(&[]);
+    let mut prepared = prepared();
+    prepared.config.tasks = vec![serde_json::from_value(json!({
+        "node_did": OWNER, "task_id": "tick", "command": {"argv": ["true"]},
+        "tags": ["gents:pack:acme/demo"]
+    }))
+    .unwrap()];
+    let target = crate::pack::InstallTarget {
+        access: &access,
+        owner: OWNER,
+        plugin_home: None,
+    };
+    let install = |grant_authority: bool| {
+        install_prepared_document_pack(
+            &target,
+            &archive,
+            &[],
+            &prepared,
+            grant_authority,
+            InstalledVia::SelfConfig,
+            crate::pack::DocumentGraphPolicy {
+                drift: DriftPolicy::Refuse,
+                profiles: &gents_inference::resolved::ProviderProfilePolicy,
+            },
+        )
+    };
+    let tasks = || async {
+        access
+            .execute("{ Task { task_id command } }")
+            .await
+            .unwrap()["data"]["Task"]
+            .clone()
+    };
+    let refusal = format!("{:#}", install(false).await.unwrap_err());
+    assert!(refusal.contains("ships command Tasks (tick)"), "{refusal}");
+    assert_eq!(
+        tasks().await,
+        json!([]),
+        "the refused install wrote nothing"
+    );
+    install(true)
+        .await
+        .expect("the grant installs the command Task");
+    assert_eq!(
+        tasks().await,
+        json!([{"task_id": "tick", "command": {"argv": ["true"]}}])
+    );
+    install(false)
+        .await
+        .expect("reinstalling the same command needs no new grant");
+    prepared.config.tasks[0].command = serde_json::from_value(json!({"argv": ["false"]})).unwrap();
+    let refusal = format!(
+        "{:#}",
+        install_prepared_document_pack(
+            &target,
+            &archive,
+            &[],
+            &prepared,
+            false,
+            InstalledVia::SelfConfig,
+            crate::pack::DocumentGraphPolicy {
+                drift: DriftPolicy::Refuse,
+                profiles: &gents_inference::resolved::ProviderProfilePolicy,
+            },
+        )
+        .await
+        .unwrap_err()
+    );
+    assert!(refusal.contains("ships command Tasks (tick)"), "{refusal}");
+    assert_eq!(
+        tasks().await,
+        json!([{"task_id": "tick", "command": {"argv": ["true"]}}]),
+        "an upgrade changing the command needs the grant and writes nothing without it"
+    );
+}
+
 #[tokio::test]
 async fn pack_with_no_asset_class_is_not_materialized() {
     let home = tempfile::tempdir().unwrap();
@@ -2563,6 +2650,39 @@ async fn dependee_names(access: &ConfigAccess) -> (Value, Value) {
         rows["data"]["Tools"][0]["display_name"].clone(),
         rows["data"]["AgentContext"][0]["display_name"].clone(),
     )
+}
+
+/// The root and a new dependency record their slots in `agent_bindings`
+/// alone: a hosted runtime looks a binding up and its client never does, so a
+/// binding in `variables` would make the two sides plan different graphs.
+#[tokio::test]
+async fn an_installation_records_agent_bindings_only_in_agent_bindings() {
+    let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
+    let owner = gents_store::identity::NodeIdentity::did(&runtime);
+    let (_guards, dependee, dependent) = documents_dependency_pair(false, false);
+    install_dependent_with_dependee(&access, &node, &runtime, &dependee, &dependent, None).await;
+    let records = access
+        .transact_readonly("test.pack.recorded_bindings", |txn| {
+            Box::pin(async move {
+                Ok::<_, anyhow::Error>([
+                    read_record(txn, owner, "fixture/dependent_fixture").await?,
+                    read_record(txn, owner, "fixture/dependee_fixture").await?,
+                ])
+            })
+        })
+        .await
+        .unwrap();
+    for record in records {
+        assert!(!record.agent_bindings.is_empty());
+        assert!(
+            !record
+                .variables
+                .keys()
+                .any(|name| crate::pack::is_agent_binding_variable(name)),
+            "{:?}",
+            record.variables
+        );
+    }
 }
 
 #[tokio::test]
@@ -4787,6 +4907,7 @@ async fn a_retirement_the_node_did_not_record_keeps_the_plugin_bytes() {
     let packs = crate::pack::node_packs::NodePacks {
         access: &access,
         node_did: OWNER,
+        registry_url: crate::pack::registry::DEFAULT_REGISTRY_URL,
         home: Some(home.path()),
         grants_authority: false,
     };

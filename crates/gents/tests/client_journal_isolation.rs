@@ -31,6 +31,7 @@ async fn runtime_http_test_node(identity: Arc<KeyIdentity>) -> (TestNode, String
                 gents_store::local::document_projector(
                     identity.clone(),
                     std::sync::Arc::new(gents_tools::surface::ToolCeiling::meta_only()),
+                    gents_protocol::schemas::HomePolicyIds::node_store(),
                 )
                 .unwrap(),
             )
@@ -125,7 +126,8 @@ async fn private_client_journal_obeys_native_policy_and_refuses_exact_peer_pull(
             .check_doc_access(
                 &native_identity,
                 permission,
-                gents_protocol::schemas::CLIENT_JOURNAL_POLICY_ID,
+                gents_protocol::schemas::HomePolicyIds::node_store()
+                    .id(gents_protocol::schemas::BuiltInPolicy::ClientJournal),
                 gents_protocol::schemas::CLIENT_JOURNAL_POLICY_RESOURCE,
                 doc_id,
             )
@@ -250,7 +252,8 @@ async fn private_client_journal_obeys_native_policy_and_refuses_exact_peer_pull(
         .document_acp()
         .register_doc_object(
             &owner.did().parse().unwrap(),
-            gents_protocol::schemas::CLIENT_JOURNAL_POLICY_ID,
+            gents_protocol::schemas::HomePolicyIds::node_store()
+                .id(gents_protocol::schemas::BuiltInPolicy::ClientJournal),
             gents_protocol::schemas::CLIENT_JOURNAL_POLICY_RESOURCE,
             doc_id,
         )

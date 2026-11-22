@@ -3,8 +3,8 @@ use gents_protocol::output::rows::{
     output_segment_create_variables, transcript_message_create_variables,
     CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
-use gents_session::request::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
 use gents_store::identity::{KeyIdentity, NodeIdentity};
+use gents_store::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
 
 use super::inference::aggregate_inference_usage;
 use super::*;
@@ -189,10 +189,12 @@ async fn seeded_node() -> gents_inference::test_support::TestDb {
         let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             request_id,
-            signer.did(),
-            signer.did(),
-            agent,
-            session,
+            gents_protocol::request_admission::RequestScope::new(
+                signer.did(),
+                signer.did(),
+                agent,
+                session,
+            ),
             "session history fixture",
             "interactive",
             created_at,
@@ -419,6 +421,7 @@ async fn seeded_node() -> gents_inference::test_support::TestDb {
 
     let accounting = gents_protocol::rendered_request::ContextAccounting {
         accounting_version: gents_protocol::rendered_request::CONTEXT_ACCOUNTING_VERSION,
+        history_stubbing: Default::default(),
         turn_index: 2,
         attempt: 0,
         estimator: "serialized_json_bytes_div_4_v1".to_string(),

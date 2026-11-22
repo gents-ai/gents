@@ -203,7 +203,7 @@ resources:
         for schema in [
             format!("type AgentSession @branchable @policy(id: \"{policy}\", resource: \"documents\") {{ node_did: String session_id: String requester_did: String }}"),
             format!("type AgentRequest @branchable @policy(id: \"{policy}\", resource: \"documents\") {{ node_did: String session_id: String requester_did: String request_id: String execution_generation: String lifecycle_state: String }}"),
-        ] { access.add_collection(&schema).await.unwrap(); }
+        ] { access.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&schema)).await.unwrap(); }
         let actor: identity::Did = requester.did().parse().unwrap();
         let owner_did: identity::Did = owner.did().parse().unwrap();
         gents_store::config_client::ConfigAccess::local_as(node.clone(), owner_did.clone())

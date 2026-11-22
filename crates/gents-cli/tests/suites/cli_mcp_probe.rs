@@ -356,13 +356,11 @@ async fn mcp_registration_requires_client_signed_transport_when_offline() -> Res
     let tempdir = tempfile::tempdir()?;
     let node_home = tempdir.path().join("node-home");
     let fixture = McpFixture::new(tempdir.path(), &node_home, "offline-mcp").await?;
-    let desktop = fixture.desktop_home.clone();
     fixture.node.shutdown().await?;
     drop(fixture);
     let cwd = tempdir.path().to_owned();
     let stderr = tokio::task::spawn_blocking(move || {
         let home = node_home.to_str().context("node home utf8")?;
-        let desktop = desktop.to_str().context("desktop home utf8")?;
         run_cli_failure_stderr_with_env(
             &cwd,
             &[
@@ -375,7 +373,7 @@ async fn mcp_registration_requires_client_signed_transport_when_offline() -> Res
                 "http://127.0.0.1:9213/mcp",
                 "offline-service",
             ],
-            &[("GENTS_DESKTOP_HOME", desktop)],
+            &[],
         )
     })
     .await??;
@@ -411,7 +409,6 @@ struct McpFixture {
     node_did: String,
     graphql: String,
     cwd: std::path::PathBuf,
-    desktop_home: std::path::PathBuf,
     _store_claim: gents_store::local::home::StoreLock,
     _runtime: gents_store::identity::KeyIdentity,
     _client: gents_store::client_journal::principal_identity::PrincipalIdentity,
@@ -421,14 +418,16 @@ impl McpFixture {
     async fn new(cwd: &std::path::Path, home: &std::path::Path, name: &str) -> Result<Self> {
         let cwd = cwd.to_owned();
         let home = home.to_owned();
-        let desktop_home = cwd.join("desktop");
+        let desktop_home = graphql::cli_client_paths(&cwd, &[])
+            .root()
+            .parent()
+            .context("the CLI client folder has a parent")?
+            .to_path_buf();
         let init_cwd = cwd.clone();
         let init_home = home.clone();
-        let init_desktop = desktop_home.clone();
         let name = name.to_owned();
         let init = tokio::task::spawn_blocking(move || {
             let home = init_home.to_str().context("home utf8")?;
-            let desktop = init_desktop.to_str().context("desktop home utf8")?;
             run_cli_json_with_env(
                 &init_cwd,
                 &[
@@ -440,7 +439,7 @@ impl McpFixture {
                     "--node-name",
                     &name,
                 ],
-                &[("GENTS_DESKTOP_HOME", desktop)],
+                &[],
             )
         })
         .await??;
@@ -488,7 +487,6 @@ impl McpFixture {
             node_did,
             graphql,
             cwd,
-            desktop_home,
             _store_claim: claim,
             _runtime: runtime,
             _client: client,
@@ -506,11 +504,9 @@ impl McpFixture {
             node_did.to_owned(),
         ]);
         let cwd = self.cwd.clone();
-        let desktop = self.desktop_home.clone();
         tokio::task::spawn_blocking(move || {
             std::process::Command::new(cli_bin())
                 .env("HOME", &cwd)
-                .env("GENTS_DESKTOP_HOME", desktop)
                 .env("RUST_LOG", "error")
                 .args(args)
                 .output()

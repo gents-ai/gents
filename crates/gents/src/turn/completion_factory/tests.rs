@@ -689,7 +689,8 @@ fn service_tier_loop_config_follows_the_lean_model() {
 
 fn calibration_accounting(estimator: &str, estimated: usize, ratio: Option<u64>) -> String {
     serde_json::json!({
-        "accounting_version": 3,
+        "accounting_version": gents_protocol::rendered_request::CONTEXT_ACCOUNTING_VERSION,
+        "history_stubbing": {"stubbed_results": 0, "original_bytes": 0, "stub_bytes": 0},
         "estimator": estimator,
         "components": {"messages": estimated, "documents": 0, "tool_schemas": 0,
             "additional_parameters": 0, "output_schema": 0},

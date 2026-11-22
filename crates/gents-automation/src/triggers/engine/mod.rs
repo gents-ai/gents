@@ -7,6 +7,7 @@ use tokio_util::sync::CancellationToken;
 use crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
 use gents_documents::task_delivery::TriggerKind;
 
+pub mod command;
 pub(crate) mod deferred_delivery;
 pub mod durable;
 pub(crate) mod event_delivery;
@@ -26,17 +27,22 @@ type TriggerLockMap = RapidHashMap<TriggerLockKey, TriggerLock>;
 
 /// Dispatches every fire from `sources` through the production materializer
 /// until `cancel` fires: the trigger task the runtime starts once its startup
-/// barrier releases.
+/// barrier releases. Command Tasks run under `tool_root`, the operator's tool
+/// ceiling.
 pub async fn run_trigger_engine(
     node: Arc<defra_node::Node>,
     snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
     sources: Vec<Box<dyn TriggerSource>>,
+    tool_root: Option<std::path::PathBuf>,
     cancel: CancellationToken,
 ) {
     let materializer: Arc<dyn MaterializerHandle> = Arc::new(
-        production_materializer::ProductionMaterializer::new(node, snapshot_rx.clone()),
+        production_materializer::ProductionMaterializer::new(node.clone(), snapshot_rx.clone()),
     );
     TriggerEngine::new(snapshot_rx, materializer)
+        .with_command_host(Arc::new(command::ProductionCommandHost::new(
+            node, tool_root,
+        )))
         .run(sources, cancel)
         .await;
 }
@@ -167,12 +173,28 @@ pub const UNACKNOWLEDGED_STATUS: &str = "unacknowledged";
 
 #[derive(Debug, Clone)]
 pub enum FireResult {
-    Duplicate { request_id: String },
-    Fired { request_id: String },
-    Skipped { reason: String },
-    Errored { error: String },
-    Rejected { error: String },
-    BudgetExhausted { reason: String },
+    Duplicate {
+        request_id: String,
+    },
+    Fired {
+        request_id: String,
+    },
+    Skipped {
+        reason: String,
+    },
+    Errored {
+        error: String,
+    },
+    Rejected {
+        error: String,
+    },
+    BudgetExhausted {
+        reason: String,
+    },
+    /// A command Task's fire launched its command; no request was written.
+    CommandStarted {
+        run_id: String,
+    },
 }
 
 pub trait TriggerSource: Send + Sync {
@@ -254,6 +276,9 @@ pub(crate) struct TriggerEngine {
     snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
     materializer: Arc<dyn MaterializerHandle>,
     per_trigger_locks: Mutex<TriggerLockMap>,
+    command_host: Option<Arc<dyn command::CommandHost>>,
+    command_runs: Arc<Mutex<command::CommandRuns>>,
+    command_shutdown: CancellationToken,
 }
 
 impl TriggerEngine {
@@ -265,7 +290,15 @@ impl TriggerEngine {
             snapshot_rx,
             materializer,
             per_trigger_locks: Mutex::new(RapidHashMap::new()),
+            command_host: None,
+            command_runs: Arc::default(),
+            command_shutdown: CancellationToken::new(),
         }
+    }
+
+    pub(crate) fn with_command_host(mut self, host: Arc<dyn command::CommandHost>) -> Self {
+        self.command_host = Some(host);
+        self
     }
 
     pub(crate) async fn run(self, sources: Vec<Box<dyn TriggerSource>>, cancel: CancellationToken) {
@@ -298,6 +331,7 @@ impl TriggerEngine {
                 }
             }
         }
+        engine.command_shutdown.cancel();
     }
 
     async fn prune_trigger_lock(&self, lock_key: &TriggerLockKey, lock: &TriggerLock) {

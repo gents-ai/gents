@@ -29,7 +29,8 @@ use gents_inference::resolved::{
 };
 use gents_loop::completion_retry::CompletionRetryProfileFields;
 use gents_store::identity::{NodeIdentity, RuntimeNode};
-use gents_toolcalls::call::hook::{BackgroundExecutionRegistry, FailurePolicy};
+use gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry;
+use gents_toolcalls::call::hook::FailurePolicy;
 use gents_tools::mcp::health::HealthCheckerOptions;
 use gents_tools::mcp::pool::McpPool;
 use gents_tools::surface::{
@@ -269,7 +270,6 @@ impl GentsBuilder {
             runtime_node: principal,
             agents,
             unavailable_agents: Default::default(),
-            active_snapshot: Default::default(),
             document_runtime_context: None,
             mcp_pool: self.mcp_pool,
             local_hostname: self
@@ -287,6 +287,7 @@ impl GentsBuilder {
             p2p_intervals: Default::default(),
             p2p_network_id: gents_p2p::p2p_reconcile::DEFAULT_NETWORK_ID.to_owned(),
             system_log: false,
+            registry_url: None,
             backend_health: self.backend_health,
             storage_fault: crate::runtime::storage_fault::StorageFaultObservation::new(),
             process_state_observer: self.process_state_observer,
@@ -304,6 +305,7 @@ impl GentsBuilder {
                     gents_store::config_client::ConfigAccess::local(plugin_node),
                 ),
             )),
+            native_executables: Default::default(),
         })
     }
 }

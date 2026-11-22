@@ -645,14 +645,6 @@ fn plant_remembered(config_dir: &std::path::Path, contents: &str) -> std::path::
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
-enum Env {
-    Absent,
-    Empty,
-    Set,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
 enum Remembered {
     Absent,
     Unreadable,
@@ -667,7 +659,6 @@ enum Remembered {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum Resolution {
-    FromEnv,
     FromRemembered,
     DotGents,
     Unreadable,
@@ -675,15 +666,9 @@ enum Resolution {
     Unresolved,
 }
 
-const ENV_HOME: &str = "/srv/env";
 const REMEMBERED_HOME: &str = "/srv/remembered";
 
-fn resolve_in_temp(
-    env: Env,
-    remembered: Remembered,
-    config_dir: bool,
-    user_home: bool,
-) -> Resolution {
+fn resolve_in_temp(remembered: Remembered, config_dir: bool, user_home: bool) -> Resolution {
     let temp = tempfile::tempdir().unwrap();
     let config = temp.path().join("config");
     let user = temp.path().join("user");
@@ -705,18 +690,11 @@ fn resolve_in_temp(
     if let Some(contents) = contents {
         plant_remembered(&config, contents);
     }
-    let env_home = match env {
-        Env::Absent => None,
-        Env::Empty => Some(std::ffi::OsString::new()),
-        Env::Set => Some(std::ffi::OsString::from(ENV_HOME)),
-    };
     let resolved = super::default_home_from(
-        env_home,
         config_dir.then_some(config.as_path()),
         user_home.then_some(user.as_path()),
     );
     match resolved {
-        Ok(home) if home.as_path() == Path::new(ENV_HOME) => Resolution::FromEnv,
         Ok(home) if home.as_path() == Path::new(REMEMBERED_HOME) => Resolution::FromRemembered,
         Ok(home) if home == user.join(".gents") => Resolution::DotGents,
         Ok(home) => panic!("unexpected home {}", home.display()),
@@ -729,9 +707,9 @@ fn resolve_in_temp(
 
 #[test]
 fn home_resolution_matches_the_lean_model() {
-    gents_lean_vocab::families::home_resolution_resolve::replay::<Env, Remembered, Resolution>(
-        |i| resolve_in_temp(i.env, i.remembered, i.config_dir, i.user_home),
-    );
+    gents_lean_vocab::families::home_resolution_resolve::replay::<Remembered, Resolution>(|i| {
+        resolve_in_temp(i.remembered, i.config_dir, i.user_home)
+    });
 }
 
 #[test]
@@ -741,7 +719,7 @@ fn a_directory_at_the_file_path_is_a_read_error() {
     let remembered = config.path().join("gents/home");
     std::fs::create_dir_all(&remembered).unwrap();
 
-    let error = super::default_home_from(None, Some(config.path()), Some(user.path())).unwrap_err();
+    let error = super::default_home_from(Some(config.path()), Some(user.path())).unwrap_err();
 
     assert!(
         matches!(&error, super::HomeError::RememberedHomeRead { path, .. } if *path == remembered),
@@ -757,8 +735,7 @@ fn empty_or_relative_contents_are_invalid() {
         let config = tempfile::tempdir().unwrap();
         let remembered = plant_remembered(config.path(), contents);
 
-        let error =
-            super::default_home_from(None, Some(config.path()), Some(user.path())).unwrap_err();
+        let error = super::default_home_from(Some(config.path()), Some(user.path())).unwrap_err();
 
         assert!(
             matches!(&error, super::HomeError::RememberedHomeInvalid { path } if *path == remembered),
@@ -775,7 +752,7 @@ fn path_with_spaces_round_trips() {
     let chosen = std::path::Path::new("/srv/my gents home ");
 
     super::remember_home_in(config.path(), user.path(), chosen).unwrap();
-    let resolved = super::default_home_from(None, Some(config.path()), Some(user.path()));
+    let resolved = super::default_home_from(Some(config.path()), Some(user.path()));
 
     assert_eq!(resolved.unwrap(), chosen);
 }

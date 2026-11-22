@@ -71,8 +71,10 @@ mod tests {
         assert_eq!(
             sweep_open_mailbox_items(
                 &node,
-                super::super::tests::root_identity().did(),
-                &[super::super::tests::agent_identity()],
+                gents_store::test_support::fixture_root().did(),
+                &[gents_store::test_support::fixture_agent(
+                    super::super::tests::AGENT_NONCE
+                )],
                 None
             )
             .await
@@ -95,8 +97,10 @@ mod tests {
         assert_eq!(
             sweep_open_mailbox_items(
                 &node,
-                super::super::tests::root_identity().did(),
-                &[super::super::tests::agent_identity()],
+                gents_store::test_support::fixture_root().did(),
+                &[gents_store::test_support::fixture_agent(
+                    super::super::tests::AGENT_NONCE
+                )],
                 None
             )
             .await
@@ -117,8 +121,10 @@ mod tests {
         assert_eq!(
             sweep_open_mailbox_items(
                 &node,
-                super::super::tests::root_identity().did(),
-                &[super::super::tests::agent_identity()],
+                gents_store::test_support::fixture_root().did(),
+                &[gents_store::test_support::fixture_agent(
+                    super::super::tests::AGENT_NONCE
+                )],
                 None
             )
             .await

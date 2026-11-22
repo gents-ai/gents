@@ -479,6 +479,21 @@ pub struct SessionLiveDeltaArgs {
     pub base_reasoning_hash: String,
 }
 
+impl From<SessionLiveDeltaArgs> for crate::types::SessionLiveDeltaRequest {
+    fn from(args: SessionLiveDeltaArgs) -> Self {
+        Self {
+            session_id: args.session_id,
+            node_did: Some(args.node_did),
+            request_id: args.request_id,
+            base_live_cursor: args.base_live_cursor,
+            base_content_byte_len: args.base_content_byte_len,
+            base_content_hash: args.base_content_hash,
+            base_reasoning_byte_len: args.base_reasoning_byte_len,
+            base_reasoning_hash: args.base_reasoning_hash,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, TS)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum HostMessage {

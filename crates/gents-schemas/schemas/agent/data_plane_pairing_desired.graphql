@@ -1,4 +1,4 @@
-type DataPlanePairingDesired @policy(id: "d323c1bbd2491661b9fbe4667b64d6d7a596f4ddc57346a41d90c10733ab3961", resource: "application_pairings") {
+type DataPlanePairingDesired @policy(id: "$household", resource: "application_pairings") {
     peer_id: String @index(unique: true)
     node_did: String @index
     actor_did: String @index @immutable

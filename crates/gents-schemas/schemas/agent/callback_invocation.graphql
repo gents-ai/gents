@@ -1,5 +1,5 @@
 type CallbackInvocation
-    @policy(id: "d323c1bbd2491661b9fbe4667b64d6d7a596f4ddc57346a41d90c10733ab3961", resource: "agent_children")
+    @policy(id: "$household", resource: "agent_children")
     @index(fields: ["owner_node_did", "invocation_id"], unique: true)
     @index(fields: ["owner_node_did", "idempotency_key"], unique: true) {
     invocation_id: String @immutable

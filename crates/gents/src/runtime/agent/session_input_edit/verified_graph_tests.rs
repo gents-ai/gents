@@ -1,6 +1,6 @@
 use super::*;
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_protocol::request_input::{QueueDelivery, QueuePolicy, QueueSource, RequestQueue};
 use gents_protocol::session_input_edit::{PendingMessageEdit, PendingQueueEdit};
@@ -95,10 +95,7 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
         let mut original = AgentRequestCreate::base(
             RequestPurpose::Normal,
             "original",
-            root.did(),
-            user.did(),
-            &binding.agent_did,
-            "session",
+            RequestScope::new(root.did(), user.did(), &binding.agent_did, "session"),
             "before",
             "interactive",
             "2026-10-10T00:00:00Z",
@@ -205,9 +202,13 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
         let byte = signature[0].as_u64().context("signature byte missing")?;
         signature[0] = serde_json::json!(byte ^ 1);
         let input = gents_store::config_client::client_request_input(&command.replacements[0])?;
-        let tampered_accepted = gents_store::config_client::verify_request_evidence(input, altered)
-            .await
-            .is_ok();
+        let tampered_accepted = gents_store::config_client::verify_request_evidence(
+            input,
+            altered,
+            gents_protocol::schemas::HomePolicyIds::node_store(),
+        )
+        .await
+        .is_ok();
         let command_doc =
             gents_session::request::lifecycle::queue::publish_edit_command(&edit_access, &command)
                 .await?;

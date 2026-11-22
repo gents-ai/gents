@@ -78,7 +78,8 @@ async fn observations_in_one_session_have_separate_file_documents_and_read_back_
                 .check_doc_access(
                     &actor,
                     defra_node::DocumentPermission::Read,
-                    gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_ID,
+                    gents_protocol::schemas::HomePolicyIds::node_store()
+                        .id(gents_protocol::schemas::BuiltInPolicy::ToolFileChange),
                     gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_RESOURCE,
                     document,
                 )
