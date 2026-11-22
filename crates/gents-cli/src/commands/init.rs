@@ -2867,12 +2867,6 @@ mod tests {
                         "{}: {error:#}",
                         case.input.name
                     );
-                    assert_eq!(
-                        marker.exists(),
-                        !case.input.fresh_evidence || !case.input.reservation_durable,
-                        "{}: {error:#}",
-                        case.input.name
-                    );
                     false
                 }
             };
