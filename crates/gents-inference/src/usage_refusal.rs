@@ -28,7 +28,7 @@ pub struct UsageRefusal {
 
 #[derive(Debug, thiserror::Error)]
 pub enum UsageRefusalError {
-    #[error("reading provider usage refusals: {0}")]
+    #[error(transparent)]
     Read(#[from] ViewError),
     #[error("InferenceCall {call_id} records {field} {value:?}, which is not an RFC 3339 time")]
     Time {

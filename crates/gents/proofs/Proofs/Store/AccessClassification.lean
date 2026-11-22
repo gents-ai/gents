@@ -313,19 +313,21 @@ def StoreWrapper.holding : StoreWrapper → Holding
 def StoreWrapper.wrap (wrapper : StoreWrapper) (failure : Failure) : Error :=
   .wrapper wrapper.holding (.owner failure)
 
-/-- `gents-inference`. `inventoryErrorView` holds the store's `ViewError`
-transparently, which is sound because `ViewError` holds the access error as a
-sourced variant. -/
+/-- `gents-inference`. `inventoryErrorView` and `usageRefusalErrorRead` hold
+the store's `ViewError` transparently, which is sound because `ViewError`
+holds the access error as a sourced variant. -/
 inductive InferenceWrapper where
   | inventoryErrorStore
   | inventoryErrorView
   | runtimeAccountMetadataErrorAccess
   | configurationVisibilityErrorVersion
   | configurationVisibilityErrorAccess
+  | usageRefusalErrorRead
   deriving DecidableEq, Repr
 
 def InferenceWrapper.wrap : InferenceWrapper → Failure → Error
-  | .inventoryErrorView, failure => .wrapper .transparent (StoreWrapper.viewErrorExecute.wrap failure)
+  | .inventoryErrorView, failure | .usageRefusalErrorRead, failure =>
+      .wrapper .transparent (StoreWrapper.viewErrorExecute.wrap failure)
   | _, failure => .wrapper .sourced (.owner failure)
 
 /-- `gents-session`. -/

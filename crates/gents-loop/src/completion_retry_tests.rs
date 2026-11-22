@@ -684,11 +684,11 @@ fn provider_limit_verdicts_follow_the_executable_model() {
             InferenceError::UsageLimited(crate::provider_limit::UsageLimit {
                 resets_at: input.reported_at.map(at),
                 detail: String::new(),
-                statement: gents_protocol::provider_limit::ProviderLimitStatement {
+                statement: Box::new(gents_protocol::provider_limit::ProviderLimitStatement {
                     window_minutes: input.statement.window_minutes,
                     tokens_used: input.statement.tokens_used,
                     tokens_limit: input.statement.tokens_limit,
-                },
+                }),
             })
         } else {
             InferenceError::RateLimited {

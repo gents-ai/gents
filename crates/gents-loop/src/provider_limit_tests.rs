@@ -519,7 +519,7 @@ fn xai_free_tier_refusal_states_its_window_and_counter() {
         };
         assert_eq!(limit.resets_at, None);
         assert_eq!(
-            limit.statement,
+            *limit.statement,
             ProviderLimitStatement {
                 window_minutes: Some(24 * 60),
                 tokens_used: Some(691_791),
@@ -536,5 +536,5 @@ fn an_unstated_limit_records_nothing() {
     let Some(ProviderLimit::UsageExhausted(limit)) = recorded_limit(text, now()) else {
         panic!("expected a usage limit");
     };
-    assert_eq!(limit.statement, ProviderLimitStatement::default());
+    assert_eq!(*limit.statement, ProviderLimitStatement::default());
 }

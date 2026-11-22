@@ -213,7 +213,7 @@ pub fn recorded_failure_reason(text: &str, limit: Option<&ProviderLimit>) -> Str
 pub struct UsageLimit {
     pub resets_at: Option<DateTime<Utc>>,
     pub detail: String,
-    pub statement: ProviderLimitStatement,
+    pub statement: Box<ProviderLimitStatement>,
 }
 
 impl UsageLimit {
@@ -224,7 +224,7 @@ impl UsageLimit {
         Self {
             resets_at,
             detail: provider_detail(body, embedded_json(body).as_ref()),
-            statement: ProviderLimitStatement::default(),
+            statement: Box::default(),
         }
     }
 }
@@ -260,7 +260,7 @@ impl ProviderLimit {
             Self::UsageExhausted(limit) => RecordedProviderLimit {
                 verdict: ProviderLimitVerdict::UsageLimited,
                 resets_at: limit.resets_at,
-                statement: limit.statement,
+                statement: *limit.statement,
             },
         }
     }
@@ -298,7 +298,7 @@ pub fn classify_attempt_provider_limit(text: &str, now: DateTime<Utc>) -> Option
         return Some(ProviderLimit::UsageExhausted(UsageLimit {
             resets_at,
             detail: provider_detail(body, body_json.as_ref()),
-            statement: stated_limit(&lower),
+            statement: Box::new(stated_limit(&lower)),
         }));
     }
 
