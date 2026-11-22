@@ -72,6 +72,11 @@ impl ToolOutcome {
                 denial: None,
                 text: error.to_string(),
             },
+            Err(ToolError::Admission(refusal)) => Self::Failed {
+                class: FailureClass::PolicyDenied,
+                denial: None,
+                text: refusal.to_string(),
+            },
             Err(ToolError::ReportedFailure { class, text }) => Self::Failed {
                 class,
                 denial: None,

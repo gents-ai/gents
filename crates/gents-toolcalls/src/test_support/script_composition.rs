@@ -25,6 +25,9 @@ pub async fn bind_admitted_deadline(
 }
 
 impl ToolDyn for Probe {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         "probe".into()
     }
@@ -51,6 +54,9 @@ impl ToolDyn for Probe {
 pub struct Stall(pub Arc<tokio::sync::Notify>);
 
 impl ToolDyn for Stall {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         "stall".into()
     }

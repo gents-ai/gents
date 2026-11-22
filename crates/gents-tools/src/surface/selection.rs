@@ -33,6 +33,7 @@ pub struct CommandOutputLimits {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedToolSelection {
+    pub hidden_tool_names: Vec<String>,
     pub file_tools: FileToolMode,
     pub file_tool_root: Option<PathBuf>,
     pub bash: BashMode,
@@ -79,6 +80,7 @@ pub struct ResolvedToolSelection {
 impl Default for ResolvedToolSelection {
     fn default() -> Self {
         Self {
+            hidden_tool_names: Vec::new(),
             file_tools: FileToolMode::Off,
             file_tool_root: None,
             bash: BashMode::Off,
@@ -129,7 +131,7 @@ impl ResolvedToolSelection {
     }
 
     pub fn from_document(tools: &gents_documents::Tools) -> anyhow::Result<Self> {
-        tools.validate()?;
+        tools.validate_stored()?;
         let host = tools.host.as_ref();
         let files = host.and_then(|host| host.files.as_ref());
         let bash_group = host.and_then(|host| host.bash.as_ref());
@@ -214,6 +216,7 @@ impl ResolvedToolSelection {
         );
 
         Ok(Self {
+            hidden_tool_names: tools.hidden_tool_names.clone(),
             file_tools,
             file_tool_root: host
                 .and_then(|host| host.root.as_deref())

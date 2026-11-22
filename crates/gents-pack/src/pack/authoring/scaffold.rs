@@ -503,6 +503,7 @@ fn workflow_config(names: &Names) -> Value {
             {
                 "tools_id": format!("{kebab}-caller"),
                 "display_name": format!("{} caller: the workflow tool over its worker", names.title),
+                "agents": {"target_ids": [worker]},
                 "integrations": {"plugins": [{
                     "plugin": format!("{}/{}", names.namespace, names.name),
                     "job": {
