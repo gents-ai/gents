@@ -1,0 +1,544 @@
+{
+  "case_id": "library-hold-edition-links",
+  "split": "held_out",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type LibraryHoldEdition { hold: String @index(unique: true) edition: String }",
+      "type LibraryHold { hold: String @index(unique: true) branch: String }",
+      "type LibraryEdition { edition: String @index(unique: true) title: String format: String }",
+      "type LibraryHoldImport { hold: String @index(unique: true) edition: String title_hint: String }"
+    ],
+    "documents": [
+      {
+        "collection": "LibraryHoldEdition",
+        "document": {
+          "hold": "LH-4",
+          "edition": "ED-50"
+        }
+      },
+      {
+        "collection": "LibraryHold",
+        "document": {
+          "hold": "LH-1",
+          "branch": "main"
+        }
+      },
+      {
+        "collection": "LibraryHold",
+        "document": {
+          "hold": "LH-2",
+          "branch": "main"
+        }
+      },
+      {
+        "collection": "LibraryHold",
+        "document": {
+          "hold": "LH-3",
+          "branch": "east"
+        }
+      },
+      {
+        "collection": "LibraryHold",
+        "document": {
+          "hold": "LH-4",
+          "branch": "east"
+        }
+      },
+      {
+        "collection": "LibraryEdition",
+        "document": {
+          "edition": "ED-11",
+          "title": "Field atlas",
+          "format": "print"
+        }
+      },
+      {
+        "collection": "LibraryEdition",
+        "document": {
+          "edition": "ED-19",
+          "title": "Field atlas",
+          "format": "audio"
+        }
+      },
+      {
+        "collection": "LibraryEdition",
+        "document": {
+          "edition": "ED-50",
+          "title": "Bird list",
+          "format": "print"
+        }
+      },
+      {
+        "collection": "LibraryHoldImport",
+        "document": {
+          "hold": "LH-1",
+          "edition": "ED-19",
+          "title_hint": "Field atlas"
+        }
+      },
+      {
+        "collection": "LibraryHoldImport",
+        "document": {
+          "hold": "LH-2",
+          "edition": "ED-11",
+          "title_hint": "Field atlas"
+        }
+      },
+      {
+        "collection": "LibraryHoldImport",
+        "document": {
+          "hold": "LH-3",
+          "title_hint": "Field atlas"
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "access",
+      "prompt": "I keep application records in LibraryHoldEdition, LibraryHold, LibraryEdition and LibraryHoldImport. Enable your general read access only to those collections, and general create/update/delete access only to LibraryHoldEdition if your native tools support it. Keep shell execution off and leave all other collection permissions alone. Inspect the available fields before working with records.",
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "agents": {
+              "agents": "agents",
+              "contexts": "contexts",
+              "tools": "tools",
+              "expect": [
+                {
+                  "agent_did": "gents:agent-slot:engineer",
+                  "tools": [
+                    {
+                      "field": "host.bash.mode",
+                      "matches": "^(null|Off)$"
+                    },
+                    {
+                      "field": "datastore.write_collections",
+                      "equals": [
+                        "LibraryHoldEdition"
+                      ]
+                    },
+                    {
+                      "field": "datastore.defra_query_collections",
+                      "contains": "\"LibraryHoldEdition\""
+                    },
+                    {
+                      "field": "datastore.defra_query_collections",
+                      "contains": "\"LibraryHold\""
+                    },
+                    {
+                      "field": "datastore.defra_query_collections",
+                      "contains": "\"LibraryEdition\""
+                    },
+                    {
+                      "field": "datastore.defra_query_collections",
+                      "contains": "\"LibraryHoldImport\""
+                    }
+                  ]
+                }
+              ]
+            },
+            "present": [
+              {
+                "capture": "LibraryHoldEdition",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "LibraryHold",
+                "min": 4,
+                "max": 4
+              },
+              {
+                "capture": "LibraryEdition",
+                "min": 3,
+                "max": 3
+              },
+              {
+                "capture": "LibraryHoldImport",
+                "min": 3,
+                "max": 3
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name",
+            "context_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "contexts",
+          "collection": "AgentContext",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "context_id",
+            "tools_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "tools",
+          "collection": "Tools",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "tools_id",
+            "host",
+            "datastore"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "LibraryHoldEdition",
+          "collection": "LibraryHoldEdition",
+          "filter": {},
+          "fields": [
+            "hold",
+            "edition"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "LibraryHold",
+          "collection": "LibraryHold",
+          "filter": {},
+          "fields": [
+            "hold",
+            "branch"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "LibraryEdition",
+          "collection": "LibraryEdition",
+          "filter": {},
+          "fields": [
+            "edition",
+            "title",
+            "format"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "LibraryHoldImport",
+          "collection": "LibraryHoldImport",
+          "filter": {},
+          "fields": [
+            "hold",
+            "edition",
+            "title_hint"
+          ]
+        }
+      ]
+    },
+    {
+      "stage_id": "link",
+      "prompt": "The branch import left some holds without an edition. Fill in the missing LibraryHoldEdition records from LibraryHoldImport, but only from an edition ID the import actually gives and that LibraryEdition really has. Several editions share a title, so a hold that only has a title hint stays open. Don't touch the link that already exists or any of the source records. Answer with a JSON object listing the still-open hold IDs under \"unresolved\".",
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "bash",
+              "schema"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "LibraryHoldEdition",
+                "min": 3,
+                "max": 3
+              },
+              {
+                "capture": "LibraryHold",
+                "min": 4,
+                "max": 4
+              },
+              {
+                "capture": "LibraryEdition",
+                "min": 3,
+                "max": 3
+              },
+              {
+                "capture": "LibraryHoldImport",
+                "min": 3,
+                "max": 3
+              }
+            ],
+            "rows": [
+              {
+                "capture": "LibraryHoldEdition",
+                "key": "hold",
+                "id": "LH-4",
+                "expect": [
+                  {
+                    "field": "edition",
+                    "equals": "ED-50"
+                  }
+                ]
+              },
+              {
+                "capture": "LibraryHoldEdition",
+                "key": "hold",
+                "id": "LH-1",
+                "expect": [
+                  {
+                    "field": "edition",
+                    "equals": "ED-19"
+                  }
+                ]
+              },
+              {
+                "capture": "LibraryHoldEdition",
+                "key": "hold",
+                "id": "LH-2",
+                "expect": [
+                  {
+                    "field": "edition",
+                    "equals": "ED-11"
+                  }
+                ]
+              },
+              {
+                "capture": "LibraryHold",
+                "key": "hold",
+                "id": "LH-1",
+                "expect": [
+                  {
+                    "field": "branch",
+                    "equals": "main"
+                  }
+                ]
+              },
+              {
+                "capture": "LibraryHold",
+                "key": "hold",
+                "id": "LH-2",
+                "expect": [
+                  {
+                    "field": "branch",
+                    "equals": "main"
+                  }
+                ]
+              },
+              {
+                "capture": "LibraryHold",
+                "key": "hold",
+                "id": "LH-3",
+                "expect": [
+                  {
+                    "field": "branch",
+                    "equals": "east"
+                  }
+                ]
+              },
+              {
+                "capture": "LibraryHold",
+                "key": "hold",
+                "id": "LH-4",
+                "expect": [
+                  {
+                    "field": "branch",
+                    "equals": "east"
+                  }
+                ]
+              },
+              {
+                "capture": "LibraryEdition",
+                "key": "edition",
+                "id": "ED-11",
+                "expect": [
+                  {
+                    "field": "title",
+                    "equals": "Field atlas"
+                  },
+                  {
+                    "field": "format",
+                    "equals": "print"
+                  }
+                ]
+              },
+              {
+                "capture": "LibraryEdition",
+                "key": "edition",
+                "id": "ED-19",
+                "expect": [
+                  {
+                    "field": "title",
+                    "equals": "Field atlas"
+                  },
+                  {
+                    "field": "format",
+                    "equals": "audio"
+                  }
+                ]
+              },
+              {
+                "capture": "LibraryEdition",
+                "key": "edition",
+                "id": "ED-50",
+                "expect": [
+                  {
+                    "field": "title",
+                    "equals": "Bird list"
+                  },
+                  {
+                    "field": "format",
+                    "equals": "print"
+                  }
+                ]
+              },
+              {
+                "capture": "LibraryHoldImport",
+                "key": "hold",
+                "id": "LH-1",
+                "expect": [
+                  {
+                    "field": "edition",
+                    "equals": "ED-19"
+                  },
+                  {
+                    "field": "title_hint",
+                    "equals": "Field atlas"
+                  }
+                ]
+              },
+              {
+                "capture": "LibraryHoldImport",
+                "key": "hold",
+                "id": "LH-2",
+                "expect": [
+                  {
+                    "field": "edition",
+                    "equals": "ED-11"
+                  },
+                  {
+                    "field": "title_hint",
+                    "equals": "Field atlas"
+                  }
+                ]
+              },
+              {
+                "capture": "LibraryHoldImport",
+                "key": "hold",
+                "id": "LH-3",
+                "expect": [
+                  {
+                    "field": "edition",
+                    "equals": null
+                  },
+                  {
+                    "field": "title_hint",
+                    "equals": "Field atlas"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\"unresolved\"\\s*:\\s*\\[\\s*(?:\"LH-3\")\\s*\\]"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "LibraryHoldEdition",
+          "collection": "LibraryHoldEdition",
+          "filter": {},
+          "fields": [
+            "hold",
+            "edition"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "LibraryHold",
+          "collection": "LibraryHold",
+          "filter": {},
+          "fields": [
+            "hold",
+            "branch"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "LibraryEdition",
+          "collection": "LibraryEdition",
+          "filter": {},
+          "fields": [
+            "edition",
+            "title",
+            "format"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "LibraryHoldImport",
+          "collection": "LibraryHoldImport",
+          "filter": {},
+          "fields": [
+            "hold",
+            "edition",
+            "title_hint"
+          ]
+        }
+      ]
+    }
+  ]
+}

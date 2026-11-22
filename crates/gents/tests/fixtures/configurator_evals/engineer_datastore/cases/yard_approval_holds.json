@@ -1,0 +1,641 @@
+{
+  "case_id": "yard-approval-holds",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type AssetHold { hold: String @index(unique: true) state: String yard: String }",
+      "type AssetApproval { approval: String @index(unique: true) hold: String role: String }",
+      "type AssetSafetyStop { hold: String @index(unique: true) active: Boolean }"
+    ],
+    "documents": [
+      {
+        "collection": "AssetHold",
+        "document": {
+          "hold": "AH-103",
+          "state": "held",
+          "yard": "west"
+        }
+      },
+      {
+        "collection": "AssetHold",
+        "document": {
+          "hold": "AH-109",
+          "state": "held",
+          "yard": "north"
+        }
+      },
+      {
+        "collection": "AssetHold",
+        "document": {
+          "hold": "AH-112",
+          "state": "held",
+          "yard": "east"
+        }
+      },
+      {
+        "collection": "AssetHold",
+        "document": {
+          "hold": "AH-118",
+          "state": "held",
+          "yard": "west"
+        }
+      },
+      {
+        "collection": "AssetHold",
+        "document": {
+          "hold": "AH-122",
+          "state": "cleared",
+          "yard": "north"
+        }
+      },
+      {
+        "collection": "AssetHold",
+        "document": {
+          "hold": "AH-127",
+          "state": "held",
+          "yard": "east"
+        }
+      },
+      {
+        "collection": "AssetApproval",
+        "document": {
+          "approval": "S-100",
+          "hold": "AH-103",
+          "role": "lead"
+        }
+      },
+      {
+        "collection": "AssetApproval",
+        "document": {
+          "approval": "S-101",
+          "hold": "AH-109",
+          "role": "lead"
+        }
+      },
+      {
+        "collection": "AssetApproval",
+        "document": {
+          "approval": "S-102",
+          "hold": "AH-112",
+          "role": "lead"
+        }
+      },
+      {
+        "collection": "AssetApproval",
+        "document": {
+          "approval": "S-103",
+          "hold": "AH-118",
+          "role": "lead"
+        }
+      },
+      {
+        "collection": "AssetApproval",
+        "document": {
+          "approval": "S-105",
+          "hold": "AH-127",
+          "role": "review"
+        }
+      },
+      {
+        "collection": "AssetApproval",
+        "document": {
+          "approval": "S-106",
+          "hold": "AH-103",
+          "role": "review"
+        }
+      },
+      {
+        "collection": "AssetApproval",
+        "document": {
+          "approval": "S-107",
+          "hold": "AH-109",
+          "role": "review"
+        }
+      },
+      {
+        "collection": "AssetApproval",
+        "document": {
+          "approval": "S-108",
+          "hold": "AH-112",
+          "role": "review"
+        }
+      },
+      {
+        "collection": "AssetApproval",
+        "document": {
+          "approval": "S-110",
+          "hold": "AH-122",
+          "role": "review"
+        }
+      },
+      {
+        "collection": "AssetSafetyStop",
+        "document": {
+          "hold": "AH-109",
+          "active": true
+        }
+      },
+      {
+        "collection": "AssetSafetyStop",
+        "document": {
+          "hold": "AH-127",
+          "active": false
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "access",
+      "prompt": "I keep application records in AssetHold, AssetApproval and AssetSafetyStop. Enable your general read access only to those collections, and general create/update/delete access only to AssetHold if your native tools support it. Keep shell execution off and leave all other collection permissions alone. Inspect the available fields before working with records.",
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "agents": {
+              "agents": "agents",
+              "contexts": "contexts",
+              "tools": "tools",
+              "expect": [
+                {
+                  "agent_did": "gents:agent-slot:engineer",
+                  "tools": [
+                    {
+                      "field": "host.bash.mode",
+                      "matches": "^(null|Off)$"
+                    },
+                    {
+                      "field": "datastore.write_collections",
+                      "equals": [
+                        "AssetHold"
+                      ]
+                    },
+                    {
+                      "field": "datastore.defra_query_collections",
+                      "contains": "\"AssetHold\""
+                    },
+                    {
+                      "field": "datastore.defra_query_collections",
+                      "contains": "\"AssetApproval\""
+                    },
+                    {
+                      "field": "datastore.defra_query_collections",
+                      "contains": "\"AssetSafetyStop\""
+                    }
+                  ]
+                }
+              ]
+            },
+            "present": [
+              {
+                "capture": "AssetHold",
+                "min": 6,
+                "max": 6
+              },
+              {
+                "capture": "AssetApproval",
+                "min": 9,
+                "max": 9
+              },
+              {
+                "capture": "AssetSafetyStop",
+                "min": 2,
+                "max": 2
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name",
+            "context_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "contexts",
+          "collection": "AgentContext",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "context_id",
+            "tools_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "tools",
+          "collection": "Tools",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "tools_id",
+            "host",
+            "datastore"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "AssetHold",
+          "collection": "AssetHold",
+          "filter": {},
+          "fields": [
+            "hold",
+            "state",
+            "yard"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "AssetApproval",
+          "collection": "AssetApproval",
+          "filter": {},
+          "fields": [
+            "approval",
+            "hold",
+            "role"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "AssetSafetyStop",
+          "collection": "AssetSafetyStop",
+          "filter": {},
+          "fields": [
+            "hold",
+            "active"
+          ]
+        }
+      ]
+    },
+    {
+      "stage_id": "ask",
+      "prompt": "Yard audit 10: clear AssetHold records still held only when AssetApproval has both a lead and a review for that hold and AssetSafetyStop has no active stop for it. Ignore the withdrawn approval S-109 if it appears. Change only state on qualifying holds. Reply with JSON containing \"cleared\", the hold IDs changed today.",
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "bash",
+              "schema"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "AssetHold",
+                "min": 6,
+                "max": 6
+              },
+              {
+                "capture": "AssetApproval",
+                "min": 9,
+                "max": 9
+              },
+              {
+                "capture": "AssetSafetyStop",
+                "min": 2,
+                "max": 2
+              }
+            ],
+            "rows": [
+              {
+                "capture": "AssetHold",
+                "key": "hold",
+                "id": "AH-103",
+                "expect": [
+                  {
+                    "field": "state",
+                    "equals": "cleared"
+                  },
+                  {
+                    "field": "yard",
+                    "equals": "west"
+                  }
+                ]
+              },
+              {
+                "capture": "AssetHold",
+                "key": "hold",
+                "id": "AH-109",
+                "expect": [
+                  {
+                    "field": "state",
+                    "equals": "held"
+                  },
+                  {
+                    "field": "yard",
+                    "equals": "north"
+                  }
+                ]
+              },
+              {
+                "capture": "AssetHold",
+                "key": "hold",
+                "id": "AH-112",
+                "expect": [
+                  {
+                    "field": "state",
+                    "equals": "cleared"
+                  },
+                  {
+                    "field": "yard",
+                    "equals": "east"
+                  }
+                ]
+              },
+              {
+                "capture": "AssetHold",
+                "key": "hold",
+                "id": "AH-118",
+                "expect": [
+                  {
+                    "field": "state",
+                    "equals": "held"
+                  },
+                  {
+                    "field": "yard",
+                    "equals": "west"
+                  }
+                ]
+              },
+              {
+                "capture": "AssetHold",
+                "key": "hold",
+                "id": "AH-122",
+                "expect": [
+                  {
+                    "field": "state",
+                    "equals": "cleared"
+                  },
+                  {
+                    "field": "yard",
+                    "equals": "north"
+                  }
+                ]
+              },
+              {
+                "capture": "AssetHold",
+                "key": "hold",
+                "id": "AH-127",
+                "expect": [
+                  {
+                    "field": "state",
+                    "equals": "held"
+                  },
+                  {
+                    "field": "yard",
+                    "equals": "east"
+                  }
+                ]
+              },
+              {
+                "capture": "AssetApproval",
+                "key": "approval",
+                "id": "S-100",
+                "expect": [
+                  {
+                    "field": "hold",
+                    "equals": "AH-103"
+                  },
+                  {
+                    "field": "role",
+                    "equals": "lead"
+                  }
+                ]
+              },
+              {
+                "capture": "AssetApproval",
+                "key": "approval",
+                "id": "S-101",
+                "expect": [
+                  {
+                    "field": "hold",
+                    "equals": "AH-109"
+                  },
+                  {
+                    "field": "role",
+                    "equals": "lead"
+                  }
+                ]
+              },
+              {
+                "capture": "AssetApproval",
+                "key": "approval",
+                "id": "S-102",
+                "expect": [
+                  {
+                    "field": "hold",
+                    "equals": "AH-112"
+                  },
+                  {
+                    "field": "role",
+                    "equals": "lead"
+                  }
+                ]
+              },
+              {
+                "capture": "AssetApproval",
+                "key": "approval",
+                "id": "S-103",
+                "expect": [
+                  {
+                    "field": "hold",
+                    "equals": "AH-118"
+                  },
+                  {
+                    "field": "role",
+                    "equals": "lead"
+                  }
+                ]
+              },
+              {
+                "capture": "AssetApproval",
+                "key": "approval",
+                "id": "S-105",
+                "expect": [
+                  {
+                    "field": "hold",
+                    "equals": "AH-127"
+                  },
+                  {
+                    "field": "role",
+                    "equals": "review"
+                  }
+                ]
+              },
+              {
+                "capture": "AssetApproval",
+                "key": "approval",
+                "id": "S-106",
+                "expect": [
+                  {
+                    "field": "hold",
+                    "equals": "AH-103"
+                  },
+                  {
+                    "field": "role",
+                    "equals": "review"
+                  }
+                ]
+              },
+              {
+                "capture": "AssetApproval",
+                "key": "approval",
+                "id": "S-107",
+                "expect": [
+                  {
+                    "field": "hold",
+                    "equals": "AH-109"
+                  },
+                  {
+                    "field": "role",
+                    "equals": "review"
+                  }
+                ]
+              },
+              {
+                "capture": "AssetApproval",
+                "key": "approval",
+                "id": "S-108",
+                "expect": [
+                  {
+                    "field": "hold",
+                    "equals": "AH-112"
+                  },
+                  {
+                    "field": "role",
+                    "equals": "review"
+                  }
+                ]
+              },
+              {
+                "capture": "AssetApproval",
+                "key": "approval",
+                "id": "S-110",
+                "expect": [
+                  {
+                    "field": "hold",
+                    "equals": "AH-122"
+                  },
+                  {
+                    "field": "role",
+                    "equals": "review"
+                  }
+                ]
+              },
+              {
+                "capture": "AssetSafetyStop",
+                "key": "hold",
+                "id": "AH-109",
+                "expect": [
+                  {
+                    "field": "active",
+                    "equals": true
+                  }
+                ]
+              },
+              {
+                "capture": "AssetSafetyStop",
+                "key": "hold",
+                "id": "AH-127",
+                "expect": [
+                  {
+                    "field": "active",
+                    "equals": false
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\"cleared\"\\s*:\\s*\\[\\s*(?:\"AH-103\"\\s*,\\s*\"AH-112\"|\"AH-112\"\\s*,\\s*\"AH-103\")\\s*\\]"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "AssetHold",
+          "collection": "AssetHold",
+          "filter": {},
+          "fields": [
+            "hold",
+            "state",
+            "yard"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "AssetApproval",
+          "collection": "AssetApproval",
+          "filter": {},
+          "fields": [
+            "approval",
+            "hold",
+            "role"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "AssetSafetyStop",
+          "collection": "AssetSafetyStop",
+          "filter": {},
+          "fields": [
+            "hold",
+            "active"
+          ]
+        }
+      ]
+    }
+  ]
+}

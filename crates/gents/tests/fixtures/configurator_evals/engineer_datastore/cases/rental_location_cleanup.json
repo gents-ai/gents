@@ -1,0 +1,401 @@
+{
+  "case_id": "rental-location-cleanup",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type RentalLocation { location: String @index(unique: true) retired_on: String site: String }",
+      "type RentalOrder { order_id: String @index(unique: true) location: String state: String }"
+    ],
+    "documents": [
+      {
+        "collection": "RentalLocation",
+        "document": {
+          "location": "LC-103",
+          "retired_on": "2026-11-03",
+          "site": "north"
+        }
+      },
+      {
+        "collection": "RentalLocation",
+        "document": {
+          "location": "LC-105",
+          "retired_on": "2026-10-30",
+          "site": "east"
+        }
+      },
+      {
+        "collection": "RentalLocation",
+        "document": {
+          "location": "LC-108",
+          "retired_on": "2026-11-12",
+          "site": "west"
+        }
+      },
+      {
+        "collection": "RentalLocation",
+        "document": {
+          "location": "LC-113",
+          "site": "east"
+        }
+      },
+      {
+        "collection": "RentalLocation",
+        "document": {
+          "location": "LC-120",
+          "retired_on": "2026-11-02",
+          "site": "north"
+        }
+      },
+      {
+        "collection": "RentalLocation",
+        "document": {
+          "location": "LC-131",
+          "retired_on": "2026-12-01",
+          "site": "west"
+        }
+      },
+      {
+        "collection": "RentalOrder",
+        "document": {
+          "order_id": "RO-101",
+          "location": "LC-105",
+          "state": "open"
+        }
+      },
+      {
+        "collection": "RentalOrder",
+        "document": {
+          "order_id": "RO-102",
+          "location": "LC-103",
+          "state": "closed"
+        }
+      },
+      {
+        "collection": "RentalOrder",
+        "document": {
+          "order_id": "RO-103",
+          "location": "LC-113",
+          "state": "open"
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "access",
+      "prompt": "I keep application records in RentalLocation and RentalOrder. Enable your general read access only to those collections, and general create/update/delete access only to RentalLocation if your native tools support it. Keep shell execution off and leave all other collection permissions alone. Inspect the available fields before working with records.",
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "agents": {
+              "agents": "agents",
+              "contexts": "contexts",
+              "tools": "tools",
+              "expect": [
+                {
+                  "agent_did": "gents:agent-slot:engineer",
+                  "tools": [
+                    {
+                      "field": "host.bash.mode",
+                      "matches": "^(null|Off)$"
+                    },
+                    {
+                      "field": "datastore.write_collections",
+                      "equals": [
+                        "RentalLocation"
+                      ]
+                    },
+                    {
+                      "field": "datastore.defra_query_collections",
+                      "contains": "\"RentalLocation\""
+                    },
+                    {
+                      "field": "datastore.defra_query_collections",
+                      "contains": "\"RentalOrder\""
+                    }
+                  ]
+                }
+              ]
+            },
+            "present": [
+              {
+                "capture": "RentalLocation",
+                "min": 6,
+                "max": 6
+              },
+              {
+                "capture": "RentalOrder",
+                "min": 3,
+                "max": 3
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name",
+            "context_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "contexts",
+          "collection": "AgentContext",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "context_id",
+            "tools_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "tools",
+          "collection": "Tools",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "tools_id",
+            "host",
+            "datastore"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "RentalLocation",
+          "collection": "RentalLocation",
+          "filter": {},
+          "fields": [
+            "location",
+            "retired_on",
+            "site"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "RentalOrder",
+          "collection": "RentalOrder",
+          "filter": {},
+          "fields": [
+            "order_id",
+            "location",
+            "state"
+          ]
+        }
+      ]
+    },
+    {
+      "stage_id": "ask",
+      "prompt": "Clean up RentalLocation records retired strictly before 2026-11-12. Delete one only if no open RentalOrder still references it by location. Closed orders do not block removal. Preserve all orders, every active or later location, and the boundary date itself. Reply with JSON containing \"removed\", the location codes you deleted.",
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "bash",
+              "schema"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "RentalLocation",
+                "min": 4,
+                "max": 4
+              },
+              {
+                "capture": "RentalOrder",
+                "min": 3,
+                "max": 3
+              }
+            ],
+            "rows": [
+              {
+                "capture": "RentalLocation",
+                "key": "location",
+                "id": "LC-105",
+                "expect": [
+                  {
+                    "field": "retired_on",
+                    "equals": "2026-10-30"
+                  },
+                  {
+                    "field": "site",
+                    "equals": "east"
+                  }
+                ]
+              },
+              {
+                "capture": "RentalLocation",
+                "key": "location",
+                "id": "LC-108",
+                "expect": [
+                  {
+                    "field": "retired_on",
+                    "equals": "2026-11-12"
+                  },
+                  {
+                    "field": "site",
+                    "equals": "west"
+                  }
+                ]
+              },
+              {
+                "capture": "RentalLocation",
+                "key": "location",
+                "id": "LC-113",
+                "expect": [
+                  {
+                    "field": "retired_on",
+                    "equals": null
+                  },
+                  {
+                    "field": "site",
+                    "equals": "east"
+                  }
+                ]
+              },
+              {
+                "capture": "RentalLocation",
+                "key": "location",
+                "id": "LC-131",
+                "expect": [
+                  {
+                    "field": "retired_on",
+                    "equals": "2026-12-01"
+                  },
+                  {
+                    "field": "site",
+                    "equals": "west"
+                  }
+                ]
+              },
+              {
+                "capture": "RentalOrder",
+                "key": "order_id",
+                "id": "RO-101",
+                "expect": [
+                  {
+                    "field": "location",
+                    "equals": "LC-105"
+                  },
+                  {
+                    "field": "state",
+                    "equals": "open"
+                  }
+                ]
+              },
+              {
+                "capture": "RentalOrder",
+                "key": "order_id",
+                "id": "RO-102",
+                "expect": [
+                  {
+                    "field": "location",
+                    "equals": "LC-103"
+                  },
+                  {
+                    "field": "state",
+                    "equals": "closed"
+                  }
+                ]
+              },
+              {
+                "capture": "RentalOrder",
+                "key": "order_id",
+                "id": "RO-103",
+                "expect": [
+                  {
+                    "field": "location",
+                    "equals": "LC-113"
+                  },
+                  {
+                    "field": "state",
+                    "equals": "open"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\"removed\"\\s*:\\s*\\[\\s*(?:\"LC-103\"\\s*,\\s*\"LC-120\"|\"LC-120\"\\s*,\\s*\"LC-103\")\\s*\\]"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "RentalLocation",
+          "collection": "RentalLocation",
+          "filter": {},
+          "fields": [
+            "location",
+            "retired_on",
+            "site"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "RentalOrder",
+          "collection": "RentalOrder",
+          "filter": {},
+          "fields": [
+            "order_id",
+            "location",
+            "state"
+          ]
+        }
+      ]
+    }
+  ]
+}
