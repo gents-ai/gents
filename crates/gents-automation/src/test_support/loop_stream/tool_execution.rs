@@ -417,6 +417,9 @@ pub struct ComposedChild {
 }
 
 impl ToolDyn for ComposedChild {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         self.name.to_owned()
     }
@@ -464,6 +467,9 @@ pub const SPAWNED_PROCESS: &str = "$spawned_process";
 pub const NEW_SESSION: &str = "$new_session";
 
 impl ToolDyn for ComposingParent {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         "plugin".into()
     }
@@ -530,6 +536,9 @@ pub struct AdmissionChild {
 }
 
 impl ToolDyn for AdmissionChild {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         self.name.to_owned()
     }
@@ -722,6 +731,9 @@ pub async fn allow_general_agent_target(
 pub struct StoppingParent(pub Arc<tokio::sync::Notify>);
 
 impl ToolDyn for StoppingParent {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         "plugin".into()
     }
@@ -763,6 +775,9 @@ impl ToolDyn for StoppingParent {
 pub struct Stall(pub Arc<tokio::sync::Notify>);
 
 impl ToolDyn for Stall {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         "stall".into()
     }
@@ -796,6 +811,9 @@ pub struct ParallelReadProbe {
 }
 
 impl ToolDyn for ParallelReadProbe {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         "parallel_read_probe".into()
     }
@@ -912,6 +930,9 @@ pub async fn assert_overlapping_reads_keep_call_order(fail_first: bool) {
 
 pub struct SerialReadMeasurement(pub Box<dyn ToolDyn>);
 impl ToolDyn for SerialReadMeasurement {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         self.0.name()
     }

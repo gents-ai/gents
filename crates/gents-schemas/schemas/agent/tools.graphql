@@ -10,5 +10,6 @@ type Tools @policy(id: "$household", resource: "configuration") @index(fields: [
     integrations: JSON
     self_config: JSON
     tags: [String!]
+    hidden_tool_names: [String!]
     updated_at: DateTime
 }
