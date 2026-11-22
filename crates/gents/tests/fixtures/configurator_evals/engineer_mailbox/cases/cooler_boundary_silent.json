@@ -1,0 +1,99 @@
+{
+  "case_id": "cooler-boundary-silent",
+  "split": "validation",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "check",
+      "prompt": "The vaccine-free shipping cooler should be between 2 and 8 degrees inclusive. The minimum recorded was 2 and the maximum was 8. Flag my inbox only if the readings were outside that range. Let me know what you found.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "visible",
+          "collection": "MailboxItem",
+          "filter": {},
+          "fields": [
+            "item_key",
+            "title"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "notice",
+          "collection": "MailboxItem",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "target_node_did": {
+              "_eq": "$trial"
+            },
+            "target_agent_did": {
+              "_eq": "gents:agent-slot:engineer"
+            },
+            "requester_did": {
+              "_eq": "$evaluator"
+            },
+            "session_id": {
+              "_eq": "$session"
+            }
+          },
+          "fields": [
+            "item_key",
+            "node_did",
+            "requester_did",
+            "kind",
+            "action",
+            "status",
+            "title",
+            "summary",
+            "payload",
+            "source_kind",
+            "session_id",
+            "request_id",
+            "target_node_did",
+            "target_agent_did"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "visible",
+            "min": 0,
+            "max": 0
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "write",
+              "bash",
+              "write_file",
+              "edit_file"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "any": [
+              {
+                "matches": "(?i)within|inside|in range|no (alert|flag)|not (flag|file)|did(n'?t| not) (flag|file|add)|nothing"
+              }
+            ]
+          },
+          "tier": "development",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

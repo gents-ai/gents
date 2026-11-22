@@ -1,5 +1,8 @@
 use gents::support;
 
+#[path = "onboarding_evals/engineer_full.rs"]
+mod engineer_full;
+
 #[path = "onboarding_evals/factory_setup.rs"]
 mod factory_setup;
 
