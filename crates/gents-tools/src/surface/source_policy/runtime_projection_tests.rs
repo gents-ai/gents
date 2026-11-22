@@ -47,7 +47,7 @@ async fn installed_projector_links_transport_and_preserves_revocation() -> anyho
         &gents_protocol::schemas::HomePolicyIds::node_store().render(gents_protocol::schemas::NODE),
     )
     .await?;
-    let access = gents_store::config_client::ConfigAccess::local_as(node.clone(), actor.clone());
+    let access = gents_store::config_client::ConfigAccess::local_as(node.clone(), actor);
     let did = gents_store::graphql::escape_graphql_string(runtime.did());
     let network = access
         .write(
