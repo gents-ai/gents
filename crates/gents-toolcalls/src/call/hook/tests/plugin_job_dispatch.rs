@@ -332,7 +332,7 @@ async fn step0(output: Value, options: Options) -> Step0 {
         "agents": {"enabled": true, "target_ids": ["t-worker"]},
         "integrations": {"plugins": [{"plugin": "team/plugin", "job": hook.job_tools.get(TOOL).unwrap().settings}]},
     })).unwrap();
-    gents_documents::write_tools_document(
+    let tools_doc = gents_documents::write_tools_document(
         &owner,
         &tools,
         &gents_inference::resolved::ProviderProfilePolicy,
@@ -340,18 +340,14 @@ async fn step0(output: Value, options: Options) -> Step0 {
     .await
     .unwrap();
     if !options.caller_targets {
-        let tools_id = format!("{}:tools", caller.did());
-        let node_did = identity.did().to_owned();
         owner
             .transact_write("test.plugin_job_stored_unconfigured_caller", |txn| {
-                let tools_id = &tools_id;
-                let node_did = &node_did;
+                let tools_doc = &tools_doc;
                 Box::pin(async move {
                     txn.execute_desired_state_mutation(
-                        "mutation($node: String, $tools: String, $input: ToolsMutationInputArg!) { update_Tools(filter: {node_did: {_eq: $node}, tools_id: {_eq: $tools}}, input: $input) { _docID } }",
+                        "mutation($id: ID!, $input: ToolsMutationInputArg!) { update_Tools(docID: $id, input: $input) { _docID } }",
                         &json!({
-                            "node": node_did,
-                            "tools": tools_id,
+                            "id": tools_doc,
                             "input": {"agents": {"enabled": true, "target_ids": null}},
                         }),
                         gents_store::collection::Collection::Tools,
