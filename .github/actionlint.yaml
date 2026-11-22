@@ -1,5 +1,5 @@
 self-hosted-runner:
-  # The labels of .github/ci-runners.json (test_gate.py keeps them equal).
+  # The labels of .github/ci-runners.json, its reserve label included (test_gate.py keeps them equal).
   labels:
     - macOS
     - ARM64
@@ -14,10 +14,11 @@ self-hosted-runner:
     - ci-macos
     - ci-notary
     - ci-portable
+    - ci-pr
     - ci-release
-    - ci-release-candidate
     - ci-runtime
     - ci-runtime-isolated
+    - ci-signing
     - ci-support
 paths:
   .github/workflows/release-macos.yml:

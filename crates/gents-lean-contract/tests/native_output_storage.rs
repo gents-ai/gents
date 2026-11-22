@@ -49,10 +49,10 @@ async fn canonical_segment_create_returns_physical_identity_and_exact_json() {
         .unwrap();
     assert_eq!(
         policy,
-        gents_schemas::HomePolicyIds::shared().id(gents_schemas::BuiltInPolicy::Household)
+        gents_schemas::HomePolicyIds::node_store().id(gents_schemas::BuiltInPolicy::Household)
     );
     node.add_collection(
-        &gents_schemas::HomePolicyIds::shared().render(gents_schemas::AGENT_OUTPUT_SEGMENT),
+        &gents_schemas::HomePolicyIds::node_store().render(gents_schemas::AGENT_OUTPUT_SEGMENT),
     )
     .await
     .unwrap();

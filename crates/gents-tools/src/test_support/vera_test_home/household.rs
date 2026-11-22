@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gents_protocol::agent_identity::AgentIdentityBinding;
-use gents_protocol::schemas::{BuiltInPolicy, HomePolicyIds};
+use gents_protocol::schemas::BuiltInPolicy;
 use gents_store::config_client::{ClientSigningCapability, ConfigAccess};
 use gents_store::identity::KeyIdentity;
 use gents_store::local::backend_protection::FreshBackendStore;
@@ -295,7 +295,8 @@ impl Household {
             .check_named_permission(
                 actor,
                 permission,
-                HomePolicyIds::shared().id(BuiltInPolicy::Household),
+                gents_store::local::document_acp::node_policy_ids(&self.node)
+                    .id(BuiltInPolicy::Household),
                 resource,
                 document,
             )

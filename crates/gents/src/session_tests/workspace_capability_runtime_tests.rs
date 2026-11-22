@@ -75,7 +75,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
         };
         node.add_collection_as(
             &ctx,
-            &gents_protocol::schemas::HomePolicyIds::shared().render(&schema),
+            &gents_protocol::schemas::HomePolicyIds::node_store().render(&schema),
         )
         .await?;
     }

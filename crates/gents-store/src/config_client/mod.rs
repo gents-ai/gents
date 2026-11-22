@@ -20,6 +20,8 @@ pub mod access_classification_fixture;
 mod agent_signer_conformance;
 mod application_failure;
 mod application_pairing;
+pub mod assignment_receiver;
+pub mod assignments;
 pub mod authored_document;
 mod client_agent_publication;
 pub mod client_authentication;
@@ -49,6 +51,7 @@ pub mod agent_session;
 #[cfg(test)]
 mod client_signed_agent_conformance;
 mod common;
+pub mod decision_read;
 mod delegation;
 #[cfg(test)]
 mod delegation_conformance;
@@ -61,6 +64,7 @@ mod error;
 mod event_policy_conformance;
 mod graphql;
 mod held_audience;
+mod home_provider;
 pub mod home_status;
 pub mod node_deferred_operation;
 mod node_document_publication;
@@ -166,6 +170,7 @@ pub use schema_install::{
 };
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use txn::NativeOperationObservation;
+pub(crate) use txn::ReadAccess;
 pub use txn::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use txn::{count_statements, StatementCounts};
@@ -830,9 +835,14 @@ impl ConfigAccess {
             match self {
                 Self::Graphql(graphql) => post_graphql(graphql, query).await,
                 Self::Local(local) => {
-                    let response =
-                        Self::read_local_response_owned(local, query, None, "config GraphQL")
-                            .await?;
+                    let response = Self::read_local_response_owned(
+                        local,
+                        query,
+                        None,
+                        "config GraphQL",
+                        txn::ReadAccess::Partial,
+                    )
+                    .await?;
                     crate::graphql::ensure_no_errors(&response, "config GraphQL")?;
                     Ok(crate::graphql::into_data_envelope(response.data))
                 }
@@ -846,6 +856,15 @@ impl ConfigAccess {
         query: &'a str,
         variables: &'a Value,
     ) -> BoxFuture<'a, Result<Value>> {
+        self.read_with_variables(query, variables, txn::ReadAccess::Partial)
+    }
+
+    fn read_with_variables<'a>(
+        &'a self,
+        query: &'a str,
+        variables: &'a Value,
+        access: txn::ReadAccess,
+    ) -> BoxFuture<'a, Result<Value>> {
         Box::pin(async move {
             match self {
                 Self::Graphql(graphql) => {
@@ -857,6 +876,7 @@ impl ConfigAccess {
                         query,
                         Some(variables),
                         "config GraphQL",
+                        access,
                     )
                     .await?;
                     crate::graphql::ensure_no_errors(&response, "config GraphQL")?;
@@ -868,14 +888,26 @@ impl ConfigAccess {
 
     /// A read a decision is taken on: the absence of a row it does not
     /// return is acted upon (a receipt to withdraw, an owed removal, a
-    /// client access request). It is [`Self::read`] until the pinned DefraDB
-    /// can refuse a read whose access checks it could not complete; this is
-    /// where that refusal is asked for.
+    /// client access request). Embedded, it is a strict read, and an access
+    /// check without an answer is [`ConfigClientError::DecisionReadUnanswered`]
+    /// or [`ConfigClientError::DecisionReadFailed`]
+    /// (`DecisionRead.decides_only_on_a_complete_read`). External premise:
+    /// DefraDB's HTTP API has no strict read at this pin, so over HTTP it is
+    /// [`Self::read`].
     pub fn read_for_decision<'a>(
         &'a self,
         operation: &'a gents_protocol::document_query::Rendered,
     ) -> BoxFuture<'a, Result<Value>> {
-        self.read(operation)
+        Box::pin(async move {
+            decision_read::decided(
+                self.read_with_variables(
+                    &operation.document,
+                    &operation.variables,
+                    txn::ReadAccess::Strict,
+                )
+                .await,
+            )
+        })
     }
 
     /// Execute a rendered read and return its envelope.

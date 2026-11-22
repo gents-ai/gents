@@ -43,11 +43,11 @@ async fn deferred_enrollment_documents_remain_private_then_follow_the_node() -> 
     )
     .await?;
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::NODE),
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(gents_protocol::schemas::NODE),
     )
     .await?;
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared()
+        &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::NODE_READINESS),
     )
     .await?;
@@ -59,7 +59,7 @@ async fn deferred_enrollment_documents_remain_private_then_follow_the_node() -> 
         gents_protocol::schemas::PEER_PAIRING_APPLIED,
         gents_protocol::schemas::PEER_PAIRING_DESIRED,
     ] {
-        node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(schema))
+        node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(schema))
             .await?;
     }
     let access = |actor: &gents_store::identity::KeyIdentity| -> Result<ConfigAccess> {

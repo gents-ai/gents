@@ -335,7 +335,9 @@ mod tests {
             gents_protocol::schemas::BACKEND_CREDENTIAL,
         ] {
             owner
-                .add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(schema))
+                .add_collection(
+                    &gents_protocol::schemas::HomePolicyIds::node_store().render(schema),
+                )
                 .await?;
         }
         let node_did = escape_graphql_string(runtime.did());
@@ -432,7 +434,7 @@ mod tests {
                 .check_doc_access(
                     &defra_node::AcpIdentity::Authenticated(actor.parse()?),
                     permission,
-                    gents_protocol::schemas::HomePolicyIds::shared()
+                    gents_protocol::schemas::HomePolicyIds::node_store()
                         .id(gents_protocol::schemas::BuiltInPolicy::Household),
                     &case.input.resource,
                     doc,

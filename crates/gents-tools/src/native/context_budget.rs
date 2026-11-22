@@ -30,6 +30,15 @@ pub struct ContextBudgetSnapshot {
     pub recent_session_compactions: Vec<ContextReductionEvidence>,
     pub recent_request_reductions: Vec<ContextReductionEvidence>,
     pub last_request: Option<LastRequestContextSnapshot>,
+    /// The latest dispatch's history tool outputs replaced by stubs; none
+    /// when no dispatch is recorded.
+    pub history_tool_outputs_stubbed_this_dispatch: Option<HistoryStubbingSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HistoryStubbingSnapshot {
+    pub count: usize,
+    pub bytes_removed: usize,
 }
 
 const RECENT_REDUCTION_LIMIT: usize = 5;
@@ -237,7 +246,9 @@ impl Tool for ContextBudgetTool {
                 accounting: component token estimates, context window, compaction threshold, \
                 decision/reason, utilization, and this node/agent/session scope. Session-prefix \
                 compactions and request-local provider reductions are reported separately, with \
-                exact counts and up to five recent evidence records of each kind."
+                exact counts and up to five recent evidence records of each kind. History tool \
+                outputs the latest dispatch carried as stubs are reported as a count and the \
+                bytes removed; stubbing is neither a compaction nor a reduction."
                 .to_string(),
             parameters: json!({
                 "type": "object",
@@ -260,6 +271,7 @@ impl Tool for ContextBudgetTool {
                 "max_tokens",
                 "utilization_percent",
                 "last_request",
+                "history_tool_outputs_stubbed_this_dispatch",
                 "compaction_count",
                 "last_compacted_at",
                 "scope",
@@ -496,6 +508,13 @@ fn build_snapshot(
         (Some(current), Some(max)) if max > 0 => Some((current as f64 / max as f64) * 100.0),
         _ => None,
     };
+    let history_tool_outputs_stubbed_this_dispatch = last_request.as_ref().map(|request| {
+        let stubbing = &request.accounting.history_stubbing;
+        HistoryStubbingSnapshot {
+            count: stubbing.stubbed_results,
+            bytes_removed: stubbing.bytes_removed(),
+        }
+    });
 
     ContextBudgetSnapshot {
         scope,
@@ -535,6 +554,7 @@ fn build_snapshot(
             })
             .collect(),
         last_request,
+        history_tool_outputs_stubbed_this_dispatch,
     }
 }
 
@@ -557,12 +577,17 @@ fn latest_request_context(rows: &[InferenceCallRow]) -> Result<Option<LastReques
     let Some((row, encoded)) = candidates.pop() else {
         return Ok(None);
     };
-    let accounting = serde_json::from_str(encoded).with_context(|| {
-        format!(
-            "decoding context accounting for InferenceCall {}",
-            row.call_id
-        )
-    })?;
+    let Some(accounting) = gents_protocol::rendered_request::ContextAccounting::parse(encoded)
+        .with_context(|| {
+            format!(
+                "decoding context accounting for InferenceCall {}",
+                row.call_id
+            )
+        })?
+        .current()
+    else {
+        return Ok(None);
+    };
     Ok(Some(LastRequestContextSnapshot {
         request_id: row.request_id.clone(),
         call_id: row.call_id.clone(),
@@ -708,6 +733,7 @@ mod tests {
 
         let accounting = gents_protocol::rendered_request::ContextAccounting {
             accounting_version: gents_protocol::rendered_request::CONTEXT_ACCOUNTING_VERSION,
+            history_stubbing: Default::default(),
             turn_index: 2,
             attempt: 0,
             estimator: "serialized_json_bytes_div_4_v1".to_string(),
@@ -837,6 +863,7 @@ mod tests {
             .await;
             let accounting = gents_protocol::rendered_request::ContextAccounting {
                 accounting_version: gents_protocol::rendered_request::CONTEXT_ACCOUNTING_VERSION,
+                history_stubbing: Default::default(),
                 turn_index: 0,
                 attempt: 0,
                 estimator: "foreign".to_string(),
@@ -973,6 +1000,81 @@ mod tests {
             error.to_string().contains("calling agent identity"),
             "{error}"
         );
+    }
+
+    /// The latest dispatch's stubbing is reported on its own, apart from the
+    /// compaction and reduction counts; accounting of an older version reads
+    /// as no dispatch rather than an error.
+    #[test]
+    fn the_latest_dispatch_reports_its_stubbing_and_older_accounting_reads_as_none() {
+        use gents_protocol::rendered_request::{
+            ContextAccounting, ContextCompactionReason, ContextInputComponents, HistoryStubbing,
+            CONTEXT_ACCOUNTING_VERSION,
+        };
+        let current = serde_json::to_value(ContextAccounting {
+            accounting_version: CONTEXT_ACCOUNTING_VERSION,
+            history_stubbing: HistoryStubbing {
+                stubbed_results: 2,
+                original_bytes: 9_000,
+                stub_bytes: 250,
+            },
+            turn_index: 1,
+            attempt: 0,
+            estimator: "serialized_json_bytes_div_4_v1".to_string(),
+            components: ContextInputComponents {
+                messages: 500,
+                documents: 0,
+                tool_schemas: 0,
+                additional_parameters: 0,
+                output_schema: 0,
+            },
+            estimated_input_tokens: 500,
+            raw_estimated_input_tokens: None,
+            input_calibration_basis_points: None,
+            anchored_input_tokens: None,
+            context_window: 1_000,
+            compaction_threshold_basis_points: 8_000,
+            compaction_threshold_tokens: 800,
+            configured_max_output_tokens: None,
+            effective_max_output_tokens: None,
+            compaction_reason: ContextCompactionReason::BelowThreshold,
+            pre_compaction_input_tokens: None,
+        })
+        .unwrap();
+        let mut older = current.clone();
+        older["accounting_version"] = (CONTEXT_ACCOUNTING_VERSION - 1).into();
+        older.as_object_mut().unwrap().remove("history_stubbing");
+        let row = |call_seq: i64, accounting: &Value| InferenceCallRow {
+            request_id: "request-context".into(),
+            call_id: format!("call-{call_seq}"),
+            call_seq,
+            queued_at: Some(format!("2026-06-03T11:00:0{call_seq}Z")),
+            context_accounting_json: Some(accounting.to_string()),
+        };
+        let scope = ContextBudgetScope {
+            node_did: "did:key:z-context".into(),
+            agent_did: agent_context_did(),
+            session_id: "session-context".into(),
+        };
+
+        let last = latest_request_context(&[row(1, &older), row(2, &current)]).unwrap();
+        let snapshot = build_snapshot(scope, Some(1_000), Vec::new(), Vec::new(), last);
+        assert_eq!(
+            snapshot.history_tool_outputs_stubbed_this_dispatch,
+            Some(HistoryStubbingSnapshot {
+                count: 2,
+                bytes_removed: 8_750,
+            })
+        );
+        assert_eq!(
+            (
+                snapshot.compaction_count,
+                snapshot.session_compaction_count,
+                snapshot.request_reduction_count
+            ),
+            (0, 0, 0)
+        );
+        assert_eq!(latest_request_context(&[row(1, &older)]).unwrap(), None);
     }
 
     #[tokio::test]

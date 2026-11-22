@@ -255,6 +255,7 @@ impl AgentToolSurfaceConfig {
                     .then(|| host_tools.read_root().map(ToOwned::to_owned))
                     .flatten(),
                 ceiling_root: ceiling.root().map(ToOwned::to_owned),
+                node_home: None,
             });
 
         let effective_allowed_mcp_service_ids =

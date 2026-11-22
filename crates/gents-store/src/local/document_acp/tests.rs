@@ -412,3 +412,10 @@ fn what_a_person_reads_names_no_internals() {
         assert!(!lowered.contains("access control"), "{text:?}");
     }
 }
+
+#[test]
+fn policy_ids_match_the_lean_model() {
+    gents_lean_vocab::families::document_acp_choice_policy_ids::replay::<super::PolicyIds, Provider>(
+        |input| super::policy_ids(document_acp(input.provider)),
+    );
+}

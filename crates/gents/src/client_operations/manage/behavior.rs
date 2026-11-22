@@ -45,9 +45,14 @@ pub async fn upsert_agent_with_publication_on(
         agent_did: document.agent_did.clone(),
     };
     let owner = document.node_did.as_str();
-    let admission = observe(access, owner, std::slice::from_ref(&document.agent_did))
-        .await
-        .map_err(agent_failure)?;
+    let admission = observe(
+        access,
+        owner,
+        std::slice::from_ref(&document.agent_did),
+        None,
+    )
+    .await
+    .map_err(agent_failure)?;
     access
         .transact_write_with_agent_publication("desktop.agent.save", observer, |txn| {
             let (admission, binding, ceiling) = (&admission, &binding, &ceiling);

@@ -213,6 +213,8 @@ export function nodeReadinessDetail(
       return `Agent “${decision.agentLabel}” has an invalid tool configuration`;
     case "tool_surface_unavailable":
       return `Agent “${decision.agentLabel}” cannot start its tools. Check installed plugins and Tools configuration on its node.`;
+    case "workspace_root_reader_missing":
+      return `Agent “${decision.agentLabel}” has host tools under a workspace root it is not a reader of. Grant it the reader on its node, then start the agent again.`;
     case "executor_start_failed":
       return `Agent “${decision.agentLabel}” could not start`;
   }

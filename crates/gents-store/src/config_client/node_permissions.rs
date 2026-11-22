@@ -253,6 +253,64 @@ impl ConfigAccess {
         }
     }
 
+    /// The relationships on a document, read without an Agent signature, for
+    /// the offline operator CLI: the one access built with the endpoint holding
+    /// the client signing key (`with_client_signed_writes_through`), which no
+    /// Agent holds. Its actor is the client identity that endpoint proves, and
+    /// Native DefraDB still decides the read on it.
+    ///
+    /// The unsigned path is taken only on that proof, never on the mere absence
+    /// of an Agent signer: the runtime and session side build signer-less
+    /// [`Self::Local`] accesses too, and any of them asserting an identity must
+    /// not inherit this read. Every other access falls to
+    /// [`Self::list_document_relationships`], whose `ManagedAgentSignerRequired`
+    /// the `workspace-root` listing degrades to `unknown (<reason>)`.
+    pub async fn list_document_relationships_as_node(
+        &self,
+        collection: &str,
+        doc_id: &str,
+    ) -> Result<Vec<acp::DocumentRelationship>, ConfigClientError> {
+        match self {
+            Self::Local(local) if local.agent_signer().is_some() => {
+                self.list_document_relationships(collection, doc_id).await
+            }
+            // The client signing key proves the operator; nothing else does.
+            Self::Local(local) if local.client_endpoint().is_some() => {
+                self.list_document_relationships_unproved(collection, doc_id)
+                    .await
+            }
+            _ => self.list_document_relationships(collection, doc_id).await,
+        }
+    }
+
+    /// [`Self::list_document_relationships`] without the signer gate, reachable
+    /// only through [`Self::list_document_relationships_as_node`]'s proof.
+    async fn list_document_relationships_unproved(
+        &self,
+        collection: &str,
+        doc_id: &str,
+    ) -> Result<Vec<acp::DocumentRelationship>, ConfigClientError> {
+        crate::graphql::validate_collection_identifier(collection)?;
+        let Self::Local(local) = self else {
+            return self.list_document_relationships(collection, doc_id).await;
+        };
+        let actor = local
+            .identity()
+            .cloned()
+            .ok_or(ConfigClientError::NodePermissionActorRequired)?;
+        let (collection, doc_id) = (collection.to_owned(), doc_id.to_owned());
+        local
+            .run_owned(move |node| async move {
+                let context =
+                    defra_core::RequestContext::default().with_identity(Some(actor.to_string()));
+                Ok::<_, ConfigClientError>(
+                    node.list_dac_relationships_as(&context, &collection, &doc_id)
+                        .await?,
+                )
+            })
+            .await
+    }
+
     /// A grant to a member whose Node administration removal is owed is
     /// refused (Lean `Identity.EnrollmentGrant.permissionGrantAdmitted`).
     /// Native NAC decides the change as this access's actor: locally its

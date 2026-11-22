@@ -5,9 +5,7 @@ use std::time::Duration;
 
 use defra_node::keyring::{self, FileKeyring, Keyring};
 
-use defra_node::{
-    EmbeddedVeraActor, EmbeddedVeraConfig, EmbeddedVeraDeployment, EmbeddedVeraPolicy,
-};
+use defra_node::{EmbeddedVeraActor, EmbeddedVeraConfig, EmbeddedVeraDeployment};
 use sha2::{Digest as _, Sha256};
 use vera::vera_rs::{DelegationAlgorithm, DelegationSigner, SignerError};
 use zeroize::Zeroizing;
@@ -49,11 +47,7 @@ fn deployment(node_did: &str) -> EmbeddedVeraDeployment {
             .map_or(0, |elapsed| elapsed.as_secs()),
         policies: gents_protocol::schemas::BuiltInPolicy::ALL
             .iter()
-            .map(|policy| EmbeddedVeraPolicy {
-                definition: policy.definition().to_owned(),
-                counter: 0,
-                owner: node_did.to_owned(),
-            })
+            .map(crate::schema::catalog::vera_seed::seed)
             .collect(),
     }
 }

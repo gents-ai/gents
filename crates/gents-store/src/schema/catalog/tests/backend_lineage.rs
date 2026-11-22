@@ -1,7 +1,7 @@
 use gents_protocol::schemas;
 
 use super::common;
-use crate::schema::catalog::{ensure_runtime, SchemaError, BASELINE};
+use crate::schema::catalog::{baseline, ensure_runtime, SchemaError};
 
 fn without(fields: &[&str]) -> String {
     schemas::INFERENCE_BACKEND
@@ -26,7 +26,7 @@ async fn a_pre_identity_backend_lineage_is_refused_without_conversion() {
     ] {
         let node = common::fresh_node().await;
         node.add_collection(
-            &gents_protocol::schemas::HomePolicyIds::shared().render(&without(fields)),
+            &gents_protocol::schemas::HomePolicyIds::node_store().render(&without(fields)),
         )
         .await
         .unwrap();
@@ -64,7 +64,7 @@ async fn a_pre_identity_backend_lineage_is_refused_without_conversion() {
 /// A fresh store registers the current backend SDL directly, on the baseline root.
 #[tokio::test]
 async fn a_fresh_store_registers_the_current_backend_sdl_on_the_baseline_root() {
-    let baseline = BASELINE
+    let baseline = baseline(gents_protocol::schemas::HomePolicyIds::node_store())
         .iter()
         .find(|entry| entry.name == schemas::INFERENCE_BACKEND_NAME)
         .unwrap();
@@ -82,7 +82,8 @@ async fn a_fresh_store_registers_the_current_backend_sdl_on_the_baseline_root() 
     let direct = common::fresh_node().await;
     direct
         .add_collection(
-            &gents_protocol::schemas::HomePolicyIds::shared().render(schemas::INFERENCE_BACKEND),
+            &gents_protocol::schemas::HomePolicyIds::node_store()
+                .render(schemas::INFERENCE_BACKEND),
         )
         .await
         .unwrap();

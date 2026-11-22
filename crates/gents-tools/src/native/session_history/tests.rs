@@ -421,6 +421,7 @@ async fn seeded_node() -> gents_inference::test_support::TestDb {
 
     let accounting = gents_protocol::rendered_request::ContextAccounting {
         accounting_version: gents_protocol::rendered_request::CONTEXT_ACCOUNTING_VERSION,
+        history_stubbing: Default::default(),
         turn_index: 2,
         attempt: 0,
         estimator: "serialized_json_bytes_div_4_v1".to_string(),

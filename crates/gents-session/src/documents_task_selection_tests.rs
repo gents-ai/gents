@@ -46,7 +46,7 @@ async fn task_and_agent_target_visibility_follows_modeled_native_selection() -> 
                 .await?;
         }
     }
-    let old_policy = gents_protocol::schemas::HomePolicyIds::shared()
+    let old_policy = gents_protocol::schemas::HomePolicyIds::node_store()
         .id(gents_protocol::schemas::BuiltInPolicy::Household);
     // Configuration publication reads every configuration collection, so the
     // node declares them all, configuration under the modeled policy.
@@ -66,7 +66,7 @@ async fn task_and_agent_target_visibility_follows_modeled_native_selection() -> 
                 .any(|collection| collection.graphql_type() == *name)
         {
             node.add_collection(
-                &gents_protocol::schemas::HomePolicyIds::shared()
+                &gents_protocol::schemas::HomePolicyIds::node_store()
                     .render(&schema.replace(old_policy, &policy)),
             )
             .await?;

@@ -92,18 +92,22 @@ pub(crate) async fn attach_client_goal_graphs(
         return Ok(Err("goal creation actor or physical targets differ".into()));
     }
     let input = gents_store::config_client::client_request_input(request)?;
-    let graph =
-        match gents_store::config_client::verify_request_evidence(input, evidence.request.clone())
-            .await
-        {
-            Ok(graph) if graph.signer_did() == command.requester_did => std::sync::Arc::new(graph),
-            Ok(_)
-            | Err(
-                gents_store::config_client::ConfigClientError::ClientAgentGraph(_)
-                | gents_store::config_client::ConfigClientError::Json(_),
-            ) => return Ok(Err("invalid native goal request evidence".into())),
-            Err(error) => return Err(error.into()),
-        };
+    let ids = txn.home_policy_ids().await?;
+    let graph = match gents_store::config_client::verify_request_evidence(
+        input,
+        evidence.request.clone(),
+        ids,
+    )
+    .await
+    {
+        Ok(graph) if graph.signer_did() == command.requester_did => std::sync::Arc::new(graph),
+        Ok(_)
+        | Err(
+            gents_store::config_client::ConfigClientError::ClientAgentGraph(_)
+            | gents_store::config_client::ConfigClientError::Json(_),
+        ) => return Ok(Err("invalid native goal request evidence".into())),
+        Err(error) => return Err(error.into()),
+    };
     if let Err(refusal) =
         txn.admit_stored_user_create(request, graph.doc_id(), &evidence.request_credentials)?
     {

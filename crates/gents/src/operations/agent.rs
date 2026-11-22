@@ -184,8 +184,13 @@ pub async fn observe(
     access: &ConfigAccess,
     owner: &str,
     agent_dids: &[String],
+    home: Option<std::path::PathBuf>,
 ) -> Result<ObservedAdmission, AgentOperationError> {
-    gents_tools::builtin::self_config::observe_admission(access, owner, agent_dids).await
+    Ok(
+        gents_tools::builtin::self_config::observe_admission(access, owner, agent_dids)
+            .await?
+            .with_node_home(home),
+    )
 }
 
 /// `edit` inside the caller's transaction, admitted from `admission`.

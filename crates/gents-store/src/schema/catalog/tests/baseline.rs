@@ -4,13 +4,13 @@ use gents_protocol::schemas;
 
 use super::common::{self, fresh_node};
 use crate::schema::catalog::{
-    ensure, ensure_runtime, validate_existing_schema, BaselineCollection, Catalog, SchemaError,
-    BASELINE, RUNTIME_CATALOG,
+    baseline, ensure, ensure_runtime, runtime_catalog, validate_existing_schema,
+    BaselineCollection, Catalog, SchemaError,
 };
 
 #[test]
 fn default_baseline_matches_ordered_protocol_catalog() {
-    let actual = BASELINE
+    let actual = baseline(gents_protocol::schemas::HomePolicyIds::node_store())
         .iter()
         .map(|entry| (entry.name, entry.sdl))
         .collect::<Vec<_>>();
@@ -31,7 +31,7 @@ fn default_baseline_matches_ordered_protocol_catalog() {
 
 #[test]
 fn default_baseline_covers_every_protocol_collection_once() {
-    let baseline_names = BASELINE
+    let baseline_names = baseline(gents_protocol::schemas::HomePolicyIds::node_store())
         .iter()
         .map(|entry| entry.name)
         .collect::<BTreeSet<_>>();
@@ -42,12 +42,12 @@ fn default_baseline_covers_every_protocol_collection_once() {
         .collect::<BTreeSet<_>>();
 
     assert_eq!(
-        BASELINE.len(),
+        baseline(gents_protocol::schemas::HomePolicyIds::node_store()).len(),
         baseline_names.len(),
         "baseline must not contain duplicate collections"
     );
     assert!(
-        BASELINE
+        baseline(gents_protocol::schemas::HomePolicyIds::node_store())
             .iter()
             .all(|entry| entry.expected_version.is_some()),
         "production baseline must pin every root version"
@@ -96,7 +96,7 @@ async fn ensure_registers_the_baseline_on_its_roots_and_is_idempotent() {
         .get_all_collection_versions()
         .await
         .expect("versions after first ensure");
-    for entry in BASELINE.iter() {
+    for entry in baseline(gents_protocol::schemas::HomePolicyIds::node_store()).iter() {
         let cv = node
             .get_collection(entry.name)
             .expect("get_collection")
@@ -109,7 +109,9 @@ async fn ensure_registers_the_baseline_on_its_roots_and_is_idempotent() {
         );
         assert_eq!(Some(cv.version_id.as_str()), entry.expected_version);
     }
-    for index in RUNTIME_CATALOG.ordinary_indexes {
+    for index in
+        runtime_catalog(gents_protocol::schemas::HomePolicyIds::node_store()).ordinary_indexes
+    {
         let collection = node
             .get_collection(index.collection)
             .expect("get_collection")
@@ -148,11 +150,11 @@ async fn ensure_registers_the_baseline_on_its_roots_and_is_idempotent() {
 #[tokio::test]
 async fn agent_request_on_its_root_keeps_its_rows_and_ensure_is_idempotent() {
     let node = fresh_node().await;
-    let baseline = BASELINE
+    let baseline = baseline(gents_protocol::schemas::HomePolicyIds::node_store())
         .iter()
         .find(|entry| entry.name == gents_protocol::schemas::AGENT_REQUEST_NAME)
         .expect("AgentRequest baseline");
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(baseline.sdl))
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(baseline.sdl))
         .await
         .expect("register request baseline");
 
@@ -279,13 +281,15 @@ async fn goal_creation_claim_baseline_enforces_uniqueness() {
 #[tokio::test]
 async fn rendered_request_reaches_a_pre_existing_store_through_the_baseline() {
     let node = fresh_node().await;
-    for entry in BASELINE.iter() {
+    for entry in baseline(gents_protocol::schemas::HomePolicyIds::node_store()).iter() {
         if entry.name == gents_protocol::schemas::RENDERED_REQUEST_NAME {
             continue;
         }
-        node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(entry.sdl))
-            .await
-            .unwrap_or_else(|error| panic!("register {}: {error}", entry.name));
+        node.add_collection(
+            &gents_protocol::schemas::HomePolicyIds::node_store().render(entry.sdl),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("register {}: {error}", entry.name));
     }
     let create = r#"mutation {
         create_AgentSession(input: { session_id: "pre-upgrade-session" }) { session_id }
@@ -313,7 +317,7 @@ async fn rendered_request_reaches_a_pre_existing_store_through_the_baseline() {
         .expect("RenderedRequest present after upgrade");
     assert!(rendered.is_active);
     assert!(!rendered.is_placeholder);
-    let pin = BASELINE
+    let pin = baseline(gents_protocol::schemas::HomePolicyIds::node_store())
         .iter()
         .find(|entry| entry.name == gents_protocol::schemas::RENDERED_REQUEST_NAME)
         .and_then(|entry| entry.expected_version)
@@ -428,7 +432,7 @@ async fn single_version_unknown_root_is_rejected() {
 
     let authoring_node = fresh_node().await;
     authoring_node
-        .add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(EXPECTED_SDL))
+        .add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(EXPECTED_SDL))
         .await
         .expect("register expected root");
     let expected_root = authoring_node
@@ -442,7 +446,7 @@ async fn single_version_unknown_root_is_rejected() {
         .expect("shut down test node");
 
     let node = fresh_node().await;
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(FOREIGN_SDL))
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(FOREIGN_SDL))
         .await
         .expect("register foreign root");
     let catalog = Catalog {
@@ -480,7 +484,7 @@ async fn fresh_backend_collections_reject_a_foreign_single_root() {
         let body = sdl.trim_end().strip_suffix('}').expect("bundled SDL type");
         let node = fresh_node().await;
         node.add_collection(
-            &gents_protocol::schemas::HomePolicyIds::shared()
+            &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(&format!("{body}    foreign_field: String\n}}")),
         )
         .await
@@ -506,7 +510,7 @@ async fn unknown_lineage_is_rejected_before_the_baseline_writes_the_store() {
 
     let authoring_node = fresh_node().await;
     authoring_node
-        .add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(EXPECTED_SDL))
+        .add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(EXPECTED_SDL))
         .await
         .expect("register expected root");
     let expected_root = authoring_node
@@ -520,7 +524,7 @@ async fn unknown_lineage_is_rejected_before_the_baseline_writes_the_store() {
         .expect("shut down test node");
 
     let node = fresh_node().await;
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(OLD_SDL))
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(OLD_SDL))
         .await
         .expect("register old root");
     let before = node
@@ -600,14 +604,14 @@ async fn unprotected_file_images_are_rejected_without_changing_retained_data() {
     let node = common::fresh_node().await;
     let directive = format!(
         "@policy(id: \"{}\", resource: \"{}\")",
-        gents_protocol::schemas::HomePolicyIds::shared()
+        gents_protocol::schemas::HomePolicyIds::node_store()
             .id(gents_protocol::schemas::BuiltInPolicy::ToolFileChange),
         gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_RESOURCE
     );
-    let unprotected = gents_protocol::schemas::HomePolicyIds::shared()
+    let unprotected = gents_protocol::schemas::HomePolicyIds::node_store()
         .render(gents_protocol::schemas::TOOL_FILE_CHANGE)
         .replace(&directive, "");
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&unprotected))
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&unprotected))
         .await
         .unwrap();
     let created = node.execute("mutation { create_ToolFileChange(input: { tool_call_doc_id: \"retained-tool\" }) { _docID } }").await;
@@ -645,14 +649,15 @@ async fn file_observation_install_preserves_retained_collection_lineages_and_doc
         .build()
         .await
         .unwrap();
-    let baseline = BASELINE
+    let baseline = baseline(gents_protocol::schemas::HomePolicyIds::node_store())
         .iter()
         .copied()
         .filter(|entry| entry.name != gents_protocol::schemas::TOOL_FILE_CHANGE_NAME)
         .collect::<Vec<_>>();
     let catalog = Catalog {
         baseline: &baseline,
-        ordinary_indexes: RUNTIME_CATALOG.ordinary_indexes,
+        ordinary_indexes: runtime_catalog(gents_protocol::schemas::HomePolicyIds::node_store())
+            .ordinary_indexes,
     };
     ensure(&node, &catalog).await.unwrap();
     let created = node
@@ -745,7 +750,7 @@ async fn removed_node_memory_is_not_registered_or_deleted() {
 #[tokio::test]
 async fn agent_message_keeps_its_current_schema_and_rows() {
     assert!(!schemas::AGENT_MESSAGE.contains("native_request_id"));
-    let canonical = BASELINE
+    let canonical = baseline(gents_protocol::schemas::HomePolicyIds::node_store())
         .iter()
         .find(|entry| entry.name == "AgentMessage")
         .and_then(|entry| entry.expected_version)
@@ -761,7 +766,7 @@ async fn agent_message_keeps_its_current_schema_and_rows() {
 
     let node = fresh_node().await;
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared().render(schemas::AGENT_MESSAGE),
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(schemas::AGENT_MESSAGE),
     )
     .await
     .unwrap();
@@ -814,15 +819,15 @@ async fn agent_message_keeps_its_current_schema_and_rows() {
 #[tokio::test]
 async fn runtime_locality_rejects_branchable_metadata_even_when_schema_cid_matches() {
     let node = fresh_node().await;
-    let sdl = gents_protocol::schemas::HomePolicyIds::shared()
+    let sdl = gents_protocol::schemas::HomePolicyIds::node_store()
         .render(schemas::AGENT)
         .replace("type Agent ", "type Agent @branchable ");
     assert_ne!(sdl, schemas::AGENT);
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&sdl))
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&sdl))
         .await
         .unwrap();
     let before = node.get_collection(schemas::AGENT_NAME).unwrap().unwrap();
-    let expected = BASELINE
+    let expected = baseline(gents_protocol::schemas::HomePolicyIds::node_store())
         .iter()
         .find(|entry| entry.name == schemas::AGENT_NAME)
         .unwrap();
@@ -841,14 +846,17 @@ async fn runtime_locality_rejects_branchable_metadata_even_when_schema_cid_match
 #[tokio::test]
 async fn existing_schema_from_another_version_is_refused_by_type_without_writing() {
     let node = fresh_node().await;
-    validate_existing_schema(&node)
+    validate_existing_schema(&node, gents_protocol::schemas::HomePolicyIds::node_store())
         .await
         .expect("an empty store is this build's to take");
-    let branchable = schemas::HomePolicyIds::shared()
+    let branchable = schemas::HomePolicyIds::node_store()
         .render(schemas::AGENT)
         .replace("type Agent ", "type Agent @branchable ");
     node.add_collection(&branchable).await.unwrap();
-    let error = validate_existing_schema(&node).await.unwrap_err();
+    let error =
+        validate_existing_schema(&node, gents_protocol::schemas::HomePolicyIds::node_store())
+            .await
+            .unwrap_err();
     assert!(
         matches!(error, SchemaError::RuntimeLocalityMismatch { ref collection } if collection == schemas::AGENT_NAME),
         "{error}"
@@ -859,17 +867,20 @@ async fn existing_schema_from_another_version_is_refused_by_type_without_writing
     let node = fresh_node().await;
     let directive = format!(
         "@policy(id: \"{}\", resource: \"{}\")",
-        schemas::HomePolicyIds::shared().id(schemas::BuiltInPolicy::ClientJournal),
+        schemas::HomePolicyIds::node_store().id(schemas::BuiltInPolicy::ClientJournal),
         schemas::CLIENT_JOURNAL_POLICY_RESOURCE
     );
     node.add_collection(
-        &schemas::HomePolicyIds::shared()
+        &schemas::HomePolicyIds::node_store()
             .render(schemas::PENDING_CHAT_SUBMISSION)
             .replace(&directive, ""),
     )
     .await
     .unwrap();
-    let error = validate_existing_schema(&node).await.unwrap_err();
+    let error =
+        validate_existing_schema(&node, gents_protocol::schemas::HomePolicyIds::node_store())
+            .await
+            .unwrap_err();
     assert!(
         matches!(error, SchemaError::IncompatibleIdentityPolicy { ref collection } if collection == schemas::PENDING_CHAT_SUBMISSION_NAME),
         "{error}"
@@ -882,7 +893,9 @@ async fn existing_schema_from_another_version_is_refused_by_type_without_writing
 async fn existing_schema_this_build_wrote_is_accepted() {
     let node = fresh_node().await;
     ensure_runtime(&node).await.unwrap();
-    validate_existing_schema(&node).await.unwrap();
+    validate_existing_schema(&node, gents_protocol::schemas::HomePolicyIds::node_store())
+        .await
+        .unwrap();
     node.shutdown().await.unwrap();
 }
 
@@ -891,13 +904,13 @@ async fn unbound_client_journal_is_rejected_without_changing_data() {
     let node = fresh_node().await;
     let directive = format!(
         "@policy(id: \"{}\", resource: \"{}\")",
-        schemas::HomePolicyIds::shared().id(schemas::BuiltInPolicy::ClientJournal),
+        schemas::HomePolicyIds::node_store().id(schemas::BuiltInPolicy::ClientJournal),
         schemas::CLIENT_JOURNAL_POLICY_RESOURCE
     );
-    let unbound = gents_protocol::schemas::HomePolicyIds::shared()
+    let unbound = gents_protocol::schemas::HomePolicyIds::node_store()
         .render(schemas::PENDING_CHAT_SUBMISSION)
         .replace(&directive, "");
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&unbound))
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&unbound))
         .await
         .unwrap();
     let created = node.execute("mutation { create_PendingChatSubmission(input: { request_id: \"retained\", payload: \"data\" }) { _docID } }").await;
@@ -923,13 +936,13 @@ async fn unbound_mailbox_is_rejected_without_changing_data() {
     let node = fresh_node().await;
     let directive = format!(
         "@policy(id: \"{}\", resource: \"{}\")",
-        schemas::HomePolicyIds::shared().id(schemas::BuiltInPolicy::Mailbox),
+        schemas::HomePolicyIds::node_store().id(schemas::BuiltInPolicy::Mailbox),
         schemas::MAILBOX_POLICY_RESOURCE
     );
-    let unbound = gents_protocol::schemas::HomePolicyIds::shared()
+    let unbound = gents_protocol::schemas::HomePolicyIds::node_store()
         .render(schemas::MAILBOX_ITEM)
         .replace(&directive, "");
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&unbound))
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&unbound))
         .await
         .unwrap();
     let created = node.execute("mutation { create_MailboxItem(input: { item_key: \"retained\", title: \"data\" }) { _docID } }").await;
@@ -973,7 +986,7 @@ async fn a_store_holding_the_earlier_household_policy_refuses_the_restricted_one
         .expect("earlier policy");
     assert_eq!(
         earlier_id,
-        gents_protocol::schemas::HomePolicyIds::shared()
+        gents_protocol::schemas::HomePolicyIds::node_store()
             .id(gents_protocol::schemas::BuiltInPolicy::Household)
     );
     let error = ensure_runtime(&node)
@@ -982,7 +995,7 @@ async fn a_store_holding_the_earlier_household_policy_refuses_the_restricted_one
     let error = format!("{error:#}");
     assert!(
         error.contains(
-            gents_protocol::schemas::HomePolicyIds::shared()
+            gents_protocol::schemas::HomePolicyIds::node_store()
                 .id(gents_protocol::schemas::BuiltInPolicy::Household)
         ),
         "{error}"
@@ -1005,7 +1018,7 @@ async fn canonical_catalog_pins_for_authoring() {
         )
         .collect::<Vec<_>>();
     for (name, sdl) in &catalog {
-        node.add_collection(&schemas::HomePolicyIds::shared().render(sdl))
+        node.add_collection(&schemas::HomePolicyIds::node_store().render(sdl))
             .await
             .unwrap_or_else(|error| panic!("register {name} for pin authoring: {error}"));
     }
@@ -1016,7 +1029,7 @@ async fn canonical_catalog_pins_for_authoring() {
             .get_collection(name)
             .expect("get")
             .unwrap_or_else(|| panic!("missing {name}"));
-        let expected = BASELINE
+        let expected = baseline(gents_protocol::schemas::HomePolicyIds::node_store())
             .iter()
             .find(|entry| entry.name == name)
             .and_then(|entry| entry.expected_version);
