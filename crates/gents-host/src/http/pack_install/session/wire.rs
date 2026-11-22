@@ -28,7 +28,11 @@ pub(super) async fn run(
             anyhow::anyhow!("endpoint serves a different node"),
         ));
     }
-    if requests.is_empty() || requests.iter().any(|request| request.preview || request.remove) {
+    if requests.is_empty()
+        || requests
+            .iter()
+            .any(|request| request.preview || request.remove)
+    {
         return Err(SessionFailure::not_installed(Class::InvalidRequest)(
             anyhow::anyhow!("a pack session wires new pins"),
         ));
