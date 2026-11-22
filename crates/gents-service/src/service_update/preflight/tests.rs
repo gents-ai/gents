@@ -224,6 +224,7 @@ fn an_unreadable_store_key_refuses_before_staging_and_names_the_item() {
     assert!(!gents_store::local::store_key::home_key_file(home).exists());
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn keychain_reader_is_noninteractive_and_discards_the_key() {
     const CHILD: &str = "GENTS_UPDATE_KEY_PREFLIGHT_TEST_CHILD";
