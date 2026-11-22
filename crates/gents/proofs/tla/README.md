@@ -517,6 +517,16 @@ See `../README.md` for how this fits the broader formal-verification model.
   bytes, the observed failure; `TimeoutKill` is the tool timeout killing it
   at the gate, which the wait reports as failed; `PollBudget` is the test's poll budget failing
   before the child prints. Green has neither clock.
+- `ScriptEffectBatch` — one composing plugin's batch of tool calls through
+  the loop's effect dispatcher. Groups come from Lean `joinsGroup` (a fresh
+  read joins until the bound); each member reserves and asks its approval in
+  request order, bodies start once their group is approved, and the next
+  group waits until this one settled. Green keeps `NoOverlappingApproval`,
+  `GroupApprovedBeforeExecution` and `WriterBarrier`; `Approval` asks before
+  the previous approval returned, `EarlyBody` starts a body inside a
+  partially approved group, and `Barrier` starts the next group before this
+  one settled. Skips, failures, cancellation and result positions are the
+  dispatcher's tests, not this model's.
 - `ScriptFixtureExec` — a test that executes a script beside sibling tests
   that spawn (`supplied_path_retains_native_script_fallback`). A sibling's
   spawn copies the process's descriptors into its child until that child

@@ -472,6 +472,11 @@ def scenarios : List CaseRow := examplesToRows ++
     , doc := [("self_config", "{\"enable_self_config\":true}")]
     , patch := [("self_config",
         some "{\"enable_self_config\":true,\"enable_pack_authority\":true}")] }
+  , { name := "tools_hiding_is_not_a_grant_accepted"
+    , target := .tools, guarded := false, validates := true
+    , doc := [("self_config", "{\"enable_self_config\":true}"),
+        ("integrations", "{\"plugins\":[{\"plugin\":\"gents/script\",\"tool_calls\":true}]}")]
+    , patch := [("hidden_tool_names", some "[\"schema\"]")] }
   , { name := "tools_grant_unrelated_edit_on_granted_tools_accepted"
     , target := .tools, guarded := false, validates := true
     , doc := [("self_config", "{\"enable_self_config\":true,\"enable_pack_install\":true}")]
@@ -555,29 +560,34 @@ def scenarios : List CaseRow := examplesToRows ++
   , { name := "tools_job_ceiling_narrowing_accepted"
     , target := .tools, guarded := false, validates := true
     , doc := [("self_config", "{\"enable_self_config\":true}"),
+        ("agents", "{\"target_ids\":[\"target\"]}"),
         ("integrations", jobIntegrations 8 "check")]
     , patch := [("integrations", some (jobIntegrations 4 "check"))] }
   , { name := "tools_job_ceiling_widening_with_held_accepted"
     , target := .tools, guarded := false, validates := true
     , held := { Grants.bot with packInstall := true }
     , doc := [("self_config", "{\"enable_self_config\":true}"),
+        ("agents", "{\"target_ids\":[\"target\"]}"),
         ("integrations", jobIntegrations 4 "check")]
     , patch := [("integrations", some (jobIntegrations 8 "check"))] }
   , { name := "tools_job_policy_edit_accepted"
     , target := .tools, guarded := false, validates := true
     , doc := [("self_config", "{\"enable_self_config\":true}"),
+        ("agents", "{\"target_ids\":[\"target\"]}"),
         ("integrations", jobIntegrations 4 "check")]
     , patch := [("integrations", some (jobIntegrations 4 "off"))] }
   , { name := "tools_job_block_added_accepted"
     , target := .tools, guarded := false, validates := true
-    , doc := [("self_config", "{\"enable_self_config\":true}")]
+    , doc := [("self_config", "{\"enable_self_config\":true}"),
+        ("agents", "{\"target_ids\":[\"target\"]}")]
     , patch := [("integrations", some (jobIntegrations 4 "check"))] }
   , { name := "context_select_job_tools_from_none_with_held_accepted"
     , target := .agentContext, guarded := false, validates := true
     , held := { Grants.bot with packInstall := true }
     , doc := [("context_id", "ctx")]
     , patch := [("tools_id", some "jobbed")]
-    , tools := [("jobbed", plainTools ++ [("integrations", jobIntegrations 4 "check")])] }
+    , tools := [("jobbed", plainTools ++ [("agents", "{\"target_ids\":[\"target\"]}"),
+        ("integrations", jobIntegrations 4 "check")])] }
   ]
 
 def selfConfigCases : List CaseWitness :=

@@ -120,6 +120,7 @@ const DEFAULT_CLI_TIMEOUT_SECS: u64 = 10;
 
 #[derive(Clone)]
 pub struct ToolSurface {
+    hidden_tool_names: Vec<String>,
     host_tools: ToolSet,
     root_execution_guard: Option<RootExecutionGuard>,
     include_meta_tools: bool,
@@ -301,6 +302,22 @@ impl ToolSurface {
                 true
             }
         });
+    }
+
+    /// The names the model is shown: [`Self::tool_names`] without those
+    /// `build_tools` hides.
+    pub fn advertised_tool_names(&self) -> Vec<String> {
+        let names = self.tool_names();
+        let hidden =
+            gents_loop::tool_policy::presentation::hidden_names(&names, &self.hidden_tool_names);
+        names
+            .into_iter()
+            .filter(|name| !hidden.contains(name))
+            .collect()
+    }
+
+    pub fn hidden_tool_names(&self) -> &[String] {
+        &self.hidden_tool_names
     }
 
     pub fn tool_names(&self) -> Vec<String> {
@@ -719,7 +736,10 @@ impl ToolSurface {
             }
             tools.push(tool);
         }
-        Ok(tools)
+        Ok(gents_loop::tool_policy::presentation::present_tools(
+            tools,
+            &self.hidden_tool_names,
+        ))
     }
 }
 
@@ -727,6 +747,7 @@ impl std::fmt::Debug for ToolSurface {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ToolSurface")
             .field("host_tools", &self.host_tools)
+            .field("hidden_tool_names", &self.hidden_tool_names)
             .field("include_meta_tools", &self.include_meta_tools)
             .field("include_goal_tools", &self.include_goal_tools)
             .field("include_goal_creation", &self.include_goal_creation)

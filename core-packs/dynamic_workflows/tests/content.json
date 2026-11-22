@@ -10,8 +10,8 @@
       "expr": "plugin | .name == \"workflow\" and .job == true and .host_imports == [\"run_script\"] and (.script_runtime == null) and (.input_schema.required | index(\"script\") != null) and .instructions == \"plugins/workflow/TOOL.md\" and .limits.wall_clock_secs <= 900"
     },
     {
-      "name": "the caller template names only the read-only worker and ships dynamic as check (a pack may not ship run)",
-      "expr": "tool(\"workflow-caller\") | .integrations.plugins[0] | .plugin == \"gents/workflow\" and .job.policy.dynamic == \"check\" and .job.policy.dynamic_targets == [\"wf-read-only\"] and .job.agent_targets == [\"wf-read-only\"]"
+      "name": "the caller template names only the read-only worker, lists it as a caller target without direct starts, and ships dynamic as check (a pack may not ship run)",
+      "expr": "(tool(\"workflow-caller\") | .agents.target_ids == [\"wf-read-only\"] and .agents.enabled != true) and (tool(\"workflow-caller\") | .integrations.plugins[0] | .plugin == \"gents/workflow\" and .job.policy.dynamic == \"check\" and .job.policy.dynamic_targets == [\"wf-read-only\"] and .job.agent_targets == [\"wf-read-only\"])"
     },
     {
       "name": "the worker is read-only with no network and no session history",
