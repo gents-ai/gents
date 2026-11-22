@@ -2858,6 +2858,9 @@ mod tests {
 }
 
 #[cfg(test)]
+mod child_scope_fixture;
+
+#[cfg(test)]
 mod auxiliary_repair_tests;
 
 #[cfg(test)]
