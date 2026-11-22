@@ -2269,7 +2269,7 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
         },
         ExpectedModes {
             file_tools_mode: "ReadOnly",
-            bash_mode: "ReadOnly",
+            bash_mode: Some("ReadOnly"),
             prompt_snippet: "read-only operating mode",
         },
     )

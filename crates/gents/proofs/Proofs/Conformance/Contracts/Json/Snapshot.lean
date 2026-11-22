@@ -158,6 +158,7 @@ import Proofs.Conformance.OperatorPaths
 import Proofs.Conformance.WorkspaceCommandRoot
 import Proofs.Conformance.WorkspaceFire
 import Proofs.Conformance.CommandIsolation
+import Proofs.Conformance.HostPreset
 import Proofs.Conformance.CompactionCheckpoint
 import Proofs.Conformance.ClientDataPublicationCases
 import Proofs.Conformance.ClientTelemetry

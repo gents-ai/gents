@@ -133,7 +133,7 @@ async fn init_bootstraps_backend_default_agent_and_tools_idempotently() -> Resul
         },
         ExpectedModes {
             file_tools_mode: "ReadOnly",
-            bash_mode: "ReadOnly",
+            bash_mode: Some("ReadOnly"),
             prompt_snippet: "read-only operating mode",
         },
     )
@@ -177,7 +177,7 @@ async fn init_bootstraps_backend_default_agent_and_tools_idempotently() -> Resul
         },
         ExpectedModes {
             file_tools_mode: "ReadOnly",
-            bash_mode: "ReadOnly",
+            bash_mode: Some("ReadOnly"),
             prompt_snippet: "read-only operating mode",
         },
     )
@@ -551,7 +551,7 @@ async fn init_supports_provider_auth_backend_fields() -> Result<()> {
         },
         ExpectedModes {
             file_tools_mode: "ReadOnly",
-            bash_mode: "ReadOnly",
+            bash_mode: Some("ReadOnly"),
             prompt_snippet: "read-only operating mode",
         },
     )
@@ -861,7 +861,7 @@ async fn init_accepts_explicit_backend_and_model_together() -> Result<()> {
         },
         ExpectedModes {
             file_tools_mode: "ReadOnly",
-            bash_mode: "ReadOnly",
+            bash_mode: Some("ReadOnly"),
             prompt_snippet: "read-only operating mode",
         },
     )
@@ -1349,6 +1349,17 @@ async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
         init.pointer("/init/tool_ceiling").and_then(Value::as_str),
         Some("Readwrite")
     );
+    let bash = gents_tools::surface::presets::HostPackage::Write.host_bash();
+    assert_eq!(
+        init.pointer("/command_execution").and_then(Value::as_str),
+        Some(if bash.is_some() { "sandboxed" } else { "off" })
+    );
+    assert_eq!(
+        init.pointer("/command_execution_notice")
+            .and_then(Value::as_str)
+            .is_some(),
+        bash.is_none()
+    );
     let node_did = node_did_from_init(&init)?;
     let backend_id = generated_backend_id_for_agent(&node_did);
     let tools_id = generated_tools_id_for_agent(&agent_did_from_init(&init)?);
@@ -1371,8 +1382,12 @@ async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
         },
         ExpectedModes {
             file_tools_mode: "ReadWrite",
-            bash_mode: "Unrestricted",
-            prompt_snippet: "write-capable local tools",
+            bash_mode: bash.as_ref().map(|_| "Unrestricted"),
+            prompt_snippet: if bash.is_some() {
+                "write-capable local tools"
+            } else {
+                "you have no shell"
+            },
         },
     )
     .await?;
@@ -1389,22 +1404,17 @@ async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
     )
     .await?;
     let tools = first_graphql_row(&response, "Tools")?;
-    let expected_command_policy = if cfg!(target_os = "macos") {
-        Some("workspace_write")
-    } else {
-        Some("unrestricted")
-    };
     assert_eq!(
         tools
             .pointer("/host/bash/execution_mode")
             .and_then(Value::as_str),
-        expected_command_policy
+        bash.as_ref().map(|_| "workspace_write")
     );
     assert_eq!(
         tools
             .pointer("/host/bash/background_enabled")
             .and_then(Value::as_bool),
-        Some(true)
+        bash.as_ref().map(|bash| bash.background_enabled)
     );
 
     Ok(())

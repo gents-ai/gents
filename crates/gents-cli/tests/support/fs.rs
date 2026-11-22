@@ -156,7 +156,7 @@ pub struct ExpectedBackend<'a> {
 #[derive(Clone, Copy)]
 pub struct ExpectedModes<'a> {
     pub file_tools_mode: &'a str,
-    pub bash_mode: &'a str,
+    pub bash_mode: Option<&'a str>,
     pub prompt_snippet: &'a str,
 }
 
@@ -350,7 +350,7 @@ pub async fn assert_runtime_init_state(
     );
     assert_eq!(
         tools.pointer("/host/bash/mode").and_then(Value::as_str),
-        Some(expected_bash_mode)
+        expected_bash_mode
     );
 
     Ok(())

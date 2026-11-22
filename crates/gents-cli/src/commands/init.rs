@@ -29,6 +29,7 @@ use gents_store::{
 };
 use gents_tools::builtin::self_config::engineer_self_config;
 use gents_tools::native::CommandExecutionMode;
+use gents_tools::surface::presets::HostPackage;
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -75,6 +76,17 @@ Work like a strong command-line operator:
 You have write-capable local tools. When the user asks you to make a change, you may edit files and use write-capable shell actions deliberately. Read the relevant state first, make the smallest effective change, and report the concrete outcome.
 
 For long-running commands such as builds, test suites, installs, servers, and log tails, prefer spawn_process with tool_name "bash_unrestricted" instead of shell backgrounding with "&". Use list_processes, read_process, wait_process, or cancel_process to inspect, finish, or stop backgrounded work."#;
+const STANDARD_FILE_WRITE_SYSTEM_PROMPT: &str = r#"You are a terminal-native engineering and operations agent running for the user inside a local DefraDB runtime.
+
+Your job is to help with software work, debugging, code changes, codebase maintenance, incident triage, release checks, infrastructure investigation, and general computer operations tasks. Build your conclusions from real evidence: inspect files and tool results before making claims.
+
+Work like a strong command-line operator:
+- inspect first, then act
+- keep changes focused and easy to explain
+- prefer direct answers over long essays
+- summarize exactly what changed and why
+
+You can read and write files under the tool root, but you have no shell: this host cannot sandbox commands, so none were granted. When a task needs a command, say which command and why, and leave running it to the user."#;
 
 const ENGINEER_SYSTEM_PROMPT: &str = gents_protocol::ENGINEER_PROMPT;
 const ENGINEER_TARGET_ID: &str = "engineer";
@@ -83,6 +95,12 @@ const YOLO_WARNING: &str = "\
 WARNING: --yolo bootstraps UNRESTRICTED tools. The agent can run any command\n\
 and write any file your user account can reach — no sandbox, no containment.\n\
 Use --write for sandboxed writes scoped to the tool root.";
+
+const UNSANDBOXED_HOST_WRITE_NOTICE: &str = "\
+NOTE: --write grants no command execution on this host. --write runs commands\n\
+only inside the workspace-write sandbox (macOS Seatbelt), which this host cannot\n\
+enforce, so the agent gets file tools scoped to the tool root and no bash.\n\
+To grant unrestricted bash deliberately, use --yolo (--tool-package yolo).";
 
 /// Takes the store lock for the rest of init; an overwrite wipes the home
 /// under that same lock, keeping the lock file itself, so no runtime can open
@@ -187,8 +205,12 @@ fn overwrite_data_dir(home_dir: &Path, home: &Path, data_dir: &Path) -> Result<P
 }
 
 pub(crate) async fn init(args: InitArgs) -> Result<()> {
-    if matches!(resolve_initial_tool_package(&args)?, ToolPackageArg::Yolo) {
+    let tool_package = resolve_initial_tool_package(&args)?;
+    if matches!(tool_package, ToolPackageArg::Yolo) {
         eprintln!("{YOLO_WARNING}");
+    }
+    if let Some(notice) = command_execution_notice(tool_package) {
+        eprintln!("{notice}");
     }
     print_json(&init_home(args).await?)
 }
@@ -551,6 +573,8 @@ pub(crate) async fn init_home_with_core_packs(
             "tool_package": format_tool_package(summary.tool_package),
             "tool_ceiling": format_tool_ceiling(summary.tool_ceiling),
             "tool_root": summary.tool_root,
+            "command_execution": command_execution(summary.tool_package),
+            "command_execution_notice": command_execution_notice(summary.tool_package),
             "enable_defra_query": summary.enable_defra_query,
             "defra_query_collections": summary.defra_query_collections,
             "runtime_state_reset": runtime_state_reset,
@@ -1665,26 +1689,7 @@ fn tools_for_package(
                     },
                     ..Default::default()
                 }),
-                bash: Some(BashTools {
-                    mode: match tool_package {
-                        ToolPackageArg::Readonly => BashMode::ReadOnly,
-                        _ => BashMode::Unrestricted,
-                    },
-                    execution_mode: match tool_package {
-                        ToolPackageArg::Write if cfg!(target_os = "macos") => {
-                            Some(CommandExecutionMode::WorkspaceWrite)
-                        }
-                        ToolPackageArg::Write | ToolPackageArg::Yolo => {
-                            Some(CommandExecutionMode::Unrestricted)
-                        }
-                        _ => None,
-                    },
-                    background_enabled: matches!(
-                        tool_package,
-                        ToolPackageArg::Write | ToolPackageArg::Yolo
-                    ),
-                    ..Default::default()
-                }),
+                bash: host_package(tool_package).and_then(HostPackage::host_bash),
                 cli: Vec::new(),
                 max_instruction_chars: None,
                 max_background_tool_calls: None,
@@ -1943,11 +1948,64 @@ fn default_backend_id_for_agent(node_did: &str) -> String {
 
 fn standard_system_prompt(tool_package: ToolPackageArg) -> &'static str {
     match tool_package {
-        ToolPackageArg::Write | ToolPackageArg::Yolo => STANDARD_READWRITE_SYSTEM_PROMPT,
+        ToolPackageArg::Write | ToolPackageArg::Yolo => match command_execution(tool_package) {
+            CommandExecution::Off => STANDARD_FILE_WRITE_SYSTEM_PROMPT,
+            _ => STANDARD_READWRITE_SYSTEM_PROMPT,
+        },
         ToolPackageArg::Minimal | ToolPackageArg::Introspection | ToolPackageArg::Readonly => {
             STANDARD_READONLY_SYSTEM_PROMPT
         }
     }
+}
+
+fn host_package(tool_package: ToolPackageArg) -> Option<HostPackage> {
+    match tool_package {
+        ToolPackageArg::Minimal | ToolPackageArg::Introspection => None,
+        ToolPackageArg::Readonly => Some(HostPackage::ReadOnly),
+        ToolPackageArg::Write => Some(HostPackage::Write),
+        ToolPackageArg::Yolo => Some(HostPackage::Unrestricted),
+    }
+}
+
+/// The command execution a package's bash grants on this host, as the init
+/// receipt names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CommandExecution {
+    Off,
+    ReadOnly,
+    Sandboxed,
+    Unrestricted,
+}
+
+fn command_execution_of(bash: Option<&BashTools>) -> CommandExecution {
+    match bash {
+        None => CommandExecution::Off,
+        Some(bash) => match (bash.mode, bash.execution_mode) {
+            (BashMode::Off, _) => CommandExecution::Off,
+            (BashMode::ReadOnly, _) => CommandExecution::ReadOnly,
+            (BashMode::Unrestricted, Some(CommandExecutionMode::Unrestricted) | None) => {
+                CommandExecution::Unrestricted
+            }
+            (BashMode::Unrestricted, Some(_)) => CommandExecution::Sandboxed,
+        },
+    }
+}
+
+pub(crate) fn command_execution(tool_package: ToolPackageArg) -> CommandExecution {
+    command_execution_of(
+        host_package(tool_package)
+            .and_then(HostPackage::host_bash)
+            .as_ref(),
+    )
+}
+
+/// The notice init prints when `--write` grants no command execution because
+/// this host cannot enforce the workspace-write sandbox.
+pub(crate) fn command_execution_notice(tool_package: ToolPackageArg) -> Option<&'static str> {
+    (tool_package == ToolPackageArg::Write
+        && command_execution(tool_package) == CommandExecution::Off)
+        .then_some(UNSANDBOXED_HOST_WRITE_NOTICE)
 }
 
 fn init_next_steps(
@@ -2062,6 +2120,38 @@ mod inference_seed_tests;
 mod tests {
     use super::*;
     use gents::runtime::embedded::EmbeddedHome;
+
+    #[test]
+    fn write_names_the_command_execution_this_host_grants() {
+        assert_eq!(
+            UNSANDBOXED_HOST_WRITE_NOTICE,
+            "NOTE: --write grants no command execution on this host. --write runs commands\n\
+             only inside the workspace-write sandbox (macOS Seatbelt), which this host cannot\n\
+             enforce, so the agent gets file tools scoped to the tool root and no bash.\n\
+             To grant unrestricted bash deliberately, use --yolo (--tool-package yolo)."
+        );
+        let sandboxed = HostPackage::Write.host_bash().is_some();
+        assert_eq!(
+            command_execution_notice(ToolPackageArg::Write),
+            (!sandboxed).then_some(UNSANDBOXED_HOST_WRITE_NOTICE)
+        );
+        assert_eq!(
+            standard_system_prompt(ToolPackageArg::Write).contains("bash_unrestricted"),
+            sandboxed
+        );
+        for package in [
+            ToolPackageArg::Minimal,
+            ToolPackageArg::Introspection,
+            ToolPackageArg::Readonly,
+            ToolPackageArg::Yolo,
+        ] {
+            assert_eq!(command_execution_notice(package), None);
+        }
+        assert_eq!(
+            command_execution(ToolPackageArg::Yolo),
+            CommandExecution::Unrestricted
+        );
+    }
 
     #[tokio::test]
     async fn identity_failure_does_not_consume_fresh_bootstrap() {

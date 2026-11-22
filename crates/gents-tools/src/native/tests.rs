@@ -181,6 +181,57 @@ async fn workspace_write_bash_names_its_process_limits() {
     }
 }
 
+/// Premise of the write package (Lean `Tools.HostPreset.bash`): a host that
+/// reports the workspace-write sandbox confines a workspace-write command's
+/// writes to its root, and a host that does not runs no such command at all.
+#[tokio::test]
+async fn workspace_write_commands_run_confined_or_not_at_all() {
+    let root = temp_root("gents-host-sandbox-root");
+    let outside = temp_root("gents-host-sandbox-outside");
+    let inside_file = root.join("inside");
+    let outside_file = outside.join("escaped");
+    let tool = UnrestrictedBashTool::with_policy(
+        ToolContext::new(root.clone(), false).unwrap(),
+        Duration::from_secs(30),
+        Duration::from_secs(30),
+        DEFAULT_MAX_COMMAND_CHARS,
+        CommandExecutionPolicy::write_capable().with_mode(CommandExecutionMode::WorkspaceWrite),
+    );
+    let result = gents_loop::tool::Tool::call(
+        &tool,
+        BashArgs {
+            command: format!(
+                "touch '{}'; touch '{}'",
+                inside_file.display(),
+                outside_file.display()
+            ),
+            args: Vec::new(),
+            cwd: None,
+            timeout_secs: None,
+            raw_json: false,
+        },
+        &gents_loop::tool::ToolCallEnvelope::default(),
+    )
+    .await;
+    assert!(
+        !outside_file.exists(),
+        "a workspace-write command wrote outside its root: {result:?}"
+    );
+    if gents_session::workspace::sandbox::workspace_write_sandbox_enforced() {
+        assert!(
+            inside_file.exists(),
+            "the sandboxed command did not run: {result:?}"
+        );
+    } else {
+        let error = result.expect_err("an unsandboxed host must refuse workspace-write commands");
+        assert!(
+            error.to_string().contains("sandbox"),
+            "the refusal names the missing sandbox: {error}"
+        );
+        assert!(!inside_file.exists(), "a refused command ran: {error}");
+    }
+}
+
 #[test]
 fn session_message_tools_follow_enabled_and_agent_new_needs_a_target() {
     let disabled = AgentToolConfig {

@@ -4,7 +4,7 @@ use gents_documents::{
     validate_desired_state_plan, DefaultAgentSelection, DesiredStateApplyDocument,
     DesiredStateApplyPlan,
 };
-use gents_documents::{Agent, AgentContext, BashTools, BuiltInTools, FileTools, HostTools, Tools};
+use gents_documents::{Agent, AgentContext, BuiltInTools, FileTools, HostTools, Tools};
 use gents_protocol::agent_identity::{AgentAdmissionFacts, AgentIdentityBinding};
 use gents_protocol::operations::agent::{
     AgentCreateInput, AgentCreateOperation, AgentOperationError, AgentOperationKind, AgentOutcome,
@@ -934,23 +934,15 @@ async fn agent_apply_in_txn(
                     AgentOperationError::ClonePresetRefused,
                 )?;
                 let fields = preset_fields(preset).ok_or(AgentOperationError::UnknownPreset)?;
-                let write = preset == crate::surface::presets::PRESET_WRITE;
+                let package = crate::surface::presets::preset_package(preset)
+                    .ok_or(AgentOperationError::UnknownPreset)?;
                 tools = Some(Tools {
                     host: Some(HostTools {
                         files: Some(FileTools {
                             mode: gents_documents::FileToolMode::parse(&fields.file_tools_mode)?,
                             ..Default::default()
                         }),
-                        bash: Some(BashTools {
-                            mode: gents_documents::BashMode::parse(&fields.bash_mode)?,
-                            execution_mode: write.then_some(if cfg!(target_os = "macos") {
-                                crate::native::CommandExecutionMode::WorkspaceWrite
-                            } else {
-                                crate::native::CommandExecutionMode::Unrestricted
-                            }),
-                            background_enabled: write,
-                            ..Default::default()
-                        }),
+                        bash: package.host_bash(),
                         ..Default::default()
                     }),
                     built_ins: Some(BuiltInTools {

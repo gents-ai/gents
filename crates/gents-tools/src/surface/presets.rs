@@ -1,3 +1,7 @@
+use crate::native::CommandExecutionMode;
+use gents_documents::{BashMode, BashTools};
+use gents_session::workspace::sandbox::workspace_write_sandbox_enforced;
+
 pub const PRESET_READONLY: &str = "readonly";
 pub const PRESET_WRITE: &str = "write";
 
@@ -18,32 +22,77 @@ pub struct PresetFields {
     pub write_tools: Vec<String>,
 }
 
-pub fn preset_fields(name: &str) -> Option<PresetFields> {
+/// A host tool package a User names: `init --tool-package` (`--write`,
+/// `--yolo`) and the self-config `preset`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostPackage {
+    ReadOnly,
+    Write,
+    Unrestricted,
+}
+
+impl HostPackage {
+    /// The bash this package grants on a host that does or does not enforce
+    /// the workspace-write sandbox (Lean `Tools.HostPreset.bash`).
+    pub fn bash(self, workspace_write_sandbox_enforced: bool) -> Option<BashTools> {
+        let (mode, execution_mode, background_enabled) = match self {
+            Self::ReadOnly => (BashMode::ReadOnly, None, false),
+            Self::Write if workspace_write_sandbox_enforced => (
+                BashMode::Unrestricted,
+                Some(CommandExecutionMode::WorkspaceWrite),
+                true,
+            ),
+            Self::Write => return None,
+            Self::Unrestricted => (
+                BashMode::Unrestricted,
+                Some(CommandExecutionMode::Unrestricted),
+                true,
+            ),
+        };
+        Some(BashTools {
+            mode,
+            execution_mode,
+            background_enabled,
+            ..Default::default()
+        })
+    }
+
+    /// [`Self::bash`] on this host.
+    pub fn host_bash(self) -> Option<BashTools> {
+        self.bash(workspace_write_sandbox_enforced())
+    }
+}
+
+pub fn preset_package(name: &str) -> Option<HostPackage> {
     match name {
-        PRESET_READONLY => Some(PresetFields {
-            enable_file_tools: true,
-            file_tools_mode: "ReadOnly".to_string(),
-            enable_bash: true,
-            bash_mode: "ReadOnly".to_string(),
-            command_allowed_argv_prefixes: Vec::new(),
-            command_forbidden_argv_prefixes: Vec::new(),
-            read_only_command_allowlist: Vec::new(),
-            enable_self_config: false,
-            write_tools: Vec::new(),
-        }),
-        PRESET_WRITE => Some(PresetFields {
-            enable_file_tools: true,
-            file_tools_mode: "ReadWrite".to_string(),
-            enable_bash: true,
-            bash_mode: "Unrestricted".to_string(),
-            command_allowed_argv_prefixes: Vec::new(),
-            command_forbidden_argv_prefixes: Vec::new(),
-            read_only_command_allowlist: Vec::new(),
-            enable_self_config: false,
-            write_tools: Vec::new(),
-        }),
+        PRESET_READONLY => Some(HostPackage::ReadOnly),
+        PRESET_WRITE => Some(HostPackage::Write),
         _ => None,
     }
+}
+
+pub fn preset_fields(name: &str) -> Option<PresetFields> {
+    let package = preset_package(name)?;
+    let bash = package
+        .host_bash()
+        .map(|bash| bash.mode)
+        .unwrap_or_default();
+    Some(PresetFields {
+        enable_file_tools: true,
+        file_tools_mode: match package {
+            HostPackage::ReadOnly => "ReadOnly",
+            HostPackage::Write | HostPackage::Unrestricted => "ReadWrite",
+        }
+        .to_string(),
+        enable_bash: bash != BashMode::Off,
+        bash_mode: format!("{bash:?}"),
+        command_allowed_argv_prefixes: Vec::new(),
+        command_forbidden_argv_prefixes: Vec::new(),
+        read_only_command_allowlist: Vec::new(),
+        enable_self_config: false,
+        write_tools: Vec::new(),
+    })
 }
 
 pub fn preset_name(fields: &PresetFields) -> Option<&'static str> {
@@ -57,7 +106,7 @@ pub fn classify_tools(
     tools: &gents_documents::Tools,
     merged: &gents_documents::MergedSurfaceTools,
 ) -> anyhow::Result<Option<&'static str>> {
-    use gents_documents::{BashMode, FileToolMode};
+    use gents_documents::FileToolMode;
     let host = tools.host.as_ref();
     let files = host
         .and_then(|h| h.files.as_ref())
@@ -107,7 +156,7 @@ mod tests {
     fn canonical_classifier_includes_expanded_datastore_writes() {
         let tools: gents_documents::Tools = serde_json::from_value(serde_json::json!({
             "node_did":"owner", "tools_id":"tools", "host":{
-                "files":{"mode":"ReadWrite"}, "bash":{"mode":"Unrestricted"}
+                "files":{"mode":"ReadWrite"}, "bash": HostPackage::Write.host_bash()
             }
         }))
         .unwrap();
@@ -122,5 +171,24 @@ mod tests {
             output_obligation: None,
         });
         assert_eq!(classify_tools(&tools, &merged).unwrap(), None);
+    }
+
+    #[test]
+    fn host_package_bash_matches_lean() {
+        use gents_lean_vocab::families::tools_host_preset_bash as family;
+        family::replay(|i: &family::Input<HostPackage>| {
+            i.package
+                .bash(i.workspace_write_sandbox_enforced)
+                .map(|bash| family::Commands {
+                    bash_mode: match bash.mode {
+                        BashMode::Off => "off",
+                        BashMode::ReadOnly => "read_only",
+                        BashMode::Unrestricted => "unrestricted",
+                    }
+                    .to_owned(),
+                    execution: bash.execution_mode,
+                    background: bash.background_enabled,
+                })
+        });
     }
 }
