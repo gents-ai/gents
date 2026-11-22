@@ -21,6 +21,7 @@ use crate::support::builder_runtime::{
     builder_actors, fixture_agent, runtime_builder, spawn_runtime, submit_request,
 };
 use crate::support::interrupt::{wait_for_request_terminal_state, BootedAgent};
+use crate::support::live_inference::rows_when;
 use crate::support::snapshots::fetch_request_snapshot;
 use crate::support::streaming_backend::{
     MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse, StreamScript,
@@ -291,6 +292,9 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
     );
 }
 
+/// A request whose deadline passes is failed by its executor without a second
+/// provider call, and every inference call it started ends `failed`, though
+/// possibly after the request's terminal.
 #[tokio::test]
 async fn deadline_tight_fails_cleanly() {
     let marker = "deadline-tight";
@@ -331,7 +335,7 @@ async fn deadline_tight_fails_cleanly() {
         observed_requests <= 1,
         "deadline overshoot should prevent a second provider call"
     );
-    let calls = fetch_inference_calls(&actors, request_id).await;
+    let calls = wait_for_ended_inference_calls(&actors, request_id).await;
     assert!(calls.len() <= 1, "deadline must prevent a retry: {calls:?}");
     if observed_requests == 1 {
         assert_eq!(
@@ -884,6 +888,29 @@ async fn fetch_inference_calls(
         .into_iter()
         .map(|value| serde_json::from_value(value).expect("decode TimelineInferenceCallRow"))
         .collect()
+}
+
+/// Reads the request's inference calls once none is live, re-reading on each
+/// `InferenceCall` change. A call whose stream the request deadline cut is
+/// ended by its dropped permit's detached cleanup, which nothing orders before
+/// the request's own terminal (`tla/DroppedPermitCleanup.tla`:
+/// `RequestChanges` holds, `RequestRead` fails).
+async fn wait_for_ended_inference_calls(
+    actors: &RequestActors,
+    request_id: &str,
+) -> Vec<TimelineInferenceCallRow> {
+    let escaped = escape_graphql_string(request_id);
+    let query = format!(
+        r#"{{ InferenceCall(filter: {{ request_id: {{ _eq: "{escaped}" }}, call_kind: {{ _eq: "inference" }} }}) {{ call_state }} }}"#
+    );
+    rows_when(actors, "InferenceCall", &query, |data| {
+        data["InferenceCall"].as_array().is_some_and(|rows| {
+            rows.iter()
+                .all(|row| !matches!(row["call_state"].as_str(), Some("queued" | "running")))
+        })
+    })
+    .await;
+    fetch_inference_calls(actors, request_id).await
 }
 
 async fn fetch_call_diagnostics(actors: &RequestActors, request_id: &str) -> Vec<Value> {
