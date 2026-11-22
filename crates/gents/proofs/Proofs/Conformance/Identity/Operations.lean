@@ -309,7 +309,8 @@ unregistered or absent, as a foreign runtime, with the publication mark
 aborted and retried; the user reads the row only through the parent grant. -/
 @[conformance_family]
 def readinessRecovery : Family RecoveryInput RecoveryOutput where
-  inputs := recoveryInputs.filter (·.name ∉ ["owner-unknown", "owner-mismatch", "grant-failed"])
+  inputs := recoveryInputs.filter
+    (·.name ∉ ["owner-unknown", "owner-mismatch", "grant-failed", "retry-grant-failed"])
   model := fun c => { parentGranted := (recoveryAfter c).parentGranted
                       parentLinked := (recoveryAfter c).parentLinked }
 
@@ -325,7 +326,7 @@ mutations the store's fault seam counts, and no actor can make it fail while
 the runtime's ownership and parent observations still hold. -/
 @[conformance_family]
 def readinessRecoveryUnreached : Family RecoveryInput RecoveryOutput where
-  inputs := recoveryInputs.filter (·.name = "grant-failed")
+  inputs := recoveryInputs.filter (·.name ∈ ["grant-failed", "retry-grant-failed"])
   model := fun c => { parentGranted := (recoveryAfter c).parentGranted
                       parentLinked := (recoveryAfter c).parentLinked }
 

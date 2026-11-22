@@ -27,6 +27,7 @@ def recoveryCases : List RecoveryCase :=
   , ⟨"grant-failed", true, false, "runtime", some "runtime", some "node", some "node", false, true, "runtime", true⟩
   , ⟨"mark-failed", true, false, "runtime", some "runtime", some "node", some "node", true, false, "runtime", true⟩
   , ⟨"retry-mark", true, true, "runtime", some "runtime", some "node", some "node", true, true, "runtime", true⟩
+  , ⟨"retry-grant-failed", true, true, "runtime", some "runtime", some "node", some "node", false, true, "runtime", true⟩
   , ⟨"owner-unknown", true, false, "runtime", none, some "node", some "node", true, true, "runtime", true⟩
   , ⟨"owner-mismatch", true, false, "runtime", some "other", some "node", some "node", true, true, "runtime", true⟩
   , ⟨"parent-missing", true, false, "runtime", some "runtime", none, none, true, true, "runtime", true⟩

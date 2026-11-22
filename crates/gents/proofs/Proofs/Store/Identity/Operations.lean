@@ -777,11 +777,14 @@ def readinessRecoveryEligible (pending : Bool) (runtime embeddedRuntime : DID) (
   pending && !runtime.isEmpty && runtime == embeddedRuntime && parentRegistered && nativeOwner == some runtime &&
     recordedParent.isSome && recordedParent == currentParent
 
+/-- Every repair attempt issues the parent grant again and marks the row only
+after that grant succeeds; a grant that fails on a retry stops the attempt
+before the mark, even when an earlier attempt's grant succeeded. -/
 def repairReadiness (state : ParentPublication) (runtime embeddedRuntime : DID) (parentRegistered : Bool)
     (nativeOwner recordedParent currentParent : Option String)
     (grantSucceeded markSucceeded : Bool) : ParentPublication :=
   if readinessRecoveryEligible (!state.parentLinked) runtime embeddedRuntime parentRegistered nativeOwner recordedParent currentParent then
-    repairParent state grantSucceeded markSucceeded
+    if grantSucceeded then repairParent state true markSucceeded else state
   else state
 
 theorem readiness_unknown_owner_cannot_repair (state : ParentPublication) (runtime embeddedRuntime : DID)
@@ -827,8 +830,15 @@ theorem readiness_grant_survives_failed_marker :
     let first := repairReadiness beginParentPublication "runtime" "runtime" true (some "runtime")
       (some "node") (some "node") true false
     let second := repairReadiness first "runtime" "runtime" true (some "runtime")
-      (some "node") (some "node") false true
+      (some "node") (some "node") true true
     first.parentGranted = true ∧ first.parentLinked = false ∧ second.parentLinked = true := by decide
+
+theorem failed_retry_grant_cannot_mark_complete :
+    let first := repairReadiness beginParentPublication "runtime" "runtime" true (some "runtime")
+      (some "node") (some "node") true false
+    let second := repairReadiness first "runtime" "runtime" true (some "runtime")
+      (some "node") (some "node") false true
+    second.parentGranted = true ∧ second.parentLinked = false := by decide
 
 /-- A stale worker may have observed an incomplete marker before another
 worker completed publication and an owner revoked the grant. A detached ACP1
