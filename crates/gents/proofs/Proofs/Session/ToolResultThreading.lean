@@ -115,11 +115,12 @@ def replayShape (parts : List SourcePart) : TextShape :=
   else if parts == [.text true .json] then .json
   else .mixed
 
-/-- A persisted result with an image is replayed as one text part, its
+/-- A persisted result with an image is loaded back as one text part, its
 segments in order. -/
 def replayedParts (parts : List SourcePart) : Option (List (List Segment)) :=
   if hasImage parts then some [parts.map replayPart] else none
 
+/-- The loaded-back result as the next request carries it. -/
 def replayed (parts : List SourcePart) : Option (List (List Segment)) :=
   if hasImage parts then some (forProvider [(parts.map replayPart, some (replayShape parts))])
   else none
