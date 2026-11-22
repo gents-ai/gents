@@ -6,7 +6,8 @@ use gents_protocol::operations::workspace_root::{
     enabled_after, normalize_root_path, reader_decision, writes_display_name, EnabledUpdate,
     NameUpdate, ReaderChange, ReaderDecision, ReaderSubject, StoredRoot, WorkspaceRootError,
     WorkspaceRootPublish, WorkspaceRootReaderInput, WorkspaceRootReaderReceipt,
-    WorkspaceRootReceipt, WorkspaceRootRemoved, WorkspaceRootView,
+    WorkspaceRootReaders, WorkspaceRootReceipt, WorkspaceRootRemoved, WorkspaceRootView,
+    WorkspaceRootWithReaders,
 };
 use gents_protocol::operations::StringUpdate;
 use gents_store::collection::Collection;
@@ -373,6 +374,58 @@ pub async fn show_workspace_root(
         .ok_or(WorkspaceRootError::RootMissing(root_path))
 }
 
+/// The `reader` relation on a WorkspaceRoot: a User's grant to an Agent.
+pub const ROOT_READER_RELATION: &str = "reader";
+
+/// The `reader` holders on a root, or why they could not be read. A failed read
+/// never fails the listing: an operator who may see roots but not their
+/// relationships still gets the roots, and the table says so. The read runs as
+/// the offline operator CLI's access, whose client signing key proves the
+/// actor; Native DefraDB still decides whether it may see the relationships.
+async fn reader_agents_of(access: &ConfigAccess, doc_id: &str) -> WorkspaceRootReaders {
+    match access
+        .list_document_relationships_as_node("WorkspaceRoot", doc_id)
+        .await
+    {
+        Ok(relationships) => {
+            let mut agents = relationships
+                .into_iter()
+                .filter(|relationship| relationship.relation == ROOT_READER_RELATION)
+                .map(|relationship| relationship.subject)
+                .collect::<Vec<_>>();
+            agents.sort();
+            agents.dedup();
+            WorkspaceRootReaders::Known { agents }
+        }
+        Err(error) => WorkspaceRootReaders::Unknown {
+            reason: error.to_string(),
+        },
+    }
+}
+
+/// [`list_workspace_roots`], each root with who may run host tools under it.
+pub async fn list_workspace_roots_with_readers(
+    access: &ConfigAccess,
+) -> std::result::Result<Vec<WorkspaceRootWithReaders>, WorkspaceRootError> {
+    let roots = list_workspace_roots(access).await?;
+    let mut listed = Vec::with_capacity(roots.len());
+    for root in roots {
+        let readers = reader_agents_of(access, &root.doc_id).await;
+        listed.push(WorkspaceRootWithReaders { root, readers });
+    }
+    Ok(listed)
+}
+
+/// [`show_workspace_root`], with the Agents granted `reader` on it.
+pub async fn show_workspace_root_with_readers(
+    access: &ConfigAccess,
+    root_path: &str,
+) -> std::result::Result<WorkspaceRootWithReaders, WorkspaceRootError> {
+    let root = show_workspace_root(access, root_path).await?;
+    let readers = reader_agents_of(access, &root.doc_id).await;
+    Ok(WorkspaceRootWithReaders { root, readers })
+}
+
 async fn read_roots(
     access: &ConfigAccess,
     query: gents_protocol::document_query::Query<RootDoc>,
@@ -591,7 +644,7 @@ mod tests {
             .await?;
         assert_eq!(
             policy,
-            gents_protocol::schemas::HomePolicyIds::shared()
+            gents_protocol::schemas::HomePolicyIds::node_store()
                 .id(gents_protocol::schemas::BuiltInPolicy::Household)
         );
         for key in [
@@ -611,24 +664,25 @@ mod tests {
         }
         node.add_collection_as(
             &context,
-            &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::NODE),
+            &gents_protocol::schemas::HomePolicyIds::node_store()
+                .render(gents_protocol::schemas::NODE),
         )
         .await?;
         node.add_collection_as(
             &context,
-            &gents_protocol::schemas::HomePolicyIds::shared()
+            &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_protocol::schemas::AGENT),
         )
         .await?;
         let binding = format!(
             "type WorkspaceRoot @policy(id: \"{policy}\", resource: \"workspace_roots\") {{"
         );
-        let schema = gents_protocol::schemas::HomePolicyIds::shared()
+        let schema = gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::WORKSPACE_ROOT)
             .replacen("type WorkspaceRoot {", &binding, 1);
         node.add_collection_as(
             &context,
-            &gents_protocol::schemas::HomePolicyIds::shared().render(&schema),
+            &gents_protocol::schemas::HomePolicyIds::node_store().render(&schema),
         )
         .await?;
         let endpoint = format!("http://{address}/api/v0/graphql");
@@ -712,6 +766,7 @@ mod tests {
             agent_did: writer.did().to_owned(),
             selected_root: Some(std::path::PathBuf::from(&path)),
             ceiling_root: None,
+            node_home: None,
         };
         let mut expected = Vec::new();
         let mut may_publish = Vec::new();

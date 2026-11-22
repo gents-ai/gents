@@ -134,7 +134,7 @@ async fn a_live_app_exports_installs_on_a_second_node_and_is_adopted_where_it_ca
     let tools_id = format!("{}:tools", worker.agent_did);
     grant_schema(&origin, &origin_user).await;
     origin_access
-        .add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(SDL))
+        .add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(SDL))
         .await
         .unwrap();
     apply(
@@ -528,7 +528,7 @@ async fn a_page_and_a_plugin_source_export_with_the_surface_the_page_is_granted(
     let owner = origin.node_identity.did().to_owned();
     grant_schema(&origin, &user).await;
     access
-        .add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(SDL))
+        .add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(SDL))
         .await
         .unwrap();
     access

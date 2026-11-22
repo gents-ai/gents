@@ -72,6 +72,30 @@ theorem job_tool_requires_admission (selected staticHookOwned : Bool) :
     childAdmissible selected (routeOf staticHookOwned true) false = false := by
   simp [childAdmissible]
 
+/-- A guest reads the name and definition of exactly the tools it may call:
+those the request selected, and only while it holds tool access. Reading one
+runs nothing and reserves no effect, so describing a tool grants no authority
+a call to it would not. -/
+def describable (toolAccess selected : Bool) : Bool := toolAccess && selected
+
+theorem described_tool_is_selected (toolAccess selected : Bool)
+    (h : describable toolAccess selected = true) : selected = true := by
+  simp_all [describable]
+
+theorem describing_requires_tool_access (selected : Bool) :
+    describable false selected = false := by simp [describable]
+
+/-- A plugin reads a child's result as data. When the child's owner offers a
+structured form of its result and the caller chose no form, the host asks for
+the structured one; a form the caller chose is never replaced. -/
+def structuredByDefault (offered chosen : Bool) : Bool := offered && !chosen
+
+theorem chosen_form_is_kept (offered : Bool) :
+    structuredByDefault offered true = false := by simp [structuredByDefault]
+
+theorem unoffered_form_is_never_requested (chosen : Bool) :
+    structuredByDefault false chosen = false := by simp [structuredByDefault]
+
 def reserve (used : Nat) : Option Nat :=
   if used < maxEffects then some (used + 1) else none
 

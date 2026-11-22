@@ -331,7 +331,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         "the final published ordinary turn closes the prefix"
     );
     let durable_before = history.clone();
-    let (provider_history, _) = provider_view(GROUPED_PROFILE, history);
+    let (provider_history, _, _) = provider_view(GROUPED_PROFILE, history);
     let result = compactor
         .reduce(
             provider_history,
@@ -430,7 +430,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
     assert!(next_request_history
         .iter()
         .all(|row| row.sequence > compacted_through_sequence));
-    let (resumed_history, _) = provider_view(
+    let (resumed_history, _, _) = provider_view(
         GROUPED_PROFILE,
         next_request_history
             .into_iter()

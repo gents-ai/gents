@@ -15,7 +15,9 @@ pub const ASSEMBLY_TRACE_VERSION: u32 = 4;
 
 /// Version of the request-bound context accounting payload; the exact values
 /// the runtime used for its dispatch decision, not a provider tokenizer claim.
-pub const CONTEXT_ACCOUNTING_VERSION: u32 = 3;
+/// A reader reports a payload of another version as unsupported rather than
+/// guessing (`ContextAccounting::parse`).
+pub const CONTEXT_ACCOUNTING_VERSION: u32 = 4;
 
 /// Request paths whose body is a completion request. The capturing transport
 /// only claims a pending capture for one of these.
@@ -401,10 +403,29 @@ impl ContextInputComponents {
     }
 }
 
+/// The history tool outputs stripping replaced with stubs that this dispatch
+/// carries: how many, and the bytes of the outputs and of their stubs. Only
+/// stubs the reducer made from real output count (Lean
+/// `Compaction.providerViewFigures`); this is neither a compaction nor a
+/// provider reduction, and not a running total.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoryStubbing {
+    pub stubbed_results: usize,
+    pub original_bytes: usize,
+    pub stub_bytes: usize,
+}
+
+impl HistoryStubbing {
+    pub fn bytes_removed(&self) -> usize {
+        self.original_bytes.saturating_sub(self.stub_bytes)
+    }
+}
+
 /// Request-bound context accounting persisted with the exact rendered request.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextAccounting {
     pub accounting_version: u32,
+    pub history_stubbing: HistoryStubbing,
     #[serde(default)]
     pub turn_index: usize,
     #[serde(default)]
@@ -439,6 +460,78 @@ pub struct ContextAccounting {
     pub compaction_reason: ContextCompactionReason,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pre_compaction_input_tokens: Option<usize>,
+}
+
+/// A stored context accounting payload, read by its `accounting_version`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StoredContextAccounting {
+    Current(Box<ContextAccounting>),
+    /// Written under a version this reader does not know.
+    Unsupported {
+        accounting_version: u32,
+    },
+}
+
+impl StoredContextAccounting {
+    pub fn current(self) -> Option<ContextAccounting> {
+        match self {
+            Self::Current(accounting) => Some(*accounting),
+            Self::Unsupported { .. } => None,
+        }
+    }
+}
+
+/// A malformed context accounting payload, distinct from one of an unknown
+/// version.
+#[derive(Debug, thiserror::Error)]
+pub enum ContextAccountingParseError {
+    #[error("context accounting is not JSON: {0}")]
+    InvalidJson(#[source] serde_json::Error),
+    #[error("context accounting carries no numeric accounting_version")]
+    MissingVersion,
+    #[error("context accounting does not match its declared version: {0}")]
+    InvalidAccounting(#[source] serde_json::Error),
+}
+
+impl ContextAccounting {
+    /// Read a stored payload, gating on `accounting_version` before
+    /// committing to a shape.
+    pub fn parse(json: &str) -> Result<StoredContextAccounting, ContextAccountingParseError> {
+        Self::parse_value(
+            serde_json::from_str(json).map_err(ContextAccountingParseError::InvalidJson)?,
+        )
+    }
+
+    pub fn parse_value(
+        value: serde_json::Value,
+    ) -> Result<StoredContextAccounting, ContextAccountingParseError> {
+        let accounting_version = value
+            .get("accounting_version")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|version| u32::try_from(version).ok())
+            .ok_or(ContextAccountingParseError::MissingVersion)?;
+        if accounting_version != CONTEXT_ACCOUNTING_VERSION {
+            return Ok(StoredContextAccounting::Unsupported { accounting_version });
+        }
+        serde_json::from_value(value)
+            .map(|accounting| StoredContextAccounting::Current(Box::new(accounting)))
+            .map_err(ContextAccountingParseError::InvalidAccounting)
+    }
+}
+
+/// The trace's accounting when this reader knows its version, else none.
+fn current_context_accounting<'de, D>(
+    deserializer: D,
+) -> Result<Option<ContextAccounting>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let Some(value) = Option::<serde_json::Value>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    ContextAccounting::parse_value(value)
+        .map(StoredContextAccounting::current)
+        .map_err(serde::de::Error::custom)
 }
 
 impl ContextAccounting {
@@ -506,6 +599,7 @@ pub struct AssemblyTrace {
     /// Ordered immutable per-turn reduction facts that causally determine the
     /// sticky provider projection used for this request.
     pub reduction_keys: Vec<String>,
+    #[serde(default, deserialize_with = "current_context_accounting")]
     pub context_accounting: Option<ContextAccounting>,
 }
 
@@ -515,6 +609,7 @@ pub struct AssemblyTraceMetadata {
     pub build_path: AssemblyBuildPath,
     pub effective_message_count: usize,
     pub reduction_keys: Vec<String>,
+    #[serde(default, deserialize_with = "current_context_accounting")]
     pub context_accounting: Option<ContextAccounting>,
 }
 
@@ -741,7 +836,8 @@ mod calibrated_components_tests {
 
     fn accounting(components: ContextInputComponents, estimated: usize) -> ContextAccounting {
         ContextAccounting {
-            accounting_version: 3,
+            accounting_version: CONTEXT_ACCOUNTING_VERSION,
+            history_stubbing: HistoryStubbing::default(),
             turn_index: 0,
             attempt: 0,
             estimator: "test".into(),
@@ -758,6 +854,60 @@ mod calibrated_components_tests {
             compaction_reason: ContextCompactionReason::BelowThreshold,
             pre_compaction_input_tokens: None,
         }
+    }
+
+    /// A payload of another accounting version reads as unsupported, and a
+    /// trace carrying one still decodes, without its accounting; a payload of
+    /// this version missing a field is malformed.
+    #[test]
+    fn context_accounting_of_another_version_is_unsupported_not_malformed() {
+        let current = accounting(
+            ContextInputComponents {
+                messages: 1,
+                documents: 0,
+                tool_schemas: 0,
+                additional_parameters: 0,
+                output_schema: 0,
+            },
+            1,
+        );
+        let encoded = serde_json::to_value(&current).unwrap();
+        assert_eq!(
+            ContextAccounting::parse(&encoded.to_string())
+                .unwrap()
+                .current(),
+            Some(current)
+        );
+
+        let mut older = encoded.clone();
+        older["accounting_version"] = (CONTEXT_ACCOUNTING_VERSION - 1).into();
+        older.as_object_mut().unwrap().remove("history_stubbing");
+        assert_eq!(
+            ContextAccounting::parse(&older.to_string()).unwrap(),
+            StoredContextAccounting::Unsupported {
+                accounting_version: CONTEXT_ACCOUNTING_VERSION - 1
+            }
+        );
+        let mut missing = encoded;
+        missing.as_object_mut().unwrap().remove("history_stubbing");
+        assert!(matches!(
+            ContextAccounting::parse(&missing.to_string()),
+            Err(ContextAccountingParseError::InvalidAccounting(_))
+        ));
+
+        let trace = AssemblyTraceMetadata {
+            trace_version: ASSEMBLY_TRACE_VERSION,
+            build_path: AssemblyBuildPath::Budgeted,
+            effective_message_count: 0,
+            reduction_keys: Vec::new(),
+            context_accounting: None,
+        };
+        let mut stored = serde_json::to_value(&trace).unwrap();
+        stored["context_accounting"] = older;
+        assert_eq!(
+            serde_json::from_value::<AssemblyTraceMetadata>(stored).unwrap(),
+            trace
+        );
     }
 
     #[test]

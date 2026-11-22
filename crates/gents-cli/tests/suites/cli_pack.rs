@@ -1734,7 +1734,7 @@ async fn core_packs_are_enabled_around_a_running_runtime() -> Result<()> {
         CorePack,
         Reason,
     >() {
-        if case.input.core_pack == CorePack::DynamicWorkflows && case.input.host_tools {
+        if case.input.core_pack == CorePack::DynamicWorkflows {
             case.check(serde_json::from_value::<Option<Reason>>(
                 reason.clone().unwrap_or_default(),
             )?);
@@ -1754,7 +1754,7 @@ async fn core_packs_are_enabled_around_a_running_runtime() -> Result<()> {
         CorePack,
         Reason,
     >() {
-        if case.input.core_pack == CorePack::DynamicWorkflows && case.input.host_tools {
+        if case.input.core_pack == CorePack::DynamicWorkflows {
             case.check(serde_json::from_value::<Option<Reason>>(
                 reason.clone().unwrap_or_default(),
             )?);

@@ -352,6 +352,24 @@ describe("deployment operational state", () => {
     });
   });
 
+  it("names the workspace-root reader grant when an agent's tools are not admitted", () => {
+    const state = projectDeploymentOperationalState(
+      deployment({
+        readinessStatus: {
+          state: "unavailable",
+          agentDid: "default",
+          reason: "workspace_root_reader_missing",
+        },
+      }),
+    );
+    expect(state.agent).toMatchObject({
+      kind: "blocked",
+      shortLabel: "Unavailable",
+      detail:
+        "Agent “Default” has host tools under a workspace root it is not a reader of. Grant it the reader on its node, then start the agent again.",
+    });
+  });
+
   it("does not call an explicitly unavailable agent online", () => {
     const state = projectDeploymentOperationalState(
       deployment({

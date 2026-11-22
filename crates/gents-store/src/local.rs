@@ -19,12 +19,14 @@ pub use projection_policy::{
 /// Build the single native document projector for a held local peer identity.
 /// The caller supplies the host's tool policy; transport publication remains
 /// scoped to the native Node administrator of this store.
+/// The document projector of a home whose built-in policies have `ids`.
 pub fn document_projector(
     node: std::sync::Arc<dyn crate::identity::NodeIdentity>,
     policy: std::sync::Arc<dyn ToolSourcePolicy>,
+    ids: &'static gents_protocol::schemas::HomePolicyIds,
 ) -> std::result::Result<std::sync::Arc<dyn db::DocumentMutationProjector>, identity::Error> {
     Ok(std::sync::Arc::new(
-        runtime_document_projection::RuntimeDocumentProjector::new(node, policy)?,
+        runtime_document_projection::RuntimeDocumentProjector::new(node, policy, ids)?,
     ))
 }
 
@@ -32,9 +34,10 @@ pub(crate) fn document_projector_with_installed_plugins(
     node: std::sync::Arc<dyn crate::identity::NodeIdentity>,
     policy: std::sync::Arc<dyn ToolSourcePolicy>,
     plugins: Vec<ProjectedPlugin>,
+    ids: &'static gents_protocol::schemas::HomePolicyIds,
 ) -> std::result::Result<std::sync::Arc<dyn db::DocumentMutationProjector>, identity::Error> {
     Ok(std::sync::Arc::new(
-        runtime_document_projection::RuntimeDocumentProjector::new(node, policy)?
+        runtime_document_projection::RuntimeDocumentProjector::new(node, policy, ids)?
             .with_startup_plugins(plugins),
     ))
 }

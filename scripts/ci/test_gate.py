@@ -809,11 +809,13 @@ class Runners(unittest.TestCase):
         for path in sorted((gate.ROOT / ".github/workflows").glob("*.yml")):
             for job, value in runs_on_values(path.read_text()):
                 for literal in re.findall(r"fromJSON\('(\[[^']*\])'\)", value):
-                    self.assertEqual(json.loads(literal), ROLES["linux"]["labels"], f"{path.name} {job}")
+                    self.assertIn(json.loads(literal), [ROLES["linux"]["labels"], gate.shared(ROLES["linux"]["labels"])],
+                                  f"{path.name} {job}")
 
     def test_no_workflow_selects_a_runner_by_host(self):
-        vocabulary = {"self-hosted"} | {label for entry in ROLES.values() for label in entry["labels"]}
-        role_sets = [entry["labels"] for entry in ROLES.values()]
+        vocabulary = {"self-hosted", gate.reserve_label()} | {label for entry in ROLES.values()
+                                                               for label in entry["labels"]}
+        role_sets = [labels for entry in ROLES.values() for labels in (entry["labels"], gate.shared(entry["labels"]))]
         for path in sorted((gate.ROOT / ".github/workflows").glob("*.yml")):
             text = path.read_text()
             self.assertNotRegex(text, r"runner\.name\s*(==|!=)", path.name)
@@ -838,12 +840,73 @@ class Runners(unittest.TestCase):
                     continue
                 with self.subTest(workflow=path.name, job=job):
                     self.assertEqual(len(roles), 1, roles)
-                    self.assertEqual(sorted(labels_of(value)), sorted(ROLES[roles.pop()]["labels"]), value)
+                    role = ROLES[roles.pop()]["labels"]
+                    self.assertIn(sorted(labels_of(value)), [sorted(role), sorted(gate.shared(role))], value)
 
     def test_actionlint_knows_exactly_the_inventory_labels(self):
         config = (gate.ROOT / ".github/actionlint.yaml").read_text()
         listed = set(re.findall(r"^    - (\S+)$", config.split("paths:")[0], flags=re.M))
-        self.assertEqual(listed, {label for entry in ROLES.values() for label in entry["labels"]} - {"self-hosted"})
+        self.assertEqual(listed, ({label for entry in ROLES.values() for label in entry["labels"]} - {"self-hosted"})
+                         | {gate.reserve_label()})
+
+    def test_a_pull_request_stays_off_the_merge_queues_reserved_runners(self):
+        label = gate.reserve_label()
+        group = ROLES["portable"]["host_groups"][0]
+        pull = gate.placement("portable", fork=False, fallback=False, host_group=group, event="pull_request")
+        self.assertEqual(pull["runs_on"], [*ROLES["portable"]["labels"], label, group])
+        for event in ("merge_group", "schedule", "workflow_dispatch"):
+            self.assertEqual(gate.runner("macos", fork=False, fallback=False, event=event), ROLES["macos"]["labels"])
+        self.assertEqual(gate.runner("macos", fork=True, fallback=False, event="pull_request"), ROLES["macos"]["hosted"])
+        self.assertEqual(gate.runner("linux", fork=False, fallback=True, event="pull_request"), "ubuntu-latest")
+        self.assertEqual(gate.runner("portable", fork=False, fallback=True, event="pull_request"),
+                         [*ROLES["macos"]["labels"], label])
+        with mock.patch.dict(os.environ, {"GATE_EVENT": "pull_request"}):
+            selection = select(everything=True)
+        self.assertTrue(all(label in entry["runs_on"] for entry in selection["matrix"] + selection["archives"]))
+        self.assertTrue(all(label in labels for labels in selection["runs_on"].values() if isinstance(labels, list)))
+
+    def test_the_plan_job_routes_a_pull_request_as_the_plan_does(self):
+        plan = workflow_jobs(CI)["plan"]
+        literals = [json.loads(literal) for literal in re.findall(r"fromJSON\('(\[[^']*\])'\)", plan)]
+        self.assertEqual(literals, [gate.shared(ROLES["linux"]["labels"]), ROLES["linux"]["labels"]])
+        self.assertIn("github.event_name == 'pull_request' && fromJSON", plan)
+
+
+class Reservation(unittest.TestCase):
+    """The merge queue's reserve: which runners keep only the roles' labels."""
+
+    @staticmethod
+    def fleet(*runners):
+        return [{"name": name, "labels": [{"name": label} for label in labels]} for name, labels in runners]
+
+    PORTABLE = ["self-hosted", "Linux", "X64", "ci-portable"]
+    MACOS = ["self-hosted", "macOS", "ARM64", "ci-macos", "ci-desktop"]
+
+    def test_the_reserve_spreads_over_host_groups_and_spares_multi_role_runners(self):
+        runners = self.fleet(
+            ("p-a1", [*self.PORTABLE, "ci-portable-a"]), ("p-a2", [*self.PORTABLE, "ci-portable-a"]),
+            ("p-a3", [*self.PORTABLE, "ci-portable-a"]), ("p-b1", [*self.PORTABLE, "ci-portable-b"]),
+            ("p-b2", [*self.PORTABLE, "ci-portable-b"]), ("p-b3", [*self.PORTABLE, "ci-portable-b"]),
+            ("p-c1", [*self.PORTABLE, "ci-portable-c"]), ("p-c2", [*self.PORTABLE, "ci-portable-c"]),
+            ("m1", [*self.MACOS, "ci-runtime", "ci-cli"]), ("m2", [*self.MACOS, "ci-cli"]), ("m3", self.MACOS),
+            ("l1", ["self-hosted", "Linux", "X64", "ci-linux"]))
+        reserved, unreserved = gate.reservation(runners, {"portable": 2, "desktop": 1})
+        self.assertEqual(reserved, ["m3", "p-a3", "p-b3"])
+        self.assertEqual(set(reserved) | set(unreserved), {runner["name"] for runner in runners})
+        self.assertFalse(set(reserved) & set(unreserved))
+
+    def test_a_role_keeps_a_runner_for_pull_requests(self):
+        runners = self.fleet(("m1", self.MACOS), ("m2", self.MACOS))
+        reserved, unreserved = gate.reservation(runners, {"desktop": 1})
+        self.assertEqual((len(reserved), len(unreserved)), (1, 1))
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            gate.reservation(runners, {"desktop": 2})
+
+    def test_the_inventory_reserves_only_known_roles(self):
+        reserve = gate.inventory()["reserve"]
+        self.assertTrue(reserve["label"].startswith("ci-"))
+        self.assertLessEqual(set(reserve["roles"]), set(ROLES))
+        self.assertFalse(any(reserve["label"] in entry["labels"] for entry in ROLES.values()))
 
 
 class HostGroups(unittest.TestCase):

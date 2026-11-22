@@ -18,6 +18,7 @@ async fn installed_projector_links_pending_transport_and_preserves_revocation() 
             &path, None,
         )?),
         Arc::new(crate::surface::ToolCeiling::meta_only()),
+        gents_protocol::schemas::HomePolicyIds::node_store(),
     )?;
     let node = Arc::new(
         defra_node::Node::builder()
@@ -38,11 +39,12 @@ async fn installed_projector_links_pending_transport_and_preserves_revocation() 
     )
     .await?;
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::NETWORK),
+        &gents_protocol::schemas::HomePolicyIds::node_store()
+            .render(gents_protocol::schemas::NETWORK),
     )
     .await?;
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::NODE),
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(gents_protocol::schemas::NODE),
     )
     .await?;
     let access = gents_store::config_client::ConfigAccess::local_as(node.clone(), actor.clone());
@@ -65,7 +67,7 @@ async fn installed_projector_links_pending_transport_and_preserves_revocation() 
             );
             let present = tuples
                 .has_relationship(
-                    gents_protocol::schemas::HomePolicyIds::shared()
+                    gents_protocol::schemas::HomePolicyIds::node_store()
                         .id(gents_protocol::schemas::BuiltInPolicy::Household),
                     "enrollment_records",
                     &network,

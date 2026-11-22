@@ -260,7 +260,7 @@ async fn probe_db() -> ProbeDb {
             .await
             .expect("embedded node"),
     );
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(PROBE_SCHEMA))
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(PROBE_SCHEMA))
         .await
         .expect("add probe schema");
     ProbeDb {
@@ -440,7 +440,7 @@ async fn text_crdt_reads_each_revision_at_its_cid() {
     let db = probe_db().await;
     let node = db.node;
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared().render(TEXT_PROBE_SCHEMA),
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(TEXT_PROBE_SCHEMA),
     )
     .await
     .expect("add text probe schema");
@@ -516,7 +516,7 @@ async fn text_crdt_versions_written_in_one_transaction_stay_readable() {
     let db = probe_db().await;
     let node = db.node;
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared().render(TEXT_PROBE_SCHEMA),
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(TEXT_PROBE_SCHEMA),
     )
     .await
     .expect("add text probe schema");

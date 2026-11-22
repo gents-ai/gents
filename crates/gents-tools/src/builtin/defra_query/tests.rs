@@ -672,7 +672,7 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
         )
         .await
         .unwrap();
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&format!(
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&format!(
         "type PrivateRecord @policy(id: \"{}\", resource: \"records\") {{ label: String @fulltext }}",
         gents_store::graphql::escape_graphql_string(&policy)
     )))

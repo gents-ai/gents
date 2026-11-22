@@ -298,6 +298,8 @@ inductive StoreWrapper where
   | journalSchemaErrorAccess
   | outboxErrorAccess
   | outboxErrorResponse
+  | receiverErrorStore
+  | receiverErrorResponse
   | clientAccessErrorAccess
   | runtimeAccessErrorConfiguration
   | ownGrantErrorUnanswered

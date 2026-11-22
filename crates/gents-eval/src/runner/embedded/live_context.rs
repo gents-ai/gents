@@ -55,8 +55,9 @@ pub(super) fn session_contexts(data: &Value) -> Option<Vec<SessionContextUsage>>
         let accounting = call["context_accounting_json"]
             .as_str()
             .and_then(|encoded| {
-                serde_json::from_str::<gents_protocol::rendered_request::ContextAccounting>(encoded)
-                    .ok()
+                gents_protocol::rendered_request::ContextAccounting::parse(encoded)
+                    .ok()?
+                    .current()
             });
         session.last_estimated_input_tokens =
             accounting.as_ref().map(|a| a.estimated_input_tokens as u64);

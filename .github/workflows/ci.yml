@@ -89,14 +89,16 @@ env:
 jobs:
   # Every job runs where the plan's runs_on says: the runner roles in
   # .github/ci-runners.json, a hosted runner for a fork pull request, or a
-  # role's fallback while GENTS_CI_FALLBACK is `hosted`. The plan itself
-  # cannot read the plan, so its labels are the inventory's `linux` role
-  # (test_gate.py keeps them equal).
+  # role's fallback while GENTS_CI_FALLBACK is `hosted`. A pull request's
+  # self-hosted jobs also require the inventory's reserve label, leaving the
+  # reserved runners to the merge queue. The plan itself cannot read the plan,
+  # so its labels are the inventory's `linux` role (test_gate.py keeps them equal).
   plan:
     runs-on: >-
       ${{ ((github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name != github.repository) ||
       vars.GENTS_CI_FALLBACK == 'hosted') && 'ubuntu-latest' ||
+      github.event_name == 'pull_request' && fromJSON('["self-hosted","Linux","X64","ci-linux","ci-pr"]') ||
       fromJSON('["self-hosted","Linux","X64","ci-linux"]') }}
     timeout-minutes: 10
     env:

@@ -1302,11 +1302,12 @@ mod tests {
         )
         .await?;
         node.add_collection(
-            &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::NODE),
+            &gents_protocol::schemas::HomePolicyIds::node_store()
+                .render(gents_protocol::schemas::NODE),
         )
         .await?;
         node.add_collection(
-            &gents_protocol::schemas::HomePolicyIds::shared()
+            &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_protocol::schemas::TOOL_SERVICE_HEALTH_STATE),
         )
         .await?;

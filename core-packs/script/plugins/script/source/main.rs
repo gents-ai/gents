@@ -19,6 +19,11 @@ fn invoke(request: String) -> Result<String, HostError> {
     if length == -2 {
         return Err(HostError::Stopped);
     }
+    if length == -4 {
+        return Err(HostError::Failed(
+            "TOO_LARGE: host call request exceeds the 1 MiB limit".into(),
+        ));
+    }
     if length < 0 {
         return Err(HostError::Failed("host call exceeded its bounds".into()));
     }
