@@ -242,6 +242,16 @@ pub fn authored_message_key(request_doc_id: &str, key: &str) -> String {
     format!("authored:{request_doc_id}:{key}")
 }
 
+/// Lean `SessionFork.runtimeContextKey`: the runtime's per-request
+/// `<context>` row, named by its key alone so a fork copy, which drops its
+/// request, still is one.
+pub fn is_runtime_context_key(message_key: &str) -> bool {
+    matches!(
+        message_key.split(':').collect::<Vec<_>>().as_slice(),
+        ["authored", request, "context"] if !request.is_empty()
+    )
+}
+
 pub fn output_segment_create_variables(
     segment: &OutputSegment,
 ) -> Result<Value, CanonicalRowError> {
