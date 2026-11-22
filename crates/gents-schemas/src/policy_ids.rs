@@ -68,7 +68,7 @@ impl HomePolicyIds {
     /// home holds the same IDs. gents-store checks them against the seeds.
     pub fn embedded_vera() -> &'static Self {
         const EMBEDDED_VERA: HomePolicyIds = HomePolicyIds {
-            household: "f3dcf097ad19787fab44a51cd2b58ff334fad37296d016382c47d4f1bf504510",
+            household: "26095a1a5d3baa580a902cdbc3656804299856a1688ff98cd9470c1f41de82f7",
             mailbox: "5324b84ea41dc068f4d6d29428ace86915d450831862bbb25c3e322c09b603af",
             client_journal: "892a0e58078046d272f53661a1d1ec4091d13948122b4dc82a14eeddb3955618",
             tool_file_change: "da40747a0af6694036fad9782e338525e2ad60b41e1eebd234c22916c2beff53",
