@@ -240,11 +240,9 @@ impl PackInstallSession {
             }
             other => return Err(other.refusal(SessionStep::Graph)),
         };
-        let ids = self
-            .endpoint
-            .home_policy_ids()
-            .await
-            .map_err(PackSessionError::HomePolicies)?;
+        let ids = self.endpoint.home_policy_ids().await.map_err(|error| {
+            PackSessionError::HomePolicies(gents_protocol::error_chain::PassedThrough::error(error))
+        })?;
         let evidence =
             prepare_pack_evidence_from_history(&self.actor, &self.scope, expected, history, ids)
                 .await?;
