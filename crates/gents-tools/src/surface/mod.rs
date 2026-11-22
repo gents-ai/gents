@@ -403,7 +403,8 @@ impl ToolSurface {
             guard.node_home = runtime.plugin_home().map(std::path::Path::to_path_buf);
             guard.validate(&runtime.node, agent).await?;
         }
-        self.build_admitted_tools(runtime).await
+        self.build_admitted_tools(runtime, publication_deadline)
+            .await
     }
 
     /// [`Self::build_tools`] once the root guard has admitted the root:
@@ -411,6 +412,7 @@ impl ToolSurface {
     async fn build_admitted_tools(
         &self,
         runtime: &ToolRuntimeContext,
+        publication_deadline: tokio::time::Instant,
     ) -> Result<Vec<Box<dyn ToolDyn>>> {
         let writethrough = self.lsp.as_ref().map(|config| {
             crate::native::lsp::LspWritethrough::new(runtime.lsp_pool.clone(), config.clone())
