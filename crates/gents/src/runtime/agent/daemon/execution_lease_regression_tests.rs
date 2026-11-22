@@ -591,6 +591,9 @@ struct LeaseBlockingTool {
 }
 
 impl gents_loop::tool::ToolDyn for LeaseBlockingTool {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         "lease_block".into()
     }

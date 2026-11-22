@@ -2,7 +2,8 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use gents_loop::tool::ToolDefinition;
-use gents_loop::tool_effects::{ToolEffectDispatcher, ToolEffectError};
+use gents_loop::tool_effects::parallel::MAX_PARALLEL_READ_TOOLS;
+use gents_loop::tool_effects::{ToolEffectCall, ToolEffectDispatcher, ToolEffectError};
 use gents_protocol::plugin_tool_call_limits::{MAX_EFFECTS, MAX_PAYLOAD_BYTES};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -19,7 +20,7 @@ pub fn supported(_name: &str, _job_tools: &BTreeSet<String>) -> bool {
 
 pub fn composition_note() -> String {
     format!(
-        "\nThis plugin may call up to {MAX_EFFECTS} of this request's tools in sequence, with their existing permissions and lifecycle behavior."
+        "\nThis plugin may call up to {MAX_EFFECTS} of this request's tools, with their existing permissions and lifecycle behavior; up to {MAX_PARALLEL_READ_TOOLS} trusted reads in one batch run together, every other call in order."
     )
 }
 
@@ -142,13 +143,13 @@ impl Session {
         }
     }
 
-    pub async fn call(
+    async fn prepare(
         &mut self,
-        name: &str,
+        name: String,
         mut arguments: Map<String, Value>,
-    ) -> Result<Value, String> {
+    ) -> Result<ToolEffectCall, Value> {
         let Some(next) = reserve(self.used) else {
-            return Ok(json!({"error": format!("the plugin used its {MAX_EFFECTS} tool calls")}));
+            return Err(json!({"error": format!("the plugin used its {MAX_EFFECTS} tool calls")}));
         };
         self.used = next;
         let offered = self
@@ -160,12 +161,58 @@ impl Session {
         if structured_by_default(offered, arguments.contains_key(STRUCTURED_RESULT)) {
             arguments.insert(STRUCTURED_RESULT.into(), Value::Bool(true));
         }
-        let arguments = Value::Object(arguments).to_string();
+        Ok(ToolEffectCall {
+            ordinal: next,
+            name,
+            arguments: Value::Object(arguments).to_string(),
+        })
+    }
+
+    pub async fn call(
+        &mut self,
+        name: &str,
+        arguments: Map<String, Value>,
+    ) -> Result<Value, String> {
+        let call = match self.prepare(name.to_owned(), arguments).await {
+            Ok(call) => call,
+            Err(refused) => return Ok(refused),
+        };
         settle(
             self.dispatcher
-                .call(&self.parent, next, name, &arguments)
+                .call(&self.parent, call.ordinal, &call.name, &call.arguments)
                 .await,
         )
+    }
+
+    /// The answers to `requests`, in request order, dispatched as one batch;
+    /// the first fatal result stops the plugin.
+    pub async fn call_batch(
+        &mut self,
+        requests: Vec<(String, Map<String, Value>)>,
+    ) -> Result<Vec<Value>, String> {
+        let mut calls = Vec::with_capacity(requests.len());
+        let mut refused = Vec::with_capacity(requests.len());
+        for (name, arguments) in requests {
+            match self.prepare(name, arguments).await {
+                Ok(call) => {
+                    calls.push(call);
+                    refused.push(None);
+                }
+                Err(answer) => refused.push(Some(answer)),
+            }
+        }
+        let mut results = self.dispatcher.batch(&self.parent, calls).await.into_iter();
+        refused
+            .into_iter()
+            .map(|refused| match refused {
+                Some(answer) => Ok(answer),
+                None => settle(
+                    results
+                        .next()
+                        .ok_or("the tool batch did not settle every member")?,
+                ),
+            })
+            .collect()
     }
 
     /// The `tool_calls` service of the plugin call `parent`, if it is granted
