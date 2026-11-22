@@ -167,6 +167,13 @@ pub enum ConfigClientError {
     OwedAwait(#[source] Box<crate::identity::RemoteAgentProvisionError>),
     #[error("the transaction to wait for is not one this node opened")]
     OwedAwaitTransaction,
+    #[error(
+        "this home's access control did not answer who may read what this decision reads; \
+         nothing was decided, try again in a moment"
+    )]
+    DecisionReadUnanswered,
+    #[error("an access check of what this decision reads failed; nothing was decided")]
+    DecisionReadFailed,
     #[error("a document relationship requires an authenticated actor")]
     RelationshipActorRequired,
     #[error("invalid transaction owner observation response")]
@@ -796,6 +803,23 @@ impl ConfigClientError {
             }
             Self::Protocol(error) => error.database_failure(),
             _ => None,
+        }
+    }
+
+    /// The access check a strict read failed on, whichever owner carried
+    /// DefraDB's answer.
+    pub fn access_check(&self) -> Option<super::decision_read::AccessCheck> {
+        match self {
+            Self::EmbeddedGraphqlErrors { errors } => errors
+                .iter()
+                .filter_map(|error| error.code())
+                .find_map(super::decision_read::AccessCheck::from_code),
+            Self::Response(crate::graphql::GraphqlResponseError::Access(error))
+            | Self::StorageFailure(error)
+            | Self::HttpQuery { source: error, .. } => error.access_check(),
+            _ => self
+                .database_failure()
+                .and_then(gents_protocol::database_error::GraphqlFailure::access_check),
         }
     }
 

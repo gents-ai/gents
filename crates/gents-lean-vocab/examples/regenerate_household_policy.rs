@@ -124,7 +124,7 @@ fn main() -> Result<()> {
     let previous_policy =
         acp::policy_yaml::parse_policy_yaml(&previous_yaml).map_err(anyhow::Error::msg)?;
     let previous_id = acp::policy_yaml::generate_policy_id(&previous_policy, 0);
-    let shared = HomePolicyIds::shared();
+    let shared = HomePolicyIds::node_store();
     let household = BuiltInPolicy::Household.placeholder();
     let mailbox = BuiltInPolicy::Mailbox.placeholder();
     let old_ids = [shared.id(BuiltInPolicy::Household), previous_id.as_str()];

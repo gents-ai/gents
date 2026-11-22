@@ -288,6 +288,7 @@ async fn drive_replacement(c: &ReplacementInput<String, String>) -> ReplacementO
         request: gents_store::config_client::prepare_request_evidence(
             fixture.user.as_ref(),
             gents_store::config_client::client_request_input(initial).unwrap(),
+            gents_protocol::schemas::HomePolicyIds::node_store(),
         )
         .await
         .unwrap(),

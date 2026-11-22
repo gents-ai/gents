@@ -1,4 +1,4 @@
-use crate::schema::catalog::{ensure, Catalog, OrdinaryIndex, BASELINE, ORDINARY_INDEXES};
+use crate::schema::catalog::{baseline, ensure, Catalog, OrdinaryIndex, ORDINARY_INDEXES};
 use defra_node::Node as EmbeddedNode;
 use gents_protocol::schemas::{AGENT_REQUEST, AGENT_REQUEST_NAME, MAILBOX_ITEM, MAILBOX_ITEM_NAME};
 use serde_json::Value;
@@ -58,7 +58,7 @@ async fn assert_indexed_query(node: &EmbeddedNode, query: &str, index: &str, max
 }
 
 fn catalog_with_request_index<'a>(indexes: &'a [OrdinaryIndex<'static>]) -> Catalog<'a> {
-    let request = BASELINE
+    let request = baseline(gents_protocol::schemas::HomePolicyIds::node_store())
         .iter()
         .find(|entry| entry.name == AGENT_REQUEST_NAME)
         .expect("AgentRequest baseline");
@@ -69,7 +69,7 @@ fn catalog_with_request_index<'a>(indexes: &'a [OrdinaryIndex<'static>]) -> Cata
 }
 
 fn catalog_with_mailbox_cursor_index() -> Catalog<'static> {
-    let mailbox = BASELINE
+    let mailbox = baseline(gents_protocol::schemas::HomePolicyIds::node_store())
         .iter()
         .find(|entry| entry.name == MAILBOX_ITEM_NAME)
         .expect("MailboxItem baseline");
@@ -220,7 +220,7 @@ async fn existing_and_fresh_stores_reconcile_the_same_index_without_changing_doc
     let catalog = catalog_with_request_index(&indexes);
     let existing = fresh_node().await;
     existing
-        .add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(AGENT_REQUEST))
+        .add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(AGENT_REQUEST))
         .await
         .expect("register pre-index AgentRequest schema");
     let first_doc = create_request(existing.as_ref(), "request-twin", "session-a", "first").await;
@@ -458,7 +458,7 @@ async fn existing_and_fresh_stores_reconcile_the_same_index_without_changing_doc
 #[tokio::test]
 async fn mailbox_cursor_index_reconciles_on_an_existing_collection() {
     let node = fresh_node().await;
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(MAILBOX_ITEM))
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(MAILBOX_ITEM))
         .await
         .expect("register pre-index MailboxItem schema");
     let before = node
@@ -506,7 +506,7 @@ async fn output_source_index_backfills_existing_rows_and_retains_conflicts() {
 
     let node = fresh_node().await;
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared().render(AGENT_OUTPUT_SEGMENT),
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(AGENT_OUTPUT_SEGMENT),
     )
     .await
     .unwrap();
@@ -540,7 +540,7 @@ async fn output_source_index_backfills_existing_rows_and_retains_conflicts() {
         .await;
     assert!(!created.has_errors(), "{:?}", created.errors);
 
-    let baseline = BASELINE
+    let baseline = baseline(gents_protocol::schemas::HomePolicyIds::node_store())
         .iter()
         .find(|entry| entry.name == AGENT_OUTPUT_SEGMENT_NAME)
         .unwrap();
@@ -582,9 +582,11 @@ async fn output_source_index_backfills_existing_rows_and_retains_conflicts() {
 async fn background_completion_recovery_seeks_pending_status_range() {
     use gents_protocol::schemas::{AGENT_TOOL_CALL, AGENT_TOOL_CALL_NAME};
     let node = fresh_node().await;
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(AGENT_TOOL_CALL))
-        .await
-        .unwrap();
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(AGENT_TOOL_CALL),
+    )
+    .await
+    .unwrap();
     let before = node.get_collection(AGENT_TOOL_CALL_NAME).unwrap().unwrap();
     let historical = (0..160)
         .map(|i| {
@@ -601,7 +603,7 @@ async fn background_completion_recovery_seeks_pending_status_range() {
         ))
         .await;
     assert!(!created.has_errors(), "{:?}", created.errors);
-    let baseline = BASELINE
+    let baseline = baseline(gents_protocol::schemas::HomePolicyIds::node_store())
         .iter()
         .find(|c| c.name == AGENT_TOOL_CALL_NAME)
         .unwrap();
@@ -663,9 +665,11 @@ async fn background_completion_recovery_seeks_pending_status_range() {
 async fn session_only_message_page_uses_ordered_index_with_tiebreaker() {
     use gents_protocol::schemas::{AGENT_MESSAGE, AGENT_MESSAGE_NAME};
     let node = fresh_node().await;
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(AGENT_MESSAGE))
-        .await
-        .unwrap();
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(AGENT_MESSAGE),
+    )
+    .await
+    .unwrap();
     let before = node.get_collection(AGENT_MESSAGE_NAME).unwrap().unwrap();
     let input=Value::Array((0..160).map(|i|serde_json::json!({"message_key":format!("message-{i}"),"node_did":"n","session_id":"s","sequence":i})).collect());
     let input = gents_protocol::graphql::graphql_input_literal(&input).unwrap();
@@ -678,7 +682,7 @@ async fn session_only_message_page_uses_ordered_index_with_tiebreaker() {
     let query = r#"query {AgentMessage(filter:{session_id:{_eq:"s"}},order:[{sequence:DESC},{_docID:ASC}],limit:30){_docID sequence}}"#;
     let original = node.execute(query).await;
     assert!(!original.has_errors(), "{:?}", original.errors);
-    let baseline = BASELINE
+    let baseline = baseline(gents_protocol::schemas::HomePolicyIds::node_store())
         .iter()
         .find(|c| c.name == AGENT_MESSAGE_NAME)
         .unwrap();
@@ -709,9 +713,11 @@ async fn session_only_message_page_uses_ordered_index_with_tiebreaker() {
 async fn transcript_tool_page_streams_sequence_and_key_order() {
     use gents_protocol::schemas::{AGENT_TOOL_CALL, AGENT_TOOL_CALL_NAME};
     let node = fresh_node().await;
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(AGENT_TOOL_CALL))
-        .await
-        .unwrap();
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(AGENT_TOOL_CALL),
+    )
+    .await
+    .unwrap();
     let before = node.get_collection(AGENT_TOOL_CALL_NAME).unwrap().unwrap();
     let rows = (0..160).map(|i| serde_json::json!({
         "tool_call_key": format!("tool-{i:03}"),
@@ -733,7 +739,7 @@ async fn transcript_tool_page_streams_sequence_and_key_order() {
     let query = r#"query { AgentToolCall(filter:{session_id:{_eq:"s"},node_did:{_eq:"n"},requester_did:{_eq:"r"}},order:[{message_sequence:DESC},{tool_call_key:DESC}],limit:10){_docID message_sequence tool_call_key} }"#;
     let original = node.execute(query).await;
     assert!(!original.has_errors(), "{:?}", original.errors);
-    let baseline = BASELINE
+    let baseline = baseline(gents_protocol::schemas::HomePolicyIds::node_store())
         .iter()
         .find(|c| c.name == AGENT_TOOL_CALL_NAME)
         .unwrap();
@@ -779,9 +785,11 @@ async fn transcript_tool_page_streams_sequence_and_key_order() {
 async fn inference_metrics_window_seeks_recent_terminal_calls() {
     use gents_protocol::schemas::{INFERENCE_CALL, INFERENCE_CALL_NAME};
     let node = fresh_node().await;
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(INFERENCE_CALL))
-        .await
-        .unwrap();
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(INFERENCE_CALL),
+    )
+    .await
+    .unwrap();
     let call = |id: String, state: &str, ended_at: &str| {
         serde_json::json!({
             "call_id": id, "call_kind": "inference", "call_state": state, "ended_at": ended_at
@@ -816,7 +824,7 @@ async fn inference_metrics_window_seeks_recent_terminal_calls() {
         ))
         .await;
     assert!(!created.has_errors(), "{:?}", created.errors);
-    let baseline = BASELINE
+    let baseline = baseline(gents_protocol::schemas::HomePolicyIds::node_store())
         .iter()
         .find(|c| c.name == INFERENCE_CALL_NAME)
         .unwrap();
@@ -850,9 +858,11 @@ async fn inference_metrics_window_seeks_recent_terminal_calls() {
 async fn rendered_request_context_details_lookup_is_bounded_to_one_call() {
     use gents_protocol::schemas::{RENDERED_REQUEST, RENDERED_REQUEST_NAME};
     let node = fresh_node().await;
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(RENDERED_REQUEST))
-        .await
-        .unwrap();
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(RENDERED_REQUEST),
+    )
+    .await
+    .unwrap();
     let before = node.get_collection(RENDERED_REQUEST_NAME).unwrap().unwrap();
     let rows = (0..100)
         .map(|turn| {
@@ -871,7 +881,7 @@ async fn rendered_request_context_details_lookup_is_bounded_to_one_call() {
         ))
         .await;
     assert!(!created.has_errors(), "{:?}", created.errors);
-    let baseline = BASELINE
+    let baseline = baseline(gents_protocol::schemas::HomePolicyIds::node_store())
         .iter()
         .find(|c| c.name == RENDERED_REQUEST_NAME)
         .unwrap();

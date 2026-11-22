@@ -44,20 +44,22 @@ async fn modeled_skill_selection_and_revocation_follow_native_source_edges() -> 
         gents_protocol::schemas::TOOLS,
     ] {
         node.add_collection(
-            &gents_protocol::schemas::HomePolicyIds::shared()
+            &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(&schema.replace(previous_policy, &policy)),
         )
         .await?;
     }
-    let skill_schema = gents_protocol::schemas::HomePolicyIds::shared()
+    let skill_schema = gents_protocol::schemas::HomePolicyIds::node_store()
         .render(gents_protocol::schemas::SKILL)
         .replacen(
             "type Skill ",
             &format!("type Skill @policy(id: \"{policy}\", resource: \"configuration\") "),
             1,
         );
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&skill_schema))
-        .await?;
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(&skill_schema),
+    )
+    .await?;
     let access = ConfigAccess::local_as(node.clone(), identity::Did::new(owner.did())?);
     let did = gents_store::graphql::escape_graphql_string(owner.did());
     let agent = gents_store::graphql::escape_graphql_string(selected.did());

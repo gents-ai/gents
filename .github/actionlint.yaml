@@ -16,9 +16,9 @@ self-hosted-runner:
     - ci-portable
     - ci-pr
     - ci-release
-    - ci-release-candidate
     - ci-runtime
     - ci-runtime-isolated
+    - ci-signing
     - ci-support
 paths:
   .github/workflows/release-macos.yml:

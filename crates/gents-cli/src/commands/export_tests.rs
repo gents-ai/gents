@@ -139,7 +139,7 @@ async fn native_export_preserves_fields_beyond_selection_width_limit() {
         .join(" ");
     access
         .add_collection(
-            &gents_protocol::schemas::HomePolicyIds::shared()
+            &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(&format!("type ExportWide {{ {fields} }}")),
         )
         .await

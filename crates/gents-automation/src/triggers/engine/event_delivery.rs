@@ -748,7 +748,7 @@ mod tests {
         .unwrap();
         owner_access
             .add_collection(
-                &gents_protocol::schemas::HomePolicyIds::shared()
+                &gents_protocol::schemas::HomePolicyIds::node_store()
                     .render(gents_protocol::schemas::AGENT),
             )
             .await
@@ -770,7 +770,7 @@ mod tests {
                 .unwrap();
         }
         node.add_collection(
-            &gents_protocol::schemas::HomePolicyIds::shared()
+            &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_protocol::schemas::EVENT_GROUP_STATE),
         )
         .await

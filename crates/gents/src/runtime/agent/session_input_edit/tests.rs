@@ -880,6 +880,7 @@ async fn valid_author_signature_cannot_install_replacement_with_wrong_admission_
     command.replacement_evidence = vec![gents_store::config_client::prepare_request_evidence(
         fixture.identity.as_ref(),
         gents_store::config_client::client_request_input(&command.replacements[0]).unwrap(),
+        gents_protocol::schemas::HomePolicyIds::node_store(),
     )
     .await
     .unwrap()];

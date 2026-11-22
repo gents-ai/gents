@@ -119,9 +119,15 @@ where
     let mut evidence = Vec::new();
     for (task, scope) in &writes {
         evidence.push(
-            prepare_pack_evidence_from_history(user, scope, &create(task), None)
-                .await
-                .map_err(|error| ConfigClientError::PackEvidence(Box::new(error)))?,
+            prepare_pack_evidence_from_history(
+                user,
+                scope,
+                &create(task),
+                None,
+                gents_protocol::schemas::HomePolicyIds::embedded_vera(),
+            )
+            .await
+            .map_err(|error| ConfigClientError::PackEvidence(Box::new(error)))?,
         );
     }
     let user_did =

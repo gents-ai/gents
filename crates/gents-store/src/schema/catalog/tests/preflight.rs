@@ -65,7 +65,7 @@ async fn a_collection_from_before_its_current_fields_is_refused_without_conversi
         ),
     ] {
         let node = fresh_node().await;
-        let sdl = schemas::HomePolicyIds::shared().render(sdl);
+        let sdl = schemas::HomePolicyIds::node_store().render(sdl);
         let older = sdl
             .lines()
             .filter(|line| {
@@ -83,7 +83,7 @@ async fn a_collection_from_before_its_current_fields_is_refused_without_conversi
         let retained = node.execute(&query).await.data;
         let before = node.get_all_collection_versions().await.unwrap();
         assert!(
-            matches!(check_lineages(&before), Err(SchemaError::UnknownLineage { ref collection, .. }) if collection == name),
+            matches!(check_lineages(&before, gents_protocol::schemas::HomePolicyIds::node_store()), Err(SchemaError::UnknownLineage { ref collection, .. }) if collection == name),
             "{name}"
         );
         assert!(
@@ -105,15 +105,18 @@ async fn a_collection_from_before_its_current_fields_is_refused_without_conversi
 async fn preflight_and_startup_refuse_the_same_unknown_lineage() {
     let node = fresh_node().await;
     // Bound to its identity policy, so its lineage is the only refusal reason.
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&format!(
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&format!(
         r#"type InferenceProfile @policy(id: "{}", resource: "configuration") {{ alien: String }}"#,
-        schemas::HomePolicyIds::shared().id(schemas::BuiltInPolicy::Household)
+        schemas::HomePolicyIds::node_store().id(schemas::BuiltInPolicy::Household)
     )))
     .await
     .unwrap();
     let before = node.get_all_collection_versions().await.unwrap();
     assert!(matches!(
-        check_lineages(&before),
+        check_lineages(
+            &before,
+            gents_protocol::schemas::HomePolicyIds::node_store()
+        ),
         Err(SchemaError::UnknownLineage { .. })
     ));
     assert!(matches!(
@@ -153,7 +156,7 @@ async fn startup_refuses_existing_unbound_provider_collections_before_changes() 
             "{name} must be bound in the catalog"
         );
         node.add_collection(
-            &gents_protocol::schemas::HomePolicyIds::shared()
+            &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(&schema.replacen(&directive, "", 1)),
         )
         .await
@@ -185,7 +188,7 @@ async fn branchable_identity_collections_have_private_local_fallback_objects() {
         let acp = node.document_acp();
         assert!(acp
             .is_doc_registered(
-                schemas::HomePolicyIds::shared().id(schemas::BuiltInPolicy::Household),
+                schemas::HomePolicyIds::node_store().id(schemas::BuiltInPolicy::Household),
                 resource,
                 &collection.collection_id
             )
@@ -193,7 +196,7 @@ async fn branchable_identity_collections_have_private_local_fallback_objects() {
             .unwrap());
         assert_eq!(
             acp.get_doc_owner(
-                schemas::HomePolicyIds::shared().id(schemas::BuiltInPolicy::Household),
+                schemas::HomePolicyIds::node_store().id(schemas::BuiltInPolicy::Household),
                 resource,
                 &collection.collection_id
             )
@@ -251,7 +254,7 @@ async fn startup_refuses_unbound_transport_collections_before_mutation() {
         assert!(schema.contains(&directive));
         let node = fresh_node().await;
         node.add_collection(
-            &gents_protocol::schemas::HomePolicyIds::shared()
+            &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(&schema.replacen(&directive, "", 1)),
         )
         .await

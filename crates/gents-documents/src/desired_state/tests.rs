@@ -106,7 +106,7 @@ async fn modeled_callback_configuration_publication_and_revocation() -> Result<(
     }
     node.add_collection_as(
         &context,
-        &gents_protocol::schemas::HomePolicyIds::shared()
+        &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::EVENT_SOURCE_CURSOR),
     )
     .await?;
@@ -1648,7 +1648,7 @@ async fn schema_obligation_publication_matches_lean() -> Result<()> {
         if !probes.contains_key(&shape) {
             let name = format!("ObligationProbe{}", probes.len());
             node.add_collection(
-                &gents_protocol::schemas::HomePolicyIds::shared()
+                &gents_protocol::schemas::HomePolicyIds::node_store()
                     .render(&sdl(&name, &input.schema)),
             )
             .await?;
@@ -1986,7 +1986,7 @@ async fn modeled_node_binding_uses_runtime_visibility_without_changing_agent_act
         .await?;
     node.add_collection_as(
         &ctx,
-        &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::NODE),
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(gents_protocol::schemas::NODE),
     )
     .await?;
     let response = user_access
@@ -2208,7 +2208,7 @@ async fn projection_binding_publication_follows_modeled_native_ownership() -> Re
                         .check_doc_access(
                             &defra_node::AcpIdentity::Authenticated(actor.did().parse()?),
                             defra_node::DocumentPermission::Update,
-                            gents_protocol::schemas::HomePolicyIds::shared()
+                            gents_protocol::schemas::HomePolicyIds::node_store()
                                 .id(gents_protocol::schemas::BuiltInPolicy::Household),
                             "configuration",
                             &doc,

@@ -31,13 +31,13 @@ async fn fixture() -> Arc<defra_node::Node> {
         .await
         .unwrap();
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::NODE),
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(gents_protocol::schemas::NODE),
     )
     .await
     .unwrap();
     // Deliberately omit the unique index: merge-parked twins remain scan-visible
     // even though local creation through the production index would reject them.
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&format!(
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&format!(
         r#"type PeerPairingDesired @policy(id: "{policy_id}", resource: "pairing_observations") {{
         peer_id: String node_did: String actor_did: String @immutable source: String template: String
         collections: [String!] replicator_addresses: [String!] profiles: [String!]
