@@ -76,10 +76,12 @@ def BootstrapInput.toModel (i : BootstrapInput) : BootstrapObservation :=
     i.storeEmptyObserved, i.reservationDurable, i.nacEnabled, i.freshEvidence,
     i.configurationPublished⟩
 
-/-- Init builds a fresh home, and a home whose marker survived a crash before
-its grants; each other observation is a separate refusal inside init that no
-test home can be put into without replacing init's own steps. -/
-def bootstrapReached : List String := ["fresh", "crash-after-reservation"]
+/-- Init reaches a fresh home, a home whose marker survived a crash before its
+grants, a store another holder has locked, a data directory that is not empty,
+and a home whose directory cannot be opened to sync the new marker. -/
+def bootstrapReached : List String :=
+  ["fresh", "not-exclusive", "store-not-fresh", "reservation-not-durable",
+    "crash-after-reservation"]
 
 @[conformance_family]
 def bootstrapGrant : Family BootstrapInput Bool where
@@ -87,9 +89,10 @@ def bootstrapGrant : Family BootstrapInput Bool where
     fun (name, _) => name ∈ bootstrapReached).map fun (name, o) => BootstrapInput.ofModel name o
   model := fun i => bootstrapMayGrant i.toModel
 
-/-- model-production-gap: init decides these inline across its store lock,
-runtime match, client authentication, Node and store observation, NAC status and
-publication steps; no production function takes the observation. -/
+/-- Init builds these observations itself: it opens the node under the runtime
+key it holds, signs as the client key it holds, observes an empty store, which
+holds no Node and no published configuration, and configures NAC on that store
+before it opens it. -/
 @[conformance_family]
 def bootstrapGrantUnreached : Family BootstrapInput Bool where
   inputs := (Identity.NodeProvisioningConformance.bootstrapCases.filter
@@ -157,23 +160,9 @@ private def creatorInput (c : String × AgentCreatorObservation) : CreatorInput 
     signerMatches := c.2.signerMatches, nativeCreate := c.2.nativeCreate
     nativeRelation := c.2.nativeRelation }
 
-/-- The served creation scenario holds a node whose native document ACP admits
-the creator, so it can vary the runtime and the signer but not the native
-create and relation decisions. -/
-private def nativeAdmits (c : String × AgentCreatorObservation) : Bool :=
-  c.2.nativeCreate && c.2.nativeRelation
-
 @[conformance_family]
 def agentCreator : Family CreatorInput Bool where
-  inputs := (NodeProvisioningConformance.agentCreatorCases.filter nativeAdmits).map creatorInput
-  model := fun i => agentCreatorMayPublish i.observation
-
-/-- model-production-gap: no served creation scenario denies the native Agent
-create or its parent relation to an otherwise authorized creator yet. -/
-@[conformance_family]
-def agentCreatorUnreached : Family CreatorInput Bool where
-  inputs :=
-    (NodeProvisioningConformance.agentCreatorCases.filter (!nativeAdmits ·)).map creatorInput
+  inputs := NodeProvisioningConformance.agentCreatorCases.map creatorInput
   model := fun i => agentCreatorMayPublish i.observation
 
 /-- A User-created Engineer on a node the User owns, selected as its default

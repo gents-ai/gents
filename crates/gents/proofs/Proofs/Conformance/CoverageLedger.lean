@@ -2225,11 +2225,6 @@ def caseCoverage : List CoverageEntry :=
       "event-delivery" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "family"
-      "node_provisioning_agent_creator_unreached"
-      "model-production-gap: no served creation scenario denies the native Agent create or its parent relation to an otherwise authorized creator yet (native-create-denied, native-relation-denied).")
-      "identity-permission" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "family"
       "delegated_finality_served_unreached"
       "model-production-gap: the session-message commit keeps no caller-side knowledge state for a pending read, a foreign receipt or an invalid abort proof, and no attempt counter or retry and failure-report permission, so pending-is-unconfirmed, foreign-receipt, no-proof-of-abort and failure-proof-cannot-undo-child have no production form.")
       "identity-permission" [Surface.runtimeInternal]
@@ -4110,7 +4105,7 @@ def caseCoverage : List CoverageEntry :=
       "model-production-gap: no production path reaches these emitted cases yet (file-sync-failed: no production path makes the file sync of a newly created bootstrap marker fail)")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (followUpCoverage "family" "node_provisioning_bootstrap_grant_unreached"
-      "model-production-gap: no production path reaches these emitted cases yet (not-exclusive, foreign-runtime, unauthenticated-client, existing-or-unknown-node, store-not-fresh, reservation-not-durable, nac-disabled, already-published: init decides each inline across its store lock, runtime match, client authentication, Node and store observation, reservation, NAC status and publication steps; no production function takes the bootstrap observation)")
+      "model-production-gap: no production path reaches these emitted cases yet (foreign-runtime, unauthenticated-client, existing-or-unknown-node, nac-disabled, already-published: init opens the node under the runtime key it holds, signs as the client key it holds, observes an empty store, which holds no Node and no published configuration, and configures NAC on that store before opening it)")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (followUpCoverage "family" "remote_delivery_delivery_unreached"
       "model-production-gap: no production path reaches these emitted cases yet (every case: production refuses delivery to another runtime until the authenticated HTTP delivery path exists (plan_with_delivery), so remote creation, the working-agent grant and response confirmation have no production owner)")
