@@ -427,8 +427,6 @@ def snapshotCoverageTailJson : String :=
       ++ coverageLedgerJson
     ++ ",\"feature_surface_requirements\":"
       ++ featureSurfaceRequirementsJson
-    ++ ",\"feature_matrix\":"
-      ++ featureMatrixJson
     ++ "}"
 
 def snapshotJsonTail : String :=
