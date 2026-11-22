@@ -58,7 +58,7 @@ pub enum PackSessionError {
     #[error(transparent)]
     Evidence(#[from] PackEvidenceError),
     #[error("could not read which policies the runtime's home uses")]
-    HomePolicies(#[source] gents_store::config_client::ConfigClientError),
+    HomePolicies(#[source] gents_protocol::error_chain::PassedThrough),
     #[error(fmt = gents_protocol::error_chain::held)]
     Endpoint(#[source] anyhow::Error),
 }
