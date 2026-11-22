@@ -78,6 +78,39 @@ fn is_request_context_message_only_matches_context_user_text() {
 }
 
 #[test]
+fn stored_context_readers_match_lean() {
+    gents_lean_vocab::families::prompt_assembly_request_context_keeps_stored_context::replay(|i| {
+        super::keeps_stored_context(i.history_reader)
+    });
+}
+
+#[test]
+fn every_reader_drops_stored_context_rows_and_keeps_the_rest_in_order() {
+    let rows = vec![
+        Message::user("<context>\nYour profile's model: model-a.\n</context>"),
+        Message::user("first prompt"),
+        Message::assistant("first answer"),
+        Message::user("<context>\nYour profile's model: model-b.\n</context>"),
+        Message::user("second prompt"),
+    ];
+    for reader in [
+        super::HistoryReader::Dispatch,
+        super::HistoryReader::AdmissionEstimate,
+        super::HistoryReader::Summarizer,
+    ] {
+        assert_eq!(
+            super::stored_history(reader, rows.clone(), |message| message),
+            vec![
+                Message::user("first prompt"),
+                Message::assistant("first answer"),
+                Message::user("second prompt"),
+            ],
+            "{reader:?}"
+        );
+    }
+}
+
+#[test]
 fn repair_preserves_a_tool_pair_split_across_history_and_prompt() {
     let history = vec![Message::Assistant {
         request_id: None,

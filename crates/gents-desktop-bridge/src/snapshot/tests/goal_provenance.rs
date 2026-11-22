@@ -661,6 +661,9 @@ async fn paged_native_forks_follow_goal_provenance() {
             .iter()
             .filter(|row| row["request_doc_id"] == request)
             .map(|row| row["message_key"].as_str().unwrap().to_owned())
+            .filter(|key| {
+                *key == gents_protocol::output::rows::authored_message_key(request, "prompt")
+            })
             .collect::<Vec<_>>();
         assert_eq!(keys.len(), 1, "{request} publishes one prompt: {messages}");
         keys.into_iter().next().unwrap()

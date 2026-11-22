@@ -107,6 +107,10 @@ impl AgentReadinessUnavailableReason {
 /// it must run against: several nodes run on one machine, and a bare `gents`
 /// acts on the default home, so a grant applied elsewhere leaves this node's
 /// Agent exactly as it was.
+/// Given with a user command the runtime built without knowing its home.
+pub const TARGET_GUIDANCE: &str =
+    "Add --home with this node's home when running against a node other than your default one.";
+
 pub fn workspace_root_reader_grant(path: &str, agent_did: &str, home: &str) -> String {
     format!("gents config workspace-root grant-reader --path {path} --agent-did {agent_did} --home {home}")
 }

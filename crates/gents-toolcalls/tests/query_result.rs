@@ -256,9 +256,7 @@ async fn plugin_child_reader_rejects_foreign_stable_identity_before_loading_argu
         .await
         .unwrap_err();
     assert!(
-        error
-            .to_string()
-            .contains("invalid plugin effect provenance"),
+        format!("{error:#}").contains("invalid plugin effect provenance"),
         "{error:#}"
     );
     drop(request_owner);
