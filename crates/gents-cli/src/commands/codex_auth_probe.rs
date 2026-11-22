@@ -34,7 +34,15 @@ pub(crate) async fn codex_auth_probe(args: CodexAuthProbeArgs) -> Result<()> {
         &access,
         &node_did,
         &provider,
-        |credential| probe_account(credential, &node_did, &provider, args.max_models),
+        |credential, client_version| {
+            probe_account(
+                credential,
+                client_version,
+                &node_did,
+                &provider,
+                args.max_models,
+            )
+        },
     )
     .await?;
     if blocks.is_empty() {
@@ -56,6 +64,7 @@ pub(crate) async fn codex_auth_probe(args: CodexAuthProbeArgs) -> Result<()> {
 
 async fn probe_account(
     credential: gents_inference::auth::credential::OAuthCredential,
+    client_version: Option<String>,
     node_did: &str,
     provider: &str,
     max_models: usize,
@@ -68,13 +77,15 @@ async fn probe_account(
         .get(&models_url)
         .query(&[(
             "client_version",
-            gents_inference::clients::chatgpt_codex::chatgpt_codex_client_version(None),
+            gents_inference::clients::chatgpt_codex::chatgpt_codex_client_version(
+                client_version.as_deref(),
+            ),
         )])
         .bearer_auth(&credential.access_token);
     for (name, value) in gents_inference::clients::chatgpt_codex::build_chatgpt_codex_headers(
         credential.account_id.as_deref(),
         credential.is_fedramp,
-        None,
+        client_version.as_deref(),
     )? {
         if let Some(name) = name {
             request = request.header(name, value);

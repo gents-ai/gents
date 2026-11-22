@@ -145,6 +145,18 @@ pub fn inference_setup_catalog() -> InferenceSetupCatalog {
             ("maxTurns", Some(crate::resolved::DEFAULT_MAX_TURNS as i64)),
             ("maxTotalTokens", None),
             (
+                "maxInvalidToolCalls",
+                Some(gents_loop::loop_stream::DEFAULT_MAX_INVALID_TOOL_CALLS as i64),
+            ),
+            (
+                "repeatedToolFailureLimit",
+                Some(gents_loop::loop_stream::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT as i64),
+            ),
+            (
+                "maxRequestRetries",
+                Some(gents_documents::inference_defaults::DEFAULT_REQUEST_MAX_RETRIES as i64),
+            ),
+            (
                 "streamBatchMs",
                 Some(crate::resolved::DEFAULT_STREAM_BATCH_MS as i64),
             ),
@@ -158,6 +170,10 @@ pub fn inference_setup_catalog() -> InferenceSetupCatalog {
             (
                 "providerIdleSecs",
                 Some(crate::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS as i64),
+            ),
+            (
+                "titleTimeoutSecs",
+                Some(crate::resolved::DEFAULT_TITLE_TIMEOUT_SECS as i64),
             ),
             (
                 "deadlineSecs",

@@ -198,6 +198,35 @@ impl Snapshot {
         self.profiles_on(&serving)
     }
 
+    /// Each client version the node's enabled backends send with `account`'s
+    /// sign-in, a pool sending it for every account of its provider; `None` is
+    /// the built-in version, which an unset backend or no backend at all sends.
+    fn client_versions_sent(&self, account: &AccountSummary) -> Vec<Option<String>> {
+        let mut versions: Vec<_> = self
+            .backends
+            .iter()
+            .filter(|backend| backend.enabled)
+            .filter(|backend| match backend_account(backend, &self.accounts) {
+                Some(found) => {
+                    found.is_some_and(|found| found.credential_id == account.credential_id)
+                }
+                None => {
+                    matches!(
+                        backend.auth,
+                        gents_documents::BackendAuth::NodeOAuthPool { .. }
+                    ) && backend.provider_kind.oauth_provider() == Some(account.provider.as_str())
+                }
+            })
+            .map(|backend| backend.client_version.clone())
+            .collect();
+        versions.sort();
+        versions.dedup();
+        if versions.is_empty() {
+            versions.push(None);
+        }
+        versions
+    }
+
     pub(crate) fn pick(&self, needle: &str, provider: Option<&str>) -> Result<&AccountSummary> {
         let candidates: Vec<_> = self
             .accounts
@@ -678,21 +707,22 @@ pub(crate) async fn probe_each_account<F, Fut>(
     probe: F,
 ) -> Result<Vec<String>>
 where
-    F: Fn(gents_inference::auth::credential::OAuthCredential) -> Fut,
+    F: Fn(gents_inference::auth::credential::OAuthCredential, Option<String>) -> Fut,
     Fut: std::future::Future<Output = Result<String>>,
 {
     let mut blocks = Vec::new();
     let mut failed = Vec::new();
-    for account in gents_inference::auth::credential::list_accounts(access, node_did)
-        .await?
-        .into_iter()
+    let snapshot = snapshot(access, node_did).await?;
+    for account in snapshot
+        .accounts
+        .iter()
         .filter(|account| account.provider == provider)
     {
         if !account.enabled {
             blocks.push(format!("{}: disabled, not probed", account.label));
             continue;
         }
-        let probed = match gents_inference::auth::credential::resolve_oauth_credential(
+        let credential = gents_inference::auth::credential::resolve_oauth_credential(
             access,
             node_did,
             provider,
@@ -700,16 +730,22 @@ where
                 account.account_ref.as_deref(),
             ),
         )
-        .await?
-        {
-            Some(credential) => probe(credential).await,
-            None => Err(anyhow::anyhow!("the account is no longer stored")),
-        };
-        match probed {
-            Ok(text) => blocks.push(format!("{}\n{text}", account.label)),
-            Err(error) => {
-                blocks.push(format!("{}: probe failed: {error:#}", account.label));
-                failed.push(account.label);
+        .await?;
+        for version in snapshot.client_versions_sent(account) {
+            let label = match &version {
+                Some(version) => format!("{} (client version {version})", account.label),
+                None => account.label.clone(),
+            };
+            let probed = match &credential {
+                Some(credential) => probe(credential.clone(), version).await,
+                None => Err(anyhow::anyhow!("the account is no longer stored")),
+            };
+            match probed {
+                Ok(text) => blocks.push(format!("{label}\n{text}")),
+                Err(error) => {
+                    blocks.push(format!("{label}: probe failed: {error:#}"));
+                    failed.push(label);
+                }
             }
         }
     }
@@ -720,4 +756,80 @@ where
         failed.join(", ")
     );
     Ok(blocks)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn account(account_ref: Option<&str>) -> AccountSummary {
+        AccountSummary {
+            credential_id: format!("xai-oauth:did:key:zNode:{account_ref:?}"),
+            provider: gents_inference::clients::xai_grok::XAI_OAUTH_PROVIDER.into(),
+            account_ref: account_ref.map(str::to_owned),
+            label: account_ref.unwrap_or("original").into(),
+            identity: None,
+            plan: None,
+            enabled: true,
+            default: account_ref.is_none(),
+            access_token_expires_at: chrono::Utc::now(),
+            connected_at: None,
+        }
+    }
+
+    fn backend(
+        id: &str,
+        auth: Value,
+        client_version: Option<&str>,
+        enabled: bool,
+    ) -> InferenceBackend {
+        serde_json::from_value(json!({
+            "node_did": "did:key:zNode", "backend_id": id, "name": id,
+            "provider_kind": "XaiGrokOAuth", "endpoint": "https://cli-chat-proxy.grok.com/v1",
+            "auth": auth, "client_version": client_version, "enabled": enabled,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_probe_sends_each_version_the_accounts_backends_send() {
+        let snapshot = Snapshot {
+            accounts: vec![account(None), account(Some("second"))],
+            backends: vec![
+                backend(
+                    "original",
+                    json!({"kind": "node_oauth"}),
+                    Some("2.0.0"),
+                    true,
+                ),
+                backend(
+                    "second",
+                    json!({"kind": "node_oauth", "account_ref": "second"}),
+                    None,
+                    true,
+                ),
+                backend(
+                    "pool",
+                    json!({"kind": "node_oauth_pool", "allow_overage": false}),
+                    Some("3.0.0"),
+                    true,
+                ),
+                backend("off", json!({"kind": "node_oauth"}), Some("4.0.0"), false),
+            ],
+            profiles: Vec::new(),
+        };
+        assert_eq!(
+            snapshot.client_versions_sent(&snapshot.accounts[0]),
+            [Some("2.0.0".to_owned()), Some("3.0.0".to_owned())]
+        );
+        assert_eq!(
+            snapshot.client_versions_sent(&snapshot.accounts[1]),
+            [None, Some("3.0.0".to_owned())]
+        );
+        let unserved = Snapshot {
+            backends: Vec::new(),
+            ..snapshot
+        };
+        assert_eq!(unserved.client_versions_sent(&unserved.accounts[0]), [None]);
+    }
 }

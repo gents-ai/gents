@@ -24,8 +24,10 @@ import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group, Unfold } from "./rows";
 import { ToolsSummary, ToolsUsedBy } from "./ToolsSummary";
 import {
+  BACKGROUND_TOOL_CALL_LIMIT,
   BASH_OUTPUT_LIMIT,
   FILE_LIMITS,
+  INSTRUCTION_LIMIT,
   TOOL_LIMIT_DEFAULTS,
   ToolGroupControls,
 } from "./ToolGroupControls";
@@ -107,12 +109,15 @@ export function parseAdvancedTools(
     if (typeof value === "number" && value > max)
       throw new Error(`${label} must be at most ${max.toLocaleString("en-US")}`);
   }
-  const bashOutputLimit = advanced.host?.bash?.max_output_chars;
-  positiveWholeNumber(BASH_OUTPUT_LIMIT.label, bashOutputLimit);
-  if (typeof bashOutputLimit === "number" && bashOutputLimit > BASH_OUTPUT_LIMIT.max)
-    throw new Error(
-      `${BASH_OUTPUT_LIMIT.label} must be at most ${BASH_OUTPUT_LIMIT.max.toLocaleString("en-US")}`,
-    );
+  for (const [{ label, max }, value] of [
+    [BASH_OUTPUT_LIMIT, advanced.host?.bash?.max_output_chars],
+    [INSTRUCTION_LIMIT, advanced.host?.max_instruction_chars],
+    [BACKGROUND_TOOL_CALL_LIMIT, advanced.host?.max_background_tool_calls],
+  ] as const) {
+    positiveWholeNumber(label, value);
+    if (typeof value === "number" && value > max)
+      throw new Error(`${label} must be at most ${max.toLocaleString("en-US")}`);
+  }
   boundedSeconds(
     "Bash timeout",
     advanced.host?.bash?.timeout_secs,

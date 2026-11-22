@@ -217,3 +217,77 @@ async fn inference_view_exposure_follows_reader_acp_on_served_node() -> Result<(
     db.node.shutdown().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn inference_settings_views_read_back_every_written_field() -> Result<()> {
+    let (db, _owner, access) = gents_inference::test_support::signed_test_node_without_agent(
+        "inference-view-read-back",
+        gents_store::node_extension::Extensions::default(),
+    )
+    .await;
+    let node_did = db.node_identity.did();
+    let backend = serde_json::json!({
+        "node_did": node_did, "backend_id": "backend", "name": "Backend",
+        "provider_kind": "OpenAiCompatible", "openai_wire_api": "chat_completions",
+        "endpoint": "http://127.0.0.1:1/v1", "auth": {"kind": "unauthenticated"},
+        "client_version": "9.8.7", "connect_timeout_secs": 3, "discovery_timeout_secs": 4,
+        "request_timeout_secs": 45, "max_concurrent": 2, "max_queue_depth": 5,
+        "enabled": false, "tags": ["limits"]
+    });
+    gents_documents::inference_backend::write_inference_backend_document(
+        &access,
+        &serde_json::from_value(backend.clone())?,
+        &gents_documents::test_support::AdmitAllProfiles,
+    )
+    .await?;
+    let execution = serde_json::json!({
+        "node_did": node_did, "execution_id": "execution", "display_name": "Limits",
+        "max_turns": 2, "max_total_tokens": 1000, "max_invalid_tool_calls": 5,
+        "repeated_tool_failure_limit": 2, "max_request_retries": 1, "stream_batch_ms": 50,
+        "stream_liveness_timeout_secs": 60, "provider_idle_timeout_secs": 30,
+        "title_timeout_secs": 7, "deadline_duration_secs": 600, "tags": ["limits"]
+    });
+    let plan = gents_documents::DesiredStateApplyPlan::new(vec![
+        gents_documents::DesiredStateApplyDocument {
+            collection: gents_store::collection::Collection::InferenceExecution,
+            add: execution.clone(),
+            update: execution.clone(),
+        },
+    ])?;
+    access
+        .transact_write("test.inference.views.read_back", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                gents_documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents_documents::test_support::AdmitAllProfiles,
+                )
+                .await
+            })
+        })
+        .await?;
+    let read_backend = access
+        .read_view(&BackendList::new(node_did))
+        .await?
+        .pop()
+        .context("backend fixture missing")?
+        .metadata
+        .into_backend()?;
+    let read_execution = access
+        .read_view(&ExecutionList::new(node_did))
+        .await?
+        .pop()
+        .context("execution fixture missing")?
+        .settings;
+    for (written, read) in [
+        (backend, serde_json::to_value(read_backend)?),
+        (execution, serde_json::to_value(read_execution)?),
+    ] {
+        for (field, value) in written.as_object().context("fixture is an object")? {
+            assert_eq!(read.get(field), Some(value), "{field} reads back");
+        }
+    }
+    db.node.shutdown().await?;
+    Ok(())
+}
