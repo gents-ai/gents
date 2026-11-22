@@ -80,6 +80,7 @@ async fn the_working_agent_cannot_change_its_pinned_budget() {
             deadline_duration_secs: 60,
             execution_origin: ExecutionOrigin::Interactive,
             backend_id: "pin-test".into(),
+            operator_tool_root: None,
         },
         Default::default(),
         Some(working_agent),
