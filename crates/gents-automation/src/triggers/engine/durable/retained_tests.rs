@@ -184,6 +184,8 @@ async fn retained_task_outcomes_follow_modeled_assignment_history() {
             goal_id: Some("task-goal".into()),
             goal_objective: Some("Original Task assignment".into()),
             goal_token_budget: None,
+            goal_blocked_audit_threshold: None,
+            goal_max_infrastructure_retries: None,
             goal_assignment_applied: true,
             emit_outcome: true,
             queued_serial: true,

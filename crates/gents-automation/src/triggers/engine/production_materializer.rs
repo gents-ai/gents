@@ -289,6 +289,7 @@ impl MaterializerHandle for ProductionMaterializer {
         let rendered_prompt = rendered_prompt.to_string();
         let rendered_goal_objective = rendered_goal_objective.map(str::to_owned);
         let goal_token_budget = task.goal_token_budget;
+        let goal_limits = task.goal_limits();
         let durable_fire_key = durable_fire_key.to_string();
         let trigger_id = trigger_id.map(str::to_owned);
         let trigger_doc_id = trigger_doc_id.map(str::to_owned);
@@ -452,6 +453,7 @@ impl MaterializerHandle for ProductionMaterializer {
                         session_id: &identity.session_id,
                         objective,
                         token_budget: goal_token_budget,
+                        limits: goal_limits,
                     },
                     &create,
                     Some(agent_identity.as_ref()),
@@ -462,6 +464,10 @@ impl MaterializerHandle for ProductionMaterializer {
                 anyhow::ensure!(
                     goal_token_budget.is_none(),
                     "goal token budget requires a goal objective template"
+                );
+                anyhow::ensure!(
+                    goal_limits == gents_protocol::goal::GoalLimits::default(),
+                    "goal limits require a goal objective template"
                 );
                 let request_id = prepared_ids
                     .as_ref()

@@ -34,6 +34,8 @@ async fn trigger_cursor_traces_match_the_durable_model() -> Result<()> {
             goal_id: None,
             goal_objective: None,
             goal_token_budget: None,
+            goal_blocked_audit_threshold: None,
+            goal_max_infrastructure_retries: None,
             goal_assignment_applied: false,
             emit_outcome: false,
             queued_serial: true,

@@ -348,6 +348,10 @@ pub struct GoalRow {
     #[serde(default)]
     pub infrastructure_retry_count: Option<i64>,
     #[serde(default)]
+    pub blocked_audit_threshold: Option<i64>,
+    #[serde(default)]
+    pub max_infrastructure_retries: Option<i64>,
+    #[serde(default)]
     pub last_failure: Option<String>,
     #[serde(default)]
     pub completion_evidence: Option<String>,

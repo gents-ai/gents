@@ -567,6 +567,7 @@ async fn goal_and_claim_publication_links_match_lean() {
                                 session_id: "links-session",
                                 objective: "Finish work",
                                 token_budget: None,
+                                limits: gents_protocol::goal::GoalLimits::default(),
                             },
                             initial_state: GoalState {
                                 status: GoalStatus::Active,

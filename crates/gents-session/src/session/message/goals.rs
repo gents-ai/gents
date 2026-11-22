@@ -6,6 +6,7 @@
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 
+use gents_protocol::goal::GoalLimits;
 use gents_protocol::goal_status::GoalStatus;
 use gents_protocol::request_admission::AgentRequestCreate;
 use gents_protocol::request_input::RequestInput;
@@ -46,16 +47,16 @@ pub trait SessionMessageGoals: Send + Sync {
         session_id: &str,
     ) -> Result<Option<SessionGoal>>;
 
-    /// Stages the signed `request` together with a Goal for `objective` in
-    /// `txn`, so both commit or neither does. Replaying the same retry key
-    /// returns the request already staged.
+    /// Stages the signed `request` together with a Goal for `objective` on the
+    /// request's session in `txn`, so both commit or neither does; the Goal
+    /// pins `limits`. Replaying the same retry key returns the request already
+    /// staged.
     async fn stage_goal_backed_request_in_txn(
         &self,
         txn: &ConfigApplyTxn<'_>,
-        node_did: &str,
-        session_id: &str,
         objective: &str,
         token_budget: Option<i64>,
+        limits: GoalLimits,
         request: &AgentRequestCreate,
     ) -> Result<EnqueuedAgentRequest>;
 
@@ -98,10 +99,9 @@ impl SessionMessageGoals for NoSessionMessageGoals {
     async fn stage_goal_backed_request_in_txn(
         &self,
         _txn: &ConfigApplyTxn<'_>,
-        _node_did: &str,
-        _session_id: &str,
         _objective: &str,
         _token_budget: Option<i64>,
+        _limits: GoalLimits,
         _request: &AgentRequestCreate,
     ) -> Result<EnqueuedAgentRequest> {
         Err(anyhow!("no Goals plugin is attached"))

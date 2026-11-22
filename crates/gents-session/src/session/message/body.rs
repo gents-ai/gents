@@ -98,11 +98,18 @@ pub fn render_task_body(
         &task_document.prompt_template,
         task_document.goal_objective_template.as_deref(),
         task_document.goal_token_budget,
+        task_document.goal_limits(),
         &scope,
     ) {
         Ok(rendered) => rendered,
         Err(error) => return Err(format!("task {error}")),
     };
-    let goal = objective.map(|objective| (objective, task_document.goal_token_budget));
+    let goal = objective.map(|objective| {
+        (
+            objective,
+            task_document.goal_token_budget,
+            task_document.goal_limits(),
+        )
+    });
     Ok(RenderedBody { content, goal })
 }

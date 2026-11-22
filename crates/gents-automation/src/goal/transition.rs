@@ -4,6 +4,7 @@ pub struct GoalCreationFingerprint {
     pub session: String,
     pub objective: String,
     pub token_budget: Option<i128>,
+    pub limits: gents_protocol::goal::GoalLimits,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,6 +16,7 @@ pub struct GoalCreateRequest {
     pub objective: String,
     pub objective_nonempty: bool,
     pub token_budget: Option<i128>,
+    pub limits: gents_protocol::goal::GoalLimits,
     pub goal_tools: bool,
     pub goal_create: bool,
 }
@@ -35,6 +37,7 @@ pub fn goal_creation_fingerprint(request: &GoalCreateRequest) -> GoalCreationFin
         session: request.current_session.clone(),
         objective: request.objective.trim().to_string(),
         token_budget: request.token_budget,
+        limits: request.limits,
     }
 }
 
@@ -54,6 +57,14 @@ pub fn decide_model_goal_create(
         || request
             .token_budget
             .is_some_and(|budget| budget <= 0 || budget > i64::MAX as i128)
+        || request
+            .limits
+            .blocked_audit_threshold
+            .is_some_and(|threshold| threshold <= 0)
+        || request
+            .limits
+            .max_infrastructure_retries
+            .is_some_and(|retries| retries < 0)
     {
         return GoalCreateDisposition::Invalid;
     }

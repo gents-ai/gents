@@ -497,7 +497,7 @@ pub(crate) async fn stage_outcome_reader(
     Ok(())
 }
 
-pub(crate) const FIRE_FIELDS: &str = "fire_key owner_did trigger_id source_collection source_doc_id task_id request_id session_id goal_id goal_objective goal_token_budget goal_assignment_applied emit_outcome queued_serial source_handoff_id reply_session_id shard_id attempt created_at";
+pub(crate) const FIRE_FIELDS: &str = "fire_key owner_did trigger_id source_collection source_doc_id task_id request_id session_id goal_id goal_objective goal_token_budget goal_blocked_audit_threshold goal_max_infrastructure_retries goal_assignment_applied emit_outcome queued_serial source_handoff_id reply_session_id shard_id attempt created_at";
 
 async fn outcome_published(txn: &ConfigApplyTxn<'_>, fire: &TriggerFire) -> Result<bool> {
     let response = {
@@ -876,9 +876,22 @@ async fn stage_task_delivery_with_receipt(
                     fire.goal_token_budget.is_none_or(|budget| budget > 0),
                     "Task Goal budget must be positive"
                 );
+                anyhow::ensure!(
+                    fire.goal_blocked_audit_threshold
+                        .is_none_or(|threshold| threshold > 0),
+                    "Task Goal blocked-audit threshold must be positive"
+                );
+                anyhow::ensure!(
+                    fire.goal_max_infrastructure_retries
+                        .is_none_or(|retries| retries >= 0),
+                    "Task Goal infrastructure retry limit must not be negative"
+                );
             }
             None => anyhow::ensure!(
-                fire.goal_objective.is_none() && fire.goal_token_budget.is_none(),
+                fire.goal_objective.is_none()
+                    && fire.goal_token_budget.is_none()
+                    && fire.goal_blocked_audit_threshold.is_none()
+                    && fire.goal_max_infrastructure_retries.is_none(),
                 "ordinary Task receipt cannot declare a Goal assignment"
             ),
         }

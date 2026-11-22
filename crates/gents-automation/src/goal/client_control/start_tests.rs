@@ -1328,6 +1328,7 @@ async fn client_goal_control_cannot_publish_user_graph_as_the_agent() {
                     session_id: SESSION,
                     objective: "new User work",
                     token_budget: None,
+                    limits: gents_protocol::goal::GoalLimits::default(),
                 },
                 &request,
                 None,

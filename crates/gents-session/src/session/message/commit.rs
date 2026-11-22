@@ -570,17 +570,11 @@ async fn stage_agent_new_in_txn(
         PlannedWrite::Goal {
             objective,
             token_budget,
+            limits,
             ..
         } => {
             goals
-                .stage_goal_backed_request_in_txn(
-                    txn,
-                    &create.node_did,
-                    &create.session_id,
-                    objective,
-                    *token_budget,
-                    &create,
-                )
+                .stage_goal_backed_request_in_txn(txn, objective, *token_budget, *limits, &create)
                 .await?
         }
     };
@@ -709,17 +703,11 @@ pub async fn stage_planned_write_in_txn(
             create,
             objective,
             token_budget,
+            limits,
         } => {
             ensure_planned_hop_current(txn, create).await?;
             let enqueued = goals
-                .stage_goal_backed_request_in_txn(
-                    txn,
-                    &create.node_did,
-                    &plan.session_id,
-                    objective,
-                    *token_budget,
-                    create,
-                )
+                .stage_goal_backed_request_in_txn(txn, objective, *token_budget, *limits, create)
                 .await?;
             if let Some(expected_head) = &plan.steer_head {
                 validate_steer_in_txn(txn, create, &enqueued.doc_id, expected_head.as_deref())

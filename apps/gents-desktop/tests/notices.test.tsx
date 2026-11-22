@@ -113,6 +113,8 @@ describe("where the words are used", () => {
       objective: "Make the import resumable",
       status: "usage_limited",
       tokenBudget: null,
+      blockedAuditThreshold: "3",
+      maxInfrastructureRetries: "2",
       tokensUsed: "0",
       activeTimeSeconds: "0",
       continuationSequence: "0",

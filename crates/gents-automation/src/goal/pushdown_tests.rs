@@ -23,6 +23,8 @@ fn generated_goal_decision_cases_fence_runtime_controller() {
                 .expect("modeled retries fit i64"),
             wrapup_requested: case.wrapup_requested,
             wrapup_completed: case.wrapup_completed,
+            max_infrastructure_retries: i64::try_from(case.max_infrastructure_retries)
+                .expect("modeled limit fits i64"),
         })
     });
 }
@@ -59,6 +61,8 @@ fn generated_goal_readiness_gate_cases_fence_retry_accounting() {
                 .expect("modeled retries fit i64"),
             wrapup_requested: case.wrapup_requested,
             wrapup_completed: case.wrapup_completed,
+            max_infrastructure_retries: i64::try_from(case.max_infrastructure_retries)
+                .expect("modeled limit fits i64"),
         };
         let gated = gate_goal_continuation(observation, case.settled, case.cause, &facts);
         gents_lean_vocab::families::contracts_goal_readiness_gate::ReadinessGateOutput {
@@ -114,7 +118,10 @@ fn generated_goal_transition_cases_fence_runtime_state_machine() {
             "clean_turn" => GoalAction::CleanTurn,
             other => panic!("unknown action {other:?} in Lean case {}", case.name),
         };
-        let stepped = pre.step(action);
+        let stepped = pre.step_with_blocked_audit_threshold(
+            action,
+            i64::try_from(case.blocked_audit_threshold).expect("modeled threshold fits i64"),
+        );
         let post = stepped.unwrap_or(pre);
         gents_lean_vocab::families::contracts_goal_transition::GoalTransitionOutput {
             accepted: stepped.is_some(),
@@ -148,6 +155,10 @@ fn generated_goal_create_cases_fence_authority_and_idempotency() {
             objective: case.objective.clone(),
             objective_nonempty: case.objective_nonempty,
             token_budget: family_budget(case.token_budget.as_ref()),
+            limits: gents_protocol::goal::GoalLimits {
+                blocked_audit_threshold: case.blocked_audit_threshold,
+                max_infrastructure_retries: case.max_infrastructure_retries,
+            },
             goal_tools: case.goal_tools,
             goal_create: case.goal_create,
         };
@@ -159,6 +170,10 @@ fn generated_goal_create_cases_fence_authority_and_idempotency() {
                 session: existing.session.clone(),
                 objective: existing.objective.clone(),
                 token_budget: family_budget(existing.token_budget.as_ref()),
+                limits: gents_protocol::goal::GoalLimits {
+                    blocked_audit_threshold: existing.blocked_audit_threshold,
+                    max_infrastructure_retries: existing.max_infrastructure_retries,
+                },
             });
         decide_model_goal_create(&request, existing.as_ref())
     });
