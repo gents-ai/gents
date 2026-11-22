@@ -208,6 +208,19 @@ async fn output_pages_the_full_stored_tool_output_behind_a_bounded_view() {
     let next: Value =
         serde_json::from_str(error.split_once("next call: sessions ").unwrap().1).unwrap();
     assert_eq!(next, json!({"action":"transcript","session_id":session}));
+    let transcript = call(&tool, next).await;
+    let listed = transcript["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|message| message["tool_calls"].as_array())
+        .flatten()
+        .cloned()
+        .collect::<Vec<_>>();
+    assert!(
+        listed.contains(&json!({"call_id":"spawn-provider-call","tool":gents_protocol::tool_names::SPAWN_PROCESS_TOOL_NAME})),
+        "the named next call yields the call_id output needs: {transcript}"
+    );
 
     let error = call_error(
         &tool,

@@ -215,7 +215,7 @@ impl SelfConfigCore {
                 "lsp_readiness": "Selection does not prove a language server is installed, started, or indexed.",
             },
             "runtime_effective": {
-                "meaning": "agent_narrowing is saved permission; effective also applies this process's ceiling. Save lasting role restrictions in Tools even when this process already blocks access. Use tools edit with options.agent to select the role.",
+                "meaning": "agent_narrowing is saved permission; effective also applies this process's ceiling. Save lasting role restrictions in Tools even when this process already blocks access. Use tools update with options.agent to select the role.",
                 "process_ceiling": process_ceiling,
                 "agent_narrowing": {
                     "requested_file_mode": requested_file_mode,

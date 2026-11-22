@@ -57,7 +57,9 @@ The model calls `charts`:
 
 and gets back the picture as an image part, `alt` (a description with each
 series' highest and lowest point), `series` (the numbers behind the marks) and
-`warnings`. `plugins/charts/TOOL.md` is what the model reads.
+`warnings`. `plugins/charts/TOOL.md` is the small core the model reads with
+every request; the detail is in help topics (`plugins/charts/help/`) that the
+model reads on demand with `{"help": "<topic>"}`.
 
 ## Use it as a callback node
 
@@ -164,10 +166,11 @@ ceiling).
 
 ## Inputs and outputs
 
-See `plugins/charts/TOOL.md` for every field, the number-format language and
-the chart types. In short:
+See the help topics in `plugins/charts/help/` (inputs, types, options, formats,
+output, saving) for every field, the number-format language and the chart
+types. In short:
 
-- One JSON object in; `chart` is required. Data is `data` (inline) or `path`
+- One JSON object in; `chart` is required unless `help` asks for a topic. Data is `data` (inline) or `path`
   (file or folder) with `file`.
 - A tool call returns `{"response": {...}, "parts": [{"type": "image", ...}]}`:
   gents turns `parts` into an image the model and the desktop show.

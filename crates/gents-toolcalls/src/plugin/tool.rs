@@ -58,7 +58,15 @@ impl PluginTool {
         let definition = ToolDefinition {
             name: plugin.tool_name().to_string(),
             description,
-            parameters: bound_schema(&record.declaration.input_schema, &plugin.input_fields)?,
+            parameters: bound_schema(
+                &record.declaration.input_schema,
+                record
+                    .declaration
+                    .bind_dir
+                    .as_ref()
+                    .and_then(|bind_dir| bind_dir.original_field.as_deref()),
+                &plugin.input_fields,
+            )?,
         };
         Ok(Self {
             executor,
@@ -340,9 +348,18 @@ impl PluginTool {
 
 fn bound_schema(
     schema: &serde_json::Value,
+    host_original: Option<&str>,
     fields: &[WriteToolField],
 ) -> Result<serde_json::Value> {
     let mut schema = schema.clone();
+    if let Some(original) = host_original {
+        if let Some(properties) = schema["properties"].as_object_mut() {
+            properties.remove(original);
+        }
+        if let Some(required) = schema["required"].as_array_mut() {
+            required.retain(|name| name.as_str() != Some(original));
+        }
+    }
     if fields.is_empty() {
         return Ok(schema);
     }
@@ -436,15 +453,28 @@ mod tests {
         let schema = json!({"type":"object","additionalProperties":false,
             "properties":{"path":{"type":"string"},"run_id":{"type":"string"},"page":{"type":"integer"}},
             "required":["path","run_id","page"]});
-        let bound = bound_schema(&schema, &fields()).unwrap();
+        let bound = bound_schema(&schema, None, &fields()).unwrap();
         assert_eq!(bound["required"], json!(["page"]));
         assert_eq!(bound["properties"], json!({"page":{"type":"integer"}}));
         assert_eq!(bound["additionalProperties"], false);
         let mut wrong = schema.clone();
         wrong["properties"]["path"]["type"] = json!("integer");
-        assert!(bound_schema(&wrong, &fields()).is_err());
-        assert!(bound_schema(&schema, &[fields()[0].clone(), fields()[0].clone()]).is_err());
-        assert_eq!(bound_schema(&schema, &[]).unwrap(), schema);
+        assert!(bound_schema(&wrong, None, &fields()).is_err());
+        assert!(bound_schema(&schema, None, &[fields()[0].clone(), fields()[0].clone()]).is_err());
+        assert_eq!(bound_schema(&schema, None, &[]).unwrap(), schema);
+    }
+
+    #[test]
+    fn the_host_filled_original_path_is_not_a_model_input() {
+        let schema = json!({"type":"object","additionalProperties":false,
+            "properties":{"path":{"type":"string"},"path_original":{"type":"string"},"page":{"type":"integer"}},
+            "required":["page"]});
+        let bound = bound_schema(&schema, Some("path_original"), &[]).unwrap();
+        assert_eq!(
+            bound["properties"],
+            json!({"path":{"type":"string"},"page":{"type":"integer"}})
+        );
+        assert_eq!(bound["required"], json!(["page"]));
     }
 
     #[tokio::test]

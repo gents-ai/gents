@@ -169,6 +169,23 @@ fn wrong_parameter_types_do_not_start_network_work() {
 }
 
 #[test]
+fn same_host_is_an_unknown_crawl_parameter() {
+    for value in [json!(true), json!(false)] {
+        let result = run(
+            "web_crawl",
+            json!({"url":"https://public.example/","same_host":value,"http_calls":true}),
+        );
+        assert!(result.get("http_calls").is_none(), "{result}");
+        assert_eq!(result["error"]["code"], "invalid_arguments", "{result}");
+        assert_eq!(
+            result["error"]["message"],
+            "unsupported parameter \"same_host\"; this runtime does not implement it",
+            "{result}"
+        );
+    }
+}
+
+#[test]
 fn failed_sitemap_is_attempted_once() {
     let (result, urls) = drive(
         "web_crawl",

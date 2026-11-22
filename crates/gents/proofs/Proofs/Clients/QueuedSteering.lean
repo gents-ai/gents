@@ -17,22 +17,12 @@ inductive AgentDelivery where
   | queue | steer | interrupt
   deriving DecidableEq, Repr
 
-def resolveAgentDelivery (delivery : Option AgentDelivery) (legacyInterrupt : Option Bool) :
-    Option AgentDelivery :=
-  match delivery, legacyInterrupt with
-  | none, none | none, some false => some .queue
-  | none, some true => some .interrupt
-  | some mode, none => some mode
-  | some .interrupt, some true => some .interrupt
-  | some .queue, some false => some .queue
-  | some .steer, some false => some .steer
-  | some _, some _ => none
+/-- `agent_message` takes one delivery choice; an omitted choice queues. -/
+def resolveAgentDelivery (delivery : Option AgentDelivery) : AgentDelivery :=
+  delivery.getD .queue
 
-def agentDeliveryCases : List (Option AgentDelivery × Option Bool) :=
-  [ (none, none), (none, some false), (none, some true)
-  , (some .queue, none), (some .queue, some false), (some .queue, some true)
-  , (some .steer, none), (some .steer, some false), (some .steer, some true)
-  , (some .interrupt, none), (some .interrupt, some false), (some .interrupt, some true) ]
+def agentDeliveryCases : List (Option AgentDelivery) :=
+  [none, some .queue, some .steer, some .interrupt]
 
 /-- Select the physical active head before publishing the delivered request.
 The request created by this publication cannot become its own interrupt target. -/
@@ -196,17 +186,13 @@ theorem folded_agent_message_waits_for_its_head :
 theorem ordinary_supersession_stays_terminal :
     agentMessageOutcome false .superseded .completed = .superseded := by decide
 
-theorem legacy_agent_delivery_defaults :
-    resolveAgentDelivery none none = some .queue ∧
-    resolveAgentDelivery none (some false) = some .queue ∧
-    resolveAgentDelivery none (some true) = some .interrupt := by
+theorem omitted_agent_delivery_queues :
+    resolveAgentDelivery none = .queue := by
   decide
 
-theorem conflicting_agent_delivery_rejected :
-    resolveAgentDelivery (some .queue) (some true) = none ∧
-    resolveAgentDelivery (some .steer) (some true) = none ∧
-    resolveAgentDelivery (some .interrupt) (some false) = none := by
-  decide
+theorem chosen_agent_delivery_is_kept (mode : AgentDelivery) :
+    resolveAgentDelivery (some mode) = mode := by
+  rfl
 
 structure AdmissionInput where
   requestId : RequestId

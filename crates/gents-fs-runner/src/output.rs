@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use serde::Serialize;
 
-use crate::model::{FilesystemEntry, WalkStats, DEFAULT_IGNORED_NAMES};
+use crate::model::{FilesystemEntry, WalkStats};
 
 const DEFAULT_GREP_PREVIEW_CHARS: usize = 240;
 
@@ -85,7 +85,8 @@ pub(crate) struct ListFilesMetadata {
     pub(crate) returned_count: usize,
     pub(crate) total_count: Option<usize>,
     pub(crate) truncated: bool,
-    pub(crate) default_ignored: &'static [&'static str],
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    pub(crate) default_ignored: Vec<&'static str>,
     pub(crate) summary: EntrySummary,
     pub(crate) walk: WalkStats,
 }
@@ -110,7 +111,8 @@ pub(crate) struct GlobMetadata {
     pub(crate) returned_count: usize,
     pub(crate) total_count: Option<usize>,
     pub(crate) truncated: bool,
-    pub(crate) default_ignored: &'static [&'static str],
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    pub(crate) default_ignored: Vec<&'static str>,
     pub(crate) walk: WalkStats,
 }
 
@@ -135,7 +137,8 @@ pub(crate) struct GrepMetadata {
     pub(crate) total_count: Option<usize>,
     pub(crate) files_with_matches: usize,
     pub(crate) truncated: bool,
-    pub(crate) default_ignored: &'static [&'static str],
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    pub(crate) default_ignored: Vec<&'static str>,
     pub(crate) bytes_read: u64,
     pub(crate) skipped_large_files: usize,
     pub(crate) skipped_binary_files: usize,
@@ -226,10 +229,6 @@ pub(crate) fn render_tool_output(
 
 pub(crate) fn truncate_grep_preview(text: &str) -> String {
     truncate_inline(text, DEFAULT_GREP_PREVIEW_CHARS)
-}
-
-pub(crate) fn default_ignored_names() -> &'static [&'static str] {
-    DEFAULT_IGNORED_NAMES
 }
 
 fn render_json(value: &impl Serialize) -> Result<String> {

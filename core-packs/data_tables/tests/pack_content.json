@@ -43,6 +43,14 @@
     {
       "name": "the system prompt and the notice carry no em or en dash",
       "expr": "[.assets[\"agent_behaviors/data_analyst/system_prompt.md\"], .assets[\"notice.md\"], .assets[\"README.md\"], .assets[\"plugins/data_tables/TOOL.md\"]] | all(test(\"\\u2014|\\u2013\") | not)"
+    },
+    {
+      "name": "the tool description is a small core that keeps the rules that change outcomes and names its help",
+      "expr": ".assets[\"plugins/data_tables/TOOL.md\"] as $t | ($t | gsub(\"\\\\s+\"; \" \")) as $f | ($t | utf8bytelength <= 1200) and ($f | contains(\"Let SQL count, filter, group and join instead of reading the raw file.\")) and ($f | contains(\"Read `warnings`\")) and ($f | contains(\"continues with its `cursor` and every other field unchanged\")) and ($f | contains(\"never repeat the call unchanged\")) and ($f | contains(\"`{\\\"help\\\": \\\"topics\\\"}`\")) and ($f | contains(\"`{\\\"help\\\": \\\"<topic>\\\"}`\")) and all(.manifest.plugins[0].input_schema.properties.help.enum[]; . as $k | $f | contains($k))"
+    },
+    {
+      "name": "help is a model-only field: the callback binding never passes it",
+      "expr": ".config.callback_bindings[0].input_fields | index(\"help\") == null"
     }
   ]
 }

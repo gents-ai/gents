@@ -14,12 +14,12 @@
       "expr": "all(.manifest.plugins[]; .limits.memory_mib <= 4096 and .limits.wall_clock_secs <= 900 and .limits.max_output_mib == 4)"
     },
     {
-      "name": "the schema is closed, requires chart and lists every chart type the tool documents",
-      "expr": "schema(\"charts\") as $s | $s.additionalProperties == false and $s.required == [\"chart\"] and ($s.properties.chart.enum | sort) == [\"area\", \"bar\", \"box\", \"bubble\", \"combo\", \"donut\", \"heatmap\", \"histogram\", \"horizontal_bar\", \"line\", \"pie\", \"scatter\", \"stacked_area\", \"stacked_bar\"]"
+      "name": "the schema is closed, requires no field so a help call stands alone, and lists every chart type and help topic",
+      "expr": "schema(\"charts\") as $s | $s.additionalProperties == false and $s.required == null and ($s.properties.chart.enum | sort) == [\"area\", \"bar\", \"box\", \"bubble\", \"combo\", \"donut\", \"heatmap\", \"histogram\", \"horizontal_bar\", \"line\", \"pie\", \"scatter\", \"stacked_area\", \"stacked_bar\"] and $s.properties.help.enum == [\"topics\", \"inputs\", \"types\", \"options\", \"formats\", \"output\", \"saving\"]"
     },
     {
-      "name": "every field the schema names is explained in the tool instructions",
-      "expr": "doc_text(\"plugins/charts/TOOL.md\") as $t | [schema(\"charts\").properties | keys[] | select(. != \"path_original\") | . as $k | select(($t | contains(\"`\" + $k + \"`\")) | not)] == []"
+      "name": "the tool description is a small core that keeps the rules that change outcomes and names its help",
+      "expr": "doc_text(\"plugins/charts/TOOL.md\") as $t | ($t | gsub(\"\\\\s+\"; \" \")) as $f | ($t | utf8bytelength <= 1200) and ($f | contains(\"Never invent numbers: chart only data you were given or read from a file.\")) and ($f | contains(\"Read `warnings` before you trust the chart\")) and ($f | contains(\"fix that, do not retry the same call\")) and ($f | contains(\"`chart`\")) and ($f | contains(\"`data`\")) and ($f | contains(\"`path`\")) and ($f | contains(\"`{\\\"help\\\": \\\"topics\\\"}`\")) and ($f | contains(\"`{\\\"help\\\": \\\"<topic>\\\"}`\")) and all(schema(\"charts\").properties.help.enum[]; . as $k | $f | contains($k))"
     },
     {
       "name": "numeric limits in the schema match the ones the tool states",
@@ -42,8 +42,8 @@
       "expr": "doc_text(\"schemas/chart_request.graphql\") as $g | (row(\"callback_bindings\"; \"binding_id\"; \"chart-render\").input_fields | index(\"save\")) == null and (row(\"callback_bindings\"; \"binding_id\"; \"chart-save\").input_fields | index(\"save\")) != null and all(.config.callback_bindings[].input_fields[]; . as $f | $g | contains(\"  \" + $f + \":\"))"
     },
     {
-      "name": "the request fields of the schema are exactly the tool fields plus run_id",
-      "expr": "doc_text(\"schemas/chart_request.graphql\") as $g | ([$g | scan(\"\\\\n  ([a-z_0-9]+):\") | .[0]] | sort) == (([\"run_id\"] + (schema(\"charts\").properties | keys)) | sort)"
+      "name": "the request fields of the schema are exactly the tool fields plus run_id, without the model-only help",
+      "expr": "doc_text(\"schemas/chart_request.graphql\") as $g | ([$g | scan(\"\\\\n  ([a-z_0-9]+):\") | .[0]] | sort) == (([\"run_id\"] + (schema(\"charts\").properties | keys | map(select(. != \"help\")))) | sort)"
     },
     {
       "name": "the result schema carries the documented fields",

@@ -4,21 +4,16 @@ use super::*;
 #[test]
 fn agent_delivery_matches_lean() {
     gents_lean_vocab::families::contracts_agent_delivery::replay::<String>(|case| {
-        let mut input = serde_json::json!({
+        let input = serde_json::json!({
             "session_id": "target", "message": "hello", "delivery": case.delivery
         });
-        if let Some(interrupt) = case.interrupt {
-            input["interrupt"] = interrupt.into();
-        }
         let args: AgentMessageArgs = serde_json::from_value(input).unwrap();
-        args.delivery().ok().map(|mode| {
-            match mode {
-                AgentMessageDelivery::Queue => "queue",
-                AgentMessageDelivery::Steer => "steer",
-                AgentMessageDelivery::Interrupt => "interrupt",
-            }
-            .to_owned()
-        })
+        match args.delivery() {
+            AgentMessageDelivery::Queue => "queue",
+            AgentMessageDelivery::Steer => "steer",
+            AgentMessageDelivery::Interrupt => "interrupt",
+        }
+        .to_owned()
     });
 }
 

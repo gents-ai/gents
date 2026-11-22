@@ -197,10 +197,6 @@ impl Tool for AgentMessageTool {
             "type": "string",
             "description": "A session_id that agent_new returned or agent_session_list shows; never an agent name (start an agent with agent_new) or this conversation's own session."
         });
-        properties["interrupt"] = serde_json::json!({
-            "type": "boolean",
-            "description": "Legacy interrupt flag; if delivery is also supplied, true requires interrupt and false requires queue or steer."
-        });
         properties["delivery"] = serde_json::json!({
             "type": "string",
             "enum": ["queue", "steer", "interrupt"],
@@ -232,8 +228,6 @@ impl Tool for AgentMessageTool {
         }
         args.body()
             .map_err(|message| invalid_arguments_error(Self::NAME, "/", message))?;
-        args.delivery()
-            .map_err(|message| invalid_arguments_error(Self::NAME, "/delivery", message))?;
         Err(not_yet_executable_error(Self::NAME))
     }
 }
@@ -590,13 +584,11 @@ impl Tool for ReadProcessTool {
         ToolDefinition {
             name: Self::NAME.to_string(),
             description: "Read an incremental, byte-addressed slice of the captured output of a manageable background process in this session, including one started on an earlier turn. \
-stdout and stderr are merged in capture order behind a single byte cursor \
-(stdout first, then a `--- stderr ---` boundary, then stderr), so you page through ALL output \
-gap-free with one `offset`. The response returns `output` (the slice), `next_offset` (= offset + \
-bytes returned; the exact cursor to pass next), `total_bytes` (total captured so far), `has_more` \
-(true when `next_offset < total_bytes`), and `exited`/`exit_code` (whether the process finished). \
-To read everything, start at offset 0 and loop with `offset = next_offset` until `has_more` is \
-false. Pages are contiguous from the cursor; nothing in the middle is dropped."
+stdout and stderr arrive interleaved in capture order behind one byte cursor, so you page through all output \
+gap-free with one `offset`. The response returns `output` (the slice), `next_offset` (the cursor to pass next), \
+`total_bytes` (captured so far), `has_more` and `exited` (whether the process finished). \
+To read everything, start at offset 0 and pass `offset = next_offset` until `has_more` is false. \
+The exit code is in the final result that wait_process returns."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -811,12 +803,37 @@ mod description_tests {
     use super::*;
 
     #[tokio::test]
+    async fn agent_message_takes_one_delivery_choice() {
+        let parameters = AgentMessageTool.definition(String::new()).await.parameters;
+        assert!(
+            parameters["properties"].get("interrupt").is_none(),
+            "{parameters}"
+        );
+        assert_eq!(
+            parameters["properties"]["delivery"]["enum"],
+            serde_json::json!(["queue", "steer", "interrupt"])
+        );
+        assert!(gents_protocol::ENGINEER_PROMPT.contains(
+            "Use `delivery: \"interrupt\"` on `agent_message` to a busy session only for urgent work"
+        ));
+    }
+
+    #[tokio::test]
     async fn read_process_description_opens_with_what_it_reads() {
         let description = ReadProcessTool.definition(String::new()).await.description;
         assert!(
             description.starts_with(
-                "Read an incremental, byte-addressed slice of the captured output of a manageable background process in this session, including one started on an earlier turn. stdout and stderr are merged"
+                "Read an incremental, byte-addressed slice of the captured output of a manageable background process in this session, including one started on an earlier turn. stdout and stderr arrive interleaved in capture order"
             ),
+            "{description}"
+        );
+        assert!(
+            !description.contains("--- stderr ---") && !description.contains("exit_code"),
+            "read_process promises no stderr boundary and no exit_code it does not return: {description}"
+        );
+        assert!(
+            description
+                .ends_with("The exit code is in the final result that wait_process returns."),
             "{description}"
         );
     }

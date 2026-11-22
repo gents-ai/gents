@@ -86,6 +86,7 @@ import Proofs.Session.CommandPolicy
 import Proofs.Tools.ToolPolicy
 import Proofs.Tools.Lsp
 import Proofs.Tools.WorkspaceRootOperations
+import Proofs.Tools.SchemaCollections
 import Proofs.P2P.Operations
 import Proofs.Clients.ServiceLifecycle
 import Proofs.Session.ToolExecution
