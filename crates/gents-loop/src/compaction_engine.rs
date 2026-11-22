@@ -63,7 +63,10 @@ where
     M: ProviderModel,
 {
     pub fn new(model: Arc<M>, mut config: crate::loop_stream::LoopConfig) -> Self {
-        config.retry_policy = crate::completion_retry::CompletionRetryPolicy::internal_immediate();
+        config.retry_policy = crate::completion_retry::CompletionRetryPolicy {
+            max_rate_limit_wait: config.retry_policy.max_rate_limit_wait,
+            ..crate::completion_retry::CompletionRetryPolicy::internal_immediate()
+        };
         Self {
             model,
             source_input_counter: None,

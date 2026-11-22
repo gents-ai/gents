@@ -820,12 +820,15 @@ impl Fixture {
         )
         .returning(Selection::doc_id())
         .render();
+        let (_, provider_limit, provider_limit_resets_at) =
+            crate::goal::blocked_turn::permit_recorded(failure, chrono::Utc::now());
         let input = json!({
             "call_id": format!("call-{request_id}"), "request_id": request_id,
             "request_doc_id": request_doc, "session_id": self.session,
             "call_seq": 1, "backend_id": backend, "agent_did": self.agent.did(),
             "node_did": self.identity.did(), "call_kind": kind, "attempt": 1,
             "call_state": "failed", "failure_reason": failure,
+            "provider_limit": provider_limit, "provider_limit_resets_at": provider_limit_resets_at,
             "queued_at": at, "started_at": at, "ended_at": at,
         });
         access.transact_write("test.goal.failed_call", |txn| {

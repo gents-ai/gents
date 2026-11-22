@@ -7,6 +7,7 @@ type InferenceRetryPolicy @policy(id: "$household", resource: "configuration") @
     max_resample_retries: Int
     allow_repair: Boolean
     interactive_max_retries: Int
+    max_rate_limit_wait_ms: Int
     tags: [String!]
     updated_at: DateTime @index(direction: DESC)
 }

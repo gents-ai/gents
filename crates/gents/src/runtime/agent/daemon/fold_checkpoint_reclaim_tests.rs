@@ -45,7 +45,6 @@ async fn create_user_message(
         parent_request_doc_id: Some(parent.doc_id.clone()),
         root_request_id: parent.request_id.clone(),
         retry_count: 1,
-        max_retries: 3,
     });
     let create = gents_session::request::lifecycle::build_signed_client_request(
         client,

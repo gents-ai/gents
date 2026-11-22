@@ -1522,5 +1522,209 @@ class TlaStructure(unittest.TestCase):
                                                      "PROPERTY": ["B"]})
 
 
+REUSE = gate.load_reuse()
+TREE = REUSE.tree(gate.ROOT)
+
+
+def changed_blob(entries, path):
+    """The tree with one file's content changed."""
+    assert any(entry[0] == path for entry in entries), path
+    return [(name, mode, "0" * 40 if name == path else blob) for name, mode, blob in entries]
+
+
+def keys_of(selection, entries=TREE):
+    return {unit: info["key"] for unit, info in gate.unit_keys(selection, MEMBERS, entries).items()}
+
+
+def some_file(crate):
+    directory = MEMBERS[crate][0] + "/"
+    return next(path for path, _, _ in TREE if path.startswith(directory) and path.endswith(".rs"))
+
+
+class ReuseKeys(unittest.TestCase):
+    """A unit is skipped only if an identical input key passed before on the
+    same platform: its key changes with every file the gate says can change it,
+    with what the plan asks of it and with its platform, and with nothing else."""
+
+    SELECTION = select("crates/gents-store/src/lib.rs", "apps/gents-desktop/package.json")
+    RUST = {unit for unit in ("lint", "test:store", "test:session", "test:cli", "test:native")}
+    TS = {"ts-packages", "ts-unit", "ts-fuzz", *(f"ts-browser:{index}/{gate.BROWSER_SHARDS}"
+                                                for index in range(1, gate.BROWSER_SHARDS + 1))}
+
+    def changed_units(self, *paths):
+        before = keys_of(self.SELECTION)
+        entries = TREE
+        for path in paths:
+            entries = changed_blob(entries, path)
+        after = keys_of(self.SELECTION, entries)
+        return {unit for unit in before if before[unit] != after[unit]}
+
+    def test_the_same_inputs_give_the_same_keys(self):
+        self.assertEqual(keys_of(self.SELECTION),
+                         keys_of(select("crates/gents-store/src/lib.rs", "apps/gents-desktop/package.json")))
+        self.assertEqual(len(set(keys_of(self.SELECTION).values())), len(keys_of(self.SELECTION)))
+        self.assertLessEqual(self.RUST | self.TS, set(keys_of(self.SELECTION)))
+
+    def test_a_crate_change_changes_the_rust_units_and_formatting_but_not_the_frontend(self):
+        for crate in ("gents-store", "gents-schemas", "gents-desktop-tauri"):
+            with self.subTest(crate=crate):
+                changed = self.changed_units(some_file(crate))
+                self.assertLessEqual(self.RUST | {"fmt", "contract"}, changed)
+                self.assertFalse(changed & self.TS)
+
+    def test_a_frontend_change_changes_the_frontend_and_rust_units_but_not_formatting(self):
+        changed = self.changed_units("apps/gents-desktop/package.json")
+        self.assertLessEqual(self.TS | self.RUST | {"contract"}, changed)
+        self.assertNotIn("fmt", changed)
+
+    def test_an_inert_change_keeps_every_key_but_the_whole_tree_contracts(self):
+        inert = [path for path, _, _ in TREE if gate.classify(path, MEMBERS) == {"inert"}]
+        self.assertTrue(inert)
+        for path in (inert[0], next(path for path in inert if path.startswith(".github/scripts/test-"))):
+            with self.subTest(path=path):
+                self.assertEqual(self.changed_units(path), {"contract"})
+
+    def test_build_inputs_and_the_gates_own_files_change_every_key(self):
+        units = set(keys_of(self.SELECTION))
+        for path in ("Cargo.lock", "rust-toolchain.toml", ".github/workflows/ci.yml", "scripts/ci/gate.py",
+                     "scripts/ci/reuse.py", ".github/actions/gate-record/action.yml", "clippy.toml"):
+            with self.subTest(path=path):
+                self.assertEqual(self.changed_units(path), units)
+
+    def test_a_new_file_in_a_closure_changes_the_key(self):
+        before = keys_of(self.SELECTION)
+        after = keys_of(self.SELECTION, [*TREE, (MEMBERS["gents-store"][0] + "/src/new.rs", "100644", "1" * 40)])
+        self.assertNotEqual(before["test:store"], after["test:store"])
+        self.assertEqual(before["ts-unit"], after["ts-unit"])
+
+    def test_what_the_plan_asks_and_the_platform_are_in_the_key(self):
+        selection = json.loads(json.dumps(self.SELECTION))
+        entry = next(entry for entry in selection["matrix"] if entry["job"] == "test:store")
+        base = keys_of(selection)["test:store"]
+        entry["runs_on"] = ROLES["macos"]["labels"]
+        self.assertNotEqual(keys_of(selection)["test:store"], base)
+        entry["runs_on"] = [*ROLES["portable"]["labels"], "ci-pr", ROLES["portable"]["host_groups"][-1]]
+        self.assertEqual(keys_of(selection)["test:store"], base, "routing labels other than the platform")
+        entry["vera"] = "" if entry["vera"] else "gents-store"
+        self.assertNotEqual(keys_of(selection)["test:store"], base)
+        lint = keys_of(selection)["lint"]
+        selection["lint_vera"] = not selection["lint_vera"]
+        self.assertNotEqual(keys_of(selection)["lint"], lint)
+
+    def test_a_pull_request_and_its_queue_entry_agree_when_nothing_else_changed(self):
+        with mock.patch.dict(os.environ, {"GATE_EVENT": "pull_request"}):
+            pull = keys_of(select("crates/gents-cli/src/main.rs"))
+        with mock.patch.dict(os.environ, {"GATE_EVENT": "merge_group"}):
+            queue = keys_of(select("crates/gents-cli/src/main.rs"))
+        # Only the Vera checks a pull request leaves to the queue differ.
+        differ = {unit for unit in pull if pull[unit] != queue.get(unit)}
+        self.assertEqual(differ, {"lint", "test:cli"})
+        self.assertEqual(set(pull), set(queue))
+
+    def test_every_selected_job_but_a_shard_is_made_of_units(self):
+        selection = sharded(1, everything=True)
+        jobs = {info["job"] for info in gate.unit_keys(selection, MEMBERS, TREE).values()}
+        self.assertEqual(jobs, set(selection["jobs"]) - {f"shard:{gate.ARCHIVE}"})
+        units = gate.unit_keys(sharded(3, everything=True), MEMBERS, TREE)
+        self.assertNotIn(f"build:{gate.ARCHIVE}", {info["job"] for info in units.values()})
+
+    def test_each_unit_names_the_platform_its_job_runs_on(self):
+        keys = gate.unit_keys(select(everything=True), MEMBERS, TREE)
+        self.assertEqual(keys["lint"]["platform"], "macOS/ARM64")
+        self.assertEqual(keys["fmt"]["platform"], "Linux/X64")
+        self.assertEqual(keys["ts-unit"]["platform"], "Linux/X64")
+        self.assertEqual(keys["test:native"]["platform"], "macOS/ARM64")
+        self.assertEqual(REUSE.platform("macos-latest"), "macOS/ARM64")
+
+
+class ReuseStore(unittest.TestCase):
+    REPOSITORY_ID = 7
+
+    def artifact(self, run, head=REPOSITORY_ID, expired=False):
+        return {"expired": expired, "workflow_run": {"id": run, "repository_id": self.REPOSITORY_ID,
+                                                     "head_repository_id": head}}
+
+    def test_only_a_live_record_of_this_repositorys_code_is_believed(self):
+        self.assertIsNone(REUSE.trusted_run([]))
+        self.assertIsNone(REUSE.trusted_run([self.artifact(1, head=99)]))
+        self.assertIsNone(REUSE.trusted_run([self.artifact(2, expired=True)]))
+        self.assertEqual(REUSE.trusted_run([self.artifact(1, head=99), self.artifact(3)]), 3)
+
+    def test_a_failed_lookup_is_a_miss(self):
+        with mock.patch.object(REUSE.subprocess, "run", side_effect=subprocess.CalledProcessError(1, "gh")), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(REUSE.lookup("o/r", ["a", "b"]), {})
+
+    def test_a_pass_is_recorded_only_on_the_platform_its_key_names(self):
+        info = {"key": "k" * 64, "platform": "Linux/X64", "job": "fmt"}
+        with tempfile.TemporaryDirectory() as directory, contextlib.redirect_stdout(io.StringIO()):
+            environment = {"RUNNER_OS": "macOS", "RUNNER_ARCH": "ARM64", "RUNNER_TEMP": directory}
+            self.assertIsNone(REUSE.record("fmt", info, environment))
+            self.assertIsNone(REUSE.record("fmt", None, environment))
+            environment.update(RUNNER_OS="Linux", RUNNER_ARCH="X64", GITHUB_RUN_ID="5")
+            name, path = REUSE.record("fmt", info, environment)
+            self.assertEqual(name, "gate-pass-" + info["key"])
+            self.assertEqual(json.loads((Path(path) / "record.json").read_text())["run_id"], "5")
+
+
+class ReusePlan(unittest.TestCase):
+    def reused(self, selection, units):
+        keys = gate.unit_keys(selection, MEMBERS, TREE)
+        found = {keys[unit]["key"]: 42 for unit in units}
+        with mock.patch.object(REUSE, "lookup", lambda repository, wanted: found):
+            return gate.apply_reuse(selection, MEMBERS, True, "o/r", TREE)
+
+    def test_a_reused_unit_leaves_its_matrix_and_a_wholly_reused_job_does_not_run(self):
+        selection = self.reused(sharded(1, everything=True), {"test:native", "ts-unit", "lint"})
+        self.assertNotIn("test:native", {entry["job"] for entry in selection["matrix"]})
+        self.assertIn("test:macos-only", {entry["job"] for entry in selection["matrix"]})
+        self.assertEqual([entry["unit"] for entry in selection["desktop_ui"]],
+                         [f"ts-browser:{index}/{gate.BROWSER_SHARDS}" for index in range(1, gate.BROWSER_SHARDS + 1)])
+        self.assertEqual(set(selection["jobs"]) - set(selection["run"]), {"test:native", "ts-unit", "lint"})
+        self.assertEqual(gate.reused_jobs(selection), {"test:native", "ts-unit", "lint"})
+
+    def test_record_mode_looks_nothing_up(self):
+        with mock.patch.object(REUSE, "lookup", side_effect=AssertionError("looked up")):
+            selection = gate.apply_reuse(select(everything=True), MEMBERS, False, "o/r", TREE)
+        self.assertEqual(selection["run"], selection["jobs"])
+        self.assertFalse(any(info["run"] for info in selection["reuse"].values()))
+
+    def test_the_gate_passes_a_skipped_job_only_when_every_unit_was_reused(self):
+        selection = self.reused(select("crates/gents-store/src/lib.rs"), {"test:store", "lint"})
+        needs = {name: {"result": "success"} for name in gate.ALWAYS}
+        needs.update({name: {"result": "success"} for name in set(gate.WORKFLOW_JOBS.values()) | set(gate.MATRIX_JOBS)})
+        needs["plan"]["outputs"] = {"plan": json.dumps(selection)}
+        needs["lint"] = {"result": "skipped"}
+        self.assertEqual(gate.verdict(needs), [])
+        partial = self.reused(select("crates/gents-store/src/lib.rs"), {"test:store"})
+        needs["plan"]["outputs"] = {"plan": json.dumps(partial)}
+        self.assertEqual(gate.verdict(needs), ["lint: the plan selected lint but it was skipped"])
+        needs["lint"] = {"result": "success"}
+        needs["test"] = {"result": "failure"}
+        self.assertTrue(any(problem.startswith("test:") for problem in gate.verdict(needs)))
+        report = gate.reuse_report(selection, "o/r")
+        self.assertIn("| `test:store` | reused [run 42](", report)
+        self.assertIn("| `test:cli` | ran |", report)
+
+    def test_only_pull_requests_and_queue_entries_look_up(self):
+        step = CI.split("- name: Select gate jobs", 1)[1].split("\n      - ", 1)[0]
+        mode = re.search(r"GATE_REUSE: >-\n((?:            .*\n)+)", step).group(1)
+        self.assertEqual(" ".join(mode.split()), "${{ (github.event_name == 'pull_request' || "
+                         "github.event_name == 'merge_group') && 'lookup' || 'record' }}")
+        self.assertIn("actions: read", workflow_jobs(CI)["plan"])
+
+    def test_every_job_that_runs_a_unit_records_it_last(self):
+        jobs = workflow_jobs(CI)
+        for job in sorted(set(gate.WORKFLOW_JOBS.values()) | {"test", "build"}):
+            with self.subTest(job=job):
+                steps = jobs[job].split("\n      - ")
+                self.assertIn("uses: ./.github/actions/gate-record", steps[-1])
+                self.assertIn("if: success()", steps[-1])
+        action = (gate.ROOT / ".github/actions/gate-record/action.yml").read_text()
+        self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", action)
+        self.assertIn(f"retention-days: {REUSE.RETENTION_DAYS}", action)
+        self.assertIn("matrix: ${{ fromJSON(needs.plan.outputs.desktop_ui) }}", jobs["desktop-ui"])
+
+
 if __name__ == "__main__":
     unittest.main()

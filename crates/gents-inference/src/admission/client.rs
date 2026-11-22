@@ -32,6 +32,10 @@ pub struct AdmittedCompletionModel<M> {
     connection: Arc<str>,
     pub(crate) model_name: Option<String>,
     pub(crate) profile_id: Option<String>,
+    /// The agent's rate-limit wait cap, which the owned loop driving this
+    /// model holds; each call's permit records its provider-limit verdict
+    /// under it.
+    max_rate_limit_wait: std::time::Duration,
     pub(crate) separate_reasoning: bool,
     pub agent_signer: Option<gents_store::identity::ManagedAgentSigner>,
     /// The call this model was built for.
@@ -49,6 +53,7 @@ where
             connection: self.connection.clone(),
             model_name: self.model_name.clone(),
             profile_id: self.profile_id.clone(),
+            max_rate_limit_wait: self.max_rate_limit_wait,
             separate_reasoning: self.separate_reasoning,
             agent_signer: self.agent_signer.clone(),
             call: call.clone(),
@@ -57,13 +62,19 @@ where
 }
 
 impl<M> AdmittedCompletionModel<M> {
-    pub fn new(inner: M, admission: AdmissionRegistry, connection: impl Into<Arc<str>>) -> Self {
+    pub fn new(
+        inner: M,
+        admission: AdmissionRegistry,
+        connection: impl Into<Arc<str>>,
+        max_rate_limit_wait: std::time::Duration,
+    ) -> Self {
         Self {
             inner,
             admission,
             connection: connection.into(),
             model_name: None,
             profile_id: None,
+            max_rate_limit_wait,
             separate_reasoning: false,
             agent_signer: None,
             call: ProviderCall::default(),
@@ -87,6 +98,7 @@ impl<M> AdmittedCompletionModel<M> {
                 &self.connection,
                 self.model_name.as_deref(),
                 self.profile_id.as_deref(),
+                self.max_rate_limit_wait,
                 self.agent_signer.clone(),
             )
             .await
@@ -134,6 +146,7 @@ pub(super) fn next_call(
     runtime_instance_id: &str,
     model_name: Option<&str>,
     profile_id: Option<&str>,
+    max_rate_limit_wait: std::time::Duration,
     agent_signer: Option<gents_store::identity::ManagedAgentSigner>,
 ) -> PendingCallMetadata {
     let (call_seq, join) = context.mint(uuid::Uuid::new_v4().to_string());
@@ -148,6 +161,7 @@ pub(super) fn next_call(
         requester_did: context.requester_did().map(str::to_owned),
         model_name: model_name.map(str::to_owned),
         profile_id: profile_id.map(str::to_owned),
+        max_rate_limit_wait,
         call_seq,
         backend_id: context.backend_id().to_owned(),
         agent_did: context.agent_did().to_owned(),

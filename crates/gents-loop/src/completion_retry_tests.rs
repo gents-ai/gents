@@ -127,6 +127,73 @@ fn rate_limited_uses_provider_hint_when_larger_than_ladder() {
 }
 
 #[test]
+fn rate_limit_wait_beyond_the_cap_fails_as_usage_limited_whatever_budget_remains() {
+    let now = Utc::now();
+    let wait = crate::provider_limit::LONG_RATE_LIMIT_WAIT + Duration::from_secs(1);
+    let error = InferenceError::RateLimited {
+        retry_after: Some(wait),
+    };
+    for policy in [
+        CompletionRetryPolicy::scheduled_default(),
+        CompletionRetryPolicy::no_retry(),
+    ] {
+        let mut state = CompletionRetryState::new(policy);
+        let failure = state.read_failure(classified(&error, "rate limited"), now);
+        let InferenceError::UsageLimited(limit) = &failure.error else {
+            panic!("expected a usage limit, got {:?}", failure.error);
+        };
+        assert_eq!(
+            limit.resets_at,
+            Some(now + chrono::Duration::milliseconds(wait.as_millis() as i64))
+        );
+        match state.on_pre_stream_failure(&failure, now, None) {
+            PreStreamDirective::Fail { reason } => assert_eq!(reason, limit.to_string()),
+            other => panic!("expected Fail, got {other:?}"),
+        }
+        assert_eq!(state.retry_count(), 0);
+    }
+}
+
+#[test]
+fn raising_the_cap_holds_a_longer_rate_limit_wait() {
+    let now = Utc::now();
+    let wait = Duration::from_secs(10 * 60);
+    let mut state = CompletionRetryState::new(CompletionRetryPolicy {
+        max_rate_limit_wait: Duration::from_secs(15 * 60),
+        ..CompletionRetryPolicy::scheduled_default()
+    });
+    let error = InferenceError::RateLimited {
+        retry_after: Some(wait),
+    };
+    let failure = state.read_failure(classified(&error, "rate limited"), now);
+    assert!(matches!(failure.error, InferenceError::RateLimited { .. }));
+    match state.on_pre_stream_failure(&failure, now, None) {
+        PreStreamDirective::RetryAfter { delay, kind } => {
+            assert_eq!(kind, RetryKind::Transport);
+            assert_in_range(delay, 450_000, 750_000);
+        }
+        other => panic!("expected RetryAfter, got {other:?}"),
+    }
+}
+
+#[test]
+fn default_backoff_steps_are_clamped_to_a_lower_cap() {
+    let now = Utc::now();
+    let mut state = CompletionRetryState::new(CompletionRetryPolicy {
+        max_rate_limit_wait: Duration::from_secs(10),
+        ..CompletionRetryPolicy::scheduled_default()
+    });
+    for _ in 0..3 {
+        match state.on_mid_stream_failure(false, now, None) {
+            MidStreamDirective::RetractAndResample { delay } => {
+                assert!(delay <= Duration::from_secs(10), "{delay:?}");
+            }
+            other => panic!("expected RetractAndResample, got {other:?}"),
+        }
+    }
+}
+
+#[test]
 fn fresh_parse_400_deadline_overshoot_fails_immediately_not_repair() {
     let policy = CompletionRetryPolicy {
         transport_backoff: vec![Duration::from_secs(30)],
@@ -134,6 +201,7 @@ fn fresh_parse_400_deadline_overshoot_fails_immediately_not_repair() {
         max_empty_resample: 1,
         allow_repair: true,
         account_hops: 0,
+        max_rate_limit_wait: crate::provider_limit::LONG_RATE_LIMIT_WAIT,
     };
     let mut state = CompletionRetryState::new(policy);
     let now = Utc::now();
@@ -507,6 +575,7 @@ fn replay_retry_trace(trace: &RetryTrace) -> Vec<RetryTraceOutcome> {
         max_empty_resample: trace.policy.max_empty_resample,
         allow_repair: trace.policy.allow_repair,
         account_hops: trace.policy.account_hops,
+        max_rate_limit_wait: Duration::MAX,
     });
     let mut now = chrono::DateTime::from_timestamp(trace.now, 0).expect("modeled clock");
     let deadline = trace
@@ -596,4 +665,58 @@ fn no_visible_output_retry_traces_follow_the_lean_directive_projection() {
             trace,
         )))
     });
+}
+
+#[test]
+fn provider_limit_verdicts_follow_the_executable_model() {
+    use gents_lean_vocab::families::inference_provider_limit_verdicts as family;
+    use gents_protocol::provider_limit::ProviderLimitVerdict;
+    let at = |seconds: u64| {
+        chrono::DateTime::<Utc>::UNIX_EPOCH
+            + chrono::Duration::seconds(i64::try_from(seconds).unwrap())
+    };
+    family::replay::<ProviderLimitVerdict>(|input: &family::VerdictInput| {
+        let now = at(input.now);
+        let error = if input.usage_exhausted {
+            InferenceError::UsageLimited(crate::provider_limit::UsageLimit {
+                resets_at: input.reported_at.map(at),
+                detail: String::new(),
+            })
+        } else {
+            InferenceError::RateLimited {
+                retry_after: input
+                    .reported_at
+                    .map(|wake| Duration::from_secs(wake.saturating_sub(input.now))),
+            }
+        };
+        let cap = input.max_wait.map_or(Duration::MAX, Duration::from_secs);
+        let recorded = provider_limit_verdict(&classified(&error, ""), now, cap)
+            .expect("a throttle or a usage exhaustion is a provider limit")
+            .recorded();
+        let read = CompletionRetryState::new(CompletionRetryPolicy {
+            max_rate_limit_wait: cap,
+            ..CompletionRetryPolicy::scheduled_default()
+        })
+        .read_failure(classified(&error, ""), now);
+        assert_eq!(
+            failure_class(&read) == FailureClass::Permanent,
+            recorded.verdict == ProviderLimitVerdict::UsageLimited,
+            "the loop retries exactly the throttles the call records"
+        );
+        family::VerdictOutput {
+            verdict: recorded.verdict,
+            resets_at: recorded
+                .resets_at
+                .map(|reset| u64::try_from(reset.timestamp()).unwrap()),
+        }
+    });
+}
+
+#[test]
+fn provider_limit_verdict_names_follow_the_executable_model() {
+    use gents_protocol::provider_limit::ProviderLimitVerdict;
+    gents_lean_vocab::families::inference_call_provider_limit_verdict_vocabulary::replay(&[
+        ProviderLimitVerdict::Throttled,
+        ProviderLimitVerdict::UsageLimited,
+    ]);
 }

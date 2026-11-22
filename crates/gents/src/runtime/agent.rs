@@ -603,6 +603,7 @@ pub(crate) fn agent_config_from_documents(
     let resolved_max_turns = inference.max_turns()?;
     let max_invalid_tool_calls = inference.max_invalid_tool_calls()?;
     let repeated_tool_failure_limit = inference.repeated_tool_failure_limit()?;
+    let max_request_retries = inference.max_request_retries()?;
     anyhow::ensure!(
         agent_config.node_did == principal.node_did,
         "Agent {} belongs to a different runtime node",
@@ -652,6 +653,7 @@ pub(crate) fn agent_config_from_documents(
         max_total_tokens,
         max_invalid_tool_calls,
         repeated_tool_failure_limit,
+        max_request_retries,
         system_prompt: context
             .and_then(|context| context.system_prompt.clone())
             .unwrap_or_default(),
@@ -662,13 +664,7 @@ pub(crate) fn agent_config_from_documents(
         provider_idle_timeout: Duration::from_secs(provider_idle_secs),
         title_timeout: Duration::from_secs(title_secs),
         deadline_duration: Duration::from_secs(deadline_duration_secs),
-        completion_retry: gents_loop::completion_retry::CompletionRetryProfileFields {
-            retry_max_transport: retry.max_transport_retries,
-            retry_backoff_ms: retry.backoff_ms,
-            retry_max_resample: retry.max_resample_retries,
-            retry_allow_repair: retry.allow_repair,
-            retry_interactive_max: retry.interactive_max_retries,
-        },
+        completion_retry: retry.completion_retry_fields(),
         sampling: inference.sampling_config()?,
         skills,
         oauth_pool,

@@ -2620,7 +2620,7 @@ mod tests {
                         request_id: "{}", purpose: "normal", node_did: "{node_did}",
                         requester_did: "{node_did}", agent_did: "{escaped_agent_did}", session_id: "{}",
                         content: "sibling turn", lifecycle_state: "pending",
-                        created_at: "{}", retry_count: 0, max_retries: 3, request_hop: 0
+                        created_at: "{}", retry_count: 0, request_hop: 0
                     }}) {{ _docID }} }}"#,
                         gents_store::graphql::escape_graphql_string(sibling_request_id),
                         gents_store::graphql::escape_graphql_string(session_id),
@@ -2787,7 +2787,7 @@ mod tests {
                             session_id: "skew-session", content: "run the disallowed skill",
                             lifecycle_state: "pending", created_at: "2026-09-01T00:00:00Z",
                             input: {{ future_field: "written by a newer runtime" }},
-                            retry_count: 0, max_retries: 3, request_hop: 0
+                            retry_count: 0, request_hop: 0
                         }}) {{ _docID }} }}"#
                         ),
                         "AgentRequest",

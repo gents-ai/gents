@@ -313,7 +313,6 @@ pub struct AgentRequestSigningFields<'a> {
     pub caused_by_source_doc_id: Option<&'a str>,
     pub created_at: &'a str,
     pub retry_count: Option<i64>,
-    pub max_retries: Option<i64>,
     pub valid_until: Option<&'a str>,
     pub request_hop: u32,
     pub caused_by_parent_request_id: Option<&'a str>,
@@ -673,7 +672,6 @@ impl AgentRequestAdmissionRecord {
         push_option(&mut fields, request.caused_by_source_doc_id);
         push_text(&mut fields, request.created_at);
         push_i64(&mut fields, request.retry_count);
-        push_i64(&mut fields, request.max_retries);
         push_option(&mut fields, request.valid_until);
         push_text(&mut fields, &request.request_hop.to_string());
         push_option(&mut fields, request.caused_by_parent_request_id);
@@ -989,7 +987,6 @@ pub struct AgentRequestCreate {
     pub caused_by_source_doc_id: Option<String>,
     pub created_at: String,
     pub retry_count: i64,
-    pub max_retries: i64,
     pub valid_until: Option<String>,
     pub request_hop: u32,
     pub caused_by_parent_request_id: Option<String>,
@@ -1069,7 +1066,6 @@ impl AgentRequestCreate {
             caused_by_source_doc_id: None,
             created_at: created_at.into(),
             retry_count: 0,
-            max_retries: 3,
             valid_until: None,
             request_hop: 0,
             caused_by_parent_request_id: None,
@@ -1110,7 +1106,6 @@ impl AgentRequestCreate {
             caused_by_source_doc_id: self.caused_by_source_doc_id.as_deref(),
             created_at: &self.created_at,
             retry_count: Some(self.retry_count),
-            max_retries: Some(self.max_retries),
             valid_until: self.valid_until.as_deref(),
             request_hop: self.request_hop,
             caused_by_parent_request_id: self.caused_by_parent_request_id.as_deref(),
@@ -1228,7 +1223,6 @@ impl AgentRequestCreate {
         );
         text(&mut fields, "created_at", &self.created_at);
         fields.push(format!("retry_count: {}", self.retry_count));
-        fields.push(format!("max_retries: {}", self.max_retries));
         optional_text(&mut fields, "valid_until", self.valid_until.as_deref());
         fields.push(format!("request_hop: {}", self.request_hop));
         optional_text(
@@ -1385,7 +1379,7 @@ _docID request_id purpose node_did requester_did agent_did session_id session_do
                 caused_by_trigger_context caused_by_source_doc_id caused_by_trigger_doc_id
                 created_at deadline backend_id execution_generation execution_lease_expires_at retry_count
                 execution_lease_secs background_completion_input_through_sequence background_completion_notification_keys_json
-                max_retries valid_until request_hop caused_by_parent_request_id
+                valid_until request_hop caused_by_parent_request_id
                 caused_by_parent_request_doc_id caused_by_parent_tool_call_id
                 caused_by_parent_tool_call_doc_id workspace_id workspace_owner_node_did workspace_authority
                 workspace_seal_hash admission_kind

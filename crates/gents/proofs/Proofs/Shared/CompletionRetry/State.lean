@@ -53,6 +53,15 @@ structure Budget where
   allowRepair : Bool
   /-- Other eligible accounts when the attempt was issued; one rotation each. -/
   accountHops : Nat := 0
+  /-- Longest transport wait the policy holds before a retry, and the single
+  threshold between a provider throttle and the provider's usage limit. The
+  policy's own backoff never exceeds it (configured steps are validated against
+  it and default steps are clamped to it), so a wake beyond it is the provider's
+  rate-limit wait: the completion fails as usage-limited, resetting at that wake,
+  before any budget or deadline is consulted, instead of holding the request
+  until a distant retry time. `none` leaves the wait bounded only by the
+  deadline. -/
+  maxWait : Option Time := none
   deriving DecidableEq, Repr
 
 /-- Retry policy begins before publication. Accepted phases are absorbing
@@ -103,6 +112,16 @@ def fitsDeadline (wake : Time) (deadline : Option Time) : Prop :=
 instance (wake : Time) (deadline : Option Time) : Decidable (fitsDeadline wake deadline) := by
   unfold fitsDeadline
   cases deadline <;> infer_instance
+
+def withinMaxWait (now wake : Time) (maxWait : Option Time) : Prop :=
+  match maxWait with
+  | none => True
+  | some cap => wake ≤ now + cap
+
+instance (now wake : Time) (maxWait : Option Time) :
+    Decidable (withinMaxWait now wake maxWait) := by
+  unfold withinMaxWait
+  cases maxWait <;> infer_instance
 
 def State.accepted (s : State) : Prop :=
   (∃ header, s.phase = .accepted header) ∨

@@ -233,6 +233,7 @@ fn test_agent_with_identity(
         max_total_tokens: None,
         max_invalid_tool_calls: gents_loop::loop_stream::DEFAULT_MAX_INVALID_TOOL_CALLS,
         repeated_tool_failure_limit: gents_loop::loop_stream::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
+        max_request_retries: gents_documents::inference_defaults::DEFAULT_REQUEST_MAX_RETRIES,
         stream_batch_ms: gents_inference::resolved::DEFAULT_STREAM_BATCH_MS,
         stream_liveness_timeout: Duration::from_secs(
             gents_documents::inference_defaults::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
@@ -1385,6 +1386,9 @@ async fn seed_failed_call_from_access(
         ended_at,
         failure_reason,
     } = call;
+    let (_, provider_limit, provider_limit_resets_at) =
+        crate::goal::blocked_turn::permit_recorded(failure_reason, chrono::Utc::now());
+    let (provider_limit, provider_limit_resets_at) = (&provider_limit, &provider_limit_resets_at);
     access.transact_write("test.goal_failed_call", |txn| {
         Box::pin(async move {
             let response = txn.execute_with_variables(
@@ -1394,7 +1398,8 @@ async fn seed_failed_call_from_access(
                     "session_id": SESSION, "agent_did": agent.did(), "backend_id": format!("{}:backend", agent.did()),
                     "call_seq": 1, "call_kind": call_kind, "attempt": attempt, "call_state": "failed",
                     "queued_at": "2026-07-15T00:00:00Z", "started_at": "2026-07-15T00:00:00Z",
-                    "ended_at": ended_at, "failure_reason": failure_reason}}),
+                    "ended_at": ended_at, "failure_reason": failure_reason,
+                    "provider_limit": provider_limit, "provider_limit_resets_at": provider_limit_resets_at}}),
             ).await?;
             let doc = gents_store::graphql::created_doc_id(&response, "InferenceCall")?;
             txn.add_resource_relationship("InferenceCall", &doc, "parent", "sessions", session_doc).await?;
@@ -3562,7 +3567,7 @@ async fn openrouter_credits_402_moves_active_goal_to_usage_limited() {
     let (_user, agent, access) = goal_recovery_actors(&db, "usage-limited-request", "failed").await;
     let request = access.execute("{AgentRequest(filter: {request_id: {_eq: \"usage-limited-request\"}}) {_docID session_doc_id}}").await.unwrap();
     let parent = &request["data"]["AgentRequest"][0];
-    let reason = gents_loop::provider_limit::persisted_failure_reason(
+    let (reason, _, _) = crate::goal::blocked_turn::permit_recorded(
         r#"HttpError: Invalid status code 402 Payment Required with message: {"error":{"code":402,"message":"Insufficient credits. Add more using https://openrouter.ai/credits"}}"#,
         chrono::Utc::now(),
     );
@@ -4062,7 +4067,7 @@ async fn operator_resume_rejects_corrupted_child_receipt_without_reactivation() 
     .unwrap();
     let original = client.execute(&format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{
-            request_id purpose node_did requester_did session_doc_id agent_doc_id admission_kind admission_signer_did admission_signature enrollment_request_id enrollment_request_digest enrollment_admin_did enrollment_authorization_sequence enrollment_authorization_expires_at runtime_issuer_did runtime_source_request_id runtime_source_kind agent_did session_id retry_parent_request retry_parent_request_doc_id retry_root_request retry_key content max_total_tokens input execution_origin caused_by_trigger_id caused_by_trigger_doc_id caused_by_trigger_kind caused_by_correlation caused_by_trigger_context caused_by_source_doc_id created_at retry_count max_retries valid_until request_hop caused_by_parent_request_id caused_by_parent_request_doc_id caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id workspace_id workspace_authority workspace_owner_node_did workspace_seal_hash lifecycle_state
+            request_id purpose node_did requester_did session_doc_id agent_doc_id admission_kind admission_signer_did admission_signature enrollment_request_id enrollment_request_digest enrollment_admin_did enrollment_authorization_sequence enrollment_authorization_expires_at runtime_issuer_did runtime_source_request_id runtime_source_kind agent_did session_id retry_parent_request retry_parent_request_doc_id retry_root_request retry_key content max_total_tokens input execution_origin caused_by_trigger_id caused_by_trigger_doc_id caused_by_trigger_kind caused_by_correlation caused_by_trigger_context caused_by_source_doc_id created_at retry_count valid_until request_hop caused_by_parent_request_id caused_by_parent_request_doc_id caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id workspace_id workspace_authority workspace_owner_node_did workspace_seal_hash lifecycle_state
         }} }}"#, gents_store::graphql::escape_graphql_string(&first.doc_id),
     )).await.unwrap();
     let mut forged = original["data"]["AgentRequest"][0].clone();
