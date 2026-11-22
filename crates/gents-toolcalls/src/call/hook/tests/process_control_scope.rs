@@ -47,6 +47,9 @@ use gents_store::identity::NodeIdentity;
 struct PendingTool;
 
 impl ToolDyn for PendingTool {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         "slow_tool".into()
     }

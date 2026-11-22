@@ -123,6 +123,9 @@ fn error(kind: &str) -> CompletionError {
 
 struct Echo;
 impl ToolDyn for Echo {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         "echo".into()
     }

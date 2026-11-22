@@ -383,6 +383,7 @@ pub fn generate_pack(dir: &Path, name: &str, run: &DynamicRun) -> Result<Generat
         "tools": [{
             "tools_id": format!("{kebab}-caller"),
             "display_name": format!("{name} caller: the workflow tool over its targets"),
+            "agents": {"target_ids": run.targets},
             "integrations": {"plugins": [{
                 "plugin": plugin,
                 "job": {
@@ -722,6 +723,7 @@ mod tests {
         let plugin = &tools[0]["integrations"]["plugins"][0];
         assert_eq!(plugin["plugin"], "gents/rome");
         assert_eq!(plugin["job"]["agent_targets"], json!(["wf-read-only"]));
+        assert_eq!(tools[0]["agents"], json!({"target_ids": ["wf-read-only"]}));
         assert_eq!(plugin["job"]["policy"]["dynamic"], "off");
         for absent in ["agents", "contexts", "agent_targets"] {
             assert!(config.get(absent).is_none(), "{absent}");
