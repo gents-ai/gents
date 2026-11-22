@@ -964,3 +964,27 @@ async fn a_run_frozen_without_the_file_falls_back_to_the_live_definition() {
     .unwrap();
     assert_eq!(thawed.definition, frozen.definition);
 }
+
+#[test]
+fn a_definitions_core_packs_must_be_core_packs_the_build_carries() {
+    use super::validate::validate_core_packs;
+    let mut definition: EvalDefinition = serde_json::from_value(json!({
+        "definition_id": "core-packs",
+        "node_did": "did:key:owner",
+        "comparability_version": 1,
+        "subject": {"kind": "agent", "core_packs": ["gents/script"]},
+        "cases": [{"case_id": "c", "split": "train", "stages": [{"stage_id": "s", "prompt": "p",
+            "checks": [{"check": "tool_calls_expected", "params": {"required": ["script"]}, "tier": "acceptance"}]}]}]
+    }))
+    .unwrap();
+    let carried: &[(&str, &[u8])] = &[("gents/script", b"archive")];
+    validate_core_packs(&definition, carried).unwrap();
+    let missing = refusal(&validate_core_packs(&definition, &[]).unwrap_err());
+    assert!(
+        missing.contains("gents/script") && missing.contains("make core-packs"),
+        "{missing}"
+    );
+    definition.subject.core_packs = vec!["gents/nonesuch".into()];
+    let unknown = refusal(&validate_core_packs(&definition, carried).unwrap_err());
+    assert!(unknown.contains("is not a core pack"), "{unknown}");
+}
