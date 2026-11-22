@@ -22,12 +22,18 @@ struct AssignmentTestRuntime {
     active: tokio::sync::Mutex<std::collections::BTreeSet<String>>,
     bodies: tokio::sync::Mutex<std::collections::BTreeSet<String>>,
     fail_stop: std::sync::atomic::AtomicBool,
+    block_active: std::sync::atomic::AtomicBool,
+    active_entered: tokio::sync::Notify,
     changed: tokio::sync::Notify,
 }
 
 #[async_trait::async_trait]
 impl crate::config_client::assignment_receiver::AssignmentRuntime for AssignmentTestRuntime {
     async fn active(&self) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
+        if self.block_active.load(std::sync::atomic::Ordering::SeqCst) {
+            self.active_entered.notify_one();
+            std::future::pending::<()>().await;
+        }
         Ok(self.active.lock().await.iter().cloned().collect())
     }
 
@@ -58,6 +64,50 @@ impl crate::config_client::assignment_receiver::AssignmentRuntime for Assignment
         self.changed.notify_one();
         Ok(true)
     }
+}
+
+#[tokio::test]
+async fn shutdown_cancels_a_pending_assignment_runtime_callback(
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let home = home(Provider::Vera).await?;
+    let access = home.runtime()?;
+    access
+        .add_collection(
+            &crate::local::document_acp::node_policy_ids(&home.node)
+                .render(gents_protocol::schemas::CERTIFIED_ASSIGNMENT_STATE),
+        )
+        .await?;
+    let scope = crate::config_client::assignment_receiver::AssignmentScope {
+        policy: crate::local::document_acp::node_policy_ids(&home.node)
+            .id(gents_protocol::schemas::BuiltInPolicy::Household)
+            .to_owned(),
+        resource: "nodes".into(),
+        relation: "runtime_reader".into(),
+        issuer: home.owner.did().into(),
+        node_document: home.node_doc.clone(),
+    };
+    let runtime = Arc::new(AssignmentTestRuntime::default());
+    runtime
+        .block_active
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let ids = crate::subscription_source::collection_ids(&home.node, ["Node"])?;
+    let (shutdown, stop) = tokio::sync::watch::channel(false);
+    let watcher = tokio::spawn({
+        let runtime = runtime.clone();
+        async move {
+            access
+                .watch_assignments(&scope, runtime.as_ref(), ids, stop)
+                .await
+        }
+    });
+    tokio::time::timeout(
+        crate::test_support::STALL_CEILING,
+        runtime.active_entered.notified(),
+    )
+    .await?;
+    shutdown.send(true)?;
+    tokio::time::timeout(crate::test_support::STALL_CEILING, watcher).await???;
+    Ok(())
 }
 
 #[tokio::test]

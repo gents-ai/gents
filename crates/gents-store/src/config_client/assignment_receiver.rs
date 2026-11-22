@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::error::Error;
+use std::future::Future;
 use std::time::Duration;
 
 use super::{
@@ -268,6 +269,31 @@ async fn create_state(
     Ok(())
 }
 
+fn stop_for_shutdown(requested: bool, closed: bool) -> bool {
+    requested || closed
+}
+
+async fn interruptible<T>(
+    future: impl Future<Output = T>,
+    shutdown: &mut Option<&mut tokio::sync::watch::Receiver<bool>>,
+) -> Option<T> {
+    let Some(shutdown) = shutdown.as_deref_mut() else {
+        return Some(future.await);
+    };
+    tokio::pin!(future);
+    loop {
+        if stop_for_shutdown(*shutdown.borrow(), false) {
+            return None;
+        }
+        tokio::select! {
+            result = &mut future => return Some(result),
+            changed = shutdown.changed() => {
+                if stop_for_shutdown(*shutdown.borrow(), changed.is_err()) { return None; }
+            }
+        }
+    }
+}
+
 impl ConfigAccess {
     pub async fn watch_assignments<R>(
         &self,
@@ -291,8 +317,12 @@ impl ConfigAccess {
                 return Ok(());
             }
             while heights.try_recv().is_ok() {}
-            let retry = match self.refresh_assignments(scope, runtime).await {
-                Ok(_) => false,
+            let retry = match self
+                .refresh_assignments_inner(scope, runtime, Some(&mut shutdown))
+                .await
+            {
+                Ok(None) => return Ok(()),
+                Ok(Some(_)) => false,
                 Err(error) if error.retryable() => true,
                 Err(error) => return Err(error),
             };
@@ -334,6 +364,20 @@ impl ConfigAccess {
     where
         R: AssignmentRuntime,
     {
+        self.refresh_assignments_inner(scope, runtime, None)
+            .await?
+            .ok_or(ReceiverError::InvalidState("unexpected shutdown"))
+    }
+
+    async fn refresh_assignments_inner<R>(
+        &self,
+        scope: &AssignmentScope,
+        runtime: &R,
+        mut shutdown: Option<&mut tokio::sync::watch::Receiver<bool>>,
+    ) -> Result<Option<AssignmentState>, ReceiverError>
+    where
+        R: AssignmentRuntime,
+    {
         let subject = self.actor_did().ok_or(ReceiverError::MissingIdentity)?;
         let key = scope_key(&subject, scope);
         let ConfigAccess::Local(local) = self else {
@@ -358,15 +402,21 @@ impl ConfigAccess {
             position: certified.position,
             assigned,
         };
-        let active = runtime.active().await.map_err(ReceiverError::Runtime)?;
+        let Some(active) = interruptible(runtime.active(), &mut shutdown).await else {
+            return Ok(None);
+        };
+        let active = active.map_err(ReceiverError::Runtime)?;
         for id in &active {
             if !next.assigned.contains(id)
-                || !runtime
-                    .has_verified_body(id)
-                    .await
-                    .map_err(ReceiverError::Runtime)?
+                || !match interruptible(runtime.has_verified_body(id), &mut shutdown).await {
+                    Some(result) => result.map_err(ReceiverError::Runtime)?,
+                    None => return Ok(None),
+                }
             {
-                runtime.stop(id).await.map_err(ReceiverError::Runtime)?;
+                let Some(result) = interruptible(runtime.stop(id), &mut shutdown).await else {
+                    return Ok(None);
+                };
+                result.map_err(ReceiverError::Runtime)?;
             }
         }
         let committed = self
@@ -374,22 +424,52 @@ impl ConfigAccess {
                 Box::pin(persist(txn, &key, &subject, scope, &next))
             })
             .await?;
-        let active = runtime.active().await.map_err(ReceiverError::Runtime)?;
+        let Some(active) = interruptible(runtime.active(), &mut shutdown).await else {
+            return Ok(None);
+        };
+        let active = active.map_err(ReceiverError::Runtime)?;
         for id in &committed.assigned {
             if !active.contains(id) {
-                runtime
-                    .start_if_verified(id)
-                    .await
-                    .map_err(ReceiverError::Runtime)?;
+                let Some(result) =
+                    interruptible(runtime.start_if_verified(id), &mut shutdown).await
+                else {
+                    return Ok(None);
+                };
+                result.map_err(ReceiverError::Runtime)?;
             }
         }
-        Ok(committed)
+        Ok(Some(committed))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn false_shutdown_update_preserves_the_pending_callback() {
+        use std::task::{Context, Poll};
+        let (sender, mut receiver) = tokio::sync::watch::channel(false);
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let pending = async {
+            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            std::future::pending::<()>().await
+        };
+        let mut shutdown = Some(&mut receiver);
+        let future = interruptible(pending, &mut shutdown);
+        tokio::pin!(future);
+        let waker = futures::task::noop_waker();
+        let mut context = Context::from_waker(&waker);
+        assert!(matches!(future.as_mut().poll(&mut context), Poll::Pending));
+        sender.send(false).unwrap();
+        assert!(matches!(future.as_mut().poll(&mut context), Poll::Pending));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        sender.send(true).unwrap();
+        assert!(matches!(
+            future.as_mut().poll(&mut context),
+            Poll::Ready(None)
+        ));
+    }
 
     fn state(term: u64, height: u64, hash: &str, assigned: &[&str]) -> AssignmentState {
         AssignmentState {
@@ -454,6 +534,9 @@ mod tests {
 
     #[test]
     fn assignment_admission_matches_the_model() {
+        gents_lean_vocab::families::assignment_receiver_stop_for_shutdown::replay(|input| {
+            stop_for_shutdown(input.requested, input.closed)
+        });
         gents_lean_vocab::families::assignment_receiver_retry::replay(|input| {
             retry(input.unavailable, input.overtaken)
         });

@@ -42,6 +42,14 @@ def permits (assigned bodyVerified : Bool) : Bool := assigned && bodyVerified
 
 def retry (unavailable overtaken : Bool) : Bool := unavailable || overtaken
 
+/-- A closed shutdown channel and a true value both stop runtime callbacks. -/
+def stopForShutdown (requested closed : Bool) : Bool := requested || closed
+
+theorem false_update_keeps_callback : stopForShutdown false false = false := rfl
+
+theorem closed_channel_stops_callback (requested : Bool) :
+    stopForShutdown requested true = true := by simp [stopForShutdown]
+
 def mayRun (state : State) (id : String) (bodyVerified : Bool) : Bool :=
   permits (state.assigned.contains id) bodyVerified
 

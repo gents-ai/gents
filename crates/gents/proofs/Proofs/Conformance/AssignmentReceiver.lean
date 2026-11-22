@@ -5,7 +5,7 @@ namespace AssignmentReceiver
 
 deriving instance Lean.ToJson for Position, State
 
-attribute [conformance_function] permits retry
+attribute [conformance_function] permits retry stopForShutdown
 
 end AssignmentReceiver
 

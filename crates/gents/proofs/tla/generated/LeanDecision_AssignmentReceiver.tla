@@ -12,4 +12,14 @@ permits_table ==
 permits(assigned, body_verified) ==
   permits_table[<<assigned, body_verified>>]
 
+\* Lean `AssignmentReceiver.stopForShutdown`.
+stopForShutdown_table ==
+  ((<<FALSE, FALSE>> :> FALSE
+    @@ <<FALSE, TRUE>> :> TRUE)
+   @@ (<<TRUE, FALSE>> :> TRUE
+       @@ <<TRUE, TRUE>> :> TRUE))
+
+stopForShutdown(requested, closed) ==
+  stopForShutdown_table[<<requested, closed>>]
+
 ====
