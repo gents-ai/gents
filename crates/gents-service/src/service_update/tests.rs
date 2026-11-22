@@ -92,8 +92,31 @@ async fn stale_acknowledgement_cannot_resurrect_a_failed_operation() {
     assert_eq!(saved.message, "acknowledgement expired");
 }
 
+/// A spawn on another thread of this test binary holds a copy of every open
+/// descriptor until its child execs (see `files::copy_executable`), and with it
+/// the lock this test releases, so the release is observed in a process of its
+/// own.
 #[test]
 fn operation_lock_survives_receipt_replacement_and_excludes_duplicates() {
+    const CHILD: &str = "GENTS_UPDATE_OPERATION_LOCK_TEST_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "service_update::tests::operation_lock_survives_receipt_replacement_and_excludes_duplicates",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("helper.lock");
     let first = files::lock(&path).unwrap();
