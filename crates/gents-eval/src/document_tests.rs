@@ -3,7 +3,7 @@ use anyhow::Context;
 use gents::defra_node::Node as EmbeddedNode;
 use gents::eval::documents::*;
 use gents_documents::EvalSplit;
-use gents_store::config_client::ConfigAccess;
+use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
 use serde_json::json;
 use std::sync::Arc;
 #[tokio::test]
@@ -272,6 +272,50 @@ async fn model_driven_held_client_eval_and_optimization_records_are_private() ->
                     agent_user_read = Some(output.user_read);
                 }
                 output
+            }
+            "relationship-failed" | "commit-failed" => {
+                let create = create_run(
+                    &access,
+                    name,
+                    runtime.did(),
+                    user.did(),
+                    &origin(EvalSplit::Train),
+                );
+                if name == "relationship-failed" {
+                    let _ =
+                        ConfigApplyTxn::with_successful_mutation_failure_at(Some(1), create).await;
+                } else {
+                    let rename = async {
+                        access
+                            .transact_write("test.eval.rename_node", |txn| {
+                                let parent = gents_store::graphql::escape_graphql_string(&parent);
+                                Box::pin(async move {
+                                    txn.execute_client_signed_update(
+                                        &format!(
+                                            "mutation($input: NodeMutationInputArg!) {{ update_Node(filter: {{ _docID: {{ _eq: \"{parent}\" }} }}, input: $input) {{ _docID }} }}"
+                                        ),
+                                        &json!({"input": {"display_name": "renamed"}}),
+                                        gents_protocol::schemas::NODE,
+                                    )
+                                    .await?;
+                                    Ok::<_, anyhow::Error>(())
+                                })
+                            })
+                            .await
+                            .expect("the user renames the Node while the run commit waits");
+                    };
+                    let (_, paused) =
+                        ConfigApplyTxn::with_concurrent_write_before_commit(create, rename).await;
+                    assert!(paused, "the run create paused before its commit");
+                }
+                let created = load_run(&access, runtime.did(), name).await?.is_some();
+                PublishOutput {
+                    created,
+                    user_read: created,
+                    stranger_read: load_run(&outsider_access, runtime.did(), name)
+                        .await?
+                        .is_some(),
+                }
             }
             "foreign-node" => {
                 assert!(create_run(

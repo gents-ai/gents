@@ -553,13 +553,7 @@ def caseCoverage : List CoverageEntry :=
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "eval_records_published")
       "identity-permission" [Surface.runtimeInternal]
-  , tagged (followUpCoverage "family" "eval_records_published_unreached"
-      "model-production-gap: no production path lets the Node parent relationship fail or the commit fail after an eval record create is staged.")
-      "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "optimization_promotion_held_transition")
-      "identity-permission" [Surface.runtimeInternal]
-  , tagged (followUpCoverage "family" "optimization_promotion_held_transition_unreached"
-      "model-production-gap: no production path withholds target update permission from a caller that may update the job, forces a stale journal compare-and-set, or fails the commit after both writes are staged.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "family"
@@ -3335,9 +3329,6 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage "family" "household_task_receipt_session")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "household_task_receipt_delivery")
-      "identity-permission" [Surface.runtimeInternal]
-  , tagged (followUpCoverage "family" "household_callback_module_claim_unreached"
-      "model-production-gap: claim_invocation commits the module plan and the claim in its own transaction; no production path aborts that transaction after a valid module plan has been prepared, so an aborted module claim cannot be driven.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "household_mcp_service_lookup")
       "identity-permission" [Surface.runtimeInternal]

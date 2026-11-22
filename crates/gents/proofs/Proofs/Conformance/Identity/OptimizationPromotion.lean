@@ -35,23 +35,9 @@ def promotionOutput (i : PromotionInput) : PromotionOutput :=
   { target := after.target
     journal := after.journal.map fun (action, principal) => { action, principal } }
 
-/-- A held evaluator harness drives these cases: the held user promotes and reverts,
-an authenticated reader holds target but not job update permission, and an
-anonymous caller has no actor. -/
-def heldCaseNames : List String :=
-  ["held-user-promote", "held-user-revert", "reader-cannot-update-job", "missing-actor"]
-
 @[conformance_family]
 def heldTransition : Family PromotionInput PromotionOutput where
-  inputs := (cases.filter fun c => c.name ∈ heldCaseNames).map PromotionInput.ofCase
-  model := promotionOutput
-
-/-- model-production-gap: no production path withholds target update permission from a
-caller that may update the job, forces the journal compare-and-set to observe a stale
-length, or fails the commit after both writes are staged. -/
-@[conformance_family]
-def heldTransitionUnreached : Family PromotionInput PromotionOutput where
-  inputs := (cases.filter fun c => c.name ∉ heldCaseNames).map PromotionInput.ofCase
+  inputs := cases.map PromotionInput.ofCase
   model := promotionOutput
 
 end Conformance.OptimizationPromotion

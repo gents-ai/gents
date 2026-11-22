@@ -157,16 +157,7 @@ def moduleClaimInputs : List ModuleClaimInput :=
 
 @[conformance_family]
 def callbackModuleClaim : Family ModuleClaimInput Bool where
-  inputs := moduleClaimInputs.filter fun i => i.committed
-  model := fun i => Automation.callbackModuleClaim i.visible i.same i.prepared i.committed
-
-/-- model-production-gap: `claim_invocation` commits the module plan and the
-claim in its own transaction; no production path aborts that transaction after
-a valid module plan has been prepared, so an aborted module claim cannot be
-driven. -/
-@[conformance_family]
-def callbackModuleClaimUnreached : Family ModuleClaimInput Bool where
-  inputs := moduleClaimInputs.filter fun i => !i.committed
+  inputs := moduleClaimInputs
   model := fun i => Automation.callbackModuleClaim i.visible i.same i.prepared i.committed
 
 structure ClaimedInput where
