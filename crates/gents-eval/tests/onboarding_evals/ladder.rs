@@ -539,7 +539,7 @@ fn delegation_execution_allows_inspection_but_rejects_config_mutations() {
             }
         }
     }
-    assert_eq!(checked, 7);
+    assert_eq!(checked, 22);
 }
 
 #[test]
