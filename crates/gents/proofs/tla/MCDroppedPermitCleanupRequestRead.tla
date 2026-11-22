@@ -1,0 +1,4 @@
+---- MODULE MCDroppedPermitCleanupRequestRead ----
+EXTENDS DroppedPermitCleanup
+
+====
