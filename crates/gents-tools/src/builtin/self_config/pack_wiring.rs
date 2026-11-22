@@ -76,12 +76,14 @@ impl PackInstaller {
                         })
                     })
                     .await?
-            };
+            }
+            .rendered_for(gents_pack::pack::RemedySurface::ConfigTool);
             wired.push(json!({
                 "plugin": format!("{namespace}/{}", shipped.name),
                 "changed": report.changed,
                 "job": report.job,
                 "warnings": report.warnings,
+                "policy_warnings": report.policy_warnings,
             }));
         }
         let call = |verb: &[&str]| {

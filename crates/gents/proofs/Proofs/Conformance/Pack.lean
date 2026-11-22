@@ -134,6 +134,25 @@ private def narrow : Job :=
 
 private def skill : List String := ["create-workflow"]
 
+private def modeName : PluginWiring.Dynamic → String
+  | .off => "off"
+  | .check => "check"
+  | .run => "run"
+
+/-- Every pair of the operator's and the incoming dynamic mode, against
+incoming target lists the operator's list covers, misses, or orders otherwise.
+Each wiring is repeated, then the operator's own block is wired back. -/
+private def keptPolicyScripts : List WiringScript :=
+  [PluginWiring.Dynamic.off, .check, .run].flatMap fun existingMode =>
+    [PluginWiring.Dynamic.off, .check, .run].flatMap fun incomingMode =>
+      [[], ["a"], ["a", "c"], ["b", "a"]].map fun incomingTargets =>
+        let existing := block ["a", "b", "c"] existingMode ["b", "a"]
+        let step := wireStep runner (skills := skill)
+          (reviewed := some (block ["a", "b", "c"] incomingMode incomingTargets))
+        ⟨s!"wiring keeps the operator's {modeName existingMode} [b, a] against {modeName incomingMode} {incomingTargets}",
+          wiredWith (some existing) ["a", "b", "c"],
+          [step, step, wireStep runner (reviewed := some existing)]⟩
+
 @[conformance_family]
 def pluginWiring : Family WiringScript (List (Option Outcome)) where
   inputs :=
@@ -156,6 +175,15 @@ def pluginWiring : Family WiringScript (List (Option Outcome)) where
     , ⟨"a later wiring cannot raise the dynamic mode",
         wiredWith (some (block ["a"] .check)) ["a"],
         [wireStep runner (reviewed := some (block ["a"] .run))]⟩
+    , ⟨"a later wiring keeps the operator's run and its targets",
+        wiredWith (some (block ["a", "b"] .run ["b", "a"])) ["a", "b"],
+        [wireStep (runner (some "acme/engine")) (reviewed := some (block ["a", "b"] .check ["a"]))
+          (sources := [single])]⟩
+    , ⟨"rewiring the artifact already pinned under run does not warn of a new pin",
+        { wiredWith (some (block ["a"] .run ["a"])) ["a"] with
+          plugins := [{ plugin := "acme/runner", digest := "sha256:aa", toolCalls := false
+                        job := some (block ["a"] .run ["a"]) }] },
+        [wireStep runner (reviewed := some (block ["a"] .run ["a"]))]⟩
     , ⟨"wiring leaves an unset Agent switch unset", fresh none,
         [wireStep runner (sources := [single])]⟩
     , ⟨"wiring leaves a disabled Agent switch disabled", fresh (some false),
@@ -241,6 +269,7 @@ def pluginWiring : Family WiringScript (List (Option Outcome)) where
     , ⟨"a target the Agent held before the wiring leaves with the block",
         { fresh with targets := ["reviewer"] },
         [wireStep runner (reviewed := some (block ["reviewer"])), unwireStep runner]⟩ ]
+    ++ keptPolicyScripts
   model := fun script => runWiring script.start script.steps
 
 end Wiring

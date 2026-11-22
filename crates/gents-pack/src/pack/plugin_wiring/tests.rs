@@ -22,6 +22,17 @@ enum Warning {
     DynamicCheck,
     AgentNewWidened,
     NotWired,
+    DynamicModeKept,
+    DynamicTargetsKept,
+    DynamicRunRepinned,
+}
+
+fn policy_warning(code: PolicyWarningCode) -> Warning {
+    match code {
+        PolicyWarningCode::DynamicModeKept => Warning::DynamicModeKept,
+        PolicyWarningCode::DynamicTargetsKept => Warning::DynamicTargetsKept,
+        PolicyWarningCode::DynamicRunRepinned => Warning::DynamicRunRepinned,
+    }
 }
 
 type Surface = family::Surface<DynamicMode>;
@@ -201,7 +212,17 @@ fn wiring_conforms_to_the_model() {
                 Some(family::Outcome {
                     surface: surface(&tools, &context),
                     job: report.job.as_ref().map(recode),
-                    warnings: report.warnings.iter().map(|text| warning(text)).collect(),
+                    warnings: report
+                        .warnings
+                        .iter()
+                        .map(|text| warning(text))
+                        .chain(
+                            report
+                                .policy_warnings
+                                .iter()
+                                .map(|kept| policy_warning(kept.code)),
+                        )
+                        .collect(),
                     next_call: report.next_call.is_some(),
                 })
             })
@@ -255,6 +276,68 @@ fn the_report_names_the_next_call_and_what_check_refuses() {
 
     let (_, _, report) = unwire_plugin(&tools, &context, &plugin, &[], &[content]).unwrap();
     assert!(report.next_call.unwrap().contains("non-job verbs only"));
+}
+
+#[test]
+fn a_kept_policy_warning_names_what_was_asked_and_each_surfaces_own_calls() {
+    let (mut tools, context) = start(None);
+    tools.tools_id = "engineer-tools".to_owned();
+    let operator = PluginJobSettings {
+        agent_targets: strs(&["a", "b"]),
+        policy: gents_protocol::job::JobPolicy {
+            dynamic: DynamicMode::Run,
+            dynamic_targets: strs(&["b", "a"]),
+            ..Default::default()
+        },
+        ..pack_block(&["a", "b"])
+    };
+    let plugin = installed(true, None);
+    let (tools, context, _) =
+        wire_plugin(&tools, &context, &plugin, Some(&operator), &[], &[]).unwrap();
+    let (_, _, report) =
+        wire_plugin(&tools, &context, &plugin, Some(&pack_block(&["a"])), &[], &[]).unwrap();
+    let [warning] = report.policy_warnings.as_slice() else {
+        panic!("one kept-mode warning: {:?}", report.policy_warnings);
+    };
+    assert_eq!(warning.code, PolicyWarningCode::DynamicModeKept);
+    assert_eq!(warning.tools_id, "engineer-tools");
+    assert_eq!(
+        warning.requested.as_ref().map(|policy| policy.dynamic),
+        Some(DynamicMode::Check)
+    );
+    assert_eq!(warning.kept.dynamic, DynamicMode::Run);
+    assert_eq!(warning.kept.dynamic_targets, strs(&["b", "a"]));
+    assert!(
+        warning
+            .remedy
+            .contains("gents config tools show engineer-tools")
+            && warning.remedy.contains("gents config tools set --file"),
+        "{}",
+        warning.remedy
+    );
+    let tool = warning.clone().rendered_for(RemedySurface::ConfigTool).remedy;
+    assert!(
+        tool.contains(r#"config {"argv":["tools","get"],"target_id":"engineer-tools"}"#)
+            && tool.contains(r#"["tools","edit"]"#)
+            && !tool.contains("gents config"),
+        "{tool}"
+    );
+}
+
+fn pack_block(targets: &[&str]) -> PluginJobSettings {
+    PluginJobSettings {
+        agent_targets: strs(targets),
+        max_live: PluginJobSettings::DEFAULT_MAX_LIVE,
+        max_spawns: PluginJobSettings::DEFAULT_MAX_SPAWNS,
+        max_messages_per_slot: PluginJobSettings::DEFAULT_MAX_MESSAGES_PER_SLOT,
+        result_bytes: PluginJobSettings::DEFAULT_RESULT_BYTES,
+        max_wall_secs: PluginJobSettings::DEFAULT_MAX_WALL_SECS,
+        policy: gents_protocol::job::JobPolicy {
+            dynamic: DynamicMode::Check,
+            dynamic_targets: strs(targets),
+            ..Default::default()
+        },
+    }
 }
 
 #[test]

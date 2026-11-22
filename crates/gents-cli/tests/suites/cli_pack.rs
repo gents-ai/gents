@@ -866,6 +866,77 @@ fn pack_wire_preview_writes_nothing() -> Result<()> {
     Ok(())
 }
 
+/// The live-node finding behind `PluginWiring.wire_keeps_existing_policy`:
+/// wiring again put an operator's `run` back to the pack's mode.
+#[test]
+fn pack_wire_keeps_the_operators_run_and_warns() -> Result<()> {
+    let fixture = wire_fixture(true)?;
+    fixture.wire(&[])?;
+    let mut tools = fixture.agent_tools()?;
+    tools
+        .as_object_mut()
+        .context("Tools is an object")?
+        .remove("_docID");
+    let tools_id = tools["tools_id"].as_str().context("tools_id")?.to_owned();
+    let entry = tools["integrations"]["plugins"]
+        .as_array_mut()
+        .context("plugins")?
+        .iter_mut()
+        .find(|entry| entry["plugin"] == "fixture/job_fixture")
+        .context("plugin not wired")?;
+    entry["job"]["policy"]["dynamic"] = "run".into();
+    entry["job"]["policy"]["dynamic_targets"] = serde_json::json!(["wf-fixture"]);
+    let file = fixture.tempdir.path().join("operator-tools.json");
+    write_json_file(&file, &tools)?;
+    run_cli_json(
+        fixture.tempdir.path(),
+        &[
+            "config",
+            "tools",
+            "set",
+            "--file",
+            dir_arg(&file),
+            "--home",
+            dir_arg(&fixture.home),
+        ],
+    )?;
+    let operator = wired_plugin(&fixture.agent_tools()?)
+        .context("plugin not wired")?["job"]["policy"]
+        .clone();
+    let previewed = fixture.wire(&["--preview"])?;
+    let first = fixture.wire(&[])?;
+    let second = fixture.wire(&[])?;
+    let kept = wired_plugin(&fixture.agent_tools()?)
+        .context("plugin not wired")?["job"]["policy"]
+        .clone();
+    anyhow::ensure!(
+        kept == operator && kept["dynamic"] == "run",
+        "wiring changed the operator's policy {operator} to {kept}"
+    );
+    anyhow::ensure!(
+        previewed["report"] == first["report"] && first["report"] == second["report"],
+        "preview, apply and a repeated wire differ: {previewed} {first} {second}"
+    );
+    let warnings = first["report"]["policy_warnings"]
+        .as_array()
+        .context("no policy_warnings")?;
+    let warning = warnings
+        .iter()
+        .find(|warning| warning["code"] == "dynamic_mode_kept")
+        .with_context(|| format!("the kept run is not reported: {first}"))?;
+    anyhow::ensure!(
+        warning["requested"]["dynamic"] == "off"
+            && warning["kept"] == kept
+            && warning["tools_id"] == tools_id.as_str()
+            && warning["remedy"]
+                .as_str()
+                .is_some_and(|remedy| remedy
+                    .contains(&format!("gents config tools show {tools_id}"))),
+        "the warning does not name what was asked and how to change it: {warning}"
+    );
+    Ok(())
+}
+
 #[test]
 fn pack_wire_remove_reverses_only_unreferenced() -> Result<()> {
     let fixture = wire_fixture(true)?;
