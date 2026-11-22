@@ -8,6 +8,7 @@
   gate.py packages GROUP...                  list the crates of test groups
   gate.py verdict                            decide the `gate` job from NEEDS
   gate.py runners [--apply]                  give every runner but the queue's reserve the reserve label
+  gate.py record UNIT                        record that a unit of the plan passed here (reuse.py)
 
 `run` reads the plan from GATE_PLAN (CI passes the plan job's output) or
 computes it against --base.
@@ -45,9 +46,20 @@ def load_tla_check():
     return module
 
 
+@functools.cache
+def load_reuse():
+    """The pass store, beside this file however gate.py was loaded."""
+    spec = importlib.util.spec_from_file_location("gate_reuse", Path(__file__).resolve().with_name("reuse.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def __getattr__(name):
     if name == "tla_check":
         return load_tla_check()
+    if name == "reuse":
+        return load_reuse()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 # Roles -> runner labels: the one inventory of CI runners. Jobs select runners
@@ -57,6 +69,7 @@ INVENTORY = ROOT / ".github/ci-runners.json"
 # Roles the CI workflow's non-matrix jobs run on.
 WORKFLOW_ROLES = ("linux", "browser", "macos")
 HOSTED_LINUX = "ubuntu-latest"
+CI_WORKFLOW = ROOT / ".github/workflows/ci.yml"
 
 
 class Group:
@@ -240,6 +253,10 @@ TS_JOBS = {
         "npm --prefix apps/gents-desktop run test:ui:fuzz -- --time-limit 30s",
     ],
 }
+# The browser journeys run as this many shards of the desktop-ui job: on two
+# Playwright workers they take 24 to 37 minutes on a hosted four-core runner
+# (#3786); each third takes about 9 to 12.
+BROWSER_SHARDS = 3
 TS_LEAN = [
     "npm run build --workspace @source-inc/gents-desktop-client",
     "npm run build --workspace @source-inc/gents-desktop-ui",
@@ -671,6 +688,22 @@ def balance(entries):
         entry.update(placement("portable", host_group=group))
 
 
+def scope(tags, members, everything=False, tier="full"):
+    """What a change with these classify() tags reaches: the crates it changes,
+    those it builds and lints (their dependents), those whose tests it affects
+    and tests at `tier`, and whether it reaches the frontend or the proofs."""
+    everything = everything or "all" in tags
+    changed = set(members) if everything else {tag[6:] for tag in tags if tag.startswith("crate:")}
+    built = dependents(members, changed)
+    # Proofs change what the contract's consumers replay, not what compiles.
+    affected = dependents(members, changed | {"gents-lean-contract"}) if "proofs" in tags else built
+    # A draft tests the crates it changes; their dependents are still compiled
+    # and linted, and tested once the pull request is ready for review.
+    tested = affected if tier == "full" or "proofs" in tags else changed
+    return {"everything": everything, "changed": changed, "built": built, "affected": affected, "tested": tested,
+            "ts": everything or "ts" in tags, "proofs": everything or "proofs" in tags}
+
+
 def plan(files, members, everything=False, only=None, tier="full", mirrors=False):
     check_groups(members)
     tags, reasons = set(), {}
@@ -678,17 +711,10 @@ def plan(files, members, everything=False, only=None, tier="full", mirrors=False
         for tag in classify(path, members):
             tags.add(tag)
             reasons.setdefault(tag, path)
-    everything = everything or "all" in tags
-    changed = set(members) if everything else {tag[6:] for tag in tags if tag.startswith("crate:")}
-    built = dependents(members, changed)
+    reach = scope(tags, members, everything, tier)
+    everything, changed, built = reach["everything"], reach["changed"], reach["built"]
+    affected, tested, ts, proofs = reach["affected"], reach["tested"], reach["ts"], reach["proofs"]
     rust = bool(changed)
-    # Proofs change what the contract's consumers replay, not what compiles.
-    affected = dependents(members, changed | {"gents-lean-contract"}) if "proofs" in tags else built
-    # A draft tests the crates it changes; their dependents are still compiled
-    # and linted, and tested once the pull request is ready for review.
-    tested = affected if tier == "full" or "proofs" in tags else changed
-    ts = everything or "ts" in tags
-    proofs = everything or "proofs" in tags
     tla = tla_specs(files, members, everything)
     jobs = {
         "fmt": rust,
@@ -772,6 +798,14 @@ def plan(files, members, everything=False, only=None, tier="full", mirrors=False
     if archives:
         jobs[f"build:{ARCHIVE}"] = True
         jobs[f"shard:{ARCHIVE}"] = bool(shards)
+    desktop_ui = [{"suite": "unit", "unit": "ts-unit"}] if jobs.get("ts-unit") else []
+    if jobs.get("ts-browser"):
+        desktop_ui += [{"suite": "browser", "shard": f"{index}/{BROWSER_SHARDS}",
+                        "unit": f"ts-browser:{index}/{BROWSER_SHARDS}"} for index in range(1, BROWSER_SHARDS + 1)]
+    for entry in matrix:
+        entry["unit"] = entry["job"]
+    for entry in archives:
+        entry["unit"] = f"build:{entry['archive']}" + (f":{entry['partition']}" if entry.get("partition") else "")
     return {
         "tier": tier,
         "everything": everything,
@@ -783,6 +817,7 @@ def plan(files, members, everything=False, only=None, tier="full", mirrors=False
         "matrix": matrix,
         "archives": archives,
         "shards": shards,
+        "desktop_ui": desktop_ui,
         "contract": {
             # write_owner_structure scans every crate's sources but is a
             # gents test target, which the runtime group runs when selected.
@@ -800,6 +835,8 @@ def plan(files, members, everything=False, only=None, tier="full", mirrors=False
         # The live suites (`live-e2e`) run after merge; lint them when they or a
         # crate they use changed.
         "live_e2e_lint": [package for package in ("gents", "gents-cli") if package in built],
+        # The CLI's `vera` feature check, off on a pull request like the Vera tests.
+        "lint_vera": "gents-cli" in built and os.environ.get("GATE_EVENT") != "pull_request",
         "runs_on": {role: runner(role) for role in WORKFLOW_ROLES},
     }
 
@@ -1028,7 +1065,7 @@ def run_lint(selection):
     for package in selection.get("live_e2e_lint", []):
         sh(["cargo", "clippy", "-p", package, "--tests", "--features", "live-e2e", *profile, "--", "-D", "warnings"],
            env={**os.environ, **side_tree_env("live-e2e")})
-    if "gents-cli" in affected and os.environ.get("GITHUB_EVENT_NAME") != "pull_request":
+    if selection.get("lint_vera"):
         sh(["cargo", "check", "-p", "gents-cli", "--tests", "--features", "vera", *profile])
     if "gents-loop" in affected:
         sh(["cargo", "build", "-p", "gents-loop", "--target", "wasm32-wasip1", *profile])
@@ -1698,6 +1735,128 @@ def workflow_job(job):
     return prefix if prefix in MATRIX_JOBS and ":" in job else WORKFLOW_JOBS[job]
 
 
+# ---- reuse: never run a unit twice on the same inputs (reuse.py) ----
+
+# Plan entry fields that say where a unit runs, not what it does; the platform
+# stands for them in its key.
+PLACEMENT = ("runs_on", "build_jobs", "test_threads", "timeout", "unit")
+
+
+def workflow_role(job):
+    """The runner role ci.yml routes a non-matrix workflow job to."""
+    block = re.search(rf"^  {re.escape(job)}:\n(.*?)(?=^  \S|\Z)", CI_WORKFLOW.read_text(), re.M | re.S)
+    return re.search(r"runs_on\.([\w-]+)", block.group(1)).group(1)
+
+
+def reuse_units(selection):
+    """Each unit of work the plan selected that may be reused: a job, or an
+    entry of a job's matrix, with the files its key covers (`reaches`). Rust
+    builds and tests cover every file the gate does not classify inert: tests
+    in 19 crates read beyond their crate's dependency closure (the structure
+    ratchets and the consumer scan read every crate's sources), so the crate
+    graph is not their closure. Shards are never reused: they run an archive
+    their build job uploads."""
+    def placed(entry):
+        return {key: value for key, value in entry.items() if key not in PLACEMENT}
+
+    def routed(job):
+        return selection["runs_on"][workflow_role(WORKFLOW_JOBS[job])]
+
+    units = []
+    jobs = set(selection["jobs"])
+    if "fmt" in jobs:
+        units.append({"unit": "fmt", "job": "fmt", "slice": {}, "closure": "fmt", "runs_on": routed("fmt")})
+    if "lint" in jobs:
+        lint = {key: selection.get(key) for key in ("built", "everything", "live_e2e_lint", "ios_check", "lint_vera")}
+        units.append({"unit": "lint", "job": "lint", "slice": lint, "closure": "gated", "runs_on": routed("lint")})
+    if "contract" in jobs:
+        units.append({"unit": "contract", "job": "contract", "slice": selection["contract"], "closure": "tree",
+                      "runs_on": routed("contract")})
+    for job in ("ts-packages", "ts-fuzz"):
+        if job in jobs:
+            units.append({"unit": job, "job": job, "slice": {}, "closure": "ts", "runs_on": routed(job)})
+    for entry in selection.get("desktop_ui", []):
+        units.append({"unit": entry["unit"], "job": entry["unit"].split(":", 1)[0], "slice": placed(entry),
+                      "closure": "ts", "runs_on": routed(f"ts-{entry['suite']}")})
+    for entry in selection["matrix"]:
+        units.append({"unit": entry["unit"], "job": entry["job"], "slice": placed(entry), "closure": "gated",
+                      "runs_on": entry["runs_on"]})
+    for entry in selection["archives"]:
+        if entry.get("run"):
+            units.append({"unit": entry["unit"], "job": f"build:{entry['archive']}", "slice": placed(entry),
+                          "closure": "gated", "runs_on": entry["runs_on"]})
+    return units
+
+
+def reaches(closure, tags, reach):
+    """Whether a file with these classify() tags and scope() is in a unit's
+    closure: `tree` holds every file, `gated` every file the gate does not
+    classify inert, `fmt` the crates' files and `ts` the frontend's (each with
+    the paths that select everything)."""
+    if closure == "tree":
+        return True
+    if closure == "gated":
+        return tags != {"inert"}
+    if closure == "fmt":
+        return bool(reach["changed"])
+    return reach["ts"]
+
+
+def unit_keys(selection, members, entries):
+    """unit -> its plan job, input key and platform, the key covering the
+    files of `entries` (reuse.tree) in the unit's closure."""
+    reuse = load_reuse()
+    reach = {}
+    tagged = []
+    for path, mode, blob in entries:
+        tags = frozenset(classify(path, members))
+        if tags not in reach:
+            reach[tags] = scope(tags, members)
+        tagged.append((tags, (path, mode, blob)))
+    keys = {}
+    for unit in reuse_units(selection):
+        files = [entry for tags, entry in tagged if reaches(unit["closure"], tags, reach[tags])]
+        runner_platform = reuse.platform(unit["runs_on"])
+        keys[unit["unit"]] = {"job": unit["job"], "platform": runner_platform,
+                              "key": reuse.key(unit["unit"], unit["slice"], runner_platform, files)}
+    return keys
+
+
+def apply_reuse(selection, members, lookup, repository=None, entries=None):
+    """The plan with its reuse record: every unit's key and, when `lookup`, the
+    run that passed it. A reused unit leaves its matrix, and `run` holds the
+    plan jobs some unit of which still runs."""
+    reuse = load_reuse()
+    keys = unit_keys(selection, members, entries if entries is not None else reuse.tree(ROOT))
+    found = reuse.lookup(repository, sorted({info["key"] for info in keys.values()})) if lookup else {}
+    for info in keys.values():
+        info["run"] = found.get(info["key"])
+    reused = {unit for unit, info in keys.items() if info["run"]}
+    selection["reuse"] = keys
+    for name in ("matrix", "archives", "desktop_ui"):
+        selection[name] = [entry for entry in selection[name] if entry["unit"] not in reused]
+    selection["run"] = sorted(job for job in selection["jobs"] if job not in reused_jobs(selection))
+    return selection
+
+
+def reused_jobs(selection):
+    """The plan jobs every unit of which was reused."""
+    units = {}
+    for info in selection.get("reuse", {}).values():
+        units.setdefault(info["job"], []).append(bool(info.get("run")))
+    return {job for job, runs in units.items() if all(runs)}
+
+
+def reuse_report(selection, repository):
+    """A markdown table of each unit: reused from a run, or run."""
+    reuse = load_reuse()
+    lines = ["| unit | result |", "|---|---|"]
+    for unit, info in sorted(selection.get("reuse", {}).items()):
+        result = f"reused [run {info['run']}]({reuse.run_url(repository, info['run'])})" if info.get("run") else "ran"
+        lines.append(f"| `{unit}` | {result} |")
+    return "\n".join(lines) + "\n"
+
+
 def verdict(needs, fork=False):
     """The `gate` job's decision from its `toJSON(needs)`: a list of problems, empty to pass.
 
@@ -1721,7 +1880,12 @@ def verdict(needs, fork=False):
     if not raw:
         problems.setdefault("plan", "produced no plan")
         return [f"{name}: {problem}" for name, problem in problems.items()]
-    for job in json.loads(raw)["jobs"]:
+    selection = json.loads(raw)
+    # A job whose every unit passed before on the same input key did not run.
+    reused = reused_jobs(selection)
+    for job in selection["jobs"]:
+        if job in reused:
+            continue
         owner = workflow_job(job)
         result = needs.get(owner, {}).get("result")
         if result != "success":
@@ -1739,10 +1903,11 @@ def emit(selection):
         with open(output, "a") as handle:
             handle.write(f"plan={json.dumps(selection)}\n")
             handle.write(f"matrix={json.dumps({'include': selection['matrix']})}\n")
-            handle.write(f"jobs={json.dumps(selection['jobs'])}\n")
+            handle.write(f"jobs={json.dumps(selection.get('run', selection['jobs']))}\n")
             handle.write(f"tests={'true' if selection['matrix'] else 'false'}\n")
             handle.write(f"archives={json.dumps({'include': selection['archives']})}\n")
             handle.write(f"shards={json.dumps({'include': selection['shards']})}\n")
+            handle.write(f"desktop_ui={json.dumps({'include': selection['desktop_ui']})}\n")
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a") as handle:
@@ -1763,6 +1928,10 @@ def emit(selection):
                     continue
                 handle.write(f"- `build:{entry['archive']}`, then {len(selection['shards'])} "
                              f"`shard:{entry['archive']}` slices: {entry['packages']}\n")
+            if selection.get("reuse"):
+                handle.write("\n### Reuse\n\nA unit is skipped only if an identical input key passed before on "
+                             "the same platform.\n\n")
+                handle.write(reuse_report(selection, os.environ.get("GITHUB_REPOSITORY", "")))
 
 
 def main():
@@ -1777,6 +1946,7 @@ def main():
             command.add_argument("job")
     commands.add_parser("packages").add_argument("groups", nargs="+")
     commands.add_parser("verdict", help="decide the gate job from NEEDS (its toJSON(needs))")
+    commands.add_parser("record", help="record that a plan unit passed on this runner").add_argument("unit")
     commands.add_parser("runners", help="reserve runners for the merge queue (.github/ci-runners.json `reserve`)") \
         .add_argument("--apply", action="store_true")
     arguments = parser.parse_args()
@@ -1784,15 +1954,35 @@ def main():
         reconcile_runners(arguments.apply)
         return
     if arguments.command == "verdict":
-        problems = verdict(json.loads(os.environ["NEEDS"]), os.environ.get("GATE_FORK") == "true")
+        needs = json.loads(os.environ["NEEDS"])
+        problems = verdict(needs, os.environ.get("GATE_FORK") == "true")
         for problem in problems:
             print(f"::error::{problem}")
+        raw = needs.get("plan", {}).get("outputs", {}).get("plan")
+        if raw and os.environ.get("GITHUB_STEP_SUMMARY"):
+            with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+                summary.write("### Gate units\n\n" + reuse_report(json.loads(raw), os.environ.get("GITHUB_REPOSITORY", "")))
         sys.exit(1 if problems else 0)
+    if arguments.command == "record":
+        if not os.environ.get("GATE_PLAN"):
+            fail("record reads the plan from GATE_PLAN")
+        recorded = load_reuse().record(arguments.unit, json.loads(os.environ["GATE_PLAN"]).get("reuse", {}).get(
+            arguments.unit))
+        if recorded and os.environ.get("GITHUB_OUTPUT"):
+            with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+                output.write(f"name={recorded[0]}\npath={recorded[1]}\n")
+        return
     if arguments.command == "packages":
         print(" ".join(package for group in GROUPS if group.name in arguments.groups for package in group.packages))
         return
     selection = resolve_plan(arguments)
     if arguments.command == "plan":
+        # GATE_REUSE: `lookup` skips units that passed before, `record` only keys them.
+        mode = os.environ.get("GATE_REUSE", "")
+        if mode in ("lookup", "record"):
+            selection = apply_reuse(selection, workspace(), mode == "lookup", os.environ.get("GITHUB_REPOSITORY"))
+        elif mode:
+            fail(f"GATE_REUSE must be lookup, record or empty, got {mode!r}")
         emit(selection)
         return
     for job in [arguments.job] if arguments.command == "run" else selection["jobs"]:
