@@ -117,7 +117,7 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , deferred := []
     }
   , { feature := "inference-call"
-    , required := [Surface.agentFacing, Surface.runtimeInternal]
+    , required := [Surface.runtimeInternal]
     , deferred := []
     }
   , { feature := "completion-retry"
@@ -342,10 +342,6 @@ def vocabularyCoverage : List CoverageEntry :=
       "interrupt-and-cancel" [Surface.agentFacing]
   , tagged (consumerCoverage
       "family"
-      "managed_exec_state_vocabulary")
-      "managed-exec" [Surface.agentFacing]
-  , tagged (consumerCoverage
-      "family"
       "managed_exec_stop_outcome_vocabulary")
       "managed-exec" [Surface.agentFacing]
   , tagged (consumerCoverage
@@ -468,77 +464,7 @@ def vocabularyCoverage : List CoverageEntry :=
   ]
 
 def stateMachineCoverage : List CoverageEntry :=
-  [ tagged (followUpCoverage
-      "state_machine"
-      "Request"
-      "model-production-gap: production has no transition function over this catalog; it is emitted as the unconsumed family state_machines_catalog_unreached. Its terminal partition is replayed through request_state_terminal.")
-      "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "state_machine"
-      "Process"
-      "model-production-gap: production has no transition function over this catalog; it is emitted as the unconsumed family state_machines_catalog_unreached.")
-      "process-lifecycle" [Surface.runtimeInternal]
-  , tagged (boundaryCoverage
-      "state_machine"
-      "Persistence.failClosed"
-      "The database has no per-token persistence document; fail-closed and fail-open hook decisions are replayed through hook_persistence_failure.")
-      "persistence-failure-policy" [Surface.runtimeInternal]
-  , tagged (boundaryCoverage
-      "state_machine"
-      "Persistence.failOpen"
-      "The database has no per-token persistence document; fail-closed and fail-open hook decisions are replayed through hook_persistence_failure.")
-      "persistence-failure-policy" [Surface.runtimeInternal]
-  , tagged (boundaryCoverage
-      "state_machine"
-      "StorageObservation.failClosed"
-      "Local mutation acknowledgements, stale reads and visible rows are observations of DefraDB, not proofs of its internal commit algorithm.")
-      "storage-observation" [Surface.runtimeInternal]
-  , tagged (boundaryCoverage
-      "state_machine"
-      "StorageObservation.failOpen"
-      "Local mutation acknowledgements, stale reads and visible rows are observations of DefraDB, not proofs of its internal commit algorithm.")
-      "storage-observation" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "state_machine"
-      "RuntimeReconcile"
-      "model-production-gap: production has no transition function over this catalog; it is emitted as the unconsumed family state_machines_catalog_unreached.")
-      "runtime-reconcile" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "state_machine"
-      "SessionRecovery"
-      "model-production-gap: production has no transition function over this catalog; it is emitted as the unconsumed family state_machines_catalog_unreached.")
-      "session-recovery" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "state_machine"
-      "InferenceCall"
-      "model-production-gap: production has no transition function over this catalog; it is emitted as the unconsumed family state_machines_catalog_unreached.")
-      "inference-call" [Surface.agentFacing, Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "state_machine"
-      "ToolCall"
-      "model-production-gap: production has no transition function over this catalog; it is emitted as the unconsumed family state_machines_catalog_unreached. Its terminal partition is replayed through tool_execution_tool_call_state_terminal.")
-      "tool-call" [Surface.agentFacing, Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "state_machine"
-      "ManagedExec"
-      "model-production-gap: production has no transition function over this catalog; it is emitted as the unconsumed family state_machines_catalog_unreached.")
-      "managed-exec" [Surface.agentFacing]
-  , tagged (followUpCoverage
-      "state_machine"
-      "Goal"
-      "model-production-gap: production has no transition function over this catalog; it is emitted as the unconsumed family state_machines_catalog_unreached.")
-      "durable-goals" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "state_machine"
-      "Mailbox"
-      "model-production-gap: production has no transition function over this catalog; it is emitted as the unconsumed family state_machines_catalog_unreached. Its terminal partition is replayed through mailbox_status_terminal.")
-      "mailbox" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "family"
-      "state_machines_catalog_unreached"
-      "model-production-gap: production has no transition function over the state-machine catalogs; each owner writes its transitions inline, so only the terminal partitions are replayed.")
-      "request-lifecycle" [Surface.runtimeInternal]
-  , tagged (consumerCoverage "family" "request_state_terminal")
+  [ tagged (consumerCoverage "family" "request_state_terminal")
       "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "tool_execution_tool_call_state_terminal")
       "tool-call" [Surface.agentFacing, Surface.runtimeInternal]
@@ -1051,11 +977,6 @@ def caseCoverage : List CoverageEntry :=
       "aggregate_budget_ledger"
       "Exercises charged-usage summation and the owned loop budget ledger. Database selection of restart rows and missing-usage rejection still need completion-owner observations.")
       "prompt-assembly" [Surface.agentFacing]
-  , tagged (followUpCoverage
-      "family"
-      "aggregate_budget_ledger_unreached"
-      "model-production-gap: the owned loop ledger receives usage rows already scoped to the physical request; a history that mixes requests reaches only the served rehydration test.")
-      "prompt-assembly" [Surface.agentFacing]
   , tagged (consumerCoverage
       "family"
       "aggregate_budget_shared")
@@ -1372,10 +1293,6 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "admission_handoff_hook_effect")
       "tool-call" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "family" "admission_handoff_unreached"
-      "model-production-gap: production's typed oneshot admission handoff has no dispatch linearization, lease or generation fence, duplicate or misaddressed reply, unpublished header, invocation without a reply or effect observed after a stop to stage, so no production scenario replays these cases.")
-      "tool-call" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
       "count_carrier_value")
@@ -1420,9 +1337,6 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "completion_retry_contracts_origin_class")
       "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
-  , tagged (followUpCoverage "family" "completion_retry_contracts_retraction_unreached"
-      "model-production-gap: production has no API to attempt these retry-machine actions: a schedule before a durable retraction, an uncommitted retraction, a failure or a schedule after acceptance, and an accepted-tool-failure observation on the retry machine.")
-      "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
       "completion_retry_contracts_loop_witness")
@@ -1452,11 +1366,6 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "native_completion_trace_unreached"
       "model-production-gap: no served scenario blocks a transaction statement, observes the rollback owner's return and then retries, so the timeout, cancellation, drain-then-rollback and concurrent-drain traces reach no production path.")
-      "storage-observation" [Surface.runtimeInternal]
-  , tagged (boundaryCoverage
-      "family"
-      "hook_persistence_visibility_unreached"
-      "model-production-gap: the hook observes only its own mutation acknowledgements; read-your-writes, stale reads, stale events and late event delivery are DefraDB observations no production path classifies.")
       "storage-observation" [Surface.runtimeInternal]
   , tagged ({ consumerCoverage
       "family"
@@ -1696,11 +1605,6 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "family"
       "contracts_tool_retry_call")
-      "tool-call" [Surface.agentFacing]
-  , tagged (followUpCoverage
-      "family"
-      "contracts_tool_retry_unreached"
-      "model-production-gap: production has no retry classifier; the MCP pool retries a list_tools transport failure and never retries call_tool, and carries no idempotency evidence, so the other operations and failure classes have no production path.")
       "tool-call" [Surface.agentFacing]
   , tagged (consumerCoverage
       "family"
@@ -2400,11 +2304,6 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "plugin_resources_call_admissions")
       "tool-policy" [Surface.agentFacing]
-  , tagged (followUpCoverage
-      "family"
-      "plugin_resources_call_admissions_unreached"
-      "model-production-gap: a declaration naming write fields under read access fails validation, so no installed plugin carries it and bind admission never runs for it.")
-      "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "family"
       "plugin_resources_invocations")
@@ -2777,11 +2676,6 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "family"
       "native_refinement_grant_scenario")
-      "process-lifecycle" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "family"
-      "native_refinement_grant_unreached"
-      "model-production-gap: no production path reaches these emitted cases yet (production publishes a control outcome only inside the claim's fenced transaction; unfenced publication is unreachable)")
       "process-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -3477,9 +3371,6 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "native_execution_contracts_title_crash_recovery")
       "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
-  , tagged (followUpCoverage "family" "native_execution_contracts_script_unreached"
-      "model-production-gap: these scripts need a product transaction production lacks: the resume-to-active recovery primitive, a split tool close and delivery, a bridge background receipt with a late result, a candidate spawned-child document, or unmaterialized tool and header inputs on a title request; each names its premise in native_gap.")
-      "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
       "dispatch_observation_contracts_spawned_target")
@@ -3543,21 +3434,6 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "contract_cases_compaction_projection_join_staged_turn_reduction")
       "compaction" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "family"
-      "contract_cases_compaction_projection_join_projection_join"
-      "model-production-gap: no production path reaches these emitted cases yet. Model-derived projection/estimate/reduction and rebuilt-admission observations bind exact input identities, failure propagation and threshold/output-capacity boundaries. Provider projection and estimation are explicit fallible native premises, not modeled serializers. Native adapters and the real serialized-request experiment remain pending; controlled observations are not native consumer coverage.")
-      "compaction" [Surface.agentFacing]
-  , tagged (followUpCoverage
-      "family"
-      "compaction_canonical_projection_unreached"
-      "model-production-gap: production composes canonical reconstruction, provider projection, estimation and reduction inside gents-loop request assembly over the serialized request; no production function takes a canonical world, selected identities and supplied estimates. Concrete canonical records and selected identities pin the full native messages at initial and checkpoint-rebuild callbacks and reject missing or loading dependencies without shortened history.")
-      "compaction" [Surface.agentFacing]
-  , tagged (followUpCoverage
-      "family"
-      "contract_cases_compaction_canonical_projection_repaired_admission_unreached"
-      "model-production-gap: production admits a fresh provider request inside gents-loop request assembly over the serialized request, where projection and estimation are the provider's own calls; no production function takes a supplied projection outcome and estimate. This does not model the repair transformation.")
-      "compaction" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
       "family"
       "canonical_output_projection_view"
@@ -3587,11 +3463,6 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "reasoning_audit_signature"
       "Generated typed cases bind published-header signature agreement to retained signature bytes, including provider inline-signature rejection without a retained stream and authored inline-signature allowance. This does not establish provider-event capture, durable write admission, or ACP.")
-      "canonical-output" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "family"
-      "reasoning_audit_signature_unreached"
-      "model-production-gap: native OutputSegment payload is a UTF-8 String, so a flush whose modeled bytes are not UTF-8 cannot be written or translated; the model rejects such a signature run as malformed.")
       "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"
@@ -3731,16 +3602,6 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "family"
       "contracts_compaction_reducer_gate_open")
-      "compaction" [Surface.agentFacing]
-  , tagged (followUpCoverage
-      "family"
-      "contracts_compaction_reducer_apply_unreached"
-      "model-production-gap: production summarizes by a token budget and no production reducer applies the model's fixed split index; the identity reducer exists only in the model. Summarize and identity message counts, pair and order preservation, identity and idempotence have no native observation.")
-      "compaction" [Surface.agentFacing]
-  , tagged (followUpCoverage
-      "family"
-      "contracts_compaction_reducer_identity_gate_unreached"
-      "model-production-gap: the identity reducer exists only in the model; no production compaction path evaluates its validity gate.")
       "compaction" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
       "family" "contracts_protected_replay_compaction"
@@ -3957,11 +3818,6 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "tool_execution_cancel_cause_vocabulary")
       "interrupt-and-cancel" [Surface.operatorUi]
-  , tagged (followUpCoverage
-      "state_machine"
-      "Request"
-      "model-production-gap: production has no transition function over this catalog; it is emitted as the unconsumed family state_machines_catalog_unreached. Its terminal partition is replayed through request_state_terminal.")
-      "interrupt-and-cancel" [Surface.operatorUi]
   , tagged (consumerCoverage
       "family"
       "contracts_workspace_quickstart_transition")
@@ -4163,8 +4019,6 @@ def externalPremiseCoverage : List CoverageEntry :=
       "The database has no per-token PersistenceState document. Local commit acknowledgements are supplied by the store adapter.") "persistence-failure-policy" [Surface.runtimeInternal]
   , tagged (boundaryCoverage "premise" "boundary.storage.observation-daemon-visible"
       "Store acknowledgements and read visibility are external observations; their model does not verify DefraDB internals.") "storage-observation" [Surface.runtimeInternal]
-  , tagged (boundaryCoverage "premise" "boundary.storage.minimum-visibility-path"
-      "After a successful mutation acknowledgement, the database eventually supplies read-your-writes or a later visible observation; stale reads and missing events may intervene.") "storage-observation" [Surface.runtimeInternal]
   , tagged (boundaryCoverage "premise" "boundary.backend-health.admission-freshness"
       "A successful models-endpoint probe does not establish all provider operations, remote reachability or freshness of every replica.") "backend-health" [Surface.runtimeInternal]
   , tagged (boundaryCoverage "premise" "boundary.event-delivery.fair-substrate"

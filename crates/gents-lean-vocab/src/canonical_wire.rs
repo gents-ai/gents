@@ -556,27 +556,12 @@ pub enum Operation {
         record: Segment,
         message: Message<PayloadSpec>,
     },
-    DeliverForegroundResult {
-        actor: u64,
-        now: u64,
-        document: u64,
-        message: Message<PayloadSpec>,
-    },
     TerminalizeCompleted {
         actor: u64,
         now: u64,
         generation: u64,
         outcome: String,
         selection: TerminalSelection,
-    },
-    RecoverExpiredGeneration {
-        actor: u64,
-        now: u64,
-        expected_generation: u64,
-        fresh_generation: u64,
-        duration: u64,
-        deadline: u64,
-        items: Vec<RecoveryItem>,
     },
     RecoverExpiredTerminal {
         actor: u64,
@@ -657,18 +642,6 @@ pub enum Operation {
         generation: u64,
         admission: SpawnedToolAdmission,
     },
-    PublishAuthored {
-        actor: u64,
-        now: u64,
-        generation: u64,
-        closing: Segment,
-        message: Message<PayloadSpec>,
-    },
-    AdvanceCompactionCursor {
-        actor: u64,
-        now: u64,
-        cursor: u64,
-    },
     RevokeCorrupt {
         actor: u64,
         now: u64,
@@ -692,9 +665,7 @@ impl Operation {
             | Self::Dispatch { actor, now, .. }
             | Self::CloseForegroundTool { actor, now, .. }
             | Self::CompleteForegroundTool { actor, now, .. }
-            | Self::DeliverForegroundResult { actor, now, .. }
             | Self::TerminalizeCompleted { actor, now, .. }
-            | Self::RecoverExpiredGeneration { actor, now, .. }
             | Self::RecoverExpiredTerminal { actor, now, .. }
             | Self::ClosePartial { actor, now, .. }
             | Self::CloseAuxiliary { actor, now, .. }
@@ -707,8 +678,6 @@ impl Operation {
             | Self::BackgroundTool { actor, now, .. }
             | Self::PublishBackgroundReceipt { actor, now, .. }
             | Self::AdmitSpawnedBackground { actor, now, .. }
-            | Self::PublishAuthored { actor, now, .. }
-            | Self::AdvanceCompactionCursor { actor, now, .. }
             | Self::RevokeCorrupt { actor, now, .. }
             | Self::DeliverReplicatedSegment { actor, now, .. } => (*actor, *now),
         }

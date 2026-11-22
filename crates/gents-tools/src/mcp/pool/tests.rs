@@ -13,7 +13,6 @@ async fn list_tools_transport_failure_retries_generated_safe_read_case() {
         String,
         String,
     >() {
-        assert_eq!(case.input.failure_class, "transport");
         list_tools_after_transport_failure(case).await;
     }
 }
@@ -78,7 +77,6 @@ async fn call_tool_transport_failure_obeys_generated_no_retry_cases_without_idem
     for case in
         gents_lean_vocab::families::contracts_tool_retry_call::cases::<String, String, String>()
     {
-        assert_eq!(case.input.failure_class, "transport");
         call_tool_after_transport_failure(case).await;
     }
 }
@@ -93,7 +91,7 @@ async fn call_tool_after_transport_failure(
     let calls = Arc::new(AtomicUsize::new(0));
     let calls_for_fn = Arc::clone(&calls);
     let endpoint = "http://mcp.test/mcp";
-    let service_id = format!("mutating-service-{}", case.input.idempotency);
+    let service_id = format!("mutating-service-{}", case.input.name);
 
     {
         let mut guard = pool.inner.write().await;
@@ -136,12 +134,12 @@ async fn call_tool_after_transport_failure(
             .contains_key(&super::ParkKey::new(&service_id, endpoint, None));
     assert!(
         parked,
-        "{}: a failed call_tool must not evict and reconnect without idempotency evidence",
+        "{}: a failed call_tool must not evict and reconnect",
         case.input.name
     );
     case.check(
         if calls > 1 {
-            "retry_idempotent_tool_call"
+            "retried"
         } else {
             "do_not_retry"
         }

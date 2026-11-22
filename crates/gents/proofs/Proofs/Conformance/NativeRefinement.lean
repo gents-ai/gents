@@ -111,32 +111,21 @@ def clientProcessReceipt : Family ClientProcessReceiptInput Bool where
 
 structure GrantInput where
   authority : Bool
-  fenced : Bool
   deriving ToJson, BEq
 
+/-- Production publishes a control outcome only inside the claim's fenced
+transaction, so a publication is always fenced and current authority decides
+it; `unfenced_authority_cannot_publish_outcome` covers the fence. -/
 def grantAllowed (i : GrantInput) : Bool :=
-  Background.ProcessControl.mayPublishOutcome i.authority i.fenced
+  Background.ProcessControl.mayPublishOutcome i.authority true
 
-/-- The served claim scenario publishes inside the claim's fenced transaction,
-first under current authority after a failed control mutation, then after the
-agent's document update permission is revoked. -/
-def servedPublications : List GrantInput := [⟨true, true⟩, ⟨false, true⟩]
-
+/-- The served claim scenario publishes first under current authority after a
+failed control mutation, then after the agent's document update permission is
+revoked. -/
 @[conformance_family]
 def grantScenario : Family GrantInput Bool where
-  inputs := servedPublications
+  inputs := [⟨true⟩, ⟨false⟩]
   model := grantAllowed
-
-/-- model-production-gap: production publishes a control outcome only inside the
-claim's fenced transaction, so no production path reaches an unfenced
-publication. -/
-@[conformance_family]
-def grantUnreached : Family GrantInput Bool where
-  inputs := ([false, true].flatMap fun authority => [false, true].map fun fenced =>
-    ({ authority, fenced } : GrantInput)).filter fun i => !servedPublications.contains i
-  model := grantAllowed
-
-example : grantAllowed ⟨true, false⟩ = false := by decide
 
 deriving instance ToJson for Change
 deriving instance ToJson for Wake

@@ -4,7 +4,7 @@ import Proofs.Conformance.Family
 import Proofs.Conformance.CanonicalOutputWire
 
 /-!
-# Payload presentation before provider projection (#1571)
+# Payload presentation before provider projection
 
 Headers select presentations of immutable streams. This fixture compares stored
 payload length with reconstructed payload length, not serialized provider input
@@ -178,8 +178,6 @@ def cases : List Case :=
   , ⟨"utf8_boundary_moves_forward", [65, 226, 130, 172, 66], [116], 3⟩
   , ⟨"utf8_exact_budget_retains_codepoint", [65, 226, 130, 172, 66], [116], 4⟩
   , ⟨"budget_smaller_than_final_codepoint", [65, 226, 130, 172], [116], 2⟩
-  , ⟨"invalid_raw_rejected", [255], [116], 16⟩
-  , ⟨"invalid_cause_rejected", [65], [255], 16⟩
   , ⟨"multibyte_cause_preserved", [65], [226, 130, 172], 1⟩ ]
 
 structure PartWire where
@@ -232,7 +230,6 @@ structure PlanOutput where
 def PlanOutput.ofResult : Except MessageError (Presentation × List UInt8) → PlanOutput
   | .ok (presentation, rendered) =>
       ⟨"ok", some (PresentationWire.ofModel presentation), some (rendered.map (·.toNat))⟩
-  | .error .invalidUtf8 => ⟨"invalid_utf8", none, none⟩
   | .error _ => ⟨"unexpected_error", none, none⟩
 
 @[conformance_family]
@@ -258,7 +255,14 @@ def streamedFailure : Conformance.Family PlanInput StreamedFailureOutput where
 example : (cases.map fun value => (result value).toOption.map Prod.snd) =
     [some [116], some [65, 66, 10, 116], some [67, 68, 10, 116], some [116],
      some [66, 10, 116], some [226, 130, 172, 66, 10, 116], some [116],
-     none, none, some [65, 10, 226, 130, 172]] := by native_decide
+     some [65, 10, 226, 130, 172]] := by native_decide
+
+/-- Production's tool output and cause are strings, so a non-UTF-8 source never
+reaches the presentation owner; the model still rejects one. -/
+example : ([⟨"invalid_raw", [255], [116], 16⟩, ⟨"invalid_cause", [65], [255], 16⟩] : List Case).all
+    (fun value => match result value with
+      | .error .invalidUtf8 => true
+      | _ => false) = true := by native_decide
 
 end Conformance.TerminalDiagnosticContracts
 

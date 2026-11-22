@@ -855,7 +855,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     )
     .await
     .unwrap();
-    publications.push(((true, true), unconfirmed.is_some()));
+    publications.push((true, unconfirmed.is_some()));
     let unconfirmed = unconfirmed.unwrap();
     assert!(matches!(
         &unconfirmed.outcome,
@@ -991,7 +991,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     )
     .await
     .unwrap();
-    publications.push(((false, true), observed.is_some()));
+    publications.push((false, observed.is_some()));
     let rows = agent_access.execute(&claim_query(&first)).await.unwrap();
     let signed = rows["data"]["AgentToolControlClaim"]
         .as_array()
@@ -1029,7 +1029,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     assert_eq!(grant_cases.len(), publications.len());
     for (case, (grant, published)) in grant_cases.iter().zip(publications) {
         assert_eq!(
-            (case.input.authority, case.input.fenced),
+            case.input.authority,
             grant,
             "the served scenario publishes {:?}",
             case.input
