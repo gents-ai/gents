@@ -1,10 +1,9 @@
 use super::support::*;
 use super::*;
+use crate::goal::blocked_turn::permit_recorded;
 use crate::goal::continuation::goal_continuation_identity;
 use gents_lean_vocab::families::goal_reset_resume_contracts_reset as wire;
-use gents_loop::provider_limit::{
-    classify_provider_limit, persisted_failure_reason, ProviderLimit, ProviderLimitHeaders,
-};
+use gents_loop::provider_limit::ProviderLimitHeaders;
 use serde_json::{json, Value};
 
 pub(super) fn at(seconds: i64) -> DateTime<Utc> {
@@ -105,7 +104,7 @@ pub(super) fn usage_limit(reset_at: Option<i64>) -> String {
         }
         None => r#"HttpError: Invalid status code 429 Too Many Requests with message: {"error":{"type":"usage_limit_reached","message":"The usage limit has been reached"}}"#.to_owned(),
     };
-    persisted_failure_reason(&text, Utc::now())
+    permit_recorded(&text, Utc::now()).0
 }
 
 #[tokio::test]
@@ -151,17 +150,12 @@ async fn generated_goal_reset_resume_cases_drive_real_transactions() {
             &at(facts.limit_started_at as i64).to_rfc3339(),
         )
         .await;
-        let Some(ProviderLimit::UsageExhausted(limit)) =
-            classify_provider_limit(&failure, Utc::now())
-        else {
-            panic!("{}: not a usage limit", case.name);
-        };
         execute(
             &f.agent_access(),
             &format!(
                 r#"mutation {{ update_Goal(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ last_failure: "{}" }}) {{ _docID }} }}"#,
                 escape_graphql_string(&f.goal.doc_id),
-                escape_graphql_string(&limit.to_string())
+                escape_graphql_string(&failure)
             ),
         )
         .await;

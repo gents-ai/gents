@@ -967,6 +967,37 @@ impl RequestLifecycle {
         Ok(ClaimOutcome::Claimed)
     }
 
+    /// The pin this request's first claim writes (Lean
+    /// `Request.PinnedRetryBudget.claimPin`), with the parent's pin as the
+    /// Node signed it (`read_pin`). A retry parent is terminal before its
+    /// successor exists and its pin was written before it ran, so the pin
+    /// read here cannot change before this claim commits.
+    async fn first_claim_retry_budget(&self) -> Result<u64> {
+        let parent_doc_id = self
+            .request
+            .retry_parent_request_doc_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|doc_id| !doc_id.is_empty());
+        let parent_pin = match parent_doc_id {
+            Some(parent_doc_id) => {
+                crate::request::retry_budget::read_pin(
+                    &self.access()?,
+                    &self.request.node_did,
+                    parent_doc_id,
+                )
+                .await?
+            }
+            None => None,
+        };
+        Ok(crate::request::retry_budget::claim_pin(
+            self.request.purpose == gents_protocol::request_admission::RequestPurpose::Normal,
+            self.configured_max_request_retries,
+            parent_doc_id.is_some(),
+            parent_pin,
+        )?)
+    }
+
     async fn persist_pending_claim_at(
         &self,
         now: chrono::DateTime<chrono::Utc>,
@@ -1015,7 +1046,14 @@ impl RequestLifecycle {
         let prior_generation = gents_protocol::graphql::graphql_input_literal(
             &serde_json::to_value(&self.request.execution_generation)?,
         )?;
-        let budget_field = if self.request.execution_generation.is_none() {
+        let first_claim = self.request.execution_generation.is_none();
+        let retry_pin = match &self.retry_budget_pin_writer {
+            Some(writer) if first_claim => {
+                Some((writer.clone(), self.first_claim_retry_budget().await?))
+            }
+            _ => None,
+        };
+        let budget_field = if first_claim {
             let limit = self
                 .configured_max_total_tokens
                 .map(|limit| {
@@ -1126,6 +1164,16 @@ impl RequestLifecycle {
             execution_origin,
             "claimed agent request with exact DefraDB version"
         );
+        if let Some((writer, max_retries)) = retry_pin {
+            crate::request::retry_budget::write_pin(
+                self.node.clone(),
+                writer,
+                &claimed_request.node_did,
+                &doc_id,
+                max_retries,
+            )
+            .await?;
+        }
 
         Ok(Some(DurableClaimReceipt {
             request: claimed_request,

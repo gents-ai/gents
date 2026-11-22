@@ -1117,7 +1117,7 @@ async fn claimed_publication_replay_keeps_its_hop_across_a_same_second_write() {
             node_did: "{}", requester_did: "{}", agent_did: "{}",
             session_id: "{SESSION}", content: "later work", execution_origin: "scheduled",
             lifecycle_state: "completed", failure_reason: "", created_at: "{}",
-            retry_count: 0, max_retries: 3, retry_root_request: "background-completion-same-second",
+            retry_count: 0, retry_root_request: "background-completion-same-second",
             request_hop: {}
         }}) {{ _docID }} }}"#,
             escape_graphql_string(fixture.identity.did()),

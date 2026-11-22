@@ -1,0 +1,10 @@
+type AgentRequestRetryBudget @policy(id: "$household", resource: "request_retry_budgets") {
+    # The successor budget a request's first claim pins
+    # (Lean Request.PinnedRetryBudget, Identity.RequestRetryBudget): created
+    # once by the request's Node, which signs node_did, request_doc_id and
+    # max_retries; no one else may update or delete it.
+    request_doc_id: String @index @immutable
+    node_did: String @index @immutable
+    max_retries: Int @immutable
+    signature: String @immutable
+}

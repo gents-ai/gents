@@ -21,6 +21,11 @@ def loopConfigForRequest : Conformance.Family Input (Option Observation) :=
                 temperature := if sampled then some 1 else none,
                 topK := if sampled then some 40 else none,
                 maxTokens := if sampled then some 1024 else none,
-                session, request, budget }), resolve⟩
+                session, request, budget }) ++
+    ["interactive", "scheduled"].flatMap (fun origin =>
+      [none, some (-1), some 0, some 1, some 60000, some 300000, some 300001, some 3600000].map
+        fun maxWait =>
+          ({ origin, transport := none, interactive := none, resample := none, repair := none,
+             delays := none, hops := 0, deadline := none, maxWait } : Input)), resolve⟩
 
 end Runtime.CompletionConfig

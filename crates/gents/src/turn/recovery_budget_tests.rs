@@ -106,6 +106,7 @@ fn pending_call(
         request_purpose: gents_protocol::request_admission::RequestPurpose::Normal,
         model_name: None,
         profile_id: None,
+        max_rate_limit_wait: gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT,
         call_id: call_id.into(),
         runtime_instance_id: "recovery-cas-runtime".into(),
         request_id: "recovery-cas-request".into(),
@@ -233,6 +234,7 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
         &snapshot.doc_id,
         "completed",
         None,
+        None,
         Some(usage),
         gents_loop::rig_compat::CachedInputTokensObservation::NotAvailable,
     )
@@ -264,6 +266,7 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
         &call,
         &snapshot.doc_id,
         "completed",
+        None,
         None,
         Some(usage),
         gents_loop::rig_compat::CachedInputTokensObservation::NotAvailable,

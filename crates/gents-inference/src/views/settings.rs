@@ -105,6 +105,7 @@ settings_view!(
         DISPLAY_NAME,
         MAX_TURNS,
         MAX_TOTAL_TOKENS,
+        MAX_REQUEST_RETRIES,
         STREAM_BATCH_MS,
         STREAM_LIVENESS_TIMEOUT_SECS,
         PROVIDER_IDLE_TIMEOUT_SECS,
@@ -125,6 +126,7 @@ settings_view!(
         MAX_RESAMPLE_RETRIES,
         ALLOW_REPAIR,
         INTERACTIVE_MAX_RETRIES,
+        MAX_RATE_LIMIT_WAIT_MS,
         TAGS
     ]
 );
