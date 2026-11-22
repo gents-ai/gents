@@ -217,6 +217,7 @@ pub(super) async fn install(
         .map(|agent| agent.agent_did.clone())
         .collect::<Vec<_>>();
     install_workspace_root(&access, &node_did, workspace, &root_readers).await?;
+    install_core_packs(spec, home, &node_did, &agent_did).await?;
     let mut fixtures = spec.fixtures.clone();
     for fixture in &mut fixtures.documents {
         gents_pack::pack::bind_agent_references(&mut fixture.document, &identity.agent_bindings)?;
@@ -254,6 +255,65 @@ pub(super) async fn install(
     )
     .await?;
     Ok(agent_did)
+}
+
+/// Leaves each of the subject's core packs on its agent as `gents init`
+/// leaves them on the Engineer, through the same owner and from the archives
+/// this build carries. The evaluator is the trial node's init User, so it
+/// holds the store and signs the wire, as init's User does.
+async fn install_core_packs(
+    spec: &TrialSpec,
+    home: &EmbeddedHome,
+    node_did: &str,
+    agent_did: &str,
+) -> Result<()> {
+    use gents::operations::core_packs::{apply, Consent, CorePackTarget};
+    use gents_pack::pack::core_packs::{init_wiring, CorePack};
+    use gents_pack::pack::plugin_wire::{HeldUser, WireSigners};
+
+    if spec.core_packs.is_empty() {
+        return Ok(());
+    }
+    let access = home.local_client_access(&spec.evaluator_did)?;
+    let target = CorePackTarget {
+        access: &access,
+        owner: node_did,
+        home: home.path(),
+        engineer: agent_did,
+        runtime: home.identity.clone(),
+        signers: WireSigners {
+            held_user: HeldUser::Held(home.evaluator_identity(&spec.evaluator_did)?),
+            client: trial_wires_through_its_own_store,
+        },
+        registry: None,
+        enable_with: "the eval definition's subject core_packs".to_owned(),
+    };
+    for coordinate in &spec.core_packs {
+        let pack = CorePack::of_coordinate(coordinate)
+            .with_context(|| format!("{coordinate} is not a core pack"))?;
+        apply(
+            &target,
+            pack,
+            gents_core_packs::archives(),
+            init_wiring(pack),
+            Consent::Init,
+        )
+        .await
+        .with_context(|| format!("installing core pack {coordinate} on the trial subject"))?;
+    }
+    Ok(())
+}
+
+fn trial_wires_through_its_own_store(
+    _: gents_store::config_client::GraphqlEndpoint,
+    _: String,
+    _: std::path::PathBuf,
+    _: gents_pack::pack::plugin_wire::WireRequest,
+    _: Option<gents_pack::pack::plugin_wire::ClientPlan>,
+) -> futures::future::BoxFuture<'static, Result<Value>> {
+    Box::pin(async {
+        anyhow::bail!("an eval trial wires its core packs through its own store, never a runtime")
+    })
 }
 
 pub(crate) async fn grant_trial_operations(home: &EmbeddedHome, target: &str) -> Result<()> {

@@ -120,3 +120,32 @@ pub(super) fn select_cases(
     }
     Ok(selected)
 }
+
+/// Refuses a definition whose subject names a core pack that is not one, or
+/// one `archives` (the running build's) does not carry: every trial would
+/// install it, so a run that cannot is refused before any trial starts.
+pub(crate) fn validate_core_packs(
+    definition: &gents_documents::EvalDefinition,
+    archives: gents::operations::core_packs::Archives<'_>,
+) -> Result<()> {
+    for coordinate in &definition.subject.core_packs {
+        let Some(pack) = gents_pack::pack::core_packs::CorePack::of_coordinate(coordinate) else {
+            return Err(refused(format!(
+                "eval definition {} names {coordinate:?} in subject core_packs, which is not a core pack ({})",
+                definition.definition_id,
+                gents_pack::pack::core_packs::CorePack::ALL
+                    .map(gents_pack::pack::core_packs::CorePack::coordinate)
+                    .join(", ")
+            )));
+        };
+        if gents::operations::core_packs::release_archive(archives, pack).is_none() {
+            return Err(refused(format!(
+                "eval definition {} installs {} on its subject, but {}",
+                definition.definition_id,
+                pack.coordinate(),
+                gents::operations::core_packs::not_carried(pack)
+            )));
+        }
+    }
+    Ok(())
+}

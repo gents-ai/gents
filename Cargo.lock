@@ -6751,6 +6751,7 @@ dependencies = [
  "futures",
  "gents",
  "gents-automation",
+ "gents-core-packs",
  "gents-documents",
  "gents-eval",
  "gents-inference",

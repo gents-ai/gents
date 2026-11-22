@@ -33,6 +33,9 @@ pub struct TrialSpec {
     pub fixtures: TrialFixtures,
     #[serde(default)]
     pub host_bash: bool,
+    /// Core packs installed on the subject before its first stage.
+    #[serde(default)]
+    pub core_packs: Vec<String>,
     pub stages: Vec<StageSpec>,
     pub trial_dir: PathBuf,
     pub script_key: Option<ScriptKey>,
@@ -67,6 +70,7 @@ impl TrialSpec {
             },
             fixtures: TrialFixtures::default(),
             host_bash: false,
+            core_packs: Vec::new(),
             stages: Vec::new(),
             trial_dir: PathBuf::new(),
             script_key: None,

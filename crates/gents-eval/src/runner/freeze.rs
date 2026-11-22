@@ -23,7 +23,8 @@ use self::snapshot::{
     read_frozen_definition, read_sidecar, sidecar_path, write_frozen_definition, write_sidecar,
 };
 use self::validate::{
-    select_cases, validate_cell_identity, validate_evaluator, validate_purpose, validate_seed_range,
+    select_cases, validate_cell_identity, validate_core_packs, validate_evaluator,
+    validate_purpose, validate_seed_range,
 };
 
 #[derive(Clone, Debug)]
@@ -118,6 +119,7 @@ pub async fn freeze(
     validate_cell_identity(request)?;
     validate_seed_range(request)?;
     let definition = load_definition(access, &request.owner, &request.definition_id).await?;
+    validate_core_packs(&definition, gents_core_packs::archives())?;
     let case_ids = select_cases(request, &definition)?;
 
     let run_dir = request.runs_dir.join(&request.run_id);
@@ -233,6 +235,7 @@ pub(crate) async fn thaw(
             definition
         }
     };
+    validate_core_packs(&definition, gents_core_packs::archives())?;
 
     let mut cells = Vec::with_capacity(record.origin.cells.len());
     for spec in &record.origin.cells {
