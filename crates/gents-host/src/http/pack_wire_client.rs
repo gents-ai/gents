@@ -116,6 +116,8 @@ pub async fn served_plan(
 /// itself, and its own key through a runtime serving the node.
 pub const SIGNERS: gents_pack::pack::plugin_wire::WireSigners =
     gents_pack::pack::plugin_wire::WireSigners {
-        held_user: gents_service::home_state::load_held_user_identity,
+        held_user: gents_pack::pack::plugin_wire::HeldUser::Load(
+            gents_service::home_state::load_held_user_identity,
+        ),
         client: wire_as_client,
     };

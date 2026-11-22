@@ -203,7 +203,7 @@ pub(crate) async fn init_home(args: InitArgs) -> Result<Value> {
 /// database.
 pub(crate) async fn init_home_with_core_packs(
     mut args: InitArgs,
-    core_packs: default_packs::Archives<'_>,
+    core_packs: gents::operations::core_packs::Archives<'_>,
 ) -> Result<Value> {
     let registry = args.registry.clone();
     let started = Instant::now();

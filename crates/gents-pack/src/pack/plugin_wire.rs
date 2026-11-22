@@ -33,6 +33,24 @@ pub type LoadHeldUser = fn(
     Result<Arc<dyn gents_store::identity::NodeIdentity>>,
 >;
 
+/// The held User a write through a local transaction signs with: loaded from
+/// the home that transaction opens, or held by a caller that opened the
+/// store itself, as an eval trial's evaluator is.
+#[derive(Clone)]
+pub enum HeldUser {
+    Load(LoadHeldUser),
+    Held(Arc<dyn gents_store::identity::NodeIdentity>),
+}
+
+impl HeldUser {
+    async fn identity(&self, home: &Path) -> Result<Arc<dyn gents_store::identity::NodeIdentity>> {
+        match self {
+            Self::Load(load) => load(home).await,
+            Self::Held(identity) => Ok(identity.clone()),
+        }
+    }
+}
+
 /// Wires a new pin through the runtime serving `endpoint`'s node, the client
 /// signing each of its writes with the User key it holds
 /// (`Identity.UserDelegation.runtimeSignsWithHeldUserKey`), from the plan
@@ -114,9 +132,9 @@ impl crate::pack::wiring::Vouch for Approved<'_> {
 
 /// Who signs a wire: the held User of a home a local transaction opens, or
 /// the client itself through the runtime serving the node.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct WireSigners {
-    pub held_user: LoadHeldUser,
+    pub held_user: HeldUser,
     pub client: WireAsClient,
 }
 
@@ -202,7 +220,7 @@ pub async fn wire_in_spawned(
     owner: &str,
     home: &Path,
     request: &WireRequest,
-    held_user: LoadHeldUser,
+    held_user: HeldUser,
 ) -> Result<Value> {
     let access = access.clone();
     let owner = owner.to_owned();
@@ -221,7 +239,7 @@ async fn wire_in_owned(
     owner: &str,
     home: &Path,
     request: &WireRequest,
-    held_user: LoadHeldUser,
+    held_user: HeldUser,
 ) -> Result<Value> {
     anyhow::ensure!(wire_target_allowed(matches!(access, ConfigAccess::Local(_)), request.preview, request.remove),
             "cannot publish a plugin pin through GraphQL because the commit outcome may be unknown; stop the runtime serving the owning node home, then run `gents config pack wire {} --agent {} --home <node-home>` without --graphql",
@@ -242,7 +260,7 @@ async fn wire_in_owned(
             })
             .await?
     } else if matches!(access, ConfigAccess::Local(_)) {
-        let client = held_user(home).await?;
+        let client = held_user.identity(home).await?;
         anyhow::ensure!(
             access.actor_did().as_deref() == Some(client.did()),
             "pack wire requires the held User identity selected by the local transaction"
@@ -539,7 +557,8 @@ pub async fn wire_pack_plugins_consenting(
                 record,
                 approvals: approvals.clone(),
             });
-            wired.push(wire_in_planned(access, owner, home, &request, plan, signers).await?);
+            wired
+                .push(wire_in_planned(access, owner, home, &request, plan, signers.clone()).await?);
         }
     }
     Ok(wired)
@@ -568,7 +587,7 @@ pub async fn attach_pack_skills(
     agent: &str,
     coordinate: &str,
     digest: &str,
-    held_user: LoadHeldUser,
+    held_user: HeldUser,
 ) -> Result<Vec<String>> {
     let skills: Vec<String> = installed_pack_documents(access, owner, coordinate)
         .await?
@@ -585,7 +604,7 @@ pub async fn attach_pack_skills(
         skills: &skills,
     };
     if matches!(access, ConfigAccess::Local(_)) {
-        let client = held_user(home).await?;
+        let client = held_user.identity(home).await?;
         anyhow::ensure!(
             access.actor_did().as_deref() == Some(client.did()),
             "attaching pack skills requires the held User identity selected by the local transaction"

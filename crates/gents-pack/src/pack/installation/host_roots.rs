@@ -1,8 +1,10 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use gents_documents::PackConfig;
 use gents_store::{collection::Collection, config_client::ConfigAccess};
 
-use super::documents::{host_tools_without_root, installer_tool_root};
+use super::documents::{
+    host_tools_without_root, installer_tool_root, tools_taking_installer_root, InstallerRootAgent,
+};
 use super::InstalledDependencySnapshot;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -89,6 +91,66 @@ pub(super) async fn default_host_tool_roots(
         }
     }
     Ok(supplied)
+}
+
+/// The agents `pack` would run under its installer's root on the node
+/// `node_did`, read from its archive alone: what a starter pack's status
+/// shows before any node plan exists. It is a display, not the grant's
+/// source: an approval carries these rows and the grant is their
+/// intersection with what the install recorded
+/// (`gents_tools::surface::grant_pack_root_readers`). A config that does
+/// not load is an error, never "no such agents": what was not read was not
+/// shown.
+pub fn listed_root_agents(
+    pack: &crate::pack::resolved_pack::ResolvedPack,
+    node_did: &str,
+) -> Result<Vec<InstallerRootAgent>> {
+    let coordinate = format!(
+        "{}/{}",
+        pack.manifest().metadata.namespace,
+        pack.manifest().name
+    );
+    if pack.manifest().config.is_none() {
+        return Ok(Vec::new());
+    }
+    crate::pack::load_pack_authoring_config(
+        pack.manifest(),
+        &crate::pack::PackInstallOptions {
+            node_did: node_did.to_owned(),
+        },
+        &|path| Ok(pack.asset(path)?.to_vec()),
+        &|name| std::env::var(name).ok(),
+    )
+    .and_then(|authored| {
+        let tools = tools_taking_installer_root(&authored.documents.tools)?;
+        // An authored agent names a slot, not a DID, so it is read as written.
+        let rows = |key: &str| authored.value[key].as_array().into_iter().flatten();
+        Ok(rows("agents")
+            .filter_map(|agent| {
+                let selected = rows("contexts")
+                    .find(|context| {
+                        context["context_id"].is_string()
+                            && context["context_id"] == agent["context_id"]
+                    })
+                    .and_then(|context| context["tools_id"].as_str())
+                    .filter(|selected| tools.iter().any(|id| id == selected))?;
+                Some(InstallerRootAgent {
+                    coordinate: coordinate.clone(),
+                    agent: agent["agent_slot"]
+                        .as_str()
+                        .or(agent["agent_did"].as_str())?
+                        .to_owned(),
+                    name: agent["display_name"].as_str().map(ToOwned::to_owned),
+                    tools: selected.to_owned(),
+                })
+            })
+            .collect())
+    })
+    .with_context(|| {
+        format!(
+            "{coordinate} did not load for its host tool review, so the folder its agents would read is unknown"
+        )
+    })
 }
 
 #[cfg(test)]
