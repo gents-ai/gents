@@ -20,7 +20,6 @@ pub struct LeanContractSnapshot {
     pub coverage_ledger: Vec<LeanCoverageEntry>,
     pub feature_surface_requirements: Vec<LeanFeatureSurfaceRequirement>,
     pub feature_matrix: LeanFeatureMatrix,
-    pub recovery_sweep_ids: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
