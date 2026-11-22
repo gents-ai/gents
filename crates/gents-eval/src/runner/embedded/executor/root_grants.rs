@@ -17,8 +17,9 @@ use crate::runner::embedded::home::{fetch_node_readiness_snapshot, EmbeddedHome}
 
 const READMISSION_WINDOW: Duration = Duration::from_secs(30);
 
-/// Agents waiting for the trial root: demoted for their tool surface and not
-/// yet granted by this trial.
+/// Agents waiting for the trial root: demoted for a root they cannot read —
+/// either an unadmitted tool surface in general, or the specific missing
+/// `reader` this trial grants — and not yet granted by this trial.
 fn awaiting_root(
     snapshot: &gents_protocol::node_readiness::NodeReadinessSnapshot,
     granted: &BTreeSet<String>,
@@ -28,7 +29,13 @@ fn awaiting_root(
         .iter()
         .filter(|agent| {
             agent.state == AgentReadinessState::Unavailable
-                && agent.reason == Some(AgentReadinessUnavailableReason::ToolSurfaceUnavailable)
+                && matches!(
+                    agent.reason,
+                    Some(
+                        AgentReadinessUnavailableReason::ToolSurfaceUnavailable
+                            | AgentReadinessUnavailableReason::WorkspaceRootReaderMissing
+                    )
+                )
                 && !granted.contains(&agent.agent_did)
         })
         .map(|agent| agent.agent_did.clone())
@@ -110,6 +117,11 @@ mod tests {
                     Some(AgentReadinessUnavailableReason::ToolSurfaceUnavailable),
                 ),
                 entry(
+                    "reader-missing",
+                    AgentReadinessState::Unavailable,
+                    Some(AgentReadinessUnavailableReason::WorkspaceRootReaderMissing),
+                ),
+                entry(
                     "disabled",
                     AgentReadinessState::Unavailable,
                     Some(AgentReadinessUnavailableReason::AgentDisabled),
@@ -117,6 +129,10 @@ mod tests {
             ],
         };
         let granted = BTreeSet::from(["granted".to_owned()]);
-        assert_eq!(awaiting_root(&snapshot, &granted), vec!["scout".to_owned()]);
+        assert_eq!(
+            awaiting_root(&snapshot, &granted),
+            vec!["scout".to_owned(), "reader-missing".to_owned()],
+            "an agent whose host tools read a root it is not a reader of is granted exactly like one with an unadmitted surface"
+        );
     }
 }

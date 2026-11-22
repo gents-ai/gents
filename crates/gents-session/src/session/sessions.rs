@@ -1298,18 +1298,18 @@ mod invoke_session_isolation_tests {
                 0,
             )
             .await?;
-        let policy_id = gents_protocol::schemas::HomePolicyIds::shared()
+        let policy_id = gents_protocol::schemas::HomePolicyIds::node_store()
             .id(gents_protocol::schemas::BuiltInPolicy::Household);
         node.add_collection_as(
             &root_context,
-            &gents_protocol::schemas::HomePolicyIds::shared()
+            &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_protocol::schemas::AGENT)
                 .replace(policy_id, &policy),
         )
         .await?;
         node.add_collection_as(
             &root_context,
-            &gents_protocol::schemas::HomePolicyIds::shared()
+            &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_protocol::schemas::AGENT_SESSION)
                 .replace(policy_id, &policy),
         )

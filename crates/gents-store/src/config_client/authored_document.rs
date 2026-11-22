@@ -62,7 +62,7 @@ fn unsupported_client_create(
     collection: &str,
     fields: &Value,
 ) -> Option<AuthoredDocumentCreateError> {
-    let schema = super::client_signed_agent::signing_schema(sdl, collection).ok()?;
+    let schema = super::client_signed_agent::written_signing_schema(sdl, collection).ok()?;
     if schema.is_branchable {
         return Some(AuthoredDocumentCreateError::BranchableCollection {
             collection: collection.to_owned(),
@@ -214,7 +214,7 @@ mod tests {
                 .build()
                 .await?,
         );
-        node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(SDL))
+        node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(SDL))
             .await?;
         let offline =
             || ConfigAccess::local_as(node.clone(), identity::Did::new(user.did()).unwrap());
@@ -274,7 +274,7 @@ mod tests {
                 .build()
                 .await?,
         );
-        node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(SDL))
+        node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(SDL))
             .await?;
         let local = ConfigAccess::local_as(node.clone(), identity::Did::new(user.did()).unwrap());
         let routed = local.clone().with_client_signed_writes_through(

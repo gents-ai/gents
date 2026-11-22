@@ -9,6 +9,25 @@ pub const TXN_CONFLICT_CODE: &str = "TXN_CONFLICT";
 /// DefraDB reports explicit ACP refusal with this structured GraphQL code.
 pub const PERMISSION_DENIED_CODE: &str = "PERMISSION_DENIED";
 
+/// Why a strict read returned no rows (`DecisionRead.AccessCheck`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccessCheck {
+    Unavailable,
+    Failed,
+}
+
+impl AccessCheck {
+    /// `DecisionRead.accessCheck`.
+    pub fn from_code(code: &str) -> Option<Self> {
+        match code {
+            "ACCESS_CHECK_UNAVAILABLE" => Some(Self::Unavailable),
+            "ACCESS_CHECK_FAILED" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+
 /// Full storage does not establish whether a mutation committed. A latched
 /// store must be reopened by its existing owner after space is available.
 #[derive(Debug, Clone, Copy)]
@@ -72,6 +91,16 @@ impl GraphqlFailure {
             error.pointer("/extensions/code").and_then(Value::as_str)
                 == Some(crate::delegation_audience::DELEGATION_OUTSIDE_WINDOW_CODE)
         })
+    }
+
+    /// The access check a strict read failed on, when it failed on one.
+    pub fn access_check(&self) -> Option<AccessCheck> {
+        self.errors
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|error| error.pointer("/extensions/code").and_then(Value::as_str))
+            .find_map(AccessCheck::from_code)
     }
 
     pub fn is_permission_denied(&self) -> bool {

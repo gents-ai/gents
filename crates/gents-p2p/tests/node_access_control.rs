@@ -183,8 +183,10 @@ fn served_home_admits_only_its_principal_across_restart() -> Result<()> {
     serve_phase(&data_dir, &identity, |node, address| {
         let identity = identity.clone();
         Box::pin(async move {
-            node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(SCHEMA))
-                .await?;
+            node.add_collection(
+                &gents_protocol::schemas::HomePolicyIds::node_store().render(SCHEMA),
+            )
+            .await?;
             assert_access_control(node, identity.as_ref(), address, "first").await;
             Ok(())
         })

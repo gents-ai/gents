@@ -54,7 +54,7 @@ impl ConfigCommandTool {
         let mut managed = Vec::new();
         let mut absent = Vec::new();
         for collection in &data.collections {
-            if gents_store::schema::catalog::RUNTIME_CATALOG.manages(collection) {
+            if gents_store::schema::catalog::is_runtime_collection(collection) {
                 managed.push(collection.as_str());
             } else if access
                 .collection_version(collection)

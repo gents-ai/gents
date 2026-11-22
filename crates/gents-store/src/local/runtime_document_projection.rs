@@ -6,15 +6,18 @@ use crate::config_client::transport_publication::{
 };
 
 pub struct RuntimeDocumentProjector {
+    ids: &'static gents_protocol::schemas::HomePolicyIds,
     tools: ToolPermissionProjection,
     startup_plugins: Option<Vec<super::ProjectedPlugin>>,
     projection_rules: Vec<acp::projection::Rule>,
 }
 
 impl RuntimeDocumentProjector {
+    /// The projector of a home whose built-in policies have `ids`.
     pub fn new(
         node: std::sync::Arc<dyn crate::identity::NodeIdentity>,
         policy: std::sync::Arc<dyn super::ToolSourcePolicy>,
+        ids: &'static gents_protocol::schemas::HomePolicyIds,
     ) -> std::result::Result<Self, identity::Error> {
         let mut projection_rules = Vec::new();
         for collection in gents_protocol::schemas::BRANCHABLE_AGENT_COLLECTION_NAMES {
@@ -50,6 +53,7 @@ impl RuntimeDocumentProjector {
             }
         }
         Ok(Self {
+            ids,
             tools: ToolPermissionProjection::new(node, policy)?,
             startup_plugins: None,
             projection_rules,
@@ -83,14 +87,14 @@ impl RuntimeDocumentProjector {
         ) {
             self.tools.update(ctx).await?;
         }
-        if project_transport_document(ctx, collection, doc_id).await? {
+        if project_transport_document(ctx, self.ids, collection, doc_id).await? {
             ctx.notify_access_changed(collection, doc_id).await?;
         }
         Ok(())
     }
 
     async fn reconcile_transport(&self, ctx: &db::DocumentMutationContext<'_>) -> Result<()> {
-        for (collection, doc_id) in reconcile_transport_documents(ctx).await? {
+        for (collection, doc_id) in reconcile_transport_documents(ctx, self.ids).await? {
             ctx.notify_access_changed(&collection, &doc_id).await?;
         }
         Ok(())
@@ -158,13 +162,7 @@ impl db::DocumentMutationProjector for RuntimeDocumentProjector {
         policy: &str,
         resource: &str,
     ) -> Option<db::GenesisReadAccess> {
-        receiver_genesis_access(
-            gents_protocol::schemas::HomePolicyIds::shared(),
-            collection,
-            policy,
-            resource,
-        )
-        .unwrap_or_else(|error| {
+        receiver_genesis_access(self.ids, collection, policy, resource).unwrap_or_else(|error| {
             tracing::error!(
                 error = %gents_protocol::error_chain::ErrorChain(&error),
                 "a replicated genesis is left unread"

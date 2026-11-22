@@ -7,7 +7,7 @@ use crate::schema::catalog::{ensure_runtime, SchemaError};
 async fn fresh_inference_usage_keeps_its_canonical_root_and_single_indexes() {
     let node = common::fresh_node().await;
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared().render(schemas::INFERENCE_CALL),
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(schemas::INFERENCE_CALL),
     )
     .await
     .unwrap();
@@ -36,12 +36,14 @@ async fn fresh_inference_usage_keeps_its_canonical_root_and_single_indexes() {
 #[tokio::test]
 async fn incompatible_inference_usage_stays_refused_without_schema_changes() {
     let node = common::fresh_node().await;
-    let incompatible = gents_protocol::schemas::HomePolicyIds::shared()
+    let incompatible = gents_protocol::schemas::HomePolicyIds::node_store()
         .render(schemas::INFERENCE_CALL)
         .replace("prompt_tokens: Int", "prompt_tokens: String");
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&incompatible))
-        .await
-        .unwrap();
+    node.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(&incompatible),
+    )
+    .await
+    .unwrap();
     let before = node.get_collection("InferenceCall").unwrap().unwrap();
     let error = ensure_runtime(node.as_ref()).await.unwrap_err();
     assert!(matches!(error, SchemaError::UnknownLineage { .. }));

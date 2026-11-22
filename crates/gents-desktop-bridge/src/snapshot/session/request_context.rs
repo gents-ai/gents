@@ -24,7 +24,9 @@ pub async fn load_session_context_details(
     if !has_context_accounting(&row) {
         return Ok(None);
     }
-    let context = decode_request_context_row(&row)?;
+    let Some(context) = decode_request_context_row(&row)? else {
+        return Ok(None);
+    };
     let Some(physical_id) = context.request_doc_id.as_deref() else {
         return Ok(None);
     };
@@ -123,13 +125,16 @@ pub(super) async fn load_session_request_context_history(
         .collect::<Result<Vec<_>, _>>()?
         .iter()
         .filter(|row| has_context_accounting(row))
-        .map(|row| {
-            let mut context = decode_request_context_row(row)?;
+        .filter_map(|row| {
+            let mut context = match decode_request_context_row(row) {
+                Ok(context) => context?,
+                Err(error) => return Some(Err(error)),
+            };
             context.anchor_sequence = context
                 .request_doc_id
                 .as_deref()
                 .and_then(|doc_id| anchors.get(doc_id).copied());
-            Ok(context)
+            Some(Ok(context))
         })
         .collect()
 }
@@ -343,9 +348,14 @@ pub(super) fn decode_latest_request_context(
         })
         .map(decode_request_context_row)
         .transpose()
+        .map(Option::flatten)
 }
 
-fn decode_request_context_row(row: &serde_json::Value) -> anyhow::Result<LoadedRequestContext> {
+/// The row's request context, or none when its accounting is of a version
+/// this reader does not know.
+fn decode_request_context_row(
+    row: &serde_json::Value,
+) -> anyhow::Result<Option<LoadedRequestContext>> {
     let required_string = |field: &str| {
         row.get(field)
             .and_then(serde_json::Value::as_str)
@@ -354,7 +364,13 @@ fn decode_request_context_row(row: &serde_json::Value) -> anyhow::Result<LoadedR
             .ok_or_else(|| anyhow::anyhow!("InferenceCall accounting row has no {field}"))
     };
     let encoded = required_string("context_accounting_json")?;
-    Ok(LoadedRequestContext {
+    let Some(accounting) = gents_protocol::rendered_request::ContextAccounting::parse(&encoded)
+        .map_err(|error| anyhow::anyhow!("decoding context_accounting_json: {error}"))?
+        .current()
+    else {
+        return Ok(None);
+    };
+    Ok(Some(LoadedRequestContext {
         request_id: required_string("request_id")?,
         request_doc_id: required_string("request_doc_id").ok(),
         anchor_sequence: None,
@@ -367,9 +383,8 @@ fn decode_request_context_row(row: &serde_json::Value) -> anyhow::Result<LoadedR
             .get("queued_at")
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned),
-        accounting: serde_json::from_str(&encoded)
-            .map_err(|error| anyhow::anyhow!("decoding context_accounting_json: {error}"))?,
-    })
+        accounting,
+    }))
 }
 
 #[cfg(test)]
@@ -426,6 +441,7 @@ mod tests {
         );
         let accounting = serde_json::json!({
             "accounting_version":gents_protocol::rendered_request::CONTEXT_ACCOUNTING_VERSION,
+            "history_stubbing": {"stubbed_results": 0, "original_bytes": 0, "stub_bytes": 0},
             "turn_index":0, "attempt":0, "estimator":"openai_chat_wire_json_bytes_div_4_v1",
             "components":{"messages":1,"documents":0,"tool_schemas":0,"additional_parameters":0,"output_schema":0},
             "estimated_input_tokens":1, "context_window":10000,
@@ -593,7 +609,11 @@ mod tests {
                 "call_seq": call_seq,
                 "queued_at": format!("2026-10-29T21:14:5{call_seq}Z"),
                 "context_accounting_json": serde_json::json!({
-                    "accounting_version": 2, "attempt": 0, "compaction_reason": reason,
+                    "accounting_version":
+                        gents_protocol::rendered_request::CONTEXT_ACCOUNTING_VERSION,
+                    "history_stubbing": {"stubbed_results": 0, "original_bytes": 0,
+                        "stub_bytes": 0},
+                    "attempt": 0, "compaction_reason": reason,
                     "compaction_threshold_basis_points": 250,
                     "compaction_threshold_tokens": 25000,
                     "components": {"additional_parameters": 35, "documents": 0,
@@ -604,6 +624,7 @@ mod tests {
                     "pre_compaction_input_tokens": 26865, "turn_index": 1
                 }).to_string(),
             }))
+            .unwrap()
             .unwrap();
             context.anchor_sequence = Some(12);
             context

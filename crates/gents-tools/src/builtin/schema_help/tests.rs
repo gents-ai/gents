@@ -420,7 +420,7 @@ async fn schema_view_and_materialization_use_managed_agent_authority() {
     for scratch in ["AgentScratch", "AgentScratchKept"] {
         owner
             .add_collection(
-                &gents_protocol::schemas::HomePolicyIds::shared()
+                &gents_protocol::schemas::HomePolicyIds::node_store()
                     .render(&format!("type {scratch} {{ name: String }}")),
             )
             .await
@@ -432,6 +432,17 @@ async fn schema_view_and_materialization_use_managed_agent_authority() {
             )
             .await
             .unwrap();
+    }
+    for scratch in ["AgentScratch", "AgentScratchKept"] {
+        let result = owner
+            .execute(&format!("{{ {scratch} {{ _docID name }} }}"))
+            .await
+            .unwrap();
+        assert_eq!(
+            result["data"][scratch].as_array().unwrap().len(),
+            1,
+            "{result}"
+        );
     }
     let actor_did = identity::Did::new(agent.did()).unwrap();
     let access =
@@ -479,7 +490,31 @@ async fn schema_view_and_materialization_use_managed_agent_authority() {
         .await
         .unwrap();
     assert!(permissions.contains(&NodePermission::CollectionTruncate));
+    let kept_before_truncate = owner
+        .execute("{ AgentScratchKept { _docID name } }")
+        .await
+        .unwrap();
+    assert_eq!(
+        kept_before_truncate["data"]["AgentScratchKept"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1,
+        "before truncate: {kept_before_truncate}"
+    );
     access.truncate_collection("AgentScratch").await.unwrap();
+    let kept_after_truncate = owner
+        .execute("{ AgentScratchKept { _docID name } }")
+        .await
+        .unwrap();
+    assert_eq!(
+        kept_after_truncate["data"]["AgentScratchKept"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1,
+        "{kept_after_truncate}"
+    );
     access
         .remove_collections(&["AgentScratch".to_owned()])
         .await

@@ -478,10 +478,11 @@ def pull_request_context(head_repository, repository="gents-ai/gents"):
     fork = (head_repository or "").lower() != repository.lower()
     # A gate plan that selects every job, so only the trust rule can skip one,
     # routed as the plan job routes this pull request.
-    plan = {"runs_on": {role: GATE.runner(role, fork=fork, fallback=False) for role in GATE.WORKFLOW_ROLES},
+    plan = {"runs_on": {role: GATE.runner(role, fork=fork, fallback=False, event="pull_request")
+                        for role in GATE.WORKFLOW_ROLES},
             "jobs": ["contract", "fmt", "lint", "ts-browser", "ts-fuzz", "ts-packages", "ts-unit",
                      "test:runtime", "build:portable", "shard:portable"]}
-    matrix = [{"group": group.name, "runs_on": GATE.runner(group.runner, fork=fork, fallback=False)}
+    matrix = [{"group": group.name, "runs_on": GATE.runner(group.runner, fork=fork, fallback=False, event="pull_request")}
               for group in GATE.GROUPS]
     outputs = {"plan": json.dumps(plan), "jobs": json.dumps(plan["jobs"]), "tests": "true"}
     return {"github": {"event_name": "pull_request", "ref": "refs/pull/1/merge",
@@ -539,6 +540,15 @@ class SelfHostedRoutingTests(unittest.TestCase):
                 self.assertTrue(job_runs(condition, context))
                 expected = not (key == ("ci.yml", "desktop-ui") and browser_hosted)
                 self.assertEqual(self_hosted(runners), expected, runners)
+
+    def test_pull_request_jobs_stay_off_the_merge_queues_reserved_runners(self):
+        label = GATE.reserve_label()
+        context = pull_request_context("gents-ai/gents")
+        for workflow, job, condition, runners in self.routed(context):
+            with self.subTest(workflow=workflow, job=job):
+                for labels in runners:
+                    if isinstance(labels, list) and "self-hosted" in labels:
+                        self.assertIn(label, labels)
 
     def test_the_guard_reports_skipped_jobs_to_a_fork(self):
         guard = [job_field(block, "if") for workflow, job, block in pull_request_job_blocks()

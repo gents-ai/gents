@@ -33,6 +33,14 @@ fn wrapped(wrapper: &str, failure: AccessFailure, erasure: Erasure) -> AccessCla
             erasure,
             crate::client_journal::outbox::OutboxError::Response(response()),
         ),
+        "receiver_error_store" => classify_erased(
+            erasure,
+            crate::config_client::assignment_receiver::ReceiverError::Store(access),
+        ),
+        "receiver_error_response" => classify_erased(
+            erasure,
+            crate::config_client::assignment_receiver::ReceiverError::Response(response()),
+        ),
         "client_access_error_access" => classify_erased(
             erasure,
             crate::identity::client_access::ClientAccessError::Access(access),

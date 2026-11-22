@@ -24,6 +24,12 @@ pub enum StorageBackendError {
         #[source]
         source: crate::schema::catalog::SchemaError,
     },
+    #[error("reading which document access control {} was created with", path.display())]
+    InspectionProvider {
+        path: PathBuf,
+        #[source]
+        source: Box<crate::local::document_acp::DocumentAcpError>,
+    },
 }
 
 impl StorageBackendError {
@@ -33,7 +39,8 @@ impl StorageBackendError {
             Self::Io(_)
             | Self::NoExistingDatabase { .. }
             | Self::InspectionOpen { .. }
-            | Self::InspectionSchema { .. } => None,
+            | Self::InspectionSchema { .. }
+            | Self::InspectionProvider { .. } => None,
         }
     }
 }
@@ -128,8 +135,16 @@ pub async fn refuse_other_version_schema(
         Some(key) => key.encrypt(builder),
         None => builder,
     };
+    let ids = crate::local::document_acp::home_policy_ids(
+        crate::local::document_acp::recorded(data_path).map_err(|source| {
+            StorageBackendError::InspectionProvider {
+                path: data_path.to_path_buf(),
+                source: Box::new(source),
+            }
+        })?,
+    );
     let node = builder.build().await.map_err(opened)?;
-    let validated = crate::schema::catalog::validate_existing_schema(&node).await;
+    let validated = crate::schema::catalog::validate_existing_schema(&node, ids).await;
     node.shutdown().await.map_err(opened)?;
     validated.map_err(|source| match incompatible_store(&source, data_path) {
         Some(store) => StorageBackendError::Incompatible(store),
@@ -443,10 +458,10 @@ mod tests {
         crate::test_support::acp_policies::install_identity_acp_policies(&node)
             .await
             .unwrap();
-        node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&format!(
+        node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&format!(
             r#"type {} @policy(id: "{}", resource: "secret_configuration") {{ backend_id: String }}"#,
             gents_protocol::schemas::INFERENCE_BACKEND_NAME,
-            gents_protocol::schemas::HomePolicyIds::shared().id(gents_protocol::schemas::BuiltInPolicy::Household),
+            gents_protocol::schemas::HomePolicyIds::node_store().id(gents_protocol::schemas::BuiltInPolicy::Household),
         )))
         .await
         .unwrap();

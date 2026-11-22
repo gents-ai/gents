@@ -302,18 +302,18 @@ resources:
         )
         .await
         .unwrap();
-    let schema = gents_protocol::schemas::HomePolicyIds::shared()
+    let schema = gents_protocol::schemas::HomePolicyIds::node_store()
         .render(gents_protocol::schemas::AGENT_SESSION)
         .replace(
             &format!(
                 "@policy(id: \"{}\", resource: \"sessions\")",
-                gents_protocol::schemas::HomePolicyIds::shared()
+                gents_protocol::schemas::HomePolicyIds::node_store()
                     .id(gents_protocol::schemas::BuiltInPolicy::Household)
             ),
             &format!("@policy(id: \"{policy}\", resource: \"sessions\")"),
         );
     ConfigAccess::local(Arc::clone(&node))
-        .add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&schema))
+        .add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&schema))
         .await
         .unwrap();
     let id = create_session(&node, &owner).await.unwrap();
@@ -401,7 +401,7 @@ async fn concurrent_archive_calls_commit_one_revision() {
         .await
         .unwrap();
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared()
+        &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::AGENT_SESSION),
     )
     .await
@@ -465,7 +465,7 @@ async fn authenticated_http_archive_uses_the_same_durable_transaction_owner() ->
         .await?;
     assert_eq!(
         policy,
-        gents_protocol::schemas::HomePolicyIds::shared()
+        gents_protocol::schemas::HomePolicyIds::node_store()
             .id(gents_protocol::schemas::BuiltInPolicy::Household)
     );
     for schema in [
@@ -475,7 +475,7 @@ async fn authenticated_http_archive_uses_the_same_durable_transaction_owner() ->
     ] {
         node.add_collection_as(
             &context,
-            &gents_protocol::schemas::HomePolicyIds::shared().render(schema),
+            &gents_protocol::schemas::HomePolicyIds::node_store().render(schema),
         )
         .await?;
     }

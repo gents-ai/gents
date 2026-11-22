@@ -125,7 +125,7 @@ async fn competing_goal_reservations_and_acknowledgement_survive_reopen() -> Res
         };
         let node = open().await?;
         node.add_collection(
-            &gents_protocol::schemas::HomePolicyIds::shared()
+            &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(&crate::test_support::unbound_journal_schema()),
         )
         .await?;

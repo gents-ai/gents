@@ -73,6 +73,7 @@ def resource : Family ResourceInput (Option String) where
     "Trigger",
     "EventSource",
     "EventSourceCursor",
+    "CertifiedAssignmentState",
     "Agent",
     "AgentRequest",
     "AgentSession",

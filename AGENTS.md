@@ -201,6 +201,8 @@ pass.
 
 **Runners** are chosen by role from `.github/ci-runners.json` (capability
 labels, never host names); a machine joins by registering with a role's labels.
+Pull request jobs also require `ci-pr`; the few runners without it
+(`gate.py runners`) serve only the merge queue and the nightly run.
 A fork pull request never runs on a self-hosted runner; a maintainer pushes it
 to a branch here to test it.
 

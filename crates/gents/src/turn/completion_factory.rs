@@ -425,10 +425,11 @@ struct RecordedCalibration {
 /// under the estimate is implausible for an undercounting estimator; neither
 /// is an observation, so neither can lower the ratio.
 fn recorded_calibration(row: &CalibrationCallRow, estimator: &str) -> Option<RecordedCalibration> {
-    let accounting = serde_json::from_str::<gents_protocol::rendered_request::ContextAccounting>(
+    let accounting = gents_protocol::rendered_request::ContextAccounting::parse(
         row.context_accounting_json.as_deref()?,
     )
-    .ok()
+    .ok()?
+    .current()
     .filter(|accounting| accounting.estimator == estimator)?;
     let estimated = accounting
         .raw_estimated_input_tokens

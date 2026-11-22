@@ -62,29 +62,30 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
             0,
         )
         .await?;
-        node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(schema))
+        node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(schema))
             .await?;
         node.add_collection(
-            &gents_protocol::schemas::HomePolicyIds::shared()
+            &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_protocol::schemas::NETWORK_ENROLLMENT_DECISION),
         )
         .await?;
     }
     for node in [candidate_node, admin_node] {
         node.add_collection(
-            &gents_protocol::schemas::HomePolicyIds::shared()
+            &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_protocol::schemas::AGENT_SESSION),
         )
         .await?;
         node.add_collection(
-            &gents_protocol::schemas::HomePolicyIds::shared()
+            &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_protocol::schemas::PEER_REGISTRY),
         )
         .await?;
     }
     admin_node
         .add_collection(
-            &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::NODE),
+            &gents_protocol::schemas::HomePolicyIds::node_store()
+                .render(gents_protocol::schemas::NODE),
         )
         .await?;
     let candidate_local =
@@ -342,7 +343,7 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         admin_node
             .document_acp()
             .get_doc_owner(
-                gents_protocol::schemas::HomePolicyIds::shared()
+                gents_protocol::schemas::HomePolicyIds::node_store()
                     .id(gents_protocol::schemas::BuiltInPolicy::Household),
                 "enrollment_records",
                 &doc
@@ -780,6 +781,7 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
             .with_document_projector(gents_store::local::document_projector(
                 Arc::new(KeyIdentity::load_or_create(&admin_path, None)?),
                 super::fixtures::no_tool_sources(),
+                gents_protocol::schemas::HomePolicyIds::node_store(),
             )?)
             .with_http(defra_node::HttpConfig::with_addr(reopened_address))
             .build()

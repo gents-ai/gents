@@ -7,6 +7,7 @@
   gate.py all [--base REF]                   plan, then run every selected job
   gate.py packages GROUP...                  list the crates of test groups
   gate.py verdict                            decide the `gate` job from NEEDS
+  gate.py runners [--apply]                  give every runner but the queue's reserve the reserve label
 
 `run` reads the plan from GATE_PLAN (CI passes the plan job's output) or
 computes it against --base.
@@ -339,34 +340,103 @@ def inventory():
     return json.loads(INVENTORY.read_text())
 
 
-def runner(role, roles=None, fork=None, fallback=None, host_group=None):
+def runner(role, roles=None, fork=None, fallback=None, host_group=None, event=None):
     """The runs-on value for a role: its labels, a hosted label for a fork pull
     request (never a self-hosted runner) or a role whose pool is still hosted,
     or the role's fallback while the repository variable GENTS_CI_FALLBACK is
     `hosted`. `host_group` adds one of the role's `host_groups` labels to its
     own labels, pinning the job to that group's hosts."""
-    return placement(role, roles, fork, fallback, host_group)["runs_on"]
+    return placement(role, roles, fork, fallback, host_group, event)["runs_on"]
 
 
-def placement(role, roles=None, fork=None, fallback=None, host_group=None):
+def placement(role, roles=None, fork=None, fallback=None, host_group=None, event=None):
     """Where a job of `role` runs (`runs_on`) and the Cargo build jobs and test
     threads its runner may use (empty: the workflow's defaults). The role's
     `jobs` divide a host's cores between the runners it registers, so its
-    concurrent jobs cannot oversubscribe it."""
+    concurrent jobs cannot oversubscribe it. A pull request's self-hosted job
+    also requires the reserve label (`shared`)."""
     roles = roles or inventory()["roles"]
     labels = route(role, roles, fork, fallback)
     entry = roles.get(role, {})
     if labels == entry.get("labels"):
         groups = entry.get("host_groups", [])
-        if host_group is not None:
-            if host_group not in groups:
-                fail(f"role {role!r} has no host group {host_group!r} in {INVENTORY.relative_to(ROOT)}")
-            labels = [*labels, host_group]
+        if host_group is not None and host_group not in groups:
+            fail(f"role {role!r} has no host group {host_group!r} in {INVENTORY.relative_to(ROOT)}")
         jobs = entry.get("jobs", {})
     else:
+        host_group = None
         target = entry.get("fallback")
         jobs = roles[target].get("jobs", {}) if labels == roles.get(target, {}).get("labels") else {}
+    if (event or os.environ.get("GATE_EVENT")) == "pull_request":
+        labels = shared(labels)
+    if host_group is not None:
+        labels = [*labels, host_group]
     return {"runs_on": labels, "build_jobs": str(jobs.get("build", "")), "test_threads": str(jobs.get("test", ""))}
+
+
+def reserve_label():
+    """The label every runner but the merge queue's reserved ones carries."""
+    return inventory()["reserve"]["label"]
+
+
+def shared(labels):
+    """A self-hosted label list narrowed to the runners outside the queue's reserve."""
+    if isinstance(labels, list) and "self-hosted" in labels:
+        return [*labels, reserve_label()]
+    return labels
+
+
+def reservation(runners, reserve=None, roles=None):
+    """The repository's self-hosted runners (the Actions API's `runners`) split
+    into those that carry the reserve label and those kept for the merge queue.
+
+    For each role, `reserve` many runners with the role's labels are kept:
+    first those serving the fewest roles, so pull requests lose the least
+    capability, then from the role's host group with the most runners still
+    shared, so the reserve spreads over hosts. A role must keep a shared
+    runner. Returns (reserved names, shared names)."""
+    roles = roles or inventory()["roles"]
+    reserve = reserve if reserve is not None else inventory()["reserve"]["roles"]
+    labels = {runner["name"]: {label["name"] for label in runner["labels"]} for runner in runners}
+    serves = {name: [role for role, entry in roles.items() if set(entry["labels"]) <= have]
+              for name, have in labels.items()}
+    reserved = set()
+    for role, count in sorted(reserve.items()):
+        groups = roles[role].get("host_groups", [])
+        group_of = {name: next((group for group in groups if group in labels[name]), None) for name in labels}
+        for _ in range(count):
+            candidates = sorted((name for name in labels if role in serves[name] and name not in reserved),
+                                reverse=True)
+            if len(candidates) < 2:
+                fail(f"role {role!r} has {len(candidates)} unreserved runners; reserving one would leave "
+                     "pull requests none")
+            in_group = {group: sum(1 for name in candidates if group_of[name] == group) for group in groups}
+            reserved.add(min(candidates, key=lambda name: (len(serves[name]), -in_group.get(group_of[name], 0))))
+    return sorted(reserved), sorted(set(labels) - reserved)
+
+
+def reconcile_runners(apply=False):
+    """Print, and with `apply` make, the label changes that give every
+    unreserved runner the reserve label and take it from the reserved ones."""
+    repository = os.environ.get("GITHUB_REPOSITORY", "gents-ai/gents")
+    raw = subprocess.run(["gh", "api", "--paginate", f"repos/{repository}/actions/runners", "--jq", ".runners[]"],
+                         check=True, stdout=subprocess.PIPE, text=True).stdout
+    runners = [json.loads(line) for line in raw.splitlines() if line.strip()]
+    label = reserve_label()
+    reserved, unreserved = reservation(runners)
+    by_name = {runner["name"]: runner for runner in runners}
+    for name in reserved + unreserved:
+        runner = by_name[name]
+        has = any(item["name"] == label for item in runner["labels"])
+        wanted = name in unreserved
+        state = "shared" if wanted else "reserved for the merge queue"
+        change = "" if has == wanted else (" (add label)" if wanted else " (remove label)")
+        print(f"{name}: {state}{change}")
+        if apply and has != wanted:
+            path = f"repos/{repository}/actions/runners/{runner['id']}/labels"
+            command = ["gh", "api", "-X", "POST", path, "-f", f"labels[]={label}"] if wanted else \
+                ["gh", "api", "-X", "DELETE", f"{path}/{label}"]
+            subprocess.run(command, check=True, stdout=subprocess.DEVNULL)
 
 
 def host_groups(role, roles=None, fork=None, fallback=None):
@@ -1648,7 +1718,12 @@ def main():
             command.add_argument("job")
     commands.add_parser("packages").add_argument("groups", nargs="+")
     commands.add_parser("verdict", help="decide the gate job from NEEDS (its toJSON(needs))")
+    commands.add_parser("runners", help="reserve runners for the merge queue (.github/ci-runners.json `reserve`)") \
+        .add_argument("--apply", action="store_true")
     arguments = parser.parse_args()
+    if arguments.command == "runners":
+        reconcile_runners(arguments.apply)
+        return
     if arguments.command == "verdict":
         problems = verdict(json.loads(os.environ["NEEDS"]), os.environ.get("GATE_FORK") == "true")
         for problem in problems:

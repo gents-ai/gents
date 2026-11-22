@@ -679,15 +679,20 @@ struct LocalWireApprover {
 impl PackEffectApprover for LocalWireApprover {
     async fn approve_graph(
         &self,
-        _txn: &ConfigApplyTxn<'_>,
+        txn: &ConfigApplyTxn<'_>,
         mutation: &PackMutation,
         history: Option<Value>,
     ) -> std::result::Result<PackEvidence, PackApprovalError> {
+        let ids = txn
+            .home_policy_ids()
+            .await
+            .map_err(|error| PackApprovalError::Refused(error.to_string()))?;
         gents_store::config_client::prepare_pack_evidence_from_history(
             &self.actor,
             &self.scope,
             mutation,
             history,
+            ids,
         )
         .await
         .map_err(|error| PackApprovalError::Refused(error.to_string()))

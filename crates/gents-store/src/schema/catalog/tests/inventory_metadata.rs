@@ -4,13 +4,13 @@ use gents_protocol::schemas::{
 };
 
 use super::common;
-use crate::schema::catalog::{ensure_runtime, BASELINE};
+use crate::schema::catalog::{baseline, ensure_runtime};
 
 #[tokio::test]
 async fn inventory_metadata_has_its_pinned_fresh_schema() {
     let node = common::fresh_node().await;
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared().render(TOOL_FILE_INVENTORY),
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(TOOL_FILE_INVENTORY),
     )
     .await
     .unwrap();
@@ -18,7 +18,7 @@ async fn inventory_metadata_has_its_pinned_fresh_schema() {
         .get_collection(TOOL_FILE_INVENTORY_NAME)
         .unwrap()
         .unwrap();
-    let entry = BASELINE
+    let entry = baseline(gents_protocol::schemas::HomePolicyIds::node_store())
         .iter()
         .find(|entry| entry.name == TOOL_FILE_INVENTORY_NAME)
         .unwrap();
@@ -26,7 +26,7 @@ async fn inventory_metadata_has_its_pinned_fresh_schema() {
     let policy = collection.policy.unwrap();
     assert_eq!(
         policy.id,
-        HomePolicyIds::shared().id(BuiltInPolicy::ToolFileChange)
+        HomePolicyIds::node_store().id(BuiltInPolicy::ToolFileChange)
     );
     assert_eq!(policy.resource_name, TOOL_FILE_CHANGE_POLICY_RESOURCE);
     node.shutdown().await.expect("shut down test node");
@@ -45,7 +45,7 @@ async fn inventory_metadata_collection_fallback_stays_owned_by_its_node() {
         let owner = node
             .document_acp()
             .get_doc_owner(
-                HomePolicyIds::shared().id(BuiltInPolicy::ToolFileChange),
+                HomePolicyIds::node_store().id(BuiltInPolicy::ToolFileChange),
                 TOOL_FILE_CHANGE_POLICY_RESOURCE,
                 &collection.collection_id,
             )
@@ -77,7 +77,8 @@ async fn inventory_metadata_refuses_an_unprotected_collection() {
             TOOL_FILE_CHANGE_POLICY_RESOURCE
         );
         node.add_collection(
-            &gents_protocol::schemas::HomePolicyIds::shared().render(&sdl.replace(&directive, "")),
+            &gents_protocol::schemas::HomePolicyIds::node_store()
+                .render(&sdl.replace(&directive, "")),
         )
         .await
         .unwrap();
@@ -100,7 +101,7 @@ async fn inventory_reply_has_its_pinned_protected_local_schema() {
     use gents_protocol::schemas::{FILE_INVENTORY_REPLY, FILE_INVENTORY_REPLY_NAME};
     let node = common::fresh_node().await;
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared().render(FILE_INVENTORY_REPLY),
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(FILE_INVENTORY_REPLY),
     )
     .await
     .unwrap();
@@ -108,7 +109,7 @@ async fn inventory_reply_has_its_pinned_protected_local_schema() {
         .get_collection(FILE_INVENTORY_REPLY_NAME)
         .unwrap()
         .unwrap();
-    let entry = BASELINE
+    let entry = baseline(gents_protocol::schemas::HomePolicyIds::node_store())
         .iter()
         .find(|entry| entry.name == FILE_INVENTORY_REPLY_NAME)
         .unwrap();
@@ -116,7 +117,7 @@ async fn inventory_reply_has_its_pinned_protected_local_schema() {
     let policy = collection.policy.unwrap();
     assert_eq!(
         policy.id,
-        HomePolicyIds::shared().id(BuiltInPolicy::ToolFileChange)
+        HomePolicyIds::node_store().id(BuiltInPolicy::ToolFileChange)
     );
     assert_eq!(policy.resource_name, TOOL_FILE_CHANGE_POLICY_RESOURCE);
     assert!(gents_protocol::schemas::is_local_only_collection(
@@ -131,11 +132,14 @@ async fn inventory_transport_has_its_pinned_fresh_schemas() {
     let node = common::fresh_node().await;
     let mut observed = Vec::new();
     for (name, sdl) in [(FILE_INVENTORY_REQUEST_NAME, FILE_INVENTORY_REQUEST)] {
-        node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(sdl))
+        node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(sdl))
             .await
             .unwrap();
         let collection = node.get_collection(name).unwrap().unwrap();
-        let entry = BASELINE.iter().find(|entry| entry.name == name).unwrap();
+        let entry = baseline(gents_protocol::schemas::HomePolicyIds::node_store())
+            .iter()
+            .find(|entry| entry.name == name)
+            .unwrap();
         observed.push((name, collection.version_id, entry.expected_version.unwrap()));
         assert!(!is_replicated_protocol_collection(name));
     }
@@ -153,7 +157,7 @@ async fn inventory_client_progress_has_its_pinned_protected_local_schema() {
     use gents_protocol::schemas::{FILE_INVENTORY_PROGRESS, FILE_INVENTORY_PROGRESS_NAME};
     let node = common::fresh_node().await;
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared().render(FILE_INVENTORY_PROGRESS),
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(FILE_INVENTORY_PROGRESS),
     )
     .await
     .unwrap();
@@ -161,7 +165,7 @@ async fn inventory_client_progress_has_its_pinned_protected_local_schema() {
         .get_collection(FILE_INVENTORY_PROGRESS_NAME)
         .unwrap()
         .unwrap();
-    let entry = BASELINE
+    let entry = baseline(gents_protocol::schemas::HomePolicyIds::node_store())
         .iter()
         .find(|entry| entry.name == FILE_INVENTORY_PROGRESS_NAME)
         .unwrap();
@@ -169,7 +173,7 @@ async fn inventory_client_progress_has_its_pinned_protected_local_schema() {
     let policy = collection.policy.unwrap();
     assert_eq!(
         policy.id,
-        HomePolicyIds::shared().id(BuiltInPolicy::ToolFileChange)
+        HomePolicyIds::node_store().id(BuiltInPolicy::ToolFileChange)
     );
     assert_eq!(policy.resource_name, TOOL_FILE_CHANGE_POLICY_RESOURCE);
     assert!(gents_protocol::schemas::is_local_only_collection(
@@ -203,10 +207,10 @@ const RETIRED_IMAGE_DEMAND: &str = r#"type FileImageHydrationRequest @policy(id:
 async fn retired_image_demand_rows_survive_startup() {
     let node = common::fresh_node().await;
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared().render(
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(
             &RETIRED_IMAGE_DEMAND.replace(
                 "POLICY",
-                gents_protocol::schemas::HomePolicyIds::shared()
+                gents_protocol::schemas::HomePolicyIds::node_store()
                     .id(gents_protocol::schemas::BuiltInPolicy::Household),
             ),
         ),

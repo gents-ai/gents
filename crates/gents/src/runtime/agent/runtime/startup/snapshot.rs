@@ -56,10 +56,30 @@ pub(in crate::runtime::agent::runtime) async fn demote_unbuildable_agents(
             .build_tools_until(&tool_runtime, publication_deadline)
             .await
         {
-            let reason = UnavailableAgent::new(
-                gents_protocol::node_readiness::AgentReadinessUnavailableReason::ToolSurfaceUnavailable,
-                format!("building tool surface: {error:#}"),
-            )
+            // Lean `Runtime.StartupDegraded.toolSurfaceReason` decides the cause
+            // from the facts the refusal carries: an enabled published root over
+            // the tools plus a denial is the missing reader, whose grant the
+            // text states; every other refusal is the generic unbuilt surface.
+            let refusal = gents_tools::surface::tool_root_refusal(error.as_ref());
+            let (publishing, denial) = refusal.map_or(
+                (
+                    gents_tools::surface::RootPublishing::NoPolicy,
+                    gents_tools::surface::RootDenialKind::Admitted,
+                ),
+                |refusal| (refusal.publishing(), refusal.denial()),
+            );
+            let cause = gents_tools::surface::tool_surface_reason(publishing, denial);
+            let reason = match refusal {
+                Some(gents_tools::surface::ToolRootRefusal::ReaderMissing { .. })
+                    if cause
+                        == gents_protocol::node_readiness::AgentReadinessUnavailableReason::WorkspaceRootReaderMissing =>
+                {
+                    let grant = refusal.map(ToString::to_string).unwrap_or_default();
+                    UnavailableAgent::new(cause, format!("building tool surface: {grant}"))
+                        .with_public_message(grant)
+                }
+                _ => UnavailableAgent::new(cause, format!("building tool surface: {error:#}")),
+            }
             .with_publication_busy(
                 gents_pack::plugin::store::PublishedPluginReadError::error_chain_is_busy(
                     error.as_ref(),

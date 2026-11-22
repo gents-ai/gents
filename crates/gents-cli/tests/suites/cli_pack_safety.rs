@@ -5,6 +5,10 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use axum::{routing::get, Json, Router};
+use gents::support::live_inference::rows_when;
+use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
+use gents_protocol::row::{decode_node_readiness_snapshot, NodeReadinessRow};
+use gents_store::config_client::ConfigAccess;
 use serde_json::{json, Value};
 
 fn document_pack(
@@ -201,6 +205,27 @@ async fn remote_pack_install_update_and_diagnose_keep_plugin_failures_isolated()
         .as_str()
         .context("created Agent DID")?
         .to_owned();
+    // Root admission precedes plugin construction; grant the clone reader on
+    // its inherited root so the plugin failure is the one diagnosed.
+    let published_root = created
+        .pointer("/host_root_access/published_root")
+        .and_then(Value::as_str)
+        .context("clone receipt's published root")?;
+    run_cli_json(
+        &home,
+        &[
+            "config",
+            "workspace-root",
+            "grant-reader",
+            "--path",
+            published_root,
+            "--agent-did",
+            &broken_agent,
+            "--graphql",
+            &graphql,
+        ],
+    )?;
+    wait_for_runtime_quiescence(&graphql, &owner, 2, Duration::from_millis(200)).await?;
     let selection = graphql_query(
         &graphql,
         &format!(
@@ -248,7 +273,30 @@ async fn remote_pack_install_update_and_diagnose_keep_plugin_failures_isolated()
             &graphql,
         ],
     )?;
-    wait_for_runtime_quiescence(&graphql, &owner, 2, Duration::from_millis(200)).await?;
+    // Wait on the node's readiness rows for the edit's demotion of this agent;
+    // a quiescent earlier generation may still precede the Tools edit.
+    let readiness = ConfigAccess::Graphql(crate::support::graphql::served_endpoint(&graphql));
+    let query = format!(
+        r#"{{ NodeReadiness(filter: {{node_did: {{_eq: "{}"}}}}) {{node_did snapshot_json updated_at}} }}"#,
+        escape_graphql_string(&owner)
+    );
+    rows_when(&readiness, "NodeReadiness", &query, |data| {
+        data["NodeReadiness"].as_array().is_some_and(|rows| {
+            rows.iter().any(|value| {
+                serde_json::from_value::<NodeReadinessRow>(value.clone())
+                    .ok()
+                    .and_then(|row| decode_node_readiness_snapshot(&row, &owner).ok())
+                    .is_some_and(|snapshot| {
+                        snapshot.agents.iter().any(|agent| {
+                            agent.agent_did == broken_agent
+                                && agent.reason
+                                    == Some(AgentReadinessUnavailableReason::ToolSurfaceUnavailable)
+                        })
+                    })
+            })
+        })
+    })
+    .await;
     let diagnosed = run_cli_json(&home, &["runtime", "diagnose", "--graphql", &graphql])?;
     let unavailable = diagnosed
         .pointer("/checks/runtime_node_readiness/unavailable_agents")

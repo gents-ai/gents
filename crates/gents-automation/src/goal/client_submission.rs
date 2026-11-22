@@ -37,7 +37,9 @@ pub async fn prepare_session_goal_control(
         );
         let input = gents_store::config_client::client_request_input(request)?;
         let create = request;
-        let request = gents_store::config_client::prepare_request_evidence(signer, input).await?;
+        let ids = access.home_policy_ids().await?;
+        let request =
+            gents_store::config_client::prepare_request_evidence(signer, input, ids).await?;
         let request_credentials = access
             .stored_create_credentials(signer, create, &request)
             .await?;

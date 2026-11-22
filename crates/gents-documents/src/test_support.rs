@@ -264,7 +264,7 @@ pub mod desired_state_fixtures {
                     }
                 }
                 node.add_collection(
-                    &gents_protocol::schemas::HomePolicyIds::shared().render(&schema),
+                    &gents_protocol::schemas::HomePolicyIds::node_store().render(&schema),
                 )
                 .await?;
             }

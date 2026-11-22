@@ -96,7 +96,7 @@ async fn model_driven_held_client_eval_and_optimization_records_are_private() ->
         .collect::<anyhow::Result<Vec<_>>>()?;
     ConfigAccess::local_as(node.clone(), identity::Did::new(user.did())?)
         .add_collection(
-            &gents_protocol::schemas::HomePolicyIds::shared().render(&schemas.join("\n")),
+            &gents_protocol::schemas::HomePolicyIds::node_store().render(&schemas.join("\n")),
         )
         .await?;
     let endpoint = |actor: &gents_store::identity::KeyIdentity| -> anyhow::Result<ConfigAccess> {
