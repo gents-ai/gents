@@ -17,9 +17,49 @@ enum Provider {
     Vera,
 }
 
+#[derive(Default)]
+struct AssignmentTestRuntime {
+    active: tokio::sync::Mutex<std::collections::BTreeSet<String>>,
+    bodies: tokio::sync::Mutex<std::collections::BTreeSet<String>>,
+    fail_stop: std::sync::atomic::AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl crate::config_client::assignment_receiver::AssignmentRuntime for AssignmentTestRuntime {
+    async fn active(&self) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(self.active.lock().await.iter().cloned().collect())
+    }
+
+    async fn stop(&self, id: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if self.fail_stop.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(std::io::Error::other("stop failed").into());
+        }
+        self.active.lock().await.remove(id);
+        Ok(())
+    }
+
+    async fn has_verified_body(
+        &self,
+        id: &str,
+    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(self.bodies.lock().await.contains(id))
+    }
+
+    async fn start_if_verified(
+        &self,
+        id: &str,
+    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+        if !self.bodies.lock().await.contains(id) {
+            return Ok(false);
+        }
+        self.active.lock().await.insert(id.to_owned());
+        Ok(true)
+    }
+}
+
 #[tokio::test]
 async fn a_vera_home_reads_only_its_own_certified_assignments() -> anyhow::Result<()> {
-    let home = home(Provider::Vera).await?;
+    let home = home_with_storage(Provider::Vera, true).await?;
     let access = home.runtime()?;
     let query = defra_node::AssignmentQuery {
         policy: crate::local::document_acp::node_policy_ids(&home.node)
@@ -33,12 +73,58 @@ async fn a_vera_home_reads_only_its_own_certified_assignments() -> anyhow::Resul
     };
     let certified = access.certified_assignments(query.clone()).await?;
     assert_eq!(certified.object_ids, [home.node_doc.clone()]);
+    access
+        .add_collection(
+            &crate::local::document_acp::node_policy_ids(&home.node)
+                .render(gents_protocol::schemas::CERTIFIED_ASSIGNMENT_STATE),
+        )
+        .await?;
+    let scope = crate::config_client::assignment_receiver::AssignmentScope {
+        policy: query.policy.clone(),
+        resource: query.resource.clone(),
+        relation: query.relation.clone(),
+        issuer: query.issuer.clone(),
+        node_document: home.node_doc.clone(),
+    };
+    let running = AssignmentTestRuntime::default();
+    running.bodies.lock().await.insert(home.node_doc.clone());
+    let initial = access
+        .refresh_assignments(&scope, &running)
+        .await
+        .map_err(|error| anyhow::anyhow!("initial assignment refresh: {error}"))?;
+    assert!(initial.may_run(&home.node_doc, true));
+    assert!(!initial.may_run(&home.node_doc, false));
+    assert!(running.active.lock().await.contains(&home.node_doc));
     let other = defra_node::AssignmentQuery {
         subject: home.owner.did().into(),
         ..query.clone()
     };
     assert!(access.certified_assignments(other).await.is_err());
-    ConfigAccess::Graphql(home.owner_endpoint.clone())
+    let owner_access = ConfigAccess::Graphql(home.owner_endpoint.clone());
+    let input = json!({"node_did": home.owner.did(), "enabled": true});
+    let response = owner_access
+        .transact_write("test.assignment_replacement.node", |txn| {
+            let input = &input;
+            Box::pin(async move {
+                txn.execute_client_signed_create(
+                    "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
+                    &json!({"input": input}),
+                    gents_protocol::schemas::NODE,
+                )
+                .await
+            })
+        })
+        .await?;
+    let replacement = crate::graphql::created_doc_id(&response, "Node")?;
+    owner_access
+        .add_actor_relationship(
+            "Node",
+            &replacement,
+            "runtime_reader",
+            &home.runtime.did().parse()?,
+        )
+        .await?;
+    owner_access
         .delete_actor_relationship(
             "Node",
             &home.node_doc,
@@ -52,8 +138,69 @@ async fn a_vera_home_reads_only_its_own_certified_assignments() -> anyhow::Resul
             ..query
         })
         .await?;
-    assert!(withdrawn.object_ids.is_empty());
+    assert_eq!(withdrawn.object_ids, [replacement.clone()]);
     assert!(withdrawn.position.height > certified.position.height);
+    running
+        .fail_stop
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(access.refresh_assignments(&scope, &running).await.is_err());
+    assert_eq!(access.load_assignments(&scope).await?, Some(initial));
+    assert!(running.active.lock().await.contains(&home.node_doc));
+    running
+        .fail_stop
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    let persisted = access
+        .refresh_assignments(&scope, &running)
+        .await
+        .map_err(|error| anyhow::anyhow!("withdrawn assignment refresh: {error}"))?;
+    assert!(!persisted.may_run(&home.node_doc, true));
+    assert!(!persisted.may_run(&replacement, false));
+    assert!(running.active.lock().await.is_empty());
+    drop(access);
+    let Home {
+        _directory: directory,
+        runtime,
+        owner,
+        node,
+        _endpoints: endpoints,
+        vera_config,
+        ..
+    } = home;
+    node.shutdown().await?;
+    drop(endpoints);
+    drop(node);
+    let reopened = Arc::new(
+        defra_node::Node::builder()
+            .data_path(directory.path().join("db"))
+            .with_node_acp_owner(owner.did())
+            .with_signing_key(defra_node::SigningKey::Ed25519(
+                runtime.identity.private_key_bytes(),
+            ))
+            .with_node_acp_enabled()
+            .with_embedded_vera(vera_config.expect("Vera configuration"))
+            .build()
+            .await?,
+    );
+    let access = ConfigAccess::local_as(reopened, runtime.did().parse()?);
+    let recovered = access
+        .load_assignments(&scope)
+        .await?
+        .expect("persisted assignment state");
+    assert_eq!(recovered, persisted);
+    assert!(!recovered.may_run(&scope.node_document, true));
+    assert!(!recovered.may_run(&replacement, false));
+    running.bodies.lock().await.insert(replacement.clone());
+    access.refresh_assignments(&scope, &running).await?;
+    assert_eq!(
+        running
+            .active
+            .lock()
+            .await
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>(),
+        [replacement]
+    );
     Ok(())
 }
 
@@ -66,6 +213,7 @@ struct Home {
     node: Arc<defra_node::Node>,
     node_doc: String,
     _endpoints: RuntimeEndpoints,
+    vera_config: Option<EmbeddedVeraConfig>,
 }
 
 fn held_client() -> anyhow::Result<(RawIdentity, ClientSigningCapability)> {
@@ -108,6 +256,10 @@ fn vera(
 }
 
 async fn home(provider: Provider) -> anyhow::Result<Home> {
+    home_with_storage(provider, false).await
+}
+
+async fn home_with_storage(provider: Provider, persistent: bool) -> anyhow::Result<Home> {
     let directory = tempfile::tempdir()?;
     let runtime = Arc::new(crate::identity::KeyIdentity::load_or_create(
         directory.path().join("runtime.key"),
@@ -181,8 +333,14 @@ async fn home(provider: Provider) -> anyhow::Result<Home> {
             defra_node::HttpConfig::with_listener(listener)?
                 .with_authenticated_routes(status.merge(grants.router())),
         );
+    if persistent {
+        builder = builder.data_path(directory.path().join("db"));
+    }
+    let mut vera_config = None;
     if provider == Provider::Vera {
-        builder = builder.with_embedded_vera(vera(directory.path(), &runtime)?);
+        let config = vera(directory.path(), &runtime)?;
+        builder = builder.with_embedded_vera(config.clone());
+        vera_config = Some(config);
     }
     let node = Arc::new(builder.build().await?);
     served
@@ -248,6 +406,7 @@ async fn home(provider: Provider) -> anyhow::Result<Home> {
         node,
         node_doc,
         _endpoints: endpoints,
+        vera_config,
     })
 }
 

@@ -1,5 +1,6 @@
 import Proofs.Store.StorageFailure
 import Proofs.Store.DecisionRead
+import Proofs.Store.AssignmentReceiver
 import Proofs.Store.AccessClassification
 import Proofs.Store.Views
 import Proofs.Store.Identity.RelationshipReplay
