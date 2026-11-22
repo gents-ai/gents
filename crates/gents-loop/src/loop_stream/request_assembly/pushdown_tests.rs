@@ -47,6 +47,7 @@ fn tagged_provider_view_uses_emitted_source_index_for_equal_assistant_rows() {
             source: Some(first.clone()),
             physical_header: None,
             block_indices: Vec::new(),
+            stub_receipts: Vec::new(),
         },
         TaggedMessage::unassociated(Message::user("between")),
         TaggedMessage {
@@ -54,6 +55,7 @@ fn tagged_provider_view_uses_emitted_source_index_for_equal_assistant_rows() {
             source: Some(second.clone()),
             physical_header: None,
             block_indices: Vec::new(),
+            stub_receipts: Vec::new(),
         },
     ])
     .expect("source-indexed projection");

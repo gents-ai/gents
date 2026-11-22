@@ -85,10 +85,12 @@ impl StoredCreateCommands {
     pub fn of_request(
         create: &AgentRequestCreate,
         doc_id: &str,
+        ids: &gents_protocol::schemas::HomePolicyIds,
     ) -> Result<Self, ConfigClientError> {
         let schema = super::client_signed_agent::signing_schema(
             gents_protocol::schemas::AGENT_REQUEST,
             "AgentRequest",
+            ids,
         )?;
         let policy = schema
             .policy
@@ -333,14 +335,18 @@ impl super::ConfigAccess {
         let Some(audience) = self.request_bound_audience().await? else {
             return Ok(Vec::new());
         };
+        let ids = self.home_policy_ids().await?;
         let graph = super::verify_request_evidence(
             super::client_request_input(create)
                 .map_err(|_| ConfigClientError::ClientConfigurationUpdateInvalid)?,
             evidence.clone(),
+            ids,
         )
         .await?;
         let capability = signer.client_signing_capability()?;
-        Ok(StoredCreateCommands::of_request(create, graph.doc_id())?
-            .mint(&capability, &audience)?)
+        Ok(
+            StoredCreateCommands::of_request(create, graph.doc_id(), ids)?
+                .mint(&capability, &audience)?,
+        )
     }
 }

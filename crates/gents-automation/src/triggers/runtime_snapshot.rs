@@ -47,6 +47,9 @@ impl Eq for ResolvedWatcherIdentity {}
 pub struct UnavailableAgent {
     pub public_reason: AgentReadinessUnavailableReason,
     pub diagnostic: String,
+    /// A cause whose rejection says more than its reason's fixed wording: the
+    /// text a request is rejected with, carrying the facts its fix needs.
+    pub public_text: Option<String>,
     pub awaiting_first_probe: bool,
     pub watcher_identity: Option<ResolvedWatcherIdentity>,
 }
@@ -59,9 +62,16 @@ impl UnavailableAgent {
         Self {
             public_reason,
             diagnostic: diagnostic.into(),
+            public_text: None,
             awaiting_first_probe: false,
             watcher_identity: None,
         }
+    }
+
+    /// The rejection text a cause states itself, beyond its reason's wording.
+    pub fn with_public_message(mut self, text: impl Into<String>) -> Self {
+        self.public_text = Some(text.into());
+        self
     }
 
     pub fn with_awaiting_first_probe(mut self, awaiting_first_probe: bool) -> Self {
@@ -80,6 +90,14 @@ impl UnavailableAgent {
     pub fn public_message(&self) -> &'static str {
         self.public_reason.public_message()
     }
+
+    /// The text a request rejected for this Agent carries: the cause's own when
+    /// it has one, its reason's wording otherwise.
+    pub fn rejection_text(&self) -> &str {
+        self.public_text
+            .as_deref()
+            .unwrap_or_else(|| self.public_reason.public_message())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,6 +107,9 @@ pub enum EffectiveAgentAdmission<'a> {
     Unavailable {
         public_reason: AgentReadinessUnavailableReason,
         diagnostic: &'a str,
+        /// The text a rejected request carries: the cause's own when it says
+        /// more than its reason's wording, that wording otherwise.
+        rejection_text: &'a str,
     },
     Unassigned,
 }
@@ -113,6 +134,10 @@ pub fn effective_agent_admission<'a>(
                 diagnostic: startup_diagnostic
                     .or_else(|| unavailable.map(|unavailable| unavailable.diagnostic.as_str()))
                     .expect("unavailable admission has a diagnostic source"),
+                rejection_text: unavailable.map_or_else(
+                    || public_reason.public_message(),
+                    UnavailableAgent::rejection_text,
+                ),
             }
         }
         EffectiveAgentReadinessAdmission::Unassigned => EffectiveAgentAdmission::Unassigned,

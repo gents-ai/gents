@@ -11,6 +11,9 @@ pub struct TaggedMessage {
     pub source: Option<ReplayTag>,
     pub physical_header: Option<String>,
     pub block_indices: Vec<usize>,
+    /// The stubs stripping reported for this row's tool results, carried with
+    /// the row and never rebuilt from its text.
+    pub stub_receipts: Vec<crate::compaction::history::StubReceipt>,
 }
 
 impl TaggedMessage {
@@ -20,6 +23,7 @@ impl TaggedMessage {
             source: None,
             physical_header: None,
             block_indices: Vec::new(),
+            stub_receipts: Vec::new(),
         }
     }
 }

@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use gents_loop::tool::ToolDefinition;
 use gents_loop::tool_effects::{ToolEffectDispatcher, ToolEffectError};
 use gents_protocol::plugin_tool_call_limits::{MAX_EFFECTS, MAX_PAYLOAD_BYTES};
 use serde::Deserialize;
@@ -20,6 +21,22 @@ pub fn composition_note() -> String {
     format!(
         "\nThis plugin may call up to {MAX_EFFECTS} of this request's tools in sequence, with their existing permissions and lifecycle behavior."
     )
+}
+
+fn structured_by_default(offered: bool, chosen: bool) -> bool {
+    offered && !chosen
+}
+
+/// External premise (`gents-tools` native tools): a tool that can return its
+/// result as JSON instead of model-facing text declares this boolean parameter.
+const STRUCTURED_RESULT: &str = "raw_json";
+
+fn offers_structured_result(definition: &ToolDefinition) -> bool {
+    definition
+        .parameters
+        .pointer(&format!("/properties/{STRUCTURED_RESULT}/type"))
+        .and_then(Value::as_str)
+        == Some("boolean")
 }
 
 fn reserve(used: u32) -> Option<u32> {
@@ -99,18 +116,50 @@ pub struct Session {
     parent: gents_loop::tool::ToolCallEnvelope,
     used: u32,
     pub fatal: Option<String>,
+    definitions: Option<Vec<ToolDefinition>>,
 }
 
 impl Session {
+    async fn definitions(&mut self) -> &[ToolDefinition] {
+        if self.definitions.is_none() {
+            self.definitions = Some(self.dispatcher.definitions().await);
+        }
+        self.definitions.as_deref().unwrap_or_default()
+    }
+
+    /// The names on the surface, or the definition of the tool `name`.
+    pub async fn describe(&mut self, name: Option<&str>) -> Value {
+        let definitions = self.definitions().await;
+        let Some(name) = name else {
+            let names: Vec<&str> = definitions.iter().map(|tool| tool.name.as_str()).collect();
+            return json!({ "result": names });
+        };
+        match definitions.iter().find(|tool| tool.name == name) {
+            Some(definition) => json!({ "result": definition }),
+            None => {
+                json!({"error": format!("tool '{name}' is not in this request's granted tool surface")})
+            }
+        }
+    }
+
     pub async fn call(
         &mut self,
         name: &str,
-        arguments: Map<String, Value>,
+        mut arguments: Map<String, Value>,
     ) -> Result<Value, String> {
         let Some(next) = reserve(self.used) else {
             return Ok(json!({"error": format!("the plugin used its {MAX_EFFECTS} tool calls")}));
         };
         self.used = next;
+        let offered = self
+            .definitions()
+            .await
+            .iter()
+            .find(|tool| tool.name == name)
+            .is_some_and(offers_structured_result);
+        if structured_by_default(offered, arguments.contains_key(STRUCTURED_RESULT)) {
+            arguments.insert(STRUCTURED_RESULT.into(), Value::Bool(true));
+        }
         let arguments = Value::Object(arguments).to_string();
         settle(
             self.dispatcher
@@ -131,6 +180,7 @@ impl Session {
             parent: parent.clone(),
             used: 0,
             fatal: None,
+            definitions: None,
         })
     }
 
@@ -177,6 +227,19 @@ mod tests {
     struct Tools(Mutex<Vec<(u32, String, Value)>>);
 
     impl ToolEffectDispatcher for Tools {
+        fn definitions<'a>(&'a self) -> gents_loop::tool::BoxFuture<'a, Vec<ToolDefinition>> {
+            Box::pin(async {
+                ["query", "charts"]
+                    .into_iter()
+                    .map(|name| ToolDefinition {
+                        name: name.into(),
+                        description: String::new(),
+                        parameters: json!({"type":"object"}),
+                    })
+                    .collect()
+            })
+        }
+
         fn call<'a>(
             &'a self,
             _parent: &'a gents_loop::tool::ToolCallEnvelope,
@@ -213,6 +276,72 @@ mod tests {
                 ))
             })
         }
+    }
+
+    #[tokio::test]
+    async fn a_child_is_asked_for_a_structured_result_only_where_it_offers_one() {
+        #[derive(Default)]
+        struct Forms(Mutex<Vec<Value>>);
+
+        impl ToolEffectDispatcher for Forms {
+            fn call<'a>(
+                &'a self,
+                _parent: &'a gents_loop::tool::ToolCallEnvelope,
+                _ordinal: u32,
+                _name: &'a str,
+                arguments: &'a str,
+            ) -> gents_loop::tool::BoxFuture<'a, Result<ToolOutcome, ToolEffectError>> {
+                Box::pin(async move {
+                    self.0
+                        .lock()
+                        .unwrap()
+                        .push(serde_json::from_str(arguments).unwrap());
+                    Ok(ToolOutcome::Completed("{}".into()))
+                })
+            }
+
+            fn definitions<'a>(&'a self) -> gents_loop::tool::BoxFuture<'a, Vec<ToolDefinition>> {
+                Box::pin(async {
+                    [
+                        ("files", json!({"raw_json": {"type": "boolean"}})),
+                        ("named", json!({"raw_json": {"type": "string"}})),
+                        ("plain", json!({})),
+                    ]
+                    .into_iter()
+                    .map(|(name, properties)| ToolDefinition {
+                        name: name.into(),
+                        description: String::new(),
+                        parameters: json!({"type": "object", "properties": properties}),
+                    })
+                    .collect()
+                })
+            }
+        }
+
+        let forms = Arc::new(Forms::default());
+        let parent = gents_loop::tool::ToolCallEnvelope::default()
+            .with_effects(Some(forms.clone() as Arc<dyn ToolEffectDispatcher>));
+        let mut session = Session::for_call(true, &parent).unwrap();
+        for (name, arguments) in [
+            ("files", json!({"path": "a"})),
+            ("files", json!({"path": "a", "raw_json": false})),
+            ("named", json!({})),
+            ("plain", json!({})),
+            ("absent", json!({})),
+        ] {
+            let arguments = arguments.as_object().unwrap().clone();
+            session.call(name, arguments).await.unwrap();
+        }
+        assert_eq!(
+            *forms.0.lock().unwrap(),
+            [
+                json!({"path": "a", "raw_json": true}),
+                json!({"path": "a", "raw_json": false}),
+                json!({}),
+                json!({}),
+                json!({}),
+            ]
+        );
     }
 
     #[tokio::test]
@@ -354,6 +483,19 @@ mod tests {
     async fn a_fatal_hook_termination_cannot_be_swallowed_by_the_guest() {
         struct Fatal;
         impl ToolEffectDispatcher for Fatal {
+            fn definitions<'a>(&'a self) -> gents_loop::tool::BoxFuture<'a, Vec<ToolDefinition>> {
+                Box::pin(async {
+                    ["query"]
+                        .into_iter()
+                        .map(|name| ToolDefinition {
+                            name: name.into(),
+                            description: String::new(),
+                            parameters: json!({"type":"object"}),
+                        })
+                        .collect()
+                })
+            }
+
             fn call<'a>(
                 &'a self,
                 _parent: &'a gents_loop::tool::ToolCallEnvelope,
@@ -521,6 +663,19 @@ mod tests {
     async fn serving_children_is_not_charged_to_the_guest_clock() {
         struct Slow(RoundClock);
         impl ToolEffectDispatcher for Slow {
+            fn definitions<'a>(&'a self) -> gents_loop::tool::BoxFuture<'a, Vec<ToolDefinition>> {
+                Box::pin(async {
+                    ["slow"]
+                        .into_iter()
+                        .map(|name| ToolDefinition {
+                            name: name.into(),
+                            description: String::new(),
+                            parameters: json!({"type":"object"}),
+                        })
+                        .collect()
+                })
+            }
+
             fn call<'a>(
                 &'a self,
                 _parent: &'a gents_loop::tool::ToolCallEnvelope,
@@ -593,6 +748,19 @@ mod tests {
     async fn a_child_parked_on_operator_consent_is_not_charged_to_the_guest_clock() {
         struct Asking(std::path::PathBuf, std::path::PathBuf, RoundClock);
         impl ToolEffectDispatcher for Asking {
+            fn definitions<'a>(&'a self) -> gents_loop::tool::BoxFuture<'a, Vec<ToolDefinition>> {
+                Box::pin(async {
+                    ["read"]
+                        .into_iter()
+                        .map(|name| ToolDefinition {
+                            name: name.into(),
+                            description: String::new(),
+                            parameters: json!({"type":"object"}),
+                        })
+                        .collect()
+                })
+            }
+
             fn call<'a>(
                 &'a self,
                 _parent: &'a gents_loop::tool::ToolCallEnvelope,
@@ -722,12 +890,19 @@ mod tests {
 
 #[cfg(test)]
 mod conformance {
-    use super::available;
+    use super::{available, structured_by_default};
 
     #[test]
     fn plugin_call_availability_matches_the_lean_model() {
         gents_lean_vocab::families::tool_policy_plugin_calls_available::replay(|i| {
             available(i.selected_grant, i.live_dispatcher)
+        });
+    }
+
+    #[test]
+    fn structured_result_default_matches_the_lean_model() {
+        gents_lean_vocab::families::tool_policy_plugin_calls_structured_by_default::replay(|i| {
+            structured_by_default(i.offered, i.chosen)
         });
     }
 }

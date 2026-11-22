@@ -281,6 +281,7 @@ def networkProtocolResource : String → Option String
   | "Trigger" => some "configuration"
   | "EventSource" => some "configuration"
   | "EventSourceCursor" => some "configuration"
+  | "CertifiedAssignmentState" => some "configuration"
   | "Agent" => some "agents"
   | "AgentRequest" => some "delivered_requests"
   | "AgentSession" => some "sessions"

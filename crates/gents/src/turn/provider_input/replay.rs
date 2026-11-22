@@ -102,6 +102,7 @@ pub(crate) fn tag_canonical_history(
             source: row.provider_source.clone(),
             physical_header: row.canonical_header_doc_id.clone(),
             block_indices: row.block_indices.clone(),
+            stub_receipts: Vec::new(),
         })
         .collect()
 }

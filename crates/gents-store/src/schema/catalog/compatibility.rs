@@ -4,32 +4,33 @@ use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 
 use super::{
     manages_client_journal, manages_file_images, manages_mailbox, BaselineCollection, Catalog,
-    SchemaError, FILE_COLLECTION_POLICIES, RUNTIME_CATALOG,
+    SchemaError, FILE_COLLECTION_POLICIES,
 };
 
 type Result<T, E = SchemaError> = std::result::Result<T, E>;
 
 /// The read-only refusals [`super::ensure_runtime`] raises before it writes:
 /// a store whose branchability or identity policies another Gents version
-/// declared. Callers decide from it whether this build can take the store.
-pub async fn validate_existing_schema(node: &EmbeddedNode) -> Result<()> {
-    let catalog = &*RUNTIME_CATALOG;
-    validate_runtime_locality(node)?;
-    validate_bindings(node, catalog, HomePolicyIds::shared()).await
+/// declared, for a home whose policies have `ids`. Callers decide from it
+/// whether this build can take the store.
+pub async fn validate_existing_schema(node: &EmbeddedNode, ids: &HomePolicyIds) -> Result<()> {
+    validate_runtime_locality(node, ids)?;
+    validate_bindings(node, super::runtime_catalog(ids), ids).await
 }
 
-/// Read-only preflight of the same lineages startup accepts. Callers may read
-/// these versions through ConfigAccess while another process owns the store.
-pub fn check_lineages(all_versions: &[CollectionVersion]) -> Result<()> {
-    check_lineage_versions(all_versions, &RUNTIME_CATALOG)
+/// Read-only preflight of the same lineages startup accepts for a home whose
+/// policies have `ids`. Callers may read these versions through ConfigAccess
+/// while another process owns the store.
+pub fn check_lineages(all_versions: &[CollectionVersion], ids: &HomePolicyIds) -> Result<()> {
+    check_lineage_versions(all_versions, super::runtime_catalog(ids))
 }
 
 /// DefraDB omits branchability from schema CIDs and rejects changes to it.
 /// A matching lineage therefore cannot establish runtime-local placement. Refuse
 /// an incompatible store before registering or changing any of its collections;
 /// startup must never silently retain its previous replication semantics.
-pub(super) fn validate_runtime_locality(node: &EmbeddedNode) -> Result<()> {
-    for entry in RUNTIME_CATALOG.baseline {
+pub(super) fn validate_runtime_locality(node: &EmbeddedNode, ids: &HomePolicyIds) -> Result<()> {
+    for entry in super::baseline(ids) {
         if gents_protocol::schemas::is_replicated_protocol_collection(entry.name) {
             continue;
         }

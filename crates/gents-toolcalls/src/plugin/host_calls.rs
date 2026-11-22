@@ -92,9 +92,35 @@ struct SleepRequest {
 
 #[derive(Deserialize)]
 #[serde(untagged)]
-enum Request {
+enum Effect {
     Tool(ToolRequest),
     Sleep(SleepRequest),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DescribeRequest {
+    describe: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BatchRequest {
+    batch: Vec<Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Request {
+    Effect(Effect),
+    Describe(DescribeRequest),
+    Batch(BatchRequest),
+}
+
+const EFFECT_SHAPES: &str = "{tool_name, arguments} or {sleep_ms}";
+
+fn tool_access_disabled() -> Value {
+    json!({"error": "tool access is disabled for this invocation"})
 }
 
 fn wall_clock_for_invocation(
@@ -130,17 +156,17 @@ fn sleep_admissible(milliseconds: u64, remaining: Duration) -> bool {
     u128::from(milliseconds) <= remaining.as_millis()
 }
 
-async fn serve(
-    bytes: &[u8],
+async fn perform(
+    effect: Effect,
     tools: &mut Option<tool_calls::Session>,
     deadline: tokio::time::Instant,
 ) -> Result<Value, String> {
-    match serde_json::from_slice::<Request>(bytes) {
-        Ok(Request::Tool(request)) => match tools {
+    match effect {
+        Effect::Tool(request) => match tools {
             Some(tools) => tools.call(&request.tool_name, request.arguments).await,
-            None => Ok(json!({"error": "tool access is disabled for this invocation"})),
+            None => Ok(tool_access_disabled()),
         },
-        Ok(Request::Sleep(request)) => {
+        Effect::Sleep(request) => {
             if !sleep_admissible(
                 request.sleep_ms,
                 deadline.saturating_duration_since(tokio::time::Instant::now()),
@@ -152,8 +178,40 @@ async fn serve(
             tokio::time::sleep(Duration::from_millis(request.sleep_ms)).await;
             Ok(json!({"result": null}))
         }
+    }
+}
+
+async fn describe(name: Value, tools: &mut Option<tool_calls::Session>) -> Value {
+    match (tools, name) {
+        (None, _) => tool_access_disabled(),
+        (Some(tools), Value::Null) => tools.describe(None).await,
+        (Some(tools), Value::String(name)) => tools.describe(Some(&name)).await,
+        (Some(_), _) => json!({"error": "describe takes a tool name, or null for every name"}),
+    }
+}
+
+/// A batch is its members in request order: each is performed, and reserves,
+/// exactly as it would alone, and its answer takes its member's position.
+async fn serve(
+    bytes: &[u8],
+    tools: &mut Option<tool_calls::Session>,
+    deadline: tokio::time::Instant,
+) -> Result<Value, String> {
+    match serde_json::from_slice::<Request>(bytes) {
+        Ok(Request::Effect(effect)) => perform(effect, tools, deadline).await,
+        Ok(Request::Describe(request)) => Ok(describe(request.describe, tools).await),
+        Ok(Request::Batch(request)) => {
+            let mut results = Vec::with_capacity(request.batch.len());
+            for member in request.batch {
+                results.push(match serde_json::from_value::<Effect>(member) {
+                    Ok(effect) => perform(effect, tools, deadline).await?,
+                    Err(error) => json!({"error": format!("expected {EFFECT_SHAPES}: {error}")}),
+                });
+            }
+            Ok(json!({ "results": results }))
+        }
         Err(error) => Ok(
-            json!({"error": format!("expected {{tool_name, arguments}} or {{sleep_ms}}: {error}")}),
+            json!({"error": format!("expected {EFFECT_SHAPES}, {{describe}} or {{batch}}: {error}")}),
         ),
     }
 }
@@ -232,6 +290,9 @@ pub fn prepare_input(
 }
 
 #[cfg(test)]
+mod script_e2e;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use gents_loop::tool_call_lifecycle::ToolOutcome;
@@ -296,6 +357,18 @@ mod tests {
                 Ok(ToolOutcome::Completed(
                     json!({"ordinal": ordinal}).to_string(),
                 ))
+            })
+        }
+
+        fn definitions<'a>(
+            &'a self,
+        ) -> gents_loop::tool::BoxFuture<'a, Vec<gents_loop::tool::ToolDefinition>> {
+            Box::pin(async {
+                vec![gents_loop::tool::ToolDefinition {
+                    name: "query".into(),
+                    description: "Reads rows.".into(),
+                    parameters: json!({"type": "object"}),
+                }]
             })
         }
     }
@@ -410,6 +483,67 @@ mod tests {
             let (output, unserved, _) = tool.run_once(json!({}), &context).await.unwrap();
             assert_eq!(output, expected, "tool_calls {tool_calls}");
             assert_eq!(unserved, None);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_batch_answers_each_member_in_its_position() {
+        let outcome = execute(
+            json!({"batch": [
+                {"tool_name": "query", "arguments": {}},
+                {"sleep_ms": 1},
+                {"tool_name": "query"},
+                {"tool_name": "query", "arguments": {}},
+            ]}),
+            1,
+            true,
+            json!({}),
+        )
+        .await;
+        let results = outcome.output["results"].as_array().unwrap();
+        assert_eq!(results[0], json!({"result": {"ordinal": 1}}));
+        assert_eq!(results[1], json!({"result": null}));
+        assert!(results[2]["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("expected {tool_name, arguments} or {sleep_ms}"));
+        assert_eq!(results[3], json!({"result": {"ordinal": 2}}));
+        assert_eq!(results.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn a_guest_lists_and_describes_its_surface() {
+        let outcome = execute(json!({"describe": null}), 1, true, json!({})).await;
+        assert_eq!(outcome.output, json!({"result": ["query"]}));
+        let outcome = execute(json!({"describe": "query"}), 1, true, json!({})).await;
+        assert_eq!(
+            outcome.output,
+            json!({"result": {"name": "query", "description": "Reads rows.",
+                "parameters": {"type": "object"}}})
+        );
+        let outcome = execute(json!({"describe": 1}), 1, true, json!({})).await;
+        assert!(outcome.output["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("describe takes a tool name"));
+    }
+
+    #[tokio::test]
+    async fn describing_conforms_to_lean() {
+        for case in gents_lean_vocab::families::tool_policy_plugin_calls_describable::cases() {
+            let name = if case.input.selected {
+                "query"
+            } else {
+                "absent"
+            };
+            let outcome = execute(
+                json!({ "describe": name }),
+                1,
+                case.input.tool_access,
+                json!({}),
+            )
+            .await;
+            case.check(outcome.output.get("result").is_some());
         }
     }
 

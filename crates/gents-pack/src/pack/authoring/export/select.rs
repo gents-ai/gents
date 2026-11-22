@@ -182,7 +182,7 @@ pub(super) fn close(
     let selected: BTreeSet<(Collection, String)> = queue.iter().cloned().collect();
     let mut documents = BTreeMap::new();
     let mut pulled = Vec::new();
-    let managed = |name: &str| gents_store::schema::catalog::RUNTIME_CATALOG.manages(name);
+    let managed = |name: &str| gents_store::schema::catalog::is_runtime_collection(name);
     let mut collections = BTreeSet::new();
     for name in &selection.collections {
         if managed(name) {

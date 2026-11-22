@@ -9,6 +9,8 @@ use crate::plugin::executor::call_runner;
 use gents_pack::pack::PackManifest;
 use gents_pack::plugin::{BoundDir, PluginBudget, PluginRunner, PluginVerdict};
 
+mod tool_fixture;
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PluginCase {
@@ -17,6 +19,8 @@ pub struct PluginCase {
     pub expect: Option<Value>,
     #[serde(default)]
     pub bind: Option<String>,
+    #[serde(default)]
+    pub tools: Option<tool_fixture::ToolFixture>,
 }
 
 #[derive(Debug, Serialize)]
@@ -214,7 +218,10 @@ async fn run_case(
         }
         None => None,
     };
-    let outcome = call_runner(coordinate, runner.clone(), case.input, budget, bound).await?;
+    let outcome = match case.tools {
+        Some(tools) => tools.run(runner.clone(), case.input, budget, bound).await?,
+        None => call_runner(coordinate, runner.clone(), case.input, budget, bound).await?,
+    };
     anyhow::ensure!(
         outcome.verdict == PluginVerdict::Success,
         "{:?}: {}",

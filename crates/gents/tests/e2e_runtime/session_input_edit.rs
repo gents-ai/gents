@@ -115,6 +115,7 @@ async fn signed_edit_targets(
             gents_store::config_client::prepare_request_evidence(
                 signer,
                 gents_store::config_client::client_request_input(replacement).unwrap(),
+                gents_protocol::schemas::HomePolicyIds::node_store(),
             )
             .await
             .unwrap(),

@@ -110,6 +110,7 @@ pub(super) fn close_streaming_turn(
             source: assistant_source,
             physical_header: None,
             block_indices: Vec::new(),
+            stub_receipts: Vec::new(),
         });
     }
 

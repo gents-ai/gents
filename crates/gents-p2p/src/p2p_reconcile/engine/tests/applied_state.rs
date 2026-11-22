@@ -25,14 +25,14 @@ async fn applied_state_persist_collapses_duplicates_and_recovers_a_missing_row()
     )
     .await
     .unwrap();
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::NODE))
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(gents_protocol::schemas::NODE))
         .await
         .unwrap();
-    let schema = gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::PEER_PAIRING_APPLIED).replace(
+    let schema = gents_protocol::schemas::HomePolicyIds::node_store().render(gents_protocol::schemas::PEER_PAIRING_APPLIED).replace(
         "@index(fields: [\"node_did\", \"peer_id\"], unique: true)",
         "",
     );
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&schema)).await.unwrap();
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&schema)).await.unwrap();
     let access = gents_store::config_client::ConfigAccess::local_as(
         node.clone(),
         identity::Did::new(identity.did()).unwrap(),
@@ -202,7 +202,7 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
         gents_protocol::schemas::ENROLLMENT_RENEWAL_INTENT,
         gents_protocol::schemas::ENROLLMENT_RENEWAL_OFFER,
     ] {
-        node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(schema)).await?;
+        node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(schema)).await?;
     }
     let runtime_access = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
     for actor in [&user, &agent, &sibling, &outsider] {

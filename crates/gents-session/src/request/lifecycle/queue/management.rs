@@ -984,10 +984,12 @@ pub(super) async fn replace_pending_user_messages(
     let mut graphs = Vec::with_capacity(creates.len());
     for create in &creates {
         let input = gents_store::config_client::client_request_input(create)?;
+        let ids = access.home_policy_ids().await?;
         let evidence =
-            gents_store::config_client::prepare_request_evidence(signer, input.clone()).await?;
+            gents_store::config_client::prepare_request_evidence(signer, input.clone(), ids)
+                .await?;
         graphs.push(std::sync::Arc::new(
-            gents_store::config_client::verify_request_evidence(input, evidence).await?,
+            gents_store::config_client::verify_request_evidence(input, evidence, ids).await?,
         ));
     }
     access

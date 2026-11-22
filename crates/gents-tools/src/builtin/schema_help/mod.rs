@@ -585,7 +585,7 @@ async fn find_version(access: &ConfigAccess, id: &str) -> Result<Value> {
 
 fn ensure_application_collection(name: &str) -> Result<()> {
     gents_store::graphql::validate_collection_identifier(name)?;
-    ensure!(!gents_store::schema::catalog::RUNTIME_CATALOG.manages(name), "{name} is a Gents-managed schema; only a Gents release changes it. Use config for its documents");
+    ensure!(!gents_store::schema::catalog::is_runtime_collection(name), "{name} is a Gents-managed schema; only a Gents release changes it. Use config for its documents");
     Ok(())
 }
 

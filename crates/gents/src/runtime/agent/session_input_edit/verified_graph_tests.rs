@@ -202,9 +202,13 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
         let byte = signature[0].as_u64().context("signature byte missing")?;
         signature[0] = serde_json::json!(byte ^ 1);
         let input = gents_store::config_client::client_request_input(&command.replacements[0])?;
-        let tampered_accepted = gents_store::config_client::verify_request_evidence(input, altered)
-            .await
-            .is_ok();
+        let tampered_accepted = gents_store::config_client::verify_request_evidence(
+            input,
+            altered,
+            gents_protocol::schemas::HomePolicyIds::node_store(),
+        )
+        .await
+        .is_ok();
         let command_doc =
             gents_session::request::lifecycle::queue::publish_edit_command(&edit_access, &command)
                 .await?;

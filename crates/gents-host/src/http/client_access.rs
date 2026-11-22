@@ -35,6 +35,15 @@ fn respond(
         {
             StatusCode::FORBIDDEN.into_response()
         }
+        Err(error)
+            if matches!(
+                error.config_client_error(),
+                Some(gents_store::config_client::ConfigClientError::DecisionReadFailed)
+            ) =>
+        {
+            tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "client access decision read failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
         Err(error) => {
             tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "client access operation failed");
             StatusCode::SERVICE_UNAVAILABLE.into_response()
