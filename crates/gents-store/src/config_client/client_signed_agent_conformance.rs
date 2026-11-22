@@ -29,7 +29,12 @@ fn client_goal_graphs_use_the_bundled_canonical_lineage() {
             gents_protocol::schemas::AGENT_SESSION_GOAL_CONTROL,
         ),
     ] {
-        let schema = super::client_signed_agent::signing_schema(sdl, name).unwrap();
+        let schema = super::client_signed_agent::signing_schema(
+            sdl,
+            name,
+            gents_protocol::schemas::HomePolicyIds::node_store(),
+        )
+        .unwrap();
         let bundled = query::parse_sdl(sdl).unwrap().remove(0);
         assert_eq!(schema.collection_id, bundled.collection_id);
         assert_eq!(schema.version_id, bundled.version_id);
@@ -249,7 +254,12 @@ fn modeled_configuration_delete_collections_use_trusted_schemas() {
                 }
                 _ => {}
             }
-            assert!(super::client_signed_agent::signing_schema(schema, name).is_ok());
+            assert!(super::client_signed_agent::signing_schema(
+                schema,
+                name,
+                gents_protocol::schemas::HomePolicyIds::node_store()
+            )
+            .is_ok());
         }
         schema.is_some()
     });
@@ -371,11 +381,12 @@ async fn client_agent_genesis_is_signed_by_the_authenticated_desktop_principal(
         .await?;
     assert_eq!(
         policy,
-        gents_protocol::schemas::HomePolicyIds::shared()
+        gents_protocol::schemas::HomePolicyIds::node_store()
             .id(gents_protocol::schemas::BuiltInPolicy::Household)
     );
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::AGENT),
+        &gents_protocol::schemas::HomePolicyIds::node_store()
+            .render(gents_protocol::schemas::AGENT),
     )
     .await?;
     let endpoint = super::GraphqlEndpoint::as_principal(
@@ -452,11 +463,12 @@ async fn large_client_signed_agent_document_crosses_websocket_frame_boundaries(
         .await?;
     assert_eq!(
         policy,
-        gents_protocol::schemas::HomePolicyIds::shared()
+        gents_protocol::schemas::HomePolicyIds::node_store()
             .id(gents_protocol::schemas::BuiltInPolicy::Household)
     );
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::AGENT),
+        &gents_protocol::schemas::HomePolicyIds::node_store()
+            .render(gents_protocol::schemas::AGENT),
     )
     .await?;
     let endpoint = super::GraphqlEndpoint::as_principal(
@@ -542,32 +554,36 @@ async fn client_configuration_creates_are_signed_by_the_authenticated_principal(
             .await?;
     }
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::AGENT),
+        &gents_protocol::schemas::HomePolicyIds::node_store()
+            .render(gents_protocol::schemas::AGENT),
     )
     .await?;
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared()
+        &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::AGENT_CONTEXT),
     )
     .await?;
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::TOOLS),
+        &gents_protocol::schemas::HomePolicyIds::node_store()
+            .render(gents_protocol::schemas::TOOLS),
     )
     .await?;
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::TASK),
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(gents_protocol::schemas::TASK),
     )
     .await?;
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::SCHEDULE),
+        &gents_protocol::schemas::HomePolicyIds::node_store()
+            .render(gents_protocol::schemas::SCHEDULE),
     )
     .await?;
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::TRIGGER),
+        &gents_protocol::schemas::HomePolicyIds::node_store()
+            .render(gents_protocol::schemas::TRIGGER),
     )
     .await?;
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared()
+        &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::INFERENCE_BACKEND_METADATA),
     )
     .await?;
@@ -575,20 +591,22 @@ async fn client_configuration_creates_are_signed_by_the_authenticated_principal(
     let approved_schema = super::client_signed_agent::signing_schema(
         gents_protocol::schemas::INFERENCE_BACKEND_METADATA,
         "InferenceBackendMetadata",
+        gents_protocol::schemas::HomePolicyIds::node_store(),
     )?;
     assert_eq!(backend_schema.version_id, approved_schema.version_id);
     assert_eq!(backend_schema.collection_id, approved_schema.collection_id);
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::CALLBACK),
+        &gents_protocol::schemas::HomePolicyIds::node_store()
+            .render(gents_protocol::schemas::CALLBACK),
     )
     .await?;
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared()
+        &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::CALLBACK_BINDING),
     )
     .await?;
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared()
+        &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::CALLBACK_MODULE),
     )
     .await?;

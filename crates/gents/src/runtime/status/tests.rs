@@ -82,11 +82,11 @@ async fn runtime_status_publication_preserves_native_ownership_and_revocation() 
     )
     .await?;
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::NODE),
+        &gents_protocol::schemas::HomePolicyIds::node_store().render(gents_protocol::schemas::NODE),
     )
     .await?;
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared()
+        &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::NODE_RUNTIME),
     )
     .await?;

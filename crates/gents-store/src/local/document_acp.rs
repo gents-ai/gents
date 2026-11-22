@@ -268,9 +268,38 @@ pub fn node_periodic(node: &defra_node::Node, publication: Periodic) -> Periodic
     periodic(provider_of(node), publication)
 }
 
+/// `DocumentAcpChoice.PolicyIds`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyIds {
+    Counter,
+    Seeded,
+}
+
+/// `DocumentAcpChoice.policyIds`.
+pub fn policy_ids(provider: DocumentAcp) -> PolicyIds {
+    match provider {
+        DocumentAcp::Local => PolicyIds::Counter,
+        DocumentAcp::Vera => PolicyIds::Seeded,
+    }
+}
+
+/// The IDs a home on `provider` names its built-in policies by.
+pub fn home_policy_ids(provider: DocumentAcp) -> &'static gents_protocol::schemas::HomePolicyIds {
+    match policy_ids(provider) {
+        PolicyIds::Counter => gents_protocol::schemas::HomePolicyIds::node_store(),
+        PolicyIds::Seeded => gents_protocol::schemas::HomePolicyIds::embedded_vera(),
+    }
+}
+
+/// [`home_policy_ids`] of the home `node` serves.
+pub fn node_policy_ids(node: &defra_node::Node) -> &'static gents_protocol::schemas::HomePolicyIds {
+    home_policy_ids(provider_of(node))
+}
+
 /// Where `node` decides document access.
 pub fn provider_of(node: &defra_node::Node) -> DocumentAcp {
-    #[cfg(feature = "vera")]
+    #[cfg(any(test, feature = "vera"))]
     {
         if node.vera_acp().is_some() {
             return DocumentAcp::Vera;
@@ -335,7 +364,8 @@ fn recorded_deployment(data: &Path) -> Result<Option<Deployment>> {
         .map_err(|source| DocumentAcpError::Record { path, source })
 }
 
-fn recorded(data: &Path) -> Result<DocumentAcp> {
+/// The provider the store at `data` was created with.
+pub(crate) fn recorded(data: &Path) -> Result<DocumentAcp> {
     Ok(match recorded_deployment(data)? {
         Some(_) => DocumentAcp::Vera,
         None => DocumentAcp::Local,

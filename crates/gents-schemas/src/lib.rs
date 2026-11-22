@@ -114,6 +114,9 @@ pub const WORKSPACE_RECEIPT_NAME: &str = "WorkspaceReceipt";
 pub const WORKSPACE_RECEIPT: &str = include_str!("../schemas/agent/workspace_receipt.graphql");
 pub const EVENT_SOURCE_CURSOR_NAME: &str = "EventSourceCursor";
 pub const EVENT_SOURCE_CURSOR: &str = include_str!("../schemas/agent/event_source_cursor.graphql");
+pub const CERTIFIED_ASSIGNMENT_STATE_NAME: &str = "CertifiedAssignmentState";
+pub const CERTIFIED_ASSIGNMENT_STATE: &str =
+    include_str!("../schemas/agent/certified_assignment_state.graphql");
 pub const TRIGGER_FIRE_NAME: &str = "TriggerFire";
 pub const TRIGGER_FIRE: &str = include_str!("../schemas/agent/trigger_fire.graphql");
 pub const FIRE_OUTCOME_NAME: &str = "FireOutcome";
@@ -245,6 +248,7 @@ pub const ALL: &[&str] = &[
     EVENT_SOURCE,
     TRIGGER,
     EVENT_SOURCE_CURSOR,
+    CERTIFIED_ASSIGNMENT_STATE,
     TRIGGER_FIRE,
     FIRE_OUTCOME,
     CALLBACK_MODULE,
@@ -333,6 +337,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     EVENT_SOURCE_NAME,
     TRIGGER_NAME,
     EVENT_SOURCE_CURSOR_NAME,
+    CERTIFIED_ASSIGNMENT_STATE_NAME,
     TRIGGER_FIRE_NAME,
     FIRE_OUTCOME_NAME,
     CALLBACK_MODULE_NAME,

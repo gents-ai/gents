@@ -123,6 +123,7 @@ async fn submit_prepared_edit(
             })
         })
         .await?;
+    let ids = access.home_policy_ids().await?;
     let mut replacement_evidence = Vec::with_capacity(replacements.len());
     let mut replacement_credentials = Vec::with_capacity(replacements.len());
     for create in &replacements {
@@ -136,6 +137,7 @@ async fn submit_prepared_edit(
         let evidence = gents_store::config_client::prepare_request_evidence(
             signer,
             gents_store::config_client::client_request_input(create)?,
+            ids,
         )
         .await?;
         replacement_credentials.push(

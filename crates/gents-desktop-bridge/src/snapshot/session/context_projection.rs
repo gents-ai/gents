@@ -165,7 +165,7 @@ pub(super) fn build_session_context_view(
         .collect::<Vec<_>>();
     let display_profile =
         selected_provider_profile.unwrap_or(gents::ProviderInputProfile::OpenAiChatCompletions);
-    let (active_provider_messages, _) =
+    let (active_provider_messages, _, _) =
         gents_inference::compaction::provider_view(display_profile, provider_input);
     let summaries = compaction_rows
         .iter()

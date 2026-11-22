@@ -1,18 +1,24 @@
 use std::sync::{Arc, LazyLock};
 
-use super::catalog::{BaselineCollection, Catalog, SchemaError, BASELINE};
+use super::catalog::{BaselineCollection, Catalog, SchemaError};
 use defra_node::Node;
 
 use crate::config_client::{ConfigAccess, ConfigClientError};
 
+/// A client's journal is a store of its own on the client, so its policies
+/// are always the node store's (`DocumentAcpChoice.PolicyIds.counter`).
+fn journal_ids() -> &'static gents_protocol::schemas::HomePolicyIds {
+    crate::local::document_acp::home_policy_ids(crate::local::document_acp::DocumentAcp::Local)
+}
+
 static COLLECTIONS: LazyLock<Vec<BaselineCollection<'static>>> = LazyLock::new(|| {
-    let baseline = &BASELINE;
+    let baseline = super::catalog::baseline(journal_ids());
     let sdl = baseline
         .iter()
         .map(|entry| entry.sdl)
         .collect::<Vec<_>>()
         .join("\n");
-    let parsed = query::parse_sdl(&gents_protocol::schemas::HomePolicyIds::shared().render(&sdl))
+    let parsed = query::parse_sdl(&journal_ids().render(&sdl))
         .expect("canonical journal catalog must parse");
     baseline
         .iter()
@@ -21,7 +27,7 @@ static COLLECTIONS: LazyLock<Vec<BaselineCollection<'static>>> = LazyLock::new(|
                 collection.name == entry.name
                     && collection.policy.as_ref().is_some_and(|policy| {
                         policy.id
-                            == gents_protocol::schemas::HomePolicyIds::shared()
+                            == journal_ids()
                                 .id(gents_protocol::schemas::BuiltInPolicy::ClientJournal)
                             && policy.resource_name
                                 == gents_protocol::schemas::CLIENT_JOURNAL_POLICY_RESOURCE
@@ -98,7 +104,7 @@ mod tests {
             !collection.is_branchable
                 && collection.policy.as_ref().is_some_and(|policy| {
                     policy.id
-                        == gents_protocol::schemas::HomePolicyIds::shared()
+                        == gents_protocol::schemas::HomePolicyIds::node_store()
                             .id(gents_protocol::schemas::BuiltInPolicy::ClientJournal)
                         && policy.resource_name
                             == gents_protocol::schemas::CLIENT_JOURNAL_POLICY_RESOURCE

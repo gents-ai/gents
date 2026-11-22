@@ -20,6 +20,7 @@ pub(super) struct MutationWriteGate {
     pub(super) pending_acquires: StdMutex<RapidHashMap<u64, PendingWriteAcquire>>,
     next_pending_acquire_id: AtomicU64,
     pub(super) store_claim: StdMutex<Option<Arc<StoreClaim>>>,
+    assignment_locks: StdMutex<RapidHashMap<String, Weak<tokio::sync::Mutex<()>>>>,
 }
 
 pub(super) const MUTATION_WRITE_GATE_CAPACITY: usize = 64;
@@ -52,6 +53,22 @@ pub struct LocalConfigAccess {
 }
 
 impl LocalConfigAccess {
+    pub(crate) fn assignment_lock(&self, key: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut locks = self
+            .gate
+            .assignment_locks
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        let entry = locks.entry(key.to_owned()).or_default();
+        if let Some(lock) = entry.upgrade() {
+            return lock;
+        }
+        let lock = Arc::new(tokio::sync::Mutex::new(()));
+        *entry = Arc::downgrade(&lock);
+        lock
+    }
+
     pub(crate) fn new(node: Arc<EmbeddedNode>) -> Self {
         let gate = mutation_write_gate(&node);
         Self {
@@ -400,6 +417,7 @@ impl MutationWriteGate {
             pending_acquires: StdMutex::new(RapidHashMap::new()),
             next_pending_acquire_id: AtomicU64::new(1),
             store_claim: StdMutex::new(None),
+            assignment_locks: StdMutex::new(RapidHashMap::new()),
         }
     }
 

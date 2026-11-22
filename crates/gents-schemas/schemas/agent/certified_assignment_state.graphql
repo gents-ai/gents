@@ -1,0 +1,12 @@
+type CertifiedAssignmentState @policy(id: "$household", resource: "configuration") @index(fields: ["scope_key"], unique: true) {
+    scope_key: String @immutable
+    owner_did: String @index @immutable
+    policy_id: String @immutable
+    resource: String @immutable
+    relation: String @immutable
+    issuer: String @immutable
+    term: String
+    height: String
+    block_hash: String
+    assigned: JSON
+}
