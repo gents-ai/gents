@@ -159,7 +159,14 @@ async fn a_vera_home_reads_only_its_own_certified_assignments() -> anyhow::Resul
         subject: home.owner.did().into(),
         ..query.clone()
     };
-    assert!(access.certified_assignments(other).await.is_err());
+    assert!(matches!(
+        access.certified_assignments(other).await,
+        Err(
+            crate::config_client::assignments::AssignmentReadError::Provider(
+                defra_node::Error::DacPolicy(db::DacPolicyError::AssignmentSubject)
+            )
+        )
+    ));
     let owner_access = ConfigAccess::Graphql(home.owner_endpoint.clone());
     let input = json!({"node_did": home.owner.did(), "enabled": true});
     let response = owner_access
