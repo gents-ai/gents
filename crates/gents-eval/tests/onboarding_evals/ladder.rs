@@ -552,7 +552,7 @@ fn automation_outcomes_accept_request_and_goal_success_but_reject_other_states()
         .into_iter()
         .find(|d| d.definition_id == "configurator-l4-automation")
         .unwrap();
-    assert_eq!(definition.comparability_version, 12);
+    assert_eq!(definition.comparability_version, 13);
     let registry = CheckRegistry::builtin();
     let grader = registry.get("crew_spec_match").unwrap();
     let mut checked = 0;
