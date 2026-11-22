@@ -630,6 +630,7 @@ fn wire_fixture_with(reviewed_job: bool, init_extra: &[&str]) -> Result<WireFixt
             "tools": [{
                 "tools_id": "job-fixture-caller",
                 "display_name": "Job fixture caller",
+                "agents": {"target_ids": ["wf-fixture"]},
                 "integrations": {"plugins": [plugin_entry]},
             }],
         });
@@ -1589,6 +1590,7 @@ fn release_starter_fixture(
         config["tools"] = serde_json::json!([{
             "tools_id": format!("{name}-caller"),
             "display_name": "Starter fixture caller",
+            "agents": {"target_ids": [target]},
             "integrations": {"plugins": [selection]},
         }, {
             "tools_id": "${GENTS_PACK_NODE_DID}-wf-worker",

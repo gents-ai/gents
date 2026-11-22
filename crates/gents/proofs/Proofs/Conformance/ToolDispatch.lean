@@ -29,3 +29,29 @@ def hookDispatch : Family HookBatchInput HookBatch where
   model := fun i => ToolExecution.Parallel.hookBatch i.actions i.hookCancelled
 
 end Conformance.ParallelDispatch
+
+namespace ToolExecution.Parallel
+
+deriving instance Lean.ToJson for Footprint, Call
+
+attribute [conformance_function] joinsGroup
+
+structure ScriptBatch where
+  calls : List Call
+  deriving Lean.ToJson
+
+/-- Every batch of up to six calls by footprint with distinct keys, and the
+same batch with its second call repeating its first where their footprints
+agree; six calls exceed the bound. -/
+@[conformance_family]
+def scriptEffectWidth : Conformance.Family ScriptBatch Nat where
+  inputs := (List.range 7).flatMap fun len => (List.range (2 ^ len)).flatMap fun mask =>
+    let calls := (List.range len).map fun i =>
+      (⟨i, if mask.testBit i then .barrier else .read⟩ : Call)
+    ⟨calls⟩ :: match calls with
+      | a :: b :: rest =>
+        if a.footprint = b.footprint then [⟨a :: { b with key := a.key } :: rest⟩] else []
+      | _ => []
+  model := fun batch => effectWidth maxParallelReads batch.calls
+
+end ToolExecution.Parallel
