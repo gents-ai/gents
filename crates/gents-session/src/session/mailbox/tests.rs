@@ -1023,7 +1023,7 @@ async fn remote_client_signs_conditional_mailbox_dismissal() -> anyhow::Result<(
     node.add_dac_policy_with_counter_as(&owner_context, gents_protocol::schemas::MAILBOX_POLICY, 0)
         .await?;
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared()
+        &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::MAILBOX_ITEM),
     )
     .await?;
@@ -1124,7 +1124,7 @@ async fn remote_dismissal_rebuilds_after_a_concurrent_item_write() -> anyhow::Re
     node.add_dac_policy_with_counter_as(&owner_context, gents_protocol::schemas::MAILBOX_POLICY, 0)
         .await?;
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared()
+        &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::MAILBOX_ITEM),
     )
     .await?;

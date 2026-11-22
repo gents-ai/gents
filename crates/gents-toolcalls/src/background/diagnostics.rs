@@ -808,12 +808,12 @@ mod tests {
         let node = std::sync::Arc::new(gents_store::test_support::node_builder().build().await?);
         gents_store::test_support::acp_policies::install_identity_acp_policies(&node).await?;
         node.add_collection(
-            &gents_protocol::schemas::HomePolicyIds::shared()
+            &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_protocol::schemas::AGENT_REQUEST),
         )
         .await?;
         node.add_collection(
-            &gents_protocol::schemas::HomePolicyIds::shared()
+            &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_protocol::schemas::AGENT_MESSAGE),
         )
         .await?;

@@ -422,7 +422,7 @@ async fn modeled_inference_selection_changes_stage_shared_native_edges() -> anyh
     }
     let previous_policy = gents_protocol::schemas::BuiltInPolicy::Household.placeholder();
     node.add_collection(
-        &gents_protocol::schemas::HomePolicyIds::shared()
+        &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(&gents_protocol::schemas::AGENT.replace(previous_policy, &policy)),
     )
     .await?;
@@ -434,7 +434,7 @@ async fn modeled_inference_selection_changes_stage_shared_native_edges() -> anyh
     ] {
         assert!(schema.contains(previous_policy));
         node.add_collection(
-            &gents_protocol::schemas::HomePolicyIds::shared()
+            &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(&schema.replace(previous_policy, &policy)),
         )
         .await?;

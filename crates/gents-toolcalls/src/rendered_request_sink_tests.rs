@@ -180,7 +180,7 @@ async fn failed_capture_publication_rolls_back_bound_blocks_and_record() {
                 1,
             )
         };
-        node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&bound))
+        node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&bound))
             .await
             .unwrap();
     }

@@ -1006,7 +1006,7 @@ mod tests {
         let context =
             defra_core::RequestContext::default().with_identity(Some(owner.did().to_owned()));
         let policy_id = node.add_dac_policy_as(&context, "name: WorkspaceRootCompleteness\nresources:\n  - name: roots\n    permissions:\n      - name: read\n      - name: update\n      - name: delete\n").await?;
-        node.add_collection_as(&context, &gents_protocol::schemas::HomePolicyIds::shared().render(&format!(
+        node.add_collection_as(&context, &gents_protocol::schemas::HomePolicyIds::node_store().render(&format!(
             "type WorkspaceRoot @policy(id: \"{policy_id}\", resource: \"roots\") {{ node_did: String root_path: String enabled: Boolean }}"
         ))).await?;
         let owner_access =

@@ -399,6 +399,7 @@ pub(crate) async fn init_home_with_core_packs(
         .with_document_projector(gents_store::local::document_projector(
             initialized_identity.identity.clone(),
             std::sync::Arc::new(ceiling),
+            gents_store::local::document_acp::home_policy_ids(document_acp),
         )?)
         .with_node_identity_did(initialized_identity.node_identity_did.clone())
         .with_node_acp_enabled();
@@ -2822,7 +2823,7 @@ mod tests {
                 .get_collection(gents_protocol::schemas::INFERENCE_BACKEND_NAME)?
                 .context("legacy backend baseline missing")?;
             assert!(collection.policy.is_some_and(|policy| policy.id
-                == gents_protocol::schemas::HomePolicyIds::shared()
+                == gents_protocol::schemas::HomePolicyIds::node_store()
                     .id(gents_protocol::schemas::BuiltInPolicy::Household)
                 && policy.resource_name == "secret_configuration"));
             node.shutdown().await?;
@@ -3085,6 +3086,7 @@ mod tests {
                     gents_store::local::document_projector(
                         identity.clone(),
                         std::sync::Arc::new(ceiling),
+                        gents_protocol::schemas::HomePolicyIds::node_store(),
                     )
                     .unwrap(),
                 )

@@ -96,7 +96,7 @@ async fn admiral_search_fixture_grades_native_writes_and_ranked_results() {
     let schema_params = &configure["checks"][0]["params"];
     access
         .add_collection(
-            &gents_protocol::schemas::HomePolicyIds::shared()
+            &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(schema_params["sdl"].as_str().unwrap()),
         )
         .await

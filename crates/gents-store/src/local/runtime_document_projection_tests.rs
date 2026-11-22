@@ -76,7 +76,7 @@ fn resource(resource: Resource) -> &'static str {
 
 #[test]
 fn receiver_genesis_access_matches_the_lean_model() {
-    let ids = HomePolicyIds::shared();
+    let ids = HomePolicyIds::node_store();
     let foreign = ids.id(BuiltInPolicy::Mailbox);
     family::replay::<Access, Binding, Collection, Resource>(|input| {
         let policy = match input.binding {

@@ -10,7 +10,7 @@ use super::compatibility::{
     reject_unknown_lineage, validate_bindings, validate_file_image_bindings,
     validate_file_image_policy, validate_runtime_locality, verify_lineages,
 };
-use super::{Catalog, SchemaError, FILE_COLLECTION_POLICIES, RUNTIME_CATALOG};
+use super::{Catalog, SchemaError, FILE_COLLECTION_POLICIES};
 
 type Result<T, E = SchemaError> = std::result::Result<T, E>;
 
@@ -38,18 +38,20 @@ pub async fn ensure_runtime_owned(
 }
 
 pub async fn ensure_runtime(node: &EmbeddedNode) -> Result<()> {
-    validate_runtime_locality(node)?;
-    ensure(node, &RUNTIME_CATALOG).await?;
-    validate_runtime_locality(node)
+    let ids = crate::local::document_acp::node_policy_ids(node);
+    validate_runtime_locality(node, ids)?;
+    ensure(node, super::runtime_catalog(ids)).await?;
+    validate_runtime_locality(node, ids)
 }
 
 /// Registers the catalog's missing collections, the policies and owner
-/// objects they need and their ordinary indexes. Every refusal is read-only
-/// and precedes the first write.
+/// objects they need and their ordinary indexes, under the policy IDs of the
+/// home `node` serves. Every refusal is read-only and precedes the first
+/// write.
 pub async fn ensure(node: &EmbeddedNode, catalog: &Catalog<'_>) -> Result<()> {
     let _guard = ENSURE_LOCK.lock().await;
     let started = Instant::now();
-    let ids = HomePolicyIds::shared();
+    let ids = crate::local::document_acp::node_policy_ids(node);
     validate_bindings(node, catalog, ids).await?;
     reject_unknown_lineage(node, catalog).await?;
     let file_image_owner = validate_file_image_bindings(node, catalog, ids)?;

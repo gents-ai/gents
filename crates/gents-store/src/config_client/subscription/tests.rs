@@ -197,7 +197,7 @@ async fn native_subscription_uses_caller_and_observes_nonbranchable_deletion() {
     let access = ConfigAccess::local_as(node.clone(), owner.did().parse().unwrap());
     access
         .add_collection(
-            &gents_protocol::schemas::HomePolicyIds::shared().render(&format!(
+            &gents_protocol::schemas::HomePolicyIds::node_store().render(&format!(
         "type SubscriptionParcel @policy(id: \"{}\", resource: \"parcels\") {{ value: String }}",
         crate::graphql::escape_graphql_string(&policy),
     )),

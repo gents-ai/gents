@@ -36,8 +36,9 @@ pub async fn prepare_goal_delete_evidence(
         .await?;
     let doc_id = doc_id.to_owned();
     let signing = (*capability.config).clone();
+    let ids = access.home_policy_ids().await?;
     tokio::task::spawn_blocking(move || {
-        let schema = signing_schema(gents_protocol::schemas::GOAL, "Goal")?;
+        let schema = signing_schema(gents_protocol::schemas::GOAL, "Goal", ids)?;
         let graph = db::block::builder::ClientDeleteSignatures::from_snapshot(
             &schema, &doc_id, &snapshot, &signing,
         )
@@ -55,8 +56,9 @@ pub async fn verify_goal_delete_evidence(
 ) -> Result<db::block::builder::VerifiedClientMutation> {
     let snapshot = goal_delete_snapshot(txn, doc_id).await?;
     let doc_id = doc_id.to_owned();
+    let ids = txn.home_policy_ids().await?;
     tokio::task::spawn_blocking(move || {
-        let schema = signing_schema(gents_protocol::schemas::GOAL, "Goal")?;
+        let schema = signing_schema(gents_protocol::schemas::GOAL, "Goal", ids)?;
         let evidence = serde_json::from_value(evidence)?;
         db::block::builder::VerifiedClientMutation::verify_delete(
             &schema, &doc_id, &snapshot, evidence,
@@ -238,11 +240,25 @@ pub(super) fn trusted_delete_schema(collection: &str) -> Option<&'static str> {
         .find_map(|(name, schema)| (*name == collection).then_some(*schema))
 }
 
-/// The signing graph uses the version the exact SDL registers, which is the canonical
-/// version: every collection's fresh store registers its current SDL directly.
-pub(super) fn signing_schema(sdl: &str, collection: &str) -> Result<::schema::CollectionVersion> {
-    let mut schemas =
-        query::parse_sdl(&gents_protocol::schemas::HomePolicyIds::shared().render(sdl))?;
+/// The signing graph uses the version the exact SDL registers in a home whose
+/// built-in policies have `ids`, which is the canonical version: every
+/// collection's fresh store registers its current SDL directly.
+pub(super) fn signing_schema(
+    sdl: &str,
+    collection: &str,
+    ids: &gents_protocol::schemas::HomePolicyIds,
+) -> Result<::schema::CollectionVersion> {
+    written_signing_schema(&ids.render(sdl), collection)
+}
+
+/// [`signing_schema`] of SDL that names its policies by their IDs, as a
+/// user's own schema does: only the bundled SDL names built-in policies by
+/// placeholder.
+pub(super) fn written_signing_schema(
+    sdl: &str,
+    collection: &str,
+) -> Result<::schema::CollectionVersion> {
+    let mut schemas = query::parse_sdl(sdl)?;
     if schemas.len() != 1 || schemas[0].name != collection {
         return Err(ConfigClientError::ClientAgentTransportRequired);
     }
@@ -352,12 +368,13 @@ pub(super) async fn execute(
     collection: String,
 ) -> Result<Value> {
     let signer = client_signer(endpoint)?;
+    let ids = endpoint.home_policy_ids().await?;
     let input = variables
         .get("input")
         .cloned()
         .ok_or(ConfigClientError::VariablesNotObject)?;
     let mut graph = tokio::task::spawn_blocking(move || {
-        let schema = signing_schema(&schema, &collection)?;
+        let schema = signing_schema(&schema, &collection, ids)?;
         db::block::builder::ClientCreateSignatures::from_input(
             &storage::Crdts::default(),
             &schema,
@@ -427,6 +444,7 @@ pub(super) async fn execute_update(
     target: SignedUpdateTarget,
 ) -> Result<Value> {
     let signer = client_signer(endpoint)?;
+    let ids = endpoint.home_policy_ids().await?;
     let input = variables
         .get("input")
         .cloned()
@@ -438,7 +456,7 @@ pub(super) async fn execute_update(
             doc_id,
             snapshot,
         } = target;
-        let schema = signing_schema(&schema, &collection)?;
+        let schema = signing_schema(&schema, &collection, ids)?;
         db::block::builder::ClientUpdateSignatures::from_input(
             &storage::Crdts::default(),
             &schema,
@@ -505,8 +523,9 @@ pub(super) async fn execute_delete(
     snapshot: db::block::builder::ClientUpdateSnapshot,
 ) -> Result<Value> {
     let signer = client_signer(endpoint)?;
+    let ids = endpoint.home_policy_ids().await?;
     let mut graph = tokio::task::spawn_blocking(move || {
-        let schema = signing_schema(&schema, &collection)?;
+        let schema = signing_schema(&schema, &collection, ids)?;
         db::block::builder::ClientDeleteSignatures::from_snapshot(
             &schema, &doc_id, &snapshot, &signer,
         )
@@ -560,6 +579,7 @@ pub(super) async fn execute_delete(
 pub async fn prepare_request_evidence(
     signer: &dyn crate::identity::NodeIdentity,
     input: Value,
+    ids: &'static gents_protocol::schemas::HomePolicyIds,
 ) -> Result<Value> {
     let capability = signer.client_signing_capability()?;
     if capability.did() != signer.did() {
@@ -567,7 +587,7 @@ pub async fn prepare_request_evidence(
     }
     let signing = (*capability.config).clone();
     tokio::task::spawn_blocking(move || {
-        let schema = signing_schema(gents_protocol::schemas::AGENT_REQUEST, "AgentRequest")?;
+        let schema = signing_schema(gents_protocol::schemas::AGENT_REQUEST, "AgentRequest", ids)?;
         let graph = db::block::builder::ClientCreateSignatures::from_input(
             &storage::Crdts::default(),
             &schema,
@@ -584,9 +604,10 @@ pub async fn prepare_request_evidence(
 pub async fn verify_request_evidence(
     input: Value,
     evidence: Value,
+    ids: &'static gents_protocol::schemas::HomePolicyIds,
 ) -> Result<db::block::builder::VerifiedClientCreate> {
     tokio::task::spawn_blocking(move || {
-        let schema = signing_schema(gents_protocol::schemas::AGENT_REQUEST, "AgentRequest")?;
+        let schema = signing_schema(gents_protocol::schemas::AGENT_REQUEST, "AgentRequest", ids)?;
         let evidence = serde_json::from_value(evidence)?;
         db::block::builder::VerifiedClientCreate::verify(
             &storage::Crdts::default(),

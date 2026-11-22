@@ -644,7 +644,7 @@ mod tests {
             .await?;
         assert_eq!(
             policy,
-            gents_protocol::schemas::HomePolicyIds::shared()
+            gents_protocol::schemas::HomePolicyIds::node_store()
                 .id(gents_protocol::schemas::BuiltInPolicy::Household)
         );
         for key in [
@@ -664,24 +664,25 @@ mod tests {
         }
         node.add_collection_as(
             &context,
-            &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::NODE),
+            &gents_protocol::schemas::HomePolicyIds::node_store()
+                .render(gents_protocol::schemas::NODE),
         )
         .await?;
         node.add_collection_as(
             &context,
-            &gents_protocol::schemas::HomePolicyIds::shared()
+            &gents_protocol::schemas::HomePolicyIds::node_store()
                 .render(gents_protocol::schemas::AGENT),
         )
         .await?;
         let binding = format!(
             "type WorkspaceRoot @policy(id: \"{policy}\", resource: \"workspace_roots\") {{"
         );
-        let schema = gents_protocol::schemas::HomePolicyIds::shared()
+        let schema = gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::WORKSPACE_ROOT)
             .replacen("type WorkspaceRoot {", &binding, 1);
         node.add_collection_as(
             &context,
-            &gents_protocol::schemas::HomePolicyIds::shared().render(&schema),
+            &gents_protocol::schemas::HomePolicyIds::node_store().render(&schema),
         )
         .await?;
         let endpoint = format!("http://{address}/api/v0/graphql");
