@@ -9,7 +9,7 @@ use gents_pack::pack::install_flow::{
     DocumentsInstallNode, DocumentsInstallRequest, LocalPackAccess,
 };
 use gents_pack::pack::installation_roots;
-use gents_pack::pack::plugin_wire::wire_pack_plugins;
+use gents_pack::pack::plugin_wire::{wire_pack_batch, SentPack, WireBatchOptions};
 use gents_pack::pack::resolved_pack::{resolve_pack_source, ResolvedPack};
 use gents_pack::pack::{PackChangeError, PackKind, PackManifest};
 use gents_protocol::operations::pack::{PackActor, PackOperation};
@@ -143,13 +143,16 @@ async fn install_documents_pack_inner(
             )
             .await?;
             if !request.wire.is_empty() {
-                output["wired"] = wire_pack_plugins(
+                output["wired"] = wire_pack_batch(
                     access,
                     owner,
                     &request.home,
-                    pack,
+                    SentPack {
+                        archive: pack,
+                        approval: approvals.first(),
+                    },
                     &request.wire,
-                    approvals.first(),
+                    WireBatchOptions::default(),
                     gents_host::http::pack_wire_client::SIGNERS,
                 )
                 .await?
@@ -352,13 +355,16 @@ pub(super) async fn install_documents_report(
             }
         }
         if !args.wire.is_empty() && !args.preview && args.scope.graphql.is_none() {
-            output["wired"] = wire_pack_plugins(
+            output["wired"] = wire_pack_batch(
                 &access,
                 &owner,
                 &home,
-                pack,
+                SentPack {
+                    archive: pack,
+                    approval: None,
+                },
                 &args.wire,
-                None,
+                WireBatchOptions::default(),
                 gents_host::http::pack_wire_client::SIGNERS,
             )
             .await?
@@ -494,13 +500,16 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError
                 )
                 .await?;
                 if !args.wire.is_empty() && !args.preview {
-                    result["wired"] = wire_pack_plugins(
+                    result["wired"] = wire_pack_batch(
                         &gents_store::config_client::ConfigAccess::Graphql(endpoint.clone()),
                         owner,
                         &home,
-                        &pack,
+                        SentPack {
+                            archive: &pack,
+                            approval: approvals.first(),
+                        },
                         &args.wire,
-                        approvals.first(),
+                        WireBatchOptions::default(),
                         gents_host::http::pack_wire_client::SIGNERS,
                     )
                     .await?
@@ -560,13 +569,16 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError
             });
             if !args.wire.is_empty() {
                 let (access, owner) = resolve_scope_owner(&args.scope).await?;
-                output["wired"] = wire_pack_plugins(
+                output["wired"] = wire_pack_batch(
                     &access,
                     &owner,
                     &home,
-                    &pack,
+                    SentPack {
+                        archive: &pack,
+                        approval: None,
+                    },
                     &args.wire,
-                    None,
+                    WireBatchOptions::default(),
                     gents_host::http::pack_wire_client::SIGNERS,
                 )
                 .await?

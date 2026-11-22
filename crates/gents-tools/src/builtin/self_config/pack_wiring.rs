@@ -41,7 +41,7 @@ impl PackInstaller {
         let agent = agent.unwrap_or(self.core.agent_did());
         let (namespace, _) = node_packs::split_pack_coordinate(&coordinate);
         let access = self.core.access()?;
-        let mut wired = Vec::new();
+        let mut plans = Vec::with_capacity(record.plugins.len());
         for shipped in &record.plugins {
             let plugin = PluginWiring::installed_plugin(home, namespace, &shipped.name)
                 .with_context(|| {
@@ -50,42 +50,40 @@ impl PackInstaller {
             let mut wiring =
                 PluginWiring::read(&access, self.core.node_did(), home, agent, plugin, &[]).await?;
             wiring.remove = remove;
-            wiring.preview = !commit;
             wiring.next_step = "config [\"tools\",\"get\"]".to_owned();
-            let wiring = &wiring;
-            let owner = self.core.node_did();
-            let report = if commit {
-                access
-                    .transact_write("self_config.pack_wire", |txn| {
-                        Box::pin(async move {
-                            guard_shared_wiring(txn, owner, agent, holds_catalog_grant).await?;
-                            wiring
-                                .apply(txn, &gents_inference::resolved::ProviderProfilePolicy)
-                                .await
-                        })
-                    })
-                    .await?
-            } else {
-                access
-                    .transact_readonly("self_config.pack_wire.preview", |txn| {
-                        Box::pin(async move {
-                            guard_shared_wiring(txn, owner, agent, holds_catalog_grant).await?;
-                            wiring
-                                .apply(txn, &gents_inference::resolved::ProviderProfilePolicy)
-                                .await
-                        })
-                    })
-                    .await?
-            }
-            .rendered_for(gents_pack::pack::RemedySurface::ConfigTool);
-            wired.push(json!({
-                "plugin": format!("{namespace}/{}", shipped.name),
-                "changed": report.changed,
-                "job": report.job,
-                "warnings": report.warnings,
-                "policy_warnings": report.policy_warnings,
-            }));
+            plans.push(wiring);
         }
+        let plans: Vec<&PluginWiring> = plans.iter().collect();
+        let owner = self.core.node_did();
+        let plans = &plans;
+        let reports = if commit {
+            access
+                .transact_write("self_config.pack_wire", |txn| {
+                    Box::pin(guarded_batch(txn, owner, agent, holds_catalog_grant, plans, false))
+                })
+                .await?
+        } else {
+            access
+                .transact_readonly("self_config.pack_wire.preview", |txn| {
+                    Box::pin(guarded_batch(txn, owner, agent, holds_catalog_grant, plans, true))
+                })
+                .await?
+        };
+        let wired: Vec<_> = record
+            .plugins
+            .iter()
+            .zip(reports)
+            .map(|(shipped, report)| {
+                let report = report.rendered_for(gents_pack::pack::RemedySurface::ConfigTool);
+                json!({
+                    "plugin": format!("{namespace}/{}", shipped.name),
+                    "changed": report.changed,
+                    "job": report.job,
+                    "warnings": report.warnings,
+                    "policy_warnings": report.policy_warnings,
+                })
+            })
+            .collect();
         let call = |verb: &[&str]| {
             let mut argv = verb.to_vec();
             argv.push(&coordinate);
@@ -109,6 +107,25 @@ impl PackInstaller {
         }
         .pretty()
     }
+}
+
+/// `plans` in one write under [`guard_shared_wiring`]; `preview` writes nothing.
+async fn guarded_batch(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    owner: &str,
+    agent: &str,
+    holds_catalog_grant: bool,
+    plans: &[&PluginWiring],
+    preview: bool,
+) -> anyhow::Result<Vec<gents_pack::pack::WireReport>> {
+    guard_shared_wiring(txn, owner, agent, holds_catalog_grant).await?;
+    gents_pack::pack::wiring::apply_batch(
+        txn,
+        plans,
+        preview,
+        &gents_inference::resolved::ProviderProfilePolicy,
+    )
+    .await
 }
 
 /// The Tools edit's sharing guard for the Context and Tools `agent` selects,

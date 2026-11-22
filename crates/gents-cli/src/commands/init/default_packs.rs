@@ -657,7 +657,7 @@ async fn apply(
             }
         }
         let wired = if wiring.wired && !source.manifest().metadata.plugins.is_empty() {
-            gents_pack::pack::plugin_wire::wire_pack_plugins_consenting(
+            gents_pack::pack::plugin_wire::wire_pack_batch(
                 &access,
                 &owner,
                 home,
@@ -666,9 +666,9 @@ async fn apply(
                     approval: None,
                 },
                 &[engineer.to_owned()],
-                gents_pack::pack::plugin_wire::WireConsent {
-                    dynamic: wiring.consent_dynamic,
-                    tool_calls: wiring.tool_calls,
+                gents_pack::pack::plugin_wire::WireBatchOptions {
+                    dynamic_consent: wiring.consent_dynamic,
+                    tool_calls_consent: wiring.tool_calls,
                 },
                 gents_host::http::pack_wire_client::SIGNERS,
             )

@@ -1095,3 +1095,92 @@ async fn delegated_home_removal_uses_the_existing_store_guard() {
         .unwrap();
     assert!(gents_pack::plugin::store::read_record(home.path(), "acme", "shared").is_err());
 }
+
+/// A wire batch is one transaction: a pair refused after another was planned
+/// leaves the earlier pair unwritten, where one write per pair left it wired.
+#[tokio::test]
+async fn a_refused_pair_leaves_every_pair_of_its_batch_unwritten() {
+    let afb = build_shared_plugin(b"fn main() { println!(\"{{}}\"); }").await;
+    let home = initialized_home().await;
+    let pack = plugin_pack_dir("acme", "tools", "shared", &afb);
+    install(home.path(), pack.path().to_str().unwrap().to_owned())
+        .await
+        .unwrap();
+    let (access, owner) = super::super::resolve_scope_owner(&scope(home.path()))
+        .await
+        .unwrap();
+    let agent = selected_agent(&access, &owner).await;
+    let tools = || {
+        access.transact_readonly("test.batch_tools", |txn| {
+            let (owner, agent) = (&owner, &agent);
+            Box::pin(async move {
+                Ok::<_, anyhow::Error>(serde_json::to_value(
+                    gents_documents::load_agent_context_and_tools_in_txn(txn, owner, agent)
+                        .await?,
+                )?)
+            })
+        })
+    };
+    let before = tools().await.unwrap();
+    let wire = |agent: &str, preview: bool| gents_pack::pack::plugin_wire::ClientWire {
+        request: gents_pack::pack::plugin_wire::WireRequest {
+            plugin: "acme/shared".into(),
+            agent: agent.to_owned(),
+            targets_from: Vec::new(),
+            remove: false,
+            preview,
+            dynamic_consent: false,
+            tool_calls_consent: false,
+        },
+        plan: None,
+    };
+    let refused = gents_pack::pack::plugin_wire::wire_batch_in(
+        &access,
+        &owner,
+        home.path(),
+        vec![wire(&agent, false), wire("did:key:zNoSuchAgent", false)],
+        gents_host::http::pack_wire_client::SIGNERS,
+    )
+    .await
+    .expect_err("an agent without Tools refuses the batch");
+    assert!(
+        format!("{refused:#}").contains("did:key:zNoSuchAgent"),
+        "{refused:#}"
+    );
+    assert_eq!(tools().await.unwrap(), before, "the first pair was written");
+
+    let mixed = gents_pack::pack::plugin_wire::wire_batch_in(
+        &access,
+        &owner,
+        home.path(),
+        vec![wire(&agent, true), wire(&agent, false)],
+        gents_host::http::pack_wire_client::SIGNERS,
+    )
+    .await
+    .expect_err("a batch previews or writes every pair alike");
+    assert!(
+        mixed
+            .downcast_ref::<gents_pack::pack::plugin_wire::MixedWireBatch>()
+            .is_some(),
+        "{mixed:#}"
+    );
+    assert_eq!(tools().await.unwrap(), before);
+
+    let wired = gents_pack::pack::plugin_wire::wire_batch_in(
+        &access,
+        &owner,
+        home.path(),
+        vec![wire(&agent, false)],
+        gents_host::http::pack_wire_client::SIGNERS,
+    )
+    .await
+    .unwrap();
+    assert_eq!(wired.len(), 1);
+    assert_ne!(tools().await.unwrap(), before);
+    access
+        .local_node()
+        .unwrap()
+        .shutdown()
+        .await
+        .expect("node shutdown");
+}
