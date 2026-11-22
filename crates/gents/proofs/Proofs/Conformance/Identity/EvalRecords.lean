@@ -33,7 +33,15 @@ def publishOutput (i : PublishInput) : PublishOutput :=
 
 @[conformance_family]
 def published : Family PublishInput PublishOutput where
-  inputs := cases.map PublishInput.ofCase
+  inputs := (cases.filter (·.name != "relationship-failed")).map PublishInput.ofCase
+  model := publishOutput
+
+/-- The Node parent is a native relationship change inside the creating
+transaction, and the store's fault seams fail only document mutations, so no
+fixture fails that relationship alone. -/
+@[conformance_family]
+def publishedUnreached : Family PublishInput PublishOutput where
+  inputs := (cases.filter (·.name == "relationship-failed")).map PublishInput.ofCase
   model := publishOutput
 
 end Conformance.EvalRecords

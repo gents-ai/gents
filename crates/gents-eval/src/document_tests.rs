@@ -273,7 +273,7 @@ async fn model_driven_held_client_eval_and_optimization_records_are_private() ->
                 }
                 output
             }
-            "relationship-failed" | "commit-failed" => {
+            "commit-failed" => {
                 let create = create_run(
                     &access,
                     name,
@@ -281,37 +281,34 @@ async fn model_driven_held_client_eval_and_optimization_records_are_private() ->
                     user.did(),
                     &origin(EvalSplit::Train),
                 );
-                if name == "relationship-failed" {
-                    let _ =
-                        ConfigApplyTxn::with_successful_mutation_failure_at(Some(1), create).await;
-                } else {
-                    let rename = async {
-                        access
-                            .transact_write("test.eval.rename_node", |txn| {
-                                let parent = gents_store::graphql::escape_graphql_string(&parent);
-                                Box::pin(async move {
-                                    txn.execute_client_signed_update(
-                                        &format!(
-                                            "mutation($input: NodeMutationInputArg!) {{ update_Node(filter: {{ _docID: {{ _eq: \"{parent}\" }} }}, input: $input) {{ _docID }} }}"
-                                        ),
-                                        &json!({"input": {"display_name": "renamed"}}),
-                                        gents_protocol::schemas::NODE,
-                                    )
-                                    .await?;
-                                    Ok::<_, anyhow::Error>(())
-                                })
+                let rename = async {
+                    access
+                        .transact_write("test.eval.rename_node", |txn| {
+                            let parent = gents_store::graphql::escape_graphql_string(&parent);
+                            Box::pin(async move {
+                                txn.execute_client_signed_update(
+                                    &format!(
+                                        "mutation($input: NodeMutationInputArg!) {{ update_Node(filter: {{ _docID: {{ _eq: \"{parent}\" }} }}, input: $input) {{ _docID }} }}"
+                                    ),
+                                    &json!({"input": {"display_name": "renamed"}}),
+                                    gents_protocol::schemas::NODE,
+                                )
+                                .await?;
+                                Ok::<_, anyhow::Error>(())
                             })
-                            .await
-                            .expect("the user renames the Node while the run commit waits");
-                    };
-                    let (_, paused) =
-                        ConfigApplyTxn::with_concurrent_write_before_commit(create, rename).await;
-                    assert!(paused, "the run create paused before its commit");
-                }
-                let created = load_run(&access, runtime.did(), name).await?.is_some();
+                        })
+                        .await
+                        .expect("the user renames the Node while the run commit waits");
+                };
+                let (_, paused) =
+                    ConfigApplyTxn::with_concurrent_write_before_commit(create, rename).await;
+                assert!(paused, "the run create paused before its commit");
                 PublishOutput {
-                    created,
-                    user_read: created,
+                    created: load_run(&runtime_access, runtime.did(), name)
+                        .await?
+                        .is_some()
+                        || load_run(&access, runtime.did(), name).await?.is_some(),
+                    user_read: load_run(&access, runtime.did(), name).await?.is_some(),
                     stranger_read: load_run(&outsider_access, runtime.did(), name)
                         .await?
                         .is_some(),

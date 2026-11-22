@@ -553,6 +553,9 @@ def caseCoverage : List CoverageEntry :=
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "eval_records_published")
       "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "eval_records_published_unreached"
+      "relationship-failed: the Node parent is a native relationship change, and the store's fault seams fail only document mutations, so no fixture fails that relationship alone.")
+      "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "optimization_promotion_held_transition")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
