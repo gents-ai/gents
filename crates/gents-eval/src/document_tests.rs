@@ -274,13 +274,8 @@ async fn model_driven_held_client_eval_and_optimization_records_are_private() ->
                 output
             }
             "commit-failed" => {
-                let create = create_run(
-                    &access,
-                    name,
-                    runtime.did(),
-                    user.did(),
-                    &origin(EvalSplit::Train),
-                );
+                let run_origin = origin(EvalSplit::Train);
+                let create = create_run(&access, name, runtime.did(), user.did(), &run_origin);
                 let rename = async {
                     access
                         .transact_write("test.eval.rename_node", |txn| {
