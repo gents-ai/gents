@@ -34,6 +34,9 @@ struct HeldTool {
     release: Arc<Notify>,
 }
 impl ToolDyn for HeldTool {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         "held_probe".into()
     }

@@ -36,6 +36,11 @@
     {
       "tools_id": "workflow-caller",
       "display_name": "Workflow caller: the dynamic workflow tool over the read-only worker (ships as check; the operator sets run)",
+      "agents": {
+        "target_ids": [
+          "wf-read-only"
+        ]
+      },
       "integrations": {
         "plugins": [
           {

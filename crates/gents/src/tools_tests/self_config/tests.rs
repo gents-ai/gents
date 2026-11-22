@@ -970,11 +970,37 @@ async fn modeled_job_policy_updates_follow_native_tools_authorization() {
         let fixture = gents_automation::test_support::self_config_fixture(&case.input.name).await;
         let tools_id = format!("{}:tools", fixture.agent_did());
         let node_did = fixture.node_did().to_owned();
+        let target = json!({"target_id": "target", "node_did": node_did, "name": "target",
+            "target_node_did": "did:key:peer", "agent_did": "did:key:peer-agent"});
+        let plan = gents_documents::DesiredStateApplyPlan::new(vec![
+            gents_documents::DesiredStateApplyDocument {
+                collection: gents_store::collection::Collection::AgentTarget,
+                add: target.clone(),
+                update: target,
+            },
+        ])
+        .unwrap();
+        fixture
+            .user_access()
+            .transact_write("test.job_policy.caller_target", |txn| {
+                let plan = &plan;
+                Box::pin(async move {
+                    gents_documents::apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents_inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap();
+        fixture.grant_node_reader().await;
         fixture
             .update_signed_configuration(
                 gents_store::collection::Collection::Tools,
                 &tools_id,
-                json!({"integrations": stored_integrations}),
+                json!({"agents": {"target_ids": ["target"]}, "integrations": stored_integrations}),
             )
             .await;
         if case.input.native_authorized {
