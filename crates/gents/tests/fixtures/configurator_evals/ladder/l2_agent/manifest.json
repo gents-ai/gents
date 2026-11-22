@@ -20,7 +20,8 @@
     "cases/ledger_prompt_edit_in_place.json",
     "cases/porter_fix_in_place_disable_bash.json",
     "cases/scout_grants_two_file_tools.json",
-    "pack_config.json"
+    "pack_config.json",
+    "suite.json"
   ],
   "config": "pack_config.json"
 }

@@ -1,0 +1,13 @@
+{
+  "id": "l3-datastore",
+  "title": "Datastore use",
+  "coverage": [
+    "caller fields",
+    "runtime fields",
+    "surface selection",
+    "persistence",
+    "automation output"
+  ],
+  "subject": "ladder/engineer_subject",
+  "preset_self_config": true
+}

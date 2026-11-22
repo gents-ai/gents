@@ -20,7 +20,8 @@
     "cases/val_ds_finish_partial_setup.json",
     "cases/val_ds_row_persists_across_stages.json",
     "cases/val_ds_two_collection_surface.json",
-    "pack_config.json"
+    "pack_config.json",
+    "suite.json"
   ],
   "config": "pack_config.json"
 }

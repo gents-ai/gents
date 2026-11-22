@@ -1,0 +1,13 @@
+{
+  "id": "native-packs",
+  "title": "Native local plugin packs",
+  "coverage": [
+    "verified local artifact preview",
+    "digest-pinned sealed install",
+    "explicit plugin selection preserves other Tools settings",
+    "fresh-request plugin call",
+    "offline deterministic artifact, no registry dependency",
+    "model assertion cannot grant plugin authority"
+  ],
+  "subject": "native_pack_subject"
+}

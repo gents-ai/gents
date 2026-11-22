@@ -37,7 +37,9 @@ if env.get("LINGER_PID"):
     while not pathlib.Path(env["LINGER_PID"]).exists():
         time.sleep(0.05)
 if selection == "all":
-    matrix = json.load(open(pathlib.Path(__file__).parent / "matrix.json"))
+    sys.path.insert(0, str(pathlib.Path(__file__).parent))
+    import suites as registry
+    matrix = registry.matrix(pathlib.Path(__file__).resolve().parents[2])
     index, total = map(int, env["GENTS_EVAL_SHARD"].split("/"))
     plan = json.loads(env.get("LADDER_CLASSES", "{}"))
     suites = {s["id"]: s for s in matrix["suites"]}
@@ -103,7 +105,17 @@ class LiveEngineerEvalTests(unittest.TestCase):
         scripts.mkdir(parents=True)
         shutil.copy(SOURCE / "scripts/evals/live_engineer_eval.py", scripts)
         shutil.copy(SOURCE / "scripts/evals/matrix.json", scripts)
-        shutil.copytree(SOURCE / L2, self.root / "repo" / L2)
+        shutil.copy(SOURCE / "scripts/evals/suites.py", scripts)
+        sys.path.insert(0, str(SOURCE / "scripts/evals"))
+        import suites
+        fixtures = suites.FIXTURES
+        registry = suites.matrix(SOURCE)
+        for suite in registry["suites"]:
+            if suite["id"] in registry["default"]:
+                for relative in [suite["path"], suite["subject"]]:
+                    if not (self.root / "repo" / fixtures / relative).exists():
+                        shutil.copytree(SOURCE / fixtures / relative, self.root / "repo" / fixtures / relative)
+        self.assertTrue((self.root / "repo" / L2 / "suite.json").is_file())
         (scripts / "fake_ladder.py").write_text(FAKE_LADDER)
         (scripts / "run-ladder.sh").write_text('exec "$PYTHON" "$(dirname "$0")/fake_ladder.py" "$@"\n')
         self.gents = self.root / "gents"

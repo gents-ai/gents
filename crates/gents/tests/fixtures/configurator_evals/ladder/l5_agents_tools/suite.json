@@ -1,0 +1,13 @@
+{
+  "id": "l5-agents-tools",
+  "title": "Delegation",
+  "coverage": [
+    "target selection",
+    "dispatch",
+    "follow-up",
+    "repoint",
+    "missing target refusal"
+  ],
+  "subject": "ladder/engineer_subject",
+  "preset_self_config": true
+}

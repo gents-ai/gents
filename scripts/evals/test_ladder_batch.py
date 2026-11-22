@@ -16,13 +16,15 @@ class LadderBatchTests(unittest.TestCase):
         self.scripts = self.root / "scripts/evals"
         self.scripts.mkdir(parents=True)
         shutil.copy(source / "scripts/evals/run-ladder.sh", self.scripts)
+        shutil.copy(source / "scripts/evals/suites.py", self.scripts)
         matrix = json.loads((source / "scripts/evals/matrix.json").read_text())
-        matrix["suites"] = matrix["suites"][:2]
-        matrix["default"] = [s["id"] for s in matrix["suites"]]
+        matrix["default"] = matrix["default"][:2]
         (self.scripts / "matrix.json").write_text(json.dumps(matrix))
         shutil.copytree(source / "scripts/evals/targets", self.scripts / "targets")
         fixtures = pathlib.Path("crates/gents/tests/fixtures/configurator_evals")
-        for relative in ["ladder/engineer_subject", *[s["path"] for s in matrix["suites"]]]:
+        registered = {json.loads(path.read_text())["id"]: path.parent.relative_to(source / fixtures)
+                      for path in (source / fixtures).rglob("suite.json")}
+        for relative in ["ladder/engineer_subject", *[registered[suite] for suite in matrix["default"]]]:
             shutil.copytree(source / fixtures / relative, self.root / fixtures / relative)
         for relative in ["crates/gents-protocol/prompts/engineer.md", "crates/gents-protocol/presets/engineer-self-config.json"]:
             destination = self.root / relative
