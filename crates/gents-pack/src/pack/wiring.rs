@@ -69,10 +69,6 @@ pub struct PluginWiring {
     /// (pack coordinate, the AgentTarget ids it ships, its provenance).
     pub targets_from: Vec<(String, Vec<String>, InstalledVia)>,
     pub remove: bool,
-    /// The job settings owner's consent step, set when the node owner
-    /// approved dynamic scripts for this plugin: its job block goes from
-    /// `check` to `run` (Lean `consentedDynamic`).
-    pub dynamic_consent: Option<fn(&mut Tools, &str, &mut WireReport)>,
     /// Set when the node owner approved this plugin calling the agent's own
     /// tools: its selection is written with `tool_calls: true`.
     pub tool_calls_consent: bool,
@@ -156,7 +152,6 @@ impl PluginWiring {
             skill_ids,
             targets_from: targets,
             remove: false,
-            dynamic_consent: None,
             tool_calls_consent: false,
             next_step: String::new(),
             reviewed: ReviewedJob::Read,
@@ -218,9 +213,6 @@ impl PluginWiring {
                 &self.targets_from,
             )?
         };
-        if let Some(consent) = self.dynamic_consent.filter(|_| !self.remove) {
-            consent(&mut tools, &self.coordinate(), &mut report);
-        }
         if self.tool_calls_consent && !self.remove {
             consent_tool_calls(&mut tools, &self.coordinate(), &mut report);
         }
@@ -230,7 +222,7 @@ impl PluginWiring {
 
     /// The `job` block of the first entry for this plugin in its pack's own
     /// Tools documents that carries one: what the pack's author reviewed.
-    async fn reviewed_job(
+    pub(crate) async fn reviewed_job(
         &self,
         txn: &ConfigApplyTxn<'_>,
     ) -> Result<Option<gents_protocol::job::PluginJobSettings>> {

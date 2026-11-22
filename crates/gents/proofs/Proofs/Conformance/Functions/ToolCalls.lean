@@ -47,7 +47,6 @@ attribute [conformance_function]
   Background.ProcessControl.retireStopReceipt
   Background.ProcessControl.settleLiveCancel
   Background.ProcessControl.maySettleTerminal
-  PluginJob.consentedDynamic
   PluginJob.documentUxAllowed
   Recovery.pluginJobStepInvocationAllowed
   Recovery.sessionMessageSettlementReason

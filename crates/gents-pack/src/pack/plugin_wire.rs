@@ -135,10 +135,6 @@ pub struct WireRequest {
     pub targets_from: Vec<String>,
     pub remove: bool,
     pub preview: bool,
-    /// The node owner approved dynamic scripts for this plugin (the init
-    /// approval of its pack): wiring raises its job block from `check` to
-    /// `run` (Lean `consentedDynamic`). The wire command never sets it.
-    pub dynamic_consent: bool,
     /// The node owner approved this plugin calling the agent's own tools
     /// (the init approval of its pack): its selection is wired with
     /// `tool_calls: true`. The wire command never sets it.
@@ -513,9 +509,6 @@ impl WirePlan {
         request: WireRequest,
     ) -> PlannedWire {
         plan.remove = request.remove;
-        plan.dynamic_consent = request
-            .dynamic_consent
-            .then_some(crate::pack::consent_dynamic_run as _);
         plan.tool_calls_consent = request.tool_calls_consent;
         plan.next_step = explain_tools_command(&request.agent);
         PlannedWire {
@@ -560,11 +553,11 @@ impl WirePlan {
 }
 
 /// What a wiring batch is given besides its pack and agents: the node
-/// owner's consents when its install was approved (dynamic scripts in their
-/// job blocks, and calls to each agent's own tools).
+/// owner's consent, when its install was approved, to calls to each agent's
+/// own tools. No wiring raises a dynamic policy
+/// (Lean `PluginWiring.wire_never_enables`).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WireBatchOptions {
-    pub dynamic_consent: bool,
     pub tool_calls_consent: bool,
 }
 
@@ -599,7 +592,6 @@ pub async fn wire_pack_batch(
                 targets_from: Vec::new(),
                 remove: false,
                 preview: false,
-                dynamic_consent: options.dynamic_consent,
                 tool_calls_consent: options.tool_calls_consent,
             };
             let plan = crate::pack::wire_subject::wire_plan_record(
@@ -656,11 +648,93 @@ pub async fn attach_pack_skills(
         agent,
         skills: &skills,
     };
+    write_as_operator(
+        access,
+        owner,
+        home,
+        digest,
+        "cli.pack.attach_skills",
+        held_user,
+        &plan,
+    )
+    .await?;
+    Ok(skills)
+}
+
+/// The operator's enable of the dynamic scripts of each job plugin the
+/// installed pack `coordinate` (archive `digest`) ships, on `agent`'s Tools,
+/// over the dynamic targets the pack's own block names (Lean
+/// `PluginWiring.operatorEnable`): the one way a block reaches `run`.
+pub async fn enable_pack_dynamic(
+    access: &ConfigAccess,
+    owner: &str,
+    home: &Path,
+    agent: &str,
+    coordinate: &str,
+    digest: &str,
+    held_user: LoadHeldUser,
+) -> Result<Vec<crate::pack::DynamicEnableReceipt>> {
+    let record = crate::pack::read_home_install(home, coordinate)?
+        .with_context(|| format!("{coordinate} is not installed on this home"))?;
+    let (namespace, _) = split_pack_coordinate(coordinate);
+    let mut plans = Vec::new();
+    for shipped in &record.plugins {
+        let plugin = read_record(home, namespace, &shipped.name)?;
+        if plugin.declaration.job.0 {
+            plans.push(
+                crate::pack::wiring::PluginWiring::read(access, owner, home, agent, plugin, &[])
+                    .await?,
+            );
+        }
+    }
+    anyhow::ensure!(
+        !plans.is_empty(),
+        "{coordinate} ships no plugin that runs jobs, so it has no dynamic scripts to enable"
+    );
+    let plan = DynamicEnablePlan {
+        owner,
+        agent,
+        plans: &plans,
+    };
+    write_as_operator(
+        access,
+        owner,
+        home,
+        digest,
+        "cli.pack.enable_dynamic",
+        held_user,
+        &plan,
+    )
+    .await
+}
+
+/// One write a node owner makes on a pack's behalf.
+#[async_trait::async_trait]
+trait OperatorWrite: Sync {
+    type Output: Send;
+    async fn apply(&self, txn: &ConfigApplyTxn<'_>) -> Result<Self::Output>;
+}
+
+/// `plan` in one transaction: signed by the held User of a home a local
+/// transaction opens, with the pack archive `digest` in its approval scope,
+/// and otherwise as `access`'s actor.
+async fn write_as_operator<P>(
+    access: &ConfigAccess,
+    owner: &str,
+    home: &Path,
+    digest: &str,
+    operation: &'static str,
+    held_user: LoadHeldUser,
+    plan: &P,
+) -> Result<P::Output>
+where
+    P: OperatorWrite,
+{
     if matches!(access, ConfigAccess::Local(_)) {
         let client = held_user(home).await?;
         anyhow::ensure!(
             access.actor_did().as_deref() == Some(client.did()),
-            "attaching pack skills requires the held User identity selected by the local transaction"
+            "{operation} requires the held User identity selected by the local transaction"
         );
         let scope = PackApprovalScope {
             node_did: owner.to_owned(),
@@ -672,26 +746,60 @@ pub async fn attach_pack_skills(
             scope: scope.clone(),
         });
         access
-            .transact_verified_pack_with_approver(
-                "cli.pack.attach_skills",
-                scope,
-                approver,
-                |txn| {
-                    let plan = &plan;
-                    Box::pin(async move { plan.apply(txn.approved_interpreter()?).await })
-                },
-            )
+            .transact_verified_pack_with_approver(operation, scope, approver, |txn| {
+                Box::pin(async move { plan.apply(txn.approved_interpreter()?).await })
+            })
             .await
-            .map_err(|failure| failure.error)?;
+            .map_err(|failure| failure.error)
     } else {
         access
-            .transact_write("cli.pack.attach_skills", |txn| {
-                let plan = &plan;
-                Box::pin(async move { plan.apply(txn).await })
-            })
-            .await?;
+            .transact_write(operation, |txn| Box::pin(plan.apply(txn)))
+            .await
     }
-    Ok(skills)
+}
+
+struct DynamicEnablePlan<'a> {
+    owner: &'a str,
+    agent: &'a str,
+    plans: &'a [crate::pack::wiring::PluginWiring],
+}
+
+#[async_trait::async_trait]
+impl OperatorWrite for DynamicEnablePlan<'_> {
+    type Output = Vec<crate::pack::DynamicEnableReceipt>;
+
+    async fn apply(&self, txn: &ConfigApplyTxn<'_>) -> Result<Self::Output> {
+        let (_, tools) = load_agent_context_and_tools_in_txn(txn, self.owner, self.agent).await?;
+        let mut tools = tools.with_context(|| format!("{} has no Tools document", self.agent))?;
+        let mut receipts = Vec::with_capacity(self.plans.len());
+        for plan in self.plans {
+            let coordinate = format!("{}/{}", plan.plugin.namespace, plan.plugin.name);
+            let shipped = plan.reviewed_job(txn).await?.with_context(|| {
+                format!("the pack of {coordinate} ships no job block, so it names no dynamic targets to enable")
+            })?;
+            let (enabled, receipt) = crate::pack::operator_enable_dynamic(
+                &tools,
+                &coordinate,
+                &shipped.policy.dynamic_targets,
+            )?;
+            tools = enabled;
+            receipts.push(receipt);
+        }
+        tools.validate()?;
+        let value = serde_json::to_value(&tools)?;
+        let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+            collection: Collection::Tools,
+            add: value.clone(),
+            update: value,
+        }])?;
+        apply_desired_state_plan(
+            txn,
+            &plan,
+            &gents_inference::resolved::ProviderProfilePolicy,
+        )
+        .await?;
+        Ok(receipts)
+    }
 }
 
 struct SkillPlan<'a> {
@@ -700,7 +808,10 @@ struct SkillPlan<'a> {
     skills: &'a [String],
 }
 
-impl SkillPlan<'_> {
+#[async_trait::async_trait]
+impl OperatorWrite for SkillPlan<'_> {
+    type Output = ();
+
     async fn apply(&self, txn: &ConfigApplyTxn<'_>) -> Result<()> {
         let (context, _) = load_agent_context_and_tools_in_txn(txn, self.owner, self.agent).await?;
         let mut context =

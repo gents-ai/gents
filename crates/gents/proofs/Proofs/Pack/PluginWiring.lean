@@ -293,21 +293,40 @@ def unwire (surface : Surface) (plugin : Plugin) (skills : List String) (sources
             job := some job }
         else none
 
-/-- The node owner's consent to dynamic scripts raises the plugin's block from
-`check` to `run` and nothing else: `off` stays off. -/
-def consentDynamic (coordinate : String) (outcome : Outcome) : Outcome :=
-  match (outcome.surface.plugins.find? (·.plugin = coordinate)).bind (·.job) with
-  | some job =>
-    if job.policy.dynamic = .check then
-      let raised : Job := { job with policy := { job.policy with dynamic := .run } }
-      { outcome with
-        surface :=
-          { outcome.surface with
-            plugins := setJob coordinate (some raised) outcome.surface.plugins }
-        job := some raised
-        warnings := outcome.warnings.filter (· ≠ .dynamicCheck) }
-    else outcome
-  | none => outcome
+/-- Whether a block's dynamic scripts run: what the pack status calls enabled
+and what the operator's enable leaves, read from the stored policy alone. -/
+def dynamicEnabled (job : Job) : Bool := job.policy.dynamic == .run
+
+/-- The operator's explicit enable of a block's dynamic scripts: `run`, over
+the pack's dynamic targets, which become the block's and the Agent's targets
+too.
+
+Decision (maintainer, 2026-11-10, gents-ai/packs#61 items 6 and 7, and B2
+review, 2026-11-17): a pack never ships `run`, and a block at `check` refuses
+every spawn and message a dynamic script asks for, so a workflow pack does
+nothing dynamic until `run` is set. `run` is the node owner's consent to
+model-written scripts starting agents, given by this explicit operation and
+by no wiring (`wire_keeps_existing_policy`); it raises `off` as well as
+`check`. Afterwards whoever may write the selecting Tools sets the policy
+(job settings are configuration data, see `SelfConfig.keepsGrants`). -/
+def operatorEnableJob (job : Job) (targets : List String) : Job :=
+  { job with
+    agentTargets := addMissing job.agentTargets targets
+    policy := { job.policy with dynamic := .run, dynamicTargets := targets } }
+
+/-- [`operatorEnableJob`] on the block the Agent selects for `coordinate`;
+`none` when it selects no block, which has no policy to enable. -/
+def operatorEnable (surface : Surface) (coordinate : String) (targets : List String) :
+    Option Outcome :=
+  ((surface.plugins.find? (·.plugin = coordinate)).bind (·.job)).map fun job =>
+    let raised := operatorEnableJob job targets
+    { surface :=
+        { surface with
+          plugins := setJob coordinate (some raised) surface.plugins
+          targets := addMissing surface.targets targets }
+      job := some raised
+      warnings := []
+      nextCall := false }
 
 def grantToolCalls (coordinate : String) : List Entry → List Entry
   | [] => []
@@ -407,12 +426,24 @@ theorem incoming_off_never_warns_targets (existing incoming : Job)
     Warning.dynamicTargetsKept ∉ policyWarnings existing incoming := by
   simp [policyWarnings, h]
 
-/-- Consent never enables dynamic scripts on a block that is `off`. -/
-theorem consent_keeps_off (coordinate : String) (outcome : Outcome) (job : Job)
-    (h : (outcome.surface.plugins.find? (·.plugin = coordinate)).bind (·.job) = some job)
-    (hoff : job.policy.dynamic = .off) :
-    consentDynamic coordinate outcome = outcome := by
-  simp [consentDynamic, h, hoff]
+theorem operator_enable_is_enabled (job : Job) (targets : List String) :
+    dynamicEnabled (operatorEnableJob job targets) = true := rfl
+
+theorem operator_enable_uses_pack_targets (job : Job) (targets : List String) :
+    (operatorEnableJob job targets).policy.dynamicTargets = targets := rfl
+
+/-- Only the operator's enable makes a block's dynamic scripts run: a wiring
+leaves a block that was not enabled not enabled. -/
+theorem wire_never_enables (surface : Surface) (plugin : Plugin) (reviewed : Option Job)
+    (skills : List String) (sources : List Source) (existing : Job) (outcome : Outcome)
+    (hprior : priorJob surface plugin = some existing)
+    (hoff : dynamicEnabled existing = false)
+    (h : wire surface plugin reviewed skills sources = some outcome) :
+    outcome.job.all (dynamicEnabled · = false) := by
+  obtain ⟨kept, hjob, hdynamic, _⟩ :=
+    wire_keeps_existing_policy surface plugin reviewed skills sources existing outcome hprior h
+  simp only [hjob, Option.all_some, decide_eq_true_eq]
+  simpa [dynamicEnabled, hdynamic] using hoff
 
 /-! ## What unwiring takes back -/
 

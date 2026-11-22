@@ -18,16 +18,6 @@ pub fn policy_valid(agent_targets: &[String], policy: &JobPolicy) -> bool {
             .all(|target| agent_targets.contains(target))
 }
 
-/// Lean `consentedDynamic`: the node owner's consent raises a block at `check`
-/// to `run`; `off` stays off and no consent changes nothing.
-pub fn consented_dynamic(consent: bool, mode: DynamicMode) -> DynamicMode {
-    if consent && mode == DynamicMode::Check {
-        DynamicMode::Run
-    } else {
-        mode
-    }
-}
-
 /// Lean `wireTargetsFrom`: wiring a pack trusts it, adds its targets to the
 /// job's and adds the job's targets to the caller's.
 pub fn wire_targets_from(
@@ -159,13 +149,6 @@ mod conformance {
                 job_targets: targets(job),
                 caller_targets: targets(caller),
             }
-        });
-    }
-
-    #[test]
-    fn consented_dynamic_matches_lean() {
-        gents_lean_vocab::families::plugin_job_consented_dynamic::replay(|i| {
-            consented_dynamic(i.consent, i.mode)
         });
     }
 }

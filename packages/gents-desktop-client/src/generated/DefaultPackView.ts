@@ -11,6 +11,7 @@ purpose: string,
  */
 without: string, state: DefaultPackState, version: string | null,
 /**
- * Why an unavailable pack cannot be installed.
+ * Why an unavailable pack cannot be installed, why an installed one is
+ * not on, or why its state is unknown.
  */
 reason: string | null, };

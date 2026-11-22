@@ -106,8 +106,8 @@ pub use plugin::{
     PluginService, MAX_TOOL_INSTRUCTIONS_BYTES, PLUGIN_ARTIFACT_PREFIX, SUPPORTED_PLUGIN_LANGUAGES,
 };
 pub use plugin_wiring::{
-    consent_dynamic_run, consent_tool_calls, unwire_plugin, wire_plugin, PolicyWarning,
-    PolicyWarningCode, RemedySurface, WireReport,
+    consent_tool_calls, dynamic_enabled, operator_enable_dynamic, unwire_plugin, wire_plugin,
+    DynamicEnableReceipt, NoJobBlock, PolicyWarning, PolicyWarningCode, RemedySurface, WireReport,
 };
 pub(crate) use provenance::pack_artifact_document_digest;
 pub use provenance::{

@@ -352,31 +352,61 @@ pub fn consent_tool_calls(tools: &mut Tools, coordinate: &str, report: &mut Wire
     ));
 }
 
-/// Applies the node owner's consent to dynamic scripts to `coordinate`'s job
-/// block (Lean `consentedDynamic`): `check` becomes `run`, and the report
-/// records the grant in place of the `check` warning.
-pub fn consent_dynamic_run(tools: &mut Tools, coordinate: &str, report: &mut WireReport) {
-    let Some(job) = tools
+/// Lean `PluginWiring.dynamicEnabled`: the block's dynamic scripts run.
+pub fn dynamic_enabled(job: &gents_protocol::job::PluginJobSettings) -> bool {
+    job.policy.dynamic == gents_protocol::job::DynamicMode::Run
+}
+
+/// What the operator's enable changed on one plugin's block.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DynamicEnableReceipt {
+    pub plugin: String,
+    pub before: gents_protocol::job::JobPolicy,
+    pub after: gents_protocol::job::JobPolicy,
+}
+
+/// The Tools select the plugin without a job block, so there is no dynamic
+/// policy to enable.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{plugin} has no job block on these Tools, so there is no dynamic policy to enable. Next: gents config pack wire {plugin} --agent <agent> --targets-from <pack>")]
+pub struct NoJobBlock {
+    pub plugin: String,
+}
+
+/// Lean `PluginWiring.operatorEnable`: the operator's explicit enable of
+/// `coordinate`'s dynamic scripts, the one way a block reaches `run`.
+pub fn operator_enable_dynamic(
+    tools: &Tools,
+    coordinate: &str,
+    targets: &[String],
+) -> Result<(Tools, DynamicEnableReceipt), NoJobBlock> {
+    let mut tools = tools.clone();
+    let job = tools
         .integrations
         .iter_mut()
         .flat_map(|integrations| integrations.plugins.iter_mut().flatten())
         .find(|plugin| plugin.plugin == coordinate)
         .and_then(|plugin| plugin.job.as_mut())
-    else {
-        return;
-    };
-    let consented = gents_protocol::job_settings::consented_dynamic(true, job.policy.dynamic);
-    if consented == job.policy.dynamic {
-        return;
-    }
-    job.policy.dynamic = consented;
-    report.job = Some(job.clone());
-    report
-        .warnings
-        .retain(|warning| !warning.starts_with("dynamic_check: "));
-    report.changed.push(format!(
-        "set job.policy.dynamic run for {coordinate}: the node owner approved its dynamic scripts"
-    ));
+        .ok_or_else(|| NoJobBlock {
+            plugin: coordinate.to_owned(),
+        })?;
+    let before = job.policy.clone();
+    job.policy.dynamic = gents_protocol::job::DynamicMode::Run;
+    job.policy.dynamic_targets = targets.to_vec();
+    union_into(&mut job.agent_targets, targets);
+    let after = job.policy.clone();
+    union_into(
+        &mut tools.agents.get_or_insert_with(Default::default).target_ids,
+        targets,
+    );
+    Ok((
+        tools,
+        DynamicEnableReceipt {
+            plugin: coordinate.to_owned(),
+            before,
+            after,
+        },
+    ))
 }
 
 /// Inverse of [`wire_plugin`]. With no `targets_from`, drops the plugin entry

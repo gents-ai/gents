@@ -506,7 +506,6 @@ async fn a_runtime_answering_with_what_the_client_did_not_approve_gets_nothing_s
         targets_from: vec!["acme/demo".into()],
         remove: false,
         preview: false,
-        dynamic_consent: false,
         tool_calls_consent: false,
     };
     let wire = |request: WireRequest| {
@@ -727,7 +726,6 @@ async fn a_client_wires_a_plugin_through_the_runtime_signing_each_write_itself()
             targets_from: Vec::new(),
             remove: false,
             preview: false,
-            dynamic_consent: false,
             tool_calls_consent: false,
         };
         let client_home = tempfile::tempdir().unwrap();

@@ -13,6 +13,7 @@ use serde_json::json;
 enum Action {
     Wire,
     Unwire,
+    Enable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -191,14 +192,34 @@ fn wiring_conforms_to_the_model() {
                         if step.consent_tool_calls {
                             consent_tool_calls(&mut tools, &step.plugin.coordinate, &mut report);
                         }
-                        if step.consent_dynamic {
-                            consent_dynamic_run(&mut tools, &step.plugin.coordinate, &mut report);
-                        }
                         (tools, context, report)
                     }),
                     Action::Unwire => {
                         unwire_plugin(&tools, &context, &plugin, &step.skills, &sources)
                     }
+                    Action::Enable => operator_enable_dynamic(
+                        &tools,
+                        &step.plugin.coordinate,
+                        &step.enable_targets,
+                    )
+                    .map(|(tools, receipt)| {
+                        let job = tools
+                            .integrations
+                            .iter()
+                            .flat_map(|integrations| integrations.plugins.iter().flatten())
+                            .find(|entry| entry.plugin == receipt.plugin)
+                            .and_then(|entry| entry.job.clone());
+                        assert!(job.as_ref().is_some_and(dynamic_enabled), "{}", script.name);
+                        let report = WireReport {
+                            changed: Vec::new(),
+                            job,
+                            warnings: Vec::new(),
+                            policy_warnings: Vec::new(),
+                            next_call: None,
+                        };
+                        (tools, context.clone(), report)
+                    })
+                    .map_err(anyhow::Error::from),
                 }
                 .ok()?;
                 assert_eq!(
@@ -267,12 +288,11 @@ fn the_report_names_the_next_call_and_what_check_refuses() {
         "{warning}"
     );
 
-    let (mut consented, mut consented_report) = (tools.clone(), report);
-    consent_dynamic_run(&mut consented, "acme/runner", &mut consented_report);
-    assert!(consented_report
-        .changed
-        .iter()
-        .any(|change| change.contains("set job.policy.dynamic run for acme/runner")));
+    let (_, receipt) = operator_enable_dynamic(&tools, "acme/runner", &strs(&["wf-a"])).unwrap();
+    assert_eq!(
+        (receipt.before.dynamic, receipt.after.dynamic),
+        (DynamicMode::Check, DynamicMode::Run)
+    );
 
     let (_, _, report) = unwire_plugin(&tools, &context, &plugin, &[], &[content]).unwrap();
     assert!(report.next_call.unwrap().contains("non-job verbs only"));
