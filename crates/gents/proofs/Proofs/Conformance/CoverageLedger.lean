@@ -2172,18 +2172,8 @@ def caseCoverage : List CoverageEntry :=
       "identity-permission" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "family"
-      "identity_operations_deferred_unreached"
-      "model-production-gap: the served scenarios observe only the parent link or grant the identity_operations_deferred_* families replay; no production path builds a foreign embedded runtime, an unregistered Node or a failed commit, or observes the recorded parent Node.")
-      "identity-permission" [Surface.runtimeInternal]
-  , tagged (boundaryCoverage
-      "family"
       "identity_operations_readiness_recovery_unreached"
-      "model-production-gap: production cannot inject a failed parent grant or a failed publication mark, and a readiness row natively owned by an empty runtime DID cannot be written.")
-      "identity-permission" [Surface.runtimeInternal]
-  , tagged (boundaryCoverage
-      "family"
-      "identity_operations_readiness_observation_unreached"
-      "model-production-gap: the recovery scenario builds at most one Node and exactly one readiness row, records a parent on every row that has a Node, and observes as the embedded runtime, so no production path observes a foreign requested runtime, a duplicated Node, a missing or duplicated readiness row, or a row with no recorded parent beside its Node.")
+      "the parent grant is a native ACP call outside the transaction whose mutations the store's fault seam counts, and no actor can make it fail while the runtime's ownership and parent observations still hold.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "family"

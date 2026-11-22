@@ -578,7 +578,29 @@ async fn recovery_fixture(name: &str, pending: bool) -> RecoveryFixture {
     } else {
         runtime.did()
     };
-    let result = upsert_node_readiness(&node, selected, &snapshot, "2026-01-01T00:00:01Z").await;
+    let publish = upsert_node_readiness(&node, selected, &snapshot, "2026-01-01T00:00:01Z");
+    let result = match name {
+        "mark-failed" | "retry-mark" => {
+            let (result, trace) =
+                gents_store::config_client::ConfigApplyTxn::with_successful_mutation_failure_and_trace(
+                    Some(2),
+                    publish,
+                )
+                .await;
+            assert_eq!(
+                trace.last(),
+                Some(&Some("readiness.mark_parent_linked")),
+                "the injected failure targets the publication mark: {trace:?}"
+            );
+            assert!(result.is_err());
+            if name == "retry-mark" {
+                upsert_node_readiness(&node, selected, &snapshot, "2026-01-01T00:00:02Z").await
+            } else {
+                result
+            }
+        }
+        _ => publish.await,
+    };
     let observation_access = if name == "owner-mismatch" {
         &user_access
     } else {
@@ -697,8 +719,10 @@ async fn published_readiness_observation_matches_model() {
     use gents_store::config_client::ConfigAccess;
     use gents_store::identity::NodeIdentity;
     for case in gents_lean_vocab::families::identity_operations_readiness_observation::cases() {
-        let (fixture_name, pending, mark) = match case.input.name.as_str() {
-            "valid" => ("success", true, false),
+        let name = case.input.name.as_str();
+        let (fixture_name, pending, mark) = match name {
+            "valid" | "foreign-runtime" | "duplicate-node" | "no-readiness"
+            | "duplicate-readiness" | "missing-parent" => ("success", true, false),
             "readiness-unregistered" => ("owner-unknown", true, true),
             "foreign-readiness" => ("owner-mismatch", true, true),
             "replaced-parent" => ("parent-mismatch", true, true),
@@ -747,23 +771,111 @@ async fn published_readiness_observation_matches_model() {
                 }
             }
         }
-        let actor = identity::Did::new(fixture.runtime.did()).unwrap();
-        let observed = fixture
-            .runtime_access
+        let runtime_did = escape_graphql_string(fixture.runtime.did());
+        let doc = escape_graphql_string(&fixture.doc);
+        match name {
+            "duplicate-node" => {
+                let second = fixture
+                    .user_access
+                    .write(
+                        "test.readiness.second_node",
+                        &format!(
+                            r#"mutation {{ create_Node(input: {{node_did: "{runtime_did}"}}) {{_docID}} }}"#
+                        ),
+                    )
+                    .await
+                    .unwrap();
+                let second =
+                    gents_protocol::graphql::extract_mutation_doc_id(&second, "Node").unwrap();
+                fixture
+                    .user_access
+                    .add_actor_relationship(
+                        "Node",
+                        &second,
+                        "runtime_reader",
+                        &identity::Did::new(fixture.runtime.did()).unwrap(),
+                    )
+                    .await
+                    .unwrap();
+            }
+            "no-readiness" => {
+                fixture
+                    .runtime_access
+                    .write(
+                        "test.readiness.delete",
+                        &format!(
+                            r#"mutation {{ delete_NodeReadiness(docID: "{doc}") {{_docID}} }}"#
+                        ),
+                    )
+                    .await
+                    .unwrap();
+            }
+            "duplicate-readiness" => {
+                let row = fixture
+                    .runtime_access
+                    .execute(&format!(
+                        r#"{{ NodeReadiness(filter: {{_docID: {{_eq: "{doc}"}}}}) {{node_doc_id}} }}"#
+                    ))
+                    .await
+                    .unwrap();
+                let parent = row["data"]["NodeReadiness"][0]["node_doc_id"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned();
+                fixture
+                    .runtime_access
+                    .write(
+                        "test.readiness.second_row",
+                        &format!(
+                            r#"mutation {{ create_NodeReadiness(input: {{node_did: "{runtime_did}", node_doc_id: "{}", parent_linked: true, snapshot_json: "{{}}", updated_at: "2026-01-01T00:00:02Z"}}) {{_docID}} }}"#,
+                            escape_graphql_string(&parent)
+                        ),
+                    )
+                    .await
+                    .unwrap();
+            }
+            "missing-parent" => {
+                fixture
+                    .runtime_access
+                    .write(
+                        "test.readiness.clear_parent",
+                        &format!(
+                            r#"mutation {{ update_NodeReadiness(docID: "{doc}", input: {{node_doc_id: null}}) {{_docID}} }}"#
+                        ),
+                    )
+                    .await
+                    .unwrap();
+            }
+            _ => {}
+        }
+        let requested = identity::Did::new(fixture.runtime.did()).unwrap();
+        let observer = if name == "foreign-runtime" {
+            ConfigAccess::local_as(
+                fixture.node.clone(),
+                identity::Did::new(fixture.foreign.did()).unwrap(),
+            )
+        } else {
+            fixture.runtime_access.clone()
+        };
+        let observed = observer
             .transact_readonly("test.readiness.observe_owner", |txn| {
-                let actor = &actor;
+                let requested = &requested;
                 Box::pin(async move {
                     gents_store::config_client::node_readiness::observe_published_readiness(
-                        txn, actor,
+                        txn, requested,
                     )
                     .await
                 })
             })
-            .await
-            .unwrap();
+            .await;
+        let usable = match observed {
+            Ok(row) => row.is_some(),
+            Err(_) if observer.actor_did().as_deref() != Some(requested.as_str()) => false,
+            Err(error) => panic!("{name}: observation failed: {error:#}"),
+        };
         case.check(
             gents_lean_vocab::families::identity_operations_readiness_observation::Usable {
-                usable: observed.is_some(),
+                usable,
             },
         );
         fixture.node.shutdown().await.unwrap();

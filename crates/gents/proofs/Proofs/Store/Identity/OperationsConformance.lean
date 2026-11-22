@@ -26,10 +26,9 @@ def recoveryCases : List RecoveryCase :=
   [ ⟨"success", true, false, "runtime", some "runtime", some "node", some "node", true, true, "runtime", true⟩
   , ⟨"grant-failed", true, false, "runtime", some "runtime", some "node", some "node", false, true, "runtime", true⟩
   , ⟨"mark-failed", true, false, "runtime", some "runtime", some "node", some "node", true, false, "runtime", true⟩
-  , ⟨"retry-mark", true, true, "runtime", some "runtime", some "node", some "node", false, true, "runtime", true⟩
+  , ⟨"retry-mark", true, true, "runtime", some "runtime", some "node", some "node", true, true, "runtime", true⟩
   , ⟨"owner-unknown", true, false, "runtime", none, some "node", some "node", true, true, "runtime", true⟩
   , ⟨"owner-mismatch", true, false, "runtime", some "other", some "node", some "node", true, true, "runtime", true⟩
-  , ⟨"runtime-missing", true, false, "", some "", some "node", some "node", true, true, "runtime", true⟩
   , ⟨"parent-missing", true, false, "runtime", some "runtime", none, none, true, true, "runtime", true⟩
   , ⟨"node-unknown", true, false, "runtime", some "runtime", some "node", none, true, true, "runtime", true⟩
   , ⟨"parent-mismatch", true, false, "runtime", some "runtime", some "node", some "other", true, true, "runtime", true⟩
@@ -51,7 +50,7 @@ def deferredCases : List DeferredCase :=
   [ ⟨"before-node", beginDeferredOperation, "runtime", "runtime", some "runtime", none, false, true⟩
   , ⟨"success", beginDeferredOperation, "runtime", "runtime", some "runtime", some "node", true, true⟩
   , ⟨"unregistered-node", beginDeferredOperation, "runtime", "runtime", some "runtime", some "node", false, true⟩
-  , ⟨"foreign-owner", beginDeferredOperation, "runtime", "runtime", some "other", some "node", true, true⟩
+  , ⟨"foreign-owner", ⟨none, true, false⟩, "runtime", "runtime", some "other", some "node", true, true⟩
   , ⟨"foreign-runtime", beginDeferredOperation, "runtime", "other", some "runtime", some "node", true, true⟩
   , ⟨"failed-commit", beginDeferredOperation, "runtime", "runtime", some "runtime", some "node", true, false⟩
   , ⟨"revoked-after-publication", ⟨some "node", false, true⟩, "runtime", "runtime", some "runtime", some "node", true, true⟩ ]

@@ -810,6 +810,15 @@ theorem readiness_unregistered_parent_cannot_repair (state : ParentPublication) 
       grantSucceeded markSucceeded = state := by
   simp [repairReadiness, readinessRecoveryEligible]
 
+/-- A native owner is a DID the store authenticated, so no readiness row is
+natively owned by an empty runtime DID; repair refuses one regardless. -/
+theorem readiness_empty_runtime_cannot_repair (state : ParentPublication) (embeddedRuntime : DID)
+    (parentRegistered : Bool) (nativeOwner recordedParent currentParent : Option String)
+    (grantSucceeded markSucceeded : Bool) :
+    repairReadiness state "" embeddedRuntime parentRegistered nativeOwner recordedParent currentParent
+      grantSucceeded markSucceeded = state := by
+  simp [repairReadiness, readinessRecoveryEligible]
+
 theorem failed_readiness_grant_cannot_mark_complete :
     (repairReadiness beginParentPublication "runtime" "runtime" true (some "runtime")
       (some "node") (some "node") false true).parentLinked = false := by decide
