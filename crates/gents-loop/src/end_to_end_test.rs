@@ -444,6 +444,9 @@ async fn cancelling_a_foreground_tool_keeps_its_request_and_drops_execution() {
         observed: Arc<Mutex<Option<String>>>,
     }
     impl ToolDyn for PendingTool {
+        fn hidden(&self) -> bool {
+            false
+        }
         fn name(&self) -> String {
             "echo".into()
         }
@@ -882,6 +885,9 @@ async fn serial_and_parallel_admission_follow_the_accepted_turn_and_stop_without
 
     struct ReadTool(Arc<std::sync::atomic::AtomicUsize>);
     impl ToolDyn for ReadTool {
+        fn hidden(&self) -> bool {
+            false
+        }
         fn name(&self) -> String {
             "echo".into()
         }
