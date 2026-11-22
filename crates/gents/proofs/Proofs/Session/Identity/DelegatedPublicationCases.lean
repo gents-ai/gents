@@ -33,10 +33,7 @@ def step (s : Publication) : Action → Publication
   | .commit starter receipt native => DelegatedPublication.commit s starter receipt native
   | .observe exact owner => DelegatedPublication.observe s exact owner
   | .publish actor exact grants => DelegatedPublication.publish s actor exact grants
-  | .revokeSessionParent =>
-      let relation : Relation := ⟨"sessions", s.binding.sessionDoc, "parent", .object "agents" s.binding.agentDoc⟩
-      let household := Identity.Household.apply s.household (.revokeAs s.binding.parentAgent relation)
-      { s with household := household }
+  | .revokeSessionParent => DelegatedPublication.revokeSessionParent s s.binding.parentAgent
 
 structure Case where
   name : String
@@ -110,9 +107,16 @@ theorem complete_publication_exposes_child_and_preserves_user_control :
       allowed 5 s.household "other-user" "sessions" "child-session" "delete" = false := by
   native_decide
 
-theorem denied_invoke_cannot_claim :
+theorem denied_invoke_cannot_commit :
     let s := [good, observed, grant].foldl step (initial false)
-    claim s deniedCommit = .denied := by native_decide
+    s.committed = false ∧ s.toolRunning = false ∧ claim s deniedCommit = .unavailable := by
+  native_decide
+
+theorem revoked_after_publication_keeps_the_session_parent :
+    let s := [good, observed, grant, .revokeSessionParent, grant].foldl step (initial true)
+    allowed 5 s.household "user" "sessions" "child-session" "read" = true ∧
+      claim s grantedCommit = .claimed := by
+  native_decide
 
 theorem same_agent_uses_client_admission_but_waits_for_links :
     let complete := [good, observed, grant].foldl step (initial false sameAgentBinding)

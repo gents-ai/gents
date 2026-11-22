@@ -434,52 +434,9 @@ def snapshotCoverageTailJson : String :=
 def snapshotJsonTail : String :=
   snapshotPromptTailJson ++ snapshotCaptureTailJson ++ snapshotCoverageTailJson
 
-def snapshotGoalCasesJson : String :=
-  ""
-    ++ "\"generated_by\":\"lake env lean --run Proofs/Conformance/Contracts.lean\","
-
-def snapshotGoalMutationCasesJson : String :=
-  ""
-
-def snapshotRequestCasesJson : String :=
-  ""
-
-def snapshotSessionCasesJson : String :=
-  ""
-
-def snapshotIdentityCasesJson : String :=
-  ""
-
-def snapshotClientCasesJson : String :=
-  ""
-
-def snapshotRuntimeCasesJson : String :=
-  ""
-
-def snapshotRecoveryCasesJson : String :=
-  ""
-    ++ "\"recovery_sweep_ids\":"
-      ++ jsonArray (Recovery.registeredRecoverySweepIds.map jsonString) ++ ","
-
-def snapshotPluginCasesJson : String :=
-  ""
-
-def snapshotFileCasesJson : String :=
-  ""
-
-
 def snapshotJson : String :=
   "{"
-    ++ snapshotGoalCasesJson
-    ++ snapshotGoalMutationCasesJson
-    ++ snapshotRequestCasesJson
-    ++ snapshotSessionCasesJson
-    ++ snapshotIdentityCasesJson
-    ++ snapshotClientCasesJson
-    ++ snapshotRuntimeCasesJson
-    ++ snapshotRecoveryCasesJson
-    ++ snapshotPluginCasesJson
-    ++ snapshotFileCasesJson
+    ++ "\"generated_by\":\"lake env lean --run Proofs/Conformance/Contracts.lean\","
     ++ snapshotJsonTail
 
 end Conformance.Contracts

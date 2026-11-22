@@ -52,12 +52,23 @@ def intent (b : Binding) : Intent :=
 def signedBinding (b : Binding) : Bool :=
   b.signer == b.parentAgent && signedTargetsMatch b.signedSession b.signedAgent (intent b)
 
+/-- Whether the parent may stage a session for the target Agent: an Agent
+always may for itself, and another Agent's session needs the parent's invoke
+on the target Agent document (its `session_writer`). -/
+def invokeHeld (s : Publication) : Bool :=
+  s.binding.parentAgent == s.binding.targetAgent ||
+    allowed 5 s.household s.binding.parentAgent "agents" s.binding.agentDoc "invoke"
+
 /-- The external native transaction is the only premise for atomic tool start,
-opening request, session, immutable verified starter and receipt. A failed
-transaction leaves the publication unchanged. A lost acknowledgement is not
-failure; it is represented by `committed` with `observed = false`. -/
+opening request, session, immutable verified starter and receipt. The
+transaction stages the target's session under the parent's authority, so a
+parent without invoke on the target Agent has its commit refused rather than
+its claim denied later. A failed transaction leaves the publication unchanged.
+A lost acknowledgement is not failure; it is represented by `committed` with
+`observed = false`. -/
 def commit (s : Publication) (starterVerified creationReceipt transactionCommitted : Bool) : Publication :=
-  if !s.attempted && signedBinding s.binding && starterVerified && creationReceipt && transactionCommitted &&
+  if !s.attempted && signedBinding s.binding && invokeHeld s && starterVerified && creationReceipt &&
+      transactionCommitted &&
       !(s.household.objects.any (fun o => o.resource == "sessions" && o.id == s.binding.sessionDoc)) &&
       !(s.household.objects.any (fun o => o.resource == "delivered_requests" && o.id == s.binding.requestDoc)) then
     let withSession := directCreate s.household s.binding.parentAgent "sessions" s.binding.sessionDoc true true
@@ -118,6 +129,20 @@ def publish (s : Publication) (actor : String) (exactBinding : Bool) (g : GrantA
       links := links
       sessionPending := s.sessionPending && !(links.sessionParent && links.sessionWorker && g.markSession)
       requestPending := s.requestPending && !(links.requestParent && links.requestSession && links.requestWorker && g.markRequest) }
+
+/-- A published session's parent relation binds it to its Agent. Decision:
+its creator Agent may not detach it; native relationship management refuses
+the parent Agent's delete of that relation, so the attempt leaves the
+publication unchanged. Any other actor is decided by document ACP. -/
+def revokeSessionParent (s : Publication) (actor : String) : Publication :=
+  if actor == s.binding.parentAgent then s else
+    let relation : Relation :=
+      ⟨"sessions", s.binding.sessionDoc, "parent", .object "agents" s.binding.agentDoc⟩
+    { s with household := Identity.Household.apply s.household (.revokeAs actor relation) }
+
+theorem parent_cannot_detach_its_session (s : Publication) :
+    revokeSessionParent s s.binding.parentAgent = s := by
+  simp [revokeSessionParent]
 
 /-- Native claim reads both pending markers in the same transaction that
 checks the immediate author's session update and target Agent invoke. The
@@ -195,7 +220,7 @@ decides again on the state the race left. An attempt no race reaches commits
 the decision it read. When the attempts are spent the claim reports the
 conflict and the work stays pending.
 
-Decision (maintainer, gents#3804, 2026-11-16): the model follows production's
+Decision: the model follows production's
 deliberate retry rather than ending a claim at its first conflict, because
 every rerun re-checks authorization (`claimed_after_races_reauthorizes`). -/
 def claimFrom : Nat → Publication → List ClaimRace → Decision

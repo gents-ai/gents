@@ -697,11 +697,6 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "request_execution_lease_contracts_observed_recheck")
       "request-execution-lease" [Surface.runtimeInternal]
-  , tagged (boundaryCoverage
-      "family"
-      "request_execution_lease_contracts_observed_world_unreached"
-      "model-production-gap: no production owner computes the whole lease world after an observed transaction commits; finalization, revocation, drop and competing-renewal interleavings have no served scenario.")
-      "request-execution-lease" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
       "account_rotation_contracts_selection")
@@ -725,16 +720,6 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "family"
       "request_execution_lease_contracts_relinquishment")
-      "request-execution-lease" [Surface.agentFacing, Surface.runtimeInternal]
-  , tagged (boundaryCoverage
-      "family"
-      "request_execution_lease_contracts_step_world_unreached"
-      "model-production-gap: no production owner computes the whole lease world; claim, finalization, recovery, revocation, observing-replica and clock steps have no native replay (#1571).")
-      "request-execution-lease" [Surface.agentFacing, Surface.runtimeInternal]
-  , tagged (boundaryCoverage
-      "family"
-      "request_execution_lease_contracts_lease_trace_unreached"
-      "model-production-gap: native lease owners take one database-backed action at a time under the wall clock; no production path replays a multi-action renewal, expiry, recovery or stale-owner trace over a logical clock. No scheduler fairness or wall-clock continuity is proved.")
       "request-execution-lease" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -771,10 +756,6 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "family"
       "trigger_delivery_arrival_cursor")
-      "event-delivery" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "family" "trigger_delivery_arrival_cursor_pending"
-      "model-production-gap: production returns no list of the arrivals a consumer still owes; the durable event-source scan decides each arrival's delivery inside its loop.")
       "event-delivery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -928,11 +909,6 @@ def caseCoverage : List CoverageEntry :=
       "contracts_queued_steering_trace_publication"
       "Native binding covers only the publication-before-provider-stream-entry script: it sends the modeled prepared prompt and observes the durable authored header before the provider stream opens. It does not execute generated steering queue ingress, inspect the UI admissionVisible projection or serialized capture body, or prove native lease authorization. Claimed pre-start failure, prepublication send denial, conflicting capture, and exact replay scripts remain model-derived/decoder-checked only.")
       "prompt-assembly" [Surface.agentFacing]
-  , tagged (boundaryCoverage
-      "family"
-      "contracts_queued_steering_trace_trace_unreached"
-      "model-production-gap: no native owner exposes the whole steering trace observation (admission visibility, capture binding, queue head and prepared candidate); claimed pre-start failure, prepublication send denial, conflicting capture and exact replay scripts have no native replay.")
-      "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
       "contracts_pack_installation_finality_transaction")
@@ -1296,16 +1272,6 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "contracts_self_config_sibling_tools")
       "self-config" [Surface.agentFacing]
-  , tagged (followUpCoverage
-      "family"
-      "contract_cases_session_recovery_unreached"
-      "model-production-gap: the model reissues over a session whose requests each carry an admission lease and a deadline clock; production reissue publishes a successor from persisted rows on a served node and records no per-request admission. The eligibility decision is replayed by session_operations_reissue_decision.")
-      "session-recovery" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "family"
-      "conformance_contract_cases_recovery_action_vocabulary"
-      "model-production-gap: the action vocabulary of contract_cases_session_recovery_unreached, which has no production path.")
-      "session-recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
       "inference_slot_accounting_reconstruction")
@@ -1792,11 +1758,6 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "hooks_contracts_must_commit_staging")
       "lifecycle-hooks" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "family"
-      "hooks_contracts_must_commit_staging_unreached"
-      "model-production-gap: production stages a must-commit point only after core's transition committed, so a refused transition never reaches stage_dropping; the model finds that such a case commits nothing and owes nothing.")
-      "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"
       "hooks_contracts_rerun"
@@ -1832,11 +1793,6 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "hooks_contracts_grant_validity"
       "Production validate decides every case whose grants ride on creates. The DefraDB host's relationship publication and the Goals listener (goal::lifecycle_hooks::TaskGoalAssignment) are not driven by these cases.")
-      "lifecycle-hooks" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "family"
-      "hooks_contracts_grant_validity_unreached"
-      "model-production-gap: a native grant is a field of the create that carries it, so a grant on a document the result does not create has no production form; the model finds every such case invalid.")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"
@@ -1929,11 +1885,6 @@ def caseCoverage : List CoverageEntry :=
       "fold_queue_contracts_publication_unsafe_boundary"
       "The owned loop refuses intake at both unsafe streaming boundaries; the served writer scripts in fold_queue_contracts_publication_script bind signed pending rows, native intake, authored publication, cancellation, generation fencing and natural completion.")
       "request-lifecycle" [Surface.runtimeInternal]
-  , tagged (boundaryCoverage
-      "family"
-      "fold_queue_contracts_publication_unsafe_boundary_unreached"
-      "model-production-gap: the served writer fixture has no unsafe provider-stream boundary and the owned loop has no durable queue; fold_queue_contracts_publication_unsafe_boundary replays the refused intake through run_loop_stream.")
-      "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
       "fold_queue_contracts_retry_selection")
@@ -1950,11 +1901,6 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "family"
       "recovery_sweeps_request")
-      "recovery" [Surface.runtimeInternal]
-  , tagged (boundaryCoverage
-      "recovery_sweep_ids"
-      "RecoverySweepIds"
-      "The registered sweep ids are a model registry list. Lean proves every id has a replayed recovery_sweeps_* or plugin_job_recoveries family (sweep_families_cover_registered_sweeps), and periodic_recovery_registry replays the production periodic registry against the model tick; no native test reads the list itself.")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -2157,11 +2103,6 @@ def caseCoverage : List CoverageEntry :=
       "identity-permission" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "family"
-      "identity_operations_desired_publisher_unreached"
-      "model-production-gap: a store holds only its own Node's signer, so no production path writes a desired route as a foreign actor whose signer is held.")
-      "identity-permission" [Surface.runtimeInternal]
-  , tagged (boundaryCoverage
-      "family"
       "identity_operations_registry_writer_unreached"
       "model-production-gap: the replicated registry scenario creates no registry row naming another Node, so no production path observes its writer.")
       "identity-permission" [Surface.runtimeInternal]
@@ -2184,11 +2125,6 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "identity_operations_readiness_observation_unreached"
       "model-production-gap: the recovery scenario builds at most one Node and exactly one readiness row, records a parent on every row that has a Node, and observes as the embedded runtime, so no production path observes a foreign requested runtime, a duplicated Node, a missing or duplicated readiness row, or a row with no recorded parent beside its Node.")
-      "identity-permission" [Surface.runtimeInternal]
-  , tagged (boundaryCoverage
-      "family"
-      "identity_operations_pairing_reader_unreached"
-      "model-production-gap: production records no owner-authorized reader generation, so no production path observes the last granted generation, an entitlement withdrawn without a revocation, or a new or unauthorized generation.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "family"
@@ -2228,11 +2164,6 @@ def caseCoverage : List CoverageEntry :=
       "node_provisioning_agent_creator_unreached"
       "model-production-gap: no served creation scenario denies the native Agent create or its parent relation to an otherwise authorized creator yet (native-create-denied, native-relation-denied).")
       "identity-permission" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "family"
-      "delegated_finality_served_unreached"
-      "model-production-gap: the session-message commit keeps no caller-side knowledge state for a pending read, a foreign receipt or an invalid abort proof, and no attempt counter or retry and failure-report permission, so pending-is-unconfirmed, foreign-receipt, no-proof-of-abort and failure-proof-cannot-undo-child have no production form.")
-      "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
       "delegated_publication_claim_readiness")
@@ -2264,11 +2195,6 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "family"
       "delegated_publication_same_agent_claim_race")
-      "identity-permission" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "family"
-      "delegated_publication_unreached"
-      "model-production-gap: wrong-physical-session, wrong-physical-agent, missing-creation-receipt, partial-grants and partial-then-recover have no production path (the agent_new commit binds then signs its targets and issues the receipt in one transaction; relation sets are atomic with their markers). Model and production disagree on invoke-denied (model DelegatedPublication.lean:58 commits and denies at claim; production commit.rs:460 refuses the commit) and revoked-after-publication (model DelegatedPublicationCases.lean:38 lets the parent revoke; production relationships.rs:147 refuses the parent Agent with NotAuthorized get-collection).")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -3100,9 +3026,6 @@ def caseCoverage : List CoverageEntry :=
       "transcript" [Surface.operatorUi]
   , tagged (consumerCoverage "family" "agent_identity_permission_decide")
       "identity-permission" [Surface.api]
-  , tagged (followUpCoverage "family" "agent_identity_permission_selection_unreached"
-      "model-production-gap: production has no node-scoped Agent selector over Agent rows to replay; foreign-node, unknown and duplicate DIDs are rejected only by the model before /identity/decide, which receives an already selected DID.")
-      "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "household_datastore_tool_revalidation")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "household_pack_cleanup_visible")
@@ -3183,15 +3106,6 @@ def caseCoverage : List CoverageEntry :=
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "household_backend_genesis")
       "identity-permission" [Surface.runtimeInternal]
-  , tagged (followUpCoverage "family" "household_fresh_backend_origin_unreached"
-      "model-production-gap: FreshBackendStore::initialize builds its temporary native Node without HTTP or P2P transport and has no seam that fails its schema commit, so an exposed or uncommitted fresh-store baseline cannot be driven.")
-      "identity-permission" [Surface.runtimeInternal]
-  , tagged (followUpCoverage "family" "household_self_config_lookup_unreached"
-      "model-production-gap: native document ACP cannot fence a document replacement between the self-config lookup and its relationship grant, so a lookup whose Agent document changed generation in between cannot be driven.")
-      "identity-permission" [Surface.runtimeInternal]
-  , tagged (followUpCoverage "family" "household_runtime_default_account_read_unreached"
-      "model-production-gap: the runtime default-account read always shares the Agent write's transaction snapshot, and its metadata query and delegated read check are answered by the same native ACP state, so a different snapshot or a failed native read of a runtime-visible row is not produced by any served-node fixture.")
-      "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "household_client_goal_transaction_actor")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "household_client_goal_actor_fence")
@@ -3214,17 +3128,8 @@ def caseCoverage : List CoverageEntry :=
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "household_tool_grant_hierarchy")
       "identity-permission" [Surface.runtimeInternal]
-  , tagged (followUpCoverage "family" "household_session_tool_access_unreached"
-      "model-production-gap: the session tool reads as the managed Agent, and managed-Agent signing never resolves native DAC bypass.")
-      "identity-permission" [Surface.runtimeInternal]
   , tagged (followUpCoverage "family" "household_unattended_receipt_unreached"
       "model-production-gap: production has no native transaction-scoped receipt witness, so no owner observes a receipt as absent, pending, admitted or unavailable or chooses create, retire-pending, advance or hold from it.")
-      "identity-permission" [Surface.runtimeInternal]
-  , tagged (followUpCoverage "family" "household_tool_grant_projection_unreached"
-      "model-production-gap: no production path holds a second selected source for one Agent and permission: an Agent selects one Tools document through one Context, a Tools edit changes every selecting Agent, and only the schema purpose projects patch-collection; no managed Agent is ever the Node's native owner.")
-      "identity-permission" [Surface.runtimeInternal]
-  , tagged (followUpCoverage "family" "household_tool_grant_group_unreached"
-      "model-production-gap: no production purpose other than schema projects patch-collection, and no production Tools edit forms one tool group spanning two Agents.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (followUpCoverage "family" "household_tool_grant_rebinding_unreached"
       "model-production-gap: every rebinding case starts from an other-purpose source for patch-collection, which no production purpose projects.")
@@ -3303,9 +3208,6 @@ def caseCoverage : List CoverageEntry :=
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "household_event_rebound_cursor")
       "identity-permission" [Surface.runtimeInternal]
-  , tagged (followUpCoverage "family" "household_event_rebound_cursor_unreached"
-      "model-production-gap: model and production disagree: checkpoint_prefix (crates/gents-documents/src/event_consumer.rs:411-414) refuses a checkpoint by anyone other than the selected Agent, while Identity.Automation.checkpointTaskArrival (Proofs/Store/Identity/Automation.lean:152-156) gates only on reading the request and the case passes cursorWritable=true for the former Agent; production is the safe side and the fix belongs in Lean first (maintainer, security pass #3683).")
-      "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "household_ordinary_receipt_visibility")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "household_event_stale_claim")
@@ -3362,12 +3264,6 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage "family" "household_node_binding")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "household_projection_binding")
-      "identity-permission" [Surface.runtimeInternal]
-  , tagged (followUpCoverage "family" "household_fresh_backend_admission_unreached"
-      "model-production-gap: a fresh-store admission cannot observe a missing or broken private binding; FreshBackendStore::initialize installs the private legacy schema itself, and a store whose binding is absent or altered is refused only on reopen (household_fresh_backend_reopen).")
-      "identity-permission" [Surface.runtimeInternal]
-  , tagged (followUpCoverage "family" "household_destructive_decision_unreached"
-      "model-production-gap: production has no complete-inventory read; every Gents read is filtered by document ACP for its actor, so InventoryRead has only AcpFiltered and a destructive decision over a complete inventory cannot be driven.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "household_tool_selection_references")
       "identity-permission" [Surface.runtimeInternal]
@@ -4064,9 +3960,6 @@ def caseCoverage : List CoverageEntry :=
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "contracts_archive_receipts")
       "request-lifecycle" [Surface.runtimeInternal]
-  , tagged (followUpCoverage "family" "contracts_archive_transition_unreached"
-      "model-production-gap: archive authorization is DefraDB ACP on the caller's transaction before the revision transition runs; no production scenario replays the unauthorized archive writes.")
-      "request-lifecycle" [Surface.runtimeInternal]
   , tagged (followUpCoverage "family" "session_documents_retry_unreached"
       "model-production-gap: the model selects the retry parent from the session document's observation and the exact physical request rows in one transaction; production retry eligibility reads persisted rows without that observation, so no production path takes these inputs. No fixture-local state machine may substitute.")
       "request-lifecycle" [Surface.runtimeInternal]
@@ -4087,9 +3980,6 @@ def caseCoverage : List CoverageEntry :=
       "apply-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "configuration_scope_discovery")
       "apply-reconcile" [Surface.runtimeInternal]
-  , tagged (boundaryCoverage "family" "configuration_scope_discovery_unreached"
-      "model-production-gap: a backend observation carries no owner; production reaches a catalog only through the owner-qualified backend document that holds it, so no production call is handed a foreign owner's same-labelled catalog.")
-      "apply-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "initialization_initial_inference")
       "apply-reconcile" [Surface.operatorCli]
   , tagged (followUpCoverage "family" "event_delivery_group_clock_unreached"
@@ -4097,9 +3987,6 @@ def caseCoverage : List CoverageEntry :=
       "triggers" [Surface.runtimeInternal]
   , tagged (followUpCoverage "family" "event_delivery_group_capture_unreached"
       "model-production-gap: production captures a callback group only inside the served callback scan (materialize_group), which loads the group by the delivery's own key; mismatched or trigger candidates have no production path and the eligible and quiesced cases need a served callback-binding scenario.")
-      "triggers" [Surface.runtimeInternal]
-  , tagged (followUpCoverage "family" "contracts_callback_transition_unreached"
-      "model-production-gap: the callback executor's claim, run, succeed, fail and retry steps happen inside the served engine's database writes and no production function applies one step to an invocation; denial and interrupt state and journal replay through contracts_callback_denial and contracts_callback_recovery, but the invocation document stores the origin group as a derived key string and has no emission flag, so these input, origin and emission preservation witnesses have no native replay.")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "contracts_callback_saturation_trace")
       "triggers" [Surface.runtimeInternal]

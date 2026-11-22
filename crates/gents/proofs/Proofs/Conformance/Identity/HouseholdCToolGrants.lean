@@ -60,26 +60,35 @@ structure ProjectionOutput where
   effective : Bool
   deriving ToJson
 
+private def projectionRow (name : String) (initial : Configuration.ToolGrantProjection)
+    (source : Configuration.ToolGrantSource) (enable authorized committed : Bool) : ProjectionInput :=
+  { name, initial := .ofModel initial, source := .ofModel source, enable, authorized, committed }
+
+private def selectedProjection : Configuration.ToolGrantProjection :=
+  { enabled := [toolSource], grants := [toolSource] }
+
 def projectionInputs : List ProjectionInput :=
-  let selected : Configuration.ToolGrantProjection := { enabled := [toolSource], grants := [toolSource] }
-  let row := fun (name : String) (initial : Configuration.ToolGrantProjection)
-      (source : Configuration.ToolGrantSource) (enable authorized committed : Bool) =>
-    ({ name, initial := .ofModel initial, source := .ofModel source, enable, authorized,
-       committed } : ProjectionInput)
-  [row "enable" {} toolSource true true true,
-   row "disable" selected toolSource false true true,
-   row "other-source-survives" { selected with enabled := [toolSource, otherToolSource], grants := [toolSource, otherToolSource] } toolSource false true true,
-   row "other-purpose-survives" { selected with enabled := [toolSource, otherPurposeSource], grants := [toolSource, otherPurposeSource] } toolSource false true true,
-   row "other-agent-survives" { selected with enabled := [toolSource, otherAgentSource], grants := [toolSource, otherAgentSource] } toolSource false true true,
-   row "direct-survives" { selected with direct := [(agentDid, "patch-collection")] } toolSource false true true,
-   row "owner-survives" { selected with owners := [agentDid] } toolSource false true true,
-   row "admin-survives" { selected with admins := [agentDid] } toolSource false true true,
-   row "unauthorized-enable" {} toolSource true false true,
-   row "failed-enable" {} toolSource true true false,
-   row "unauthorized-disable" selected toolSource false false true,
-   row "failed-disable" selected toolSource false true false,
-   row "missing-physical-document" {} { toolSource with toolsDoc := "" } true true true,
-   row "idempotent-enable" selected toolSource true true true]
+  [projectionRow "enable" {} toolSource true true true,
+   projectionRow "disable" selectedProjection toolSource false true true,
+   projectionRow "direct-survives" { selectedProjection with direct := [(agentDid, "patch-collection")] } toolSource false true true,
+   projectionRow "admin-survives" { selectedProjection with admins := [agentDid] } toolSource false true true,
+   projectionRow "unauthorized-enable" {} toolSource true false true,
+   projectionRow "failed-enable" {} toolSource true true false,
+   projectionRow "unauthorized-disable" selectedProjection toolSource false false true,
+   projectionRow "failed-disable" selectedProjection toolSource false true false,
+   projectionRow "missing-physical-document" {} { toolSource with toolsDoc := "" } true true true,
+   projectionRow "idempotent-enable" selectedProjection toolSource true true true]
+
+/-- A production Agent selects one Tools document through its one Context,
+only the schema purpose projects `patch-collection`, and the Node's native
+owner is fixed when the Node is created and is never an Agent, so these initial
+states (a second Tools document, a second purpose, a sibling's source for the
+same selection, the managed Agent as the Node's owner) have no production form. -/
+def multiSourceProjectionInputs : List ProjectionInput :=
+  [projectionRow "other-source-survives" { selectedProjection with enabled := [toolSource, otherToolSource], grants := [toolSource, otherToolSource] } toolSource false true true,
+   projectionRow "other-purpose-survives" { selectedProjection with enabled := [toolSource, otherPurposeSource], grants := [toolSource, otherPurposeSource] } toolSource false true true,
+   projectionRow "other-agent-survives" { selectedProjection with enabled := [toolSource, otherAgentSource], grants := [toolSource, otherAgentSource] } toolSource false true true,
+   projectionRow "owner-survives" { selectedProjection with owners := [agentDid] } toolSource false true true]
 
 def projectionOutput (i : ProjectionInput) : ProjectionOutput :=
   let result := Configuration.changeToolGrant i.initial.toModel i.source.toModel i.enable
@@ -87,12 +96,13 @@ def projectionOutput (i : ProjectionInput) : ProjectionOutput :=
   { enabled := result.enabled.map .ofModel, grants := result.grants.map .ofModel,
     effective := Configuration.toolGrantEffective result i.source.agent i.source.permission }
 
-/-- A production Agent selects one Tools document through its one Context, and
-only the schema purpose projects `patch-collection`; these initial states hold
-a second Tools document, a second purpose or a second Agent's source for the
-same selection, or make the managed Agent the Node's native owner. -/
-def projectionUnreachedNames : List String :=
-  ["other-source-survives", "other-purpose-survives", "other-agent-survives", "owner-survives"]
+/-- A per-source disable removes only its own source: every other source,
+and the owner's authority, survives it. -/
+theorem disable_removes_only_its_source :
+    multiSourceProjectionInputs.map (fun i =>
+      ((projectionOutput i).enabled.length, (projectionOutput i).effective)) =
+      [(1, true), (1, true), (1, false), (0, true)] := by
+  native_decide
 
 structure PermissionAllowed where
   permission : String
@@ -114,21 +124,28 @@ structure GroupOutput where
   permissions : List PermissionAllowed
   deriving ToJson
 
+private def groupRow (name : String) (initial : Configuration.ToolGrantProjection)
+    (sources : List Configuration.ToolGrantSource) (enable authorized committed : Bool) : GroupInput :=
+  { name, sources := sources.map .ofModel, initial := .ofModel initial, enable, authorized,
+    committed }
+
 def groupInputs : List GroupInput :=
+  [groupRow "schema-enable-all" {} schemaToolSources true true true,
+   groupRow "schema-enable-rejected" {} schemaToolSources true false true,
+   groupRow "schema-enable-rollback" {} schemaToolSources true true false]
+
+/-- Only the schema purpose projects `patch-collection`, so an initial state
+that also holds an `other` purpose source for it has no production form; one
+Tools edit grants every Agent that selects the document, so no production edit
+is a single group spanning two Agents. -/
+def overlappingGroupInputs : List GroupInput :=
   let initial : Configuration.ToolGrantProjection :=
     { enabled := schemaToolSources ++ [otherPurposeSource],
       grants := schemaToolSources ++ [otherPurposeSource],
       direct := [(agentDid, "get-collection")] }
-  let row := fun (name : String) (initial : Configuration.ToolGrantProjection)
-      (sources : List Configuration.ToolGrantSource) (enable authorized committed : Bool) =>
-    ({ name, sources := sources.map .ofModel, initial := .ofModel initial, enable, authorized,
-       committed } : GroupInput)
-  [row "schema-enable-all" {} schemaToolSources true true true,
-   row "schema-disable-preserves-overlap" initial schemaToolSources false true true,
-   row "schema-enable-rejected" {} schemaToolSources true false true,
-   row "schema-enable-rollback" {} schemaToolSources true true false,
-   row "schema-disable-rollback" initial schemaToolSources false true false,
-   row "mixed-actor-rejected" {} [toolSource, otherAgentSource] true true true]
+  [groupRow "schema-disable-preserves-overlap" initial schemaToolSources false true true,
+   groupRow "schema-disable-rollback" initial schemaToolSources false true false,
+   groupRow "mixed-actor-rejected" {} [toolSource, otherAgentSource] true true true]
 
 /-- `enabled` and `grants` are the group's tool sources alone; the Agent's
 projected grant sets are sources outside every tool group. `permissions` is
@@ -143,12 +160,12 @@ def groupOutput (i : GroupInput) : GroupOutput :=
       ⟨permission, Configuration.toolGrantEffective result agentDid permission ||
         GrantSets.GrantSet.agentBaseline.permissions.contains permission⟩ }
 
-/-- Only the schema purpose projects `patch-collection`, so an initial state
-that also holds an `other` purpose source for it cannot be built; one Tools
-edit grants every Agent that selects the document, so no production edit is a
-single group spanning two Agents. -/
-def groupUnreachedNames : List String :=
-  ["schema-disable-preserves-overlap", "schema-disable-rollback", "mixed-actor-rejected"]
+/-- A group disable keeps an overlapping source of another purpose, a failed
+disable keeps the whole group, and a group spanning two Agents is refused. -/
+theorem group_change_keeps_what_it_does_not_name :
+    overlappingGroupInputs.map (fun i => (groupOutput i).enabled.length) =
+      [1, schemaToolSources.length + 1, 0] := by
+  native_decide
 
 structure GroupWire where
   toolsDoc : String
@@ -303,33 +320,12 @@ open Lean Identity Conformance.HouseholdC
 
 @[conformance_family]
 def toolGrantProjection : Family ProjectionInput ProjectionOutput where
-  inputs := projectionInputs.filter fun i => !projectionUnreachedNames.contains i.name
-  model := projectionOutput
-
-/-- model-production-gap: no production path holds two selected sources for
-one Agent and permission. An Agent selects one Tools document through its one
-Context, a Tools edit changes the selection for every Agent that selects the
-document, and only the schema purpose projects `patch-collection`, so neither a
-second Tools document, a second purpose nor a sibling's source survives a
-per-source disable. The Node's native owner is fixed when the Node is created
-and is never an Agent derived from the Node key. -/
-@[conformance_family]
-def toolGrantProjectionUnreached : Family ProjectionInput ProjectionOutput where
-  inputs := projectionInputs.filter fun i => projectionUnreachedNames.contains i.name
+  inputs := projectionInputs
   model := projectionOutput
 
 @[conformance_family]
 def toolGrantGroup : Family GroupInput GroupOutput where
-  inputs := groupInputs.filter fun i => !groupUnreachedNames.contains i.name
-  model := groupOutput
-
-/-- model-production-gap: no production purpose other than schema projects
-`patch-collection`, so the overlapping `other` purpose source of the disable
-cases cannot be held, and a Tools edit grants every selecting Agent, so no
-production edit forms one tool group spanning two Agents. -/
-@[conformance_family]
-def toolGrantGroupUnreached : Family GroupInput GroupOutput where
-  inputs := groupInputs.filter fun i => groupUnreachedNames.contains i.name
+  inputs := groupInputs
   model := groupOutput
 
 @[conformance_family]
@@ -337,7 +333,7 @@ def toolGrantHierarchy : Family HierarchyInput HierarchyOutput where
   inputs := hierarchyInputs
   model := hierarchyOutput
 
-/-- model-production-gap: every rebinding case starts from an Agent holding
+/-- Every rebinding case starts from an Agent holding
 an `other` purpose source for `patch-collection` beside its schema source; no
 production purpose other than schema projects that permission. -/
 @[conformance_family]

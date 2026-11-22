@@ -58,36 +58,9 @@ private def finality (i : TraceInput) : Finality :=
   let s := run (i.actions.map ActionWire.toModel)
   { native := s.native, knowledge := s.knowledge }
 
-/-- A served session-message commit can hold its native commit, race a
-competing failure against it, or lose its post-commit acknowledgement; these
-traces are the ones those three situations perform. -/
-def servedNames : List String :=
-  ["child-wins-after-pending-read", "failure-wins-before-child", "child-committed-ack-lost"]
-
 @[conformance_family]
 def served : Family TraceInput Finality where
-  inputs := (cases.filter fun c => c.1 ∈ servedNames).map traceInput
+  inputs := cases.map traceInput
   model := finality
-
-structure UnreachedFinality where
-  native : Native
-  knowledge : Knowledge
-  attempts : Nat
-  mayReportFailure : Bool
-  mayRetry : Bool
-  deriving ToJson
-
-/-- model-production-gap: the session-message commit has no caller-side
-knowledge state that replays a pending read, a foreign receipt or an invalid
-abort proof, and no attempt counter or retry/report permission; production
-neither retries nor reports after a lost acknowledgement, so these traces have
-no production form yet. -/
-@[conformance_family]
-def servedUnreached : Family TraceInput UnreachedFinality where
-  inputs := (cases.filter fun c => c.1 ∉ servedNames).map traceInput
-  model := fun i =>
-    let s := run (i.actions.map ActionWire.toModel)
-    { native := s.native, knowledge := s.knowledge, attempts := s.started
-      mayReportFailure := mayReportFailure s, mayRetry := mayRetry s }
 
 end Conformance.DelegatedFinality

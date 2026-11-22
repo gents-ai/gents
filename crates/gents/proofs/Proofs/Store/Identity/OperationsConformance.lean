@@ -82,19 +82,14 @@ def settledCases : List (String × Option LiveReconcileStatus × Bool) :=
 
 structure PairingReaderCase where
   name : String
-  before : PairingReaderPublication
-  entitled : Bool
-  ownerAuthorized : Bool
+  granted : Bool
+  grant : Bool
   committed : Bool
-  generation : Nat
 
 def pairingReaderCases : List PairingReaderCase :=
-  [ ⟨"initial-grant", ⟨none, false⟩, true, true, true, 1⟩
-  , ⟨"not-entitled", ⟨some 1, true⟩, false, true, true, 1⟩
-  , ⟨"explicit-revocation", ⟨some 1, false⟩, true, true, true, 1⟩
-  , ⟨"new-owner-authorization", ⟨some 1, false⟩, true, true, true, 2⟩
-  , ⟨"unauthorized-generation", ⟨some 1, false⟩, true, false, true, 2⟩
-  , ⟨"aborted-grant", ⟨none, false⟩, true, true, false, 1⟩
-  , ⟨"aborted-revoke", ⟨some 1, true⟩, false, true, false, 1⟩ ]
+  [ ⟨"initial-grant", false, true, true⟩
+  , ⟨"explicit-revocation", true, false, true⟩
+  , ⟨"aborted-grant", false, true, false⟩
+  , ⟨"aborted-revoke", true, false, false⟩ ]
 
 end Identity.OperationsConformance

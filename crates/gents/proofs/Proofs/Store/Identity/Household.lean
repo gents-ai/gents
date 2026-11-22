@@ -25,7 +25,7 @@ def permission (name : String) (relations : List String)
     (parents : List (String × String)) : PermissionDefinition :=
   ⟨name, relations, parents⟩
 
-/-- Required native policy wiring remains unenforced pending #3485. Users own Node
+/-- Users own Node
 configuration and transitively administer Agent configuration through its parent Node.
 Narrower per-Agent reader, session-writer and administrator grants stay independent.
 User-created sessions are user-owned with an explicit working agent. Unattended sessions
@@ -57,21 +57,19 @@ inherits `manage_agents` through a parent, so it confers none of
 `administrator`'s Node read, update or delete, nor the Agent, configuration and
 session permissions those confer through `parent`
 (`SelfConfig.agent_manager_is_catalog_only`). An administrator or the Node owner
-manages it. Decision (maintainer, 2026-11-11, #3656). Its only subject is the
-userset of a Node's administrators (`agent_manager_admits_no_actor`; decision
-2026-11-13).
+manages it. Decision: its only subject is the userset of a Node's
+administrators (`agent_manager_admits_no_actor`).
 
 `default_agent_selections` holds a Node's default Agent selection, one document
 per Node (`SelfConfig.initDefaultSelection`). Its update is its parent Node's
 `manage_agents`, so choosing the default is authorized by document ACP itself;
 its read is the Node's read or `manage_agents`, so a catalog holder sees the
-selection it changes; its delete is the Node's delete. Decision
-(maintainer, 2026-11-11, #3656): the selection leaves the Node document, so the
-catalog never needs Node update.
+selection it changes; its delete is the Node's delete. Decision: the selection
+leaves the Node document, so the catalog never needs Node update.
 
 `owed_deliveries` holds the lifecycle deliveries a must-commit transition owes
-a plugin whose staging was dropped (`Hooks.OwedDelivery`). Decision 2026-11-11,
-maintainer-approved: it is node-owned operational state, because the runtime
+a plugin whose staging was dropped (`Hooks.OwedDelivery`). Decision: it is
+node-owned operational state, because the runtime
 must redrive it whatever the owing actor's own grants are. Only its native
 owner, the node key, creates, updates and deletes it: `update` and `delete`
 name no relation. Its read is its parent Node's `update`, Node administration
@@ -83,7 +81,7 @@ reaches nothing else (`Identity.OwedDeliveryAccess`).
 
 `application_pairings` holds an Agent's opt-in to replicate named application
 collections toward one enrolled peer (`DataPlanePairingDesired`,
-`PairingReconcile.OverlayBinding`). Decision (maintainer, 2026-11-12): the
+`PairingReconcile.OverlayBinding`). Decision: the
 overlay is the authoring Agent's own document, parented by its Node. Creation is
 the native create gate, so its creator, the authoring Agent, is its owner; only
 the owner adds the `parent` relation, which has no manager. Its update names no
@@ -453,7 +451,7 @@ def allowed (fuel : Nat) (state : State) (actor resource id permission : String)
 /-- What a read observes, given whether the reader bypasses document ACP and
 what the document policy answers.
 
-External premise (defradb.rs #2744, `LensedDocFetcher::dac_bypass` read by
+External premise (defradb.rs `LensedDocFetcher::dac_bypass` read by
 `QueryRunner::lent`; upstream models `NacDacBypass.tla` and `NacOrder.lean`):
 while node access control is on, a named caller that it grants `bypass-dac`
 reads every document on that node, whatever document ACP answers, decided at
@@ -462,15 +460,13 @@ enables NAC with the node key as owner (`with_node_acp_enabled` on a node
 built with that identity), so the hosting runtime's node key reads every
 document on its own node. A native admin (`GrantSets.householdOwner`) holds
 `bypass-dac` too, but every request Gents makes as a managed Agent denies
-itself the bypass (defradb.rs #3024, `RequestContext::with_dac_bypass_denied`),
+itself the bypass (defradb.rs `RequestContext::with_dac_bypass_denied`),
 so an Agent that is a native admin still reads only what document ACP grants
 (`Configuration.toolSessionReadAllowed`).
 
-Decision (maintainer, 2026-11-13, gents#3747): accepted and modeled as it is.
-`allowed` remains the document policy's own answer and still decides every
-other actor, including another node's key and every Agent. Giving NAC an owner
-other than the node key, or an upstream switch that keeps the owner under
-document ACP, is the deferred larger question (gents#3683). -/
+Decision: accepted and modeled as it is. `allowed` remains the document
+policy's own answer and decides every other actor, including another node's
+key and every Agent. -/
 def readObserved (bypass documentAcp : Bool) : Bool := bypass || documentAcp
 
 def nativeRead (bypass : Bool) (fuel : Nat) (state : State) (actor resource id : String) : Bool :=
@@ -722,8 +718,7 @@ theorem revocation_never_widens_management (state : State) (revoker actor : DID)
     exact (List.mem_filter.mp hr).1
   · exact h
 
-/-- Whoever may grant access on a document may revoke it (maintainer decision,
-2026-11-12, gents#3683). Native relationship management admits grants and
+/-- Decision: whoever may grant access on a document may revoke it. Native relationship management admits grants and
 revokes through the one gate `mayManage`; a grant only adds a tuple, so the
 grantor keeps the standing that admitted it and its revoke removes exactly
 that tuple. -/
@@ -892,13 +887,12 @@ and compare it with native ownership. The check binds context; actual relation
 management remains a native ACP1 operation. Missing or conflicting evidence
 cannot select a node or another agent as a substitute actor.
 
-External premise (defradb.rs #2770): outside a native transaction a
-relationship change also requires node `get-collection`. An Agent creator
-holds it through its baseline since defradb.rs #2744 made every document
-write require it (`NodeProvisioning.requiredPermissions`), so the permission
-no longer forces the transaction. Callback and fork-child repair still commit
-the grant and the marker in one native transaction as the creator, now for
-atomicity alone, so only the `grantSucceeded = markSucceeded` outcomes arise
+External premise (defradb.rs): outside a native transaction a relationship
+change also requires node `get-collection`, which every document write
+requires too, so an Agent creator holds it through its baseline
+(`NodeProvisioning.requiredPermissions`). Callback and fork-child repair commit
+the grant and the marker in one native transaction as the creator for
+atomicity, so only the `grantSucceeded = markSucceeded` outcomes arise
 there; the unequal outcomes remain modeled for children whose grant committed
 separately. -/
 def recoverParent (state : ParentPublication)
@@ -948,13 +942,13 @@ theorem completed_marker_does_not_schedule_new_repair :
     finishStaleParentGrant revoked false true = revoked := by rfl
 
 /-- An actor-scoped lookup precedes a separate ACP1 relationship operation.
-An absent or hidden Agent has the same observation. A later native manager
-decision does not establish that the lookup still names a live document of the
-same generation. -/
+An absent or hidden Agent has the same observation. Native document ACP cannot
+fence a document replacement between the lookup and the relationship grant, so
+the outcome takes no generation: a later native manager decision does not
+establish that the lookup still names a live document of the same generation. -/
 structure SelfConfigAttempt where
   present : Bool
   visible : Bool
-  sameGeneration : Bool
   nativeAllows : Bool
   deriving Repr
 
@@ -963,11 +957,8 @@ def selfConfigOutcome (attempt : SelfConfigAttempt) : String :=
   else if attempt.nativeAllows then "applied" else "denied"
 
 theorem self_config_absent_and_hidden_are_indistinguishable :
-    selfConfigOutcome ⟨false, false, false, false⟩ =
-      selfConfigOutcome ⟨true, false, true, true⟩ := by rfl
-
-theorem self_config_lookup_does_not_fence_generation :
-    selfConfigOutcome ⟨true, true, false, true⟩ = "applied" := by rfl
+    selfConfigOutcome ⟨false, false, false⟩ =
+      selfConfigOutcome ⟨true, false, true⟩ := by rfl
 
 /-- Desired-state creation commits before ACP1 relationship operations. The
 creator receives the remaining grants after a reported failure, but a process
@@ -1055,8 +1046,7 @@ serves with, a backend it lists or probes, the Node whose hop cap bounds a
 spawn, or the Node through which it admits agent creation. It is document
 ACP's own `read` answer for the runtime's DID, never what its read observes.
 
-Decision (maintainer, 2026-11-17, gents#3935): the read past document ACP
-accepted in gents#3747 (`readObserved`) stays, and "may use" is a separate
+Decision: the read past document ACP (`readObserved`) stays, and "may use" is a separate
 decision from "can read", so revoking `runtime_reader` on the Node or
 `runtime_writer` on a credential still stops the runtime from using them.
 External premise: DefraDB answers this through a named document capability
@@ -1091,7 +1081,7 @@ theorem revocation_never_widens_use (fuel : Nat) (state : State) (relation : Rel
   allowed_mono fuel (apply state (.revoke relation)) state rfl
     (fun _ member => (List.mem_filter.mp member).1) runtime resource id "read" h
 
-/-- The runtime work whose use #3935 decides, and the document deciding it. -/
+/-- The runtime work whose use `runtimeMayUse` decides, and the document deciding it. -/
 inductive RuntimeUse where
   | oauthCredential
   | backend
@@ -1253,8 +1243,7 @@ theorem agent_manager_types :
     typeAdmitted policy "nodes" "agent_manager" ("nodes" ++ "->" ++ "administrator") = true := by
   native_decide
 
-/-- Decision (maintainer, 2026-11-13, "Node admin holds it"): `agent_manager`
-takes only the userset of a Node's administrators. No actor DID and no
+/-- Decision: `agent_manager` takes only the userset of a Node's administrators. No actor DID and no
 wildcard is its subject, so the catalog cannot be given directly to an Agent,
 to an unenrolled DID or to everyone. By
 `subject_types_do_not_separate_actors` no type could have admitted an enrolled
@@ -1323,13 +1312,10 @@ def policyWithActorCatalog : List ResourceDefinition := policy.map fun resource 
   else resource
 
 /-- The restriction changes a relation's types and nothing the policy ID
-hashes, so the ID is the one the earlier policy had. A store created before
-the decision holds the earlier policy at that ID, and registering the present
-one there is refused (`conflicting_policy_cannot_replace`): the startup
-migration that registers the Household policy fails, so such a store does not
-start on this policy, and nothing replaces its policy. While it runs an earlier
-build it still admits a direct `agent_manager` grant. Accepted for a release
-that only initialises fresh stores; open point in #3683. -/
+hashes, so a policy that admits an actor catalog has the same ID. Registering
+a different policy at an ID a store already holds is refused
+(`conflicting_policy_cannot_replace`), so a store holding the other policy does
+not start on this one, and nothing replaces its policy. -/
 theorem catalog_restriction_keeps_policy_id :
     (policyIdInput policy == policyIdInput policyWithActorCatalog) = true ∧
     typeAdmitted policyWithActorCatalog "nodes" "agent_manager" "actor" = true := by
