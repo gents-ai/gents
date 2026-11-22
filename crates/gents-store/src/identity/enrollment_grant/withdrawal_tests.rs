@@ -17,6 +17,46 @@ enum Provider {
     Vera,
 }
 
+#[tokio::test]
+async fn a_vera_home_reads_only_its_own_certified_assignments() -> anyhow::Result<()> {
+    let home = home(Provider::Vera).await?;
+    let access = home.runtime()?;
+    let query = defra_node::AssignmentQuery {
+        policy: crate::local::document_acp::node_policy_ids(&home.node)
+            .id(gents_protocol::schemas::BuiltInPolicy::Household)
+            .to_owned(),
+        resource: "nodes".into(),
+        relation: "runtime_reader".into(),
+        subject: home.runtime.did().into(),
+        issuer: home.owner.did().into(),
+        not_before: None,
+    };
+    let certified = access.certified_assignments(query.clone()).await?;
+    assert_eq!(certified.object_ids, [home.node_doc.clone()]);
+    let other = defra_node::AssignmentQuery {
+        subject: home.owner.did().into(),
+        ..query.clone()
+    };
+    assert!(access.certified_assignments(other).await.is_err());
+    ConfigAccess::Graphql(home.owner_endpoint.clone())
+        .delete_actor_relationship(
+            "Node",
+            &home.node_doc,
+            "runtime_reader",
+            &home.runtime.did().parse()?,
+        )
+        .await?;
+    let withdrawn = access
+        .certified_assignments(defra_node::AssignmentQuery {
+            not_before: Some(certified.position.clone()),
+            ..query
+        })
+        .await?;
+    assert!(withdrawn.object_ids.is_empty());
+    assert!(withdrawn.position.height > certified.position.height);
+    Ok(())
+}
+
 struct Home {
     _directory: tempfile::TempDir,
     runtime: Arc<crate::identity::KeyIdentity>,

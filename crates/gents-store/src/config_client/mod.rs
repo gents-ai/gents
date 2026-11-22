@@ -20,6 +20,7 @@ pub mod access_classification_fixture;
 mod agent_signer_conformance;
 mod application_failure;
 mod application_pairing;
+pub mod assignments;
 pub mod authored_document;
 mod client_agent_publication;
 pub mod client_authentication;
