@@ -125,7 +125,11 @@ mod tests {
 
     #[test]
     fn plain_text_and_whole_json_reach_the_provider_unchanged() {
-        for text in ["L1: hello\nL2: world", r#"{"ok":true,"content":"L1: {}"}"#, "[1,{}]"] {
+        for text in [
+            "L1: hello\nL2: world",
+            r#"{"ok":true,"content":"L1: {}"}"#,
+            "[1,{}]",
+        ] {
             assert_eq!(sent(text), text);
         }
     }
