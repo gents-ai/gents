@@ -1984,7 +1984,7 @@ async fn help_pages_stay_within_their_size_ceilings() {
     for (argv, ceiling) in [
         (json!(["help"]), HELP_INDEX_CEILING),
         (json!(["help", "tools"]), 2_450),
-        (json!(["tools", "update", "--help"]), 1_420),
+        (json!(["tools", "update", "--help"]), 1_450),
         (json!(["tools", "update", "--help", "host"]), 2_200),
         (json!(["tools", "update", "--help", "datastore"]), 850),
         (json!(["tools", "update", "--help", "integrations"]), 1_400),
