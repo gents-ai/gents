@@ -995,6 +995,7 @@ async fn modeled_job_policy_updates_follow_native_tools_authorization() {
             })
             .await
             .unwrap();
+        fixture.grant_node_reader().await;
         fixture
             .update_signed_configuration(
                 gents_store::collection::Collection::Tools,
