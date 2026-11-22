@@ -630,6 +630,7 @@ fn wire_fixture_with(reviewed_job: bool, init_extra: &[&str]) -> Result<WireFixt
             "tools": [{
                 "tools_id": "job-fixture-caller",
                 "display_name": "Job fixture caller",
+                "agents": {"target_ids": ["wf-fixture"]},
                 "integrations": {"plugins": [plugin_entry]},
             }],
         });
