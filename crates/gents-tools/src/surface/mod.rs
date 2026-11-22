@@ -116,6 +116,7 @@ use crate::native::{
 };
 use gents_documents::{AgentTargetDocument, AgentToolConfig, QueryToolDecl, WriteToolDecl};
 
+/// Timeout of every built-in CLI registration; `CliTool.timeout_secs` overrides it per agent.
 const DEFAULT_CLI_TIMEOUT_SECS: u64 = 10;
 
 #[derive(Clone)]

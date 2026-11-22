@@ -16,6 +16,7 @@ use gents_session::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecReque
 const BUILDER_ENV: &str = "GENTS_PLUGIN_BUILDER";
 /// The hidden entry point of the `gents` and desktop binaries.
 pub const PLUGIN_BUILD_COMMAND: &str = "__plugin-build";
+/// Bounds one sandboxed plugin build; the calling request's deadline still applies. A host safety bound, not agent behaviour.
 const BUILD_TIMEOUT: Duration = Duration::from_secs(900);
 const MAX_BUILD_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 const STDERR_TAIL_BYTES: usize = 16 * 1024;

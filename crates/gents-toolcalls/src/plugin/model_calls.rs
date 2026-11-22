@@ -15,6 +15,7 @@ pub const MAX_REQUESTS_PER_ROUND: usize = 64;
 pub const MAX_RESULT_BYTES: usize = 1024 * 1024;
 pub const MAX_REQUESTS_PER_CALL: usize = 512;
 pub const MAX_ANSWER_BYTES_PER_CALL: usize = 32 * 1024 * 1024;
+/// Output cap of a plugin model call when neither the guest nor the bound profile's `InferenceProfile.max_output_tokens` sets one.
 pub const DEFAULT_MAX_TOKENS: u64 = 8192;
 pub const DEAD_ENDPOINT_ROUNDS: u32 = 2;
 async fn check_profile_visibility(visibility: &ModelProfileVisibility) -> Result<Option<String>> {

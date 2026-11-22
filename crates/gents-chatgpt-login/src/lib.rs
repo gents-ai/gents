@@ -17,6 +17,7 @@ use url::Url;
 
 const DEFAULT_PORT: u16 = 1455;
 const FALLBACK_PORT: u16 = 1457;
+/// Bounds an interactive device login waiting for the user to approve it in a browser; on expiry the user reruns the login, and the error text names this duration.
 const DEVICE_AUTH_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const DEFAULT_DEVICE_POLL_INTERVAL: u64 = 5;
 const ORIGINATOR: &str = "codex_cli_rs";

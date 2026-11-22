@@ -18,9 +18,12 @@ use crate::traversal::{
     WalkState,
 };
 
+/// Walk budgets used because the host never sets them in a request. They bound one traversal's work on the host; `FileTools` limits cap the results, and the model narrows the path or pattern instead of raising these.
 const DEFAULT_MAX_ENTRIES_VISITED: usize = 200_000;
 const SEARCH_DIR_ENTRY_HINTS: usize = 10;
+/// Bytes one traversal may read; see `DEFAULT_MAX_ENTRIES_VISITED`.
 const DEFAULT_MAX_BYTES_READ: u64 = 128 * 1024 * 1024;
+/// Wall-clock budget of one traversal; see `DEFAULT_MAX_ENTRIES_VISITED`.
 const DEFAULT_MAX_WALL_MS: u64 = 15_000;
 const MAX_PATTERN_BYTES: usize = 4096;
 
