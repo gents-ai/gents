@@ -1,0 +1,171 @@
+{
+  "case_id": "frame-matched-weld-seal",
+  "split": "validation",
+  "reducer": "all",
+  "fixtures": {
+    "documents": [
+      {
+        "collection": "AgentSession",
+        "document": {
+          "node_did": "$trial",
+          "requester_did": "$evaluator",
+          "session_id": "frame-43-store",
+          "agent_did": "gents:agent-slot:engineer",
+          "created_at": "2026-09-10T08:00:00Z",
+          "closed_at": "2026-09-10T17:00:00Z",
+          "title": {
+            "text": "Frame-43 store notes | requires weld class P34 for its released drawing",
+            "source": "user"
+          },
+          "tags": [
+            "handoff"
+          ]
+        }
+      },
+      {
+        "collection": "AgentSession",
+        "document": {
+          "node_did": "$trial",
+          "requester_did": "$evaluator",
+          "session_id": "frame-43-order",
+          "agent_did": "gents:agent-slot:engineer",
+          "created_at": "2026-09-11T08:00:00Z",
+          "closed_at": "2026-09-11T17:00:00Z",
+          "title": {
+            "text": "Frame-43 order notes | packing confirms weld class P34, seal S78",
+            "source": "user"
+          },
+          "tags": [
+            "handoff"
+          ]
+        }
+      },
+      {
+        "collection": "AgentSession",
+        "document": {
+          "node_did": "$trial",
+          "requester_did": "$evaluator",
+          "session_id": "frame-43-receipt",
+          "agent_did": "gents:agent-slot:engineer",
+          "created_at": "2026-09-12T08:00:00Z",
+          "closed_at": "2026-09-12T17:00:00Z",
+          "title": {
+            "text": "Frame-43 receipt notes | prototype has weld class high, seal Q11, not for production",
+            "source": "user"
+          },
+          "tags": [
+            "handoff"
+          ]
+        }
+      },
+      {
+        "collection": "AgentSession",
+        "document": {
+          "node_did": "$trial",
+          "requester_did": "$evaluator",
+          "session_id": "frame-43-trial",
+          "agent_did": "gents:agent-slot:engineer",
+          "created_at": "2026-09-13T08:00:00Z",
+          "closed_at": "2026-09-13T17:00:00Z",
+          "title": {
+            "text": "Frame-43 trial notes | incoming spare for weld class P34-S, seal F11",
+            "source": "user"
+          },
+          "tags": [
+            "handoff"
+          ]
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "investigate",
+      "prompt": "Look back through our Frame-43 handoff conversations. What seal did packing confirm for the weld class in the released drawing? Cite the two session IDs you relied on.",
+      "checks": [
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\\bS78\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "sessions"
+            ],
+            "forbidden": [
+              "bash",
+              "query",
+              "config"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "links": [
+              {
+                "capture": "sources",
+                "key": "session_id",
+                "id": "frame-43-store",
+                "field": "session_id",
+                "target_capture": "sources",
+                "target_key": "session_id",
+                "reported_fields": [
+                  "session_id"
+                ]
+              },
+              {
+                "capture": "sources",
+                "key": "session_id",
+                "id": "frame-43-order",
+                "field": "session_id",
+                "target_capture": "sources",
+                "target_key": "session_id",
+                "reported_fields": [
+                  "session_id"
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "sources",
+          "collection": "AgentSession",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "session_id": {
+              "_in": [
+                "frame-43-store",
+                "frame-43-order"
+              ]
+            }
+          },
+          "fields": [
+            "_docID",
+            "session_id",
+            "title",
+            "closed_at"
+          ]
+        }
+      ]
+    }
+  ]
+}
