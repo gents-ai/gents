@@ -8,6 +8,9 @@ pub struct SchemaArgumentProbe {
 }
 
 impl ToolDyn for SchemaArgumentProbe {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         self.name.clone()
     }

@@ -557,6 +557,9 @@ async fn timeout_decision_is_owned_before_cleanup_and_later_cancel() {
         use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
         struct PendingNative;
         impl ToolDyn for PendingNative {
+            fn hidden(&self) -> bool {
+                false
+            }
             fn name(&self) -> String {
                 "pending-native".into()
             }

@@ -14,8 +14,9 @@
 # GENTS_EVAL_SHARD: 1/2 or 2/2 splits the selected suites across two launchers.
 # GENTS_EVAL_HOME / GENTS_EVAL_PORT: isolated home / optional fixed port.
 # GENTS_EVAL_PER_TRIAL: concurrent calls per trial (default 1).
-# GENTS_EVAL_REASONING / GENTS_EVAL_TEMPERATURE / GENTS_EVAL_TOP_P: high / 1 / .95;
-#   an empty temperature or top_p leaves that parameter to the target.
+# GENTS_EVAL_REASONING defaults to high and GENTS_EVAL_TEMPERATURE defaults to 1.
+#   Set GENTS_EVAL_TOP_P to override the provider's nucleus sampling default.
+#   An empty temperature or top_p leaves that parameter to the provider.
 # GENTS_EVAL_WATCH: auto, 1/web, tui or 0. Auto opens the browser in a terminal.
 # GENTS_EVAL_WEB_PORT: local dashboard port (default 9495).
 # GENTS_BIN: existing gents binary; otherwise builds this checkout.
@@ -74,7 +75,7 @@ PYPORT
 )
 REASONING=${GENTS_EVAL_REASONING:-high}
 TEMPERATURE=${GENTS_EVAL_TEMPERATURE-1.0}
-TOP_P=${GENTS_EVAL_TOP_P-0.95}
+TOP_P=${GENTS_EVAL_TOP_P-}
 TARGET_FILE=${GENTS_EVAL_TARGET_FILE:-$ROOT/scripts/evals/targets/$TARGET.json}
 
 if [ "$SELECTION" = list ]; then
