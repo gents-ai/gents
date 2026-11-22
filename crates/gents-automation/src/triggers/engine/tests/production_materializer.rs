@@ -1318,7 +1318,6 @@ async fn create_request(
                 failure_reason: "",
                 created_at: "{created_at}",
                 retry_count: 0,
-                max_retries: 3,
                 caused_by_trigger_id: "{trigger_id}",
                 caused_by_trigger_kind: "{trigger_kind}",
                 caused_by_correlation: "{correlation}"

@@ -28,6 +28,9 @@ pub const AGENT_REQUEST: &str = include_str!("../schemas/agent/agent_request.gra
 pub const AGENT_REQUEST_BACKEND_WAIT_NAME: &str = "AgentRequestBackendWait";
 pub const AGENT_REQUEST_BACKEND_WAIT: &str =
     include_str!("../schemas/agent/agent_request_backend_wait.graphql");
+pub const AGENT_REQUEST_RETRY_BUDGET_NAME: &str = "AgentRequestRetryBudget";
+pub const AGENT_REQUEST_RETRY_BUDGET: &str =
+    include_str!("../schemas/agent/agent_request_retry_budget.graphql");
 pub const AGENT_MESSAGE_NAME: &str = "AgentMessage";
 pub const AGENT_MESSAGE: &str = include_str!("../schemas/agent/agent_message.graphql");
 pub const AGENT_SESSION_NAME: &str = "AgentSession";
@@ -257,6 +260,7 @@ pub const ALL: &[&str] = &[
     CALLBACK_RESULT,
     AGENT_REQUEST,
     AGENT_REQUEST_BACKEND_WAIT,
+    AGENT_REQUEST_RETRY_BUDGET,
     AGENT_OUTPUT_SEGMENT,
     AGENT_SESSION,
     GOAL,
@@ -346,6 +350,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     CALLBACK_RESULT_NAME,
     AGENT_REQUEST_NAME,
     AGENT_REQUEST_BACKEND_WAIT_NAME,
+    AGENT_REQUEST_RETRY_BUDGET_NAME,
     AGENT_OUTPUT_SEGMENT_NAME,
     AGENT_SESSION_NAME,
     GOAL_NAME,

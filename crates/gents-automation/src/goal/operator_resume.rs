@@ -214,8 +214,7 @@ where
             resume,
         });
     }
-    let now = Utc::now();
-    let limited = blocked_turn_from(&references, &accounts, &request, call.as_ref(), now)
+    let limited = blocked_turn_from(&references, &accounts, &request, call.as_ref())
         .filter(|turn| turn.reason == BlockedReason::UsageLimit)
         .with_context(|| {
             format!(
@@ -249,7 +248,7 @@ where
                 backend_id: Some(target_backend_id.to_owned()),
                 ..call
             });
-            blocked_turn_from(&references, &accounts, &request, on_target.as_ref(), now)
+            blocked_turn_from(&references, &accounts, &request, on_target.as_ref())
                 .and_then(|turn| turn.profile)
                 .context(
                     "switch failed; nothing changed: the profile that hit the limit is on \

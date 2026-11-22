@@ -47,7 +47,9 @@ def step? (s : State) : Action → Option State
   | .schedule =>
       match s.phase with
       | .retracted .transport _ wake =>
-          if s.transportUsed < s.budget.transportRetries ∧
+          if ¬ withinMaxWait s.now wake s.budget.maxWait then
+            some { s with phase := .failedPermanent }
+          else if s.transportUsed < s.budget.transportRetries ∧
               fitsDeadline wake s.deadline ∧ s.now ≤ wake then
             some { s with phase := .backingOff wake,
                           transportUsed := s.transportUsed + 1,

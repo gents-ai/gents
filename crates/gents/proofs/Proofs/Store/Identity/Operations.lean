@@ -284,6 +284,7 @@ def networkProtocolResource : String → Option String
   | "CertifiedAssignmentState" => some "configuration"
   | "Agent" => some "agents"
   | "AgentRequest" => some "delivered_requests"
+  | "AgentRequestRetryBudget" => some "request_retry_budgets"
   | "AgentSession" => some "sessions"
   | "AgentSessionGoalControl" => some "goal_controls"
   | "AgentSessionInputEdit" => some "goal_controls"

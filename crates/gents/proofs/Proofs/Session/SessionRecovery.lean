@@ -91,6 +91,8 @@ theorem reissue_publishes_successor {pre post : SessionState} {failedId newId : 
   simp [reissuedContext, Function.update_of_ne hne,
     hm, hf, ho, Nat.succ_le_of_lt hb]
 
+/-- The successor's first claim pins its parent's stored ceiling
+(`Request.PinnedRetryBudget.claimPin`). -/
 theorem reissue_preserves_parent_and_ceiling {pre post : SessionState} {failedId newId : RequestId}
     (h : step? pre (.reissueFailed failedId newId) = some post) :
     post.ctx failedId = pre.ctx failedId ∧

@@ -54,7 +54,8 @@ impl RequestLifecycle {
 
         let mut eligible = Vec::new();
         for candidate in candidates {
-            let Some(queue_key) = eligible_queue_key(&candidate)? else {
+            let pin = candidate_pin(&accesses, &candidate).await?;
+            let Some(queue_key) = eligible_queue_key(&candidate, pin)? else {
                 report.ineligible += 1;
                 continue;
             };
@@ -73,10 +74,10 @@ impl RequestLifecycle {
                 report.deferred += 1;
                 continue;
             }
-            eligible.push(candidate);
+            eligible.push((candidate, pin));
         }
 
-        for candidate in eligible
+        for (candidate, pin) in eligible
             .into_iter()
             .take(BACKGROUND_WAKE_REDRIVE_BATCH_LIMIT)
         {
@@ -91,7 +92,7 @@ impl RequestLifecycle {
                 .iter()
                 .find(|identity| identity.did() == agent_did)
                 .context("wake identity unavailable")?;
-            match redrive_one(access, signer.as_ref(), &candidate).await {
+            match redrive_one(access, signer.as_ref(), &candidate, pin).await {
                 Ok(RedriveOutcome::Created { request_id }) => {
                     report.redriven += 1;
                     tracing::info!(
@@ -99,7 +100,7 @@ impl RequestLifecycle {
                         request_id,
                         session_id = required_str(candidate.session_id.as_deref(), "session_id")?,
                         retry_count = required_i64(candidate.retry_count, "retry_count")? + 1,
-                        max_retries = required_i64(candidate.max_retries, "max_retries")?,
+                        max_retries = ?pin,
                         "redrove failed background-completion wake"
                     );
                 }
@@ -148,7 +149,7 @@ async fn load_candidates(
                 }}, order: [{{ terminalized_at: ASC }}, {{ request_id: ASC }}]) {{
                     _docID request_id node_did requester_did agent_did session_id
                     retry_root_request input
-                    request_hop retry_count max_retries
+                    request_hop retry_count
                     terminalized_at
                 }}
                 successors: AgentRequest(filter: {{
@@ -234,7 +235,6 @@ fn validate_failed_wake(candidate: &AgentRequestRow) -> Result<()> {
     required_str(candidate.agent_did.as_deref(), "agent_did")?;
     required_str(candidate.session_id.as_deref(), "session_id")?;
     required_i64(candidate.retry_count, "retry_count")?;
-    required_i64(candidate.max_retries, "max_retries")?;
     candidate
         .request_hop
         .map(u32::try_from)
@@ -254,10 +254,26 @@ fn automated_queue_key(queue: &RequestQueue) -> Option<String> {
         .flatten()
 }
 
-fn eligible_queue_key(candidate: &AgentRequestRow) -> Result<Option<String>> {
+/// The wake's pin as its Node signed it, read as the wake's own Agent.
+async fn candidate_pin(
+    accesses: &std::collections::BTreeMap<String, gents_store::config_client::ConfigAccess>,
+    candidate: &AgentRequestRow,
+) -> Result<Option<i64>> {
+    let agent_did = required_str(candidate.agent_did.as_deref(), "agent_did")?;
+    let access = accesses
+        .get(agent_did)
+        .context("wake agent signer unavailable")?;
+    Ok(crate::request::retry_budget::read_pin(
+        access,
+        required_str(candidate.node_did.as_deref(), "node_did")?,
+        required_str(candidate.doc_id.as_deref(), "_docID")?,
+    )
+    .await?)
+}
+
+fn eligible_queue_key(candidate: &AgentRequestRow, pin: Option<i64>) -> Result<Option<String>> {
     let retry_count = required_i64(candidate.retry_count, "retry_count")?;
-    let max_retries = required_i64(candidate.max_retries, "max_retries")?;
-    if retry_count < 0 || retry_count >= max_retries {
+    if !crate::request::retry_budget::successor_budget_remains(true, retry_count, pin) {
         return Ok(None);
     }
     Ok(candidate
@@ -301,6 +317,7 @@ async fn redrive_one(
     access: &gents_store::config_client::ConfigAccess,
     signer: &dyn gents_store::identity::NodeIdentity,
     candidate: &AgentRequestRow,
+    pin: Option<i64>,
 ) -> Result<RedriveOutcome> {
     let request_id = uuid::Uuid::new_v4().to_string();
     let request_id = &request_id;
@@ -309,9 +326,9 @@ async fn redrive_one(
             gents_store::config_client::IdempotentTransactionRetry::Standard,
             "lifecycle.background_wake_redrive",
             move |txn| {
-                Box::pin(
-                    async move { redrive_in_transaction(txn, signer, candidate, request_id).await },
-                )
+                Box::pin(async move {
+                    redrive_in_transaction(txn, signer, candidate, pin, request_id).await
+                })
             },
         )
         .await
@@ -321,6 +338,7 @@ async fn redrive_in_transaction(
     txn: &ConfigApplyTxn<'_>,
     signer: &dyn gents_store::identity::NodeIdentity,
     candidate: &AgentRequestRow,
+    pin: Option<i64>,
     request_id: &str,
 ) -> Result<RedriveOutcome> {
     let retry_key = format!(
@@ -343,12 +361,12 @@ async fn redrive_in_transaction(
         || current.requester_did != candidate.requester_did
         || current.node_did != candidate.node_did
         || current.agent_did != candidate.agent_did
-        || eligible_queue_key(current)?.is_none()
+        || eligible_queue_key(current, pin)?.is_none()
     {
         return Ok(RedriveOutcome::Ineligible);
     }
     let candidate = current;
-    let queue_key = eligible_queue_key(candidate)?.context("wake became ineligible")?;
+    let queue_key = eligible_queue_key(candidate, pin)?.context("wake became ineligible")?;
     if agent_request_rows(data, "pending")?.iter().any(|row| {
         row_queue(row)
             .and_then(automated_queue_key)
@@ -444,7 +462,7 @@ fn precondition_query(candidate: &AgentRequestRow, retry_key: &str) -> Result<St
                 _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{node_did}" }},
                 lifecycle_state: {{ _eq: "{failed}" }},
                 execution_origin: {{ _eq: "scheduled" }}
-            }}, limit: 2) {{ {request_fields} retry_count max_retries retry_root_request }}
+            }}, limit: 2) {{ {request_fields} retry_count retry_root_request }}
             successor: AgentRequest(
                 filter: {{ retry_key: {{ _eq: "{retry_key}" }} }}, limit: 1
             ) {{ request_id _docID }}
@@ -478,7 +496,6 @@ async fn build_redrive_request(
     let session_id = required_str(candidate.session_id.as_deref(), "session_id")?;
     let doc_id = required_str(candidate.doc_id.as_deref(), "_docID")?;
     let retry_count = required_i64(candidate.retry_count, "retry_count")?;
-    let max_retries = required_i64(candidate.max_retries, "max_retries")?;
     let admission =
         gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_control(
             agent_did,
@@ -507,7 +524,6 @@ async fn build_redrive_request(
             parent_request_doc_id: Some(doc_id.to_string()),
             root_request_id: retry_root.to_string(),
             retry_count: retry_count + 1,
-            max_retries,
         }),
         input: candidate.input.clone().unwrap_or_default(),
         retry_key: Some(retry_key.to_string()),

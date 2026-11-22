@@ -86,6 +86,7 @@ import Proofs.Conformance.InferenceSlotAccounting
 import Proofs.Conformance.FleetSlotAccounting
 import Proofs.Conformance.Identity.AgentBaseline
 import Proofs.Conformance.InferenceDroppedPermit
+import Proofs.Conformance.InferenceProviderLimit
 import Proofs.Conformance.EventSourceCursor
 import Proofs.Conformance.Identity.AgentTargetAccess
 import Proofs.Conformance.Identity.WorkspaceCompletion
