@@ -1590,6 +1590,7 @@ fn release_starter_fixture(
         config["tools"] = serde_json::json!([{
             "tools_id": format!("{name}-caller"),
             "display_name": "Starter fixture caller",
+            "agents": {"target_ids": [target]},
             "integrations": {"plugins": [selection]},
         }, {
             "tools_id": "${GENTS_PACK_NODE_DID}-wf-worker",
