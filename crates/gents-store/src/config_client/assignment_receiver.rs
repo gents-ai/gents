@@ -56,6 +56,8 @@ pub enum ReceiverError {
     Response(#[from] crate::graphql::GraphqlResponseError),
     #[error("assignment runtime failed")]
     Runtime(#[source] Box<dyn Error + Send + Sync>),
+    #[error("assignment change subscription ended")]
+    SubscriptionEnded,
 }
 
 #[async_trait::async_trait]
@@ -275,6 +277,33 @@ async fn create_state(
 }
 
 impl ConfigAccess {
+    pub async fn watch_assignments<R: AssignmentRuntime>(
+        &self,
+        scope: &AssignmentScope,
+        runtime: &R,
+        collection_ids: Vec<String>,
+        mut shutdown: tokio::sync::watch::Receiver<bool>,
+    ) -> Result<(), ReceiverError> {
+        let ConfigAccess::Local(local) = self else {
+            return Err(ReceiverError::Provider(AssignmentReadError::Unsupported));
+        };
+        let mut changes = crate::subscription_source::subscribe(local.node(), collection_ids);
+        loop {
+            if *shutdown.borrow() {
+                return Ok(());
+            }
+            self.refresh_assignments(scope, runtime).await?;
+            tokio::select! {
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() { return Ok(()); }
+                }
+                event = changes.recv() => {
+                    if event.is_none() { return Err(ReceiverError::SubscriptionEnded); }
+                }
+            }
+        }
+    }
+
     pub async fn load_assignments(
         &self,
         scope: &AssignmentScope,

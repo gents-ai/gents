@@ -22,6 +22,7 @@ struct AssignmentTestRuntime {
     active: tokio::sync::Mutex<std::collections::BTreeSet<String>>,
     bodies: tokio::sync::Mutex<std::collections::BTreeSet<String>>,
     fail_stop: std::sync::atomic::AtomicBool,
+    changed: tokio::sync::Notify,
 }
 
 #[async_trait::async_trait]
@@ -35,6 +36,7 @@ impl crate::config_client::assignment_receiver::AssignmentRuntime for Assignment
             return Err(std::io::Error::other("stop failed").into());
         }
         self.active.lock().await.remove(id);
+        self.changed.notify_one();
         Ok(())
     }
 
@@ -53,8 +55,66 @@ impl crate::config_client::assignment_receiver::AssignmentRuntime for Assignment
             return Ok(false);
         }
         self.active.lock().await.insert(id.to_owned());
+        self.changed.notify_one();
         Ok(true)
     }
+}
+
+#[tokio::test]
+async fn an_access_change_wakes_the_assignment_receiver() -> anyhow::Result<()> {
+    let home = home(Provider::Vera).await?;
+    let access = home.runtime()?;
+    access
+        .add_collection(
+            &crate::local::document_acp::node_policy_ids(&home.node)
+                .render(gents_protocol::schemas::CERTIFIED_ASSIGNMENT_STATE),
+        )
+        .await?;
+    let scope = crate::config_client::assignment_receiver::AssignmentScope {
+        policy: crate::local::document_acp::node_policy_ids(&home.node)
+            .id(gents_protocol::schemas::BuiltInPolicy::Household)
+            .to_owned(),
+        resource: "nodes".into(),
+        relation: "runtime_reader".into(),
+        issuer: home.owner.did().into(),
+        node_document: home.node_doc.clone(),
+    };
+    let runtime = Arc::new(AssignmentTestRuntime::default());
+    runtime.bodies.lock().await.insert(home.node_doc.clone());
+    let ids = crate::subscription_source::collection_ids(&home.node, ["Node"])?;
+    let (shutdown, stop) = tokio::sync::watch::channel(false);
+    let watcher = tokio::spawn({
+        let (access, runtime, scope) = (access.clone(), runtime.clone(), scope.clone());
+        async move {
+            access
+                .watch_assignments(&scope, runtime.as_ref(), ids, stop)
+                .await
+        }
+    });
+    async fn wait_active(runtime: &AssignmentTestRuntime, id: &str, active: bool) {
+        loop {
+            let changed = runtime.changed.notified();
+            if runtime.active.lock().await.contains(id) == active {
+                return;
+            }
+            tokio::time::timeout(crate::test_support::STALL_CEILING, changed)
+                .await
+                .expect("assignment runtime did not change");
+        }
+    }
+    wait_active(&runtime, &home.node_doc, true).await;
+    ConfigAccess::Graphql(home.owner_endpoint.clone())
+        .delete_actor_relationship(
+            "Node",
+            &home.node_doc,
+            "runtime_reader",
+            &home.runtime.did().parse()?,
+        )
+        .await?;
+    wait_active(&runtime, &home.node_doc, false).await;
+    shutdown.send(true)?;
+    watcher.await??;
+    Ok(())
 }
 
 #[tokio::test]
