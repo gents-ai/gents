@@ -107,11 +107,19 @@ elif args[:2] != ["config", "apply"]:
         roots = [call[call.index("--root") + 1] for call in calls if call[:2] == ["config", "apply"]]
         return json.loads((pathlib.Path(roots[0]) / "pack_config.json").read_text())
 
-    def test_default_sampling_pins_temperature_and_top_p(self):
+    def test_default_sampling_sets_only_temperature(self):
+        self.env.pop("GENTS_EVAL_TOP_P", None)
+        self.env.pop("GENTS_EVAL_TEMPERATURE", None)
         result = self.run_ladder("all", "--concurrency", "3")
         self.assertEqual(result.returncode, 0, result.stderr)
         sampling = self.inference_config()["inference_sampling"][0]
-        self.assertEqual((sampling["temperature"], sampling["top_p"]), (1.0, 0.95))
+        self.assertEqual(sampling["temperature"], 1.0)
+        self.assertNotIn("top_p", sampling)
+
+    def test_explicit_top_p_reaches_the_profile(self):
+        result = self.run_ladder("all", "--concurrency", "3", GENTS_EVAL_TOP_P="0.8")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.inference_config()["inference_sampling"][0]["top_p"], 0.8)
 
     def test_empty_sampling_leaves_the_target_defaults(self):
         result = self.run_ladder("all", "--concurrency", "3", GENTS_EVAL_TEMPERATURE="", GENTS_EVAL_TOP_P="")
