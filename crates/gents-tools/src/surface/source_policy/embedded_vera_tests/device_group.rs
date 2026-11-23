@@ -238,6 +238,40 @@ async fn a_vera_home_registers_a_foreign_peer_registry_and_preserves_its_writer(
     })
     .await
     .map_err(|_| anyhow::anyhow!("foreign creator's update did not reach receiver, origin {origin}, receiver before update {receiver_before}"))??;
+    let deletion = source
+        .as_node()
+        .write(
+            "test.registry.delete",
+            &format!(r#"mutation {{ delete_PeerRegistry(docID:"{id}") {{_docID _deleted}} }}"#),
+        )
+        .await?;
+    let deleted =
+        gents_protocol::graphql::graphql_rows_from_response(&deletion, "delete_PeerRegistry");
+    anyhow::ensure!(
+        deleted.len() == 1 && deleted[0]["_docID"] == id && deleted[0]["_deleted"] == true,
+        "origin did not delete the registry row: {deletion}"
+    );
+    let tombstone =
+        format!(r#"{{ PeerRegistry(docID:"{id}",showDeleted:true) {{_docID _deleted}} }}"#);
+    tokio::time::timeout(SETTLE_CEILING, async {
+        loop {
+            let response = receiver.as_node().execute(&tombstone).await?;
+            let rows = gents_protocol::graphql::graphql_rows_from_response(&response, collection);
+            if rows.len() == 1 && rows[0]["_docID"] == id && rows[0]["_deleted"] == true {
+                return Ok::<_, anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .context("foreign creator's tombstone did not reach the receiver")??;
+    assert_eq!(
+        provider
+            .get_doc_owner(policy, "discovery", &id)
+            .await?
+            .as_ref(),
+        Some(&receiver.node_did)
+    );
     receiver.shutdown().await?;
     source.shutdown().await?;
     Ok(())
