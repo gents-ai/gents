@@ -1,9 +1,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use gents::operations::core_packs::{
-    not_carried, release_archive, Archives, Consent, CorePackTarget,
-};
+use gents::core_packs::{not_carried, release_archive, Archives, Consent, CorePackTarget};
 use gents_pack::pack::core_packs::{self, CorePack, EnableRoute, Wiring};
 use gents_store::local::home::SETUP_UNFINISHED_FILE_NAME;
 use serde_json::{json, Value};
@@ -322,11 +320,10 @@ async fn observed_wiring(
             .all(|(_, skill)| context.skill_ids.contains(&skill));
     let wired = skills_attached && selections.iter().all(Option::is_some);
     let selections: Vec<_> = selections.into_iter().flatten().collect();
-    let agents_active =
-        gents::operations::core_packs::pack_agents(access, owner, &record.coordinate)
-            .await?
-            .iter()
-            .all(|(_, enabled)| *enabled);
+    let agents_active = gents::core_packs::pack_agents(access, owner, &record.coordinate)
+        .await?
+        .iter()
+        .all(|(_, enabled)| *enabled);
     Ok(Wiring {
         wired,
         tool_calls: !selections.is_empty() && selections.iter().all(|plugin| plugin.tool_calls),
@@ -521,9 +518,10 @@ pub(crate) async fn enable(
 }
 
 /// Leaves `pack` on `home`'s Engineer as `wiring` says through the core
-/// pack owner. One held access installs the pack, grants its agents, wires
-/// its plugins and attaches its skills; its node is drained before the next
-/// pack opens the home.
+/// pack owner. The archive is resolved from the home's files first, so a
+/// build without it opens no store; then one held access installs the pack,
+/// grants its agents, wires its plugins and attaches its skills, and its
+/// node is drained before the next pack opens the home.
 async fn apply(
     home: &Path,
     engineer: &str,
@@ -533,18 +531,35 @@ async fn apply(
     consent: Consent,
     registry: Option<&str>,
 ) -> Result<Value> {
+    let source = gents::core_packs::resolve(home, pack, archives, registry).await?;
     let (access, owner) = command::resolve_scope_owner(&scope(home)).await?;
-    let applied = async {
-        let target = target(&access, &owner, home, engineer, registry, pack)?;
-        gents::operations::core_packs::apply(&target, pack, archives, wiring, consent).await
-    }
+    let runtime = runtime_identity(home);
+    let applied = gents::core_packs::apply(
+        &target(&access, &owner, home, engineer, registry, pack, &runtime),
+        &source,
+        wiring,
+        consent,
+    )
     .await;
     release(access).await;
     applied
 }
 
-/// The home's Engineer as the core pack owner leaves a pack on it: the
-/// runtime identity its init recorded and the User the home holds.
+/// The runtime identity `home`'s init recorded, read only when a pack is
+/// installed: loading it reads the node's key.
+fn runtime_identity(
+    home: &Path,
+) -> impl Fn() -> Result<std::sync::Arc<dyn gents_store::identity::NodeIdentity>> + Send + Sync + '_
+{
+    move || {
+        let stored = gents_service::home_state::read_init_config(home)?
+            .context("home is not initialized")?;
+        gents_service::home_state::load_initialized_home_identity(home, &stored)
+    }
+}
+
+/// The home's Engineer as the core pack owner leaves a pack on it, signed by
+/// the User the home holds.
 fn target<'a>(
     access: &'a gents_store::config_client::ConfigAccess,
     owner: &'a str,
@@ -552,19 +567,18 @@ fn target<'a>(
     engineer: &'a str,
     registry: Option<&'a str>,
     pack: CorePack,
-) -> Result<CorePackTarget<'a>> {
-    let stored =
-        gents_service::home_state::read_init_config(home)?.context("home is not initialized")?;
-    Ok(CorePackTarget {
+    runtime: gents::core_packs::RuntimeIdentity<'a>,
+) -> CorePackTarget<'a> {
+    CorePackTarget {
         access,
         owner,
         home,
         engineer,
-        runtime: gents_service::home_state::load_initialized_home_identity(home, &stored)?,
+        runtime,
         signers: gents_host::http::pack_wire_client::SIGNERS,
         registry,
         enable_with: enable_command(home, pack),
-    })
+    }
 }
 
 /// `gents config pack starter`: the Engineer's core packs as this home has
@@ -827,15 +841,14 @@ mod tests {
     /// replay Lean `Pack.CorePacks`: init installs every core pack the
     /// release carries without asking and leaves each as `initWiring` says;
     /// enabling leaves each as `enabledWiring` says.
-    #[tokio::test]
-    async fn first_run_installs_packs_and_releases_the_home_for_its_service() {
-        let packs = tempfile::tempdir().unwrap();
-        let archives: Vec<_> = CorePack::ALL
+    /// Every core pack as a documents-only archive that ships one skill.
+    fn skill_archives(packs: &Path) -> Vec<(String, Vec<u8>)> {
+        CorePack::ALL
             .into_iter()
             .map(|pack| {
                 let (_, name) =
                     gents_pack::pack::registry::split_pack_coordinate(pack.coordinate());
-                let dir = packs.path().join(name);
+                let dir = packs.join(name);
                 let manifest = json!({
                     "manifest_version": 1, "name": name, "namespace": "gents",
                     "version": "1.0.0", "description": "Store handoff fixture",
@@ -856,7 +869,81 @@ mod tests {
                 );
                 (pack.coordinate().to_owned(), archive(&dir))
             })
-            .collect();
+            .collect()
+    }
+
+    /// The archive is resolved from the home's files before its store is
+    /// opened, so a build that does not carry a pack reports that without
+    /// opening and draining the store: on a home with no store at all the
+    /// answer is the missing archive, not the store.
+    #[tokio::test]
+    async fn a_pack_the_build_does_not_carry_is_reported_before_the_store_opens() {
+        let home = tempfile::tempdir().unwrap();
+        let error = apply(
+            home.path(),
+            "did:key:zEngineer",
+            CorePack::Web,
+            &[],
+            core_packs::init_wiring(CorePack::Web),
+            Consent::Init,
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(format!("{error:#}"), not_carried(CorePack::Web));
+    }
+
+    /// Only installing a pack loads the node's runtime key, so re-applying
+    /// an installed one, as enabling it does on a served home, never reads
+    /// the key.
+    #[tokio::test]
+    async fn reapplying_an_installed_pack_never_loads_the_runtime_key() {
+        let packs = tempfile::tempdir().unwrap();
+        let archives = skill_archives(packs.path());
+        let archives = borrowed(&archives);
+        let home = tempfile::tempdir().unwrap();
+        let initialized = crate::commands::init::init_home_with_core_packs(
+            init_args(home.path(), &[]),
+            &archives,
+        )
+        .await
+        .unwrap();
+        let engineer = initialized["default_agent_did"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let source = gents::core_packs::resolve(home.path(), CorePack::Web, &archives, None)
+            .await
+            .unwrap();
+        let (access, owner) = command::resolve_scope_owner(&scope(home.path()))
+            .await
+            .unwrap();
+        let unloadable = || -> Result<std::sync::Arc<dyn gents_store::identity::NodeIdentity>> {
+            anyhow::bail!("the runtime key was loaded")
+        };
+        let applied = gents::core_packs::apply(
+            &target(
+                &access,
+                &owner,
+                home.path(),
+                &engineer,
+                None,
+                CorePack::Web,
+                &unloadable,
+            ),
+            &source,
+            core_packs::enabled_wiring(CorePack::Web),
+            Consent::Explicit,
+        )
+        .await;
+        release(access).await;
+        assert_eq!(applied.unwrap()["pack"], CorePack::Web.coordinate());
+    }
+
+    #[tokio::test]
+    async fn first_run_installs_packs_and_releases_the_home_for_its_service() {
+        let packs = tempfile::tempdir().unwrap();
+        let archives = skill_archives(packs.path());
         let archives = borrowed(&archives);
         let home = tempfile::tempdir().unwrap();
         let initialized = crate::commands::init::init_home_with_core_packs(
@@ -1064,9 +1151,16 @@ mod tests {
         let (access, owner) = command::resolve_scope_owner(&scope(home.path()))
             .await
             .unwrap();
-        let config = gents::operations::core_packs::engineer_config(
-            &target(&access, &owner, home.path(), &engineer, None, CorePack::Web).unwrap(),
-        )
+        let runtime = runtime_identity(home.path());
+        let config = gents::core_packs::engineer_config(&target(
+            &access,
+            &owner,
+            home.path(),
+            &engineer,
+            None,
+            CorePack::Web,
+            &runtime,
+        ))
         .await
         .unwrap();
 
@@ -1085,10 +1179,9 @@ mod tests {
         let runtime =
             gents_service::home_state::load_initialized_home_identity(home.path(), &stored)
                 .unwrap();
-        let binding =
-            gents::operations::core_packs::agent_identity_binding(&access, &owner, &worker)
-                .await
-                .unwrap();
+        let binding = gents::core_packs::agent_identity_binding(&access, &owner, &worker)
+            .await
+            .unwrap();
         let worker_identity =
             gents_store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
         let as_worker = gents_store::config_client::ConfigAccess::local_managed_agent(

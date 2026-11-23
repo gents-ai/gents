@@ -48,6 +48,7 @@ pub struct EmbeddedExecutor {
         Arc<dyn gents_store::identity::NodeIdentity>,
         gents_store::config_client::ClientSigningCapability,
     )>,
+    core_pack_archives: gents::core_packs::Archives<'static>,
 }
 
 struct Provisioned {
@@ -68,7 +69,18 @@ impl EmbeddedExecutor {
             runtime,
             provisioned: Mutex::new(RapidHashMap::new()),
             evaluator: None,
+            core_pack_archives: gents_core_packs::archives(),
         }
+    }
+
+    /// Installs a definition's core packs from `archives` instead of the ones
+    /// this build carries.
+    pub fn with_core_pack_archives(
+        mut self,
+        archives: gents::core_packs::Archives<'static>,
+    ) -> Self {
+        self.core_pack_archives = archives;
+        self
     }
 
     pub fn with_evaluator_identity(
@@ -148,7 +160,7 @@ impl EmbeddedExecutor {
         locator: TrialLocator,
     ) -> TrialEvidence {
         let workspace = workspace_dir(&spec.trial_dir);
-        let agent_did = match install(spec, &home, &workspace).await {
+        let agent_did = match install(spec, &home, &workspace, self.core_pack_archives).await {
             Ok(agent_did) => agent_did,
             Err(error) => {
                 close(home).await;

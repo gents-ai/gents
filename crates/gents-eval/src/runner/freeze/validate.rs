@@ -126,7 +126,7 @@ pub(super) fn select_cases(
 /// install it, so a run that cannot is refused before any trial starts.
 pub(crate) fn validate_core_packs(
     definition: &gents_documents::EvalDefinition,
-    archives: gents::operations::core_packs::Archives<'_>,
+    archives: gents::core_packs::Archives<'_>,
 ) -> Result<()> {
     for coordinate in &definition.subject.core_packs {
         let Some(pack) = gents_pack::pack::core_packs::CorePack::of_coordinate(coordinate) else {
@@ -138,14 +138,59 @@ pub(crate) fn validate_core_packs(
                     .join(", ")
             )));
         };
-        if gents::operations::core_packs::release_archive(archives, pack).is_none() {
+        if gents::core_packs::release_archive(archives, pack).is_none() {
             return Err(refused(format!(
                 "eval definition {} installs {} on its subject, but {}",
                 definition.definition_id,
                 pack.coordinate(),
-                gents::operations::core_packs::not_carried(pack)
+                gents::core_packs::not_carried(pack)
             )));
         }
     }
     Ok(())
+}
+
+/// Refuses a cell whose agent cannot install the definition's core packs:
+/// a trial installs each through the agent's own config tool, as init
+/// installs one through the Engineer's, so the agent's Tools must grant
+/// self-config with pack install and pack authority. Without the grant every
+/// trial would fail at setup, so the run is refused before any starts.
+pub(crate) fn validate_core_pack_installer(
+    definition: &gents_documents::EvalDefinition,
+    cell_id: &str,
+    agent_slot: &str,
+    authored: &gents_pack::pack::AuthoredPackConfig,
+) -> Result<()> {
+    if definition.subject.core_packs.is_empty() {
+        return Ok(());
+    }
+    let rows = |key: &str| authored.value[key].as_array().into_iter().flatten();
+    let grant = authored
+        .agent(agent_slot)
+        .and_then(|agent| {
+            rows("contexts").find(|context| {
+                context["context_id"].is_string() && context["context_id"] == agent["context_id"]
+            })
+        })
+        .and_then(|context| {
+            rows("tools").find(|tools| {
+                tools["tools_id"].is_string() && tools["tools_id"] == context["tools_id"]
+            })
+        })
+        .map(|tools| &tools["self_config"]);
+    let granted = |key: &str| grant.is_some_and(|grant| grant[key] == true);
+    if [
+        "enable_self_config",
+        "enable_pack_install",
+        "enable_pack_authority",
+    ]
+    .into_iter()
+    .all(granted)
+    {
+        return Ok(());
+    }
+    Err(refused(format!(
+        "cell {cell_id:?} agent {agent_slot:?} cannot install the core packs eval definition {} names: its Tools must grant self_config with enable_self_config, enable_pack_install and enable_pack_authority",
+        definition.definition_id
+    )))
 }

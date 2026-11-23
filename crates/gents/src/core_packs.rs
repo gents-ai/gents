@@ -20,13 +20,17 @@ pub type Archives<'a> = &'a [(&'a str, &'a [u8])];
 /// Who consents to what a core pack grants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Consent {
-    /// Installing Gents, or provisioning an eval trial from this release:
-    /// the consent to an archive the release carries (Lean
-    /// `approvalRequired`).
+    /// The consent Lean `approvalRequired` names for an archive the release
+    /// carries: installing Gents, or setting up an eval trial's node.
     Init,
     /// The user named the pack to enable.
     Explicit,
 }
+
+/// Loads the node's runtime identity, which holds the Engineer's agent key.
+/// Only installing a pack calls it: re-applying an installed one never reads
+/// the key.
+pub type RuntimeIdentity<'a> = &'a (dyn Fn() -> Result<Arc<dyn NodeIdentity>> + Send + Sync);
 
 /// The node a core pack is left on, held open by the caller: its store
 /// `access` as the node's init User, the `home` whose pack and plugin store
@@ -36,8 +40,7 @@ pub struct CorePackTarget<'a> {
     pub owner: &'a str,
     pub home: &'a Path,
     pub engineer: &'a str,
-    /// The node's runtime identity, which holds the Engineer's agent key.
-    pub runtime: Arc<dyn NodeIdentity>,
+    pub runtime: RuntimeIdentity<'a>,
     /// Who signs the wire of the pack's plugins and skills.
     pub signers: WireSigners,
     pub registry: Option<&'a str>,
@@ -60,22 +63,23 @@ pub fn not_carried(pack: CorePack) -> String {
     )
 }
 
-/// Leaves `pack` on `target`'s Engineer as `wiring` says, installing it as
-/// the Engineer from the release's archive first when the home lacks it.
-pub async fn apply(
-    target: &CorePackTarget<'_>,
+/// The archive one core pack is left from: the home's installed copy, or
+/// the release's, imported into the home's pack store. Resolved from the
+/// home's files alone, before the caller opens the node's store.
+pub struct CorePackSource {
+    pack: CorePack,
+    installed: bool,
+    origin: Origin,
+    source: gents_pack::pack::resolved_pack::ResolvedPack,
+    requested: Value,
+}
+
+pub async fn resolve(
+    home: &Path,
     pack: CorePack,
     archives: Archives<'_>,
-    wiring: Wiring,
-    consent: Consent,
-) -> Result<Value> {
-    let CorePackTarget {
-        access,
-        owner,
-        home,
-        engineer,
-        ..
-    } = *target;
+    registry: Option<&str>,
+) -> Result<CorePackSource> {
     let coordinate = pack.coordinate();
     let installed = gents_pack::pack::read_home_install(home, coordinate)?;
     let (digest, origin) = match &installed {
@@ -98,10 +102,41 @@ pub async fn apply(
         }
     };
     let source =
-        gents_pack::pack::resolved_pack::resolve_pack_source(&digest, target.registry, home)
-            .await?;
+        gents_pack::pack::resolved_pack::resolve_pack_source(&digest, registry, home).await?;
     let requested = gents_pack::pack::plugin_wire::requested_authority(source.manifest(), &[])?;
-    let root_agents = gents_pack::pack::listed_root_agents(&source, owner)?;
+    Ok(CorePackSource {
+        pack,
+        installed: installed.is_some(),
+        origin,
+        source,
+        requested,
+    })
+}
+
+/// Leaves the resolved pack on `target`'s Engineer as `wiring` says,
+/// installing it as the Engineer first when the home lacks it.
+pub async fn apply(
+    target: &CorePackTarget<'_>,
+    resolved: &CorePackSource,
+    wiring: Wiring,
+    consent: Consent,
+) -> Result<Value> {
+    let CorePackTarget {
+        access,
+        owner,
+        home,
+        engineer,
+        ..
+    } = *target;
+    let CorePackSource {
+        pack,
+        installed,
+        origin,
+        ref source,
+        ref requested,
+    } = *resolved;
+    let coordinate = pack.coordinate();
+    let root_agents = gents_pack::pack::listed_root_agents(source, owner)?;
     let grants =
         requested.as_array().is_some_and(|asks| !asks.is_empty()) || !root_agents.is_empty();
     anyhow::ensure!(
@@ -109,7 +144,7 @@ pub async fn apply(
         "{coordinate} is installed from outside this release and grants what init does not consent to. Enable it with: {}",
         target.enable_with
     );
-    if installed.is_none() {
+    if !installed {
         let profile = agent_identity_row(access, owner, engineer)
             .await?
             .agent
@@ -178,7 +213,7 @@ pub async fn apply(
             owner,
             home,
             gents_pack::pack::plugin_wire::SentPack {
-                archive: &source,
+                archive: source,
                 approval: None,
             },
             &[engineer.to_owned()],
@@ -362,7 +397,8 @@ pub async fn engineer_config(
         .context("a runtime is serving this home; ask its Engineer to install the pack")?
         .clone();
     let binding = agent_identity_binding(access, owner, engineer).await?;
-    let agent = gents_store::identity::resolve_agent_identity(target.runtime.as_ref(), &binding)?;
+    let runtime = (target.runtime)()?;
+    let agent = gents_store::identity::resolve_agent_identity(runtime.as_ref(), &binding)?;
     let held = access
         .transact_readonly("cli.init.engineer_grants", |txn| {
             Box::pin(async move {
@@ -377,7 +413,7 @@ pub async fn engineer_config(
         Arc::default(),
         node,
         agent,
-        target.runtime.clone(),
+        runtime,
         &gents_tools::surface::SelfConfigToolConfig {
             enabled: held.enable_self_config.unwrap_or(false),
             agent_did: engineer.to_owned(),

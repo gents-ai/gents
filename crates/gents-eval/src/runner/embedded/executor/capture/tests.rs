@@ -639,7 +639,7 @@ async fn logical_backend_capture_and_live_counts_use_held_user_metadata() {
         evaluator_did: evaluator_did.clone(),
         ..TrialSpec::empty_for_tests("backend-capture")
     };
-    install(&spec, &home, &dir.path().join("workspace"))
+    install(&spec, &home, &dir.path().join("workspace"), &[])
         .await
         .unwrap();
     let access = home.client_access(&evaluator_did).unwrap();

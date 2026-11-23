@@ -3,7 +3,6 @@
 //! none of them names this module.
 
 pub mod agent;
-pub mod core_packs;
 pub mod mcp_service;
 pub mod request;
 pub mod skill;
