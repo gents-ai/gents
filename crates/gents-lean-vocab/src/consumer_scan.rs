@@ -289,7 +289,6 @@ mod tests {
         "contracts_session_refresh_unreached",
         "contracts_title_admission_fresh_verifier_unreached",
         "cross_actor_authorization_unreached",
-        "enrollment_auto_renewal_offer_unreached",
         "eval_records_published_unreached",
         "event_delivery_group_capture_unreached",
         "fold_queue_contracts_management_unreached",

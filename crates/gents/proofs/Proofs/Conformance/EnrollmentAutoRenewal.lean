@@ -61,25 +61,15 @@ structure Offer where
   deriving ToJson
 
 /-- The served offer scenario builds one enabled current generation on two
-live nodes and varies only the policy switch, the intent signature and its
-peer, so it reaches exactly these cases. -/
-def offerScenarioNames : List String := ["disabled", "unsigned", "wrong_peer", "valid"]
+live nodes and varies the policy switch, the intent signature and its peer;
+it then restarts the member under a new node identity with the same P2P key,
+so the member's transport peer authenticates as another DID. -/
+def offerScenarioNames : List String :=
+  ["disabled", "unsigned", "wrong_peer", "wrong_transport", "valid"]
 
 @[conformance_family]
 def offer : Family IntentInput Offer where
   inputs := intentInputs.filter fun i => i.name ∈ offerScenarioNames
-  model := fun i => { allowed := mayOffer i.current.toModel i.intent i.now i.window i.maxValidity }
-
-/-- A transport identity mismatch. `issue_renewal_offer` refuses it, but
-approval (`decide_request_with_lease`) already refuses a generation whose
-candidate transport identity differs from its signed DID, so the offer
-scenario reaches it only once a member's transport identity changes after
-approval. -/
-def offerTransportNames : List String := ["wrong_transport"]
-
-@[conformance_family]
-def offerUnreached : Family IntentInput Offer where
-  inputs := intentInputs.filter fun i => i.name ∈ offerTransportNames
   model := fun i => { allowed := mayOffer i.current.toModel i.intent i.now i.window i.maxValidity }
 
 /-- Every other intent case keeps the policy switch, verification, signature
@@ -88,8 +78,7 @@ and transport authentication the projection fixes, so `mayOffer` agrees with
 `current_for_renewal_intent`, which `issue_renewal_offer` runs before its own
 checks. -/
 theorem offer_outside_scenario_is_projection :
-    (intentInputs.filter fun i =>
-      i.name ∉ offerScenarioNames ∧ i.name ∉ offerTransportNames).all (fun i =>
+    (intentInputs.filter fun i => i.name ∉ offerScenarioNames).all (fun i =>
       mayOffer i.current.toModel i.intent i.now i.window i.maxValidity ==
         offerProjection i.current.toModel i.intent i.now i.window i.maxValidity) = true := by
   native_decide
