@@ -1,5 +1,6 @@
 import Proofs.Runtime.AuxiliaryAdmission
 import Proofs.Conformance.ContractCases.Enrollment
+import Proofs.Conformance.Contracts.Json.Enrollment
 import Proofs.Session.Compaction.State
 import Lean
 import Proofs.Conformance.Family
@@ -68,9 +69,6 @@ private def cases : List Case :=
     , row := { baseRow with logicalRequest := "x" } }
   , { name := "row-signed-fields-mismatch"
     , row := { baseRow with signedFields := [] } }
-  , { name := "row-physical-binding-stale"
-    , row := { baseRow with physicalBindingCurrent := false } }
-  , wrongWorldPhysicalCase
   , unavailableCase
   , { name := "foreign-branch-fields"
     , row := { baseRow with branchFieldsExact := false } }
@@ -137,18 +135,15 @@ private theorem unavailable_observation_retries_without_claim :
       (claimed unavailableCase).isNone = true := by
   native_decide
 
-private def emittedModelLabels (c : Case) : List Nat :=
-  let start := world c
-  let binding := (activation c).map fun activation =>
-    let value := activation.binding
-    [value.physicalRequest, value.logicalRequest, value.parentPhysical,
-     value.parentLogical, value.node, value.session]
-  [start.requestId, start.sessionId, start.nodeDid,
-   start.queue.scope.node, start.queue.scope.session,
-   start.queue.active.getD 0] ++ binding.getD []
-
-private theorem emitted_symbol_ids_remain_bounded :
-    cases.all (fun c => (emittedModelLabels c).all (· < 65536)) = true := by
+/-- Unbuildable in production: admission reloads the request by its own
+document and claims that same document, so the observed row is always the
+claimed request's current physical row and the claim always targets it. The
+model still refuses both. -/
+private theorem foreign_physical_rows_never_claim :
+    (claimed { admittedCase with
+      name := "row-physical-binding-stale"
+      row := { baseRow with physicalBindingCurrent := false } }).isNone = true ∧
+      (claimed wrongWorldPhysicalCase).isNone = true := by
   native_decide
 
 inductive SignedFor where
@@ -157,99 +152,42 @@ inductive SignedFor where
   | nothing
   deriving ToJson, DecidableEq
 
-/-- The scenario knobs of one join case: which signed request the runtime
-observes, which request the row's signed fields were produced for, and the
-row and world facts. `admissionCase` names the admission case the request was
-signed as. -/
+/-- The scenario knobs of one join case: the admission case the request was
+signed as, which request the row's signed fields were produced for, and the
+row and world facts. -/
 structure JoinInput where
   name : String
-  admissionCase : String
+  admission : Option Conformance.Contracts.TitleAdmissionInput
   observationAvailable : Bool
   accessReview : Bool
   rowSignedFor : SignedFor
-  rowPhysicalRequest : String
   rowLogicalRequest : String
-  physicalBindingCurrent : Bool
   branchFieldsExact : Bool
   pendingDeadlineAbsent : Bool
-  worldOwnPhysical : String
   activeNormal : Bool
   deriving ToJson
 
-structure BindingObservation where
-  purpose : String
-  physicalRequest : Nat
-  logicalRequest : Nat
-  parentPhysical : Nat
-  parentLogical : Nat
-  node : Nat
-  session : Nat
-  authenticated : Bool
-  deriving ToJson, DecidableEq
-
-structure StartObservation where
-  ownPhysical : Nat
-  purpose : String
-  session : Nat
-  nodeDid : Nat
-  queueScopeNode : Nat
-  queueScopeSession : Nat
-  queueActive : Option Nat
-  leasePending : Bool
-  leaseVacant : Bool
-  leaseNow : Nat
-  claimedAbsent : Bool
-  terminalSelectionAbsent : Bool
-  gateIndependent : Bool
-  gateSiblingWaiting : Bool
-  deriving ToJson, DecidableEq
-
+/-- What a claim of the auxiliary request shows: the purpose its activation
+binds, whether it claimed its own lease, whether that lease is active, and
+whether the session's normal queue is untouched. -/
 structure JoinObservation where
-  start : StartObservation
-  activation : Option BindingObservation
+  activatedPurpose : Option String
   claimed : Bool
   leaseActive : Bool
-  claimedBinding : Option BindingObservation
-  queueActive : Option Nat
   queueUnchanged : Bool
-  ownPhysical : Nat
   deriving ToJson, DecidableEq
-
-private def BindingObservation.ofModel (b : Handover.AuxiliaryBinding) : BindingObservation :=
-  { purpose := b.purpose.toWire, physicalRequest := b.physicalRequest
-    logicalRequest := b.logicalRequest, parentPhysical := b.parentPhysical
-    parentLogical := b.parentLogical, node := b.node, session := b.session
-    authenticated := b.authenticated }
 
 private def observe (c : Case) : JoinObservation :=
   let start := world c
   let result := claimed c
-  { start :=
-      { ownPhysical := start.requestId, purpose := start.purpose.toWire
-        session := start.sessionId, nodeDid := start.nodeDid
-        queueScopeNode := start.queue.scope.node, queueScopeSession := start.queue.scope.session
-        queueActive := start.queue.active
-        leasePending := start.lease.request == .pending
-        leaseVacant := start.lease.lease == .vacant
-        leaseNow := start.lease.now
-        claimedAbsent := start.claimed.isNone
-        terminalSelectionAbsent := start.terminalSelection.isNone
-        gateIndependent := start.gateSchedule.independent
-        gateSiblingWaiting := start.gateSchedule.siblingWaiting }
-    activation := (activation c).map fun value => BindingObservation.ofModel value.binding
+  { activatedPurpose := (activation c).map (·.binding.purpose.toWire)
     claimed := result.isSome
     leaseActive := match result with
       | some after => match after.lease.lease with
         | .active _ _ _ => true
         | _ => false
       | none => false
-    claimedBinding := (result.bind (·.claimed)).bind fun binding =>
-      match binding.evidence with
-      | .auxiliary title => some (BindingObservation.ofModel title)
-      | _ => none
-    queueActive := (result.getD start).queue.active
-    queueUnchanged := (result.getD start).queue == start.queue
-    ownPhysical := (result.getD start).requestId }
+    queueUnchanged := (result.getD start).queue == start.queue }
 
 private def signedFor (row : _root_.AuxiliaryAdmission.RequestRowEvidence) : SignedFor :=
   if row.signedFields == baseRow.signedFields then .title
@@ -257,40 +195,40 @@ private def signedFor (row : _root_.AuxiliaryAdmission.RequestRowEvidence) : Sig
   else .nothing
 
 private def JoinInput.ofCase (c : Case) : JoinInput :=
-  { name := c.name, admissionCase := c.admissionCase, observationAvailable := c.available
+  { name := c.name
+    admission := (Conformance.ContractCases.titleRequestAdmissionCases.find?
+      (·.name == c.admissionCase)).map Conformance.Contracts.titleAdmissionInput
+    observationAvailable := c.available
     accessReview := c.request.purpose == .accessReview, rowSignedFor := signedFor c.row
-    rowPhysicalRequest := c.row.physicalRequest, rowLogicalRequest := c.row.logicalRequest
-    physicalBindingCurrent := c.row.physicalBindingCurrent
+    rowLogicalRequest := c.row.logicalRequest
     branchFieldsExact := c.row.branchFieldsExact
     pendingDeadlineAbsent := c.row.pendingDeadlineAbsent
-    worldOwnPhysical := c.ownPhysical, activeNormal := c.activeNormal }
+    activeNormal := c.activeNormal }
 
 private def JoinInput.toCase (i : JoinInput) : Case :=
   { name := i.name, available := i.observationAvailable
     request := if i.accessReview then reviewRequest else baseRequest
     admission := if i.accessReview then reviewAdmission else baseAdmission
-    admissionCase := i.admissionCase
+    admissionCase := (i.admission.map (·.name)).getD ""
     row :=
       { baseRow with
-        physicalRequest := i.rowPhysicalRequest, logicalRequest := i.rowLogicalRequest
+        logicalRequest := i.rowLogicalRequest
         signedFields := match i.rowSignedFor with
           | .title => baseRow.signedFields
           | .accessReview => reviewRow.signedFields
           | .nothing => []
-        physicalBindingCurrent := i.physicalBindingCurrent
         branchFieldsExact := i.branchFieldsExact
         pendingDeadlineAbsent := i.pendingDeadlineAbsent }
-    ownPhysical := i.worldOwnPhysical, activeNormal := i.activeNormal }
+    activeNormal := i.activeNormal }
 
 example : cases.all (fun c => observe (JoinInput.toCase (JoinInput.ofCase c)) == observe c) = true := by
   native_decide
 
-/-- model-production-gap: the join is executed only through the Lean title
-activation and claim owner; no production scenario materializes the observed
-row and own-lease world for the title or access-review claim, so neither the
-native watcher admission nor the claim owner replays these cases. -/
+/-- Admission of the auxiliary request's own row followed by the claim of its
+own lease, replayed through the fresh verifier and the request claim owner on
+a served node. -/
 @[conformance_family]
-def joinUnreached : Conformance.Family JoinInput JoinObservation where
+def join : Conformance.Family JoinInput JoinObservation where
   inputs := cases.map JoinInput.ofCase
   model := fun i => observe (JoinInput.toCase i)
 

@@ -93,10 +93,6 @@ def openFamilies : List String :=
   , "mailbox_handoff_contracts_linked_unreached"
   , "native_completion_trace_unreached"
   , "native_refinement_claim_unreached"
-  , "title_admission_join_unreached"
-  , "title_usage_budget_unreached"
-  , "title_usage_catalog_unreached"
-  , "title_usage_goal_unreached"
   ]
 
 /-- A surface a feature reaches, and the consumed family whose replaying test

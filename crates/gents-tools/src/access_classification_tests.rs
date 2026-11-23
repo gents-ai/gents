@@ -28,6 +28,9 @@ fn every_tools_owner_variant_preserves_the_access_classification() {
                 input.erasure,
                 RegistryReadError::View(ViewError::Execute(access)),
             ),
+            "title_usage_error_read" => {
+                classify_erased(input.erasure, crate::native::TitleUsageError::Read(access))
+            }
             other => panic!(
                 "tools owner variant {other} has no constructor here; add it with its \
                  `AccessClassification.ToolsWrapper` constructor"

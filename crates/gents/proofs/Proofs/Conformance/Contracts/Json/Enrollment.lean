@@ -127,7 +127,7 @@ private def titleInputWire (input : Enrollment.RequestInput) : TitleAdmissionInp
     goalContinuation := input.goalContinuation.map fun goal =>
       { sequence := goal.sequence, wrapup := goal.wrapup } }
 
-private def titleAdmissionInput (case : TitleRequestAdmissionCase) : TitleAdmissionInput :=
+def titleAdmissionInput (case : TitleRequestAdmissionCase) : TitleAdmissionInput :=
   let request := case.request
   let admission := case.admission
   { name := case.name, parentObservedState := case.parentObservedState.toDefraDB

@@ -171,7 +171,60 @@ fn modeled_agent_did(label: &str) -> String {
     modeled_agent(label).did().to_owned()
 }
 
+/// The row and world facts one replay varies around an admission case: the
+/// fresh-verifier cases take them from the case, the join cases override them.
+struct Variation {
+    observation_available: bool,
+    branch_fields_exact: bool,
+    pending_deadline_absent: bool,
+    signed_purpose: String,
+    signature_valid: bool,
+    observed_request_id: String,
+    parent_state: String,
+    claim: bool,
+}
+
+impl Variation {
+    fn of(case: &LeanTitleRequestAdmissionCase) -> Self {
+        Self {
+            observation_available: case.observation_available,
+            branch_fields_exact: case.branch_fields_exact,
+            pending_deadline_absent: case.pending_deadline_absent,
+            signed_purpose: model_text_fields(&case.admission.model_signed_fields_hex)[2].clone(),
+            signature_valid: case.admission.signature_valid,
+            observed_request_id: case.request.request_id.clone(),
+            parent_state: case.parent_observed_state.clone(),
+            claim: false,
+        }
+    }
+}
+
+/// What the claim owner did with an admitted request.
+struct ClaimObservation {
+    claimed: bool,
+    lease_active: bool,
+    queue_unchanged: bool,
+}
+
+struct Replay {
+    disposition: String,
+    purpose: Option<RequestPurpose>,
+    claim: Option<ClaimObservation>,
+}
+
 async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) -> String {
+    replay_case(case, Variation::of(case)).await.disposition
+}
+
+async fn lifecycle_state(node: &Arc<EmbeddedNode>, doc_id: &str) -> Option<String> {
+    super::load_signed_request(node.as_ref(), doc_id)
+        .await
+        .expect("read request state")
+        .lifecycle_state
+        .map(|state| state.as_str().to_owned())
+}
+
+async fn replay_case(case: &LeanTitleRequestAdmissionCase, variation: Variation) -> Replay {
     let temp = tempfile::tempdir().expect("temporary identity directory");
     gents_store::test_support::pin_fixed_signing_identity(temp.path());
     let node_db = gents_inference::test_support::test_db_as(
@@ -243,7 +296,7 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) -> String {
         let agent = parent.agent_did.clone();
         let content = case.request.content.clone();
         let created_at = case.request.created_at.clone();
-        let state = case.parent_observed_state.clone();
+        let state = variation.parent_state.clone();
         async move {
             // Each request is signed by its own Agent: the model's target
             // runtime is the Agent that executes the request on this node.
@@ -269,7 +322,7 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) -> String {
     // A parent document label other than the evidenced parent's names another
     // normal request of the same session, which does not own the source.
     let linked_doc_id = if parent_fields[3] == parent.document_id {
-        parent_doc_id
+        parent_doc_id.clone()
     } else {
         write_parent(parent_fields[3].clone()).await
     };
@@ -331,19 +384,18 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) -> String {
     }
 
     let actual_purpose = create.purpose;
-    let signed_fields = model_text_fields(&case.admission.model_signed_fields_hex);
-    create.purpose = RequestPurpose::try_from(signed_fields[2].as_str())
+    create.purpose = RequestPurpose::try_from(variation.signed_purpose.as_str())
         .expect("modeled signed purpose has a native representation");
-    if !case.branch_fields_exact {
+    if !variation.branch_fields_exact {
         create.admission.enrollment_request_id = Some(FOREIGN_BRANCH_FIELD.to_owned());
     }
     let signed = super::sign_agent_request_create(request_agent.as_ref(), &mut create).await;
-    if case.branch_fields_exact {
+    if variation.branch_fields_exact {
         signed.expect("sign modeled title request");
     } else {
         signed.expect_err("the native signer refuses foreign branch fields after signing them");
     }
-    if !case.admission.signature_valid {
+    if !variation.signature_valid {
         create.content.push_str(&case.request.request_id);
     }
 
@@ -354,18 +406,24 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) -> String {
         .unwrap_or_else(|error| panic!("{}: load queued request: {error:#}", case.name));
     // The watcher rejects at ingest a pending row its typed request refuses,
     // so such a row is denied before admission runs.
-    let Ok(queued) = gents_protocol::row::AgentRequest::try_from(row) else {
+    let Ok(mut queued) = gents_protocol::row::AgentRequest::try_from(row) else {
         node.shutdown().await.expect("shut down test node");
-        return "deny".to_owned();
+        return Replay {
+            disposition: "deny".to_owned(),
+            purpose: None,
+            claim: None,
+        };
     };
-    if !case.pending_deadline_absent {
+    queued.request_id = variation.observed_request_id.clone();
+    if !variation.pending_deadline_absent {
         update_request_field(&node, &doc_id, "deadline", &case.request.created_at).await;
     }
     let (_owner, enrollment) = enrollment_authority_channel();
     let verifier = AgentRequestAdmissionVerifier::new(node.clone(), identity, enrollment);
+    let parent_state_before = lifecycle_state(&node, &parent_doc_id).await;
     let session_agent = modeled_agent_did(&case.session_agent);
     let verification = verifier.verify_fresh(&queued, &session_agent);
-    let result = if case.observation_available {
+    let result = if variation.observation_available {
         verification.await
     } else {
         gents_store::config_client::ConfigApplyTxn::with_read_storage_failure(
@@ -379,13 +437,49 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) -> String {
         Err(AgentRequestAdmissionError::Denied(_)) => "deny",
         Err(AgentRequestAdmissionError::Unavailable(_)) => "retry",
     };
-    if let Ok(admitted) = &result {
+    let mut replay = Replay {
+        disposition: actual_disposition.to_owned(),
+        purpose: None,
+        claim: None,
+    };
+    if let Ok(admitted) = result {
         assert_eq!(admitted.doc_id, doc_id);
         assert_eq!(admitted.request_id, case.request.request_id);
         assert_eq!(admitted.purpose, native_purpose(&case.request.purpose));
+        replay.purpose = Some(admitted.purpose);
+        if variation.claim {
+            let mut lifecycle =
+                crate::request::lifecycle::RequestLifecycle::new_with_execution_binding(
+                    node.clone(),
+                    admitted,
+                    60,
+                    crate::request::lifecycle::ExecutionOrigin::Interactive,
+                    String::new(),
+                );
+            let home = tempfile::tempdir().unwrap();
+            let root = gents_store::test_support::pin_fixed_signing_identity(home.path());
+            let managed = gents_store::identity::resolve_agent_identity(
+                &root,
+                &modeled_binding(&case.request.agent_did),
+            )
+            .expect("resolve the request's managed Agent");
+            lifecycle
+                .bind_managed_agent(managed.as_ref())
+                .expect("bind the request's managed Agent");
+            let claimed = matches!(
+                lifecycle.claim_with_identity().await,
+                Ok(crate::request::lifecycle::ClaimOutcome::Claimed)
+            );
+            replay.claim = Some(ClaimObservation {
+                claimed,
+                lease_active: lifecycle_state(&node, &doc_id).await.as_deref() == Some("claimed"),
+                queue_unchanged: lifecycle_state(&node, &parent_doc_id).await
+                    == parent_state_before,
+            });
+        }
     }
     node.shutdown().await.expect("shut down test node");
-    actual_disposition.to_owned()
+    replay
 }
 
 #[tokio::test]
@@ -393,5 +487,54 @@ async fn generated_title_admission_cases_bind_the_fresh_verifier() {
     for case in gents_lean_vocab::families::contracts_title_admission_fresh_verifier::cases() {
         let disposition = verify_generated_case(&case.input).await;
         case.check(disposition);
+    }
+}
+
+#[tokio::test]
+async fn generated_title_join_cases_bind_admission_and_claim() {
+    use gents_lean_vocab::families::title_admission_join::JoinObservation;
+    for case in gents_lean_vocab::families::title_admission_join::cases::<String>() {
+        let join = &case.input;
+        let admission: LeanTitleRequestAdmissionCase = gents_lean_vocab::family::recode(
+            join.admission
+                .as_ref()
+                .expect("a join case names an admission case"),
+        );
+        let admission = &admission;
+        let signed_purpose = match join.row_signed_for.as_str() {
+            "title" => "title-audit",
+            "access_review" => "access-review",
+            _ => admission.request.purpose.as_str(),
+        };
+        let variation = Variation {
+            observation_available: join.observation_available,
+            branch_fields_exact: join.branch_fields_exact,
+            pending_deadline_absent: join.pending_deadline_absent,
+            signed_purpose: signed_purpose.to_owned(),
+            signature_valid: join.row_signed_for != "nothing",
+            observed_request_id: if join.row_logical_request == admission.request.request_id {
+                admission.request.request_id.clone()
+            } else {
+                join.row_logical_request.clone()
+            },
+            parent_state: if join.active_normal {
+                "processing".to_owned()
+            } else {
+                admission.parent_observed_state.clone()
+            },
+            claim: true,
+        };
+        let replay = replay_case(admission, variation).await;
+        let claim = replay.claim.unwrap_or(ClaimObservation {
+            claimed: false,
+            lease_active: false,
+            queue_unchanged: true,
+        });
+        case.check(JoinObservation {
+            activated_purpose: replay.purpose.map(|purpose| purpose.as_str().to_owned()),
+            claimed: claim.claimed,
+            lease_active: claim.lease_active,
+            queue_unchanged: claim.queue_unchanged,
+        });
     }
 }
