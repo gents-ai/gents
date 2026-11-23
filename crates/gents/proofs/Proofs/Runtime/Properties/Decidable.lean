@@ -26,8 +26,7 @@ instance : Fintype PersistenceState :=
 
 instance : Fintype StorageObservation :=
   Fintype.ofList
-    [.noMutation, .inFlight, .successAcknowledged, .mutationFailed,
-     .staleObserved, .readVisible, .lostAcknowledged]
+    [.noMutation, .inFlight, .successAcknowledged, .mutationFailed, .lostAcknowledged]
     (fun s => by cases s <;> simp)
 
 instance : Fintype InferenceCallState :=
@@ -92,10 +91,8 @@ theorem storage_observation_has_distinct_state
   cases s with
   | noMutation => exact ⟨.inFlight, by decide⟩
   | inFlight => exact ⟨.successAcknowledged, by decide⟩
-  | successAcknowledged => exact ⟨.readVisible, by decide⟩
+  | successAcknowledged => exact absurd (Or.inl rfl) h
   | mutationFailed => exact ⟨.noMutation, by decide⟩
-  | staleObserved => exact ⟨.readVisible, by decide⟩
-  | readVisible => exact absurd (Or.inl rfl) h
   | lostAcknowledged => exact absurd (Or.inr rfl) h
 
 theorem inference_call_has_distinct_state (s : InferenceCallState) (h : ¬isTerminal s) :

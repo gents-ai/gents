@@ -977,10 +977,9 @@ structure CompactionReducerInput where
   deriving Lean.ToJson
 
 def compactionReducerOfName : String → Compaction.Reducer
-  | "strip" => .strip
   | "summarize" => .summarize
   | "provider_view" => .providerView
-  | _ => .identity
+  | _ => .strip
 
 def compactionReducerInputs : List CompactionReducerInput :=
   Compaction.compactionReducerCases.map fun c =>
@@ -1000,11 +999,6 @@ def compactionModelCase (i : CompactionReducerInput) : Compaction.CompactionRedu
 def compactionSummarizes (i : CompactionReducerInput) : Bool :=
   match i.reducer with
   | .summarize => true
-  | _ => false
-
-def compactionIdentity (i : CompactionReducerInput) : Bool :=
-  match i.reducer with
-  | .identity => true
   | _ => false
 
 structure CompactionReducerGateOutput where
@@ -1048,34 +1042,17 @@ def compactionReducerApplyOutput (i : CompactionReducerInput) : CompactionReduce
     reportedStubs := c.reported.count, reportedOriginalBytes := c.reported.originalBytes
     reportedStubBytes := c.reported.stubBytes, reportedBytesRemoved := c.reported.bytesRemoved }
 
+/-- Production summarizes by a token budget (`split_for_summary`), not by the
+model's fixed split index, so only the strip and provider-view steps are applied
+natively; the summarize gate is replayed by `compactionReducerGateOpen`. -/
 @[conformance_family]
 def compactionReducerApply : Family CompactionReducerInput CompactionReducerApplyOutput where
-  inputs := compactionReducerInputs.filter fun i =>
-    !compactionSummarizes i && !compactionIdentity i
-  model := compactionReducerApplyOutput
-
-/-- model-production-gap: production summarizes by a token budget
-(`split_for_summary`); no production reducer applies the model's fixed split
-index, and the identity reducer exists only in the model. The message counts,
-pair and order preservation, identity and idempotence of a summarize or
-identity step have no native observation. -/
-@[conformance_family]
-def compactionReducerApplyUnreached :
-    Family CompactionReducerInput CompactionReducerApplyOutput where
-  inputs := compactionReducerInputs.filter fun i =>
-    compactionSummarizes i || compactionIdentity i
+  inputs := compactionReducerInputs.filter fun i => !compactionSummarizes i
   model := compactionReducerApplyOutput
 
 @[conformance_family]
 def compactionReducerGateOpen : Family CompactionReducerInput (Option Bool) where
-  inputs := compactionReducerInputs.filter fun i => !compactionIdentity i
-  model := fun i => (compactionModelCase i).gateOpen
-
-/-- model-production-gap: the identity reducer exists only in the model; no
-production compaction path evaluates its validity gate. -/
-@[conformance_family]
-def compactionReducerIdentityGateUnreached : Family CompactionReducerInput (Option Bool) where
-  inputs := compactionReducerInputs.filter compactionIdentity
+  inputs := compactionReducerInputs
   model := fun i => (compactionModelCase i).gateOpen
 
 structure CompactionCursorInput where

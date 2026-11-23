@@ -24,13 +24,6 @@ theorem signature_case_names_are_unique :
       StreamingResponse.ReasoningAudit.signatureCases.length := by
   native_decide
 
-/-- Native segment payloads are UTF-8 protocol strings, so only cases whose
-flushed bytes decode as UTF-8 can be written as native segments. -/
-def stringPayloads (witness : StreamingResponse.ReasoningAudit.SignatureCase) : Bool :=
-  witness.records.all fun record =>
-    (record.flush.map fun flush =>
-      (String.fromUTF8? (ByteArray.mk flush.payload.toArray)).isSome).getD true
-
 def signatureAccepted (i : SignatureInput) : Bool :=
   ((signatureNamed i.name).map fun witness =>
     (CanonicalOutput.validateReasoningSignature witness.records [] witness.payload
@@ -38,25 +31,8 @@ def signatureAccepted (i : SignatureInput) : Bool :=
 
 @[conformance_family]
 def signature : Family SignatureInput Bool where
-  inputs := (StreamingResponse.ReasoningAudit.signatureCases.filter stringPayloads).map signatureInput
+  inputs := StreamingResponse.ReasoningAudit.signatureCases.map signatureInput
   model := signatureAccepted
-
-/-- model-production-gap: native OutputSegment payload is a UTF-8 String, so a
-flush whose modeled bytes are not UTF-8 cannot be written or translated; the
-model rejects such a signature run as malformed. -/
-@[conformance_family]
-def signatureUnreached : Family SignatureInput Bool where
-  inputs := (StreamingResponse.ReasoningAudit.signatureCases.filter (!stringPayloads ·)).map
-    signatureInput
-  model := signatureAccepted
-
-example : (StreamingResponse.ReasoningAudit.signatureCases.filter (!stringPayloads ·)).map
-    (·.name) = ["invalid_signature_bytes"] := by
-  native_decide
-
-example : (StreamingResponse.ReasoningAudit.signatureCases.filter (!stringPayloads ·)).all
-    (!·.accepted) := by
-  native_decide
 
 structure PrefixInput where
   name : String

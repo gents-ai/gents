@@ -314,7 +314,7 @@ import Proofs.Conformance.ContractCases.RollingCompaction
 import Proofs.Conformance.ContractCases.ReductionEngine
 import Proofs.Conformance.ContractCases.RenderedCapture
 import Proofs.Conformance.ContractCases.CompactionProjectionJoin
-import Proofs.Conformance.Contracts.Json.CompactionCanonicalProjection
+import Proofs.Conformance.ContractCases.CompactionCanonicalProjection
 import Proofs.Conformance.CompletionRetry.Contracts
 import Proofs.Conformance.AccountRotation.Contracts
 import Proofs.Conformance.AccountStore

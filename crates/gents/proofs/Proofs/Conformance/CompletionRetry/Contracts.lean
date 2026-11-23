@@ -192,57 +192,6 @@ def originClass : Family OriginInput OriginOutput where
         failureOrigin := .providerAccountLimited, afterPreview := false } ]
   model := fun i => { classifiedFailure := i.failureOrigin.class }
 
-def phaseName : Phase → String
-  | .issuing => "issuing"
-  | .streaming => "streaming"
-  | .retractRequired .. => "retract_required"
-  | .retracted .. => "retracted"
-  | .backingOff _ => "backing_off"
-  | .repairing => "repairing"
-  | .compacting => "compacting"
-  | .accepted _ => "accepted"
-  | .acceptedToolFailed _ => "accepted_tool_failed"
-  | .exhausted => "exhausted"
-  | .failedPermanent => "failed_permanent"
-
-structure WitnessInput where
-  name : String
-  deriving ToJson
-
-structure WitnessOutput where
-  legal : Bool
-  phase : Option String
-  transportUsed : Option Nat
-  resampleUsed : Option Nat
-  attempt : Option Nat
-  accountUsed : Option Nat
-  repairUsed : Option Bool
-  usageCharged : Option Nat
-  deriving ToJson
-
-def witnessOutput (name : String) : WitnessOutput :=
-  let post := (retryCases.find? (·.name == name)).bind (·.post)
-  { legal := post.isSome
-    phase := post.map (phaseName ·.phase)
-    transportUsed := post.map (·.transportUsed)
-    resampleUsed := post.map (·.resampleUsed)
-    attempt := post.map (·.attempt)
-    accountUsed := post.map (·.accountUsed)
-    repairUsed := post.map (·.repairUsed)
-    usageCharged := post.map (·.usageCharged) }
-
-/-- model-production-gap: production has no API to attempt these retry-machine
-actions: a schedule before a durable retraction, an uncommitted retraction, a
-failure or a schedule after acceptance, and an accepted-tool-failure
-observation on the retry machine. -/
-@[conformance_family]
-def retractionUnreached : Family WitnessInput WitnessOutput where
-  inputs :=
-    [ "cannot_schedule_before_retraction", "uncommitted_retraction_is_rejected"
-    , "accepted_failure_cannot_retract", "accepted_tool_failure_is_terminal_observation"
-    , "accepted_publication_cannot_schedule" ].map fun name => { name }
-  model := fun i => witnessOutput i.name
-
 structure LoopWitness where
   name : String
   scenario : CompletionLoop.Input

@@ -259,15 +259,13 @@ The compaction projection join connects exact canonical message reconstruction
 to a fallible complete-request projection and estimation boundary, then to the
 existing reduction decision. Rebuilt requests are projected and measured again;
 dispatch requires both threshold admission and positive output capacity. The
-provider serializer and estimator remain explicit native parameters, not a
-second implementation in Lean. `contract_cases_compaction_projection_join_projection_join` supplies
-controlled observations at that boundary; it does not establish that native
-serialization produced them. the leftover family `compaction_canonical_projection_unreached` supplies
-the immutable records and pins full reconstructed native messages;
-the family `contract_cases_compaction_canonical_projection_repaired_admission_unreached`
-covers remeasurement of repaired input.
-The actual serialized-request/threshold experiment
-remains `native.external-projected-request-threshold` in the implementation layer.
+provider serializer and estimator are explicit parameters, not a second
+implementation in Lean; production's estimator is concrete, so the composition
+over injected observations is pinned by theorems
+(`CompactionProjectionJoin.expected_results`,
+`CompactionCanonicalProjection.canonical_expectations` and `fresh_expectations`)
+and only the outcomes the served per-turn reduction reaches are emitted
+(`contract_cases_compaction_projection_join_staged_turn_reduction`).
 
 The canonical output groups are registered in `tests/conformance/coverage.rs`.
 Native projection consumers live in `crates/gents-protocol/tests/canonical_output.rs`,
@@ -780,25 +778,15 @@ lake env lean --run Proofs/Conformance/Contracts.lean
 The emitted JSON is printed between `---BEGIN GENTS LEAN CONTRACT JSON---` and
 `---END GENTS LEAN CONTRACT JSON---` sentinel lines so Rust can reject unrelated
 stdout. It is generated from Lean constructors, `toDefraDB` functions, terminal
-predicates, executable `step?` functions, and finite witness contexts. It
-currently covers:
+predicates, executable `step?` functions, and finite witness contexts.
 
-- `Request`
-- `RequestExecutionLease` one-step and recovery/race traces now describe the
-  #1571 target owner: explicit lease deadlines, replay, expiry admission, atomic recovery,
-  explicit renewal and policy revocation. The old generated Rust fixtures and
-  production seam do not yet conform to these cases. Provider-EOF cases retain
-  the explicit-final-event requirement. Native database ordering and projection
-  classification still require refinement tests in the later layer.
-- `Process`
-- `Persistence.failClosed`
-- `Persistence.failOpen`
-- `StorageObservation.failClosed`
-- `StorageObservation.failOpen`
-- `RuntimeReconcile`
-- `SessionRecovery`
-- `InferenceCall`
-- `ManagedExec`
+Production writes each machine's transitions inline, so the legal transition
+tables of `Request`, `Process`, `RuntimeReconcile`, `SessionRecovery`,
+`InferenceCall`, `ToolCall`, `ManagedExec`, `Goal` and `Mailbox` are Lean
+theorems in `Conformance/StateMachines.lean` (`wellFormed`, `legal`, `illegal`),
+not emitted families. Their terminal partitions are replayed through
+`request_state_terminal`, `tool_execution_tool_call_state_terminal` and
+`mailbox_status_terminal`.
 
 `RuntimeReconcile`, `SessionRecovery`, and `ClientShell` also emit deterministic
 witness rows. Those rows keep the JSON small while pinning generation
@@ -810,15 +798,14 @@ transport no-op, submit gates, and terminal follow-up allowance. ClientShell
 rows are split into a frontend list consumed by the TypeScript chat projection
 test and a desktop list consumed by the Rust session-snapshot bridge test.
 
-It also emits `ToolExecution` preflight and retry witness rows, plus the
-`ToolRetryDisposition` vocabulary. Current consumers observe the real MCP
-preflight gates, safe-read retry, and failed-call/no-eviction paths. The ledger
-retains the full failure/idempotency matrix and disposition vocabulary as runtime
-follow-ups; a test-only copy of the Lean policy is not owner coverage.
+It also emits `ToolExecution` preflight and retry witness rows. The MCP pool
+retries a failed `list_tools` once on a fresh connection whatever the failure,
+and never retries `call_tool`; consumers observe the real MCP preflight gates,
+the safe-read retry and the failed-call/no-eviction path.
 
-ManagedExec exports its state vocabulary, legal transition table, and
-deadline/cancel liveness witness rows. Rust consumes those contracts in the
-managed-exec unit tests and `state_machine_conformance`. A generated native
+ManagedExec exports its spawn, stop, cancel and deadline/cancel liveness
+witness rows; the managed-exec unit tests project each native outcome onto the
+model's state names. A generated native
 subprocess inventory also requires `managedExecProcessGroupBoundary`,
 process-tree termination, and bounded output drain for `list_files`, `glob`,
 `grep`, `bash`, and `bash_unrestricted`.
@@ -941,19 +928,15 @@ States:
 - `inFlight`
 - `successAcknowledged`
 - `mutationFailed`
-- `staleObserved`
-- `readVisible`
 - `lostAcknowledged`
 
 Operational meaning:
 
-- this layer models only what the daemon observed around storage writes and
-  follow-up reads/events
+- this layer models only what the session hook observes of its own mutation;
+  it never reads a committed row back
 - a successful mutation ack refines to `PersistenceState.committed`
 - a failed mutation does not refine to committed; fail-closed retries from
   uncommitted, while fail-open acknowledges lost output
-- stale reads or stale/missing events can happen after a success ack, but the
-  model keeps that separate from DefraDB's internal correctness
 
 ### Layer 4: Inference Call Lifecycle
 
@@ -1021,12 +1004,8 @@ failure refine the existing `PersistenceState` transitions
 
 Local observation theorems also record the daemon assumptions Rust relies on:
 `success_acknowledged_committed`, `mutation_failed_uncommitted`,
-`mutation_failed_ne_committed`,
-`stale_observation_preserves_success_commit`,
-`terminal_write_observed_committed`,
-`readYourWrites_visibility_path`, `successful_mutation_eventual_visibility_path`,
-`failClosed_failed_mutation_retry_path`, `failOpen_failed_mutation_lost_path`,
-`staleRead_eventual_visibility_path`, and `staleEvent_eventual_visibility_path`.
+`mutation_failed_ne_committed`, `failClosed_failed_mutation_retry_path` and
+`failOpen_failed_mutation_lost_path`.
 
 ### Liveness taxonomy
 
@@ -1505,9 +1484,9 @@ Current boundaries:
 - Fleet aggregate slot state is reconstructed from `InferenceCall` rows rather
   than persisted as a single `FleetState` document. Only rows with
   `call_state = "running"` hold slots; queued and terminal rows do not.
-- `StorageObservation` records daemon-level storage assumptions: success acks,
-  failed mutations, stale reads/events, and minimum visibility paths. DefraDB
-  storage-engine correctness remains external.
+- `StorageObservation` records the hook's own mutation acknowledgements:
+  success, failure and fail-open loss. DefraDB storage-engine correctness
+  remains external.
 
 A real unresolved Rust/spec mismatch is stated as a model definition whose
 conformance family drives the production owner, not as a hand-written record.

@@ -61,14 +61,6 @@ def resultName : Except FixtureError (RebuiltDispatch FixtureError FixtureReques
   | .ok (.noOutputCapacity _) => "zero_output_capacity"
   | .ok (.dispatch _ _) => "dispatch"
 
-def rebuiltInput (w : Case) : Option (Nat × List Nat) :=
-  match result w with
-  | .ok (.projectionFailed (.rebuild checkpoint suffix))
-  | .ok (.projectionFailed (.rebuiltEstimate checkpoint suffix)) => some (checkpoint, suffix)
-  | .ok (.stillOverThreshold projected) | .ok (.noOutputCapacity projected)
-  | .ok (.dispatch projected _) => some (projected.checkpoint, projected.retainedSuffix)
-  | _ => none
-
 def budget (w : Case) : Nat :=
   PromptAssembly.Budget.effectiveInputBudget
     (PromptAssembly.Budget.configuredThresholdBudget w.contextWindow w.thresholdBasisPoints)
@@ -82,9 +74,6 @@ def committedReductions (w : Case) : Nat :=
         (reduce w.source initial.inputTokens (budget w) w.canFit w.prefixLength w.checkpoint)
         dispatch).reductions.length
   | _, _ => 0
-
-def outputTokens (w : Case) : Option Nat :=
-  match result w with | .ok (.dispatch _ tokens) => some tokens | _ => none
 
 def cases : List Case :=
   [ { name := "initial_projection_failure", source := [1,2,3], initialProjectionSucceeds := false }
@@ -147,35 +136,6 @@ def JoinInput.toCase (i : JoinInput) : Case :=
     initialProjectionSucceeds := i.initialProjectionSucceeds
     initialEstimateTokens := i.initialEstimateTokens, rebuildSucceeds := i.rebuildSucceeds
     rebuiltEstimateTokens := i.rebuiltEstimateTokens }
-
-structure RebuiltInput where
-  checkpoint : Nat
-  retainedSuffix : List Nat
-  deriving Lean.ToJson
-
-structure JoinOutput where
-  initialProjectionInput : List Nat
-  rebuiltProjectionInput : Option RebuiltInput
-  result : String
-  outputTokens : Option Nat
-  committedReductions : Nat
-  deriving Lean.ToJson
-
-/-- model-production-gap: no native adapter drives the projection join with
-injected projection, rebuild and estimate observations, so no production path
-replays these cases; `stagedTurnReduction` replays the three outcomes the
-per-turn staged reduction reaches. -/
-@[conformance_family]
-def projectionJoin : Family JoinInput JoinOutput where
-  inputs := cases.map JoinInput.ofCase
-  model := fun i =>
-    let w := i.toCase
-    { initialProjectionInput := w.source
-      rebuiltProjectionInput := (rebuiltInput w).map fun (checkpoint, retainedSuffix) =>
-        { checkpoint, retainedSuffix }
-      result := resultName (result w)
-      outputTokens := outputTokens w
-      committedReductions := committedReductions w }
 
 structure StagedTurnOutput where
   result : String
