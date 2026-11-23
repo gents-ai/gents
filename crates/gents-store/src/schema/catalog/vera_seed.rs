@@ -59,15 +59,4 @@ mod tests {
             );
         }
     }
-
-    #[test]
-    fn v2_genesis_ids_match_its_seeds() {
-        let ids = gents_protocol::schemas::HomePolicyIds::embedded_vera_transport_v2();
-        for policy in BuiltInPolicy::ALL {
-            assert_eq!(
-                super::seed_transport_v2(&policy).id().unwrap(),
-                ids.id(policy)
-            );
-        }
-    }
 }

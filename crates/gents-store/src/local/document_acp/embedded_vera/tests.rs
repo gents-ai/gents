@@ -95,3 +95,18 @@ fn initial_operator_policy_matches_the_home() {
         deployment.threshold.into()
     });
 }
+
+#[test]
+fn v2_genesis_ids_match_its_seeds() {
+    use gents_protocol::schemas::{BuiltInPolicy, HomePolicyIds};
+
+    let account =
+        identity::Did::new("did:key:z6MkeXBLjYiSvqnhFb6D7sHm8yKm4jV45wwBFRaatf1cfZ76").unwrap();
+    let device = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+    let deployment = super::deployment(device, Some(&account));
+    let ids = HomePolicyIds::embedded_vera_transport_v2();
+    assert_eq!(deployment.policies.len(), BuiltInPolicy::ALL.len());
+    for (seed, policy) in deployment.policies.iter().zip(BuiltInPolicy::ALL) {
+        assert_eq!(seed.id().unwrap(), ids.id(policy), "{policy:?}");
+    }
+}
