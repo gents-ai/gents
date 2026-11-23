@@ -134,7 +134,13 @@ const dialogProblems = extract((state) => {
   const dialogs = Array.from(state.document.querySelectorAll('[role="dialog"]'));
   const issues: string[] = [];
   if (dialogs.length > 1) {
-    issues.push(`expected at most one dialog, found ${dialogs.length}`);
+    const named = dialogs.map(
+      (dialog) =>
+        `${dialog.getAttribute("data-slot") ?? dialog.tagName.toLowerCase()} "${accessibleName(dialog, state.document)}" ${dialog.getAttribute("data-open") === null ? "closing" : "open"}`,
+    );
+    issues.push(
+      `expected at most one dialog, found ${dialogs.length}: ${named.join("; ")}`,
+    );
   }
   for (const dialog of dialogs) {
     if (!accessibleName(dialog, state.document)) {

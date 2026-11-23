@@ -741,6 +741,14 @@ See `../README.md` for how this fits the broader formal-verification model.
   Green waits for the serving line. RED: `StaleFile` (the test that waited on
   the killed server's file and row, with the CLI reaching the service
   manager) and `StartingIsAbsent` (the CLI before the fix).
+- `ExclusivePopoverLease` — the desktop shell's one-popup lease
+  (`useExclusivePopover`) for two Base UI owners. A request takes the free
+  lease or queues and asks the holder to close; the holder keeps the lease
+  from its committed open until its popup unmounts, so `AtMostOneMounted`
+  (Bombadil's `desktop_shell_does_not_stack_dialogs`) and `RequestServed`
+  hold whether or not the popup's attach lags its commit (Base UI's premise
+  is a synchronous attach). RED: `MountLag` (a lease held only while the
+  popup is attached) and `ReleaseOnClose`.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## Checking
