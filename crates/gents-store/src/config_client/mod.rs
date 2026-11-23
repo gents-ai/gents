@@ -170,13 +170,13 @@ pub(crate) use txn::ReadAccess;
 pub use txn::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use txn::{count_statements, StatementCounts};
-#[cfg(any(test, feature = "test-fixtures"))]
-pub use txn::{RelationshipChange, RelationshipChangeKind, RelationshipMatch};
 pub use txn::{
     CallbackAgentSelection, ConfigApplyTxn, ConfigCursor, IdempotentTransactionRetry,
     LocalConfigAccess, NativeOperationAbandoned, ReceiptWriteError, ReentrantEmbeddedWrite,
     TransactionFinalityError,
 };
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use txn::{RelationshipChange, RelationshipChangeKind, RelationshipMatch};
 
 #[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]

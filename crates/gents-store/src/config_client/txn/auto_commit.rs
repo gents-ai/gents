@@ -260,6 +260,7 @@ impl ConfigAccess {
         variables: Option<&Value>,
     ) -> Result<Value> {
         graphql::ensure_mutation_document(mutation)?;
+        #[cfg(any(test, feature = "test-fixtures"))]
         super::change_fault::before_auto_commit_for_test(operation)?;
         let operation = WriteOperation::new(operation)?;
         match self.write_route() {

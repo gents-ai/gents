@@ -21,7 +21,6 @@ pub struct RelationshipMatch {
 }
 
 impl RelationshipMatch {
-    #[cfg(any(test, feature = "test-fixtures"))]
     #[must_use]
     pub fn first(collection: &'static str, relation: &'static str) -> Self {
         Self {
@@ -63,8 +62,7 @@ tokio::task_local! {
     static AUTO_COMMIT_FAULT: Arc<AutoCommitFault>;
 }
 
-/// Called before a relationship change reaches either backend, so an injected
-/// failure aborts the change before native ACP sees it.
+/// An injected failure aborts the change before either backend sees it.
 pub(in crate::config_client) fn before_relationship_change_for_test(
     operation: Option<&'static str>,
     collection: &str,
@@ -101,7 +99,6 @@ pub(in crate::config_client) fn before_relationship_change_for_test(
     Ok(())
 }
 
-/// Called before an auto-commit write executes on either route.
 pub(in crate::config_client) fn before_auto_commit_for_test(
     operation: &'static str,
 ) -> Result<(), ConfigClientError> {
@@ -114,7 +111,6 @@ pub(in crate::config_client) fn before_auto_commit_for_test(
     Ok(())
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
 impl ConfigApplyTxn<'_> {
     /// Fails the relationship change `matcher` selects, or none when it is
     /// `None`, and returns every relationship change attempted in `future` in
