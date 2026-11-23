@@ -9,9 +9,9 @@ use gents_protocol::output::rows::{
     AGENT_OUTPUT_SEGMENT_FIELDS,
 };
 use gents_protocol::output::{
-    MessageBlock, MessagePublication, OutputOutcome, OutputSegment, OutputSource,
-    OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload, SegmentRun, SourceClose,
-    StreamDeclaration, StreamPayload, TranscriptMessage,
+    MessageBlock, MessagePublication, OutputOutcome, OutputSegment, OutputSource, OutputWriter,
+    PayloadPresentation, PayloadRef, PresentedPayload, SegmentRun, SourceClose, StreamDeclaration,
+    StreamPayload, TranscriptMessage,
 };
 use gents_store::config_client::ConfigAccess;
 use gents_store::identity::NodeIdentity as _;
@@ -204,14 +204,9 @@ async fn import_source(
             .unwrap();
         imported.messages.insert(message.doc_id, doc);
     }
-    publish_agent_session_child_relationships_with_access(
-        agent,
-        scope.node_did,
-        agent_did,
-        SOURCE,
-    )
-    .await
-    .unwrap();
+    publish_agent_session_child_relationships_with_access(agent, scope.node_did, agent_did, SOURCE)
+        .await
+        .unwrap();
     let session_doc = session_doc_id(client, SOURCE).await;
     for compaction in &source.compactions {
         let sequence = u32::try_from(compaction.sequence).unwrap();
@@ -568,7 +563,8 @@ async fn generated_fork_publication_replays_the_served_fork_of_each_source() {
                 .await
                 .unwrap();
         }
-        let imported = import_source(&client, &agent_access, &agent_did, &scope, &input.source).await;
+        let imported =
+            import_source(&client, &agent_access, &agent_did, &scope, &input.source).await;
         let foreign =
             tokio::task::spawn_blocking(|| gents_store::test_support::test_identity("fork-other"))
                 .await
