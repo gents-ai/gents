@@ -1496,6 +1496,42 @@ fn collect_json_files(root: &Path) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
+#[test]
+fn a_redacted_conversation_keeps_its_structure_and_none_of_a_tool_calls_arguments() {
+    let message = json!({
+        "role": "assistant",
+        "content": [
+            {"type": "text", "text": "private answer"},
+            {
+                "type": "tool_use",
+                "id": "call-1",
+                "name": "lookup",
+                "input": {"name": "private person", "id": "private key", "nested": [{"type": "private kind"}]}
+            }
+        ]
+    });
+    let redacted = redact_conversation(message, ProjectionRedactionMode::TrainingSafe);
+    assert_eq!(
+        redacted,
+        json!({
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "[training_safe_redacted]"},
+                {
+                    "type": "tool_use",
+                    "id": "call-1",
+                    "name": "lookup",
+                    "input": {
+                        "name": "[training_safe_redacted]",
+                        "id": "[training_safe_redacted]",
+                        "nested": [{"type": "[training_safe_redacted]"}]
+                    }
+                }
+            ]
+        })
+    );
+}
+
 fn collect_json_files_into(path: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
     if path.is_file() {
         if path.extension().and_then(|ext| ext.to_str()) == Some("json")

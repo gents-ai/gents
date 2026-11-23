@@ -8,6 +8,10 @@ use super::{ProjectionContext, ProjectionRedactionMode};
 const CONVERSATION_STRUCTURE_KEYS: &[&str] =
     &["role", "type", "id", "tool_call_id", "call_id", "name"];
 
+/// Keys holding a tool call's arguments, which a wire may carry as an object:
+/// everything beneath them is the model's text, whatever its keys are named.
+const TOOL_ARGUMENT_KEYS: &[&str] = &["input", "arguments"];
+
 pub(super) fn redact_option(value: Option<&str>, context: &ProjectionContext) -> Option<String> {
     value.map(|value| redact_str(value, context))
 }
@@ -59,6 +63,9 @@ fn redact_conversation_value(value: Value, context: &ProjectionContext) -> Value
                     let value = match value {
                         Value::String(_) if CONVERSATION_STRUCTURE_KEYS.contains(&key.as_str()) => {
                             value
+                        }
+                        value if TOOL_ARGUMENT_KEYS.contains(&key.as_str()) => {
+                            redact_json_value(value, context)
                         }
                         value => redact_conversation_value(value, context),
                     };
