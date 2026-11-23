@@ -503,7 +503,7 @@ mod tests {
                     node_did: self.node.did().to_owned(),
                     client_authentication:
                         gents_protocol::client_authentication::ClientAuthentication::Vera {
-                            shared_household: false,
+                            publisher_node: None,
                             worker: audience(2).worker,
                             deployment: 2,
                         },

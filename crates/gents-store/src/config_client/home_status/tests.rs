@@ -60,7 +60,7 @@ async fn a_status_altered_after_signing_is_refused() {
             statement["provider_time"] = 2_000.into()
         }),
         ("shared household", |statement| {
-            statement["client_authentication"]["shared_household"] = true.into();
+            statement["client_authentication"]["publisher_node"] = "another-node".into();
         }),
         ("authentication", |statement| {
             statement["client_authentication"] = serde_json::json!({"kind": "local"});

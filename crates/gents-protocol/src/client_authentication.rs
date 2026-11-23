@@ -9,8 +9,8 @@ pub enum ClientAuthentication {
     Vera {
         worker: String,
         deployment: u64,
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-        shared_household: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        publisher_node: Option<String>,
     },
     Unavailable,
 }

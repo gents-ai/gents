@@ -52,7 +52,7 @@ impl GraphqlEndpoint {
         if matches!(
             self.runtime_authentication().await?,
             ClientAuthentication::Vera {
-                shared_household: true,
+                publisher_node: Some(_),
                 ..
             }
         ) {
@@ -69,6 +69,19 @@ impl GraphqlEndpoint {
 }
 
 impl ConfigAccess {
+    /// The serving runtime's registered Node for publisher-bound transport creates.
+    pub async fn transport_publisher_node(&self) -> Result<Option<String>> {
+        match self {
+            Self::Local(local) => crate::local::document_acp::transport_publisher_node(local.node())
+                .map_err(|_| ConfigClientError::SharedDeviceAdmission),
+            Self::Graphql(endpoint) => match endpoint.runtime_authentication().await? {
+                ClientAuthentication::Local => Ok(None),
+                ClientAuthentication::Vera { publisher_node, .. } => Ok(publisher_node),
+                ClientAuthentication::Unavailable => Err(ConfigClientError::RuntimeAuthenticationUnavailable),
+            },
+        }
+    }
+
     /// The provider of the home this access works against.
     pub async fn home_provider(&self) -> Result<DocumentAcp> {
         match self {

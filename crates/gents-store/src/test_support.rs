@@ -160,7 +160,7 @@ fn home_status_body(
     use gents_protocol::delegation_audience::ReportedDelegationAudience;
     let authentication = match reports {
         ReportedDelegationAudience::Named(audience) => ClientAuthentication::Vera {
-            shared_household: false,
+            publisher_node: None,
             worker: audience.worker.clone(),
             deployment: audience.deployment,
         },
