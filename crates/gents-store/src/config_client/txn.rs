@@ -1,5 +1,6 @@
 mod apply_txn;
 mod auto_commit;
+mod change_fault;
 mod configuration_reader;
 mod cursor;
 mod delete_confirmation;
@@ -33,6 +34,9 @@ use super::{
 
 pub use apply_txn::ConfigApplyTxn;
 pub(crate) use auto_commit::ReadAccess;
+pub(super) use change_fault::before_relationship_change_for_test;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use change_fault::{RelationshipChange, RelationshipChangeKind, RelationshipMatch};
 pub use cursor::ConfigCursor;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use fault_injection::NativeOperationObservation;

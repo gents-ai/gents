@@ -561,6 +561,12 @@ impl ConfigApplyTxn<'_> {
         target: &str,
         delete: bool,
     ) -> Result<()> {
+        super::change_fault::before_relationship_change_for_test(
+            self.operation,
+            collection,
+            relation,
+            delete,
+        )?;
         match &self.backend {
             TxnBackend::Embedded {
                 node,

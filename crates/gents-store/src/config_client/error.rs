@@ -526,6 +526,13 @@ pub enum ConfigClientError {
     InjectedReadStorageFailure,
     #[error("injected failure after successful transaction mutation {count}")]
     InjectedMutationFailure { count: usize },
+    #[error("injected failure of the {relation} relationship change on {collection}")]
+    InjectedRelationshipFailure {
+        collection: String,
+        relation: String,
+    },
+    #[error("injected failure of auto-commit write {operation}")]
+    InjectedAutoCommitFailure { operation: &'static str },
     #[error("injected receipt loss after committed transaction")]
     InjectedReceiptLoss,
     #[error("injected rollback failure")]
