@@ -8,6 +8,7 @@ import Proofs.Conformance.ContractCases.Types
 import Lean
 import Proofs.Conformance.Family
 import Proofs.Conformance.Functions.Session
+import Proofs.Session.Compaction.Cursor
 
 namespace Conformance.Contracts
 open Lean Conformance.SessionDocuments
@@ -585,6 +586,28 @@ def forkPublicationUnreached : Family ForkInput ForkPublication where
   model := fun i =>
     { published := ((forkCaseOf i).bind ForkCase.published).map HistoryWire.ofModel
       readers := ((forkCaseOf i).map ForkCase.readers).getD [] }
+
+structure CompactionCursorSaveInput where
+  name : String
+  stored : List Nat
+  cursor : Nat
+  deriving ToJson
+
+structure CompactionCursorSaveOutput where
+  saved : Bool
+  deriving ToJson
+
+/-- The compaction save owner stores a cursor only when it names a stored
+message of its session. `stored` lists the session's message sequences; the
+first is the one the transcript allocator assigns to a session's first
+message. -/
+@[conformance_family]
+def compactionCursorSave : Family CompactionCursorSaveInput CompactionCursorSaveOutput where
+  inputs :=
+    ([("names_first", [1, 2], 1), ("names_last", [1, 2], 2), ("past_last", [1, 2], 3),
+      ("before_first", [1, 2], 0), ("between_stored", [1, 3], 2)] :
+        List (String × List Nat × Nat)).map fun (name, stored, cursor) => { name, stored, cursor }
+  model := fun i => { saved := _root_.Compaction.Cursor.namesStoredMessage i.stored i.cursor }
 
 deriving instance ToJson for AgentSession.TaskFireEvidence, AgentSession.StarterEvidence,
   AgentSession.CreationReceipt

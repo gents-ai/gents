@@ -18,6 +18,16 @@ impl StaleCompactionGeneration {
     }
 }
 
+/// The cursor names no stored message of its session, so provider input
+/// would hide the messages after it that no summary covers (Lean
+/// `Compaction.Cursor.namesStoredMessage`).
+#[derive(Debug, thiserror::Error)]
+#[error("compaction cursor {cursor} names no stored message of session {session_id}")]
+pub struct CompactionCursorNamesNoMessage {
+    session_id: String,
+    cursor: u32,
+}
+
 #[derive(Serialize)]
 struct FilePathDelta<'a> {
     version: u32,
@@ -438,8 +448,8 @@ pub(super) async fn save_compaction_entry_with_access(
                         "compaction agent differs from session agent"
                     );
                     use gents_protocol::document_query::{
-                        fields::compaction_entry as fields, session_scope, Direction, Query,
-                        Selection,
+                        fields::{agent_message, compaction_entry as fields},
+                        session_scope, Direction, Filter, Query, Selection,
                     };
                     let query = Query::select(
                         Selection::new()
@@ -493,6 +503,27 @@ pub(super) async fn save_compaction_entry_with_access(
                             prior_cursor.is_none_or(|prior| cursor > prior),
                             "compaction cursor regression for session {session_id}"
                         );
+                        let named = txn
+                            .run(
+                                &Query::select(Selection::new().field(agent_message::SEQUENCE))
+                                    .filter(session_scope(node_did, session_id, requester_did))
+                                    .filter(Filter::eq(agent_message::SEQUENCE, cursor))
+                                    .limit(1)
+                                    .render(),
+                            )
+                            .await?;
+                        if named
+                            .pointer("/data/AgentMessage")
+                            .and_then(serde_json::Value::as_array)
+                            .context("compaction cursor query omitted rows")?
+                            .is_empty()
+                        {
+                            return Err(CompactionCursorNamesNoMessage {
+                                session_id: session_id.to_string(),
+                                cursor,
+                            }
+                            .into());
+                        }
                     }
 
                     let mut cumulative_files_read =

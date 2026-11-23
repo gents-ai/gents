@@ -1,4 +1,5 @@
 import Proofs.Session.Compaction.State
+import Proofs.Session.Compaction.Cursor
 import Proofs.Session.Compaction.Strip
 import Proofs.Session.Compaction.ProviderView
 import Proofs.Session.Compaction.Prefix

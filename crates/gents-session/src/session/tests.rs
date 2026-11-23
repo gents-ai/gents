@@ -114,20 +114,40 @@ async fn signed_compaction_fixture(
     (db, user, agent, access, requests)
 }
 
+async fn stored_sequences(
+    access: &gents_store::config_client::ConfigAccess,
+    session: &str,
+) -> Vec<u32> {
+    let response = access
+        .execute(&format!(
+            r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{}" }} }}, order: {{ sequence: ASC }}) {{ sequence }} }}"#,
+            escape_graphql_string(session),
+        ))
+        .await
+        .unwrap();
+    response["data"]["AgentMessage"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| u32::try_from(row["sequence"].as_u64().unwrap()).unwrap())
+        .collect()
+}
+
 #[tokio::test]
 async fn compaction_entries_track_files_cumulatively() {
     use gents_store::identity::NodeIdentity;
     let (db, user, agent, access, requests) =
-        signed_compaction_fixture("compaction-cumulative", "session-1", 3).await;
+        signed_compaction_fixture("compaction-cumulative", "session-1", 5).await;
     let node_did = db.node_identity.did();
+    let sequences = stored_sequences(&access, "session-1").await;
     for (index, summary, read, modified, count, cursor, original, compacted) in [
         (
             0,
             "First summary",
             vec!["/tmp/a.rs".to_string()],
             vec!["/tmp/b.rs".to_string()],
-            5,
-            10,
+            1,
+            sequences[0],
             1000,
             200,
         ),
@@ -136,12 +156,21 @@ async fn compaction_entries_track_files_cumulatively() {
             "Second summary",
             vec!["/tmp/c.rs".to_string(), "/tmp/a.rs".to_string()],
             vec!["/tmp/d.rs".to_string()],
-            7,
-            30,
+            2,
+            sequences[2],
             1200,
             250,
         ),
-        (2, "Third summary", vec![], vec![], 3, 40, 500, 100),
+        (
+            2,
+            "Third summary",
+            vec![],
+            vec![],
+            2,
+            sequences[4],
+            500,
+            100,
+        ),
     ] {
         let generation = load_prompt_compaction_state_with_access(
             &access,
@@ -183,7 +212,7 @@ async fn compaction_entries_track_files_cumulatively() {
     assert_eq!(entries[0].files_read, vec!["/tmp/a.rs"]);
     assert_eq!(entries[1].files_read, vec!["/tmp/a.rs", "/tmp/c.rs"]);
     assert_eq!(entries[1].files_modified, vec!["/tmp/b.rs", "/tmp/d.rs"]);
-    assert_eq!(entries[2].compacted_through_sequence, Some(40));
+    assert_eq!(entries[2].compacted_through_sequence, Some(sequences[4]));
     let stored = access.execute(r#"{ CompactionEntry(filter: { session_id: { _eq: "session-1" } }, order: { sequence: ASC }) { files_read files_modified } }"#).await.unwrap();
     let stored_rows = stored["data"]["CompactionEntry"]
         .as_array()
@@ -223,33 +252,149 @@ async fn compaction_entries_track_files_cumulatively() {
     .await
     .unwrap();
     assert_eq!(prompt_state.summaries.len(), 3);
-    assert_eq!(prompt_state.total_messages_compacted, 15);
-    assert_eq!(prompt_state.compacted_through_sequence, Some(40));
+    assert_eq!(prompt_state.total_messages_compacted, 5);
+    assert_eq!(prompt_state.compacted_through_sequence, Some(sequences[4]));
     let before_cursor = load_prompt_compaction_state_with_access(
         &access,
         "session-1",
         node_did,
         Some(user.did()),
-        Some(20),
+        Some(sequences[1]),
     )
     .await
     .unwrap();
     assert_eq!(before_cursor.summaries, vec!["First summary"]);
-    assert_eq!(before_cursor.total_messages_compacted, 5);
-    assert_eq!(before_cursor.compacted_through_sequence, Some(10));
+    assert_eq!(before_cursor.total_messages_compacted, 1);
+    assert_eq!(before_cursor.compacted_through_sequence, Some(sequences[0]));
     let at_cursor = load_prompt_compaction_state_with_access(
         &access,
         "session-1",
         node_did,
         Some(user.did()),
-        Some(40),
+        Some(sequences[4]),
     )
     .await
     .unwrap();
     assert_eq!(at_cursor.summaries.len(), 3);
-    assert_eq!(at_cursor.total_messages_compacted, 15);
-    assert_eq!(at_cursor.compacted_through_sequence, Some(40));
+    assert_eq!(at_cursor.total_messages_compacted, 5);
+    assert_eq!(at_cursor.compacted_through_sequence, Some(sequences[4]));
 
+    db.node.shutdown().await.expect("shut down test node");
+}
+
+#[tokio::test]
+async fn compaction_save_stores_only_a_cursor_naming_a_stored_message() {
+    use gents_lean_vocab::families::contracts_compaction_cursor_save as family;
+    use gents_store::identity::NodeIdentity;
+    let (db, user, client, binding) = gents_inference::test_support::signed_test_node(
+        "compaction-cursor-save",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node_did = db.node_identity.did();
+    let agent =
+        gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
+    let access = gents_store::config_client::ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let cases = family::cases();
+    assert!(!cases.is_empty());
+    for case in cases {
+        let session = format!("cursor-{}", case.input.name);
+        publish_signed_history(&db, &user, &client, &binding, &session, &["first".into()]).await;
+        let request_id = format!("{session}-request-0");
+        let response = access
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}, limit: 2) {{ _docID }} }}"#,
+                escape_graphql_string(&request_id),
+            ))
+            .await
+            .unwrap();
+        let [row] = response["data"]["AgentRequest"]
+            .as_array()
+            .unwrap()
+            .as_slice()
+        else {
+            panic!("cursor fixture request must be unique");
+        };
+        let request_doc = row["_docID"].as_str().unwrap().to_owned();
+        let stored = case
+            .input
+            .stored
+            .iter()
+            .map(|sequence| u32::try_from(*sequence).unwrap())
+            .collect::<Vec<_>>();
+        for sequence in stored.iter().skip(1) {
+            import_history_observation_as(
+                &access,
+                HistoryObservation {
+                    request_id: &request_doc,
+                    session_id: &session,
+                    node_did,
+                    requester_did: Some(user.did()),
+                    text: "stored",
+                    message_key_suffix: &format!("stored-{sequence}"),
+                    sequence: *sequence,
+                    tool_call: None,
+                },
+            )
+            .await;
+        }
+        assert_eq!(
+            stored_sequences(&access, &session).await,
+            stored,
+            "the session stores exactly the case's messages"
+        );
+        let generation = load_prompt_compaction_state_with_access(
+            &access,
+            &session,
+            node_did,
+            Some(user.did()),
+            None,
+        )
+        .await
+        .unwrap()
+        .generation;
+        let saved = compaction_entries::save_compaction_entry_with_access(
+            &access,
+            compaction_entries::NewExactSessionCompaction {
+                agent_did: agent.did(),
+                session_id: &session,
+                node_did,
+                requester_did: Some(user.did()),
+                request_id: &request_id,
+                request_doc_id: &request_doc,
+                files_read: &[],
+                files_modified: &[],
+                compacted_through_sequence: u32::try_from(case.input.cursor).unwrap(),
+                original_tokens: 100,
+                compacted_tokens: 10,
+                expected_generation: &generation,
+            },
+            "summary",
+            1,
+        )
+        .await;
+        if let Err(error) = &saved {
+            assert!(
+                gents_protocol::error_chain::find_source::<
+                    compaction_entries::CompactionCursorNamesNoMessage,
+                >(error.as_ref())
+                .is_some(),
+                "unexpected refusal: {error:#}"
+            );
+        }
+        let entries = load_compaction_entries(&access, &session, node_did, Some(user.did()))
+            .await
+            .unwrap();
+        assert_eq!(entries.len(), usize::from(saved.is_ok()));
+        case.check(family::CompactionCursorSaveOutput {
+            saved: saved.is_ok(),
+        });
+    }
     db.node.shutdown().await.expect("shut down test node");
 }
 
@@ -259,6 +404,7 @@ async fn concurrent_compactions_from_one_generation_persist_exactly_one_fact() {
     let (db, user, agent, access, requests) =
         signed_compaction_fixture("compaction-race", "session-race", 2).await;
     let node_did = db.node_identity.did();
+    let sequences = stored_sequences(&access, "session-race").await;
     let generation = load_prompt_compaction_state_with_access(
         &access,
         "session-race",
@@ -283,13 +429,13 @@ async fn concurrent_compactions_from_one_generation_persist_exactly_one_fact() {
             request_doc_id: &requests[0].1,
             files_read: &left_files,
             files_modified: &[],
-            compacted_through_sequence: 20,
+            compacted_through_sequence: sequences[0],
             original_tokens: 100,
             compacted_tokens: 20,
             expected_generation: &generation,
         },
         "left summary",
-        2,
+        1,
     );
     let right = compaction_entries::save_compaction_entry_with_access(
         &access,
@@ -302,13 +448,13 @@ async fn concurrent_compactions_from_one_generation_persist_exactly_one_fact() {
             request_doc_id: &requests[1].1,
             files_read: &[],
             files_modified: &right_files,
-            compacted_through_sequence: 30,
+            compacted_through_sequence: sequences[1],
             original_tokens: 200,
             compacted_tokens: 40,
             expected_generation: &generation,
         },
         "right summary",
-        3,
+        2,
     );
     let (left, right) = tokio::join!(left, right);
     assert_ne!(
@@ -329,14 +475,14 @@ async fn concurrent_compactions_from_one_generation_persist_exactly_one_fact() {
     let winner = &entries[0];
     match winner.summary.as_str() {
         "left summary" => {
-            assert_eq!(winner.messages_compacted, 2);
-            assert_eq!(winner.compacted_through_sequence, Some(20));
+            assert_eq!(winner.messages_compacted, 1);
+            assert_eq!(winner.compacted_through_sequence, Some(sequences[0]));
             assert_eq!(winner.files_read, vec!["/tmp/left.rs"]);
             assert!(winner.files_modified.is_empty());
         }
         "right summary" => {
-            assert_eq!(winner.messages_compacted, 3);
-            assert_eq!(winner.compacted_through_sequence, Some(30));
+            assert_eq!(winner.messages_compacted, 2);
+            assert_eq!(winner.compacted_through_sequence, Some(sequences[1]));
             assert!(winner.files_read.is_empty());
             assert_eq!(winner.files_modified, vec!["/tmp/right.rs"]);
         }
@@ -350,6 +496,7 @@ async fn exact_compaction_redelivery_is_idempotent() {
     let (db, user, agent, access, requests) =
         signed_compaction_fixture("compaction-redelivery", "session-redelivery", 2).await;
     let node_did = db.node_identity.did();
+    let sequences = stored_sequences(&access, "session-redelivery").await;
     let generation = load_prompt_compaction_state_with_access(
         &access,
         "session-redelivery",
@@ -374,7 +521,7 @@ async fn exact_compaction_redelivery_is_idempotent() {
                 request_doc_id: &requests[0].1,
                 files_read: &files,
                 files_modified: &[],
-                compacted_through_sequence: 20,
+                compacted_through_sequence: sequences[0],
                 original_tokens: 100,
                 compacted_tokens: 20,
                 expected_generation: &generation,
@@ -407,7 +554,7 @@ async fn exact_compaction_redelivery_is_idempotent() {
             request_doc_id: &requests[1].1,
             files_read: &[],
             files_modified: &[],
-            compacted_through_sequence: 30,
+            compacted_through_sequence: sequences[1],
             original_tokens: 80,
             compacted_tokens: 10,
             expected_generation: &next_generation,
@@ -1381,6 +1528,7 @@ async fn compaction_save_fault_leaves_chain_and_generation_intact() {
         &["first".into(), "second".into()],
     )
     .await;
+    let sequences = stored_sequences(&access, SESSION).await;
     let mut docs = Vec::new();
     for index in 0..2 {
         let request = format!("{SESSION}-request-{index}");
@@ -1417,7 +1565,7 @@ async fn compaction_save_fault_leaves_chain_and_generation_intact() {
             request_doc_id: &docs[0],
             files_read: &["/tmp/a.rs".to_string()],
             files_modified: &[],
-            compacted_through_sequence: 10,
+            compacted_through_sequence: sequences[0],
             original_tokens: 100,
             compacted_tokens: 20,
             expected_generation: &state.generation,
@@ -1457,7 +1605,7 @@ async fn compaction_save_fault_leaves_chain_and_generation_intact() {
                     request_doc_id: &docs[1],
                     files_read: &files,
                     files_modified: &[],
-                    compacted_through_sequence: 20,
+                    compacted_through_sequence: sequences[1],
                     original_tokens: 200,
                     compacted_tokens: 30,
                     expected_generation: &before.generation,
@@ -1474,7 +1622,7 @@ async fn compaction_save_fault_leaves_chain_and_generation_intact() {
     let (entries, after) = chain().await;
     assert_eq!(entries.len(), 2);
     assert_ne!(after.generation, before.generation);
-    assert_eq!(after.compacted_through_sequence, Some(20));
+    assert_eq!(after.compacted_through_sequence, Some(sequences[1]));
     node.shutdown().await.expect("shut down test node");
 }
 
