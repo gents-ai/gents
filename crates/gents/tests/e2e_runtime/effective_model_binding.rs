@@ -137,10 +137,8 @@ async fn a_claimed_request_records_the_settings_its_dispatch_bound() {
     assert!(!bodies.is_empty(), "the provider was called");
     for body in &bodies {
         assert_eq!(body["model"], MODEL, "every call names the bound model");
-        assert_eq!(
-            body["chat_template_kwargs"]["reasoning_effort"], "low",
-            "{body}"
-        );
+        assert_eq!(body["reasoning_effort"], "low", "{body}");
+        assert!(body.get("chat_template_kwargs").is_none(), "{body}");
         assert_eq!(body["service_tier"], "priority", "{body}");
     }
 

@@ -507,16 +507,14 @@ fn parse_request_deadline(value: Option<&str>) -> Option<DateTime<Utc>> {
 pub(crate) use gents_loop::compaction::merge_optional_params;
 
 /// Maps the inference profile's reasoning effort into each provider's wire
-/// contract. An absent profile setting injects no reasoning default, except
-/// ChatGPT Codex (#540).
+/// contract (`Runtime.CompletionParameters.reasoning`). An absent profile
+/// setting injects no reasoning default, except ChatGPT Codex (#540).
 ///
-/// vLLM's OpenAI-compatible server only emits chain-of-thought in
-/// `message.reasoning` when the request carries
-/// `chat_template_kwargs={"enable_thinking": true}`; that local-only toggle
-/// must not be sent to Responses or OpenRouter endpoints, which use the
-/// standard `reasoning.effort` object instead. The key is serialized flat into
-/// the OpenAI completion body, so it reaches vLLM as a top-level
-/// `chat_template_kwargs` object — exactly where the server reads it.
+/// vLLM only emits chain-of-thought in `message.reasoning` when the request
+/// carries `chat_template_kwargs={"enable_thinking": true}`; hosted
+/// OpenAI-compatible servers reject that key, so it goes only to a `Vllm`
+/// backend. The params are serialized flat into the completion body, so every
+/// key reaches the server at the top level.
 fn reasoning_profile_params(
     kind: BackendProviderKind,
     wire_api: OpenAiWireApi,
@@ -532,7 +530,7 @@ fn reasoning_profile_params(
         });
     };
     match (kind, wire_api) {
-        (BackendProviderKind::OpenAiCompatible, OpenAiWireApi::ChatCompletions) => {
+        (BackendProviderKind::Vllm, OpenAiWireApi::ChatCompletions) => {
             let mut kwargs = serde_json::Map::from_iter([(
                 "enable_thinking".to_string(),
                 serde_json::Value::Bool(reasoning_effort != ReasoningEffort::None),
@@ -545,7 +543,13 @@ fn reasoning_profile_params(
             }
             Some(serde_json::json!({ "chat_template_kwargs": kwargs }))
         }
-        (BackendProviderKind::OpenAiCompatible, OpenAiWireApi::Responses)
+        (BackendProviderKind::OpenAiCompatible, OpenAiWireApi::ChatCompletions) => {
+            Some(serde_json::json!({ "reasoning_effort": reasoning_effort.as_str() }))
+        }
+        (
+            BackendProviderKind::OpenAiCompatible | BackendProviderKind::Vllm,
+            OpenAiWireApi::Responses,
+        )
         | (BackendProviderKind::OpenRouter, _)
         | (BackendProviderKind::ChatGptCodex, _) => Some(serde_json::json!({
             "reasoning": { "effort": reasoning_effort.as_str() }
@@ -582,10 +586,12 @@ pub(crate) fn params_disable_reasoning(params: Option<&serde_json::Value>) -> bo
     {
         return !enabled;
     }
-    params
-        .pointer("/reasoning/effort")
-        .and_then(serde_json::Value::as_str)
-        == Some(ReasoningEffort::None.as_str())
+    ["/reasoning/effort", "/reasoning_effort"]
+        .iter()
+        .any(|path| {
+            params.pointer(path).and_then(serde_json::Value::as_str)
+                == Some(ReasoningEffort::None.as_str())
+        })
 }
 
 /// xAI retains Responses requests by default, so an API-key backend at its
@@ -606,7 +612,7 @@ fn provider_additional_params(
                 "include": [gents_loop::provider_patches::ENCRYPTED_REASONING_INCLUDE],
             }))
         }
-        BackendProviderKind::OpenAiCompatible => None,
+        BackendProviderKind::OpenAiCompatible | BackendProviderKind::Vllm => None,
         BackendProviderKind::OpenRouter => Some(serde_json::json!({
             "provider": { "require_parameters": true }
         })),
@@ -629,7 +635,9 @@ fn request_additional_params(
     request: &AgentRequest,
 ) -> Option<serde_json::Value> {
     match agent_config.backend_provider_kind {
-        BackendProviderKind::OpenAiCompatible => openai_cache_scope_params(request),
+        BackendProviderKind::OpenAiCompatible | BackendProviderKind::Vllm => {
+            openai_cache_scope_params(request)
+        }
         BackendProviderKind::ChatGptCodex => {
             let scope = normalize_cache_scope(request.session_id.as_str())
                 .or_else(|| normalize_cache_scope(request.request_id.as_str()))?;

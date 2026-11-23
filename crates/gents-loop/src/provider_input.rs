@@ -266,13 +266,16 @@ impl ProviderInputProfile {
 
     pub fn resolve(provider: BackendProviderKind, wire: OpenAiWireApi) -> Self {
         match (provider, wire) {
-            (BackendProviderKind::OpenAiCompatible, OpenAiWireApi::ChatCompletions)
-            | (BackendProviderKind::XaiGrokOAuth, OpenAiWireApi::ChatCompletions) => {
-                Self::OpenAiChatCompletions
-            }
-            (BackendProviderKind::OpenAiCompatible, OpenAiWireApi::Responses) => {
-                Self::OpenAiResponsesNormalized
-            }
+            (
+                BackendProviderKind::OpenAiCompatible
+                | BackendProviderKind::Vllm
+                | BackendProviderKind::XaiGrokOAuth,
+                OpenAiWireApi::ChatCompletions,
+            ) => Self::OpenAiChatCompletions,
+            (
+                BackendProviderKind::OpenAiCompatible | BackendProviderKind::Vllm,
+                OpenAiWireApi::Responses,
+            ) => Self::OpenAiResponsesNormalized,
             (BackendProviderKind::OpenRouter, _) => Self::OpenRouterChatCompletions,
             (BackendProviderKind::ChatGptCodex, _) => Self::ChatGptCodexResponses,
             (BackendProviderKind::XaiGrokOAuth, OpenAiWireApi::Responses) => Self::XaiResponses,

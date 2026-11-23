@@ -153,7 +153,9 @@ pub fn usage_view(
     let read_ok = stored.read_at.is_some() && stored.read_error.is_none();
     let note = match kind {
         _ if !windows.is_empty() => None,
-        Kind::OpenAiCompatible if stored.report.is_empty() && stored.read_at.is_none() => {
+        Kind::OpenAiCompatible | Kind::Vllm
+            if stored.report.is_empty() && stored.read_at.is_none() =>
+        {
             Some("not reported")
         }
         Kind::OpenRouter if read_ok && stored.report.windows.is_empty() => {
@@ -486,7 +488,10 @@ pub async fn read_account_usage(
     if matches!(backend.auth, BackendAuth::NodeOAuthPool { .. }) {
         return Ok(UsageRead::NotReported);
     }
-    if matches!(kind, Kind::OpenAiCompatible | Kind::AnthropicApiKey) {
+    if matches!(
+        kind,
+        Kind::OpenAiCompatible | Kind::Vllm | Kind::AnthropicApiKey
+    ) {
         return Ok(UsageRead::NotReported);
     }
     let api_key = match kind {
@@ -573,6 +578,7 @@ pub async fn read_account_usage(
                 // A new provider kind must fail to compile here rather than
                 // send its bearer to another provider.
                 Kind::OpenAiCompatible
+                | Kind::Vllm
                 | Kind::OpenRouter
                 | Kind::AnthropicApiKey
                 | Kind::ClaudeBedrock

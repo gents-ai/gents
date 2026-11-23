@@ -583,6 +583,76 @@ async fn a_failing_first_stage_skips_the_second_and_grades_it_skipped_prerequisi
 }
 
 #[tokio::test]
+async fn a_responses_backend_runs_its_trial_without_a_sampling_seed() {
+    let backend = support::mock_endpoint::MockModelEndpoint::start(MODEL).unwrap();
+    let (canary, mut request) = canary_request(backend.endpoint(), "run-responses").await;
+    let mut responses = backend_document(
+        &canary.owner,
+        "canary-backend",
+        backend.endpoint(),
+        json!({"kind": "unauthenticated"}),
+    );
+    responses["openai_wire_api"] = json!("responses");
+    let mut profile = profile_document(&canary.owner, "canary", "canary-backend", MODEL);
+    profile["reasoning_effort"] = json!("high");
+    canary
+        .install(vec![
+            (Collection::InferenceBackend, responses),
+            (Collection::InferenceProfile, profile),
+        ])
+        .await;
+    request.case_ids = Some(vec!["one-stage".into()]);
+
+    let outcome = run(
+        &canary.access,
+        &request,
+        &canary.executor(),
+        &CheckRegistry::builtin(),
+        CancellationToken::new(),
+        &RunOptions::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!((outcome.completed, outcome.not_evidence), (1, 0));
+
+    let bodies = backend
+        .recorded_requests()
+        .into_iter()
+        .filter(|request| request.path == "/v1/responses")
+        .map(|request| serde_json::from_str::<Value>(&request.body).unwrap())
+        .collect::<Vec<_>>();
+    assert!(
+        bodies.iter().all(|body| body.get("seed").is_none()),
+        "{bodies:#?}"
+    );
+    let turns = bodies
+        .into_iter()
+        .filter(|body| body.get("tools").is_some())
+        .collect::<Vec<_>>();
+    assert!(!turns.is_empty(), "the trial's agent reached the provider");
+    for mut body in turns {
+        let fields = body.as_object_mut().unwrap();
+        for content in ["input", "tools"] {
+            fields.remove(content);
+        }
+        assert!(fields.remove("user").is_some_and(|user| user.is_string()));
+        assert_eq!(
+            body,
+            json!({
+                "model": MODEL,
+                "max_output_tokens": gents_inference::resolved::DEFAULT_MAX_OUTPUT_TOKENS,
+                "stream": true,
+                "temperature": 0.0,
+                "tool_choice": "auto",
+                "reasoning": {"effort": "high"},
+                "include": ["reasoning.encrypted_content"],
+            }),
+            "{body}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn freeze_refuses_unrestricted_bash_and_an_oauth_backend_before_creating_any_home() {
     let (canary, base) = canary_request("http://127.0.0.1:1/v1", "run-refused").await;
     let executor = canary.executor();

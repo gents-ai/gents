@@ -320,6 +320,7 @@ impl ClaudeRoute {
                 route(Provider::AnthropicGoogleCloud, None, Credential::Bearer)
             }
             BackendProviderKind::OpenAiCompatible
+            | BackendProviderKind::Vllm
             | BackendProviderKind::OpenRouter
             | BackendProviderKind::ChatGptCodex
             | BackendProviderKind::XaiGrokOAuth

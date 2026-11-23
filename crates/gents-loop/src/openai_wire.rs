@@ -45,7 +45,9 @@ impl OpenAiWireApi {
         configured: Option<Self>,
     ) -> Self {
         match provider_kind {
-            BackendProviderKind::OpenAiCompatible => configured.unwrap_or(Self::ChatCompletions),
+            BackendProviderKind::OpenAiCompatible | BackendProviderKind::Vllm => {
+                configured.unwrap_or(Self::ChatCompletions)
+            }
             BackendProviderKind::OpenRouter => Self::ChatCompletions,
             BackendProviderKind::ChatGptCodex => Self::Responses,
             BackendProviderKind::XaiGrokOAuth => configured.unwrap_or(Self::Responses),

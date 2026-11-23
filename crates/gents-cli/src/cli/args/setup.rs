@@ -163,7 +163,7 @@ pub(crate) struct InitArgs {
     pub(crate) backend_preset: Option<BackendPresetArg>,
     #[arg(
         long,
-        help = "Backend provider kind. OpenAiCompatible covers OpenAI-style local and hosted endpoints"
+        help = "Backend provider kind. OpenAiCompatible covers OpenAI-style local and hosted endpoints; Vllm is a vLLM server"
     )]
     pub(crate) provider_kind: Option<String>,
     #[arg(
