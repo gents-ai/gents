@@ -923,6 +923,7 @@ structure AdmissionCaseInput where
   receipt : Option AgentSession.CreationReceipt
   authorized : Bool
   commit : Bool
+  reserved : Bool
   deriving ToJson
 
 def admissionInputs : List AdmissionCaseInput :=
@@ -930,7 +931,8 @@ def admissionInputs : List AdmissionCaseInput :=
     { name, operation := "atomic_admission", before := AdmissionStateWire.ofModel before
       requested := DocumentWire.ofModel input.requested, actor := input.actor
       sessionDoc := input.sessionDoc, agentDoc := input.agentDoc, requestDoc := input.requestDoc
-      receipt := input.receipt, authorized := input.authorized, commit := input.commit }
+      receipt := input.receipt, authorized := input.authorized, commit := input.commit
+      reserved := input.reserved }
 
 def admissionAfter (i : AdmissionCaseInput) : AgentSession.AdmissionState :=
   ((admissionCases.find? (·.1 == i.name)).map fun (_, before, input) =>
@@ -948,17 +950,34 @@ def atomicAdmissionUnattended : Family AdmissionCaseInput AdmissionTitle where
   model := fun i => { title := ((admissionAfter i).session.bind (·.title)).map fun t =>
     { text := t.text, source := t.source.toWireName } }
 
-structure AdmissionAfter where
-  after : AdmissionStateWire
+/-- What a served admission stores, named by the case's numbers: the session's
+native owner, document, `parent` Agent document and `working_agent`, whether it
+carries a creation receipt, and the newest request's document, native owner,
+`session` and `working_agent`. -/
+structure AdmissionObservation where
+  sessionOwner : Option Nat
+  sessionDoc : Option Nat
+  sessionParent : Option Nat
+  sessionWorker : Option Nat
+  receipt : Bool
+  requestDoc : Option Nat
+  requestOwner : Option Nat
+  requestParent : Option Nat
+  requestWorker : Option Nat
   deriving ToJson
 
-/-- Atomic admission runs inside the served request
-admission transaction with DefraDB identities and ACP relationships; no
-production function returns the modeled admission state, and only the
-unattended creation's session title is observed by a scenario. -/
+def AdmissionObservation.ofModel (s : AgentSession.AdmissionState) : AdmissionObservation :=
+  { sessionOwner := s.sessionOwner, sessionDoc := s.sessionDoc, sessionParent := s.sessionParent
+    sessionWorker := s.sessionWorker, receipt := s.receipt.isSome, requestDoc := s.requestDoc
+    requestOwner := s.requestOwner, requestParent := s.requestParent
+    requestWorker := s.requestWorker }
+
+/-- A User's Client submission, run through the served admission transaction:
+new, reused, refused and incomplete sessions, a denied grant and an aborted
+transaction, directly or after a reservation. -/
 @[conformance_family]
-def atomicAdmissionUnreached : Family AdmissionCaseInput AdmissionAfter where
-  inputs := admissionInputs
-  model := fun i => { after := AdmissionStateWire.ofModel (admissionAfter i) }
+def atomicAdmissionClient : Family AdmissionCaseInput AdmissionObservation where
+  inputs := admissionInputs.filter fun i => i.name ∉ ["agent_unattended_creation"]
+  model := fun i => AdmissionObservation.ofModel (admissionAfter i)
 
 end Conformance.Contracts

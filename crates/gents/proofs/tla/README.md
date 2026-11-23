@@ -85,11 +85,13 @@ See `../README.md` for how this fits the broader formal-verification model.
   `ClientOptimisticSend`) racing writes to the documents it reads. The client
   picks the request identity, shows the message pending, keeps its payload
   and sends; a reply confirms it, and a refusal or the client's deadline
-  shows it failed with Retry, which resends under the same identity. Each
-  send is the reservation (`request.client.reserve_session`) and the
-  submission (`request.client.submit`), whose commits abort when the working
-  Agent refreshes the session observation; both are signed-conflict rebuilds
-  (Lean `clientSignedWriteMayRetry`). The runtime's create is idempotent on
+  shows it failed with Retry, which resends under the same identity. A chat
+  send is one submission (`request.client.submit`) that creates a new session
+  with its request (Lean `AgentSession.admitRequest`); a reserving send (the
+  Goal path, `Reserves`) first commits the reservation
+  (`request.client.reserve_session`). Each commit aborts when the working
+  Agent refreshes the session observation, and each is a signed-conflict
+  rebuild (Lean `clientSignedWriteMayRetry`). The runtime's create is idempotent on
   the request identity (`send_client_request`: the key derived from the
   identity, the held lookup by `request_id`, the staging held check) and the
   runtime refuses only an identity it does not hold; the transport may fail

@@ -278,14 +278,30 @@ structure Document where
   observation : Option Observation := none
   deriving DecidableEq, Repr
 
-/-- Creation reserves immutable scope and agent selection. A Client submission
-ensures a new session and inserts its signed request in one transaction under the
-client actor: the session's native document owner is that user. An unattended
-agent submission creates its session under that agent. Reuse preserves the complete
-document and its native owner, including closed state and presentation metadata.
-Runtime admission requires an existing Client session and must never repair a
-missing one under agent authority. Atomic commit/rollback and native owner assignment
-are obligations of the database transaction adapter, not application ACP checks. -/
+/-- Creation reserves immutable scope and agent selection. Reuse preserves the
+complete document and its native owner, including closed state and presentation
+metadata. A new session's native owner is the actor whose transaction creates
+it: the User for a Client submission, the Agent for an unattended one.
+
+An admission runs in one transaction, so a denied grant or a failed commit
+leaves nothing of it: the session (when new), its relationships, any creation
+receipt and the signed request commit together. A Client signs its request
+against the session's document id before that transaction; for a new session it
+takes the id DefraDB derives from the session's first block, which the Client
+prepares and signs from the request's own fields, so the id exists before
+anything is stored (`AdmissionInput.reserved = false`). A creation receipt names
+its opening request and is written in the same transaction as the session and
+that request.
+
+A reservation (`AdmissionInput.reserved = true`) instead commits the session and
+its relationships in a transaction of its own, before anything is signed against
+it, and records no request and no receipt (`reserveSession`). Its states are
+none, reserved and submitted: a failed submission leaves the reservation, and the
+next submission with the same scope and Agent reuses it. Runtime admission
+requires an existing Client session and never repairs a missing one under Agent
+authority; a reserved session is never repaired under Agent authority either.
+Atomic commit/rollback and native owner assignment are obligations of the
+database transaction adapter, not application ACP checks. -/
 def ensure? (existing : Option Document) (requested : Document) : Option Document :=
   match existing with
   | none => some requested
@@ -298,9 +314,8 @@ theorem ensure_existing_preserves_document (current requested : Document)
     ensure? (some current) requested = some current := by simp [ensure?, scope, agent]
 
 /-- The completed logical admission retains its existing session and identifies
-the request/session creators and intended relationships. ACP1 installs the
-relationships after document commit; `OwnershipPublication` models that window.
-Existing sessions retain owner, title, provenance and creation receipt. -/
+the request/session creators and intended relationships. Existing sessions
+retain owner, title, provenance and creation receipt. -/
 structure AdmissionState where
   session : Option Document := none
   sessionOwner : Option Nat := none
@@ -323,11 +338,17 @@ structure AdmissionInput where
   receipt : Option CreationReceipt
   authorized : Bool
   commit : Bool
+  reserved : Bool := false
   deriving DecidableEq, Repr
 
-def admitRequest (before : AdmissionState) (input : AdmissionInput) : AdmissionState :=
-  if !input.authorized || !input.commit || (before.session.isSome && before.sessionDoc.isNone)
-  then before else
+/-- A session is complete once it has its physical document and its `parent`
+Agent relationship; a submission into an incomplete one is refused. -/
+def AdmissionState.incomplete (s : AdmissionState) : Bool :=
+  s.session.isSome && (s.sessionDoc.isNone || s.sessionParent.isNone)
+
+/-- The admission transaction: ensure the session, then insert the request. -/
+def submitRequest (before : AdmissionState) (input : AdmissionInput) : AdmissionState :=
+  if !input.authorized || !input.commit || before.incomplete then before else
   match ensure? before.session input.requested with
   | none => before
   | some session =>
@@ -344,13 +365,67 @@ def admitRequest (before : AdmissionState) (input : AdmissionInput) : AdmissionS
       requestParent := some sessionDoc
       requestWorker := if input.actor != session.agent then some session.agent else none }
 
+/-- The reservation's own committed transaction: a new session with its
+relationships under the reserving actor, no receipt and no request. An existing
+session is reused unchanged. -/
+def reserveSession (before : AdmissionState) (input : AdmissionInput) : AdmissionState :=
+  if before.session.isSome then before else
+  { session := some input.requested
+    sessionOwner := some input.actor
+    sessionDoc := some input.sessionDoc
+    sessionParent := some input.agentDoc
+    sessionWorker :=
+      if input.actor != input.requested.agent then some input.requested.agent else none }
+
+def admitRequest (before : AdmissionState) (input : AdmissionInput) : AdmissionState :=
+  submitRequest (if input.reserved then reserveSession before input else before) input
+
 theorem failed_admission_is_unchanged (before : AdmissionState) (input : AdmissionInput)
-    (aborted : input.commit = false) : admitRequest before input = before := by
-  simp [admitRequest, aborted]
+    (atomic : input.reserved = false) (aborted : input.commit = false) :
+    admitRequest before input = before := by
+  simp [admitRequest, submitRequest, atomic, aborted]
 
 theorem unauthorized_admission_is_unchanged (before : AdmissionState) (input : AdmissionInput)
-    (denied : input.authorized = false) : admitRequest before input = before := by
-  simp [admitRequest, denied]
+    (atomic : input.reserved = false) (denied : input.authorized = false) :
+    admitRequest before input = before := by
+  simp [admitRequest, submitRequest, atomic, denied]
+
+/-- A failed Client submission of a new session leaves nothing. -/
+theorem failed_client_admission_leaves_nothing (input : AdmissionInput)
+    (atomic : input.reserved = false)
+    (failed : input.authorized = false ∨ input.commit = false) :
+    admitRequest {} input = {} := by
+  rcases failed with denied | aborted
+  · exact unauthorized_admission_is_unchanged {} input atomic denied
+  · exact failed_admission_is_unchanged {} input atomic aborted
+
+/-- A failed submission after a reservation leaves exactly the reservation. -/
+theorem failed_reserved_admission_leaves_reservation (before : AdmissionState)
+    (input : AdmissionInput) (reserving : input.reserved = true)
+    (failed : input.authorized = false ∨ input.commit = false) :
+    admitRequest before input = reserveSession before input := by
+  rcases failed with denied | aborted <;> simp [admitRequest, submitRequest, reserving, *]
+
+theorem reservation_records_no_request (input : AdmissionInput) :
+    (reserveSession {} input).requestDoc = none ∧ (reserveSession {} input).receipt = none := by
+  simp [reserveSession]
+
+/-- The next submission with the same scope and Agent reuses a reservation: the
+request joins the reserved session and its document, owner and relationships
+stay as reserved. -/
+theorem reservation_is_reused (reserving next : AdmissionInput)
+    (scope : next.requested.scope = reserving.requested.scope)
+    (agent : next.requested.agent = reserving.requested.agent)
+    (authorized : next.authorized = true) (committed : next.commit = true) :
+    let reserved := reserveSession {} reserving
+    let after := admitRequest reserved next
+    after.session = reserved.session ∧ after.sessionDoc = reserved.sessionDoc ∧
+      after.sessionOwner = reserved.sessionOwner ∧
+      after.sessionParent = reserved.sessionParent ∧
+      after.requestParent = reserved.sessionDoc := by
+  cases h : next.reserved <;>
+    simp [admitRequest, submitRequest, reserveSession, AdmissionState.incomplete, ensure?,
+      scope, agent, authorized, committed, h]
 
 /-- ACP1 creation commits the authenticated owner's document before relation
 updates. Missing relationships deny the corresponding inherited access, while

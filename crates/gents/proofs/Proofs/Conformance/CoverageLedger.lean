@@ -92,7 +92,6 @@ consumes, so the list only shrinks: a new family arrives with its consumer. -/
 def openFamilies : List String :=
   [ "apply_reconcile_contract_cases_publish_cases"
   , "client_window_scope_bound_delivers"
-  , "contracts_atomic_admission_unreached"
   , "contracts_background_wake_rows_unreached"
   , "contracts_fork_publication_unreached"
   , "contracts_pack_installation_finality_unreached"
