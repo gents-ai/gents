@@ -139,10 +139,14 @@ theorem retained_claim_never_uses_another_agent (agent : String) (owner : Option
 /-- What submitting a signed intent does with the intent its client already
 holds under the same `intent_id`. `AgentToolControl` carries
 `(client_did, intent_id)` as a unique index, so of two concurrent submissions
-of one signed intent the second to commit aborts
+under one pair the second to commit aborts
 (`TransactionFence.a_unique_index_fences_twin_arrivals`) and its rebuilt
 attempt reads the first: one intent is saved, and the rebuilt submission
-reports it for observation. -/
+reports it for observation, or refuses a different intent bound to that id.
+External premise: DefraDB derives a created document's id from its genesis
+block, so two submissions of one signed intent create the same document and
+also conflict as writers of it (`TransactionFence.a_common_write_fences_both_orders`);
+the index is what fences two different intents under one id. -/
 inductive IntentSubmission where
   | create
   | observeHeld
