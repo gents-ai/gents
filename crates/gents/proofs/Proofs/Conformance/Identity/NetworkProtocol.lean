@@ -21,6 +21,7 @@ def resource : Family ResourceInput (Option String) where
     "NodeDirectoryEntry",
     "PeerRegistry",
     "Node",
+    "AccountDeviceGroup",
     "DefaultAgentSelection",
     "NodeReadiness",
     "NodeRuntime",

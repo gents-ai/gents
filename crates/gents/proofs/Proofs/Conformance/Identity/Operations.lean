@@ -513,7 +513,6 @@ def replicaGrantScenario : Family ReplicaInput ReplicaGrant where
       agentRead := replicaRead i "agent" "enrollment_records" "remote"
       outsiderRead := replicaRead i "outsider" "enrollment_records" "remote"
       appRead := replicaHostRead i "children" "application"
-      pending := (replicaState i.name).relations.contains
-        ⟨"enrollment_records", "remote", "pending_parent", .actor "runtime"⟩ }
+      pending := (replicaState i.name).pendingParents.contains ("enrollment_records", "remote", "runtime") }
 
 end Conformance.IdentityOperations

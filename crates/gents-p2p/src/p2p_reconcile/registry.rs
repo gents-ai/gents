@@ -284,6 +284,7 @@ async fn tick_registry(
     published: &mut Option<PublishedRegistryEntry>,
     renewal_interval: Duration,
 ) -> Result<()> {
+    gents_store::local::document_acp::ensure_node_publication(node).await?;
     let peer_id = p2p
         .local_peer_id()
         .await

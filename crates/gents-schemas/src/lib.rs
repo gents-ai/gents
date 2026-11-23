@@ -3,6 +3,9 @@ pub use policy_ids::{BuiltInPolicy, HomePolicyIds};
 
 pub const NODE_NAME: &str = "Node";
 pub const NODE: &str = include_str!("../schemas/agent/node.graphql");
+pub const ACCOUNT_DEVICE_GROUP_NAME: &str = "AccountDeviceGroup";
+pub const ACCOUNT_DEVICE_GROUP: &str =
+    include_str!("../schemas/agent/account_device_group.graphql");
 pub const DEFAULT_AGENT_SELECTION_NAME: &str = "DefaultAgentSelection";
 pub const DEFAULT_AGENT_SELECTION: &str =
     include_str!("../schemas/agent/default_agent_selection.graphql");
@@ -224,6 +227,7 @@ pub const GOAL_OBSERVATION: &str = include_str!("../schemas/agent/goal_observati
 
 pub const ALL: &[&str] = &[
     NODE,
+    ACCOUNT_DEVICE_GROUP,
     DEFAULT_AGENT_SELECTION,
     AGENT,
     COMPACTION_CONFIG,
@@ -314,6 +318,7 @@ pub const ALL: &[&str] = &[
 
 pub const ALL_COLLECTION_NAMES: &[&str] = &[
     NODE_NAME,
+    ACCOUNT_DEVICE_GROUP_NAME,
     DEFAULT_AGENT_SELECTION_NAME,
     AGENT_NAME,
     COMPACTION_CONFIG_NAME,

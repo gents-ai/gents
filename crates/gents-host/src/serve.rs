@@ -633,13 +633,14 @@ async fn serve_foreground(
     let _post_open_keychain_prompt_guard =
         gents_service::process_resources::prevent_keychain_prompts(args.keychain_startup_approval)?;
     let protected_backend = protected_backend
-        .preflight(
+        .preflight_with_account(
             &backend_store_key,
             &identity,
             init_config
                 .as_ref()
                 .map(|config| config.document_acp)
                 .unwrap_or_default(),
+            args.transport_account.as_ref(),
         )
         .await?
         .with_block_cache_bytes(block_cache_bytes(args.block_cache_mb)?);

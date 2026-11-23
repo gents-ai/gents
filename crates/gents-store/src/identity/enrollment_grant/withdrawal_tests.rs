@@ -22,6 +22,8 @@ struct AssignmentTestRuntime {
     active: tokio::sync::Mutex<std::collections::BTreeSet<String>>,
     bodies: tokio::sync::Mutex<std::collections::BTreeSet<String>>,
     fail_stop: std::sync::atomic::AtomicBool,
+    block_after_stop: std::sync::atomic::AtomicBool,
+    stopped: tokio::sync::Notify,
     block_active: std::sync::atomic::AtomicBool,
     active_entered: tokio::sync::Notify,
     changed: tokio::sync::Notify,
@@ -42,6 +44,13 @@ impl crate::config_client::assignment_receiver::AssignmentRuntime for Assignment
             return Err(std::io::Error::other("stop failed").into());
         }
         self.active.lock().await.remove(id);
+        if self
+            .block_after_stop
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            self.stopped.notify_one();
+            std::future::pending::<()>().await;
+        }
         self.changed.notify_one();
         Ok(())
     }
@@ -67,7 +76,7 @@ impl crate::config_client::assignment_receiver::AssignmentRuntime for Assignment
 }
 
 #[tokio::test]
-async fn shutdown_cancels_a_pending_assignment_runtime_callback(
+async fn shutdown_cancels_pending_assignment_reads_and_runtime_callbacks(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let home = home(Provider::Vera).await?;
     let access = home.runtime()?;
@@ -93,7 +102,8 @@ async fn shutdown_cancels_a_pending_assignment_runtime_callback(
     let ids = crate::subscription_source::collection_ids(&home.node, ["Node"])?;
     let (shutdown, stop) = tokio::sync::watch::channel(false);
     let watcher = tokio::spawn({
-        let runtime = runtime.clone();
+        let (access, scope, runtime, ids) =
+            (access.clone(), scope.clone(), runtime.clone(), ids.clone());
         async move {
             access
                 .watch_assignments(&scope, runtime.as_ref(), ids, stop)
@@ -105,13 +115,58 @@ async fn shutdown_cancels_a_pending_assignment_runtime_callback(
         runtime.active_entered.notified(),
     )
     .await?;
+    // A second watcher can shut down while the first still owns this scope.
+    let (second_shutdown, stop) = tokio::sync::watch::channel(false);
+    let second = access.watch_assignments(&scope, runtime.as_ref(), ids, stop);
+    tokio::pin!(second);
+    assert!(futures::poll!(&mut second).is_pending());
+    second_shutdown.send(true)?;
+    assert!(matches!(
+        futures::poll!(&mut second),
+        std::task::Poll::Ready(Ok(()))
+    ));
     shutdown.send(true)?;
     tokio::time::timeout(crate::test_support::STALL_CEILING, watcher).await???;
+
+    let (shutdown, mut stop) = tokio::sync::watch::channel(false);
+    runtime
+        .block_active
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    let (entered, reading) = tokio::sync::oneshot::channel();
+    let refresh =
+        access.refresh_with_assignment_view(&scope, runtime.as_ref(), Some(&mut stop), async {
+            entered.send(()).unwrap();
+            std::future::pending().await
+        });
+    tokio::pin!(refresh);
+    tokio::select! {
+        _ = &mut refresh => panic!("refresh returned before the provider answered"),
+        result = tokio::time::timeout(crate::test_support::STALL_CEILING, reading) => result??,
+    }
+    shutdown.send(true)?;
+    assert!(
+        tokio::time::timeout(crate::test_support::STALL_CEILING, refresh)
+            .await??
+            .is_none()
+    );
+
     Ok(())
 }
 
 #[tokio::test]
 async fn an_access_change_wakes_the_assignment_receiver() -> anyhow::Result<()> {
+    exercise_assignment_withdrawal(None).await
+}
+
+#[tokio::test]
+async fn the_first_observed_height_reconciles_a_withdrawal() -> anyhow::Result<()> {
+    exercise_assignment_withdrawal(Some(events::ChannelBus::new())).await
+}
+
+async fn exercise_assignment_withdrawal(
+    observer: Option<events::ChannelBus>,
+) -> anyhow::Result<()> {
+    use events::Bus as _;
     let home = home(Provider::Vera).await?;
     let access = home.runtime()?;
     access
@@ -135,10 +190,27 @@ async fn an_access_change_wakes_the_assignment_receiver() -> anyhow::Result<()> 
     let (shutdown, stop) = tokio::sync::watch::channel(false);
     let watcher = tokio::spawn({
         let (access, runtime, scope) = (access.clone(), runtime.clone(), scope.clone());
+        let subscriptions = observer.as_ref().map(|bus| {
+            (
+                crate::subscription_source::ChangeSubscription::from(
+                    bus.subscribe_collection_changes(ids.clone()),
+                ),
+                bus.subscribe(&[events::EventName::AcpHeightAdvanced]),
+            )
+        });
         async move {
-            access
-                .watch_assignments(&scope, runtime.as_ref(), ids, stop)
-                .await
+            match subscriptions {
+                Some((changes, heights)) => {
+                    access
+                        .watch_assignment_events(&scope, runtime.as_ref(), changes, heights, stop)
+                        .await
+                }
+                None => {
+                    access
+                        .watch_assignments(&scope, runtime.as_ref(), ids, stop)
+                        .await
+                }
+            }
         }
     });
     async fn wait_active(runtime: &AssignmentTestRuntime, id: &str, active: bool) {
@@ -161,6 +233,14 @@ async fn an_access_change_wakes_the_assignment_receiver() -> anyhow::Result<()> 
             &home.runtime.did().parse()?,
         )
         .await?;
+    if let Some(observer) = observer.as_ref() {
+        observer.publish(events::Message::acp_height_advanced(
+            events::AcpHeightAdvancedData {
+                height: 2,
+                module_state_root: "first observed root".into(),
+            },
+        ));
+    }
     wait_active(&runtime, &home.node_doc, false).await;
     shutdown.send(true)?;
     watcher.await??;
@@ -205,6 +285,27 @@ async fn a_vera_home_reads_only_its_own_certified_assignments() -> anyhow::Resul
     assert!(initial.may_run(&home.node_doc, true));
     assert!(!initial.may_run(&home.node_doc, false));
     assert!(running.active.lock().await.contains(&home.node_doc));
+    let conflicting = defra_node::CertifiedAssignments {
+        position: initial.position.clone(),
+        object_ids: Vec::new(),
+        ..certified.clone()
+    };
+    assert!(matches!(
+        access
+            .refresh_with_assignment_view(
+                &scope,
+                &running,
+                None,
+                std::future::ready(Ok(conflicting))
+            )
+            .await,
+        Err(crate::config_client::assignment_receiver::ReceiverError::InvalidState(_))
+    ));
+    assert!(running.active.lock().await.contains(&home.node_doc));
+    assert_eq!(
+        access.load_assignments(&scope).await?,
+        Some(initial.clone())
+    );
     let other = defra_node::AssignmentQuery {
         subject: home.owner.did().into(),
         ..query.clone()
@@ -261,17 +362,28 @@ async fn a_vera_home_reads_only_its_own_certified_assignments() -> anyhow::Resul
         .fail_stop
         .store(true, std::sync::atomic::Ordering::SeqCst);
     assert!(access.refresh_assignments(&scope, &running).await.is_err());
-    assert_eq!(access.load_assignments(&scope).await?, Some(initial));
+    assert_eq!(
+        access.load_assignments(&scope).await?,
+        Some(initial.clone())
+    );
     assert!(running.active.lock().await.contains(&home.node_doc));
     running
         .fail_stop
         .store(false, std::sync::atomic::Ordering::SeqCst);
-    let persisted = access
-        .refresh_assignments(&scope, &running)
-        .await
-        .map_err(|error| anyhow::anyhow!("withdrawn assignment refresh: {error}"))?;
-    assert!(!persisted.may_run(&home.node_doc, true));
-    assert!(!persisted.may_run(&replacement, false));
+    running
+        .block_after_stop
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    {
+        // The previous stop failed. Its withdrawal must take effect even if
+        // the authority cannot answer another read.
+        let interrupted =
+            access.refresh_with_assignment_view(&scope, &running, None, std::future::pending());
+        tokio::pin!(interrupted);
+        tokio::select! {
+            result = &mut interrupted => panic!("refresh returned before interruption: {result:?}"),
+            stopped = tokio::time::timeout(crate::test_support::STALL_CEILING, running.stopped.notified()) => stopped?,
+        }
+    }
     assert!(running.active.lock().await.is_empty());
     drop(access);
     let Home {
@@ -303,7 +415,20 @@ async fn a_vera_home_reads_only_its_own_certified_assignments() -> anyhow::Resul
         .load_assignments(&scope)
         .await?
         .expect("persisted assignment state");
-    assert_eq!(recovered, persisted);
+    assert_eq!(recovered, initial);
+    let replay = defra_node::CertifiedAssignments {
+        position: initial.position.clone(),
+        object_ids: initial.assigned.clone(),
+        ..certified
+    };
+    assert!(matches!(
+        access
+            .refresh_with_assignment_view(&scope, &running, None, std::future::ready(Ok(replay)))
+            .await,
+        Err(crate::config_client::assignment_receiver::ReceiverError::Overtaken)
+    ));
+    assert!(running.active.lock().await.is_empty());
+    let recovered = access.refresh_assignments(&scope, &running).await?;
     assert!(!recovered.may_run(&scope.node_document, true));
     assert!(!recovered.may_run(&replacement, false));
     running.bodies.lock().await.insert(replacement.clone());

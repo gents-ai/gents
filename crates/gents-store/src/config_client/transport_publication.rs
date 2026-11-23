@@ -74,6 +74,39 @@ async fn local_node(
     Ok(Some((doc, owner)))
 }
 
+/// Progress belongs to the receiving runtime and commits with the grants it staged.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum PublicationState {
+    PendingParent,
+    Linked,
+}
+
+fn publication_key(collection: &str, doc: &DocID, runtime: &Did) -> Vec<u8> {
+    format!("gents/publication/v1/{collection}/{doc}/{runtime}").into_bytes()
+}
+
+pub async fn publication_state(
+    view: &db::DocumentMutationView,
+    collection: &str,
+    doc: &DocID,
+    runtime: &Did,
+) -> Result<Option<PublicationState>> {
+    let key = publication_key(collection, doc, runtime);
+    read_state(&view.sibling(Namespace::Systemstore), &key).await
+}
+
+async fn read_state(
+    system: &db::DocumentMutationView,
+    key: &[u8],
+) -> Result<Option<PublicationState>> {
+    match system.get(key).await?.as_deref() {
+        None => Ok(None),
+        Some(b"pending") => Ok(Some(PublicationState::PendingParent)),
+        Some(b"linked") => Ok(Some(PublicationState::Linked)),
+        Some(_) => Err(failure("invalid local transport publication state")),
+    }
+}
+
 struct PublicationGrant<'a> {
     context: &'a DocumentMutationContext<'a>,
     collection: &'a str,
@@ -95,6 +128,7 @@ pub async fn project_transport_document(
     ids: &HomePolicyIds,
     collection_name: &str,
     doc_id: &str,
+    group_manager: Option<&Subject>,
 ) -> Result<bool> {
     let view = context.view;
     let provider = context.document_acp;
@@ -124,6 +158,22 @@ pub async fn project_transport_document(
         ));
     }
     let id = DocID::from_string(doc_id).map_err(failure)?;
+    let key = publication_key(collection_name, &id, runtime);
+    let state = read_state(&system, &key).await?;
+    if state == Some(PublicationState::Linked) {
+        return Ok(false);
+    }
+    // Defra registers incoming genesis and stages its grants before replaying
+    // the row. Only a local create starts a Gents publication.
+    if group_manager.is_some()
+        && state.is_none()
+        && (view.projection_actor().is_none()
+            || !context
+                .registration_pending(ids.id(BuiltInPolicy::Household), resource, doc_id)
+                .await?)
+    {
+        return Ok(false);
+    }
     let Some(document) = collection
         .get_by_doc_id(view, &system, &id)
         .await
@@ -146,48 +196,46 @@ pub async fn project_transport_document(
         doc: doc_id,
     };
     let actor = Subject::entity(runtime.clone());
-    let marked = context
-        .projected_actor_relationship(
-            ids.id(BuiltInPolicy::Household),
-            resource,
-            doc_id,
-            "local_publication",
-            runtime,
-        )
-        .await?;
-    if !marked {
-        if !provider.supports_transactions()
-            && !context
-                .registration_pending(ids.id(BuiltInPolicy::Household), resource, doc_id)
-                .await?
+    if state.is_none() {
+        // Import an existing publication once. Replaying its grants here could
+        // restore a reader or parent the owner has since revoked.
+        let policy = ids.id(BuiltInPolicy::Household);
+        if context
+            .projected_actor_relationship(policy, resource, doc_id, "local_publication", runtime)
+            .await?
         {
-            return Ok(false);
+            if !context
+                .projected_actor_relationship(policy, resource, doc_id, "pending_parent", runtime)
+                .await?
+            {
+                system.set(&key, b"linked").await?;
+                return Ok(true);
+            }
+        } else {
+            if !provider.supports_transactions()
+                && !context
+                    .registration_pending(policy, resource, doc_id)
+                    .await?
+            {
+                return Ok(false);
+            }
+            if let Some(manager) = group_manager {
+                grant
+                    .change("reader_manager", manager.clone(), false)
+                    .await?;
+            }
+            grant.change("reader", actor, false).await?;
+            if collection_name == PEER_REGISTRY_NAME {
+                grant.change("reader", Subject::Wildcard, false).await?;
+            }
         }
-        changed |= grant.change("reader", actor.clone(), false).await?;
-        if collection_name == PEER_REGISTRY_NAME {
-            changed |= grant.change("reader", Subject::Wildcard, false).await?;
-        }
-        changed |= grant
-            .change("local_publication", actor.clone(), false)
-            .await?;
-        changed |= grant.change("pending_parent", actor.clone(), false).await?;
-    }
-    let pending = context
-        .projected_actor_relationship(
-            ids.id(BuiltInPolicy::Household),
-            resource,
-            doc_id,
-            "pending_parent",
-            runtime,
-        )
-        .await?;
-    if !pending {
-        return Ok(changed);
+        system.set(&key, b"pending").await?;
+        changed = true;
     }
     let Some((node, owner)) = local_node(context, ids, runtime).await? else {
         return Ok(changed);
     };
-    changed |= grant
+    grant
         .change("parent", Subject::entity_set("nodes", node, ""), false)
         .await?;
     if collection_name == PEER_REGISTRY_NAME
@@ -205,16 +253,18 @@ pub async fn project_transport_document(
             None
         };
         if let Some(writer) = writer {
-            changed |= grant
+            grant
                 .change("writer", Subject::entity(writer), false)
                 .await?;
         }
     }
-    changed |= grant
-        .change("reader_manager", Subject::entity(owner), false)
-        .await?;
-    changed |= grant.change("pending_parent", actor, true).await?;
-    Ok(changed)
+    if group_manager.is_none() {
+        grant
+            .change("reader_manager", Subject::entity(owner), false)
+            .await?;
+    }
+    system.set(&key, b"linked").await?;
+    Ok(true)
 }
 
 /// Called on startup and local Node publication to complete only outstanding
@@ -222,6 +272,7 @@ pub async fn project_transport_document(
 pub async fn reconcile_transport_documents(
     context: &DocumentMutationContext<'_>,
     ids: &HomePolicyIds,
+    group_manager: Option<&Subject>,
 ) -> Result<Vec<(String, String)>> {
     let view = context.view;
     let system = view.sibling(Namespace::Systemstore);
@@ -243,7 +294,7 @@ pub async fn reconcile_transport_documents(
                 .id()
                 .ok_or_else(|| failure("transport row has no document ID"))?
                 .to_string();
-            if project_transport_document(context, ids, name, &doc).await? {
+            if project_transport_document(context, ids, name, &doc, group_manager).await? {
                 changed.push(((*name).to_owned(), doc));
             }
         }

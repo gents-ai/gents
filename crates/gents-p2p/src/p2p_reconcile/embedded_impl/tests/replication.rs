@@ -352,9 +352,13 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
                 agent_read: read(&agent, &query, request).await?,
                 outsider_read: read(&outsider, &query, request).await?,
                 app_read: read(&admin, &session_query, "AgentSession").await?,
-                pending: http(admin_address, &candidate)?
-                    .observe_actor_relationship(request, &doc, "pending_parent", &reader)
-                    .await?,
+                pending: {
+                    use gents_store::config_client::transport_publication::{publication_state, PublicationState};
+                    let txn = admin_node.database().new_txn(true).await?;
+                    let state = publication_state(&txn.datastore()?, request, &doc.parse()?, &reader).await?;
+                    txn.discard()?;
+                    state == Some(PublicationState::PendingParent)
+                },
             },
         )
     };
@@ -435,21 +439,21 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     http(admin_address, &candidate)?
         .write("test.transport.publish_request", &reproject_request)
         .await?;
-    assert!(
-        http(admin_address, &candidate)?
-            .observe_actor_relationship(
-                "NetworkEnrollmentRequest",
-                &doc,
-                "local_publication",
-                &reader
-            )
-            .await?
-    );
-    assert!(
-        http(admin_address, &candidate)?
-            .observe_actor_relationship("NetworkEnrollmentRequest", &doc, "pending_parent", &reader)
-            .await?
-    );
+    {
+        use gents_store::config_client::transport_publication::{
+            publication_state, PublicationState,
+        };
+        let txn = admin_node.database().new_txn(true).await?;
+        let state = publication_state(
+            &txn.datastore()?,
+            "NetworkEnrollmentRequest",
+            &doc.parse()?,
+            &reader,
+        )
+        .await?;
+        txn.discard()?;
+        assert_eq!(state, Some(PublicationState::PendingParent));
+    }
     http(admin_address, &candidate)?
         .add_actor_relationship("NetworkEnrollmentRequest", &doc, "reader", &reader)
         .await?;

@@ -240,12 +240,12 @@ fn node_publication_matches_the_lean_model() {
     gents_lean_vocab::families::identity_node_publication_publication::replay::<
         Provider,
         Publication,
-    >(
-        |input| match super::publication(document_acp(input.provider)) {
+    >(|input| {
+        match super::publication_with_admission(document_acp(input.provider), input.admitted) {
             super::Publication::Proceeds => Publication::Proceeds,
             super::Publication::AwaitsTransportGrants => Publication::AwaitsTransportGrants,
-        },
-    );
+        }
+    });
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]

@@ -115,7 +115,10 @@ def traceOutcomes (state : State) : List Action → List (Option Bool)
 /-- A step the wire cannot name is replayed as a check nobody may pass, so a
 malformed step is visible as a mismatch rather than skipped. -/
 def PolicyTraceInput.outcomes (i : PolicyTraceInput) : List (Option Bool) :=
-  let state : State := ⟨i.objects.map TraceObject.toModel, i.relations.map TraceRelation.toModel, i.enrolled⟩
+  let state : State :=
+    { objects := i.objects.map TraceObject.toModel
+      relations := i.relations.map TraceRelation.toModel
+      enrolled := i.enrolled }
   traceOutcomes state (i.steps.map fun step => step.toModel.getD (.check "" "" "" ""))
 
 def householdActions : List Action :=
@@ -150,6 +153,25 @@ def foreignReplicaTrace : PolicyTraceInput :=
      .grantAs runtimeDid userReader, .check userDid "enrollment_records" "remote" "read",
      .grantAs runtimeDid parent]
 
+/-- The account controls group membership. A member can manage readers of
+a linked row, and the foreign creator can edit or retract just its replica. -/
+def transportGroupTrace (resource : String) : PolicyTraceInput :=
+  let state : State := { objects := [⟨"device_groups", "account", userDid⟩,
+      ⟨resource, "replica", runtimeDid⟩], relations := [], enrolled := [] }
+  let member : Relation := ⟨"device_groups", "account", "member", .actor otherRuntimeDid⟩
+  let manager : Relation := ⟨resource, "replica", "reader_manager",
+    .entitySet "device_groups" "account" "member"⟩
+  let reader : Relation := ⟨resource, "replica", "reader", .actor readerDid⟩
+  let writer : Relation := ⟨resource, "replica", "writer", .actor strangerDid⟩
+  traceInput ("device-membership-" ++ resource) state
+    [.grantAs runtimeDid manager, .grantAs otherRuntimeDid member,
+     .grantAs otherRuntimeDid reader, .grantAs userDid member,
+     .grantAs otherRuntimeDid reader, .grantAs otherRuntimeDid writer,
+     .check otherRuntimeDid resource "replica" "update", .grantAs runtimeDid writer,
+     .check strangerDid resource "replica" "update", .check strangerDid resource "replica" "delete",
+     .revokeAs userDid member, .revokeAs otherRuntimeDid reader, .revokeAs runtimeDid writer,
+     .check strangerDid resource "replica" "delete"]
+
 /-- Every household fixture's trace, replayed against native document ACP
 with the production policy installed. -/
 @[conformance_family]
@@ -157,7 +179,8 @@ def policyTrace : Family PolicyTraceInput (List (Option Bool)) where
   inputs := [traceInput "user-node-agents-mixed-session-ownership-policy-followup"
       HouseholdFixture.initial householdActions,
     traceInput "operations-parent-publication" OperationsFixture.initial OperationsFixture.actions,
-    configurationTrace, foreignReplicaTrace,
+    configurationTrace, foreignReplicaTrace, transportGroupTrace "discovery",
+    transportGroupTrace "scoped_discovery", transportGroupTrace "enrollment_records",
     traceInput "secret-configuration-publication" SecretConfigurationFixture.initial
       SecretConfigurationFixture.actions]
   model := PolicyTraceInput.outcomes

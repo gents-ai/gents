@@ -74,6 +74,6 @@ def clientReservation : Family ReservationInput ReservationState where
     userDid agentDid "agent" i.fresh i.commit)
 
 example : (ReservationState.toState ⟨true, true, false⟩) =
-    ⟨[⟨"sessions", "session", userDid⟩], [reservationParent], []⟩ := by rfl
+    { objects := [⟨"sessions", "session", userDid⟩], relations := [reservationParent], enrolled := [] } := by rfl
 
 end Conformance.SessionPublication

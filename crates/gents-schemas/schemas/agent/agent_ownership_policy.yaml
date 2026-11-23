@@ -73,6 +73,15 @@ resources:
         expr: route_reader + tool_reader + parent->read
       - name: update
       - name: delete
+  - name: device_groups
+    relations:
+      - name: member
+        types: [actor]
+    permissions:
+      - name: read
+        expr: member
+      - name: update
+      - name: delete
   - name: discovery
     relations:
       - name: parent
@@ -80,7 +89,7 @@ resources:
       - name: reader
         types: [actor]
       - name: reader_manager
-        types: [actor]
+        types: [actor, device_groups->member]
         manages: [reader]
       - name: writer
         types: [actor]
@@ -94,6 +103,7 @@ resources:
       - name: update
         expr: writer
       - name: delete
+        expr: writer
   - name: scoped_discovery
     relations:
       - name: parent
@@ -101,17 +111,21 @@ resources:
       - name: reader
         types: [actor]
       - name: reader_manager
-        types: [actor]
+        types: [actor, device_groups->member]
         manages: [reader]
+      - name: writer
+        types: [actor]
       - name: local_publication
         types: [actor]
       - name: pending_parent
         types: [actor]
     permissions:
       - name: read
-        expr: reader + parent->read
+        expr: reader + writer + parent->read
       - name: update
+        expr: writer
       - name: delete
+        expr: writer
   - name: enrollment_records
     relations:
       - name: parent
@@ -119,17 +133,21 @@ resources:
       - name: reader
         types: [actor]
       - name: reader_manager
-        types: [actor]
+        types: [actor, device_groups->member]
         manages: [reader]
+      - name: writer
+        types: [actor]
       - name: local_publication
         types: [actor]
       - name: pending_parent
         types: [actor]
     permissions:
       - name: read
-        expr: reader + parent->read
+        expr: reader + writer + parent->read
       - name: update
+        expr: writer
       - name: delete
+        expr: writer
   - name: configuration
     relations:
       - name: parent

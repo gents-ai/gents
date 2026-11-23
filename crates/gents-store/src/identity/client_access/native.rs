@@ -221,16 +221,19 @@ async fn vera_runtime() -> anyhow::Result<VeraRuntime> {
             ),
         )
         .await?;
-    assert!(
-        !runtime_access
-            .observe_actor_relationship(
-                "PeerRegistry",
-                &registry,
-                "pending_parent",
-                &runtime.did().parse()?
-            )
-            .await?
-    );
+    {
+        use crate::config_client::transport_publication::{publication_state, PublicationState};
+        let txn = node.database().new_txn(true).await?;
+        let state = publication_state(
+            &txn.datastore()?,
+            "PeerRegistry",
+            &registry.parse()?,
+            &runtime.did().parse()?,
+        )
+        .await?;
+        txn.discard()?;
+        assert_eq!(state, Some(PublicationState::Linked));
+    }
     node.database().reconcile_document_projector().await?;
     let candidate_endpoints = RuntimeEndpoints::new(candidate.clone());
     let candidate_endpoint = candidate_endpoints.endpoint(runtime.did(), &url)?;

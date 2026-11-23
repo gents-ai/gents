@@ -1311,7 +1311,7 @@ def run_native(entry, packages):
             cargo_test("native client runtime journey", [
                 "-p", "gents-cli", "-p", "gents-client-host", "-p", "gents-media-host",
                 "--features", "gents-client-host/runtime-e2e", "--test", "integration"],
-                harness=("runtime::", "--skip", "cli_runtime::"))
+                harness=("runtime::", "--skip", "cli_runtime::", "--test-threads=1"))
 
 
 SUMMARY = re.compile(r"^\s*Summary \[\s*([\d.]+)s\] (\d+) tests? run: (.*)$")

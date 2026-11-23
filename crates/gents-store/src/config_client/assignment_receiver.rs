@@ -1,3 +1,20 @@
+//! Consume issuer-scoped assignments from an embedded Vera home.
+//!
+//! For an inventory, call [`ConfigAccess::certified_assignments`] as the
+//! receiving node. Supply its DID as the subject and select the issuer, policy,
+//! resource and relation. The IDs and certified position come from the same
+//! read. A successful empty result proves withdrawal for that scope. A failed
+//! read leaves the last accepted position in effect.
+//!
+//! For a running workload, use [`ConfigAccess::watch_assignments`] with the
+//! collection IDs that carry its bodies and an [`AssignmentRuntime`] that
+//! can enumerate and stop work already running after a process restart.
+//! If the issuer replaces B with C before C arrives locally, the receiver
+//! records the new read floor, stops B, persists the applied set, and waits for C's verified body before
+//! starting it. Recovery reads use the stored position as their lower bound.
+//! [`ConfigAccess::load_assignments`] is for inspecting the last accepted
+//! view. Call [`ConfigAccess::refresh_assignments`] for a one-shot reconciliation.
+
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::error::Error;
@@ -197,6 +214,9 @@ async fn persist(
     let previous = load(txn, key).await?;
     if let Some(previous) = &previous {
         check(&previous.state, next)?;
+        if previous.state == *next {
+            return Ok(previous.state.clone());
+        }
     }
     let update = json!({
         "term": next.position.term.to_string(),
@@ -286,12 +306,38 @@ async fn interruptible<T>(
             return None;
         }
         tokio::select! {
-            result = &mut future => return Some(result),
+            biased;
             changed = shutdown.changed() => {
                 if stop_for_shutdown(*shutdown.borrow(), changed.is_err()) { return None; }
             }
+            result = &mut future => return Some(result),
         }
     }
+}
+
+async fn stop_invalid_work(
+    runtime: &impl AssignmentRuntime,
+    view: &AssignmentState,
+    shutdown: &mut Option<&mut tokio::sync::watch::Receiver<bool>>,
+) -> Result<bool, ReceiverError> {
+    let Some(active) = interruptible(runtime.active(), shutdown).await else {
+        return Ok(false);
+    };
+    let active = active.map_err(ReceiverError::Runtime)?;
+    for id in &active {
+        if !view.assigned.contains(id)
+            || !match interruptible(runtime.has_verified_body(id), shutdown).await {
+                Some(result) => result.map_err(ReceiverError::Runtime)?,
+                None => return Ok(false),
+            }
+        {
+            let Some(result) = interruptible(runtime.stop(id), shutdown).await else {
+                return Ok(false);
+            };
+            result.map_err(ReceiverError::Runtime)?;
+        }
+    }
+    Ok(true)
 }
 
 impl ConfigAccess {
@@ -300,7 +346,7 @@ impl ConfigAccess {
         scope: &AssignmentScope,
         runtime: &R,
         collection_ids: Vec<String>,
-        mut shutdown: tokio::sync::watch::Receiver<bool>,
+        shutdown: tokio::sync::watch::Receiver<bool>,
     ) -> Result<(), ReceiverError>
     where
         R: AssignmentRuntime,
@@ -308,17 +354,35 @@ impl ConfigAccess {
         let ConfigAccess::Local(local) = self else {
             return Err(ReceiverError::Provider(AssignmentReadError::Unsupported));
         };
-        let mut changes = crate::subscription_source::subscribe(local.node(), collection_ids);
-        let mut heights = local
+        let changes = crate::subscription_source::subscribe(local.node(), collection_ids);
+        let heights = local
             .node()
             .subscribe(&[events::EventName::AcpHeightAdvanced]);
+        self.watch_assignment_events(scope, runtime, changes, heights, shutdown)
+            .await
+    }
+
+    pub(crate) async fn watch_assignment_events(
+        &self,
+        scope: &AssignmentScope,
+        runtime: &impl AssignmentRuntime,
+        mut changes: crate::subscription_source::ChangeSubscription,
+        mut heights: events::Subscription,
+        mut shutdown: tokio::sync::watch::Receiver<bool>,
+    ) -> Result<(), ReceiverError> {
+        // The observer announces its first root with a height event only.
+        let mut awaiting_first_height = true;
         loop {
             if *shutdown.borrow() {
                 return Ok(());
             }
-            while heights.try_recv().is_ok() {}
+            while heights.try_recv().is_ok() {
+                awaiting_first_height = false;
+            }
             let retry = match self
-                .refresh_assignments_inner(scope, runtime, Some(&mut shutdown))
+                .refresh_from(scope, runtime, Some(&mut shutdown), |query| {
+                    self.certified_assignments(query)
+                })
                 .await
             {
                 Ok(None) => return Ok(()),
@@ -333,7 +397,8 @@ impl ConfigAccess {
                 event = changes.recv() => {
                     if event.is_none() { return Err(ReceiverError::SubscriptionEnded); }
                 }
-                event = heights.recv(), if retry => {
+                event = heights.recv(), if awaiting_first_height || retry => {
+                    awaiting_first_height = false;
                     if event.is_none() { return Err(ReceiverError::SubscriptionEnded); }
                 }
                 _ = tokio::time::sleep(RETRY_INTERVAL), if retry => {}
@@ -364,19 +429,33 @@ impl ConfigAccess {
     where
         R: AssignmentRuntime,
     {
-        self.refresh_assignments_inner(scope, runtime, None)
-            .await?
-            .ok_or(ReceiverError::InvalidState("unexpected shutdown"))
+        self.refresh_from(scope, runtime, None, |query| {
+            self.certified_assignments(query)
+        })
+        .await?
+        .ok_or(ReceiverError::InvalidState("unexpected shutdown"))
     }
 
-    async fn refresh_assignments_inner<R>(
+    #[cfg(test)]
+    pub(crate) async fn refresh_with_assignment_view(
         &self,
         scope: &AssignmentScope,
-        runtime: &R,
+        runtime: &impl AssignmentRuntime,
+        shutdown: Option<&mut tokio::sync::watch::Receiver<bool>>,
+        read: impl Future<Output = Result<defra_node::CertifiedAssignments, AssignmentReadError>>,
+    ) -> Result<Option<AssignmentState>, ReceiverError> {
+        self.refresh_from(scope, runtime, shutdown, |_| read).await
+    }
+
+    async fn refresh_from<F>(
+        &self,
+        scope: &AssignmentScope,
+        runtime: &impl AssignmentRuntime,
         mut shutdown: Option<&mut tokio::sync::watch::Receiver<bool>>,
+        read: impl FnOnce(defra_node::AssignmentQuery) -> F,
     ) -> Result<Option<AssignmentState>, ReceiverError>
     where
-        R: AssignmentRuntime,
+        F: Future<Output = Result<defra_node::CertifiedAssignments, AssignmentReadError>>,
     {
         let subject = self.actor_did().ok_or(ReceiverError::MissingIdentity)?;
         let key = scope_key(&subject, scope);
@@ -384,17 +463,44 @@ impl ConfigAccess {
             return Err(ReceiverError::Provider(AssignmentReadError::Unsupported));
         };
         let lock = local.assignment_lock(&key);
-        let _guard = lock.lock().await;
-        let previous = self.load_assignments(scope).await?;
+        let Some(_guard) = interruptible(lock.lock(), &mut shutdown).await else {
+            return Ok(None);
+        };
+        // Earlier homes have only the applied row. It is their initial read floor.
+        let floor_key = format!("floor:{key}");
+        let (accepted, applied) = self
+            .transact_readonly("assignments.floor", |txn| {
+                let floor_key = &floor_key;
+                let key = &key;
+                Box::pin(async move {
+                    let accepted = load(txn, floor_key).await?.map(|row| row.state);
+                    let applied = load(txn, key).await?.map(|row| row.state);
+                    Ok::<_, ReceiverError>((accepted, applied))
+                })
+            })
+            .await?;
+        if let Some(pending) = accepted
+            .as_ref()
+            .filter(|view| Some(*view) != applied.as_ref())
+        {
+            // An interrupted stop is still owed while the authority is unreachable.
+            if !stop_invalid_work(runtime, pending, &mut shutdown).await? {
+                return Ok(None);
+            }
+        }
+        let previous = accepted.or(applied);
         let query = defra_node::AssignmentQuery {
             policy: scope.policy.clone(),
             resource: scope.resource.clone(),
             relation: scope.relation.clone(),
             subject: subject.clone(),
             issuer: scope.issuer.clone(),
-            not_before: previous.map(|state| state.position),
+            not_before: previous.as_ref().map(|state| state.position.clone()),
         };
-        let certified = self.certified_assignments(query).await?;
+        let Some(response) = interruptible(read(query), &mut shutdown).await else {
+            return Ok(None);
+        };
+        let certified = response?;
         let mut assigned = certified.object_ids;
         assigned.sort();
         assigned.dedup();
@@ -402,22 +508,16 @@ impl ConfigAccess {
             position: certified.position,
             assigned,
         };
-        let Some(active) = interruptible(runtime.active(), &mut shutdown).await else {
+        if let Some(previous) = &previous {
+            check(previous, &next)?;
+        }
+        // Recovery must reject an older proof even if the process dies inside stop().
+        self.transact_write("assignments.accept", |txn| {
+            Box::pin(persist(txn, &floor_key, &subject, scope, &next))
+        })
+        .await?;
+        if !stop_invalid_work(runtime, &next, &mut shutdown).await? {
             return Ok(None);
-        };
-        let active = active.map_err(ReceiverError::Runtime)?;
-        for id in &active {
-            if !next.assigned.contains(id)
-                || !match interruptible(runtime.has_verified_body(id), &mut shutdown).await {
-                    Some(result) => result.map_err(ReceiverError::Runtime)?,
-                    None => return Ok(None),
-                }
-            {
-                let Some(result) = interruptible(runtime.stop(id), &mut shutdown).await else {
-                    return Ok(None);
-                };
-                result.map_err(ReceiverError::Runtime)?;
-            }
         }
         let committed = self
             .transact_write("assignments.persist", |txn| {
@@ -445,6 +545,15 @@ impl ConfigAccess {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_closed_shutdown_channel_prevents_a_ready_callback() {
+        let (sender, mut receiver) = tokio::sync::watch::channel(false);
+        drop(sender);
+        let mut shutdown = Some(&mut receiver);
+        let callback = async { panic!("callback ran after shutdown closed") };
+        assert_eq!(interruptible::<()>(callback, &mut shutdown).await, None);
+    }
 
     #[tokio::test]
     async fn false_shutdown_update_preserves_the_pending_callback() {

@@ -84,8 +84,18 @@ pub enum BackendProtectionError {
     Join(#[from] tokio::task::JoinError),
     #[error("the started node could not take its composition root's attachments")]
     Composition(#[from] crate::node_extension::ExtensionError),
+    #[error("this device has no certified group assignment from transport account {0}")]
+    DeviceNotAdmitted(identity::Did),
+    #[error("reading the account device group during preflight")]
+    DeviceGroup(#[source] Box<crate::config_client::DeviceGroupReadError>),
     #[error(transparent)]
     DocumentAcp(#[from] DocumentAcpError),
+}
+
+impl From<crate::config_client::DeviceGroupReadError> for BackendProtectionError {
+    fn from(error: crate::config_client::DeviceGroupReadError) -> Self {
+        Self::DeviceGroup(Box::new(error))
+    }
 }
 
 impl BackendProtectionError {
@@ -312,6 +322,19 @@ impl<'a> ProtectedBackendStore<'a> {
         node: &Arc<dyn NodeIdentity>,
         document_acp: DocumentAcp,
     ) -> Result<PreflightProtectedBackendStore<'a>> {
+        self.preflight_with_account(key, node, document_acp, None)
+            .await
+    }
+
+    /// Use the expected account's certified group when configuring a Vera
+    /// receiver. Complete the lookup before opening any network listener.
+    pub async fn preflight_with_account(
+        self,
+        key: &StoreKey,
+        node: &Arc<dyn NodeIdentity>,
+        document_acp: DocumentAcp,
+        account: Option<&identity::Did>,
+    ) -> Result<PreflightProtectedBackendStore<'a>> {
         let did = node_did(node)?;
         let ids = document_acp::home_policy_ids(document_acp::recorded(&self.data)?);
         let stamped = super::store_compat::stamped(&self.data, ids);
@@ -330,10 +353,25 @@ impl<'a> ProtectedBackendStore<'a> {
         .with_node_identity_did(did.clone())
         .with_node_acp_enabled();
         let builder = document_acp::configure(builder, &self.data, key, document_acp, node)?;
-        let node = build_configured(builder, &self.data, document_acp).await?;
-        let checked = validate_binding(&node).await;
+        let node = Arc::new(build_configured(builder, &self.data, document_acp).await?);
+        let checked = async {
+            validate_binding(&node).await?;
+            match account {
+                None => Ok(None),
+                Some(account) => {
+                    let actor =
+                        identity::Did::new(&did).map_err(|_| BackendProtectionError::WrongNode)?;
+                    let access = crate::config_client::ConfigAccess::local_as(node.clone(), actor);
+                    let group = access.transport_replica(account).await?.ok_or_else(|| {
+                        BackendProtectionError::DeviceNotAdmitted(account.clone())
+                    })?;
+                    Ok(Some(group))
+                }
+            }
+        }
+        .await;
         let shutdown = node.shutdown().await;
-        checked.map_err(|error| match error {
+        let transport_replica = checked.map_err(|error| match error {
             BackendProtectionError::InvalidBinding => BackendProtectionError::Incompatible(
                 gents_protocol::operations::install_repair::IncompatibleStore {
                     kind: gents_protocol::operations::install_repair::IncompatibleStoreKind::OtherVersionSchema,
@@ -348,6 +386,7 @@ impl<'a> ProtectedBackendStore<'a> {
         }
         Ok(PreflightProtectedBackendStore {
             store: self,
+            transport_replica,
             node_did: did,
             document_acp,
             block_cache_bytes: crate::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
@@ -357,6 +396,7 @@ impl<'a> ProtectedBackendStore<'a> {
 
 pub struct PreflightProtectedBackendStore<'a> {
     store: ProtectedBackendStore<'a>,
+    transport_replica: Option<crate::config_client::transport_replica::TransportReplica>,
     node_did: String,
     document_acp: DocumentAcp,
     block_cache_bytes: usize,
@@ -389,10 +429,14 @@ impl PreflightProtectedBackendStore<'_> {
         if runtime.did() != self.node_did {
             return Err(BackendProtectionError::WrongNode);
         }
+        let mut extensions = composition.clone();
+        if let Some(group) = &self.transport_replica {
+            extensions.attach(Arc::new(group.clone()))?;
+        }
         let started = self
             .start_node_with_plugins(key, runtime, configure, policy, plugins)
             .await?;
-        if let Err(error) = crate::node_extension::attach_all(&started.0, composition) {
+        if let Err(error) = crate::node_extension::attach_all(&started.0, &extensions) {
             let _ = started.0.shutdown().await;
             return Err(error.into());
         }
@@ -411,6 +455,9 @@ impl PreflightProtectedBackendStore<'_> {
             runtime.clone(),
             policy,
             plugins,
+            self.transport_replica
+                .as_ref()
+                .map(|replica| replica.reader_manager()),
             document_acp::home_policy_ids(self.document_acp),
         )
         .map_err(|error| BackendProtectionError::Schema(error.into()))?;
@@ -423,6 +470,10 @@ impl PreflightProtectedBackendStore<'_> {
         let builder =
             document_acp::configure(builder, &self.store.data, key, self.document_acp, &runtime)?;
         let builder = configure(builder);
+        let builder = match self.transport_replica {
+            Some(replica) => builder.with_replica_registration(replica.registration()),
+            None => builder,
+        };
         let node = Arc::new(build_configured(builder, &self.store.data, self.document_acp).await?);
         if let Err(error) = validate_binding(&node).await {
             let _ = node.shutdown().await;
