@@ -21,7 +21,6 @@ pub struct LeanContractSnapshot {
     pub family_vocabularies: BTreeMap<String, serde_json::Value>,
     pub coverage_ledger: LeanCoverageLedger,
     pub feature_surface_requirements: Vec<LeanFeatureSurfaceRequirement>,
-    pub recovery_sweep_ids: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
