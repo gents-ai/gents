@@ -548,7 +548,7 @@ Provider-input assembly for Claude: the body's `system[]` blocks (attribution, i
 | File | Contents |
 |------|----------|
 | `Proofs/Shared/Basic.lean` | Shared opaque ids, `Time`, and terminal-state helpers |
-| `Proofs/Automation/Process.lean` | Process lifecycle model plus executable `Action`, `step?`, and `replay?` |
+| `Proofs/Automation/Process.lean` | Process lifecycle model plus executable `Action`, `step?`, `replay?`, and the durable-write decision `next` |
 | `Proofs/Session/Request.lean` | Barrel for request state, transitions, executable semantics, and local properties |
 | `Proofs/Session/RequestExecutionLease.lean` | Barrel for the execution-lease state, executable transitions, stale-owner exclusion, atomic terminal agreement, and bounded terminal effects |
 | `Proofs/Runtime/InferenceCall.lean` | Barrel for inference-call state, transitions, slot accounting, cancellation properties, controller bookkeeping, and the shared-pool registry handoff |
@@ -798,9 +798,19 @@ States:
 
 Operational meaning:
 
-- `recovering` means the runtime is not yet allowed to accept fresh work
+- `uninitialized` is where every process starts; a start whose recovery
+  finds no stuck work goes from here straight to `ready`
+- `recovering` means startup recovery found stuck work (or a restarting
+  process claimed its predecessor's row) and the runtime does not yet accept
+  fresh work
 - `ready` means the runtime passed startup validation and can accept work
-- `shuttingDown` means no new work should enter and existing work is draining
+- `shuttingDown` means no new work should enter and existing work is draining;
+  any state before it can begin shutdown, and a teardown cut by its deadline
+  leaves it durable for the next start to recover
+- `shutdown` means every request the process admitted has drained
+
+Every durable write goes through `ProcessState.next`, applied by the readiness
+publisher to the state it last persisted.
 
 ### Layer 2: Request Lifecycle
 

@@ -55,7 +55,9 @@ impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for ScriptedS
         _updated_at: &str,
     ) -> anyhow::Result<()> {
         let (script, attempts) = match snapshot.process_state {
-            NodeReadinessProcessState::Recovering if snapshot.active_generation > 0 => {
+            NodeReadinessProcessState::Uninitialized | NodeReadinessProcessState::Recovering
+                if snapshot.active_generation > 0 =>
+            {
                 (&self.source, &self.source_attempts)
             }
             NodeReadinessProcessState::Ready => (&self.ready, &self.ready_attempts),
@@ -236,7 +238,6 @@ async fn run_agent_starts_when_startup_probe_discovers_selected_model() {
     assert_eq!(
         observed,
         vec![
-            crate::runtime::agent::ProcessLifecycleState::Recovering,
             crate::runtime::agent::ProcessLifecycleState::Ready,
             crate::runtime::agent::ProcessLifecycleState::ShuttingDown,
             crate::runtime::agent::ProcessLifecycleState::Shutdown,

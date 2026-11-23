@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
+use gents_protocol::node_readiness::{ProcessAction, ProcessTransitionRefused};
 use gents_protocol::row::{
     project_node_readiness_source, AgentReadinessSourceEntry, AgentReadinessUnavailableReason,
     NodeReadinessProcessState, NodeReadinessSnapshot,
@@ -161,6 +162,13 @@ enum Command {
         source: ReadinessSource,
         ack: oneshot::Sender<Result<()>>,
     },
+    ApplyProcess {
+        action: ProcessAction,
+        stuck_requests: bool,
+        active_is_zero: bool,
+        ack: oneshot::Sender<Result<Result<NodeReadinessProcessState, ProcessTransitionRefused>>>,
+    },
+    #[cfg(test)]
     SetProcess {
         state: NodeReadinessProcessState,
         ack: oneshot::Sender<Result<()>>,
@@ -341,7 +349,28 @@ impl NodeReadinessPublisherHandle {
         .await
     }
 
-    pub(crate) async fn set_process_state(&self, state: ProcessLifecycleState) -> Result<()> {
+    /// Writes the state Lean `ProcessState.next` allows from the state this
+    /// publisher last persisted; a refused write leaves it unchanged.
+    pub(crate) async fn apply_process_action(
+        &self,
+        action: ProcessAction,
+        stuck_requests: bool,
+        active_is_zero: bool,
+    ) -> Result<Result<NodeReadinessProcessState, ProcessTransitionRefused>> {
+        self.send(|ack| Command::ApplyProcess {
+            action,
+            stuck_requests,
+            active_is_zero,
+            ack,
+        })
+        .await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn set_process_state(
+        &self,
+        state: impl Into<NodeReadinessProcessState>,
+    ) -> Result<()> {
         self.send(|ack| Command::SetProcess {
             state: state.into(),
             ack,
@@ -508,7 +537,7 @@ async fn run_publisher(
                 ack,
             } => {
                 let mut candidate = state.clone();
-                candidate.process_state = NodeReadinessProcessState::Recovering;
+                candidate.process_state = NodeReadinessProcessState::Uninitialized;
                 candidate.router_generation = 0;
                 candidate.source = Some(ReadinessSource {
                     active_generation: 0,
@@ -574,6 +603,36 @@ async fn run_publisher(
                     .await,
                 );
             }
+            Command::ApplyProcess {
+                action,
+                stuck_requests,
+                active_is_zero,
+                ack,
+            } => {
+                let result =
+                    match state
+                        .process_state
+                        .transition(action, stuck_requests, active_is_zero)
+                    {
+                        Err(refused) => Ok(Err(refused)),
+                        Ok(next) => {
+                            let mut candidate = state.clone();
+                            candidate.process_state = next;
+                            commit_candidate(
+                                &writer,
+                                &mut state,
+                                candidate,
+                                &observation,
+                                retry_delay,
+                                &cancel,
+                            )
+                            .await
+                            .map(|()| Ok(next))
+                        }
+                    };
+                let _ = ack.send(result);
+            }
+            #[cfg(test)]
             Command::SetProcess {
                 state: process,
                 ack,
@@ -890,10 +949,14 @@ pub(crate) async fn claim_node_readiness_for_new_process(
                 else {
                     return Ok(());
                 };
-                if matches!(
-                    snapshot.process_state,
-                    NodeReadinessProcessState::Shutdown | NodeReadinessProcessState::Recovering
-                ) {
+                let Some(claimed) =
+                    snapshot
+                        .process_state
+                        .next(ProcessAction::RestartClaim, false, false)
+                else {
+                    return Ok(());
+                };
+                if claimed == snapshot.process_state {
                     return Ok(());
                 }
                 tracing::info!(
@@ -901,7 +964,7 @@ pub(crate) async fn claim_node_readiness_for_new_process(
                     claimed_process_state = snapshot.process_state.as_str(),
                     "claiming the readiness row a previous process left behind"
                 );
-                snapshot.process_state = NodeReadinessProcessState::Recovering;
+                snapshot.process_state = claimed;
                 let snapshot_json = serde_json::to_string(&snapshot)?;
                 let update = Update::matching(
                     Filter::eq(readiness_fields::NODE_DID, node_did),

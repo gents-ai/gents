@@ -32,6 +32,65 @@ impl NodeReadinessProcessState {
     pub const fn accepts_work(self) -> bool {
         matches!(self, Self::Ready)
     }
+
+    /// Lean `ProcessState.next`: the state a durable process-state write from
+    /// `self` moves to, or `None` when the write is refused.
+    pub const fn next(
+        self,
+        action: ProcessAction,
+        stuck_requests: bool,
+        active_is_zero: bool,
+    ) -> Option<Self> {
+        match (action, self) {
+            (ProcessAction::StartupRecover, Self::Uninitialized) if stuck_requests => {
+                Some(Self::Recovering)
+            }
+            (ProcessAction::StartupClean, Self::Uninitialized) if !stuck_requests => {
+                Some(Self::Ready)
+            }
+            (ProcessAction::RecoveryComplete, Self::Recovering) => Some(Self::Ready),
+            (ProcessAction::BeginShutdown, Self::ShuttingDown | Self::Shutdown) => None,
+            (ProcessAction::BeginShutdown, _) => Some(Self::ShuttingDown),
+            (ProcessAction::FinishShutdown, Self::ShuttingDown) if active_is_zero => {
+                Some(Self::Shutdown)
+            }
+            (ProcessAction::RestartClaim, Self::Shutdown) => None,
+            (ProcessAction::RestartClaim, _) => Some(Self::Recovering),
+            _ => None,
+        }
+    }
+
+    /// [`Self::next`], with a refused write as its typed error.
+    pub fn transition(
+        self,
+        action: ProcessAction,
+        stuck_requests: bool,
+        active_is_zero: bool,
+    ) -> Result<Self, ProcessTransitionRefused> {
+        self.next(action, stuck_requests, active_is_zero)
+            .ok_or(ProcessTransitionRefused { from: self, action })
+    }
+}
+
+/// Lean `ProcessState.ActionTag`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessAction {
+    StartupRecover,
+    StartupClean,
+    RecoveryComplete,
+    BeginShutdown,
+    FinishShutdown,
+    RestartClaim,
+}
+
+/// A durable process-state write Lean `ProcessState.next` refuses; the
+/// durable state stays `from`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("process state {} refuses {action:?}", from.as_str())]
+pub struct ProcessTransitionRefused {
+    pub from: NodeReadinessProcessState,
+    pub action: ProcessAction,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

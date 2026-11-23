@@ -356,7 +356,7 @@ async fn a_store_held_through_startup_starts_degraded_and_recovers_on_release() 
     let runtime_status = RuntimeStatusHandle::new(fixture.node.clone(), &node_did);
     runtime_status.initialize_startup(&agent_did).await.unwrap();
     let installer = gents_pack::plugin::store::lock_store(home.path()).unwrap();
-    let (subscription, started) = super::super::startup::resolve_startup_until(
+    let (subscription, started, _) = super::super::startup::resolve_startup_until(
         &agent,
         &tool_runtime,
         &runtime_status,
