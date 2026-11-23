@@ -540,18 +540,14 @@ async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyh
     };
     for observation in gents_lean_vocab::families::household_self_config_lookup::cases() {
         let attempt = &observation.input;
-        let (caller, requested): (&str, &str) = match (
-            attempt.present,
-            attempt.visible,
-            attempt.same_generation,
-            attempt.native_allows,
-        ) {
-            (false, false, _, _) => (user.did(), &sibling.agent_did),
-            (true, false, _, _) => (&sibling.agent_did, &agent.agent_did),
-            (true, true, true, false) => (&agent.agent_did, &agent.agent_did),
-            (true, true, true, true) => (user.did(), &agent.agent_did),
-            _ => anyhow::bail!("unrepresentable modeled lookup case {}", attempt.name),
-        };
+        let (caller, requested): (&str, &str) =
+            match (attempt.present, attempt.visible, attempt.native_allows) {
+                (false, false, _) => (user.did(), &sibling.agent_did),
+                (true, false, _) => (&sibling.agent_did, &agent.agent_did),
+                (true, true, false) => (&agent.agent_did, &agent.agent_did),
+                (true, true, true) => (user.did(), &agent.agent_did),
+                _ => anyhow::bail!("unrepresentable modeled lookup case {}", attempt.name),
+            };
         let access = access_for(caller)?;
         let outcome = match access
             .set_agent_self_config_permission(

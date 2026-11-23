@@ -72,7 +72,15 @@ pub(crate) async fn grok_auth_probe(args: GrokAuthProbeArgs) -> Result<()> {
         &access,
         &node_did,
         &provider,
-        |credential| probe_account(credential, &node_did, &provider, args.max_models),
+        |credential, client_version| {
+            probe_account(
+                credential,
+                client_version,
+                &node_did,
+                &provider,
+                args.max_models,
+            )
+        },
     )
     .await?;
     if blocks.is_empty() {
@@ -94,6 +102,7 @@ pub(crate) async fn grok_auth_probe(args: GrokAuthProbeArgs) -> Result<()> {
 
 async fn probe_account(
     credential: gents_inference::auth::credential::OAuthCredential,
+    client_version: Option<String>,
     node_did: &str,
     provider: &str,
     max_models: usize,
@@ -105,7 +114,9 @@ async fn probe_account(
     let mut request = reqwest::Client::new()
         .get(&models_url)
         .bearer_auth(&credential.access_token);
-    for (name, value) in gents_inference::clients::xai_grok::build_xai_grok_oauth_headers(None)? {
+    for (name, value) in
+        gents_inference::clients::xai_grok::build_xai_grok_oauth_headers(client_version.as_deref())?
+    {
         if let Some(name) = name {
             request = request.header(name, value);
         }
@@ -141,7 +152,9 @@ async fn probe_account(
         if status.as_u16() == 426 {
             bail!(
                 "models request failed with HTTP {status}: {body}\n{}",
-                gents_inference::clients::xai_grok::grok_client_version_gate_guidance(None)
+                gents_inference::clients::xai_grok::grok_client_version_gate_guidance(
+                    client_version.as_deref()
+                )
             );
         }
         bail!("models request failed with HTTP {status}: {body}");

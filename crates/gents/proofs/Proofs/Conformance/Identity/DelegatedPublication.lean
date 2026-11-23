@@ -147,12 +147,14 @@ structure CreatorRecoveryOutput where
 /-- The served delegated-finality fixture drops the parent's committed
 acknowledgement, then drives the creator's recovery watcher or a node-owner
 completion attempt as the case's actions say. A recovery for a mismatched
-binding runs after the configuring User replaces the child Agent document.
-Production publication always re-verifies the retained receipt and native
+binding runs after the configuring User replaces the child Agent document;
+the parent Agent detaches the published session from its Agent after the
+recovery. Production publication always re-verifies the retained receipt and native
 owner first, so a publication attempt the caller never observed has no
 production call beyond leaving the dropped acknowledgement unrecovered. -/
 def creatorRecoveryNames : List String :=
-  ["commit-unconfirmed", "foreign-recovery-actor", "mismatched-recovery-binding"]
+  ["commit-unconfirmed", "foreign-recovery-actor", "mismatched-recovery-binding",
+   "revoked-after-publication"]
 
 @[conformance_family]
 def creatorRecovery : Family CaseInput CreatorRecoveryOutput where
@@ -175,10 +177,12 @@ structure CommitRefusalOutput where
   deriving ToJson
 
 /-- The served delegated-finality fixture fails the commit transaction's first
-mutation, replaces the planned starter with an unverifiable source session, or
-names the node owner as the planned author instead of the parent Agent; the
-atomic `agent_new` transaction then publishes nothing. -/
-def commitRefusalNames : List String := ["native-commit-failed", "missing-starter", "wrong-signer"]
+mutation, replaces the planned starter with an unverifiable source session,
+names the node owner as the planned author instead of the parent Agent, or
+withdraws the parent's invoke on the child Agent before the commit; the atomic
+`agent_new` transaction then publishes nothing. -/
+def commitRefusalNames : List String :=
+  ["native-commit-failed", "missing-starter", "wrong-signer", "invoke-denied"]
 
 @[conformance_family]
 def commitRefusal : Family CaseInput CommitRefusalOutput where
@@ -188,38 +192,6 @@ def commitRefusal : Family CaseInput CommitRefusalOutput where
     let s := finalState c
     { committed := s.committed, toolRunning := s.toolRunning, targetRead := targetRead c
       claim := claimOf c }
-
-structure Observation where
-  committed : Bool
-  observed : Bool
-  toolRunning : Bool
-  receipt : Bool
-  starter : Bool
-  creationReceipt : Bool
-  sessionPending : Bool
-  requestPending : Bool
-  targetRead : Bool
-  nodeOwnerRead : Bool
-  nodeOwnerUpdate : Bool
-  nodeOwnerAdmin : Bool
-  otherUserRead : Bool
-  otherUserAdmin : Bool
-  claim : String
-  deriving ToJson
-
-private def observation (c : Case) : Observation :=
-  let s := finalState c
-  let b := s.binding
-  { committed := s.committed, observed := s.observed, toolRunning := s.toolRunning
-    receipt := s.receipt, starter := s.starterVerified, creationReceipt := s.creationReceipt
-    sessionPending := s.sessionPending, requestPending := s.requestPending
-    targetRead := targetRead c
-    nodeOwnerRead := Identity.Household.allowed 5 s.household b.nodeOwner "sessions" b.sessionDoc "read"
-    nodeOwnerUpdate := Identity.Household.allowed 5 s.household b.nodeOwner "sessions" b.sessionDoc "update"
-    nodeOwnerAdmin := Identity.Household.allowed 5 s.household b.nodeOwner "sessions" b.sessionDoc "delete"
-    otherUserRead := Identity.Household.allowed 5 s.household "other-user" "sessions" b.sessionDoc "read"
-    otherUserAdmin := Identity.Household.allowed 5 s.household "other-user" "sessions" b.sessionDoc "delete"
-    claim := claimOf c }
 
 /-- The served delegated-finality fixture commits one complete publication,
 then holds the child's claim at its native commit boundary while the race lands:
@@ -242,32 +214,23 @@ def sameAgentClaimRace : Family CaseInput String where
   inputs := (cases.filter fun c => c.name ∈ sameAgentClaimRaceNames).map caseInput
   model := fun i => claimOf (caseNamed i.name)
 
-/-- model-production-gap: no production path reaches five cases.
-`wrong-physical-session` and `wrong-physical-agent`: the `agent_new` commit
-binds the physical session and Agent documents and then signs in the same
-transaction, so no signature names other documents. `missing-creation-receipt`:
-the receipt is issued in that transaction after the opening it needs is staged,
-signed and starter-verified there. `partial-grants` and `partial-then-recover`:
-each relation set is staged atomically with its pending marker.
-
-Model and production disagree on two cases. `invoke-denied`: the model commits
-without the parent's invoke grant (`commit`,
-Proofs/Session/Identity/DelegatedPublication.lean:58) and denies only at claim;
-production's `agent_new` transaction refuses the commit
-(crates/gents-session/src/session/message/commit.rs:460, staging the target
-session at line 534). `revoked-after-publication`: the model lets the parent
-Agent revoke its session's parent relation
-(Proofs/Session/Identity/DelegatedPublicationCases.lean:38); production refuses
-the parent Agent's `delete_resource_relationship`
-(crates/gents-store/src/config_client/relationships.rs:147) with NotAuthorized
-get-collection. -/
-@[conformance_family]
-def unreached : Family CaseInput Observation where
-  inputs := (cases.filter fun c =>
-      !(c.name ∈ readinessNames || c.name ∈ recoveryNames || c.name ∈ agentNewNames ||
-        c.name ∈ creatorRecoveryNames || c.name ∈ commitRefusalNames ||
-        c.name ∈ claimRaceNames || c.name ∈ sameAgentClaimRaceNames)).map caseInput
-  model := fun i => observation (caseNamed i.name)
+/-- Five cases have no production form. The `agent_new` commit binds the
+physical session and Agent documents and then signs in the same transaction,
+so no signature names other documents (`wrong-physical-session`,
+`wrong-physical-agent`); the creation receipt is issued in that transaction
+after the opening it needs is staged, signed and starter-verified there
+(`missing-creation-receipt`); each relation set is staged atomically with its
+pending marker (`partial-grants`, `partial-then-recover`). The model refuses
+the first three at commit, leaves a partial set unclaimable and completes it on
+recovery. -/
+theorem unpublishable_cases :
+    ["wrong-physical-session", "wrong-physical-agent", "missing-creation-receipt",
+      "partial-grants", "partial-then-recover"].map (fun name =>
+        let c := caseNamed name
+        ((finalState c).committed, claimOf c)) =
+      [(false, "unavailable"), (false, "unavailable"), (false, "unavailable"),
+        (true, "unavailable"), (true, "claimed")] := by
+  native_decide
 
 example : targetRead (caseNamed "visible-before-publication-complete") = true := by native_decide
 

@@ -6873,6 +6873,7 @@ dependencies = [
  "sha2 0.10.9",
  "subtle",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite 0.30.0",
  "tokio-util",
@@ -6972,6 +6973,7 @@ dependencies = [
  "sha2 0.10.9",
  "syn 2.0.119",
  "tokio",
+ "toml 0.8.2",
 ]
 
 [[package]]

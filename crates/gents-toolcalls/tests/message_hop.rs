@@ -272,6 +272,7 @@ async fn agent_creation_signs_local_directory_and_omits_remote_directory() {
                 create,
                 objective: "do the work".into(),
                 token_budget: None,
+                limits: gents_protocol::goal::GoalLimits::default(),
             }
         } else {
             PlannedWrite::Request {

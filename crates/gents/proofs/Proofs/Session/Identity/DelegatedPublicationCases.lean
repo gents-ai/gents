@@ -110,9 +110,20 @@ theorem complete_publication_exposes_child_and_preserves_user_control :
       allowed 5 s.household "other-user" "sessions" "child-session" "delete" = false := by
   native_decide
 
-theorem denied_invoke_cannot_claim :
+theorem denied_invoke_cannot_commit :
     let s := [good, observed, grant].foldl step (initial false)
-    claim s deniedCommit = .denied := by native_decide
+    s.committed = false ∧ s.toolRunning = false ∧ claim s deniedCommit = .unavailable := by
+  native_decide
+
+/-- The parent Agent owns the session it published, so document ACP lets it
+delete the session's `parent` relation: the User loses the session through its
+Agent, and a later recovery does not restore the cleared relation. The child's
+request keeps its own relations, so the claim still succeeds. -/
+theorem revoked_after_publication_detaches_the_session :
+    let s := [good, observed, grant, .revokeSessionParent, grant].foldl step (initial true)
+    allowed 5 s.household "user" "sessions" "child-session" "read" = false ∧
+      claim s grantedCommit = .claimed := by
+  native_decide
 
 theorem same_agent_uses_client_admission_but_waits_for_links :
     let complete := [good, observed, grant].foldl step (initial false sameAgentBinding)

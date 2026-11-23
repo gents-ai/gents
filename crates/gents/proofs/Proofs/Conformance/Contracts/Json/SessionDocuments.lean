@@ -156,7 +156,6 @@ def DocumentWire.toModel (w : DocumentWire) : AgentSession.Document :=
         latest := o.latest.map fun r => ⟨r.docId, r.requestId, r.state⟩ } }
 
 private def archiveDecisionName : AgentSession.Archive.Decision → String
-  | .denied => "denied"
   | .unchanged => "unchanged"
   | .conflict => "conflict"
   | .exhausted => "exhausted"
@@ -166,7 +165,6 @@ def archiveLimit : Nat := 9223372036854775807
 
 structure ArchiveInput where
   before : DocumentWire
-  authorized : Bool
   expectedRevision : Nat
   archived : Bool
   now : Nat
@@ -177,7 +175,6 @@ def archiveInputs : List ArchiveInput := do
   let (archivedAt, revision) ← ([(none, 0), (some 3, 1), (none, 2), (some 3, archiveLimit)] :
     List (Option Nat × Nat))
   let lifecycle ← [0, 1, 2]
-  let authorized ← [false, true]
   let expected ← [0, 1, 2, archiveLimit]
   let archived ← [false, true]
   let before := { indexed with
@@ -187,7 +184,7 @@ def archiveInputs : List ArchiveInput := do
     observation := indexed.observation.map fun o => { o with
       latest := some { newerRequest.observed with
         state := if lifecycle = 0 then .processing else .failed } } }
-  pure { before := DocumentWire.ofModel before, authorized, expectedRevision := expected, archived
+  pure { before := DocumentWire.ofModel before, expectedRevision := expected, archived
          now := 7, limit := archiveLimit }
 
 structure ArchiveOutput where
@@ -199,7 +196,7 @@ structure ArchiveOutput where
   deriving ToJson
 
 def archiveOutcome (i : ArchiveInput) : ArchiveOutput :=
-  let (decision, after) := AgentSession.Archive.apply i.before.toModel i.authorized
+  let (decision, after) := AgentSession.Archive.apply i.before.toModel
     i.expectedRevision i.archived i.now i.limit
   { decision := archiveDecisionName decision, after := DocumentWire.ofModel after
     activeVisible := AgentSession.Archive.visible .active after
@@ -208,19 +205,11 @@ def archiveOutcome (i : ArchiveInput) : ArchiveOutput :=
 
 @[conformance_family]
 def archiveTransition : Family ArchiveInput ArchiveOutput where
-  inputs := archiveInputs.filter (·.authorized)
+  inputs := archiveInputs
   model := archiveOutcome
 
 example : archiveTransition.inputs.any fun i =>
     i.before.archiveRevision == 2 && i.expectedRevision == 0 && i.archived := by native_decide
-
-/-- model-production-gap: archive authorization is DefraDB ACP on the
-caller's transaction before the revision transition runs; no production
-scenario replays these unauthorized archive writes. -/
-@[conformance_family]
-def archiveTransitionUnreached : Family ArchiveInput ArchiveOutput where
-  inputs := archiveInputs.filter fun i => !i.authorized
-  model := archiveOutcome
 
 structure ArchiveStep where
   expectedRevision : Nat
@@ -244,7 +233,7 @@ def archiveReceipts : Family ArchiveTrace (List ArchiveReceipt) where
   inputs := [{ steps := [⟨0, true⟩, ⟨0, false⟩, ⟨0, true⟩, ⟨1, false⟩, ⟨0, true⟩] }]
   model := fun trace =>
     (trace.steps.foldl (fun (state : AgentSession.Document × List ArchiveReceipt) step =>
-      let (decision, after) := AgentSession.Archive.apply state.1 true step.expectedRevision
+      let (decision, after) := AgentSession.Archive.apply state.1 step.expectedRevision
         step.archived 7 archiveLimit
       (after, state.2 ++ [{ decision := archiveDecisionName decision
                             revision := after.archiveRevision
@@ -409,7 +398,7 @@ def editAnchorFork : Family EditAnchorInput EditAnchorRetained where
   inputs := (editAnchorCases.filter fun c => c.name ∈ ["three_user_turns"]).map EditAnchorInput.ofCase
   model := editAnchorRetained
 
-/-- model-production-gap: the served fork fixture publishes user-text turns
+/-- The served fork fixture publishes user-text turns
 only; histories with assistant, tool-result or empty user messages, duplicate
 keys or anchors that no message carries are not built by any production
 scenario, so their retained prefix is not replayed. -/
@@ -591,7 +580,7 @@ structure ForkPublication where
   readers : List ForkReader
   deriving ToJson
 
-/-- model-production-gap: production publishes a fork through its served
+/-- Production publishes a fork through its served
 transaction and assigns DefraDB document identifiers, so no production function
 returns the copied history for comparison with `SessionFork.publish`, and no
 scenario builds these source histories. -/
@@ -859,7 +848,7 @@ def advanceInput (name : String) (r : AgentSession.RequestFact)
     rows := rows.map RequestWire.ofModel, request := RequestWire.ofModel r
     normalizedPreview := "candidate", now := 4 }
 
-/-- model-production-gap: the session observation owner advances the public
+/-- The session observation owner advances the public
 head inside served request admission transactions; no production function
 takes a modeled document and request rows, and no scenario builds these
 request histories. -/
@@ -892,7 +881,7 @@ def refreshInput (name : String) (event : AgentSession.RequestFact)
   { name, operation := "refresh", before := DocumentWire.ofModel indexed
     event := RequestWire.ofModel event, rows := rows.map RequestWire.ofModel, now := 4 }
 
-/-- model-production-gap: the session observation owner refreshes the public
+/-- The session observation owner refreshes the public
 head inside served request transactions; no production function takes a
 modeled document and request rows, and no scenario builds these request
 histories. -/
@@ -974,7 +963,7 @@ structure AdmissionAfter where
   after : AdmissionStateWire
   deriving ToJson
 
-/-- model-production-gap: atomic admission runs inside the served request
+/-- Atomic admission runs inside the served request
 admission transaction with DefraDB identities and ACP relationships; no
 production function returns the modeled admission state, and only the
 unattended creation's session title is observed by a scenario. -/

@@ -600,6 +600,19 @@ async fn delegated_publication_creator_recovery_follows_the_lean_model() {
                         )
                         .await;
                 }
+                "revoke_session_parent" => {
+                    let row = child_publication_row(&fixture).await;
+                    let _ = fixture
+                        .access
+                        .delete_resource_relationship(
+                            "AgentSession",
+                            row["session_doc_id"].as_str().unwrap(),
+                            "parent",
+                            "agents",
+                            &child_agent_document(&fixture).await,
+                        )
+                        .await;
+                }
                 other => panic!(
                     "unmodeled publication action {other} in {}",
                     case.input.name
@@ -666,6 +679,18 @@ async fn delegated_publication_commit_refusal_follows_the_lean_model() {
         }
         if case.input.signer != case.input.parent_agent {
             create.requester_did = fixture.config.actor_did().unwrap();
+        }
+        if !case.input.invoke_grant {
+            fixture
+                .config
+                .delete_actor_relationship(
+                    "Agent",
+                    &child_agent_document(&fixture).await,
+                    "session_writer",
+                    &fixture.parent_binding.agent_did.parse().unwrap(),
+                )
+                .await
+                .unwrap();
         }
         let mut tool = fixture.tool.clone();
         let attempt = gents_session::session::message::commit(

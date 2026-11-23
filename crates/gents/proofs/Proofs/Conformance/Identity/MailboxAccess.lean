@@ -67,23 +67,15 @@ def recipientOutput (i : ClaimInput) : RecipientOutput :=
     sessionDoc := result.map (·.sessionDoc)
     agentDoc := result.map (·.agentDoc) }
 
-/-- The served readiness fixture admits only client-signed requests; without
-the verified admission the client claim queues there, so it observes the
-provenance of an unadmitted lifecycle only before a claim commits. -/
-def claimedRecipientCases : List ClaimInput :=
-  [{ present := false, committed := false }, { present := true, committed := false },
-   { present := true, committed := true }]
-
+/-- The readiness fixture observes a client-signed request before and after
+its admitted claim commits, the same request through a lifecycle that holds no
+verified admission, and a local-self request the managed Agent signs, which
+commits its claim without a client admission. -/
 @[conformance_family]
-def claimedRecipientServed : Family ClaimInput RecipientOutput where
-  inputs := claimedRecipientCases
-  model := recipientOutput
-
-/-- model-production-gap: no served fixture commits a client claim without its
-verified admission, so a committed claim with no admitted signer is not built. -/
-@[conformance_family]
-def claimedRecipientUnreached : Family ClaimInput RecipientOutput where
-  inputs := [{ present := false, committed := true }]
+def claimedRecipientProvenance : Family ClaimInput RecipientOutput where
+  inputs :=
+    [{ present := false, committed := false }, { present := false, committed := true },
+     { present := true, committed := false }, { present := true, committed := true }]
   model := recipientOutput
 
 structure ClaimVisibilityInput where

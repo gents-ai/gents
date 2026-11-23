@@ -172,7 +172,7 @@ pub(crate) async fn attach_client_goal_graphs(
 
 fn refused(refusal: gents_store::config_client::user_write::UserWriteRefusal) -> String {
     tracing::info!(%refusal, "goal control refused before any write");
-    gents_store::config_client::user_write::REFUSED_FOR_A_PERSON.into()
+    gents_protocol::failure_text::REFUSED_FOR_A_PERSON.into()
 }
 
 /// Preflight performs no document writes. Once staging begins, every error
@@ -235,6 +235,7 @@ pub(crate) async fn prepare_goal_control(
                 session_id: &command.session_id,
                 objective,
                 token_budget: *token_budget,
+                limits: gents_protocol::goal::GoalLimits::default(),
             },
             command.expected.as_ref(),
             None,
@@ -443,6 +444,7 @@ pub(crate) async fn stage_goal_control(
                     session_id: &request.session_id,
                     objective: &objective,
                     token_budget,
+                    limits: gents_protocol::goal::GoalLimits::default(),
                 },
                 &request,
                 replacement.as_ref().map(|(_, identity)| identity),

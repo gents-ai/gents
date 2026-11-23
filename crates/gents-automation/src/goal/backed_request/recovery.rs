@@ -7,7 +7,7 @@ fn goal_creation_claim_selection(node_did: &str, session_id: &str, session_doc_i
             order: [{{ created_at: ASC }}, {{ goal_id: ASC }}]
         ) {{ {GOAL_FIELDS} }}
         GoalCreationClaim(filter: {{ creation_key: {{ _eq: "{}" }}, session_doc_id: {{ _eq: "{}" }} }}, limit: 2) {{
-            goal_id node_did session_id objective token_budget
+            goal_id node_did session_id objective token_budget blocked_audit_threshold max_infrastructure_retries
         }}"#,
         escape_graphql_string(node_did),
         escape_graphql_string(session_id),
@@ -68,12 +68,14 @@ fn verify_goal_creation_claim_cross_check(
     session_id: &str,
     objective: &str,
     token_budget: Option<i64>,
+    limits: GoalLimits,
 ) -> Result<()> {
     let expected_claim = GoalCreationFingerprint {
         owner: node_did.to_string(),
         session: session_id.to_string(),
         objective: objective.trim().to_string(),
         token_budget: token_budget.map(i128::from),
+        limits,
     };
     let mut goals: Vec<GoalDocument> = serde_json::from_value(
         response
@@ -122,12 +124,21 @@ fn verify_goal_creation_claim_cross_check(
             .get("token_budget")
             .and_then(serde_json::Value::as_i64)
             .map(i128::from),
+        limits: GoalLimits {
+            blocked_audit_threshold: claim
+                .get("blocked_audit_threshold")
+                .and_then(serde_json::Value::as_i64),
+            max_infrastructure_retries: claim
+                .get("max_infrastructure_retries")
+                .and_then(serde_json::Value::as_i64),
+        },
     };
     anyhow::ensure!(
         goal.node_did == node_did
             && goal.session_id == session_id
             && goal.objective.trim() == expected_claim.objective
             && goal.token_budget == token_budget
+            && goal.pinned_limits() == limits
             && claim_goal_id == goal.goal_id
             && claim == expected_claim,
         "goal-backed request conflicts with its durable goal claim"
@@ -141,6 +152,7 @@ fn decode_goal_backed_request_recovery(
     session_id: &str,
     objective: &str,
     token_budget: Option<i64>,
+    limits: GoalLimits,
     request: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<Option<gents_protocol::request_lifecycle::EnqueuedAgentRequest>> {
     let rows = response
@@ -158,6 +170,7 @@ fn decode_goal_backed_request_recovery(
         session_id,
         objective,
         token_budget,
+        limits,
     )?;
     Ok(Some(
         gents_protocol::request_lifecycle::EnqueuedAgentRequest {
@@ -174,6 +187,7 @@ pub(super) async fn load_goal_backed_request_by_retry_key_from_access(
     session_id: &str,
     objective: &str,
     token_budget: Option<i64>,
+    limits: GoalLimits,
     request: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<Option<gents_protocol::request_lifecycle::EnqueuedAgentRequest>> {
     access
@@ -198,6 +212,7 @@ pub(super) async fn load_goal_backed_request_by_retry_key_from_access(
                     session_id,
                     objective,
                     token_budget,
+                    limits,
                     request,
                 )?;
                 if let Some(found) = &recovered {

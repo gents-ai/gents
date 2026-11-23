@@ -14,9 +14,11 @@ use crate::defra_node::{Node as EmbeddedNode, P2PConfig, QueryResponse};
 use crate::{DocumentRuntimeOptions, Gents};
 use gents_store::{identity::KeyIdentity, identity::NodeIdentity, schema::ensure_runtime_schemas};
 
-// A full conformance run starts many embedded DefraDB nodes in parallel. On a
-// busy CI host, a healthy runtime can spend more than 60 seconds waiting for
-// startup and recovery I/O before it publishes its ready status row.
+/// Startup and shutdown bound for an embedded runtime. A full conformance run
+/// starts many embedded DefraDB nodes in parallel, and on a busy host a healthy
+/// runtime can spend more than 60 seconds on startup and recovery I/O before it
+/// publishes its ready status row. Expiry fails the boot clearly; this is a host
+/// mechanism bound, not configuration.
 pub const RUNTIME_READY_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Node-owned services can hold `EmbeddedNode` handles briefly after shutdown.

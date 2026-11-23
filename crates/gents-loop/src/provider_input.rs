@@ -90,6 +90,7 @@ pub mod budget;
 pub mod replay_frontier;
 pub mod routing_affinity;
 mod tool_call_identity;
+pub mod tool_result_text;
 
 pub(crate) use tool_call_identity::normalize_tool_call_ids;
 

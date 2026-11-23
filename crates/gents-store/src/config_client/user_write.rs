@@ -81,14 +81,10 @@ pub enum UserWriteRefusal {
     IssuerNotSigner,
 }
 
-/// What a person reads where a refused write for them is answered; the
-/// refusal itself stays in the logs.
-pub const REFUSED_FOR_A_PERSON: &str =
-    "This change could not be applied on this home. Update Gents on this device and try again.";
-
 impl UserWriteRefusal {
     /// Whether a refused write for a User, or a refused fresh delegation,
-    /// is in `error`'s chain; a person is then told `REFUSED_FOR_A_PERSON`
+    /// is in `error`'s chain; a person is then told
+    /// `gents_protocol::failure_text::REFUSED_FOR_A_PERSON`
     /// and the chain stays in the logs.
     pub fn in_chain(error: &(dyn std::error::Error + 'static)) -> bool {
         gents_protocol::error_chain::find_source::<Self>(error).is_some()

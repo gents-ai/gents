@@ -60,7 +60,6 @@ async fn installed_projector_links_pending_transport_and_preserves_revocation() 
         )
         .await?;
     let network = gents_store::graphql::created_doc_id(&network, "Network")?;
-    let mut pending = std::collections::BTreeMap::new();
     let relation = |name: &'static str, subject: Subject, network: String| {
         let node = node.clone();
         async move {
@@ -95,7 +94,7 @@ async fn installed_projector_links_pending_transport_and_preserves_revocation() 
         txn.discard()?;
         Ok::<_, anyhow::Error>(state == Some(PublicationState::PendingParent))
     };
-    pending.insert("pending", is_pending().await?);
+    assert!(is_pending().await?);
     let parent = access
         .write(
             "test.projector.node",
@@ -105,7 +104,7 @@ async fn installed_projector_links_pending_transport_and_preserves_revocation() 
     let parent = gents_store::graphql::created_doc_id(&parent, "Node")?;
     let parent_subject = Subject::entity_set("nodes", parent.clone(), "");
     assert!(relation("parent", parent_subject.clone(), network.clone()).await?);
-    pending.insert("linked", is_pending().await?);
+    assert!(!is_pending().await?);
     access
         .delete_resource_relationship("Network", &network, "parent", "nodes", &parent)
         .await?;
@@ -116,7 +115,7 @@ async fn installed_projector_links_pending_transport_and_preserves_revocation() 
         )
         .await?;
     assert!(!relation("parent", parent_subject, network.clone()).await?);
-    pending.insert("revoked", is_pending().await?);
+    assert!(!is_pending().await?);
     node.shutdown().await?;
     drop(access);
     drop(node);
@@ -147,16 +146,5 @@ async fn installed_projector_links_pending_transport_and_preserves_revocation() 
     drop(view);
     txn.discard()?;
     reopened.shutdown().await?;
-    for case in gents_lean_vocab::families::identity_operations_replica_grant_pending::cases() {
-        let pending = pending
-            .remove(case.input.name.as_str())
-            .unwrap_or_else(|| panic!("the projector scenario never reached {}", case.input.name));
-        case.check(
-            gents_lean_vocab::families::identity_operations_replica_grant_pending::ReplicaPending {
-                pending,
-            },
-        );
-    }
-    assert!(pending.is_empty(), "unmodeled projector observations");
     Ok(())
 }

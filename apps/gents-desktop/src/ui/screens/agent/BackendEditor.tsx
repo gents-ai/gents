@@ -130,6 +130,8 @@ export function BackendEditor({
     apiKey: "",
     connectTimeoutSecs: str(backend.connectTimeoutSecs),
     discoveryTimeoutSecs: str(backend.discoveryTimeoutSecs),
+    requestTimeoutSecs: str(backend.requestTimeoutSecs),
+    clientVersion: backend.clientVersion ?? "",
     maxConcurrent: str(backend.maxConcurrent),
     maxQueueDepth: str(backend.maxQueueDepth),
     enabled: backend.enabled ?? true,
@@ -163,6 +165,10 @@ export function BackendEditor({
       optionalInteger("Discovery timeout seconds", next.discoveryTimeoutSecs, {
         min: 1,
       }),
+    requestTimeoutSecs: () =>
+      optionalInteger("Plugin request timeout seconds", next.requestTimeoutSecs, {
+        min: 1,
+      }),
   });
   const d = useDraft(
     saved,
@@ -174,6 +180,7 @@ export function BackendEditor({
       const maxQueueDepth = value.maxQueueDepth();
       const connectTimeoutSecs = value.connectTimeoutSecs();
       const discoveryTimeoutSecs = value.discoveryTimeoutSecs();
+      const requestTimeoutSecs = value.requestTimeoutSecs();
       const auth = authChange(backend, saved, next, isSubscriptionKind);
 
       const changes: Partial<Omit<InferenceBackend, "node_did" | "backend_id">> = {
@@ -183,6 +190,8 @@ export function BackendEditor({
         endpoint,
         connect_timeout_secs: connectTimeoutSecs,
         discovery_timeout_secs: discoveryTimeoutSecs,
+        request_timeout_secs: requestTimeoutSecs,
+        client_version: next.clientVersion.trim() || null,
         max_concurrent: maxConcurrent,
         max_queue_depth: maxQueueDepth,
         enabled: next.enabled,
@@ -606,6 +615,24 @@ export function BackendEditor({
           onChange={(v) => d.set("discoveryTimeoutSecs", v)}
         />
         <NumberRow
+          id={id("request-timeout")}
+          label="Plugin request timeout seconds"
+          description="Positive whole number, or blank for the runtime default."
+          value={d.draft.requestTimeoutSecs}
+          error={d.problems.requestTimeoutSecs}
+          placeholder="Runtime default (120)"
+          onChange={(v) => d.set("requestTimeoutSecs", v)}
+        />
+        <TextRow
+          id={id("client-version")}
+          label="Client version"
+          description="The version a ChatGPT or Grok sign-in advertises to its provider, or blank for the built-in version."
+          value={d.draft.clientVersion}
+          onChange={(v) => d.set("clientVersion", v)}
+          placeholder="Built-in version"
+          mono
+        />
+        <NumberRow
           id={id("conc")}
           label="Max concurrent"
           description="Whole number of 1 or more."
@@ -647,6 +674,7 @@ export function BackendEditor({
           endpoint: id("endpoint"),
           connectTimeoutSecs: id("connect-timeout"),
           discoveryTimeoutSecs: id("discovery-timeout"),
+          requestTimeoutSecs: id("request-timeout"),
           maxConcurrent: id("conc"),
           maxQueueDepth: id("queue"),
         }}

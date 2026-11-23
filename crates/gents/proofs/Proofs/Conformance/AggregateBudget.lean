@@ -86,23 +86,13 @@ def ledgerModel (i : LedgerInput) : LedgerOutput :=
 def requestScoped (i : LedgerInput) : Bool :=
   i.priorRequestDocIds.all (· == i.requestDocId)
 
-/-- The owned loop's ledger rehydrates from usage rows already scoped to its
-physical request, so only histories without another request's rows reach it. -/
+/-- The owned loop's ledger rehydrates from usage rows the served query already
+scoped to its physical request, so only histories without another request's
+rows reach it; `budget_rehydration_ledger` replays that scoping. -/
 @[conformance_family]
 def ledger : Family LedgerInput LedgerOutput where
   inputs := (Conformance.ContractCases.aggregateTokenBudgetCases.map LedgerInput.ofCase).filter
     requestScoped
-  model := ledgerModel
-
-/-- model-production-gap: the owned loop's ledger owner
-(`sum_charged_from_persisted_parts`) receives rows the served-node query has
-already scoped to the physical request; no pure production path takes a
-history that mixes requests, so request scoping is replayed only by the served
-rehydration test. -/
-@[conformance_family]
-def ledgerUnreached : Family LedgerInput LedgerOutput where
-  inputs := (Conformance.ContractCases.aggregateTokenBudgetCases.map LedgerInput.ofCase).filter
-    (!requestScoped ·)
   model := ledgerModel
 
 structure SharedInput where

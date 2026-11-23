@@ -21,22 +21,19 @@ structure Case where
   published : Bool
   actions : List Action
 
+/-- Production's `drive_admissions` hands each hook reply to the waiting loop
+over a typed oneshot: a stand-in loop can stage a delivered reply (with or without elapsed
+time before the invocation), a stop before or after the reply, a closed reply
+channel, a skip that keeps a hook effect and a terminate reply. The stop reason
+and the lease clock have no representation in that handoff, so every stop
+before or after the reply is staged by the same stop. Dispatch linearization,
+lease and generation fencing and misaddressed replies have no representation
+there either. -/
 def cases : List Case :=
   [ ⟨"accepted-before-invoke", true, [.offer] ++ dispatchActions ++ [reply, .invoke]⟩
-  , ⟨"unpublished", false, [.offer] ++ dispatchActions ++ [reply, .invoke]⟩
-  , ⟨"reply-before-dispatch", true, [.offer, reply, .invoke]⟩
-  , ⟨"no-reply", true, [.offer] ++ dispatchActions ++ [.invoke]⟩
-  , ⟨"duplicate-reply", true, [.offer] ++ dispatchActions ++ [reply, reply, .invoke, .invoke]⟩
-  , ⟨"wrong-call", true, [.offer] ++ dispatchActions ++ [.reply 601 "selected-agent" .run, .invoke]⟩
-  , ⟨"wrong-agent", true, [.offer] ++ dispatchActions ++ [.reply 600 "requester" .run, .invoke]⟩
   , ⟨"skip-with-hook-effect", true, [.offer] ++ dispatchActions ++ [.beginEffect, .observeEffect, reply .skip, .invoke]⟩
   , ⟨"terminate-after-dispatch", true, [.offer] ++ dispatchActions ++ [reply .terminate, .invoke]⟩
   , ⟨"cancel-waiting-unknown", true, [.offer, .beginDispatch, .stop .cancelled, reply, .invoke]⟩
-  , ⟨"cancel-then-commit-observed", true, [.offer, .beginDispatch, .stop .cancelled, .linearizeDispatch, .observeDispatch, reply, .invoke]⟩
-  , ⟨"commit-then-cancel-outcome-unobserved", true, [.offer, .beginDispatch, .linearizeDispatch, .stop .cancelled]⟩
-  , ⟨"commit-then-cancel-before-observation", true, [.offer, .beginDispatch, .linearizeDispatch, .stop .cancelled, .observeDispatch, reply, .invoke]⟩
-  , ⟨"cancel-then-rejection-observed", true, [.offer, .beginDispatch, .stop .cancelled, .rejectDispatch, .observeDispatch, reply, .invoke]⟩
-  , ⟨"cancel-during-effect", true, [.offer] ++ dispatchActions ++ [.beginEffect, .stop .cancelled, .observeEffect, reply .skip, .invoke]⟩
   , ⟨"lease-lost-waiting", true, [.offer, .beginDispatch, .stop .leaseLost, reply, .invoke]⟩
   , ⟨"shutdown-waiting", true, [.offer, .beginDispatch, .stop .shutdown, reply, .invoke]⟩
   , ⟨"deadline-waiting", true, [.offer, .beginDispatch, .stop .deadline, reply, .invoke]⟩
@@ -45,10 +42,6 @@ def cases : List Case :=
   , ⟨"lease-lost-after-reply", true, [.offer] ++ dispatchActions ++ [reply, .stop .leaseLost, .invoke]⟩
   , ⟨"shutdown-after-reply", true, [.offer] ++ dispatchActions ++ [reply, .stop .shutdown, .invoke]⟩
   , ⟨"deadline-after-reply", true, [.offer] ++ dispatchActions ++ [reply, .stop .deadline, .invoke]⟩
-  , ⟨"lease-expires-before-native-dispatch", true, [.offer, .beginDispatch, .time 10, .linearizeDispatch, .observeDispatch, reply, .invoke]⟩
-  , ⟨"lease-expires-after-commit-before-observation", true, [.offer, .beginDispatch, .linearizeDispatch, .time 10, .observeDispatch, reply, .invoke]⟩
-  , ⟨"generation-changes-before-dispatch", true, [.offer, .beginDispatch, .replaceGeneration 8, .linearizeDispatch, .observeDispatch, reply, .invoke]⟩
-  , ⟨"generation-changes-after-commit", true, [.offer, .beginDispatch, .linearizeDispatch, .replaceGeneration 8, .observeDispatch, reply, .invoke]⟩
   , ⟨"lease-expires-after-reply-without-observed-stop", true, [.offer] ++ dispatchActions ++ [reply, .time 10, .invoke]⟩ ]
 
 def author (s : State) : Option String :=

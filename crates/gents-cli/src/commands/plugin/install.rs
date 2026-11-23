@@ -79,7 +79,8 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
             &pack_args,
             true,
         )
-        .await?;
+        .await
+        .map_err(gents_pack::pack::PackChangeError::into_anyhow)?;
         return crate::print_json(&result);
     }
     let notify_scope = notification_scope.clone();

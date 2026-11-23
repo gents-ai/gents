@@ -5,11 +5,12 @@ use super::fixtures::{
 use super::seeding::{seed_agent_request, seed_agent_tool_call};
 use super::*;
 
-async fn document_read_grant(
+async fn document_permission(
     node: &Arc<defra_node::Node>,
     actor: &identity::Did,
     collection: &str,
     doc: &str,
+    permission: &str,
 ) -> anyhow::Result<bool> {
     use anyhow::Context;
     let observed = gents_store::identity::observe_document_permissions(
@@ -17,7 +18,7 @@ async fn document_read_grant(
         node.node_identity_did().context("node identity missing")?,
         actor,
         Some((collection, doc)),
-        &["read".to_owned()],
+        &[permission.to_owned()],
     )
     .await?
     .context("document permission observation missing")?;
@@ -190,6 +191,35 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
             })
         })
         .await?;
+    let mut enrollment = std::collections::BTreeMap::new();
+    let enrollment_case = async |node: &Arc<defra_node::Node>,
+                                 actor: &KeyIdentity,
+                                 collection: &str,
+                                 doc: &str,
+                                 permission: &str| {
+        document_permission(
+            node,
+            &identity::Did::new(actor.did())?,
+            collection,
+            doc,
+            permission,
+        )
+        .await
+    };
+    let request_collection = "NetworkEnrollmentRequest";
+    for (name, actor, permission) in [
+        ("thin-client-write", &candidate, "update"),
+        ("thin-admin-read", &admin, "read"),
+        ("thin-admin-write", &admin, "update"),
+        ("thin-user-read", &user, "read"),
+        ("thin-agent-read", &agent, "read"),
+        ("thin-outsider-read", &outsider, "read"),
+    ] {
+        enrollment.insert(
+            name,
+            enrollment_case(candidate_node, actor, request_collection, &doc, permission).await?,
+        );
+    }
     let http = |address, actor: &KeyIdentity| -> anyhow::Result<ConfigAccess> {
         Ok(ConfigAccess::Graphql(
             GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), actor.did())
@@ -278,6 +308,61 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         },
         "the receiver must name the writer from the synced signature"
     );
+    let session = http(admin_address, &candidate)?.write(
+        "test.transport.private_session",
+        &format!(r#"mutation {{ create_AgentSession(input:{{session_id:"private",node_did:"{}",agent_did:"{}"}}) {{_docID}} }}"#,
+            escape_graphql_string(candidate.did()), escape_graphql_string(agent.did())),
+    ).await?;
+    let session = gents_protocol::graphql::extract_mutation_doc_id(&session, "AgentSession")?;
+    let session_query = format!(
+        r#"{{ AgentSession(filter: {{_docID: {{_eq: "{}"}}}}) {{_docID}} }}"#,
+        escape_graphql_string(&session)
+    );
+    let forged_request = format!(
+        r#"mutation {{ update_NetworkEnrollmentRequest(docID: "{}", input: {{offer_token:"forged"}}) {{_docID}} }}"#,
+        escape_graphql_string(&doc)
+    );
+    let replica_grant = async || -> anyhow::Result<
+        gents_lean_vocab::families::identity_operations_replica_grant_scenario::ReplicaGrant,
+    > {
+        let read = async |actor: &KeyIdentity, query: &str, collection: &str| {
+            Ok::<_, anyhow::Error>(
+                !gents_protocol::graphql::graphql_rows_from_response(
+                    &http(admin_address, actor)?.execute(query).await?,
+                    collection,
+                )
+                .is_empty(),
+            )
+        };
+        let request = "NetworkEnrollmentRequest";
+        let user_write = http(admin_address, &user)?
+            .write("test.transport.replica_user_write", &forged_request)
+            .await;
+        Ok(
+            gents_lean_vocab::families::identity_operations_replica_grant_scenario::ReplicaGrant {
+                runtime_read: read(&admin, &query, request).await?,
+                user_read: read(&user, &query, request).await?,
+                user_write: user_write.as_ref().is_ok_and(|response| {
+                    !gents_protocol::graphql::graphql_rows_from_response(
+                        response,
+                        "update_NetworkEnrollmentRequest",
+                    )
+                    .is_empty()
+                }),
+                agent_read: read(&agent, &query, request).await?,
+                outsider_read: read(&outsider, &query, request).await?,
+                app_read: read(&admin, &session_query, "AgentSession").await?,
+                pending: {
+                    use gents_store::config_client::transport_publication::{publication_state, PublicationState};
+                    let txn = admin_node.database().new_txn(true).await?;
+                    let state = publication_state(&txn.datastore()?, request, &doc.parse()?, &reader).await?;
+                    txn.discard()?;
+                    state == Some(PublicationState::PendingParent)
+                },
+            },
+        )
+    };
+    replica_reads.insert("before", replica_grant().await?);
     let offer_b = issuer.mint().await?;
     let request_b = crate::p2p_reconcile::enrollment_candidate::sign_enrollment_request(
         &candidate,
@@ -399,15 +484,18 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         };
         receiver_case.check(observed);
     }
-    replica_reads.insert(
-        "pending",
-        gents_lean_vocab::families::identity_operations_replica_grant_reads::ReplicaReads {
-            runtime_read: count(&http(admin_address, &admin)?.execute(&query).await?) != 0,
-            user_read: count(&http(admin_address, &user)?.execute(&query).await?) != 0,
-            agent_read: count(&http(admin_address, &agent)?.execute(&query).await?) != 0,
-            outsider_read: count(&http(admin_address, &outsider)?.execute(&query).await?) != 0,
-        },
-    );
+    replica_reads.insert("pending", replica_grant().await?);
+    for (name, actor, permission) in [
+        ("candidate-request-write", &candidate, "update"),
+        ("admin-request-read", &admin, "read"),
+        ("admin-request-write", &admin, "update"),
+        ("user-request-before-parent", &user, "read"),
+    ] {
+        enrollment.insert(
+            name,
+            enrollment_case(admin_node, actor, request_collection, &doc, permission).await?,
+        );
+    }
     let node = http(admin_address, &user)?
         .write(
             "test.transport.create_node",
@@ -421,64 +509,88 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     http(admin_address, &candidate)?
         .write("test.transport.link_request", &reproject_request)
         .await?;
-    replica_reads.insert(
-        "linked",
-        gents_lean_vocab::families::identity_operations_replica_grant_reads::ReplicaReads {
-            runtime_read: count(&http(admin_address, &admin)?.execute(&query).await?) != 0,
-            user_read: count(&http(admin_address, &user)?.execute(&query).await?) != 0,
-            agent_read: count(&http(admin_address, &agent)?.execute(&query).await?) != 0,
-            outsider_read: count(&http(admin_address, &outsider)?.execute(&query).await?) != 0,
-        },
+    replica_reads.insert("linked", replica_grant().await?);
+    for (name, actor) in [
+        ("user-request-after-parent", &user),
+        ("outsider-request", &outsider),
+    ] {
+        enrollment.insert(
+            name,
+            enrollment_case(admin_node, actor, request_collection, &doc, "read").await?,
+        );
+    }
+    http(admin_address, &candidate)?
+        .delete_actor_relationship(request_collection, &doc, "reader", &reader)
+        .await?;
+    enrollment.insert(
+        "revoked-admin",
+        enrollment_case(admin_node, &admin, request_collection, &doc, "read").await?,
     );
+    http(admin_address, &candidate)?
+        .add_actor_relationship(request_collection, &doc, "reader", &reader)
+        .await?;
+    let terminal_collection = "NetworkEnrollmentDecision";
+    let terminal = crate::p2p_reconcile::enrollment_store::GraphqlEnrollmentStore::new(
+        admin_node.clone(),
+        Arc::new(KeyIdentity::load_or_create(&admin_path, None)?),
+    )
+    .publish_records(
+        "test.transport.terminal_decision",
+        &format!(
+            r#"mutation {{ create_NetworkEnrollmentDecision(input: {{ decision_id:"terminal", request_id:"{}", initial_reader_did:"{}" }}) {{ _docID }} }}"#,
+            escape_graphql_string(&request.request_id),
+            escape_graphql_string(candidate.did())
+        ),
+        &[terminal_collection],
+        candidate.did(),
+        None,
+    )
+    .await?;
+    let terminal =
+        gents_protocol::graphql::extract_mutation_doc_id(&terminal, terminal_collection)?;
+    for (name, actor, permission) in [
+        ("admin-terminal-write", &admin, "update"),
+        ("candidate-terminal-read", &candidate, "read"),
+        ("candidate-terminal-write", &candidate, "update"),
+        ("user-terminal-read", &user, "read"),
+        ("outsider-terminal", &outsider, "read"),
+    ] {
+        enrollment.insert(
+            name,
+            enrollment_case(
+                admin_node,
+                actor,
+                terminal_collection,
+                &terminal,
+                permission,
+            )
+            .await?,
+        );
+    }
     for actor in [&agent, &sibling, &outsider] {
         assert_eq!(
             count(&http(admin_address, actor)?.execute(&query).await?),
             0
         );
     }
-    let denied = http(admin_address, &user)?.write(
-        "test.transport.denied_write",
-        &format!(r#"mutation {{ update_NetworkEnrollmentRequest(docID: "{}", input: {{offer_token:"forged"}}) {{_docID}} }}"#,
-            escape_graphql_string(&doc)),
-    ).await;
-    let request_user_wrote = denied.as_ref().is_ok_and(|response| {
-        !gents_protocol::graphql::graphql_rows_from_response(
-            response,
-            "update_NetworkEnrollmentRequest",
-        )
-        .is_empty()
-    });
-    assert_eq!(
-        admin_local.execute(&query).await?["data"]["NetworkEnrollmentRequest"][0]["offer_token"],
-        offer.token
-    );
     http(admin_address, &candidate)?
         .delete_resource_relationship("NetworkEnrollmentRequest", &doc, "parent", "nodes", &parent)
         .await?;
+    replica_reads.insert("revoked", replica_grant().await?);
     http(admin_address, &candidate)?
         .write("test.transport.revisit_request", &reproject_request)
         .await?;
-    let repaired_user_read = count(&http(admin_address, &user)?.execute(&query).await?) != 0;
-    let repaired_runtime_read = count(&http(admin_address, &admin)?.execute(&query).await?) != 0;
-    let repaired_agent_read = count(&http(admin_address, &agent)?.execute(&query).await?) != 0;
-    let session = http(admin_address, &candidate)?.write(
-        "test.transport.private_session",
-        &format!(r#"mutation {{ create_AgentSession(input:{{session_id:"private",node_did:"{}",agent_did:"{}"}}) {{_docID}} }}"#,
-            escape_graphql_string(candidate.did()), escape_graphql_string(agent.did())),
-    ).await?;
-    let session = gents_protocol::graphql::extract_mutation_doc_id(&session, "AgentSession")?;
-    let session_query = format!(
-        r#"{{ AgentSession(filter: {{_docID: {{_eq: "{}"}}}}) {{_docID}} }}"#,
-        escape_graphql_string(&session)
-    );
+    let repaired = replica_grant().await?;
+    replica_reads.insert("after-repair", repaired.clone());
     for case in gents_lean_vocab::families::identity_native_read::cases() {
         let actor = if case.input.bypass { &admin } else { &outsider };
         assert_eq!(
-            document_read_grant(
+            document_permission(
                 admin_node,
                 &identity::Did::new(actor.did())?,
                 "AgentSession",
-                &session
+                &session,
+                "read"
             )
             .await?,
             case.input.document_acp
@@ -559,7 +671,8 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     let observe_revoked = async |node: &Arc<defra_node::Node>, address| -> anyhow::Result<_> {
         Ok(
             gents_lean_vocab::families::client_transport_revoked_reader::RevokedReaderOutput {
-                document_acp: document_read_grant(node, &reader, collection, &decision_id).await?,
+                document_acp: document_permission(node, &reader, collection, &decision_id, "read")
+                    .await?,
                 host_read: !gents_protocol::graphql::graphql_rows_from_response(
                     &http(address, &admin)?.execute(&decision_query).await?,
                     collection,
@@ -635,21 +748,6 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         !gents_protocol::graphql::graphql_rows_from_response(&public, "PeerRegistry").is_empty(),
     );
     assert_eq!(public["data"]["PeerRegistry"][0]["peer_id"], candidate_peer);
-    replica_reads.insert(
-        "after-repair",
-        gents_lean_vocab::families::identity_operations_replica_grant_reads::ReplicaReads {
-            runtime_read: repaired_runtime_read,
-            user_read: repaired_user_read,
-            agent_read: repaired_agent_read,
-            outsider_read: count(&http(admin_address, &outsider)?.execute(&query).await?) != 0,
-        },
-    );
-    let repaired_app_read = !gents_protocol::graphql::graphql_rows_from_response(
-        &http(admin_address, &admin)?.execute(&session_query).await?,
-        "AgentSession",
-    )
-    .is_empty();
-
     let runtime_registry = admin_local.write(
         "test.transport.runtime_registry",
         &format!(r#"mutation {{ create_PeerRegistry(input: {{peer_id:"runtime-owned",node_did:"{}",addresses:["local"]}}) {{_docID}} }}"#, escape_graphql_string(admin.did())),
@@ -689,6 +787,27 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     writers.insert(
         "user-owner",
         runtime_write
+            .as_ref()
+            .is_ok_and(|value| {
+                gents_protocol::graphql::extract_mutation_doc_id(value, "PeerRegistry").is_ok()
+            })
+            .then(|| "runtime".to_owned()),
+    );
+    let other_node_registry = http(admin_address, &user)?.write(
+        "test.transport.other_node_registry_create",
+        &format!(r#"mutation {{ create_PeerRegistry(input: {{peer_id:"other-node",node_did:"{}",addresses:["remote"]}}) {{_docID}} }}"#, escape_graphql_string(candidate.did())),
+    ).await?;
+    let other_node_registry =
+        gents_protocol::graphql::extract_mutation_doc_id(&other_node_registry, "PeerRegistry")?;
+    let other_node_write = admin_local
+        .write(
+            "test.transport.other_node_registry_update",
+            &registry_mutation(&other_node_registry),
+        )
+        .await;
+    writers.insert(
+        "other-node",
+        other_node_write
             .as_ref()
             .is_ok_and(|value| {
                 gents_protocol::graphql::extract_mutation_doc_id(value, "PeerRegistry").is_ok()
@@ -789,12 +908,12 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     );
     assert_eq!(
         count(&http(reopened_address, &admin)?.execute(&query).await?) != 0,
-        repaired_runtime_read,
+        repaired.runtime_read,
         "a restart must not change the runtime's read of the repaired request"
     );
     assert_eq!(
         count(&http(reopened_address, &user)?.execute(&query).await?) != 0,
-        repaired_user_read,
+        repaired.user_read,
         "a restart must not change the user's read of the repaired request"
     );
     let reopened_write = http(reopened_address, &user)?
@@ -819,7 +938,7 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
             "AgentSession"
         )
         .is_empty(),
-        repaired_app_read,
+        repaired.app_read,
         "a restart must not change the runtime's read of the application session"
     );
     let after_reopen = observe_revoked(&reopened, reopened_address).await?;
@@ -831,31 +950,29 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         });
     }
     reopened.shutdown().await?;
-    for case in gents_lean_vocab::families::identity_operations_replica_grant_reads::cases() {
-        let reads = replica_reads
+    for case in gents_lean_vocab::families::identity_operations_replica_grant_scenario::cases() {
+        let observed = replica_reads
             .remove(case.input.name.as_str())
             .unwrap_or_else(|| panic!("the replica scenario never reached {}", case.input.name));
-        case.check(reads);
+        case.check(observed);
     }
     assert!(
         replica_reads.is_empty(),
         "unmodeled replica observations: {:?}",
         replica_reads.keys().collect::<Vec<_>>()
     );
-    for case in gents_lean_vocab::families::identity_operations_replica_grant_user_write::cases() {
+    for case in gents_lean_vocab::families::identity_operations_enrollment_policy::cases() {
+        let allowed = enrollment
+            .remove(case.input.name.as_str())
+            .unwrap_or_else(|| panic!("the enrollment scenario never reached {}", case.input.name));
         case.check(
-            gents_lean_vocab::families::identity_operations_replica_grant_user_write::UserWrite {
-                user_write: request_user_wrote,
-            },
+            gents_lean_vocab::families::identity_operations_enrollment_policy::Allowed { allowed },
         );
     }
-    for case in gents_lean_vocab::families::identity_operations_replica_grant_app_read::cases() {
-        case.check(
-            gents_lean_vocab::families::identity_operations_replica_grant_app_read::AppRead {
-                app_read: repaired_app_read,
-            },
-        );
-    }
+    assert!(
+        enrollment.is_empty(),
+        "unmodeled enrollment observations: {enrollment:?}"
+    );
     for case in gents_lean_vocab::families::identity_operations_discovery::cases() {
         let allowed = discovery
             .remove(case.input.name.as_str())

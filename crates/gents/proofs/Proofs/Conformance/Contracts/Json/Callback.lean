@@ -113,42 +113,6 @@ structure CallbackJournalEntryWire where
 def CallbackJournalEntryWire.ofModel (e : ActionJournalEntry) : CallbackJournalEntryWire :=
   { index := e.index, state := e.state.toDefraDB }
 
-def CallbackJournalEntryWire.toModel (e : CallbackJournalEntryWire) : ActionJournalEntry :=
-  { index := e.index, state := (ActionJournalState.fromDefraDB? e.state).getD .validated }
-
-def callbackKeyOfWire (key : Conformance.EventGroupContracts.KeyWire) :
-    Triggers.Groups.EventGroupKey :=
-  { nodeDid := key.nodeDid
-  , consumer := if key.consumer.kind = "trigger" then .trigger (key.consumer.triggerId.getD "")
-      else .callbackBinding (key.consumer.bindingId.getD "")
-  , consumerConfigKey := key.consumerConfigKey, correlation := key.correlation }
-
-structure CallbackInvocationWire where
-  invocationId : String
-  ownerNodeDid : String
-  agentDid : String
-  input : String
-  originGroupKey : Option Conformance.EventGroupContracts.KeyWire
-  state : String
-  journal : List CallbackJournalEntryWire
-  resultEmitted : Bool
-  attempts : Nat
-  deriving Lean.ToJson
-
-def CallbackInvocationWire.ofModel (inv : CallbackInvocation) : CallbackInvocationWire :=
-  { invocationId := inv.invocationId, ownerNodeDid := inv.ownerNodeDid, agentDid := inv.agentDid
-  , input := inv.input
-  , originGroupKey := inv.originGroupKey.map Conformance.EventGroupContracts.KeyWire.ofModel
-  , state := inv.state.toDefraDB, journal := inv.journal.map CallbackJournalEntryWire.ofModel
-  , resultEmitted := inv.resultEmitted, attempts := inv.attempts }
-
-def CallbackInvocationWire.toModel (inv : CallbackInvocationWire) : CallbackInvocation :=
-  { invocationId := inv.invocationId, ownerNodeDid := inv.ownerNodeDid, agentDid := inv.agentDid
-  , input := inv.input, originGroupKey := inv.originGroupKey.map callbackKeyOfWire
-  , state := (InvocationState.fromDefraDB? inv.state).getD .pending
-  , journal := inv.journal.map CallbackJournalEntryWire.toModel
-  , resultEmitted := inv.resultEmitted, attempts := inv.attempts }
-
 /-- The step each transition witness takes, in `transitionCases` order. -/
 def callbackTransitionSteps : List CallbackInvocation.Step :=
   [.claim, .run, .fail, .succeed, .denyClaimed, .denyRunning, .interrupt, .retry]
@@ -160,44 +124,6 @@ example :
       CallbackInvocation.step? callbackTransitionMaxAttempts c.pre s == some c.post) &&
     callbackTransitionSteps.length == Callback.Conformance.transitionCases.length := by
   native_decide
-
-example : Callback.Conformance.transitionCases.all fun c =>
-    (CallbackInvocationWire.ofModel c.pre).toModel == c.pre := by
-  native_decide
-
-deriving instance Lean.ToJson for CallbackInvocation.Step
-
-structure CallbackTransitionInput where
-  name : String
-  step : CallbackInvocation.Step
-  maxAttempts : Nat
-  pre : CallbackInvocationWire
-  deriving Lean.ToJson
-
-/-- A rejected step leaves the invocation as it was. -/
-structure CallbackTransitionOutput where
-  accepted : Bool
-  post : CallbackInvocationWire
-  deriving Lean.ToJson
-
-/-- model-production-gap: the executor's claim, run, succeed, fail and retry
-steps happen inside the served callback engine's database writes
-(`claim_invocation`, `persist_claimed_to_running`, the success and failure
-writes and the retry sweep), and no production function applies one step to an
-invocation; denial and interrupt are replayed for state and journal through
-`contracts_callback_denial` and `contracts_callback_recovery`, but the
-invocation document stores the origin group as a derived key string and has no
-result-emission flag, so these witnesses of input, origin and emission
-preservation have no native replay. -/
-@[conformance_family]
-def callbackTransitionUnreached : Family CallbackTransitionInput CallbackTransitionOutput where
-  inputs := (Callback.Conformance.transitionCases.zip callbackTransitionSteps).map fun (c, s) =>
-    { name := c.name, step := s, maxAttempts := callbackTransitionMaxAttempts
-    , pre := CallbackInvocationWire.ofModel c.pre }
-  model := fun i =>
-    match CallbackInvocation.step? i.maxAttempts i.pre.toModel i.step with
-    | some post => { accepted := true, post := CallbackInvocationWire.ofModel post }
-    | none => { accepted := false, post := i.pre }
 
 /-- What the served engine does to one plugin invocation between checkpoints. -/
 inductive SaturationStep where

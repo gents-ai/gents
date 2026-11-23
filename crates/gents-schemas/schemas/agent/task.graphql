@@ -8,6 +8,8 @@ type Task @policy(id: "$household", resource: "configuration") @index(fields: ["
     emit_outcome: Boolean
     goal_objective_template: String
     goal_token_budget: Int
+    goal_blocked_audit_threshold: Int
+    goal_max_infrastructure_retries: Int
     hooks: JSON
     enabled: Boolean @index
     output_schema_ref: String

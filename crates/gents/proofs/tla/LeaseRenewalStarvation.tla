@@ -56,6 +56,14 @@
 \* contract. The fence keeps the unconditional promise to every other reader
 \* (`SingleWriter`) whatever the owner's runtime does (`Fenced`).
 \*
+\* A host that stops the whole process (memory thrashing, a paused process)
+\* is the same step with no worker free, so `SyncOffRuntime` does not apply:
+\* a stall of half a lease or more fails a correct owner's request with
+\* `execution lease expired` (`MarginSpent`). The lease is not the only such
+\* bound: a stall inside a commit also outlasts the store's
+\* `EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT`. Both are premises about the
+\* host (`WallClockBound` `SlowHost`), not decisions a test can wait out.
+\*
 \* `Tick` carries the lease's runtime obligation
 \* (`gents_loop::execution_policy`: the configured duration "must leave
 \* scheduling and commit-latency margin"): the clock does not pass a due poll

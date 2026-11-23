@@ -107,7 +107,7 @@ export function usePackActions(refresh: () => Promise<void>) {
     } catch (error) {
       /* an update that would replace documents someone edited stops and
          names them; the person chooses keep or overwrite */
-      if (refusalOf(errorText(error)) === "edited") {
+      if (refusalOf(error) === "edited") {
         const overwrite = window.confirm(
           `${errorText(error)}\n\nOK replaces them, Cancel keeps your edits.`,
         );
@@ -178,7 +178,7 @@ export function usePackActions(refresh: () => Promise<void>) {
           break;
         } catch (error) {
           const text = errorText(error);
-          if (edited === "refuse" && refusalOf(text) === "edited") {
+          if (edited === "refuse" && refusalOf(error) === "edited") {
             if (!window.confirm(editedQuestion(pack, text))) {
               if (out.length > 0) toast.error(saying(`${name} wasn't removed.`));
               return false;

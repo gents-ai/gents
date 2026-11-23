@@ -1776,11 +1776,6 @@ async fn session_tool_reads_follow_the_node_grant_and_session_acp() -> anyhow::R
             "foreign" => &foreign,
             other => anyhow::bail!("unmodeled session {other}"),
         };
-        anyhow::ensure!(
-            !case.input.native_bypass,
-            "a managed Agent's signed read never resolves DAC bypass: {:?}",
-            case.input
-        );
         let read = agent_access
             .execute(&format!(
                 r#"{{ ToolSessionProbe(filter: {{_docID: {{_eq: "{}"}}}}) {{ _docID }} }}"#,

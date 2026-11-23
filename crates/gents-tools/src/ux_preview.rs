@@ -39,6 +39,7 @@ const THEMES: [&str; 2] = ["light", "dark"];
 const MAX_RECORDED_CALLS: usize = 100;
 const MAX_CONSOLE_ENTRIES: usize = 40;
 const MAX_CONSOLE_CHARS: usize = 600;
+/// Bounds one preview render across both themes so a hung page cannot hold the browser; a host mechanism bound, not agent behaviour.
 const RUN_DEADLINE: Duration = Duration::from_secs(150);
 const BLOB_ORIGIN: &str = "blob:null/";
 const BLOB_ID_CHARS: usize = 36;

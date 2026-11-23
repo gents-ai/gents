@@ -193,6 +193,11 @@ theorem foreign_requester_rejected_for_ordinary_child :
 theorem valid_paired_title_child_is_bound :
     childScopeBindingAllowed {} = true := by decide
 
+/-- External premise: DefraDB assigns every stored document a non-empty
+`_docID`, so an empty physical session is never observed and is no case. -/
+theorem empty_physical_session_is_not_bound :
+    childScopeBindingAllowed { childSessionDoc := "", sessionDoc := "" } = false := by decide
+
 theorem invalid_auxiliary_signature_cannot_repair :
     recoverBoundSessionChild beginParentPublication { auxiliarySignatureValid := false }
       (some "agent") (some "agent") (some "agent") true true =
@@ -236,7 +241,6 @@ def childScopeCases : List ChildScopeCase :=
     { name := "foreign_child_node", binding := { childNode := "other" } },
     { name := "foreign_child_session", binding := { childSession := "other" } },
     { name := "foreign_physical_session", binding := { childSessionDoc := "other" } },
-    { name := "empty_physical_session", binding := { childSessionDoc := "", sessionDoc := "" } },
     { name := "foreign_child_agent", binding := { childAgent := "other" } },
     { name := "missing_auxiliary", binding := { auxiliaryPresent := false } },
     { name := "invalid_auxiliary_signature", binding := { auxiliarySignatureValid := false } },
@@ -262,6 +266,7 @@ def childScopeCases : List ChildScopeCase :=
     { name := "foreign_native_owner", binding := {}, nativeOwner := some "other" },
     { name := "foreign_creator", binding := {}, nativeOwner := some "agent", creator := some "other" },
     { name := "foreign_authenticated_creator", binding := {}, nativeOwner := some "agent", creator := some "agent", authenticated := some "other" },
+    { name := "foreign_repairer", binding := { actor := "other" }, authenticated := some "other" },
     { name := "failed_grant", binding := {}, nativeOwner := some "agent", creator := some "agent", authenticated := some "agent", grantOk := false, markOk := true },
     { name := "failed_marker", binding := {}, nativeOwner := some "agent", creator := some "agent", authenticated := some "agent", grantOk := true, markOk := false },
     { name := "uncommitted", binding := {}, committed := false },

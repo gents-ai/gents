@@ -30,6 +30,7 @@ import {
   profileDraftFrom,
   profileNumbers,
   profileProblems,
+  type ExecutionField,
   type ProfileContext,
   type ProfileDraft,
 } from "./profileDraft";
@@ -185,9 +186,13 @@ export function ProfileEditor({
         repetitionPenalty,
         maxTurns,
         maxTotalTokens,
+        maxInvalidToolCalls,
+        repeatedToolFailureLimit,
+        maxRequestRetries,
         streamBatchMs,
         streamLivenessSecs,
         providerIdleSecs,
+        titleTimeoutSecs,
         deadlineSecs,
       } = profileNumbers(next, profileContext(next));
       const sampling = deployment.inferenceSampling.find(
@@ -233,9 +238,13 @@ export function ProfileEditor({
             execution_id: next.executionId.trim(),
             max_turns: maxTurns,
             max_total_tokens: maxTotalTokens,
+            max_invalid_tool_calls: maxInvalidToolCalls,
+            repeated_tool_failure_limit: repeatedToolFailureLimit,
+            max_request_retries: maxRequestRetries,
             stream_batch_ms: streamBatchMs,
             stream_liveness_timeout_secs: streamLivenessSecs,
             provider_idle_timeout_secs: providerIdleSecs,
+            title_timeout_secs: titleTimeoutSecs,
             deadline_duration_secs: deadlineSecs,
             retry_policy_id: next.retryPolicyId.trim() || null,
           }
@@ -257,16 +266,7 @@ export function ProfileEditor({
   const executionDefault = (key: string) =>
     executionDefaults[key] == null ? "Unlimited" : String(executionDefaults[key]);
   const [editedExecution, setEditedExecution] = useState<Set<string>>(new Set());
-  const setExecution = (
-    key:
-      | "maxTurns"
-      | "maxTotalTokens"
-      | "streamBatchMs"
-      | "streamLivenessSecs"
-      | "providerIdleSecs"
-      | "deadlineSecs",
-    value: string,
-  ) => {
+  const setExecution = (key: ExecutionField, value: string) => {
     setEditedExecution((keys) => new Set(keys).add(key));
     if (value && !d.draft.executionId)
       d.set("executionId", `${profile.profile_id}-execution`);
@@ -356,6 +356,20 @@ export function ProfileEditor({
       )
     : null;
   const id = (f: string) => `${profile.profile_id}-${f}`;
+  const executionRow = (field: ExecutionField, rowId: string) => (
+    <NumberRow
+      id={id(rowId)}
+      label={PROFILE_NUMBERS[field].label}
+      error={problems[field]}
+      value={
+        editedExecution.has(field)
+          ? d.draft[field]
+          : d.draft[field] ||
+            (executionDefaults[field] == null ? "" : String(executionDefaults[field]))
+      }
+      onChange={(v) => setExecution(field, v)}
+    />
+  );
   const [besideBackend, setBesideBackend] = useState<string | null>(null);
   const [addingBackend, setAddingBackend] = useState<
     ((id: string | null) => void) | null
@@ -548,20 +562,7 @@ export function ProfileEditor({
           onChange={(v) => d.set("executionId", v)}
           mono
         />
-        <NumberRow
-          id={id("max-turns")}
-          label={PROFILE_NUMBERS.maxTurns.label}
-          error={problems.maxTurns}
-          value={
-            editedExecution.has("maxTurns")
-              ? d.draft.maxTurns
-              : d.draft.maxTurns ||
-                (executionDefaults.maxTurns == null
-                  ? ""
-                  : String(executionDefaults.maxTurns))
-          }
-          onChange={(v) => setExecution("maxTurns", v)}
-        />
+        {executionRow("maxTurns", "max-turns")}
         <NumberRow
           id={id("max-total")}
           label={PROFILE_NUMBERS.maxTotalTokens.label}
@@ -570,62 +571,14 @@ export function ProfileEditor({
           placeholder={executionDefault("maxTotalTokens")}
           onChange={(v) => setExecution("maxTotalTokens", v)}
         />
-        <NumberRow
-          id={id("batch")}
-          label={PROFILE_NUMBERS.streamBatchMs.label}
-          error={problems.streamBatchMs}
-          value={
-            editedExecution.has("streamBatchMs")
-              ? d.draft.streamBatchMs
-              : d.draft.streamBatchMs ||
-                (executionDefaults.streamBatchMs == null
-                  ? ""
-                  : String(executionDefaults.streamBatchMs))
-          }
-          onChange={(v) => setExecution("streamBatchMs", v)}
-        />
-        <NumberRow
-          id={id("liveness")}
-          label={PROFILE_NUMBERS.streamLivenessSecs.label}
-          error={problems.streamLivenessSecs}
-          value={
-            editedExecution.has("streamLivenessSecs")
-              ? d.draft.streamLivenessSecs
-              : d.draft.streamLivenessSecs ||
-                (executionDefaults.streamLivenessSecs == null
-                  ? ""
-                  : String(executionDefaults.streamLivenessSecs))
-          }
-          onChange={(v) => setExecution("streamLivenessSecs", v)}
-        />
-        <NumberRow
-          id={id("provider-idle")}
-          label={PROFILE_NUMBERS.providerIdleSecs.label}
-          error={problems.providerIdleSecs}
-          value={
-            editedExecution.has("providerIdleSecs")
-              ? d.draft.providerIdleSecs
-              : d.draft.providerIdleSecs ||
-                (executionDefaults.providerIdleSecs == null
-                  ? ""
-                  : String(executionDefaults.providerIdleSecs))
-          }
-          onChange={(v) => setExecution("providerIdleSecs", v)}
-        />
-        <NumberRow
-          id={id("deadline")}
-          label={PROFILE_NUMBERS.deadlineSecs.label}
-          error={problems.deadlineSecs}
-          value={
-            editedExecution.has("deadlineSecs")
-              ? d.draft.deadlineSecs
-              : d.draft.deadlineSecs ||
-                (executionDefaults.deadlineSecs == null
-                  ? ""
-                  : String(executionDefaults.deadlineSecs))
-          }
-          onChange={(v) => setExecution("deadlineSecs", v)}
-        />
+        {executionRow("maxInvalidToolCalls", "max-invalid-tool-calls")}
+        {executionRow("repeatedToolFailureLimit", "repeated-tool-failure-limit")}
+        {executionRow("maxRequestRetries", "max-request-retries")}
+        {executionRow("streamBatchMs", "batch")}
+        {executionRow("streamLivenessSecs", "liveness")}
+        {executionRow("providerIdleSecs", "provider-idle")}
+        {executionRow("titleTimeoutSecs", "title-timeout")}
+        {executionRow("deadlineSecs", "deadline")}
         <TextRow
           id={id("retry")}
           label="Retry policy ID"
@@ -654,9 +607,13 @@ export function ProfileEditor({
           executionId: id("execution"),
           maxTurns: id("max-turns"),
           maxTotalTokens: id("max-total"),
+          maxInvalidToolCalls: id("max-invalid-tool-calls"),
+          repeatedToolFailureLimit: id("repeated-tool-failure-limit"),
+          maxRequestRetries: id("max-request-retries"),
           streamBatchMs: id("batch"),
           streamLivenessSecs: id("liveness"),
           providerIdleSecs: id("provider-idle"),
+          titleTimeoutSecs: id("title-timeout"),
           deadlineSecs: id("deadline"),
         }}
         saveLabel={draftMode ? "Create" : undefined}

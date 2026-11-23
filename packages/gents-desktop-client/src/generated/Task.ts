@@ -32,6 +32,16 @@ emit_outcome: boolean,
  */
 outcome_readers?: Array<WorkspaceReaderSelection> | null, goal_objective_template?: string | null, goal_token_budget?: number | null,
 /**
+ * Consecutive same-condition blocked audits that block the Goal; unset is
+ * `BLOCKED_AUDIT_THRESHOLD`. Each Goal assignment pins the value.
+ */
+goal_blocked_audit_threshold?: number | null,
+/**
+ * Automatic re-prompts after a Failed or Dead request; unset is
+ * `MAX_INFRASTRUCTURE_RETRIES`. Each Goal assignment pins the value.
+ */
+goal_max_infrastructure_retries?: number | null,
+/**
  * Explicit host commands, in list order within each phase.
  * No hooks means ordinary agent execution.
  */

@@ -8,16 +8,6 @@ use tokio_util::sync::CancellationToken;
 
 use super::*;
 
-#[test]
-fn rust_managed_exec_state_vocabulary_matches_lean_model() {
-    let rust_states = ManagedExecState::ALL
-        .iter()
-        .copied()
-        .map(|state| state.as_str().to_owned())
-        .collect::<Vec<_>>();
-    gents_lean_vocab::families::managed_exec_state_vocabulary::replay(&rust_states);
-}
-
 #[cfg(unix)]
 #[tokio::test]
 async fn managed_exec_deadline_kills_process_group() {
@@ -431,15 +421,15 @@ async fn managed_exec_spawn_outcome_matches_the_lean_model() {
             );
         }
         let state = match outcome {
-            ManagedExecOutcome::SpawnFailed { .. } => ManagedExecState::SpawnFailed,
-            _ => ManagedExecState::Running,
+            ManagedExecOutcome::SpawnFailed { .. } => "spawnFailed",
+            _ => "running",
         };
         let executor_registered = crate::exec::status::active_native_executors()
             .iter()
             .any(|snapshot| snapshot.tool_name.as_deref() == Some("spawn-failure"));
         case.check(
             gents_lean_vocab::families::managed_exec_spawn_outcome::SpawnOutput {
-                state: state.as_str().to_string(),
+                state: state.to_string(),
                 executor_registered,
             },
         );
@@ -779,21 +769,14 @@ async fn managed_exec_liveness_follows_the_lean_composed_model() {
             ManagedExecOutcome::TimedOut { kill, .. }
             | ManagedExecOutcome::Cancelled { kill, .. } => {
                 let signaled = kill.term_signal_sent || kill.kill_signal_sent;
-                (
-                    if signaled {
-                        ManagedExecState::KillSignaled
-                    } else {
-                        ManagedExecState::Exited
-                    },
-                    signaled,
-                )
+                (if signaled { "killSignaled" } else { "exited" }, signaled)
             }
-            ManagedExecOutcome::Exited { .. } => (ManagedExecState::Exited, false),
-            ManagedExecOutcome::SpawnFailed { .. } => (ManagedExecState::SpawnFailed, false),
+            ManagedExecOutcome::Exited { .. } => ("exited", false),
+            ManagedExecOutcome::SpawnFailed { .. } => ("spawnFailed", false),
         };
         case.check(
             gents_lean_vocab::families::contracts_managed_exec_liveness_exec::ManagedExecLivenessExecOutput {
-                exec_state: state.as_str().to_owned(),
+                exec_state: state.to_owned(),
                 kill_signal_required,
             },
         );

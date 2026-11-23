@@ -238,9 +238,15 @@ describe("a pack's page before it's installed", () => {
       digest: "sha256:0000",
     };
     const installPack = bridge(() => {
-      throw new Error(
-        `the pack's digest is ${DIGEST}, not the expected sha256:0000. Nothing was installed.`,
-      );
+      throw Object.assign(new Error("The pack changed since it was reviewed."), {
+        packRefusal: {
+          class: "digest_changed",
+          coordinate: null,
+          named: [],
+          unnamed: 0,
+          sentence: "The pack changed since it was reviewed.",
+        },
+      });
     });
     show(installPack, { name: "packs", review: packPreviewKey(linked) });
     const adds = await wouldAdd();

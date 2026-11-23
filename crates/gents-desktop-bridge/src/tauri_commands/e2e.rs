@@ -40,76 +40,50 @@ pub struct NativeE2eStatus {
     metrics: Option<serde_json::Value>,
 }
 
+#[cfg(feature = "native-e2e")]
+mod launch;
+#[cfg(feature = "native-e2e")]
+pub use launch::{NativeE2eLaunch, NativeE2eLaunchError, NativeLocalLaunch};
+
 #[tauri::command]
 #[cfg(feature = "native-e2e")]
-pub fn desktop_native_e2e_config() -> Result<Option<NativeE2eConfig>, BridgeError> {
+pub fn desktop_native_e2e_config<R>(
+    app: tauri::AppHandle<R>,
+) -> Result<Option<NativeE2eConfig>, BridgeError>
+where
+    R: tauri::Runtime,
+{
     #[cfg(not(debug_assertions))]
     {
+        let _ = app;
         return Ok(None);
     }
 
     #[cfg(debug_assertions)]
     {
-        let enabled = std::env::var("GENTS_NATIVE_E2E").ok().as_deref() == Some("1");
+        use tauri::Manager;
+        let launch = app.try_state::<NativeE2eLaunch>();
         tracing::info!(
             target: "crate::mobile_performance",
-            enabled,
+            enabled = launch.is_some(),
             "native E2E configuration requested"
         );
-        if !enabled {
-            return Ok(None);
-        }
-
-        let server_address = std::env::var("GENTS_E2E_SERVER_ADDRESS").map_err(|_| {
-            BridgeError::untyped("GENTS_E2E_SERVER_ADDRESS is required for native E2E")
-        })?;
-        if server_address.trim().is_empty() {
-            return Err(BridgeError::untyped(
-                "GENTS_E2E_SERVER_ADDRESS must not be empty",
-            ));
-        }
-
-        Ok(Some(NativeE2eConfig {
-            local_setup: std::env::var("GENTS_E2E_LOCAL_MODEL").ok().map(|model| {
-                NativeLocalSetup {
-                    model,
-                    endpoint: server_address.clone(),
-                    phase: std::env::var("GENTS_E2E_LOCAL_PHASE")
-                        .unwrap_or_else(|_| "setup".to_owned()),
-                    tool_root: std::env::var("GENTS_E2E_LOCAL_TOOL_ROOT").unwrap_or_default(),
-                }
-            }),
-            agent_label: std::env::var("GENTS_E2E_AGENT_LABEL")
-                .unwrap_or_else(|_| "Fleet E2E Agent".to_owned()),
-            server_address,
-            prompt: std::env::var("GENTS_E2E_PROMPT").unwrap_or_else(|_| {
-                "Reply with only the uppercase underscore form of: fleet iphone simulator e2e."
-                    .to_owned()
-            }),
-            expected_response: std::env::var("GENTS_E2E_EXPECTED_RESPONSE")
-                .unwrap_or_else(|_| "FLEET_IPHONE_SIMULATOR_E2E".to_owned()),
-            expect_empty_session_slice: std::env::var("GENTS_E2E_EXPECT_EMPTY_SESSIONS")
-                .ok()
-                .as_deref()
-                == Some("1"),
-            correlation_id: std::env::var("GENTS_E2E_CORRELATION_ID")
-                .unwrap_or_else(|_| "native-e2e".to_owned()),
-            reconnect_real_inference: std::env::var("GENTS_E2E_RECONNECT_REAL_INFERENCE")
-                .ok()
-                .as_deref()
-                == Some("1"),
-            measure_performance: std::env::var("GENTS_MOBILE_PERFORMANCE").ok().as_deref()
-                == Some("1"),
-        }))
+        Ok(launch.map(|launch| launch.config()))
     }
 }
 
 #[tauri::command]
 #[cfg(feature = "native-e2e")]
-pub async fn desktop_native_e2e_status(status: NativeE2eStatus) -> Result<(), BridgeError> {
+pub async fn desktop_native_e2e_status<R>(
+    app: tauri::AppHandle<R>,
+    status: NativeE2eStatus,
+) -> Result<(), BridgeError>
+where
+    R: tauri::Runtime,
+{
     #[cfg(not(debug_assertions))]
     {
-        let _ = status;
+        let _ = (app, status);
         return Err(BridgeError::untyped(
             "native E2E status is disabled in release builds",
         ));
@@ -117,7 +91,8 @@ pub async fn desktop_native_e2e_status(status: NativeE2eStatus) -> Result<(), Br
 
     #[cfg(debug_assertions)]
     {
-        if std::env::var("GENTS_NATIVE_E2E").ok().as_deref() != Some("1") {
+        use tauri::Manager;
+        if app.try_state::<NativeE2eLaunch>().is_none() {
             return Err(BridgeError::untyped("native E2E status is not enabled"));
         }
         if status.stage.is_empty() || status.stage.len() > 64 {

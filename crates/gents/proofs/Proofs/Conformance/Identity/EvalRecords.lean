@@ -31,21 +31,17 @@ def publishOutput (i : PublishInput) : PublishOutput :=
     userRead := allowed 5 s "user" i.resource i.name "read"
     strangerRead := allowed 5 s "stranger" i.resource i.name "read" }
 
-/-- A served node publishes each record's Node parent in the creating
-transaction, so a failed parent relationship or a failed commit cannot be
-staged from outside the eval document owners. -/
-def failedPublicationNames : List String := ["relationship-failed", "commit-failed"]
-
 @[conformance_family]
 def published : Family PublishInput PublishOutput where
-  inputs := (cases.filter fun c => c.name ∉ failedPublicationNames).map PublishInput.ofCase
+  inputs := (cases.filter (·.name != "relationship-failed")).map PublishInput.ofCase
   model := publishOutput
 
-/-- model-production-gap: no production path lets the Node parent relationship
-fail or the commit fail after an eval record create is staged. -/
+/-- The Node parent is a native relationship change inside the creating
+transaction, and the store's fault seams fail only document mutations, so no
+fixture fails that relationship alone. -/
 @[conformance_family]
 def publishedUnreached : Family PublishInput PublishOutput where
-  inputs := (cases.filter fun c => c.name ∈ failedPublicationNames).map PublishInput.ofCase
+  inputs := (cases.filter (·.name == "relationship-failed")).map PublishInput.ofCase
   model := publishOutput
 
 end Conformance.EvalRecords

@@ -7,6 +7,7 @@ use super::canonical::parse_canonical_timestamp;
 /// superseding re-enrollment of the same member: a fresh offer, a request the
 /// member signs, and an approval that takes the member's next authorization
 /// sequence. Every protocol-2 node, RC0 included, accepts that generation.
+/// Every node evaluates the same window, so it is a protocol constant, not a node setting; `EnrollmentRenewalPolicy` sets the lease length.
 pub const ENROLLMENT_RENEWAL_WINDOW_SECONDS: u64 = 7 * 24 * 60 * 60;
 
 /// A network's automatic renewal setting, as held by its

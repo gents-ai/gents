@@ -95,6 +95,8 @@ fn goal_view(
                 objective: shown(snapshot.objective),
                 status: shown(snapshot.status),
                 token_budget: snapshot.token_budget.map(|budget| budget.to_string()),
+                blocked_audit_threshold: snapshot.blocked_audit_threshold.to_string(),
+                max_infrastructure_retries: snapshot.max_infrastructure_retries.to_string(),
                 tokens_used: count(snapshot.tokens_used),
                 active_time_seconds: count(snapshot.active_time_seconds),
                 continuation_sequence: count(snapshot.continuation_sequence),

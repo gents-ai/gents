@@ -1,0 +1,4 @@
+---- MODULE MCBackgroundStopRelease ----
+EXTENDS BackgroundStopRelease
+
+====

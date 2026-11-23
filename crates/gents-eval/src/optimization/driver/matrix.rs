@@ -337,17 +337,33 @@ async fn cancel_while_proposing(
 
 pub(crate) async fn accepting_harness(job_id: &str) -> (Harness, JobRequest) {
     let harness = Harness::new().await;
+    let request = accepting_job(&harness, harness.access(), job_id).await;
+    (harness, request)
+}
+
+pub(crate) async fn accepting_job(
+    harness: &Harness,
+    access: &ConfigAccess,
+    job_id: &str,
+) -> JobRequest {
     let executor = script(base_executor(), "baseline", &VALIDATION_CASES, |_| fail());
-    let request = harness.request(job_id, DEFINITION, budgets(1_000));
-    let outcome = settle(
-        &harness,
+    let request = JobRequest {
+        evaluator_did: access.actor_did().expect("an authenticated evaluator"),
+        ..harness.request(job_id, DEFINITION, budgets(1_000))
+    };
+    let outcome = run_job(
+        access,
         &request,
         &executor,
         &repeating_proposer(CANDIDATE_PROMPT),
+        &CheckRegistry::builtin(),
+        &policy(),
+        CancellationToken::new(),
     )
-    .await;
+    .await
+    .unwrap();
     assert_eq!(outcome.state, JobState::ReadyToPromote, "{outcome:#?}");
-    (harness, request)
+    request
 }
 
 pub(crate) const CANDIDATE_TEMPLATE: &str = "Do {{ doc.goal }} for {{ doc.owner }}, and say why.\n";

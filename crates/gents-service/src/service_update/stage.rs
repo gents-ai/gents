@@ -92,21 +92,18 @@ pub(super) fn prepare(
     // No hostname resolution or redirects: the signed control response binds
     // identity/build; the persisted listener binds the endpoint to this home.
     execute::endpoint(&state.graphql, &prior_network)?;
-    let temp = tempfile::Builder::new()
-        .prefix("stage-")
-        .tempdir_in(&root)?;
-    private_dir(temp.path())?;
-    copy_executable(candidate, &temp.path().join("gents"))?;
-    anyhow::ensure!(
-        digest(&temp.path().join("gents"))? == expected,
-        "artifact changed during staging"
-    );
+    use crate::native_service::{CommandRunner as _, ProcessCommandRunner};
+    let keychain = super::preflight::keychain_custody(init.store_encryption.as_ref());
+    let (temp, admitted) = prepare_with_preflight(
+        &root,
+        candidate,
+        &expected,
+        &home,
+        keychain,
+        &ProcessCommandRunner,
+    )?;
     copy_executable(&current, &temp.path().join("helper"))?;
     copy_executable(&old_executable, &temp.path().join("prior-gents"))?;
-    validate_native_executable(&temp.path().join("gents"))?;
-    // The digest is checked before executing the candidate. Candidate-owned
-    // preflight inspects format markers without opening or modifying the store.
-    use crate::native_service::{CommandRunner as _, ProcessCommandRunner};
     let helper_probe = ProcessCommandRunner.run(
         temp.path().join("helper").as_os_str(),
         &["service".into(), "update-check".into()],
@@ -120,28 +117,6 @@ pub(super) fn prepare(
     anyhow::ensure!(
         helper_metadata["handoff_version"] == 1,
         "staged updater protocol changed; runtime unchanged"
-    );
-    let probe = ProcessCommandRunner.run(
-        temp.path().join("gents").as_os_str(),
-        &[
-            "service".into(),
-            "update-check".into(),
-            "--home".into(),
-            home.as_os_str().to_owned(),
-        ],
-    )?;
-    anyhow::ensure!(
-        probe.success,
-        "candidate preflight refused; runtime unchanged: {}",
-        gents_protocol::failure_text::bounded_text(&probe.stderr)
-    );
-    let probe: serde_json::Value = serde_json::from_str(&probe.stdout)?;
-    anyhow::ensure!(
-        probe["handoff_version"] == 1
-            && probe["schema_checked"] == true
-            && probe["os"] == std::env::consts::OS
-            && probe["arch"] == std::env::consts::ARCH,
-        "candidate platform or handoff protocol mismatch"
     );
     let target = if intent.executable_update {
         directory.join("gents")
@@ -179,7 +154,7 @@ pub(super) fn prepare(
     let receipt = Receipt {
         operation_id: id,
         node_did: plan.node_did.clone(),
-        phase: Phase::Staged,
+        phase: admitted,
         message: "Verified candidate staged; runtime unchanged".into(),
         updated_at: chrono::Utc::now().to_rfc3339(),
         directory: directory.clone(),
@@ -189,6 +164,30 @@ pub(super) fn prepare(
     fs::rename(temp.keep(), &directory)?;
     File::open(&root)?.sync_all()?;
     Ok((plan, receipt, submission_lock))
+}
+
+/// The candidate runs only as a private, digest-verified copy, never from the
+/// caller's mutable path; the copy is removed with `temp` on refusal. Only the
+/// phase admitted here may initialize the operation's receipt.
+pub(super) fn prepare_with_preflight(
+    root: &Path,
+    candidate: &Path,
+    expected: &str,
+    home: &Path,
+    keychain: bool,
+    runner: &impl crate::native_service::CommandRunner,
+) -> Result<(tempfile::TempDir, Phase)> {
+    let temp = tempfile::Builder::new().prefix("stage-").tempdir_in(root)?;
+    private_dir(temp.path())?;
+    let executable = temp.path().join("gents");
+    copy_executable(candidate, &executable)?;
+    anyhow::ensure!(
+        digest(&executable)? == expected,
+        "artifact changed during staging"
+    );
+    validate_native_executable(&executable)?;
+    let phase = super::preflight::probe(runner, &executable, home, keychain)?;
+    Ok((temp, phase))
 }
 
 /// Unpublished staging directories cannot own an operation. An abandoned

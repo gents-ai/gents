@@ -11,7 +11,7 @@ use crate::support::builder_runtime::{
     builder_actors, fixture_agent, runtime_builder, spawn_runtime, submit_request,
 };
 use crate::support::interrupt::BootedAgent;
-use crate::support::live_inference::wait_for_request_terminal;
+use crate::support::live_inference::{request_lifecycle, request_terminal_rows};
 use crate::support::streaming_backend::{
     MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse, StreamScript,
 };
@@ -102,7 +102,8 @@ async fn complete_request(
 ) {
     let submitted = Instant::now();
     submit_request(actors, request_id, session, "interactive", prompt).await;
-    let state = wait_for_request_terminal(&actors.agent_access, request_id).await;
+    let rows = request_terminal_rows(&actors.agent_access, request_id).await;
+    let state = request_lifecycle(&rows, request_id).expect("terminal lifecycle");
     tracing::info!(
         request_id,
         state,
@@ -110,7 +111,7 @@ async fn complete_request(
         test_elapsed = ?test_started.elapsed(),
         "storage budget request terminal"
     );
-    assert_eq!(state, "completed", "{request_id}");
+    assert_eq!(state, "completed", "{request_id}: {rows:#}");
 }
 
 fn turn_marker(session: usize, turn: usize) -> String {

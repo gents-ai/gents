@@ -16,7 +16,9 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
+use super::failure::{RefusalIdentifiers, SessionFailure};
 use super::{decode_install_request, delegated_install_access, refused, InstallRequest, MAX_BODY};
+use gents_protocol::operations::pack::hosted::HostedInstallFailure as Class;
 
 mod wire;
 use crate::http::router::RuntimeHttpState;
@@ -93,40 +95,28 @@ pub async fn install_session(
     upgrade: WebSocketUpgrade,
 ) -> Response {
     let Some(actor) = identity.did().cloned() else {
-        return refused(
-            StatusCode::UNAUTHORIZED,
-            "Client authentication is required.",
-        );
+        return refused(StatusCode::UNAUTHORIZED, Class::NotAuthorized);
     };
     let access = match delegated_install_access(&state, &headers, actor.clone()) {
         Ok(access) => access,
-        Err(error) => return refused(StatusCode::UNAUTHORIZED, error),
+        Err(_) => return refused(StatusCode::UNAUTHORIZED, Class::NotAuthorized),
     };
     if state.home.is_none() {
-        return refused(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "runtime plugin store unavailable",
-        );
+        return refused(StatusCode::SERVICE_UNAVAILABLE, Class::RuntimeUnavailable);
     }
     let Some(runtime) = state.activation_runtime.get() else {
-        return refused(StatusCode::SERVICE_UNAVAILABLE, "runtime is not ready");
+        return refused(StatusCode::SERVICE_UNAVAILABLE, Class::RuntimeUnavailable);
     };
     let Some(store) = runtime.plugin_store_writer() else {
-        return refused(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "runtime plugin store unavailable",
-        );
+        return refused(StatusCode::SERVICE_UNAVAILABLE, Class::RuntimeUnavailable);
     };
     let node = runtime.observation_node().clone();
     let runtime_did = match identity::Did::new(&state.node_did) {
         Ok(did) => did,
-        Err(error) => return refused(StatusCode::SERVICE_UNAVAILABLE, error),
+        Err(_) => return refused(StatusCode::SERVICE_UNAVAILABLE, Class::RuntimeUnavailable),
     };
     if node.node_identity_did() != Some(runtime_did.as_str()) {
-        return refused(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "runtime Node identity mismatch",
-        );
+        return refused(StatusCode::SERVICE_UNAVAILABLE, Class::RuntimeUnavailable);
     }
     let runtime_access = ConfigAccess::local_as(node.clone(), runtime_did);
     let authorization =
@@ -134,7 +124,7 @@ pub async fn install_session(
             &identity, &headers,
         ) {
             Ok(authorization) => authorization,
-            Err(error) => return refused(StatusCode::UNAUTHORIZED, error),
+            Err(_) => return refused(StatusCode::UNAUTHORIZED, Class::NotAuthorized),
         };
     let presented = gents_store::config_client::user_write::PresentedDelegation::of_request(
         &node,
@@ -149,7 +139,7 @@ pub async fn install_session(
         .with_client_authorization(authorization)
     {
         Ok(access) => access,
-        Err(error) => return refused(StatusCode::FORBIDDEN, error),
+        Err(_) => return refused(StatusCode::FORBIDDEN, Class::NotAuthorized),
     };
     let user = UserSession {
         access: user_access.with_presented_delegation(presented),
@@ -406,20 +396,9 @@ async fn run(
 ) {
     let socket = Arc::new(Mutex::new(socket));
     let result = run_inner(&socket, &state, store, access, user, runtime_access, actor).await;
-    if let Err((error, outcome)) = result {
-        let error = if gents_store::config_client::user_write::UserWriteRefusal::in_chain(
-            error.as_ref(),
-        ) {
-            tracing::info!(error = %format!("{error:#}"), "hosted pack session refused a write for its User");
-            gents_store::config_client::user_write::REFUSED_FOR_A_PERSON.to_owned()
-        } else {
-            format!("{error:#}")
-        };
-        let _ = send(
-            &mut *socket.lock().await,
-            json!({"type":"failed", "error":error, "outcome":outcome}),
-        )
-        .await;
+    if let Err(failure) = result {
+        failure.log();
+        let _ = send(&mut *socket.lock().await, failure.message()).await;
     }
 }
 
@@ -431,14 +410,14 @@ async fn run_inner(
     user: UserSession,
     runtime_access: ConfigAccess,
     actor: identity::Did,
-) -> std::result::Result<(), (anyhow::Error, &'static str)> {
+) -> std::result::Result<(), SessionFailure> {
     let UserSession {
         access: user_access,
         refresher,
     } = user;
     let home = store.home().to_owned();
     let runtime_did = identity::Did::new(&state.node_did)
-        .map_err(|error| (anyhow::Error::new(error), "not_installed"))?;
+        .map_err(SessionFailure::not_installed(Class::NotAuthorized))?;
     runtime_access
         .transact_readonly("pack.hosted_schema.authorize", |txn| {
             let runtime_did = &runtime_did;
@@ -450,31 +429,47 @@ async fn run_inner(
             })
         })
         .await
-        .map_err(|error| (error, "not_installed"))?;
+        .map_err(SessionFailure::not_installed(Class::NotAuthorized))?;
     let first = receive(&mut *socket.lock().await, &refresher)
         .await
-        .map_err(|error| (error, "not_installed"))?;
+        .map_err(SessionFailure::not_installed(Class::InvalidRequest))?;
     let request = match first {
         ClientMessage::Start { request } => request,
         ClientMessage::Wire { command } => {
             return wire::run(socket, state, &store, &user_access, refresher, command).await
         }
         _ => {
-            return Err((
+            return Err(SessionFailure::not_installed(Class::InvalidRequest)(
                 anyhow::anyhow!("pack session requires a start request"),
-                "not_installed",
             ))
         }
     };
-    let prepare = async {
+    if request.preview {
+        let result = preview(state, home, access, request).await?;
+        return send(
+            &mut *socket.lock().await,
+            json!({"type": "previewed", "result": result}),
+        )
+        .await
+        .map_err(SessionFailure::not_installed(Class::PreviewFailed));
+    }
+    let mut received = async {
         anyhow::ensure!(
-            !request.preview && request.wire.is_empty(),
-            "hosted pack session cannot preview or wire plugins"
+            request.wire.is_empty(),
+            "hosted pack session cannot wire plugins"
         );
         let node_did = state.node_did.clone();
-        let mut received =
-            tokio::task::spawn_blocking(move || decode_install_request(request, &node_did))
-                .await??;
+        tokio::task::spawn_blocking(move || decode_install_request(request, &node_did)).await?
+    }
+    .await
+    .map_err(SessionFailure::not_installed(Class::InvalidRequest))?;
+    let mut identifiers = RefusalIdentifiers::of(
+        &std::iter::once(&received.root)
+            .chain(received.dependencies.iter())
+            .collect::<Vec<_>>(),
+    );
+    let failed = SessionFailure::not_installed::<anyhow::Error>(Class::PreparationFailed);
+    let prepare = async {
         let requested =
             gents_pack::operations::pack::parse_inference_slots(&received.request.inference_slots)?;
         let supplied = gents_pack::pack::install_flow::supplied_variables(
@@ -485,7 +480,7 @@ async fn run_inner(
         let environment = gents_pack::operations::pack::InstallEnvironment::HostedRuntime(
             std::mem::take(&mut received.request.installer_environment),
         );
-        let mut prepared = gents_pack::pack::prepare_document_pack_archive(
+        let mut prepared = match gents_pack::pack::prepare_document_pack_archive(
             &gents_pack::pack::InstallTarget {
                 access: &access,
                 owner: &state.node_did,
@@ -511,12 +506,23 @@ async fn run_inner(
             },
             gents_pack::pack::InstalledVia::Operator,
         )
-        .await?;
+        .await
+        {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                return Ok(Err(SessionFailure::change(
+                    Class::PreparationFailed,
+                    error,
+                    &identifiers,
+                )))
+            }
+        };
         gents_pack::pack::resolved_pack::ResolvedPack::record_graph_sources(
             &mut prepared,
             &received.root,
             &received.dependencies,
         );
+        identifiers.ship(&prepared)?;
         gents_pack::pack::command_authority::require_command_task_grant(
             &access,
             &state.node_did,
@@ -547,10 +553,10 @@ async fn run_inner(
             received.request.explicit,
         )
         .await?;
-        Ok::<_, anyhow::Error>((received, prepared, stage, planned))
+        Ok::<_, anyhow::Error>(Ok((received, prepared, stage, planned)))
     }
     .await;
-    let (received, prepared, stage, planned) = prepare.map_err(|error| (error, "not_installed"))?;
+    let (received, prepared, stage, planned) = prepare.map_err(failed)??;
     let installed_plugins = stage.installed_plugins().to_vec();
     let materialized = if received.request.explicit {
         let cache_home = home.clone();
@@ -589,8 +595,8 @@ async fn run_inner(
             Ok::<_, anyhow::Error>((assets, dependency_assets, leases))
         })
         .await
-        .map_err(|error| (anyhow::Error::new(error), "not_installed"))?
-        .map_err(|error| (error, "not_installed"))?
+        .map_err(SessionFailure::not_installed(Class::PreparationFailed))?
+        .map_err(SessionFailure::not_installed(Class::PreparationFailed))?
     } else {
         (String::new(), Vec::new(), Vec::new())
     };
@@ -607,39 +613,33 @@ async fn run_inner(
         json!({"type":"ready", "scope":scope, "preparation":stage.preparation()}),
     )
     .await
-    .map_err(|error| (error, "not_installed"))?;
+    .map_err(SessionFailure::not_installed(Class::SchemaPreparation))?;
     let evidence = match tokio::time::timeout(
         std::time::Duration::from_secs(300),
         receive(&mut *socket.lock().await, &refresher),
     )
     .await
-    .map_err(|error| {
-        (
-            anyhow::Error::new(error).context("client schema preparation timed out"),
-            "not_installed",
-        )
-    })?
-    .map_err(|error| (error, "not_installed"))?
+    .map_err(SessionFailure::not_installed(Class::SchemaPreparation))?
+    .map_err(SessionFailure::not_installed(Class::SchemaPreparation))?
     {
         ClientMessage::SchemasReady { evidence } => evidence,
         _ => {
-            return Err((
+            return Err(SessionFailure::not_installed(Class::SchemaPreparation)(
                 anyhow::anyhow!("client did not finish schema preparation"),
-                "not_installed",
             ))
         }
     };
     gents_store::config_client::verify_pack_schema_approval(actor.as_str(), &scope, evidence)
-        .map_err(|error| (anyhow::Error::new(error), "not_installed"))?;
+        .map_err(SessionFailure::not_installed(Class::SchemaPreparation))?;
     // Read before any schema is applied: the collections this install
     // brings, which `pack remove --with-collections` later drops.
     let created_collections =
         gents_pack::pack::collections_install_creates(&runtime_access, received.root.archive())
             .await
-            .map_err(|error| (error, "not_installed"))?;
+            .map_err(SessionFailure::not_installed(Class::SchemaApplyFailed))?;
     gents_pack::pack::apply_prepared_dependency_schemas(&runtime_access, &prepared)
         .await
-        .map_err(|error| (error, "not_installed"))?;
+        .map_err(SessionFailure::not_installed(Class::SchemaApplyFailed))?;
     let schemas = if received.root.manifest().metadata.kind == gents_pack::pack::PackKind::Documents
     {
         let root = received.root.shared_archive();
@@ -649,11 +649,11 @@ async fn run_inner(
             Ok::<_, anyhow::Error>(temp)
         })
         .await
-        .map_err(|error| (anyhow::Error::new(error), "not_installed"))?
-        .map_err(|error| (error, "not_installed"))?;
+        .map_err(SessionFailure::not_installed(Class::SchemaApplyFailed))?
+        .map_err(SessionFailure::not_installed(Class::SchemaApplyFailed))?;
         gents_pack::pack::schema_apply::apply_pack_schemas_if_present(&runtime_access, temp.path())
             .await
-            .map_err(|error| (error, "not_installed"))?
+            .map_err(SessionFailure::not_installed(Class::SchemaApplyFailed))?
     } else {
         None
     };
@@ -717,21 +717,22 @@ async fn run_inner(
             &gents_inference::resolved::ProviderProfilePolicy,
         )
         .await
-        .map_err(|error| {
-            let outcome = match &error {
-                gents_pack::pack::HostedPackStageError::Rejected(_) => "not_installed",
-                gents_pack::pack::HostedPackStageError::Unconfirmed(_) => "unconfirmed",
-            };
-            (anyhow::Error::new(error), outcome)
+        .map_err(|error| match error {
+            gents_pack::pack::HostedPackStageError::Rejected(rejection) => {
+                SessionFailure::rejection(rejection, &identifiers)
+            }
+            gents_pack::pack::HostedPackStageError::Unconfirmed(error) => {
+                SessionFailure::unconfirmed(Class::ApplyUnconfirmed)(error)
+            }
         })?;
     let report = gents_pack::pack::assemble_document_graph_report(&prepared, reports)
-        .map_err(|error| (error, "unconfirmed"))?;
+        .map_err(SessionFailure::unconfirmed(Class::ReceiptFailed))?;
     let manifest = received.root.manifest();
     let origin_tag = gents_pack::pack::pack_origin_tag(&format!(
         "{}/{}",
         manifest.metadata.namespace, manifest.name
     ))
-    .map_err(|error| (error, "unconfirmed"))?;
+    .map_err(SessionFailure::unconfirmed(Class::ReceiptFailed))?;
     let mut result = json!({"pack":received.root.manifest().name, "source":received.root.label(), "digest":received.root.digest(), "owner":state.node_did, "inference":prepared.inference, "dependency_inference":prepared.dependency_inference, "origin_tag":origin_tag, "dependencies":received.root.manifest().metadata.dependencies, "schemas":schemas, "apply":report});
     gents_pack::pack::installation_roots::attach_planned_root_agents(&mut result, &planned);
     send(
@@ -739,6 +740,34 @@ async fn run_inner(
         json!({"type":"finished", "result":result}),
     )
     .await
-    .map_err(|error| (error, "unconfirmed"))?;
+    .map_err(SessionFailure::unconfirmed(Class::ReceiptFailed))?;
     Ok(())
+}
+
+/// A preview over the session, after the session authorized its User to
+/// update the Node. It writes nothing.
+async fn preview(
+    state: &RuntimeHttpState,
+    home: std::path::PathBuf,
+    access: ConfigAccess,
+    request: InstallRequest,
+) -> std::result::Result<Value, SessionFailure> {
+    let node_did = state.node_did.clone();
+    let received = tokio::task::spawn_blocking(move || decode_install_request(request, &node_did))
+        .await
+        .map_err(SessionFailure::not_installed(Class::InvalidRequest))?
+        .map_err(SessionFailure::not_installed(Class::InvalidRequest))?;
+    if received.root.manifest().metadata.kind != gents_pack::pack::PackKind::Documents {
+        return Err(SessionFailure::not_installed(Class::InvalidRequest)(
+            anyhow::anyhow!("a hosted preview takes a documents pack"),
+        ));
+    }
+    let identifiers = RefusalIdentifiers::of(
+        &std::iter::once(&received.root)
+            .chain(received.dependencies.iter())
+            .collect::<Vec<_>>(),
+    );
+    super::install_owned(state.clone(), home, received, access)
+        .await
+        .map_err(|error| SessionFailure::change(Class::PreviewFailed, error, &identifiers))
 }

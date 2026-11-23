@@ -80,11 +80,9 @@ pub fn reused_variable_preview(
         .context("pack has no configuration")?;
     let authored: serde_json::Value = serde_json::from_slice(pack.asset(path)?)?;
     let installed = serde_json::to_value(config)?;
-    let uses =
-        crate::pack::interpolate::inspect_install_variables(&authored, &|_| Some("preview".into()))
-            .map_err(|names| {
-                anyhow::anyhow!("cannot inspect install variables: {}", names.join(", "))
-            })?;
+    let uses = crate::pack::interpolate::inspect_install_variables(&authored, &|_| {
+        Some("preview".into())
+    })?;
     let uses = uses.into_iter().map(|entry| {
         let mut parts = entry.path.trim_start_matches('/').splitn(3, '/');
         let field = parts.next().unwrap_or_default();
@@ -201,13 +199,7 @@ fn install_variable_preview_with(
             lookup(name).map(|(value, _)| value)
         }
     };
-    let uses = crate::pack::interpolate::inspect_install_variables(&authored, &environment)
-        .map_err(|missing| {
-            anyhow::anyhow!(
-                "pack config references unset environment variables: {}",
-                missing.join(", ")
-            )
-        })?;
+    let uses = crate::pack::interpolate::inspect_install_variables(&authored, &environment)?;
     let uses = uses
         .into_iter()
         .map(|entry| {
@@ -731,14 +723,9 @@ pub fn installer_environment(
             .context("parsing pack config for install variables")?;
         // Interpolation reads an empty value as unset, which would end the
         // scan at the first name without a default.
-        let uses =
-            crate::pack::interpolate::inspect_install_variables(&config, &|_| Some("named".into()))
-                .map_err(|missing| {
-                    anyhow::anyhow!(
-                        "pack config references unset environment variables: {}",
-                        missing.join(", ")
-                    )
-                })?;
+        let uses = crate::pack::interpolate::inspect_install_variables(&config, &|_| {
+            Some("named".into())
+        })?;
         names.extend(
             uses.into_iter()
                 .flat_map(|entry| entry.variables.into_keys()),

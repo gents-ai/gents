@@ -131,9 +131,13 @@ pub fn default_read_only_command_policy() -> CommandExecutionPolicy {
     CommandExecutionPolicy::read_only(default_read_only_commands())
 }
 
+/// Unset default of `FileTools.max_read_chars`.
 pub(crate) const DEFAULT_MAX_FILE_CHARS: usize = 32_000;
+/// Unset default of `BashTools.max_output_chars`, and the budget of every built-in CLI registration (`CliTool.max_output_chars` overrides it).
 pub const DEFAULT_MAX_COMMAND_CHARS: usize = 16_000;
+/// Unset default of `FileTools.max_list_entries`.
 pub(crate) const DEFAULT_MAX_LIST_ENTRIES: usize = 200;
+/// Unset default of `FileTools.max_matches`.
 pub(crate) const DEFAULT_MAX_MATCHES: usize = 200;
 /// Bound detached bash lifetime even if its caller no longer waits. A Tools
 /// document may choose a shorter background timeout; foreground host timeout

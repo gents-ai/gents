@@ -22,17 +22,14 @@ inductive Input where
   | dispatch (now : Nat)
   | closeForeground
   | completeForeground
-  | deliverForeground
   | terminalizeCompleted
   | terminalizeNoMessage
   | terminalizeNoMessageAt (now : Nat)
-  | recover (actor : Nat) (now fresh deadline : Nat)
   | renew (now expectedDeadline : Nat)
   | appendRaw (actor now : Nat) (record : Segment)
   | retract (now : Nat) (record : Segment)
   | closeAuxiliary (now generation : Nat) (closing : Segment)
   | appendToolOutput (actor now document : Nat) (record : Segment)
-  | recoverItems (actor now fresh deadline : Nat) (items : List RecoveryItem)
   | recoverTerminal (actor now fresh : Nat)
       (outcome : RequestExecutionLease.Outcome) (selection : TerminalSelection)
       (items : List RecoveryItem)
@@ -43,9 +40,6 @@ inductive Input where
   | backgroundTool
   | backgroundReceipt
   | admitSpawned (admission : SpawnedToolAdmission)
-  | publishAuthored (closing : Segment) (message : MessageEnvelope)
-  | compact (cursor : Nat)
-  | deliverResult (sequence : Nat)
   | appendWhileSiblingWaits (record : Segment)
   | revokeDead (actor now fresh : Nat)
   /-- A distinct immutable fact arriving by replication. It bypasses the local
@@ -69,17 +63,14 @@ def Input.step : Input → Step
   | .closeForeground => .commit (.toolClose 600 (.native .complete) toolOutputClose)
   | .completeForeground => .commit
       (.toolComplete 600 (.native .complete) toolOutputClose (foregroundResultMessage 1))
-  | .deliverForeground => .commit (.toolDeliver 600 (foregroundResultMessage 1))
   | .terminalizeCompleted => .commit (.terminalize 7 .completed (.message 501))
   | .terminalizeNoMessage => .commit (.terminalize 7 .completed .noMessage)
   | .terminalizeNoMessageAt _ => .commit (.terminalize 7 .completed .noMessage)
-  | .recover _ _ fresh deadline => .commit (.recover 7 fresh 5 deadline [])
   | .renew _ expectedDeadline => .commit (.renew 7 expectedDeadline)
   | .appendRaw _ _ record => .commit (.append 7 record)
   | .retract _ record => .commit (.retract 7 record)
   | .closeAuxiliary _ generation closing => .commit (.closeAuxiliary generation closing)
   | .appendToolOutput _ _ document record => .commit (.toolAppend document record)
-  | .recoverItems _ _ fresh deadline items => .commit (.recover 7 fresh 5 deadline items)
   | .recoverTerminal _ _ fresh outcome selection items =>
       .commit (.recoverTerminal 7 fresh outcome selection items)
   | .closePartial _ generation item => .commit (.closePartial generation item)
@@ -90,18 +81,13 @@ def Input.step : Input → Step
   | .backgroundReceipt =>
       .commit (.backgroundReceipt 600 backgroundReceiptClose backgroundReceiptMessage)
   | .admitSpawned admission => .commit (.admitSpawned 7 admission)
-  | .publishAuthored closing message => .commit (.authored 7 closing message)
-  | .compact cursor => .commit (.compact cursor)
-  | .deliverResult sequence => .commit (.toolDeliver 600 (foregroundResultMessage sequence))
   | .revokeDead _ _ fresh => .commit (.revoke 7 fresh .dead (.message 501))
   | .appendWhileSiblingWaits record => .commitWhileSiblingWaits (.append 7 record)
   | .replicate record => .replicate record
 
 def Input.actor : Input → Nat
-  | .recover actor .. => actor
   | .appendRaw actor .. => actor
   | .appendToolOutput actor .. => actor
-  | .recoverItems actor .. => actor
   | .recoverTerminal actor .. => actor
   | .revokeDead actor .. => actor
   | _ => 1
@@ -109,13 +95,11 @@ def Input.actor : Input → Nat
 def Input.now : Input → Nat
   | .terminalizeNoMessageAt now => now
   | .dispatch now => now
-  | .recover _ now .. => now
   | .renew now _ => now
   | .appendRaw _ now _ => now
   | .retract now _ => now
   | .closeAuxiliary now .. => now
   | .appendToolOutput _ now .. => now
-  | .recoverItems _ now .. => now
   | .recoverTerminal _ now .. => now
   | .closePartial now .. => now
   | .dispatchCall now _ => now
@@ -128,17 +112,14 @@ def Input.tag : Input → String
   | .dispatch _ => "dispatch"
   | .closeForeground => "close_foreground_tool"
   | .completeForeground => "complete_foreground_tool"
-  | .deliverForeground => "deliver_foreground_result"
   | .terminalizeCompleted => "terminalize_completed"
   | .terminalizeNoMessage => "terminalize_completed"
   | .terminalizeNoMessageAt _ => "terminalize_completed"
-  | .recover .. => "recover_expired_generation"
   | .renew .. => "renew_lease"
   | .appendRaw .. => "append_output"
   | .retract .. => "retract_before_retry"
   | .closeAuxiliary .. => "close_auxiliary"
   | .appendToolOutput .. => "append_tool_output"
-  | .recoverItems .. => "recover_expired_generation"
   | .recoverTerminal .. => "recover_expired_terminal"
   | .closePartial .. => "close_partial"
   | .acceptTurn .. => "accept_turn"
@@ -146,9 +127,6 @@ def Input.tag : Input → String
   | .backgroundTool => "background_tool"
   | .backgroundReceipt => "publish_background_receipt"
   | .admitSpawned _ => "admit_spawned_background"
-  | .publishAuthored .. => "publish_authored"
-  | .compact _ => "advance_compaction_cursor"
-  | .deliverResult _ => "deliver_foreground_result"
   | .revokeDead .. => "revoke_corrupt"
   | .appendWhileSiblingWaits _ => "append_output_while_sibling_waits"
   | .replicate _ => "deliver_replicated_segment"
@@ -298,46 +276,23 @@ example : ((livePartialCases.head?.bind (·.expected)).bind List.getLast?).map
       observation.generation, observation.leaseDeadline)) = some (1, 1, some 7, some 10) := by
   native_decide
 
-def compactionBoundary : MessageEnvelope :=
-  CanonicalOutput.Execution.Compaction.Examples.boundary
-
 def toolSeamCases : List Case :=
-  [ mkModelCase "pending_background_recovery_cancels_before_dispatch"
-      (world 5) [.acceptBackground, .recover 2 10 8 20, .dispatch 10]
-      "The resume-to-active recovery primitive has no product transaction; native terminal recovery separately cancels a pending background call."
-  , mkCase "pending_background_terminal_recovery_cancels_before_dispatch"
+  [ mkCase "pending_background_terminal_recovery_cancels_before_dispatch"
       (world 5) [.acceptBackground,
         .recoverTerminal 2 10 8 .failed (.message 501) [], .dispatch 10]
-  , mkModelCase "running_foreground_recovery_records_handoff"
-      (world 5) [.acceptForeground, .dispatch 5, .recover 2 10 8 20]
-      "The resume-to-active recovery primitive has no product transaction; native terminal recovery separately checks the running-tool handoff."
   , mkCase "running_foreground_terminal_recovery_records_handoff"
       (world 5) [.acceptForeground, .dispatch 5,
         .recoverTerminal 2 10 8 .failed (.message 501) []]
   , mkCase "running_foreground_terminalization_rejected"
-      (world 5) [.acceptForeground, .dispatch 5, .terminalizeCompleted]
-  , mkModelCase "foreground_close_delivery_then_terminalization"
-      (world 5) [.acceptForeground, .dispatch 5, .closeForeground,
-        .deliverForeground, .terminalizeCompleted]
-      "Native complete_raw_with_presentation closes and delivers in one transaction; use foreground_tool_completion_atomically_pairs_result for native parity." ]
+      (world 5) [.acceptForeground, .dispatch 5, .terminalizeCompleted] ]
 
 def leaseOrderingCases : List Case :=
-  [ mkModelCase "renewal_wins_before_recovery"
-      (world 5) [.renew 8 10, .recover 2 10 8 20]
-      "The resume-to-active recovery primitive has no product transaction; native terminal recovery checks the same renewal fence."
-  , mkCase "renewal_wins_before_terminal_recovery"
+  [ mkCase "renewal_wins_before_terminal_recovery"
       (world 5) [.renew 8 10,
         .recoverTerminal 2 10 8 .failed .noMessage []]
-  , mkModelCase "output_append_keeps_deadline_then_recovery_swaps"
-      (world 5) [.appendRaw 1 5 (raw 100 0 0 5), .recoverItems 2 10 8 20 recoveryItems]
-      "The resume-to-active recovery primitive has no product transaction; native terminal recovery checks that append left the expiry unchanged."
   , mkCase "output_append_keeps_deadline_then_terminal_recovery"
       (world 5) [.appendRaw 1 5 (raw 100 0 0 5),
         .recoverTerminal 2 10 8 .failed (.message 200) recoveryItems]
-  , mkModelCase "stale_append_rejected_after_recovery"
-      (world 5) [.appendRaw 1 5 (raw 100 0 0 5), .recoverItems 2 10 8 20 recoveryItems,
-        .appendRaw 1 11 lateStaleFlush]
-      "The resume-to-active recovery primitive has no product transaction; native terminal recovery checks stale-generation append rejection."
   , mkCase "stale_append_rejected_after_terminal_recovery"
       (world 5) [.appendRaw 1 5 (raw 100 0 0 5),
         .recoverTerminal 2 10 8 .failed (.message 200) recoveryItems,
@@ -478,42 +433,15 @@ def publicationCases : List Case :=
   , mkModelCase "background_tool_closes_after_parent_terminal"
       (world 5) [.acceptForeground, .dispatch 5, .backgroundTool, .backgroundReceipt,
         .terminalizeCompleted, .closeForeground]
-      "The split close after background receipt has no direct native transaction; bind the bridge-specific receipt and terminal callback scenario separately."
+      "The native bridge closes a backgrounded tool through its own receipt and completion callbacks, not a split close transaction; `backgroundHandoff` replays the tool states they expose."
   , mkCaseFor "spawned_admission_replays_inertly" (world 5) 601
       [.acceptTurn spawnProviderTurn spawnProviderMessage [foregroundAdmission],
         .dispatch 5, .admitSpawned spawnedAdmission, .dispatchCall 5 601,
-        .admitSpawned spawnedAdmission]
-  , { mkCaseFor "spawned_admission_conflicting_child_document_rejected" (world 5) 601
-      [.acceptTurn spawnProviderTurn spawnProviderMessage [foregroundAdmission],
-        .dispatch 5, .admitSpawned spawnedAdmission, .dispatchCall 5 601,
-        .admitSpawned spawnedAdmission,
-        .admitSpawned { spawnedAdmission with document := 602 }] with
-      nativeGap := some "The native spawned-child owner derives the child document from the parent and has no candidate child-document argument; it cannot execute the modeled conflicting-document admission." } ]
+        .admitSpawned spawnedAdmission] ]
 
 def integrityCases : List Case :=
   [ mkCase "corrupt_twin_revocation_cancels_pending_tool"
-      (world 5) [.acceptForeground, .replicate corruptTwin, .revokeDead 1 5 8]
-  , mkModelCase "corrupt_twin_revocation_hands_off_running_tool"
-      (world 5) [.acceptForeground, .dispatch 5, .replicate corruptTwin,
-        .revokeDead 1 5 8, .closeForeground]
-      "Native tool completion after request revocation closes and publishes atomically; bind that post-revocation callback scenario separately." ]
-
-/-- The compaction watermark shares the transcript allocator with tool
-delivery. The first script pins cursor eligibility. The second pins why a
-compacted prefix stays stable: a background receipt is the native pairing row,
-so a late result is rejected at every sequence, with or without a cursor,
-rather than republished as a second native result inside that prefix. -/
-def compactionCases : List Case :=
-  [ mkModelCase "compaction_cursor_requires_stable_published_prefix"
-      (world 5) [.acceptForeground, .dispatch 5, .compact 0, .closeForeground,
-        .deliverForeground, .publishAuthored authored compactionBoundary,
-        .compact 3, .compact 2, .compact 2, .compact 1]
-      "Native complete_raw_with_presentation cannot expose a close-only prefix to compaction; use an atomic-completion cursor scenario."
-  , mkModelCase "late_foreground_result_rejected_after_background_receipt"
-      (world 5) [.acceptForeground, .dispatch 5, .backgroundTool, .backgroundReceipt,
-        .publishAuthored authored compactionBoundary, .compact 2,
-        .closeForeground, .deliverResult 1, .deliverResult 3, .compact 3]
-      "The bridge background receipt and late result need a native bridge callback/compaction scenario; split close and delivery are not physical transactions." ]
+      (world 5) [.acceptForeground, .replicate corruptTwin, .revokeDead 1 5 8] ]
 
 def auxiliaryCloseCases : List Case :=
   [ mkCase "compaction_auxiliary_complete_close_is_audit_only" (world 5)
@@ -649,16 +577,6 @@ def titleCases : List Case :=
        .replicate titleLateOutsideExtent,
        .terminalizeNoMessageAt 8]
       "A late raw fact arriving after terminalization by replication is outside the native local-write adapter's append premise."
-  , mkModelCase "title_rejects_publication_and_tool_dispatch" titleProcessing
-      [.appendRaw 1 5 (AuxiliaryCases.observed .title),
-       .acceptTurn (AuxiliaryCases.nativePublicationClose .title)
-         AuxiliaryCases.nativePublicationMessage [],
-       .dispatchCall 5 600,
-       .publishAuthored authored compactionBoundary,
-       .terminalizeCompleted,
-       .closeAuxiliary 5 7 (AuxiliaryCases.close .title .complete),
-       .terminalizeNoMessage]
-      "Dispatch names an unmaterialized tool and terminal selection names an unpublished header; the native owners require physical tool/header inputs. The separate title publication case binds the representable denial."
   , mkCase "normal_request_rejects_title_source" (world 5)
       [.appendRaw 1 5 (AuxiliaryCases.observed .title),
        .retract 6 titleRetraction,
@@ -735,7 +653,6 @@ example : titleCases.map (fun value => value.expected.map (List.map (·.accepted
       some [true, true], some [true, true], some [true, true], some [true, true, true],
       some [true, false, true, true],
       some [true, true, true, true], some [true, true, true, true, true],
-      some [true, false, false, false, false, true, true],
       some [false, false, true], some [true, false, true, true],
       some [true, true, true, true, true], some [false, true, true, true]] := by native_decide
 
@@ -809,7 +726,7 @@ def cases : List Case :=
   schedulingCases ++ toolSeamCases ++ nativeToolCompletionCases ++ leaseOrderingCases ++
     toolOutputDeadlineCases ++ terminalRecoveryCases ++
     publicationCases ++ integrityCases ++
-    compactionCases ++ auxiliaryCloseCases ++ titleCases ++ accessReviewCases ++ livePartialCases
+    auxiliaryCloseCases ++ titleCases ++ accessReviewCases ++ livePartialCases
 
 def contextFieldsJson (context : ToolExecution.ToolCallContext) : String :=
   "\"call_id\":" ++ toString context.callId ++ ","
@@ -891,9 +808,6 @@ def inputJson (input : Input) : String :=
         ",\"authority_outcome\":\"complete\",\"record\":" ++
         canonicalSegmentJson record ++ ",\"message\":" ++
         canonicalMessageJson message ++ "}"
-  | .toolDeliver document message =>
-      common ++ ",\"document\":" ++ toString document ++ ",\"message\":" ++
-        canonicalMessageJson message ++ "}"
   | .terminalize generation outcome selection =>
       let selected := match selection with
         | .noMessage => "{\"kind\":\"no_message\"}"
@@ -901,11 +815,6 @@ def inputJson (input : Input) : String :=
       common ++ ",\"generation\":" ++ toString generation ++ ",\"outcome\":" ++
         jsonString (Conformance.RequestExecutionLeaseContracts.outcomeName outcome) ++
         ",\"selection\":" ++ selected ++ "}"
-  | .recover expected fresh duration deadline items =>
-      common ++ ",\"expected_generation\":" ++ toString expected ++
-        ",\"fresh_generation\":" ++ toString fresh ++ ",\"duration\":" ++
-        toString duration ++ ",\"deadline\":" ++ toString deadline ++
-        ",\"items\":" ++ jsonArray (items.map recoveryItemJson) ++ "}"
   | .recoverTerminal expected fresh outcome selection items =>
       let selected := match selection with
         | .noMessage => "{\"kind\":\"no_message\"}"
@@ -943,10 +852,6 @@ def inputJson (input : Input) : String :=
   | .admitSpawned generation admission =>
       common ++ ",\"generation\":" ++ toString generation ++ ",\"admission\":" ++
         spawnedAdmissionJson admission ++ "}"
-  | .authored generation closing message =>
-      common ++ ",\"generation\":" ++ toString generation ++ ",\"closing\":" ++
-        canonicalSegmentJson closing ++ ",\"message\":" ++ canonicalMessageJson message ++ "}"
-  | .compact cursor => common ++ ",\"cursor\":" ++ toString cursor ++ "}"
   | .revoke expected fresh outcome (.message id) =>
       common ++ ",\"expected_generation\":" ++ toString expected ++
         ",\"fresh_generation\":" ++ toString fresh ++ ",\"outcome\":" ++
@@ -1076,27 +981,6 @@ transactional owners, one observation per operation. -/
 @[conformance_family]
 def script : Family ScriptInput (Option ScriptOutput) where
   inputs := (cases.filter nativelyExecuted).map scriptInput
-  model := fun i => scriptOutput i.name
-
-structure UnreachedInput where
-  name : String
-  nativeGap : String
-  seed : Lean.Json
-  queryDocument : Nat
-  operations : List Lean.Json
-  deriving Lean.ToJson
-
-/-- model-production-gap: each script names, in `nativeGap`, the product
-transaction it lacks (the resume-to-active recovery primitive, a split tool
-close and delivery, a bridge background receipt, a candidate spawned-child
-document, or unmaterialized tool and header inputs on a title request), so no
-production path executes it. -/
-@[conformance_family]
-def scriptUnreached : Family UnreachedInput (Option ScriptOutput) where
-  inputs := ((cases.filter (!nativelyExecuted ·)).filter
-      (·.name != "background_tool_closes_after_parent_terminal")).map fun value =>
-    { name := value.name, nativeGap := value.nativeGap.getD "", seed := seedWire value.seed
-      queryDocument := value.queryDocument, operations := value.inputs.map operationWire }
   model := fun i => scriptOutput i.name
 
 /-- The renewal and recovery scenario drives the renewal owner directly while
@@ -1248,11 +1132,7 @@ example : backgroundAdmission.context.awaitMode.toDefraDB = "background" := by n
 
 example :
     (titleCases.filter (·.nativeGap.isNone)).length = 11 ∧
-    (titleCases.filter (·.nativeGap.isSome)).map (·.name) =
-      [ "title_recovery_accepts_closed_partial_before_future_dated_raw"
-      , "title_closed_extent_allows_terminal_after_late_raw"
-      , "title_terminal_replay_ignores_late_raw"
-      , "title_rejects_publication_and_tool_dispatch" ] ∧
+    (titleCases.filter (·.nativeGap.isSome)).map (·.name) = replicatedTitleCases ∧
     titleCases.all (fun value => value.nativeGap.isSome ||
       (value.seed.claimed.bind fun claimed => match claimed.evidence with
         | .auxiliary binding => some binding

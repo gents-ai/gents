@@ -71,40 +71,25 @@ structure RuntimeDefaultAccountInput where
   name : String
   runtimeActor : Bool
   sameNode : Bool
-  sameSnapshot : Bool
   mayUse : Bool
   visibleDefault : Option String
   deriving ToJson
 
-def runtimeDefaultAccountCases : List RuntimeDefaultAccountInput :=
-  [("visible-named", true, true, true, true, some "named"),
-   ("visible-empty", true, true, true, true, none),
-   ("foreign-node", true, false, true, true, some "named"),
-   ("agent-actor", false, true, true, true, some "named"),
-   ("other-snapshot", true, true, false, true, some "named"),
-   ("use-revoked", true, true, true, false, some "named")].map
-    fun (name, runtimeActor, sameNode, sameSnapshot, mayUse, visibleDefault) =>
-      { name, runtimeActor, sameNode, sameSnapshot, mayUse, visibleDefault }
-
-def runtimeDefaultAccountAllowed (i : RuntimeDefaultAccountInput) : Bool :=
-  Configuration.runtimeMayReadDefaultAccount ⟨i.runtimeActor, i.sameNode, i.sameSnapshot, i.mayUse⟩
-
+/-- `runtime_default_oauth_account_ref` takes the Agent write's own
+`ConfigApplyTxn`, so the read always shares its snapshot. An account the
+runtime may not use is not served as its default. -/
 @[conformance_family]
 def runtimeDefaultAccountRead : Family RuntimeDefaultAccountInput Bool where
-  inputs := runtimeDefaultAccountCases.filter fun i => i.sameSnapshot && i.mayUse
-  model := runtimeDefaultAccountAllowed
-
-/-- model-production-gap: production cannot build a different snapshot or a
-refused use for the runtime default account. `runtime_default_oauth_account_ref`
-takes the Agent write's own `ConfigApplyTxn`, so the read always shares its
-snapshot, and it reads only the accounts the runtime may use
-(`Identity.Household.runtimeMayUse`, gents#3935): an account it may not use is
-filtered out as absent rather than refused, so no served-node fixture observes
-a refused use. -/
-@[conformance_family]
-def runtimeDefaultAccountReadUnreached : Family RuntimeDefaultAccountInput Bool where
-  inputs := runtimeDefaultAccountCases.filter fun i => !(i.sameSnapshot && i.mayUse)
-  model := runtimeDefaultAccountAllowed
+  inputs :=
+    [("visible-named", true, true, true, some "named"),
+     ("visible-empty", true, true, true, none),
+     ("foreign-node", true, false, true, some "named"),
+     ("agent-actor", false, true, true, some "named"),
+     ("use-revoked", true, true, false, some "named")].map
+      fun (name, runtimeActor, sameNode, mayUse, visibleDefault) =>
+        { name, runtimeActor, sameNode, mayUse, visibleDefault }
+  model := fun i =>
+    Configuration.runtimeMayReadDefaultAccount ⟨i.runtimeActor, i.sameNode, true, i.mayUse⟩
 
 structure TaskCheckpointInput where
   actor : String
@@ -122,7 +107,7 @@ def taskCheckpointArrival : Family TaskCheckpointInput Nat where
     (agentDid, 1, 2, false), (agentDid, 1, 2, true)].map fun (actor, cursor, through, receipt) =>
     { actor, role := roleOf actor, cursor, through, receipt }
   model := fun i => Identity.Automation.checkpointTaskArrival HouseholdFixture.initial i.actor
-    "automated-request" i.receipt true true i.cursor i.through
+    agentDid "automated-request" i.receipt true true i.cursor i.through
 
 structure TaskTargetInput where
   name : String

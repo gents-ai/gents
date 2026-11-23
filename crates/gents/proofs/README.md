@@ -2,11 +2,10 @@
 
 This directory contains the Lean 4 model for `gents`.
 
-## Canonical output stack (#1571): Lean contract layer
+## Canonical output: Lean contract layer
 
-Status: composed Lean revision validated; native conformance and implementation
-remain the next layers, not completed coverage. Explicit renewal separates
-liveness from output. The request/tool revision below composes lifecycle and
+Explicit renewal separates
+liveness from output. The request/tool model composes lifecycle and
 delivery in a shared session world. The composition map records the checked
 joins and their limits, not a universal application-correctness theorem.
 Retention and existing-install upgrade behavior remain product boundaries; no
@@ -18,11 +17,6 @@ the application trace cannot spend or manufacture a ticket. No request parks a
 worker while waiting on another session, because `agent_new` and
 `agent_message` never block their caller. The model does not prove fair
 scheduling or bounded progress.
-
-Branch `feat/1571-canonical-transcript-lean` targets
-`feat/1571-canonical-transcript` (original baseline `3eaff8f16`). Foundational
-protocol/SDL corrections belong on that spec parent; this layer changes Lean
-models and their documentation. Rust conformance/implementation remain later layers.
 
 `Proofs/Runtime/CanonicalOutput` supplies immutable facts, conflict-aware closure lookup,
 dense extent reconstruction, UTF-8 run validation, native block reconstruction,
@@ -220,8 +214,7 @@ checks are removed. Other defensive postchecks remain where their guarantees are
 used by the induction; an inductive theorem that consumes a check does not justify
 removing that check. These theorems describe admitted application transitions from
 valid seeds, not arbitrary conflicting replica imports, native scheduler fairness,
-or cross-process exclusion. Native
-conformance regeneration remains deferred until that proof/encoding work settles.
+or cross-process exclusion.
 
 Retry cap, deadline-fit and one-repair guarantees are retained as transition
 proofs. Segment retention is proved across observation traces; projected prefix
@@ -238,12 +231,8 @@ previously readable projection.
 Request interrupt intent remains modeled; writing the native `terminalized_at`
 timestamp is an explicit request-row adapter obligation, not a proved Lean field.
 
-### Next-layer conformance handoff
+### Conformance
 
-The stack is now published as specification #1585 and Lean #1586. The branch
-`feat/1571-canonical-transcript-conformance` starts the generated bridge; see
-[`contracts/canonical-output-conformance.md`](../../../contracts/canonical-output-conformance.md)
-for native adapter boundaries, external-premise experiments and remaining breadth.
 The four application-trace invariants are universal Lean proofs, not additional
 finite case groups or evidence that a native adapter has run.
 `Conformance/Contracts/Json/NativeExecution` derives every execution expectation by
@@ -259,76 +248,30 @@ The compaction projection join connects exact canonical message reconstruction
 to a fallible complete-request projection and estimation boundary, then to the
 existing reduction decision. Rebuilt requests are projected and measured again;
 dispatch requires both threshold admission and positive output capacity. The
-provider serializer and estimator remain explicit native parameters, not a
-second implementation in Lean. `contract_cases_compaction_projection_join_projection_join` supplies
-controlled observations at that boundary; it does not establish that native
-serialization produced them. the leftover family `compaction_canonical_projection_unreached` supplies
-the immutable records and pins full reconstructed native messages;
-the family `contract_cases_compaction_canonical_projection_repaired_admission_unreached`
-covers remeasurement of repaired input.
-The actual serialized-request/threshold experiment
-remains `native.external-projected-request-threshold` in the implementation layer.
+provider serializer and estimator are explicit parameters, not a second
+implementation in Lean; production's estimator is concrete, so the composition
+over injected observations is pinned by theorems
+(`CompactionProjectionJoin.expected_results`,
+`CompactionCanonicalProjection.canonical_expectations` and `fresh_expectations`)
+and only the outcomes the served per-turn reduction reaches are emitted
+(`contract_cases_compaction_projection_join_staged_turn_reduction`).
 
-The canonical output groups are registered in `tests/conformance/coverage.rs`.
 Native projection consumers live in `crates/gents-protocol/tests/canonical_output.rs`,
 and `src/runtime/agent/tests/canonical_execution_native_adapter.rs` binds selected
 execution scripts to native owners, including live partial publication and replay.
-The retired `streaming_response_cases` generator is no longer a runtime/test
-dependency. This is partial native coverage, not completion of every mapped seam;
-the canonical-output handoff maps record the remaining adapter and experiment work.
-Bindings marked follow-up in the coverage ledger remain implementation debt, not
-completed native coverage. Do not restore deleted generators as compatibility code.
 
-Composition repair validation: pinned Lean 4.18.0 `lake build` passed (1,154 targets,
-including the import-closure guard and standalone fixture roots),
-`git diff --check` passes, and the proof tree has no `sorry` or added axioms.
-Sol implementation agents cross-reviewed the execution, hydration and gate
-boundaries. Root review checked native compaction/fork joins, the live-prefix
-growth proof chain, physical continuation provenance, and the integrated build.
-All fourteen gate seam regression checks pass, alongside tool-delivery,
-continuation/restart, compaction and reordered-hydration cases.
-The subsequent seam review added actual physical handover with late old-tool
-completion, failed-wake release and exact completed acknowledgement, ordinary
-request activation through delayed retry to terminal queue finish, typed Goal
-publication/activation, and canonical tool-read regressions (including valid
-empty output versus an incomplete advertised extent). Fork writer/reader order
-and retry timer overshoot are checked. Retired response-only recovery,
-gate-bypassing retry wrappers, and ring/persisted-result reader dispatch are
-removed rather than retained as alternative machines.
-No Rust build/tests or external fixture regeneration were run in this layer.
-
-The structural cleanup was cross-reviewed by Sol agents for frame strength,
-validator equivalence, and preservation of every migrated regression assertion.
-The full-state continuation case caught an accidental queue/retry reset during
-gate initialization; initialization now touches only gate controls. The final
-aggregate build passes, as do the import-closure guard's three unit tests.
-
-The subsequent sequence/claim invariant checkpoint passed the pinned Lean 4.18.0
-aggregate build (1,157 targets) and all three import-closure guard tests. Sol review
-checked every application trace constructor, unchanged admission semantics and
-the new activation trace witness. No `sorry` or new axioms were introduced.
-This checkpoint adds inductive proof coverage; it is not a net line-count reduction
-or completion of the remaining full-coherence invariant work.
-
-The explicit-renewal revision removed lease `OutputFact`/eligibility and global
-derived-progress scans. Renewal
-uses a due-only generation/observed-deadline CAS; output and producer decisions
+A lease has no `OutputFact` or eligibility and no global derived-progress
+scan. Renewal uses a due-only generation/observed-deadline CAS; output and producer decisions
 are lease stutters. The cadence bound, silent/input-wait cases, stale/expired
 rejection, arbitrary-output independence and renewal/recovery ordering are checked.
 Native decision fencing without an implicit deadline write remains a refinement
 obligation; a read-only snapshot check must not be mistaken for a serializing CAS.
 Affected-source validation still traverses its prefix, so this is not a proof of
-linear total streaming cost. The subsequent tool-composition revision does not
-remove the remaining product gaps listed above.
+linear total streaming cost.
 
-## Configuration and session refactor contract layer
+## Configuration and session contract layer
 
-This branch is layer 2 above spec PR [#1430](https://github.com/gents-ai/gents/pull/1430),
-baseline `ce3aaf12`. Its changed contracts describe the **target configuration
-and session model**, not the intentionally unmigrated Rust runtime. Lean conformance-source
-adapters are updated to compile; regenerating JSON fixtures, repairing Rust
-bridges, schemas, packs, and consumers belongs to subsequent stacked PRs.
-Historical bridge references below are not evidence that this target already runs.
+The configuration and session contracts, and the owner each one keeps:
 
 | Surface | Contract and retained owner |
 | --- | --- |
@@ -337,7 +280,7 @@ Historical bridge references below are not evidence that this target already run
 | Context and permissions | `Skills` uses an explicit context whitelist and preserves tool authority exactly. `PromptAssembly/Template` retains task rendering only; its existing assembler carries literal context text, with task substitutions confined to the task slot. `ToolPolicy/Configuration` enforces exact service/tool selection, independent presentation, background subsets, and tool-local limits alongside the existing ceiling lattice; its `effective*` owners clamp admitted document timeouts to host and fixed ceilings, and the `tool_timeouts_*` families bind the native resolution to them. Its `pluginCallAccess` owner gives each bound plugin call `read` unless it sets a declared write field, and `pluginCallAdmitted` runs it only where the operator's grant covers that call's access; `plugin_resources_call_admissions` drives the executor's bind admission. `ToolPolicy/PluginNetwork` admits host-mediated plugin HTTP: a granted allow-list, HTTPS unless an entry names plaintext, and public addresses unless an entry names the IP literal; `plugin_resources_network_admission` and `plugin_resources_address_public` drive the native admission and address classifier. `ToolPolicy/WriteInput` enforces typed scalar input, nullability, required fields, and caller exclusion from runtime-filled fields; 256 generated cases exercise the bounded writer's input validator. |
 | Plugin access answers | `ToolPolicy/PluginApproval` admits an answer only for the same unanswered question before its waiter deadline. Cancellation removes the question while preserving existing grants; duplicate answers cannot widen access. The `plugin_approval_unscoped_step`, `plugin_approval_scoped_step` and `plugin_approval_delivery` families drive the native queue, answer and grant files. Native locks serialize filesystem operations; cross-file I/O atomicity is not modeled. |
 | Event groups | Trigger and callback consumers share `EventGroupKey`, candidate eligibility and the durable clock in `EventDelivery/Group`. Callback input and group origin live on the existing invocation and survive its transitions; retries do not reproject live sources. |
-| Self-configuration | Existing patch/validate/guard owner remains. Canonical nested fields replace flattened legacy fields; the opt-in no-lockout guard (`keepsControl`, #1796) consumes decoded self-config and agents enablement and is the only lockout protection; the always-on `keepsGrants` bounds each operator-managed grant on its own, and pack installation may be raised only within what the stored Tools carry or the invoking agent holds; `reselectionKeepsGrants` applies the same bound to Context and Agent re-points, new Contexts and clones; `SelfConfig/Auth` permits environment/OAuth reference edits while preventing new raw-key writes, which includes the static `awsCredentials` and `googleCredentials` auth. `Configuration/ClaudePlatform` fixes which `claude_platform` settings each Claude platform provider kind requires or refuses and the default base URL they derive; its generated cases bind the Rust validation and URL derivation. |
+| Self-configuration | Existing patch/validate/guard owner remains. Canonical nested fields replace flattened legacy fields; the opt-in no-lockout guard (`keepsControl`) consumes decoded self-config and agents enablement and is the only lockout protection; the always-on `keepsGrants` bounds each operator-managed grant on its own, and pack installation may be raised only within what the stored Tools carry or the invoking agent holds; `reselectionKeepsGrants` applies the same bound to Context and Agent re-points, new Contexts and clones; `SelfConfig/Auth` permits environment/OAuth reference edits while preventing new raw-key writes, which includes the static `awsCredentials` and `googleCredentials` auth. `Configuration/ClaudePlatform` fixes which `claude_platform` settings each Claude platform provider kind requires or refuses and the default base URL they derive; its generated cases bind the Rust validation and URL derivation. |
 | Installation | `ApplyReconcile/Publication` validates same-owner reference closure and publishes atomically without altering observations. There is one publication model; reference cycles are supported. Document references carry their node once, so same-label documents from different nodes coexist. The runtime bridge requires successful complete configuration resolution and a separate availability observation; document presence does not imply readiness. Authored IDs use an injective mapping to lifecycle IDs. Candidate construction, ACP checks, and transaction implementation are refinement boundaries. `publishIf` adds an expected-field precondition on the same publication; a stale expectation leaves state unchanged and an empty scope is `publish`. |
 | Execution | Tool execution removes per-call approval states/transitions. Request terminalization, managed execution, foreground progress, and enrollment authorization retain their owners. `TaskHooks` command results are external observations; the hook contract covers sequencing and failure handling, not exactly-once host effects. |
 | Identity | `Identity` resolves agent labels with an explicit node; shared labels never determine permissions or imply a global ID-to-node mapping. Structural fixture results evaluate the actual well-formedness predicate. |
@@ -347,7 +290,7 @@ Historical bridge references below are not evidence that this target already run
 | Request inputs | `Enrollment/RequestInput` reuses title and queue types and admits selected skills within context authority. Goal continuations carry original sequence/wrapup facts verified by the existing receipt owner. Sampling and aggregate limits come from inference configuration. |
 | Locality | Workspace/callback ownership uses the node DID. Filesystem availability remains an execution boundary; no host fingerprint or single-runtime enforcement is introduced. |
 
-Prompt proofs now preserve literal content through the existing slot assembler and
+Prompt proofs preserve literal content through the existing slot assembler and
 exclude task substitutions from other slots. Wire serialization still needs a runtime
 bridge. Discovery preserves both the containing backend’s owner and its credential scope, including shared credentials; same backend labels across nodes cannot alias. Observations remain independent of configuration. Numeric limits
 share one validator with capability-local defaults; provider/runtime wiring still
@@ -371,8 +314,6 @@ canonical session selection and projection, atomic retry/wake publication, fork 
 remapping and cursor coverage, signed request-input distinctions, physical-request usage scoping,
 foreign-capability authorization, dynamic group bounds, atomic publication, and hook
 failure/cancellation/recovery. A string-valued field model is not a JSON parser proof.
-Preserve existing event callback journals/workspace behavior until the spec's separate
-workspace-hook integration TODO is resolved. Single-instance enforcement remains #1435.
 
 The goal is not to prove math in isolation. The goal is to make the runtime
 state machines explicit enough that:
@@ -386,7 +327,7 @@ The proofs are strongest where the runtime is a state machine:
 
 - request, process, and persistence lifecycle transitions
 - request execution leases with opaque generations, explicit owner-renewed deadlines,
-  generation-fenced terminalization, and atomic expiry recovery (#1341, #1571)
+  generation-fenced terminalization, and atomic expiry recovery
 - daemon-visible storage observation assumptions at the persistence boundary
 - inference-call lifecycle, cancellation transitions, and slot reconstruction
 - scheduler and fleet slot accounting from persisted call rows
@@ -405,8 +346,7 @@ The proofs are strongest where the runtime is a state machine:
 - causal-hop attribution between agents (`Request/CausalHop`): continuations
   preserve the hop, tool-caused requests are one further, and admission applies
   `max_request_hop` when configured
-- provider-input narrowing and prompt-layer assembly (`PromptAssembly`,
-  #448 / #992): soundness/fixpoint/idempotence/split-stability over the
+- provider-input narrowing and prompt-layer assembly (`PromptAssembly`): soundness/fixpoint/idempotence/split-stability over the
   permissive transcript, loop-threading validity (the `run_loop_stream`
   chokepoint), the fixed layer order of the assembled request, and the
   provider-input threshold and dynamic per-turn output clamp checked before
@@ -445,7 +385,7 @@ local lemmas only — not listed as fenced proven areas):
   now admits compact jobs into a bounded queue before spawning worker work,
   defers overflow to its persisted retry ladder, and durably stores
   push-originated pending-DAG registrations before success acknowledgement.
-  Those newer multi-wave and restart properties are not yet modeled or
+  The multi-wave and restart properties are not modeled or
   conformance-fenced here. See
   `boundary.p2p-backpressure.obligation-model`.
 
@@ -500,7 +440,7 @@ The current proof suite covers twenty practical areas:
     eligibility before future idempotent tool retries are enabled
 13. Managed native executor liveness: deadline/cancel transitions signal the
     executor and compose to a terminal timed-out/cancelled tool outcome
-14. Backend probe health (#640): the scheduled prober's per-runtime hysteresis
+14. Backend probe health: the scheduled prober's per-runtime hysteresis
     machine — demotion at exactly K consecutive failures, no flap below K,
     single-success promotion, and effective availability as
     intent ∧ ¬measured-unhealthy
@@ -541,16 +481,16 @@ The current proof suite covers twenty practical areas:
     requester/node DIDs are not covered. Negative handoff guards remain
     model-only; generic Ask/Gate notifications do not automatically complete
     a request.
-19. Request execution leases (#1341, #1571): opaque fresh ownership generations,
+19. Request execution leases: opaque fresh ownership generations,
     explicit deadlines independent of output, bounded owner renewal,
     atomic expiry recovery, drop recovery, matching-generation terminal CAS,
     and bounded winner-owned continuation/token-charge effects. Canonical
     classification and publication composition are modeled in `CanonicalOutput`;
     their native transaction realization and conformance remain obligations.
 
-Separately, **obligation models** (no Rust refinement tests yet):
+Separately, **obligation models** (no Rust refinement tests):
 
-- **P2P backpressure/admission (#630):** local Lean lemmas + TLA+ hub
+- **P2P backpressure/admission:** local Lean lemmas + TLA+ hub
   model. Proves what *must* hold for one-wave admission safety/liveness
   (success-ack backing, pending capacity, timeout frees the push
   semaphore). Does **not** prove multi-wave hub stability, Bitswap stall
@@ -572,10 +512,10 @@ The proof boundary matters:
 The `tla/` sibling directory contains TLA+ specifications for cross-node properties beyond per-node Lean coverage. See `tla/README.md`.
 
 Currently:
-- `ReversePairing` — control-plane convergence of reverse-pairing subscriptions; first concrete artifact under issue #155's cross-boundary verification strategy.
+- `ReversePairing` — control-plane convergence of reverse-pairing subscriptions.
 - `PairingTransport` — connection/install liveness for one directed pairing edge.
-- `BackgroundAdmissionContention` — optimistic-transaction writers of one request's `AgentRequest` row and session documents: dispatch start, background admission, receipt, running children and the execution lease renewal. Checks the owned loop's call order, the admission sequence fence, the renewal owner's re-drive of a poll that admission bumps exhaust (without it the lease lapses), the renewal cadence premise (`RequestExecutionLease.consecutive_renewals_obey_cadence`) and the `Background.receiptContentionAttempts` bound, whose second extra attempt absorbs one renewal (#3592).
-- `P2PBackpressure` — bounded hub fan-in/fan-out admission and push-worker liveness obligations for issue #630 (obligation model; not a fleet stability proof).
+- `BackgroundAdmissionContention` — optimistic-transaction writers of one request's `AgentRequest` row and session documents: dispatch start, background admission, receipt, running children and the execution lease renewal. Checks the owned loop's call order, the admission sequence fence, the renewal owner's re-drive of a poll that admission bumps exhaust (without it the lease lapses), the renewal cadence premise (`RequestExecutionLease.consecutive_renewals_obey_cadence`) and the `Background.receiptContentionAttempts` bound, whose second extra attempt absorbs one renewal.
+- `P2PBackpressure` — bounded hub fan-in/fan-out admission and push-worker liveness obligations (obligation model; not a fleet stability proof).
 - `ReplicatedRequestConvergence` — replicated terminal-state convergence under
   persisted bounded owner re-drive of unacknowledged requests plus bounded
   full replay when an unacknowledged configured peer reconnects after a longer
@@ -610,13 +550,13 @@ Provider-input assembly for Claude: the body's `system[]` blocks (attribution, i
 | `Proofs/Shared/Basic.lean` | Shared opaque ids, `Time`, and terminal-state helpers |
 | `Proofs/Automation/Process.lean` | Process lifecycle model plus executable `Action`, `step?`, and `replay?` |
 | `Proofs/Session/Request.lean` | Barrel for request state, transitions, executable semantics, and local properties |
-| `Proofs/Session/RequestExecutionLease.lean` | Barrel for the #1341 execution-lease state, executable transitions, stale-owner exclusion, atomic terminal agreement, and bounded terminal effects |
+| `Proofs/Session/RequestExecutionLease.lean` | Barrel for the execution-lease state, executable transitions, stale-owner exclusion, atomic terminal agreement, and bounded terminal effects |
 | `Proofs/Runtime/InferenceCall.lean` | Barrel for inference-call state, transitions, slot accounting, cancellation properties, controller bookkeeping, and the shared-pool registry handoff |
 | `Proofs/Store/Persistence.lean` | Persistence lifecycle model plus executable `Action`, `step?`, and `replay?` |
 | `Proofs/Store/StorageObservation.lean` | Daemon-visible storage observation model and persistence bridge |
 | `Proofs/Store/AccessClassification.lean` | The answer of an error owner through the error owners that wrap it, for every classifier that finds an owner on an erased error's `source()` chain: a receiver finds the owner exactly when the variant holding it is sourced, directly or through a box, and asks the box too (`Chain.found_eq`, `Chain.found_survives_every_wrapping`, `Chain.boxed_owner_is_lost_to_an_exact_search`); the access owner's classification (`Error.classification_survives_every_wrapping`, `Error.hidden_is_unclassified`), GraphQL retryability (`retryability_survives_every_wrapping`) and the store's insecure key, lock contention and incompatible store (`store_owner_is_found`). Every owner variant holding an access error is enumerated per crate. Fence: families `access_classification_store_wrapped`, `access_classification_store_retry_wrapped` and `access_classification_store_owner_found` (consumer `gents-store` `config_client::txn::access_classification_tests`), `access_classification_inference_wrapped` (`gents-inference` `access_classification_tests`), `access_classification_session_wrapped`, `access_classification_p2p_wrapped`, `access_classification_service_wrapped`, `access_classification_tools_wrapped`, `access_classification_desktop_core_wrapped` (each crate's `access_classification_tests`), `access_classification_protocol_retry_wrapped` (`gents-protocol` `graphql::retry_classification_tests`) and `runtime_connection_observation_failed_snapshot` (`gents-desktop-core` `client::observe`); `write_owner_structure::access_error_holders_are_sourced` reads every crate's sources and checks the enumerations and that no holder is transparent. |
 | `Proofs/Store/StoreHandoff.lean` | Opening a store another process holds: a free lock is taken, a holder that declared its release in the lock file is awaited within the opener's own deadline, and only a serving holder is refused at once (`only_a_serving_holder_is_refused`). The holder's order, declare then release then acknowledge, is `Proofs/Clients/ClientShell/Installation.lean` (`acknowledgement_requires_closed_store`). Fence: family `store_handoff_decisions` (consumer `gents-store` `local::home`, against real lock files). TLA companion: `tla/StoreHandoff.tla`. |
-| `Proofs/Runtime/CrossMachineComposed.lean` | Cross-machine composition and guards; global `WellFormed` (list-level coherence, detached persistence/linkage, unique call ids, no early tools, invFG) established at `initial` and preserved by every transition; a detached plugin-job tool keeps the reachable domain nonempty (#555) |
+| `Proofs/Runtime/CrossMachineComposed.lean` | Cross-machine composition and guards; global `WellFormed` (list-level coherence, detached persistence/linkage, unique call ids, no early tools, invFG) established at `initial` and preserved by every transition; a detached plugin-job tool keeps the reachable domain nonempty |
 | `Proofs/Inference/Scheduling.lean` | Scheduler/backend slot state |
 | `Proofs/Inference/InferenceCall/DroppedPermit.lean` | The terminal a dropped admission permit records (`outcome`), and who writes it across a runtime exit: a graceful stop awaits the cleanup tracker, so the permit's own cleanup writes its terminal and observed usage (`a_graceful_stop_keeps_observed_usage`); only an exit cut by the teardown deadline or an abrupt one leaves the row to recovery, without usage (`recovery_owns_only_a_cut_or_abrupt_exit`). Fence: families `inference_dropped_permit_outcomes` and `inference_dropped_permit_kinds_calls` (consumer `gents-inference` `admission::tests`); the exit obligation is fenced by `admission::tests::a_graceful_stop_records_the_usage_of_a_cancelled_finalization`. TLA companion: `tla/DroppedPermitCleanup.tla`. |
 | `Proofs/Clients/IdentityMetadata.lean` | One writer's choice at each read of a home's client identity metadata: equal metadata is accepted, absent metadata is installed once, a writer that lost the install race accepts equal metadata on its second read, different metadata is the hard mismatch and a destination missing after the writer's own install is an error (`only_equal_metadata_is_accepted`, `the_second_read_never_installs`). Fence: family `client_identity_metadata_decisions` (consumer `gents-desktop-core` `client::principal_identity`, against real files). TLA companion: `tla/ClientIdentityMetadata.tla`. |
@@ -633,14 +573,15 @@ Provider-input assembly for Claude: the body's `system[]` blocks (attribution, i
 | `Proofs/Observe/FileInventory/FileInventory/` | Native file inventory of one session: the source facts (`Source`), the authorized canonical closure the snapshot enumerates, accepted-tool projection publication, fork copies, per-request coverage, bounded pages and resource ordering. Direct reads use the authenticated reader and native reader-bound observations; the owner read requires the exact owned physical root. Images are read through native document ACP. P2P does not replicate or hydrate sessions or serve inventory pages: session data never travels on a route. Fences: `file_inventory::{closure,selection,snapshot,order}::tests`. |
 | `Proofs/Runtime/CompletionRetry.lean` | Barrel for per-completion retry state, transitions, executable semantics, and budget/deadline/effects properties |
 | `Proofs/Shared/AccountRotation.lean` | Claude subscription account rotation: tiered selection (`select_live`, `select_best_tier`, `select_sticky`, `select_no_overage_unless_allowed`), limit observation, and the in-attempt rotation (`attempt_nodup`, `attempt_empty_exhausted`). Cases replay Claude Code's rate-limit simulator scenarios. Fences: `gents_claude::rotation::tests::generated_rotation_{select,attempt,observe}_cases_*`; the runtime pool that applies the policy lands with the transport. |
+| `Proofs/Shared/ToolResultText.lean` | How a tool result's text is sent to the provider: unchanged when it has no `{` or is exactly one JSON object or array, otherwise its text parts become one JSON object `{"text": …}`, so a route that keeps only an object found in the text (OpenRouter's Gemini conversion) still shows the model all of it (`what_is_sent_survives`, `text_that_survives_is_sent_as_it_is`, `wrapping_is_idempotent`). The measured route behaviour is the module's external premise. Family `tool_result_text_wire` replays `gents_loop::provider_input::tool_result_text::wire`. |
 | `Proofs/Runtime/StreamBatch.lean` | When the stream writer flushes streamed provider output: the first visible bytes and first reasoning at once, later growth on the write that finds its batch interval passed, and every pending buffer arms the deadline the drive loop waits on, so produced output never waits for a later provider event (`pending_output_arms_a_deadline`, `write_after_deadline_flushes`). Family `stream_batch_plan` replays `StreamBuffer` in `gents-session`; `tla/StreamDelivery` checks the interleaving with the provider pause, the append and the client reader |
 | `Proofs/Runtime/RuntimeReconcile.lean` | Barrel for runtime reconcile state, relational transitions, and executable semantics |
 | `Proofs/Runtime/RuntimeReconcile/StartupReadiness.lean` | Startup/readiness projection and semantic publication predicate. The generated `contracts_readiness_publication` family drives publisher process-state transitions and requires no writes during idle time; document age is not a connectivity lease. |
 | `Proofs/Runtime/RuntimeReconcile/UpdateHandoff.lean` | The managed update handoff's transitions (`step`, `canRestore`) and `helperRegistration`, who registers the update helper's job: only a caller holding the operation's `helper.lock`, for a live operation (`register_requires_lock_and_live_phase`), a status reader only once the operation is acknowledged (`status_registers_only_acknowledged_operations`) and takes the lock only for a phase in which it would register (`statusTakesLock`, `status_takes_lock_only_where_it_registers`), so before acknowledgement a submitter that cannot take the lock yields only to the helper; a finished operation has no successor (`finished_phases_have_no_successor`). Fence: families `update_handoff_transitions` (consumer `gents-protocol` `serve_lifecycle::update`), `runtime_reconcile_update_handoff_helper_registration` and `runtime_reconcile_update_handoff_status_takes_lock` (consumer `gents-service` `service_update::tests`). TLA companion: `tla/UpdateHelperRegistration.tla`. |
 | `Proofs/Runtime/ApplyReconcile.lean` | Barrel for atomic publication, model-driven witnesses, runtime bridge, and convergence |
-| `Proofs/Runtime/Eval.lean` | Eval core contract (#1515): closed outcome-kind vocabulary, provider reasons, the projection onto evidence classes, the theorem that no subject-causable outcome is excluded from the denominator, and monotone case-class reduction. Checks, numeric reducers and the runner are refinement boundaries |
-| `Proofs/Runtime/Optimization.lean` | Configuration optimization (#1455) on the eval contract: worst-case unknown imputation, integer sufficiency and non-regression gates over per-case paired sums, the cost sub-gate, the ordered decision, the rule that too few cases can never be accepted, and the length-guarded job journal with bounded rounds. The permutation test, eval runs and the proposer are refinement boundaries |
-| `Proofs/Tools/SelfConfig.lean` | Barrel for agent self-configuration patch semantics: field partitions, merge, write step, guardrails (#654), and the pack-install grant bound. Native document authorization governs plugin job settings; execution bounds remain with the job owner |
+| `Proofs/Runtime/Eval.lean` | Eval core contract: closed outcome-kind vocabulary, provider reasons, the projection onto evidence classes, the theorem that no subject-causable outcome is excluded from the denominator, and monotone case-class reduction. Checks, numeric reducers and the runner are refinement boundaries |
+| `Proofs/Runtime/Optimization.lean` | Configuration optimization on the eval contract: worst-case unknown imputation, integer sufficiency and non-regression gates over per-case paired sums, the cost sub-gate, the ordered decision, the rule that too few cases can never be accepted, and the length-guarded job journal with bounded rounds. The permutation test, eval runs and the proposer are refinement boundaries |
+| `Proofs/Tools/SelfConfig.lean` | Barrel for agent self-configuration patch semantics: field partitions, merge, write step, guardrails, and the pack-install grant bound. Native document authorization governs plugin job settings; execution bounds remain with the job owner |
 | `Proofs/Tools/SelfConfig/Scope.lean` | Self-config edit authority by scope: an own document needs its own self-config category, never the agent catalog (`node`); a foreign one (another Agent's, or a shared Context or Tools) needs the catalog, plus the category unless it is an Agent document. Creating or cloning an Agent needs the catalog. Created Agents and clones carry no self-config group; the Engineer preset grants self-config and the catalog. The `contracts_self_config_scope` family drives `command/grants.rs` (`may_edit`, `config_scope`). |
 | `Proofs/Tools/SelfConfig/AgentDecision.lean` | One admission (`agentAdmission`) for create, clone, edit, disable and choosing the default agent, for every front end and every actor, person or Agent: it reads the actor's ACP grants (`ActorGrants`), the node's Agent catalog and the request, never the front end, the actor kind or any tag. Create, clone and the default need the catalog (`nodes manage_agents`: owner or `administrator`, which the Engineer receives at init); an edit needs the agent category on its target (`agents update`). The one edit covers every writable Agent field plus `system_prompt` (its Context); `disable` is `enabled := false`. No agent is protected: the only protections are that the default agent stays enabled and an actor never disables itself (`admitted_keeps_default_enabled`, `admitted_keeps_actor_enabled`). A refused preview reports the commit's refusal as a success (`preview_refusal_matches_commit`). `materializedAgent` admits only through it before `Configuration.resolveAgent`. Resolution is decided at commit, not admission (`candidateResolution`): an enabled result commits when it resolves or when its only failure is a disabled backend (a node set up before inference; deferred, it materializes no session and serves no request, `deferred_agent_serves_no_request`), and any other failure is refused; family `contracts_self_config_agent_resolution`. Executable regressions in `SelfConfig/Cases` over an ACP fixture; the generated family `contracts_self_config_agent_decision` carries the actor and its grants, the request and the refusal; `contracts_self_config_agent_materialization` carries the session (or null). |
 | `Proofs/Tools/SelfConfig/CategoryGrants.lean` | Each self-config category and scope as the Household ACP permission it groups (`categoryGroupings`, checked against `Identity.Household.policy`), that every category is issued to the Engineer (`category_gaps`) and which stay out of reach of an Agent that is not a Node administrator (`narrow_category_gaps`), the actor grants agent admission reads (`actorGrantsOf`), and that creating or cloning an Agent issues no category. The catalog relation `nodes#agent_manager` gives `manage_agents` and none of `administrator`'s other permissions (`agent_manager_is_catalog_only`) and takes only the userset of the Node's administrators, so no actor holds the catalog alone (`catalog_has_no_direct_holder`, `Identity.Household.agent_manager_admits_no_actor`); the Engineer receives `nodes#administrator` at init and so holds every category on every Agent and configuration document of its Node (`engineerInitRelations`, `initialised_engineer_holds_catalog`, `initialised_engineer_administers_node`). The default Agent selection is its own per-Node document (`DefaultAgentSelection`, policy resource `default_agent_selections`, created at init by `initDefaultSelection`) whose update is the parent Node's `manage_agents`, so choosing the default is authorized by document ACP (`default_selection_write_is_the_catalog`). Every path that makes a node's Engineer takes one provisioning step (`provisionEngineer`). The policy tool accepts every relation and permission of the Household policy (`policyNames`, `resolvePolicyName`); the catalog refusal names only such words of the Node that can be granted to an actor (`catalogRefusalWords`, `catalog_refusal_words_name_the_node`) and who grants the catalog, because a refused actor cannot grant it to itself (`catalog_is_not_self_granted`). |
@@ -703,7 +644,7 @@ Provider-input assembly for Claude: the body's `system[]` blocks (attribution, i
 | `Proofs/P2P/PeerRegistryDiscovery/DirectoryProjection.lean` | Agent directory projection (machine index v1): source-owned membership, foreign-row preservation, idempotent convergence, write-free settled fixpoint, retraction soundness. Fence: `crates/gents-p2p/src/directory_projection.rs`. |
 | `Proofs/Tools/PeerRegistryDiscovery/RootAdmission.lean` | Canonical component-and-anchor containment plus operator-local `WorkspaceRoot` publication: no-document ceiling default, explicit-root narrowing, and all-disabled revocation without fallback. Filesystem resolution and execution-boundary re-resolution are Rust refinement obligations; the model makes no TOCTOU claim. Root selection and the omitted/clear/set root-edit patch contract (`rootEditSelectionOk`) live here. Fence: family `root_admission_contracts_admission`, replayed by `gents-tools` root admission. |
 | `Proofs/ToolCalls/Background/`, `Proofs/Runtime/Background/ToolOutput*.lean` | Background tool rows (native processes and `agent_new`/`agent_message` rows): admission budget, terminal CAS and notification delivery, completion continuation (independent of Goal presence), canonical output paging, process control and the foreground interrupt scope, which never cascades. Interrupting a plugin job's caller leaves the job row running. The budget's concurrent writers, including the lease renewal, and its attempt bound are checked by `tla/BackgroundAdmissionContention`; concurrent completion notifications coalescing into one wake by `tla/BackgroundWakeIdentity` |
-| `Proofs/Runtime/Recovery/`, `Proofs/Inference/Recovery/`, `Proofs/Session/Recovery/`, `Proofs/ToolCalls/Recovery/` | Recovery sweep contracts (`RecoverySweep`), the registered sweep registry, per-collection sweeps including session-message rows and the startup restart-disposition classifier (#937), and the startup sweep ordering contract. Plugin-job rows are their own `RowClass`: restart leaves them running, and neither the native, orphan nor session-message sweep selects them |
+| `Proofs/Runtime/Recovery/`, `Proofs/Inference/Recovery/`, `Proofs/Session/Recovery/`, `Proofs/ToolCalls/Recovery/` | Recovery sweep contracts (`RecoverySweep`), the registered sweep registry, per-collection sweeps including session-message rows and the startup restart-disposition classifier, and the startup sweep ordering contract. Plugin-job rows are their own `RowClass`: restart leaves them running, and neither the native, orphan nor session-message sweep selects them |
 | `Proofs/ToolCalls/PluginJob/Types.lean` | Executable source of the plugin-job contract: a plugin job is an ordinary background tool call whose pin and progress are fields on that call. Ceilings and their meet, origin, dynamic mode and job policy, pins, spawn keys, effects, step outputs, child and row states, and the wire `JobState` |
 | `Proofs/ToolCalls/PluginJob/Keys.lean` | Spawn-key encodings: `retryKey`, `messageKey` and `sessionId` are injective, a message key is never a retry key, and `decodeRetryKey?` (Lean-only; no Rust decoder) inverts `retryKey` |
 | `Proofs/ToolCalls/PluginJob/Admission.lean` | `admitStep`, the host's all-or-nothing check of one step output against the facts it re-reads in the step transaction: targets within the ceiling meet, live and spawn budgets counted over new keys only, child hop and cwd, messages, interrupts, the stall rule and terminal rules, `resumeValid` for a step-0 resume (`admitted_resume_valid`) with its effects admitted against the resumed chain row (`stepRow`, `resume_reserved_keys_uncharged`), child keys only through `admitEffects` (`spawn_only_through_admitStep`), and the host refusal codes. Every refusal except `.terminal` fails the row closed (`settleStep`) |
@@ -716,8 +657,8 @@ Provider-input assembly for Claude: the body's `system[]` blocks (attribution, i
 | `Proofs/Tools/ToolPolicy/Configuration.lean` | Install provenance and the bounded per-row scratch directory named by `tool_call_id` |
 | `Proofs/Tools/ToolPolicy/PluginCalls.lean` | `routeOf`: ordinary and hook-owned tools require selection and their owner's admission; job steps have no child dispatcher. Bounded sleep preserves the enclosing invocation deadline. |
 | `Proofs/Session/SessionQueue/` (control: `Proofs/Automation/Session/Control.lean`) | Session queue model: queue sources (`background_completion`, steering), coalesce policy/keys, automated wake-up drain |
-| `Proofs/Session/Compaction/Compaction/` | Transcript reduction (#993) plus durable request-local provider reduction (#1127): canonical provider-view sanitation, pair-safe split correspondence, immutable create-and-compare identity, persist-before-activate, and exact crash restoration. Fences: `tests/conformance/streaming_compaction.rs` and `tests/conformance/durable_reduction.rs`. |
-| `Proofs/Shared/RenderedCapture.lean` | Persist-before-send at the provider boundary (#840/#523): the five-component capture key, the opaque canonical request, `assembled → durablyCaptured → sent`, and the capture decision (fresh / idempotent / rejected). It additionally models bounded recursive resolution of full or witnessed splice records and makes a failed decode block capture and send. Ordered per-block manifests (#2333) extend the same resolution: each entry pins its block's field-commit witness, blocks resolve uniformly (full or delta) under one shared fuel budget, and an absent block, mismatched witness, or insufficient fuel fails closed (`manifest_of_fulls_resolves_exactly`, `manifest_witness_mismatch_fails_closed`, `manifest_missing_ref_fails_closed`, `manifest_no_fuel_fails_closed`). `CanonicalRequest` is still abstracted as a singleton list of naturals: the conditional splice theorem proves reconstruction once an encoder supplies the target middle, not the concrete UTF-8 JSON algorithm. Rust refines that boundary with independent top-level-field JSON splices, fixed-width persisted offsets, exact base document/field-CID witnesses, and generated cases plus UTF-8/removal/overflow tests. DefraDB CID correctness and collision resistance remain external storage assumptions. Proves `sent_implies_durably_captured`, `sent_requires_a_capture_step`, `capture_key_determines_request`, `capture_idempotent`, `capture_rejects_rebinding`, and `capture_failure_blocks_send`. The key's third component is the exact signed request document identity plus provider-call scope, encoded as the injective pair `[request_doc_id, capture_scope]`, because one request runs several completion loops and each starts its turn and attempt counters at zero. Fences: `agent::loop_stream::tests::rendered_capture_follows_the_lean_model` (ordering and durable binding, driven through the real owned loop and the real sink), `rendered_request::encoding::tests::generated_storage_cases_drive_the_lossless_codec` (storage refinement), `crates/gents-inference/src/rendered_request/pushdown_tests.rs` (key identity), and `tests/e2e_runtime/rendered_request_capture.rs` (the decoded persisted payload equals the body a real HTTP backend received, and a failing sink issues zero provider requests). Scope: `boundary.rendered-capture.assembled-request-artifact`, `boundary.rendered-capture.key-encoding-injectivity`. |
+| `Proofs/Session/Compaction/Compaction/` | Transcript reduction plus durable request-local provider reduction: canonical provider-view sanitation, pair-safe split correspondence, immutable create-and-compare identity, persist-before-activate, and exact crash restoration. Fences: `tests/conformance/streaming_compaction.rs` and `tests/conformance/durable_reduction.rs`. |
+| `Proofs/Shared/RenderedCapture.lean` | Persist-before-send at the provider boundary: the five-component capture key, the opaque canonical request, `assembled → durablyCaptured → sent`, and the capture decision (fresh / idempotent / rejected). It additionally models bounded recursive resolution of full or witnessed splice records and makes a failed decode block capture and send. Ordered per-block manifests extend the same resolution: each entry pins its block's field-commit witness, blocks resolve uniformly (full or delta) under one shared fuel budget, and an absent block, mismatched witness, or insufficient fuel fails closed (`manifest_of_fulls_resolves_exactly`, `manifest_witness_mismatch_fails_closed`, `manifest_missing_ref_fails_closed`, `manifest_no_fuel_fails_closed`). `CanonicalRequest` is still abstracted as a singleton list of naturals: the conditional splice theorem proves reconstruction once an encoder supplies the target middle, not the concrete UTF-8 JSON algorithm. Rust refines that boundary with independent top-level-field JSON splices, fixed-width persisted offsets, exact base document/field-CID witnesses, and generated cases plus UTF-8/removal/overflow tests. DefraDB CID correctness and collision resistance remain external storage assumptions. Proves `sent_implies_durably_captured`, `sent_requires_a_capture_step`, `capture_key_determines_request`, `capture_idempotent`, `capture_rejects_rebinding`, and `capture_failure_blocks_send`. The key's third component is the exact signed request document identity plus provider-call scope, encoded as the injective pair `[request_doc_id, capture_scope]`, because one request runs several completion loops and each starts its turn and attempt counters at zero. Fences: `agent::loop_stream::tests::rendered_capture_follows_the_lean_model` (ordering and durable binding, driven through the real owned loop and the real sink), `rendered_request::encoding::tests::generated_storage_cases_drive_the_lossless_codec` (storage refinement), `crates/gents-inference/src/rendered_request/pushdown_tests.rs` (key identity), and `tests/e2e_runtime/rendered_request_capture.rs` (the decoded persisted payload equals the body a real HTTP backend received, and a failing sink issues zero provider requests). Scope: `boundary.rendered-capture.assembled-request-artifact`, `boundary.rendered-capture.key-encoding-injectivity`. |
 | `Proofs/Session/DurableLineage.lean` | Session-message target authority and `agent_session_list` entries (`listedSession`: the caller's verified starter is listed without send or interrupt authority). DefraDB ingest boundary for request provenance: logical/physical document-edge coherence, root and bridge shapes, per-row rejection that cannot poison later admissible work, and steering normalization that clears both halves of the spawn tool edge. Raw admission input is retained separately from canonical execution-start publication. The R4C generated steering witness fences lineage values in Rust conformance tests. Plugin-job spawn and message writes: `openingRequest` picks one opening request per session (`opening_request_unique`), message requests never open one, a reattempt opens a new session, and two job requests have no single-request projection. |
 | `Proofs/Clients/QueuedSteering.lean` | Composes the existing queue, request, canonical execution Gate, reconstruction, RenderedCapture, and pending-turn projection owners. Signed raw input survives pre-start and owned pre-publication terminal outcomes; the latter terminalize the execution and finish the active queue. Input retention is structural, queue clearance follows Handover's finish theorem, and lease/request agreement is checked at this composition boundary. Execution-start publication of the separately prepared message gates authored-input provider send. The send predicate covers the authored-input and capture fences only: lease authorization and the native prepared-message-to-serialized-body projection remain Rust refinement obligations. Generated traces include ordered actions, full prepared candidate records, opaque capture inputs, and derived expectations. |
 | `Proofs/Runtime/Properties/Safety.lean` | Request/process/persistence safety properties S1-S6 |
@@ -729,7 +670,7 @@ Provider-input assembly for Claude: the body's `system[]` blocks (attribution, i
 | `Proofs/Conformance/RuntimeConnectionObservation.lean` | Desktop runtime connection status (`ClientShell.ObservationOrdering` `RuntimeConnectionObservation`): transitions including planned renewal and missing endpoint, the presentation tone and reason each status shows, stream-end and snapshot-outcome classification (an omitted root is an empty view; the runtime's own refusal is shown as `refused` while the source reconnects), the armed notice and armed state, the renewal cadence and the snapshot retry delay; replayed by `gents-desktop-core` `client::observe` and the desktop's operational-state projection. TLA `RuntimeConnectionTransport` models the source, observer and reconcile interleavings |
 | `Proofs/Conformance/RuntimeConnectionBackoff.lean` | Reconnect backoff (`reconnects` by origin: a snapshot that failed for a transport reason keeps the source armed; `reconnectDelayMs`: five 250 ms reconnects, then doubling to 30 s; `reconnectAttempt`, reset only after the source stayed connected for `reconnectStableMs`) replayed by `client::observe::remote`, the one delay of every reconnect path |
 | `Proofs/Conformance/ClientWindowScope.lean` | Desktop window scope (`ClientShell.ObservationScope` `ClientWindowScope`): executes serialized register/select/destroy traces and reports each window's command node, with and without a named node, and the nodes a delivery reaches it for; replayed against `DesktopBridge` by `gents-desktop-bridge` `state::window_selection_tests` |
-| `Proofs/Conformance/CoverageLedger.lean` | Checked ledger mapping every emitted conformance domain to a Rust consumer, accepted boundary, or accepted follow-up; `externalPremiseCoverage` holds the premise rows for facts about external systems (`coverage_entries_have_evidence`) |
+| `Proofs/Conformance/CoverageLedger.lean` | What no test consumes: `boundaries` (premises about the database, operating system, host, provider or WASM guest, and families only such a fact decides) and `openFamilies` (emitted families with no consumer); see [AGENTS.md](AGENTS.md) |
 | `Proofs/Conformance/Contracts.lean` | Test-time JSON extraction surface for Rust vocabularies, finite state counts, transition tables, legal/illegal transition pairs, witness rows, ClientShell cases, and the coverage ledger |
 | `Proofs/Conformance/ObserverResync.lean` | Executes `ObserverResync` and `ClientDataPublication` on observer traces the desktop's replay test serializes, one store per node; reports the slot after every step, each load's settlement and patch decision, and the final slots and each node's store rows. |
 | `Proofs/Conformance/ClientShell/Contracts.lean` | Generated finite ClientShell step/projection cases for frontend and desktop shell tests |
@@ -781,25 +722,15 @@ lake env lean --run Proofs/Conformance/Contracts.lean
 The emitted JSON is printed between `---BEGIN GENTS LEAN CONTRACT JSON---` and
 `---END GENTS LEAN CONTRACT JSON---` sentinel lines so Rust can reject unrelated
 stdout. It is generated from Lean constructors, `toDefraDB` functions, terminal
-predicates, executable `step?` functions, and finite witness contexts. It
-currently covers:
+predicates, executable `step?` functions, and finite witness contexts.
 
-- `Request`
-- `RequestExecutionLease` one-step and recovery/race traces now describe the
-  #1571 target owner: explicit lease deadlines, replay, expiry admission, atomic recovery,
-  explicit renewal and policy revocation. The old generated Rust fixtures and
-  production seam do not yet conform to these cases. Provider-EOF cases retain
-  the explicit-final-event requirement. Native database ordering and projection
-  classification still require refinement tests in the later layer.
-- `Process`
-- `Persistence.failClosed`
-- `Persistence.failOpen`
-- `StorageObservation.failClosed`
-- `StorageObservation.failOpen`
-- `RuntimeReconcile`
-- `SessionRecovery`
-- `InferenceCall`
-- `ManagedExec`
+Production writes each machine's transitions inline, so the legal transition
+tables of `Request`, `Process`, `RuntimeReconcile`, `SessionRecovery`,
+`InferenceCall`, `ToolCall`, `ManagedExec`, `Goal` and `Mailbox` are Lean
+theorems in `Conformance/StateMachines.lean` (`wellFormed`, `legal`, `illegal`),
+not emitted families. Their terminal partitions are replayed through
+`request_state_terminal`, `tool_execution_tool_call_state_terminal` and
+`mailbox_status_terminal`.
 
 `RuntimeReconcile`, `SessionRecovery`, and `ClientShell` also emit deterministic
 witness rows. Those rows keep the JSON small while pinning generation
@@ -811,15 +742,14 @@ transport no-op, submit gates, and terminal follow-up allowance. ClientShell
 rows are split into a frontend list consumed by the TypeScript chat projection
 test and a desktop list consumed by the Rust session-snapshot bridge test.
 
-It also emits `ToolExecution` preflight and retry witness rows, plus the
-`ToolRetryDisposition` vocabulary. Current consumers observe the real MCP
-preflight gates, safe-read retry, and failed-call/no-eviction paths. The ledger
-retains the full failure/idempotency matrix and disposition vocabulary as runtime
-follow-ups; a test-only copy of the Lean policy is not owner coverage.
+It also emits `ToolExecution` preflight and retry witness rows. The MCP pool
+retries a failed `list_tools` once on a fresh connection whatever the failure,
+and never retries `call_tool`; consumers observe the real MCP preflight gates,
+the safe-read retry and the failed-call/no-eviction path.
 
-ManagedExec exports its state vocabulary, legal transition table, and
-deadline/cancel liveness witness rows. Rust consumes those contracts in the
-managed-exec unit tests and `state_machine_conformance`. A generated native
+ManagedExec exports its spawn, stop, cancel and deadline/cancel liveness
+witness rows; the managed-exec unit tests project each native outcome onto the
+model's state names. A generated native
 subprocess inventory also requires `managedExecProcessGroupBoundary`,
 process-tree termination, and bounded output drain for `list_files`, `glob`,
 `grep`, `bash`, and `bash_unrestricted`.
@@ -836,13 +766,10 @@ registry surface: Rust records an active executor only after `Command::spawn`
 returns a child pid, which corresponds to the model's `running` state. Spawn
 failure is still modeled explicitly through `spawnFailed`.
 
-The same JSON includes `coverage_ledger`, maintained in
-`Proofs/Conformance/CoverageLedger.lean`. A row tags an emitted family with its
-feature and surfaces and says whether a native test consumes it, or names the
-accepted boundary or follow-up; it never names the test. The scan in
-`crates/gents-lean-vocab/src/consumer_scan.rs` finds each family's consumer
-tests from the snapshot key and this crate's loaders, and fails when a family
-no test reads lacks a boundary or follow-up row.
+The same JSON includes `coverage_ledger` (`Proofs/Conformance/CoverageLedger.lean`):
+the boundaries and the open families, the only emitted families no test
+consumes. The scan in `crates/gents-lean-vocab/src/consumer_scan.rs` finds each
+family's consumer from its key; [AGENTS.md](AGENTS.md) states the rule.
 
 When a Lean vocabulary, terminal partition, action, or legal transition changes,
 the generated JSON changes on the next Rust test run. The Rust tests then fail
@@ -854,12 +781,8 @@ idempotent MCP retries, extend that Lean model first with the metadata source,
 retry budget, and replay/idempotency assumptions, then update the Rust contract
 that ties advertised MCP metadata to the widened retry rule.
 
-Future executable `ToolExecution` or other contracts should extend
-`Proofs.Conformance.Contracts` and add matching coverage-ledger entries in the
-same PR. If the runtime side is intentionally not executable yet, the entry must
-name an external premise row in `Proofs.Conformance.CoverageLedger` or an
-accepted follow-up rather than
-leaving the Lean contract advisory-only.
+A new executable contract extends `Proofs.Conformance.Contracts` and arrives
+with the test that replays it.
 
 ## Core Model
 
@@ -942,19 +865,15 @@ States:
 - `inFlight`
 - `successAcknowledged`
 - `mutationFailed`
-- `staleObserved`
-- `readVisible`
 - `lostAcknowledged`
 
 Operational meaning:
 
-- this layer models only what the daemon observed around storage writes and
-  follow-up reads/events
+- this layer models only what the session hook observes of its own mutation;
+  it never reads a committed row back
 - a successful mutation ack refines to `PersistenceState.committed`
 - a failed mutation does not refine to committed; fail-closed retries from
   uncommitted, while fail-open acknowledges lost output
-- stale reads or stale/missing events can happen after a success ack, but the
-  model keeps that separate from DefraDB's internal correctness
 
 ### Layer 4: Inference Call Lifecycle
 
@@ -1022,18 +941,14 @@ failure refine the existing `PersistenceState` transitions
 
 Local observation theorems also record the daemon assumptions Rust relies on:
 `success_acknowledged_committed`, `mutation_failed_uncommitted`,
-`mutation_failed_ne_committed`,
-`stale_observation_preserves_success_commit`,
-`terminal_write_observed_committed`,
-`readYourWrites_visibility_path`, `successful_mutation_eventual_visibility_path`,
-`failClosed_failed_mutation_retry_path`, `failOpen_failed_mutation_lost_path`,
-`staleRead_eventual_visibility_path`, and `staleEvent_eventual_visibility_path`.
+`mutation_failed_ne_committed`, `failClosed_failed_mutation_retry_path` and
+`failOpen_failed_mutation_lost_path`.
 
 ### Liveness taxonomy
 
 "Liveness" theorems in this suite fall into four tiers. **Almost all Lean
 results are tier 1.** Reading an `*_eventually_*` or `*_convergence` name as
-fair-scheduler or wall-clock progress is a misread (#557).
+fair-scheduler or wall-clock progress is a misread.
 
 The enum-only lemmas in `Properties/Decidable.lean` are now named
 `*_has_distinct_state`. They are **not even tier-1 reachability**: finding a
@@ -1097,7 +1012,7 @@ charge the aggregate budget. These laws support the admission persistence
 reverse-race regressions; no new legal lifecycle transitions are introduced.
 
 `Proofs/Inference/InferenceCall/ProviderLimit.lean` is the verdict the admission
-permit records on a failed call (#3923): a throttle whose wake lies beyond the
+permit records on a failed call: a throttle whose wake lies beyond the
 admitted model's rate-limit wait cap (`InferenceRetryPolicy.max_rate_limit_wait_ms`,
 `CompletionRetry.Budget.maxWait`) is the provider's usage limit, resetting at
 that wake. Under the cap the owned loop holds, a recorded usage limit is exactly
@@ -1250,7 +1165,7 @@ delivery, control-watcher debounce, schedule tick cadence, subscription
 reconciliation timing, template parser failures, and persistence writeback
 shapes are integration/persistence concerns rather than Lean dispatch facts.
 
-**Projection boundary (#605):** `SystemState.requests` is a single agent's
+**Projection boundary:** `SystemState.requests` is a single agent's
 view — `TriggerKey` is only unique per agent, so the Rust queries that
 materialize it scope by the dispatching agent's `node_did`, and a
 claimed/processing row past its claim deadline (+grace) projects as terminal
@@ -1279,7 +1194,7 @@ started, and there is no foreground wait on another session.
 
 Model → conformance → Rust bindings:
 
-- **Startup restart disposition (#937)** —
+- **Startup restart disposition** —
   `Proofs/ToolCalls/Recovery/Sweeps/BackgroundRestart.lean` models the classifier as a
   total function (`restartDisposition`) with exhaustive characterizations
   (`restart_interrupt_iff_native_background_resolvable_parent`,
@@ -1295,11 +1210,11 @@ Model → conformance → Rust bindings:
   `contracts_interrupt_disposition` and `contracts_interrupt_in_flight` drive
   `InterruptDisposition::of` and the hook's in-flight interrupt path.
 - **Recovery sweeps** — `Proofs/ToolCalls/Recovery/Sweeps/*`, `Proofs/Session/Recovery/Sweeps/Requests.lean`, `Proofs/Inference/Recovery/Sweeps/Inference.lean` (tool calls, session-message
-  rows, terminal-parent foreground tools #837, and orphaned native-background
+  rows, terminal-parent foreground tools, and orphaned native-background
   ownership repair, including retryable completion-notification/wake
   obligations) → the `recovery_sweeps_*` families, one or more per
   registered sweep; the plugin-job sweep is `plugin_job_recoveries`.
-- **Partial output (#937, revised by #1571)** —
+- **Partial output** —
   `Proofs/Runtime/Background/ToolOutput.lean` reads canonical segments for the exact
   physical tool, independently of volatile executor registries. Generic paging
   retains contiguity, bounds, progress and `has_more`.
@@ -1333,10 +1248,7 @@ tokenizer accuracy, summarizer quality or the repair transformation itself.
 durable transcript and the provider view diverge on purpose, and therefore the
 place where "everything persisted can be projected back out" is most at risk.
 
-Before #993 the model was vacuous: `stubMessageKind` was literally
-`| .toolResult callId key => .toolResult callId key`, so every preservation
-property quantified over `id` and proved that doing nothing preserves meaning.
-The current model separates executable reduction from conditional global-resolution
+The model separates executable reduction from conditional global-resolution
 proofs. Transfer to content-bearing per-turn input remains explicit:
 
 - **`strip`** rewrites a tool result's payload into a pointer stub and touches
@@ -1516,9 +1428,9 @@ Current boundaries:
 - Fleet aggregate slot state is reconstructed from `InferenceCall` rows rather
   than persisted as a single `FleetState` document. Only rows with
   `call_state = "running"` hold slots; queued and terminal rows do not.
-- `StorageObservation` records daemon-level storage assumptions: success acks,
-  failed mutations, stale reads/events, and minimum visibility paths. DefraDB
-  storage-engine correctness remains external.
+- `StorageObservation` records the hook's own mutation acknowledgements:
+  success, failure and fail-open loss. DefraDB storage-engine correctness
+  remains external.
 
 A real unresolved Rust/spec mismatch is stated as a model definition whose
 conformance family drives the production owner, not as a hand-written record.
@@ -1534,7 +1446,7 @@ per-document writer has not been migrated; it is not an alternative formal contr
 ### Backend Controller Handoff
 
 `Proofs/Inference/InferenceCall/Registry.lean` refines one backend's admission capacity
-pool (#897, #1366). Metadata-only reconciliation retains the admitting
+pool. Metadata-only reconciliation retains the admitting
 controller; a resource change replaces it in the same step, on the same pool,
 so an available backend always admits (`available_desired_admits_without_gap`).
 Permits held by calls admitted before a rewrite, a removal or an outage keep
@@ -1544,8 +1456,8 @@ capacity (`acquire_admits_within_capacity`, `serve_within_capacity`,
 unavailability fails queued calls and rejects new ones
 (`unavailable_closes_admission`, `removed_backend_cannot_be_resurrected`).
 
-Each caller carries the connection its provider client was built from. By
-the #1725 product decision (snapshot semantics), a connection change such as
+Each caller carries the connection its provider client was built from
+(snapshot semantics): a connection change such as
 key rotation or an endpoint move never rejects in-progress or queued calls:
 they finish on their slot's connection, sharing the pool
 (`available_rewrite_rejects_nothing`), and every admission is attributed to
@@ -1601,10 +1513,10 @@ These proofs do not establish:
 - MCP or external tool availability
 - desktop rendering correctness
 - OS sandbox behavior
-- wall-clock skew / real-time monotonicity (`Time := Nat` is abstract; #558)
+- wall-clock skew / real-time monotonicity (`Time := Nat` is abstract)
 - ID-namespace collision freedom or cross-node identity uniqueness for
-  `RequestId` / `PeerId` / `NodeDid` collapsed to `Nat` (#558;
-  `boundary.model.nat-typed-ids-time`)
+  `RequestId` / `PeerId` / `NodeDid` collapsed to `Nat`
+  (`boundary.model.nat-typed-ids-time`)
 - fair-scheduler or bounded-latency temporal liveness for distributed
   delivery (tier 2/3; see § Liveness taxonomy and `tla/`)
 
@@ -1674,7 +1586,7 @@ remain unchanged. Eight explicit conformance cases accompany the general laws.
 The older claimed-phase convergence theorem assumes publication remains
 authorized; a historical claim alone cannot override a later pause.
 
-### Immutable workspace path capability (#1349)
+### Immutable workspace path capability
 
 `Workspace/PathCapability.lean` refines the existing host executor and receipt
 operations. The existing workspace identity now includes an immutable capability;
@@ -1706,7 +1618,7 @@ Changed component spellings are checked against both full trees, including valid
 ancestor prefixes of opaque filenames. Case/Unicode aliases involving a changed
 path still fail closed.
 
-### Artifact-only command authority (#1358)
+### Artifact-only command authority
 
 `CommandPolicy/ArtifactAuthority.lean` owns the canonical four-mode effect meet:
 ReadOnly is bottom, ArtifactWrite and WorkspaceWrite are incomparable, and
@@ -1738,7 +1650,7 @@ does not prove filesystem canonicalization, symlink/hardlink or race safety,
 Seatbelt implementation, compiler behavior, or isolation from unsandboxed host
 actors. Real host containment and compiler QA remain separate acceptance gates.
 
-### Invalid tool progress (#1298)
+### Invalid tool progress
 
 `CompletionRetry.InvalidToolProgress` models a cumulative allowance of
 invalid-arguments, policy-denied, or unknown-tool outcomes per owned request
@@ -1761,7 +1673,7 @@ configured allowances including one, drive the real owned loop and persistence h
 checked against their composition with `RepeatedToolFailure`; the model is not
 a second lifecycle or permission owner.
 
-### Repeated tool failure (#1734)
+### Repeated tool failure
 
 `CompletionRetry.RepeatedToolFailure` folds the owned loop's dispatch record
 over `InvalidToolProgress.Outcome` and composes with that allowance. After

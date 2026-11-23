@@ -131,7 +131,10 @@ impl Tool for CallToolTool {
             call_timeout =
                 call_timeout.min(super::shared::timeout(selection.stale_timeout_secs, 120)?);
         }
-        let connect_timeout = super::shared::timeout(selection.connect_timeout_secs, 15)?;
+        let connect_timeout = super::shared::timeout(
+            selection.connect_timeout_secs,
+            crate::mcp::pool::MCP_CONNECT_TIMEOUT_SECS,
+        )?;
 
         if let Some(error) = self
             .preflight_arguments(
