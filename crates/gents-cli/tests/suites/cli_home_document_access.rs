@@ -327,11 +327,12 @@ async fn paired_home_reopens_against_the_original_vera_deployment() -> Result<()
         .as_str()
         .context("host publisher Node")?;
     anyhow::ensure!(host_node != publisher_node);
+    let refusal = publish_test_peer(&access, &peer_id, follower_did, host_node)
+        .await
+        .expect_err("publication under another device's Node requires its grant");
     anyhow::ensure!(
-        publish_test_peer(&access, &peer_id, follower_did, host_node)
-            .await
-            .is_err(),
-        "a device published under another device's Node without delegation"
+        format!("{refusal:#}").contains("parent requires 'transport_publisher'"),
+        "unexpected cross-device publication error: {refusal:#}"
     );
     let peer = publish_test_peer(&access, &peer_id, follower_did, publisher_node).await?;
     prompted(follower.path(), "record a session on the paired device")?;
