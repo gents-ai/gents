@@ -92,6 +92,7 @@ mod self_config_permission;
 pub mod session_children;
 mod stored_create;
 mod subscription;
+pub(crate) mod transport_sentinel;
 pub mod transport_publication;
 mod txn;
 pub mod user_write;

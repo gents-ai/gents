@@ -275,6 +275,8 @@ async fn paired_home_reopens_against_the_original_vera_deployment() -> Result<()
         .filter(|id| !id.is_empty())
         .context("registered publisher Node")?;
     paired.extend([
+        "--vera-publisher-node",
+        publisher_node,
         "--key-path",
         key_path.to_str().context("follower key path")?,
     ]);

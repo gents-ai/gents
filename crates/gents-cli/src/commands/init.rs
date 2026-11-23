@@ -366,7 +366,7 @@ pub(crate) async fn init_home_with_core_packs(
                 .with_context(|| format!("reading the Vera anchor at {}", path.display()))?;
             let anchor = serde_json::from_slice(&bytes)
                 .with_context(|| format!("invalid Vera anchor at {}", path.display()))?;
-            VeraConnection::Follower { port, anchor }
+            VeraConnection::Follower { port, anchor, publisher_node: args.vera_publisher_node.clone() }
         } else {
             VeraConnection::Host {
                 port,
@@ -431,6 +431,11 @@ pub(crate) async fn init_home_with_core_packs(
                 &identity::Did::new(client_identity.did())?,
                 document_acp,
                 &connection,
+                if matches!(connection, VeraConnection::Host { .. }) {
+                    Some(gents_store::config_client::ClientSigningCapability::from_ed25519_key(client_identity.private_key_bytes())?)
+                } else {
+                    None
+                },
             )
             .await?;
     }
@@ -534,7 +539,7 @@ pub(crate) async fn init_home_with_core_packs(
         )
         .await?;
         stage("runtime_home_initialized");
-        let transport_group = if args.create_transport_group || matches!(connection, VeraConnection::Host { .. }) {
+        let transport_group = if args.create_transport_group && !matches!(connection, VeraConnection::Host { .. }) {
             let account = identity::Did::new(client_identity.did())?;
             let device = identity::Did::new(initialized_identity.identity.did())?;
             let group = access.create_device_group(&account, &device).await?;
@@ -640,6 +645,7 @@ pub(crate) async fn init_home_with_core_packs(
         if matches!(connection, VeraConnection::Host { .. }) {
             let anchor = gents_store::local::document_acp::VeraDeploymentAnchor::from_host(&init_node, &data_dir)?
                 .context("hosted Vera deployment has no verified genesis")?;
+            output["transport_group"] = json!({"group": anchor.group, "account": anchor.account});
             output["vera_anchor"] = serde_json::to_value(anchor)?;
         }
         if let Some(group) = transport_group {
@@ -3429,6 +3435,7 @@ mod tests {
             document_acp: None,
             vera_rpc_port: None,
             vera_anchor: None,
+            vera_publisher_node: None,
             create_transport_group: false,
             inference_endpoint: None,
             backend_id: None,

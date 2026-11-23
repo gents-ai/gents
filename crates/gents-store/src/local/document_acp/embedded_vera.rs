@@ -181,6 +181,14 @@ impl super::VeraDeploymentAnchor {
         let super::VeraConnection::Host { account, .. } = deployment.connection else {
             return Ok(None);
         };
+        let Some(scope) = deployment.transport else {
+            return Ok(None);
+        };
+        if scope.account != account || scope.host_node != scope.device_node {
+            return Err(super::DocumentAcpError::DeploymentReplaced {
+                path: data.join(super::DEPLOYMENT_RECORD),
+            });
+        }
         let Some(hosted) = node.embedded_vera_trust() else {
             return Ok(None);
         };
@@ -196,6 +204,8 @@ impl super::VeraDeploymentAnchor {
             let genesis_id = audience.genesis_id?;
             (audience.deployment == hosted.chain_id).then(|| Self {
                 account,
+                host_node: scope.host_node,
+                group: scope.group,
                 deployment: hosted.chain_id,
                 consensus_key: hosted.consensus_key.clone(),
                 genesis_id,

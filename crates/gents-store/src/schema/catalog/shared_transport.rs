@@ -5,11 +5,67 @@ use super::{BaselineCollection, SchemaError};
 
 /// The account and object IDs selected during household admission. Installation
 /// verifies these against Vera before accepting an existing collection owner.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct SharedTransportHome {
     pub account: identity::Did,
     pub group: String,
     pub host_node: String,
     pub device_node: String,
+}
+
+impl SharedTransportHome {
+    pub(crate) async fn create_host(
+        node: &std::sync::Arc<Node>,
+        url: String,
+        signer: crate::config_client::ClientSigningCapability,
+        account: &identity::Did,
+    ) -> anyhow::Result<Self> {
+        use crate::config_client::{transport_sentinel, ConfigAccess, GraphqlEndpoint};
+        use crate::local::document_acp::{self, DocumentAcp};
+        use anyhow::Context as _;
+
+        let device =
+            identity::Did::new(node.node_identity_did().context("missing host identity")?)?;
+        let endpoint = GraphqlEndpoint::as_principal(url, account.as_str())
+            .with_client_signing_capability(signer.clone())?
+            .with_local_home_schema(node)?
+            .with_client_signed_agent_creates()
+            .with_reported_delegation_audience(document_acp::status_reports(
+                DocumentAcp::Vera,
+                document_acp::node_delegation_audience(node),
+            ))?;
+        let access = ConfigAccess::Graphql(endpoint);
+        let group = access.create_device_group(account, &device).await?;
+        let host_node = access
+            .set_shared_device_membership(&group, &device, true)
+            .await?;
+        let audience = access
+            .request_bound_audience()
+            .await?
+            .context("host has no verified delegation audience")?;
+        let approval =
+            transport_sentinel::prepare_publisher(&signer, &audience, &host_node, account)?;
+        transport_sentinel::submit_publisher(node, account.as_str(), approval).await?;
+        let ids = HomePolicyIds::embedded_vera_transport_v2();
+        for entry in super::runtime_catalog(ids).baseline {
+            if resource(ids, entry.name).is_some() {
+                let audience = access
+                    .request_bound_audience()
+                    .await?
+                    .context("host has no verified delegation audience")?;
+                let approval =
+                    transport_sentinel::prepare(&signer, &audience, entry.name, &host_node)?;
+                transport_sentinel::submit(node, account.as_str(), approval).await?;
+            }
+        }
+        Ok(Self {
+            account: account.clone(),
+            group,
+            device_node: host_node.clone(),
+            host_node,
+        })
+    }
 }
 
 /// Install only the collections needed to create signed device registrations

@@ -30,6 +30,8 @@ const DEPLOYMENT_RECORD: &str = ".gents-embedded-vera-deployment";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VeraDeploymentAnchor {
+    pub host_node: String,
+    pub group: String,
     pub account: identity::Did,
     pub deployment: u64,
     pub consensus_key: String,
@@ -50,6 +52,7 @@ pub enum VeraConnection {
     Follower {
         port: std::num::NonZeroU16,
         anchor: VeraDeploymentAnchor,
+        publisher_node: Option<String>,
     },
 }
 
@@ -58,7 +61,9 @@ pub enum VeraConnection {
 pub(crate) struct Deployment {
     consensus_key: String,
     #[serde(default)]
-    connection: VeraConnection,
+    pub(super) connection: VeraConnection,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) transport: Option<crate::schema::catalog::SharedTransportHome>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -420,7 +425,7 @@ fn node_dir(data: &Path) -> PathBuf {
     vera_dir(data).join(NODE_DIR_NAME)
 }
 
-fn recorded_deployment(data: &Path) -> Result<Option<Deployment>> {
+pub(super) fn recorded_deployment(data: &Path) -> Result<Option<Deployment>> {
     let path = data.join(DEPLOYMENT_RECORD);
     let bytes = match std::fs::read(&path) {
         Ok(bytes) => bytes,
@@ -510,6 +515,7 @@ fn started(node: &defra_node::Node, connection: &VeraConnection) -> Option<Deplo
         accepts_deployment(follows, hosted.is_some(), matches).then(|| Deployment {
             consensus_key: key.clone(),
             connection: connection.clone(),
+            transport: None,
         })
     }
     #[cfg(not(feature = "vera"))]
@@ -538,8 +544,10 @@ fn ensure_present(data: &Path) -> Result<()> {
 }
 
 fn ensure_recorded(data: &Path, started: Option<&Deployment>) -> Result<()> {
-    if started.is_some() && recorded_deployment(data)?.as_ref() == started {
-        return Ok(());
+    if let (Some(started), Some(record)) = (started, recorded_deployment(data)?) {
+        if record.consensus_key == started.consensus_key && record.connection == started.connection {
+            return Ok(());
+        }
     }
     Err(DocumentAcpError::DeploymentReplaced {
         path: node_dir(data),
@@ -715,7 +723,7 @@ fn apply(
                     &recorded.connection
                 }
             };
-            if let VeraConnection::Follower { anchor, port } = connection {
+            if let VeraConnection::Follower { anchor, port, .. } = connection {
                 return anchor.configure_follower(builder, *port, data, key, node);
             }
             if !matches!(open, Open::Fresh(_)) {

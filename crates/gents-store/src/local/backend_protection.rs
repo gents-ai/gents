@@ -76,6 +76,8 @@ pub enum BackendProtectionError {
     WrongTransportAccount,
     #[error("the shared Vera operator must be the home’s account")]
     WrongVeraAccount,
+    #[error("admitted device requires the publisher Node returned by admit-device")]
+    MissingPublisherNode,
     #[error("the store could not be checked on a copy; the original was not opened")]
     CopyCheck(#[source] Box<super::store_compat::StoreCompatibilityError>),
     #[error("backend protection storage operation failed")]
@@ -155,16 +157,36 @@ pub async fn build_configured(
     data: &Path,
     document_acp: DocumentAcp,
 ) -> Result<Arc<defra_node::Node>> {
-    let ids = document_acp::recorded_policy_ids(data)?;
+    let record = document_acp::recorded_deployment(data)?;
+    let ids =
+        document_acp::policy_ids_for_connection(record.as_ref().map(|record| &record.connection));
+    let mut extensions =
+        crate::node_extension::Extensions::of(Arc::new(document_acp::BoundPolicyIds(ids)));
+    if let Some(record) = record {
+        use document_acp::VeraConnection;
+        match (record.connection, record.transport) {
+            (VeraConnection::Solo, None) => {}
+            (VeraConnection::Host { account, .. }, Some(scope))
+                if scope.account == account && scope.host_node == scope.device_node =>
+            {
+                extensions.attach(Arc::new(scope))?;
+            }
+            (VeraConnection::Follower { anchor, .. }, Some(scope))
+                if scope.account == anchor.account
+                    && scope.host_node == anchor.host_node
+                    && scope.group == anchor.group =>
+            {
+                extensions.attach(Arc::new(scope))?;
+            }
+            _ => return Err(BackendProtectionError::InvalidProvenance),
+        }
+    }
     let node = Arc::new(start(builder).await?);
     if let Err(refused) = document_acp::check_started(&node, data, document_acp) {
         let _ = node.shutdown().await;
         return Err(refused.into());
     }
-    crate::node_extension::attach_all(
-        &node,
-        &crate::node_extension::Extensions::of(Arc::new(document_acp::BoundPolicyIds(ids))),
-    )?;
+    crate::node_extension::attach_all(&node, &extensions)?;
     Ok(node)
 }
 
@@ -245,6 +267,7 @@ impl<'a> FreshBackendStore<'a> {
             nac_owner,
             document_acp,
             &document_acp::VeraConnection::Solo,
+            None,
         )
         .await
     }
@@ -256,6 +279,7 @@ impl<'a> FreshBackendStore<'a> {
         nac_owner: &identity::Did,
         document_acp: DocumentAcp,
         connection: &document_acp::VeraConnection,
+        account_key: Option<crate::config_client::ClientSigningCapability>,
     ) -> Result<()> {
         let did = node_did(node)?;
         if nac_owner.as_str() == did {
@@ -281,6 +305,23 @@ impl<'a> FreshBackendStore<'a> {
             node,
             connection,
         )?;
+        let (builder, host_setup) =
+            if let document_acp::VeraConnection::Host { account, .. } = connection {
+                let signer = account_key
+                    .filter(|key| key.did() == account.as_str())
+                    .ok_or(BackendProtectionError::WrongVeraAccount)?;
+                let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+                let url = format!("http://{}/api/v0/graphql", listener.local_addr()?);
+                let route = crate::config_client::OwnerStagedRoute::new();
+                let http = defra_node::HttpConfig::with_listener(listener)?
+                    .with_extra_routes(route.router());
+                (
+                    builder.with_http(http),
+                    Some((url, signer, route, node.clone())),
+                )
+            } else {
+                (builder, None)
+            };
         let node = Arc::new(start(builder).await?);
         let result: Result<_> = async {
             let ids = document_acp::policy_ids_for_connection(
@@ -290,7 +331,7 @@ impl<'a> FreshBackendStore<'a> {
                 &node,
                 &crate::node_extension::Extensions::of(Arc::new(document_acp::BoundPolicyIds(ids))),
             )?;
-            let deployment = document_acp::created(&node, document_acp, connection)?;
+            let mut deployment = document_acp::created(&node, document_acp, connection)?;
             grant_node_runtime(&node, nac_owner, &did).await?;
             if let document_acp::VeraConnection::Follower { anchor, .. } = connection {
                 require_device_group(&node, &did, &anchor.account).await?;
@@ -299,6 +340,44 @@ impl<'a> FreshBackendStore<'a> {
                 crate::schema::catalog::ensure_admission_schema(&node)
                     .await
                     .map_err(|error| BackendProtectionError::Schema(error.into()))?;
+                let scope = match (connection, host_setup) {
+                    (
+                        document_acp::VeraConnection::Host { account, .. },
+                        Some((url, signer, route, runtime)),
+                    ) => {
+                        route.serve(&node, runtime);
+                        crate::schema::catalog::SharedTransportHome::create_host(
+                            &node, url, signer, account,
+                        )
+                        .await
+                        .map_err(BackendProtectionError::Schema)?
+                    }
+                    (
+                        document_acp::VeraConnection::Follower {
+                            anchor,
+                            publisher_node,
+                            ..
+                        },
+                        None,
+                    ) => crate::schema::catalog::SharedTransportHome {
+                        account: anchor.account.clone(),
+                        group: anchor.group.clone(),
+                        host_node: anchor.host_node.clone(),
+                        device_node: publisher_node
+                            .clone()
+                            .filter(|id| !id.is_empty())
+                            .ok_or(BackendProtectionError::MissingPublisherNode)?,
+                    },
+                    _ => return Err(BackendProtectionError::InvalidProvenance),
+                };
+                deployment
+                    .as_mut()
+                    .ok_or(BackendProtectionError::InvalidProvenance)?
+                    .transport = Some(scope.clone());
+                crate::node_extension::attach_all(
+                    &node,
+                    &crate::node_extension::Extensions::of(Arc::new(scope)),
+                )?;
             }
             crate::schema::ensure_runtime_schemas(&node)
                 .await

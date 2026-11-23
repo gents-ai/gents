@@ -34,6 +34,7 @@ fn deployment(consensus_key: &str) -> Deployment {
     Deployment {
         consensus_key: consensus_key.into(),
         connection: Default::default(),
+        transport: None,
     }
 }
 

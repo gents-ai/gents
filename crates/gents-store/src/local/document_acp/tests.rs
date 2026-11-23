@@ -74,6 +74,7 @@ fn admission_matches_the_lean_model() {
                     &Deployment {
                         consensus_key: "recorded".into(),
                         connection: Default::default(),
+                        transport: None,
                     },
                 )
                 .unwrap();
