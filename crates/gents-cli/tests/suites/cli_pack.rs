@@ -1505,6 +1505,7 @@ fn uninstalled_reviewed_job_pack(authored: bool) -> Result<WireFixture> {
         "tools": [{
             "tools_id": "job-fixture-caller",
             "display_name": "Job fixture caller",
+            "agents": {"target_ids": ["wf-fixture"]},
             "integrations": {"plugins": [{"plugin": "fixture/job_fixture",
                 "job": {"agent_targets": ["wf-fixture"], "policy": {"dynamic": "check"}}}]},
         }],
