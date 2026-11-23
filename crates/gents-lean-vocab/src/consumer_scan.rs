@@ -278,7 +278,6 @@ mod tests {
     /// stops emitting it, and a new family arrives with its consumer.
     const OPEN: &[&str] = &[
         "apply_reconcile_contract_cases_publish_cases",
-        "contracts_atomic_admission_unreached",
         "contracts_pack_installation_hosted_plugin_unreached",
         "contracts_runtime_reconcile_unreached",
         "contracts_self_config_job_guard_unreached",

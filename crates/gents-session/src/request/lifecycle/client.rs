@@ -369,17 +369,13 @@ pub async fn stage_admitted_request_in_txn(
     Ok(doc_id)
 }
 
-pub async fn ensure_request_session_in_txn(
-    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+/// A request may join an existing session only with its requester and Agent;
+/// a new session's requester is its creator.
+fn check_request_session_scope(
+    existing: Option<&gents_protocol::session::SessionOwnerRow>,
     create: &AgentRequestCreate,
     actor: &str,
-) -> anyhow::Result<(String, String, bool)> {
-    let existing = gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
-        txn,
-        &create.node_did,
-        &create.session_id,
-    )
-    .await?;
+) -> anyhow::Result<()> {
     if let Some(existing) = existing {
         anyhow::ensure!(
             existing.session.requester_did.as_deref() == Some(create.requester_did.as_str()),
@@ -395,19 +391,37 @@ pub async fn ensure_request_session_in_txn(
             "new client session requester differs from its creator"
         );
     }
-    let created = crate::session::ensure_reserved_session_in_txn(
+    Ok(())
+}
+
+/// The session a request creates when its scope has none, every field taken
+/// from the signed request so its first block is fixed before signing.
+fn new_request_session(create: &AgentRequestCreate) -> crate::session::NewAgentSession<'_> {
+    crate::session::NewAgentSession {
+        session_id: &create.session_id,
+        node_did: &create.node_did,
+        agent_did: &create.agent_did,
+        requester_did: Some(&create.requester_did),
+        title: create.input.initial_title.clone(),
+        provenance: None,
+        created_at: &create.created_at,
+    }
+}
+
+pub async fn ensure_request_session_in_txn(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    create: &AgentRequestCreate,
+    actor: &str,
+) -> anyhow::Result<(String, String, bool)> {
+    let existing = gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
         txn,
-        crate::session::NewAgentSession {
-            session_id: &create.session_id,
-            node_did: &create.node_did,
-            agent_did: &create.agent_did,
-            requester_did: Some(&create.requester_did),
-            title: create.input.initial_title.clone(),
-            provenance: None,
-            created_at: &create.created_at,
-        },
+        &create.node_did,
+        &create.session_id,
     )
     .await?;
+    check_request_session_scope(existing.as_ref(), create, actor)?;
+    let created =
+        crate::session::ensure_reserved_session_in_txn(txn, new_request_session(create)).await?;
     let session = gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
         txn,
         &create.node_did,
@@ -447,6 +461,9 @@ pub async fn reserve_goal_session(
     Ok(session)
 }
 
+/// Commit the session and its relationships in a transaction of their own
+/// (Lean `AgentSession.reserveSession`); the next submission with the same
+/// scope and Agent reuses it.
 pub async fn reserve_client_targets(
     access: &ConfigAccess,
     create: &AgentRequestCreate,
@@ -482,11 +499,88 @@ pub async fn reserve_client_targets(
     Ok((session, agent))
 }
 
-/// Reserve the physical session and selected Agent before signing client work.
+/// The physical targets a client signs before its one admission transaction
+/// (Lean `AgentSession.admitRequest`): an existing session's document, or the
+/// id DefraDB derives from the new session's signed first block, and the
+/// selected Agent's document. Nothing is created here; an existing session
+/// whose creator has not yet published its relationships has them completed
+/// by that creator.
+async fn prepare_client_targets(
+    access: &ConfigAccess,
+    create: &AgentRequestCreate,
+) -> Result<(String, String), ClientSubmissionError> {
+    let actor = request_actor(access, create).map_err(ClientSubmissionError::Rejected)?;
+    let (existing, agent) = access
+        .transact_readonly("request.client.prepare_targets", |txn| {
+            Box::pin(async move {
+                let existing =
+                    gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
+                        txn,
+                        &create.node_did,
+                        &create.session_id,
+                    )
+                    .await?;
+                let (agent, _) = gents_documents::read_desired_state_record_in_txn(
+                    txn,
+                    gents_store::collection::Collection::Agent,
+                    &create.node_did,
+                    &create.agent_did,
+                )
+                .await?
+                .context("selected agent is unavailable")?;
+                Ok::<_, anyhow::Error>((existing, agent))
+            })
+        })
+        .await
+        .map_err(ClientSubmissionError::Rejected)?;
+    check_request_session_scope(existing.as_ref(), create, &actor)
+        .map_err(ClientSubmissionError::Rejected)?;
+    let Some(existing) = existing else {
+        let session = access
+            .client_signed_create_doc_id(
+                &new_request_session(create).create_input(false),
+                gents_protocol::schemas::AGENT_SESSION,
+            )
+            .await
+            .map_err(|error| ClientSubmissionError::Rejected(error.into()))?;
+        return Ok((session, agent));
+    };
+    crate::session::grant_created_session_relationships(
+        access,
+        &existing.doc_id,
+        &agent,
+        &create.agent_did,
+    )
+    .await
+    .map_err(ClientSubmissionError::Unconfirmed)?;
+    Ok((existing.doc_id, agent))
+}
+
+/// Bind the physical session and selected Agent, then sign the client work;
+/// [`submit_client_request`] creates a new session with the request.
 pub async fn build_signed_client_request(
     access: &ConfigAccess,
     spec: super::RequestSpec,
     signer: super::RequestSigner<'_>,
+) -> anyhow::Result<AgentRequestCreate> {
+    build_signed_client_request_with(access, spec, signer, false).await
+}
+
+/// Reserve the physical session and selected Agent, then sign the client work
+/// against them: a Goal start's command is signed against a committed session.
+pub async fn build_signed_reserved_client_request(
+    access: &ConfigAccess,
+    spec: super::RequestSpec,
+    signer: super::RequestSigner<'_>,
+) -> anyhow::Result<AgentRequestCreate> {
+    build_signed_client_request_with(access, spec, signer, true).await
+}
+
+async fn build_signed_client_request_with(
+    access: &ConfigAccess,
+    spec: super::RequestSpec,
+    signer: super::RequestSigner<'_>,
+    reserve: bool,
 ) -> anyhow::Result<AgentRequestCreate> {
     let mut create = super::materialize::build_request(spec)?;
     let actor = request_actor(access, &create)?;
@@ -494,7 +588,13 @@ pub async fn build_signed_client_request(
         publication_admission_allowed(&create, &actor),
         "request publication admission is not allowed"
     );
-    let (session, agent) = reserve_client_targets(access, &create).await?;
+    // Only a held client key derives a new session's document id before it is
+    // stored; an access signing in the runtime reserves the session first.
+    let (session, agent) = if reserve || access.client_held_signer_did().is_none() {
+        reserve_client_targets(access, &create).await?
+    } else {
+        prepare_client_targets(access, &create).await?
+    };
     create.session_doc_id = Some(session);
     create.agent_doc_id = Some(agent);
     super::materialize::sign_request(&mut create, signer).await?;
@@ -566,9 +666,27 @@ async fn bind_existing_targets_in_txn(
     Ok(())
 }
 
-/// Publishes a signed request against its previously reserved physical targets.
-/// Existing session provenance is immutable; its requester is not the acting
-/// client's identity. Native ACP authorizes the transaction's explicit actor.
+/// Ensure the signed request's session, then create the request in it, both
+/// in `txn`; the session must be the one the request signed.
+pub async fn admit_client_request_in_txn(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    create: &AgentRequestCreate,
+    actor: &str,
+) -> anyhow::Result<String> {
+    let (session, agent, _created) = ensure_request_session_in_txn(txn, create, actor).await?;
+    anyhow::ensure!(
+        create.session_doc_id.as_deref() == Some(session.as_str())
+            && create.agent_doc_id.as_deref() == Some(agent.as_str()),
+        "client request physical targets changed before publication"
+    );
+    stage_client_request_in_txn(txn, create, &session, &agent).await
+}
+
+/// Admits a signed request in one transaction: the session when its scope has
+/// none, its relationships and the request commit together, or none of them do
+/// (Lean `AgentSession.admitRequest`). Existing session provenance is
+/// immutable; its requester is not the acting client's identity. Native ACP
+/// authorizes the transaction's explicit actor.
 pub async fn submit_client_request(
     access: &ConfigAccess,
     create: &AgentRequestCreate,
@@ -587,14 +705,7 @@ pub async fn submit_client_request(
         .transact_signed_conflict_rebuild_with_finality("request.client.submit", |txn| {
             let actor = &actor;
             Box::pin(async move {
-                let (session, agent, _created) =
-                    ensure_request_session_in_txn(txn, create, actor).await?;
-                anyhow::ensure!(
-                    create.session_doc_id.as_deref() == Some(session.as_str())
-                        && create.agent_doc_id.as_deref() == Some(agent.as_str()),
-                    "client request physical targets changed before publication"
-                );
-                stage_client_request_in_txn(txn, create, &session, &agent).await?;
+                admit_client_request_in_txn(txn, create, actor).await?;
                 Ok::<_, anyhow::Error>(())
             })
         })
@@ -1488,6 +1599,8 @@ mod tests {
 
     use crate::test_support::assert_block_signer;
 
+    #[path = "admission_tests.rs"]
+    mod admission_tests;
     #[path = "claim_tests.rs"]
     mod claim_tests;
     #[path = "mailbox_claim_tests.rs"]

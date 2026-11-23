@@ -58,16 +58,35 @@ def admissionExisting : AgentSession.AdmissionState :=
   { session := some session, sessionOwner := some 2, sessionDoc := some 8,
     sessionParent := some 30, sessionWorker := some 3, receipt := some starterReceipt }
 
+/-- A Client's new session carries the request's scope, Agent and creation time
+and nothing else: no provenance, receipt, title or tags. -/
+def clientRequested : Document := { scope := scope, agent := 3, createdAt := 1 }
+
+def clientInput : AdmissionInput :=
+  { requested := clientRequested, actor := 2, sessionDoc := 8, agentDoc := 30,
+    requestDoc := 9, receipt := none, authorized := true, commit := true }
+
+def clientExisting : AgentSession.AdmissionState := admitRequest {} clientInput
+
+def clientIncomplete : AgentSession.AdmissionState :=
+  { session := some clientRequested, sessionOwner := some 2, sessionDoc := some 8 }
+
+def nextClientInput : AdmissionInput := { clientInput with requestDoc := 12 }
+
 def admissionCases : List (String × AgentSession.AdmissionState × AdmissionInput) :=
-  [ ("client_creation", {}, admissionInput)
+  [ ("client_creation", {}, clientInput)
   , ("agent_unattended_creation", {}, { admissionInput with actor := 3, requested := unattendedRequested })
-  , ("nested_other_agent_creation", {}, { admissionInput with actor := 7 })
-  , ("grant_denied_rolls_back", {}, { admissionInput with authorized := false })
-  , ("commit_failure_rolls_back", {}, { admissionInput with commit := false })
-  , ("reuse_preserves_title_and_receipt", admissionExisting, admissionInput)
-  , ("changed_agent_rejected", admissionExisting,
-      { admissionInput with requested := { admissionRequested with agent := 99 } })
-  , ("incomplete_session_rejected", { admissionExisting with sessionDoc := none }, admissionInput) ]
+  , ("grant_denied_rolls_back", {}, { clientInput with authorized := false })
+  , ("commit_failure_rolls_back", {}, { clientInput with commit := false })
+  , ("reuse_preserves_session", clientExisting, nextClientInput)
+  , ("changed_agent_rejected", clientExisting,
+      { nextClientInput with requested := { clientRequested with agent := 99 } })
+  , ("incomplete_session_rejected", clientIncomplete, clientInput)
+  , ("reserved_grant_denied_leaves_reservation", {},
+      { clientInput with reserved := true, authorized := false })
+  , ("reserved_commit_failure_leaves_reservation", {},
+      { clientInput with reserved := true, commit := false })
+  , ("reserved_session_is_reused", {}, { clientInput with reserved := true }) ]
 
 example : (admitRequest {} admissionInput).requestParent = some 8 := by decide
 example : (admitRequest {} admissionInput).requestWorker = some 3 := by decide
@@ -75,6 +94,14 @@ example : (admitRequest {} { admissionInput with actor := 3 }).sessionOwner = so
 example : (admitRequest {} { admissionInput with actor := 3 }).requestWorker = none := by decide
 example : (admitRequest admissionExisting admissionInput).session = some session := by decide
 example : (admitRequest admissionExisting admissionInput).receipt = some starterReceipt := by decide
+/-- An Agent creating a session for another Agent owns it and grants that Agent
+`working_agent` on the session and the request. -/
+example : (admitRequest {} { admissionInput with actor := 7 }).sessionOwner = some 7 ∧
+    (admitRequest {} { admissionInput with actor := 7 }).sessionWorker = some 3 ∧
+    (admitRequest {} { admissionInput with actor := 7 }).requestWorker = some 3 := by decide
+example : admitRequest { admissionExisting with sessionDoc := none } admissionInput =
+    { admissionExisting with sessionDoc := none } := by decide
+example : admitRequest {} { clientInput with reserved := true } = clientExisting := by decide
 
 def request (id time : Nat) : RequestFact :=
   { purpose := .normal, scope, agent:= 3, createdAt := time, observed := ⟨id + 100, id, .failed⟩ }

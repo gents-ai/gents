@@ -788,7 +788,7 @@ async fn create_session_with_agent_did_rejects_mismatched_existing_binding() {
     )
     .await;
     assert_ne!(binding.agent_did, other.agent_did);
-    crate::request::lifecycle::build_signed_client_request(
+    crate::request::lifecycle::build_signed_reserved_client_request(
         &access,
         crate::request::lifecycle::RequestSpec::new(
             gents_protocol::request_admission::RequestPurpose::Normal,
@@ -1935,7 +1935,7 @@ async fn reserve_signed_session(
     binding: &gents_protocol::agent_identity::AgentIdentityBinding,
     session_id: &str,
 ) {
-    crate::request::lifecycle::build_signed_client_request(
+    crate::request::lifecycle::build_signed_reserved_client_request(
         client,
         crate::request::lifecycle::RequestSpec::new(
             gents_protocol::request_admission::RequestPurpose::Normal,

@@ -713,7 +713,8 @@ async fn reserve_goal_session(
 ) -> String {
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
     use gents_session::request::lifecycle::{
-        build_signed_client_request, ExecutionOrigin, RequestIdentity, RequestSigner, RequestSpec,
+        build_signed_reserved_client_request, ExecutionOrigin, RequestIdentity, RequestSigner,
+        RequestSpec,
     };
 
     let access = db.client_access(user);
@@ -731,7 +732,7 @@ async fn reserve_goal_session(
         },
         AgentRequestAdmissionRecord::client(user.did()),
     );
-    build_signed_client_request(&access, spec, RequestSigner::Identity(user))
+    build_signed_reserved_client_request(&access, spec, RequestSigner::Identity(user))
         .await
         .expect("reserve user-owned goal session")
         .session_doc_id

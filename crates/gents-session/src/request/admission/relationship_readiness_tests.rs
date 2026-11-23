@@ -295,7 +295,7 @@ async fn exercise_readiness(same_agent: bool, cases: Vec<ReadinessCase>) {
     } else {
         db.client_access(&user)
     };
-    let create = build_signed_client_request(
+    let create = crate::request::lifecycle::build_signed_reserved_client_request(
         &author_access,
         RequestSpec::new(
             RequestPurpose::Normal,
