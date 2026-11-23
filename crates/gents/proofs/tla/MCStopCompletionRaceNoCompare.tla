@@ -1,0 +1,4 @@
+---- MODULE MCStopCompletionRaceNoCompare ----
+EXTENDS StopCompletionRace
+
+====

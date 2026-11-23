@@ -160,6 +160,7 @@ impl ToolCallLifecycle {
                 },
                 result,
                 presentation,
+                false,
                 "tool_call.complete_delivery",
             )
             .await?
@@ -233,17 +234,19 @@ impl ToolCallLifecycle {
         failure: super::FailureClass,
         presentation: Option<gents_protocol::output::PayloadPresentation>,
     ) -> Result<bool> {
-        self.fail_owned_inner(result, failure, presentation, None)
+        self.fail_owned_inner(result, failure, presentation, None, false)
             .await
     }
 
+    /// A failure by a writer that does not own the execution, which adopts a
+    /// terminal the owner committed first.
     pub(crate) async fn fail_owned_with_completion_reason(
         &mut self,
         result: &str,
         failure: super::FailureClass,
         completion_reason: &str,
     ) -> Result<bool> {
-        self.fail_owned_inner(result, failure, None, Some(completion_reason))
+        self.fail_owned_inner(result, failure, None, Some(completion_reason), true)
             .await
     }
 
@@ -253,6 +256,7 @@ impl ToolCallLifecycle {
         failure: super::FailureClass,
         presentation: Option<gents_protocol::output::PayloadPresentation>,
         completion_reason: Option<&str>,
+        adopt_competing_terminal: bool,
     ) -> Result<bool> {
         self.ensure_state(&[ToolCallState::Running], "fail")?;
 
@@ -267,6 +271,7 @@ impl ToolCallLifecycle {
                 },
                 result,
                 presentation,
+                adopt_competing_terminal,
                 "tool_call.fail_delivery",
             )
             .await?
