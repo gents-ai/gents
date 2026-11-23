@@ -90,7 +90,6 @@ def openFamilies : List String :=
   , "contracts_session_refresh_unreached"
   , "contracts_title_admission_fresh_verifier_unreached"
   , "eval_records_published_unreached"
-  , "event_delivery_group_capture_unreached"
   , "fold_queue_contracts_management_unreached"
   , "household_tool_grant_rebinding_unreached"
   , "household_unattended_receipt_unreached"

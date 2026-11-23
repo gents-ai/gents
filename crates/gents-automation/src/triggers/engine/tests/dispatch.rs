@@ -189,6 +189,79 @@ async fn goal_fire_retry_recovers_after_goal_declaration_is_removed() {
     );
 }
 
+/// Per-group dispatch of one complete group, with or without a request
+/// already materialized for its durable fire key.
+#[tokio::test]
+async fn per_group_dispatch_marks_each_group_once() {
+    gents_lean_vocab::snapshot().await;
+    for case in gents_lean_vocab::families::event_delivery_group_marker::cases() {
+        let task = spy_resolved_task("group {{ group.correlation_value }}");
+        let agent = spy_test_agent();
+        let node_did = agent.node_did().to_string();
+        let trigger = ResolvedEventTrigger {
+            fire_mode: gents_documents::automation::EventTriggerFireMode::PerGroup,
+            correlation_field: Some("run_id".to_string()),
+            expected_count: Some(2),
+            ..resolved_event_trigger_with_concurrency(
+                "group-trigger",
+                task.clone(),
+                ConcurrencyMode::Parallel,
+            )
+        };
+        let snapshot = Arc::new(
+            ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
+                agent.agent_did.clone(),
+                vec![with_default_tools(agent.clone())],
+                RapidHashMap::new(),
+                RapidHashMap::new(),
+                RapidHashMap::new(),
+            )
+            .with_automation(gents_documents::automation::ResolvedAutomation {
+                event_triggers: RapidHashMap::from_iter([("group-trigger".to_string(), trigger)]),
+                ..Default::default()
+            })
+            .with_node(agent.node.clone())
+            .with_local_did(agent.node_did().to_string())
+            .activate(1, RapidHashMap::new()),
+        );
+        let (_tx, rx) = watch::channel(snapshot);
+        let materializer = SpyMaterializer::new();
+        materializer.persist_materialized_group_markers(&node_did);
+        let durable_fire_key =
+            gents_protocol::trigger_delivery::durable_fire_key("event-group", &["run-1"]);
+        if case.input.prior_materialized {
+            materializer.mark_group_materialized(&node_did, "group-trigger", &durable_fire_key);
+        }
+        let engine = TriggerEngine::new(rx, materializer.clone());
+        let result = engine
+            .dispatch(FireIntent {
+                trigger_id: Some("group-trigger".to_string()),
+                trigger_kind: TriggerKind::Event,
+                task: task.clone(),
+                concurrency: ConcurrencyMode::Parallel,
+                event_vars: serde_json::json!({"source_doc_id": "result-1"}),
+                doc_vars: Some(serde_json::json!({"_docID": "result-1"})),
+                correlation: Some("run-1".to_string()),
+                group_vars: Some(serde_json::json!({
+                    "state_doc_id": "physical-group-run-1",
+                    "correlation_value": "run-1",
+                    "count": 2,
+                })),
+                trigger_context: None,
+                args_vars: None,
+                durable_fire_key,
+                pre_materialized_request_id: None,
+                event_source_generation: None,
+                on_result: Box::new(|_| {}),
+            })
+            .await;
+        case.check(gents_lean_vocab::families::event_delivery_group_marker::MarkerOutput {
+            materialized: matches!(result, FireResult::Fired { .. }),
+            marker_count_after: materializer.group_markers.lock().unwrap().len() as u64,
+        });
+    }
+}
+
 #[tokio::test]
 async fn dispatch_parallel_group_materializes_once_for_the_same_correlation() {
     let task = spy_resolved_task("group {{ group.correlation_value }}");

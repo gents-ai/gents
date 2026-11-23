@@ -96,39 +96,6 @@ def scenarios : List GroupScenario :=
     }
   ]
 
-def jsonOptionNat : Option Nat → String
-  | none => "null"
-  | some value => toString value
-
-def consumerJson : EventConsumer → String
-  | .trigger id => "{\"kind\":\"trigger\",\"trigger_id\":" ++ jsonString id ++ "}"
-  | .callbackBinding id =>
-      "{\"kind\":\"callback_binding\",\"binding_id\":" ++ jsonString id ++ "}"
-
-def keyJson (value : EventGroupKey) : String :=
-  "{"
-    ++ "\"node_did\":" ++ jsonString value.nodeDid ++ ","
-    ++ "\"consumer\":" ++ consumerJson value.consumer ++ ","
-    ++ "\"consumer_config_key\":" ++ jsonString value.consumerConfigKey ++ ","
-    ++ "\"correlation\":" ++ jsonString value.correlation
-    ++ "}"
-
-def scenarioJson (scenario : GroupScenario) : String :=
-  let after := reconcile scenario.before scenario.candidate
-  "{"
-    ++ "\"name\":" ++ jsonString scenario.name ++ ","
-    ++ "\"candidate\":" ++ keyJson scenario.candidate.key ++ ","
-    ++ "\"actual_count\":" ++ toString scenario.candidate.actualCount ++ ","
-    ++ "\"expected_count\":" ++ jsonOptionNat scenario.candidate.expectedCount ++ ","
-    ++ "\"minimum_count\":" ++ toString scenario.candidate.minimumCount ++ ","
-    ++ "\"timed_out\":" ++ toString scenario.candidate.timedOut ++ ","
-    ++ "\"well_formed\":" ++ toString scenario.candidate.wellFormed ++ ","
-    ++ "\"prior_markers\":" ++ jsonArray (scenario.before.materialized.map keyJson) ++ ","
-    ++ "\"eligible\":" ++ toString scenario.candidate.eligible ++ ","
-    ++ "\"materialized\":" ++ toString (after.has scenario.candidate.key) ++ ","
-    ++ "\"marker_count_after\":" ++ toString after.materialized.length
-    ++ "}"
-
 structure ConsumerWire where
   kind : String
   triggerId : Option String

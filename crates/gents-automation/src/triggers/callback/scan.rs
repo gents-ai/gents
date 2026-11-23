@@ -1024,6 +1024,97 @@ mod grouped_tests {
     use super::*;
     use serde_json::json;
 
+    /// Each case seeds a grouped callback binding whose source holds the case's
+    /// members, quiesces the group first when the case says so, and runs the
+    /// scan's `materialize_group`.
+    #[tokio::test]
+    async fn group_capture_follows_the_model() {
+        gents_lean_vocab::snapshot().await;
+        for case in gents_lean_vocab::families::event_delivery_group_capture::cases() {
+            let input = &case.input;
+            let db = crate::triggers::callback::test_node_builder("callback-group-capture").await;
+            let node = db.node.clone();
+            let owner = db.node_identity.did();
+            crate::triggers::callback::seed_test_agent(&node, owner).await;
+            node.add_collection("type CallbackMember { batch:String value:String }")
+                .await
+                .unwrap();
+            for index in 0..input.actual_count {
+                let response = node
+                    .execute(&format!(
+                        "mutation{{create_CallbackMember(input:{{batch:\"batch\",value:\"{index}\"}}){{_docID}}}}"
+                    ))
+                    .await;
+                assert!(!response.has_errors(), "{:?}", response.errors);
+            }
+            let binding: CallbackBindingDoc = serde_json::from_value(json!({"node_did":owner,"binding_id":"binding","agent_did":gents_store::test_support::fixture_agent_did(gents_store::test_support::FIXTURE_AGENT_NONCE),"event_source_id":"source","callback_id":"callback","input_fields":["value"]})).unwrap();
+            let source: gents_documents::EventSource = serde_json::from_value(json!({"node_did":owner,"event_source_id":"source","source_collection":"CallbackMember","correlation_field":"batch","group":{"expected_count":input.expected_count}})).unwrap();
+            crate::triggers::callback::seed_test_configuration(
+                &node,
+                owner,
+                vec![
+                    (
+                        gents_store::collection::Collection::Callback,
+                        json!({"callback_id":"callback","enabled":true,
+                    "handler":{"kind":"built_in","emitter":"create_workspace"}}),
+                    ),
+                    (
+                        gents_store::collection::Collection::EventSource,
+                        serde_json::to_value(&source).unwrap(),
+                    ),
+                    (
+                        gents_store::collection::Collection::CallbackBinding,
+                        serde_json::to_value(&binding).unwrap(),
+                    ),
+                ],
+            )
+            .await;
+            let mut engine = CallbackEngine::new(
+                node.clone(),
+                owner.into(),
+                None,
+                tokio_util::sync::CancellationToken::new(),
+            );
+            engine.snapshots = Some(crate::triggers::callback::test_snapshot());
+            let delivery = Delivery::Callback {
+                binding: &binding,
+                source: &source,
+            };
+            if input.quiesced {
+                let access = engine.access_for_agent(&binding.agent_did).unwrap();
+                let record = crate::triggers::engine::event_delivery::load_or_create_group(
+                    &access, delivery, "batch",
+                )
+                .await
+                .unwrap();
+                crate::triggers::engine::event_delivery::quiesce_group(&access, &record, "fixture")
+                    .await
+                    .unwrap();
+            }
+            engine
+                .materialize_group(&binding, &source, "batch", None)
+                .await
+                .unwrap();
+            let response = node
+                .execute("{CallbackInvocation {owner_node_did origin}}")
+                .await;
+            let rows = gents_store::graphql::rows::<Value>(&response, "CallbackInvocation").unwrap();
+            assert!(rows.len() <= 1, "{}: one invocation per group", input.name);
+            let invocation = rows.first();
+            case.check(
+                gents_lean_vocab::families::event_delivery_group_capture::CaptureOutput {
+                    captured: invocation.is_some(),
+                    owned_by_group_node: invocation
+                        .is_some_and(|row| row["owner_node_did"] == owner),
+                    origin_is_group: invocation.is_some_and(|row| {
+                        row["origin"]["group_key"] == delivery.group_key("batch").as_str()
+                    }),
+                },
+            );
+            node.shutdown().await.expect("node shutdown");
+        }
+    }
+
     #[tokio::test]
     async fn group_invocation_freezes_projected_array_once_and_surfaces_planner_error() {
         let db = crate::triggers::callback::test_node_builder("callback-grouped").await;
