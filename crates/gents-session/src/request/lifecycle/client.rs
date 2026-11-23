@@ -2148,12 +2148,23 @@ mod tests {
             let name = input.name.clone();
             let parent_doc = publish_pending(name.clone(), input.matching_signature).await;
             if !input.initial_pending {
-                reconcile_client_retry(&access, runtime.did(), "retry-session", user.did(), &parent_doc)
-                    .await
-                    .unwrap();
+                reconcile_client_retry(
+                    &access,
+                    runtime.did(),
+                    "retry-session",
+                    user.did(),
+                    &parent_doc,
+                )
+                .await
+                .unwrap();
                 let (doc, _) = observe(name.clone()).await;
                 access
-                    .delete_actor_relationship("AgentRequest", &doc, "working_agent", &working_agent)
+                    .delete_actor_relationship(
+                        "AgentRequest",
+                        &doc,
+                        "working_agent",
+                        &working_agent,
+                    )
                     .await
                     .unwrap();
             }
@@ -2186,7 +2197,10 @@ mod tests {
                     input.same_signer.then_some(name.as_str())
                 );
             } else {
-                assert!(recovered.is_err(), "{name} recovers a request whose signature differs");
+                assert!(
+                    recovered.is_err(),
+                    "{name} recovers a request whose signature differs"
+                );
             }
             case.check(observe(name).await.1);
         }

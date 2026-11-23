@@ -171,7 +171,10 @@ async fn claim_local_self_request(
         .verify_fresh_for_claim(&AgentRequest::try_from(row).unwrap(), agent_did)
         .await
         .unwrap();
-    assert!(admission.is_none(), "a local-self claim has no client admission");
+    assert!(
+        admission.is_none(),
+        "a local-self claim has no client admission"
+    );
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
         request,
