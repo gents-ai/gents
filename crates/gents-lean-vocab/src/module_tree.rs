@@ -188,7 +188,13 @@ impl ModuleTree {
         }
     }
 
-    fn visit_items(&mut self, file: &Path, path_base: &Path, directory: &Path, items: &[syn::Item]) {
+    fn visit_items(
+        &mut self,
+        file: &Path,
+        path_base: &Path,
+        directory: &Path,
+        items: &[syn::Item],
+    ) {
         for item in items {
             let syn::Item::Mod(module) = item else {
                 continue;
@@ -214,10 +220,7 @@ impl ModuleTree {
                             let directory = module_directory(&target, explicit.is_some());
                             self.visit_file(&target, directory);
                         }
-                        _ => panic!(
-                            "{}: `mod {name};` names no file",
-                            file.display()
-                        ),
+                        _ => panic!("{}: `mod {name};` names no file", file.display()),
                     }
                 }
             }
