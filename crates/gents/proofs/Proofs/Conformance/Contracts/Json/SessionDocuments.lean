@@ -373,39 +373,36 @@ def EditAnchorInput.ofCase (witness : EditAnchorCase) : EditAnchorInput :=
 def EditAnchorInput.source? (i : EditAnchorInput) : Option SessionFork.History :=
   (editAnchorCases.find? (·.name == i.name)).map (·.source)
 
+def editAnchorRetained? (i : EditAnchorInput) : Option Nat :=
+  i.source?.bind fun source =>
+    (SessionFork.editCut source i.key).map fun cut =>
+      (SessionFork.copyPrefix source child remap childKey cut).messages.length
+
 structure EditAnchorCut where
   cut : Option Nat
+  retainedCount : Option Nat
   deriving ToJson
 
+/-- The cut an edit anchor selects and the number of source messages a fork at
+that cut copies. -/
 @[conformance_family]
 def editAnchorCut : Family EditAnchorInput EditAnchorCut where
   inputs := editAnchorCases.map EditAnchorInput.ofCase
-  model := fun i => { cut := i.source?.bind fun source => SessionFork.editCut source i.key }
+  model := fun i =>
+    { cut := i.source?.bind fun source => SessionFork.editCut source i.key
+      retainedCount := editAnchorRetained? i }
 
 structure EditAnchorRetained where
   retainedCount : Option Nat
   deriving ToJson
 
-def editAnchorRetained (i : EditAnchorInput) : EditAnchorRetained :=
-  { retainedCount := i.source?.bind fun source =>
-      (SessionFork.editCut source i.key).map fun cut =>
-        (SessionFork.copyPrefix source child remap childKey cut).messages.length }
-
-/-- The fork scenario publishes signed user-text turns only, so only a history
-made of user messages can be built on a served node. -/
+/-- A served edit fork of a signed user history copies the prefix before the
+anchor and leaves the source unchanged; `editAnchorCut` replays every anchor's
+cut and copied prefix. -/
 @[conformance_family]
 def editAnchorFork : Family EditAnchorInput EditAnchorRetained where
   inputs := (editAnchorCases.filter fun c => c.name ∈ ["three_user_turns"]).map EditAnchorInput.ofCase
-  model := editAnchorRetained
-
-/-- The served fork fixture publishes user-text turns
-only; histories with assistant, tool-result or empty user messages, duplicate
-keys or anchors that no message carries are not built by any production
-scenario, so their retained prefix is not replayed. -/
-@[conformance_family]
-def editAnchorForkUnreached : Family EditAnchorInput EditAnchorRetained where
-  inputs := (editAnchorCases.filter fun c => c.name ∉ ["three_user_turns"]).map EditAnchorInput.ofCase
-  model := editAnchorRetained
+  model := fun i => { retainedCount := editAnchorRetained? i }
 
 deriving instance ToJson for SessionFork.EditForkBinding, SessionFork.EditForkDecision
 
@@ -848,17 +845,15 @@ def advanceInput (name : String) (r : AgentSession.RequestFact)
     rows := rows.map RequestWire.ofModel, request := RequestWire.ofModel r
     normalizedPreview := "candidate", now := 4 }
 
-/-- The session observation owner advances the public
-head inside served request admission transactions; no production function
-takes a modeled document and request rows, and no scenario builds these
-request histories. -/
+/-- A claim advances the public head from the request facts it loads under the
+session's exact scope, which select normal-purpose rows only, so the incoming
+request is always a normal-purpose row of that scope; `title_does_not_advance`
+covers a title-audit row. -/
 @[conformance_family]
-def sessionAdvanceUnreached : Family AdvanceInput DocumentAfter where
+def sessionAdvance : Family AdvanceInput DocumentAfter where
   inputs :=
     [ advanceInput "stale_admission" old,
       advanceInput "current_admission" newerRequest,
-      advanceInput "title_does_not_advance_public_observation" titleRequest session
-        [old, newerRequest, titleRequest],
       advanceInput "foreign_requester_does_not_freeze_own_index" scopedSuccessor indexed
         [old, newerRequest, scopedSuccessor, foreignRequester],
       advanceInput "present_requester_does_not_freeze_absent_scope" absentScopeRequest
@@ -881,14 +876,10 @@ def refreshInput (name : String) (event : AgentSession.RequestFact)
   { name, operation := "refresh", before := DocumentWire.ofModel indexed
     event := RequestWire.ofModel event, rows := rows.map RequestWire.ofModel, now := 4 }
 
-/-- The session observation owner refreshes the public
-head inside served request transactions; no production function takes a
-modeled document and request rows, and no scenario builds these request
-histories. -/
 @[conformance_family]
-def sessionRefreshUnreached : Family RefreshInput DocumentAfter where
+def sessionRefresh : Family RefreshInput DocumentAfter where
   inputs :=
-    [ refreshInput "stale_completion" old,
+    [ refreshInput "stale_completion" old [old],
       refreshInput "wrong_physical_completion"
         { newerRequest with observed := { newerRequest.observed with docId := 999 } },
       refreshInput "current_completion" completedRequest,

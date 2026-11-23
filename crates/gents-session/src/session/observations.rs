@@ -838,6 +838,9 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
 }
 
 #[cfg(test)]
+mod observation_conformance_tests;
+
+#[cfg(test)]
 mod observation_refresh_tests;
 
 #[cfg(test)]

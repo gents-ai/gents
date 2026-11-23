@@ -253,6 +253,13 @@ def threeUserHistory : History :=
   { messages := [editUser 1 1, editUser 2 2, editUser 3 3]
     compactions := [] }
 
+def contextHistory : History :=
+  { messages := [editUser 1 1, { editUser 2 2 with key := "authored:9:context" }, editUser 3 3]
+    compactions := [] }
+
+example : editCut contextHistory "authored:9:context" = none := by decide
+example : (retainedMessages contextHistory 3).map (·.key) = ["origin-1"] := by decide
+
 def editAnchorCases : List EditAnchorCase :=
   [ ⟨"three_user_turns", threeUserHistory, "origin-3"⟩
   , ⟨"first_user_turn", editHistory, "origin-1"⟩
@@ -264,7 +271,9 @@ def editAnchorCases : List EditAnchorCase :=
   , ⟨"ambiguous_key", { editHistory with messages :=
         editHistory.messages ++ [{ editUser 5 4 with key := "origin-1" }] }, "origin-1"⟩
   , ⟨"empty_user_message", { editHistory with messages :=
-        [{ editUser 1 0 with blocks := [] }] }, "origin-1"⟩ ]
+        [{ editUser 1 0 with blocks := [] }] }, "origin-1"⟩
+  , ⟨"runtime_context_row", contextHistory, "authored:9:context"⟩
+  , ⟨"user_turn_after_runtime_context", contextHistory, "origin-3"⟩ ]
 
 example : editCut editHistory "origin-1" = some 0 := by decide
 example : editCut editHistory "origin-4" = some 3 := by decide
