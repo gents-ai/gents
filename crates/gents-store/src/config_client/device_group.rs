@@ -44,6 +44,67 @@ impl ConfigAccess {
         Ok(group)
     }
 
+    /// Update the publisher grant on this device's Node together with its group
+    /// membership. Only the account holding both objects may enroll the device.
+    pub async fn set_shared_device_membership(
+        &self,
+        group: &str,
+        device: &Did,
+        admit: bool,
+    ) -> Result<String, ConfigClientError> {
+        use gents_protocol::schemas::{HomePolicyIds, NODE, NODE_NAME};
+
+        if !matches!(self, ConfigAccess::Graphql(_))
+            || device.is_wildcard()
+            || self.home_policy_ids().await? != HomePolicyIds::embedded_vera_transport_v2()
+        {
+            return Err(ConfigClientError::SharedDeviceAdmission);
+        }
+        self.transact_write("config.shared_device_membership", |txn| {
+            Box::pin(async move {
+                let account = txn.actor_did().ok_or(ConfigClientError::SharedDeviceAdmission)?;
+                let owned_by_account = |owners: &[query::owners::DocumentOwnerObservation], id: &str| {
+                    matches!(owners, [entry] if entry.doc_id == id && entry.visible && entry.owner.as_ref().map(Did::as_str) == Some(account))
+                };
+                if !owned_by_account(&txn.document_owners(ACCOUNT_DEVICE_GROUP_NAME, &[group.to_owned()]).await?, group) {
+                    return Err(ConfigClientError::SharedDeviceAdmission);
+                }
+                let response = txn.execute_with_variables(
+                    "query($did: String!) { Node(filter: {node_did: {_eq: $did}}, limit: 2) { _docID } }",
+                    &serde_json::json!({"did": device.as_str()}),
+                ).await?;
+                let rows = response["data"][NODE_NAME].as_array().ok_or(ConfigClientError::SharedDeviceAdmission)?;
+                let node = match rows.as_slice() {
+                    [row] => {
+                        let id = row["_docID"].as_str().ok_or(ConfigClientError::SharedDeviceAdmission)?.to_owned();
+                        if !owned_by_account(&txn.document_owners(NODE_NAME, std::slice::from_ref(&id)).await?, &id) {
+                            return Err(ConfigClientError::SharedDeviceAdmission);
+                        }
+                        id
+                    }
+                    [] if admit => {
+                        let created = txn.execute_client_signed_create(
+                            "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
+                            &serde_json::json!({"input":{"node_did":device.as_str(), "enabled":true}}), NODE,
+                        ).await?;
+                        crate::graphql::created_doc_id(&created, NODE_NAME)?
+                    }
+                    _ => return Err(ConfigClientError::SharedDeviceAdmission),
+                };
+                if admit {
+                    txn.add_actor_relationship(NODE_NAME, &node, "runtime_reader", device).await?;
+                    txn.add_actor_relationship(NODE_NAME, &node, "transport_publisher", device).await?;
+                    txn.add_actor_relationship(ACCOUNT_DEVICE_GROUP_NAME, group, "member", device).await?;
+                } else {
+                    txn.delete_actor_relationship(ACCOUNT_DEVICE_GROUP_NAME, group, "member", device).await?;
+                    txn.delete_actor_relationship(NODE_NAME, &node, "transport_publisher", device).await?;
+                    txn.delete_actor_relationship(NODE_NAME, &node, "runtime_reader", device).await?;
+                }
+                Ok(node)
+            })
+        }).await
+    }
+
     /// Create the account's group as its authenticated owner and admit the
     /// first device. Keep the returned document ID when joining other devices.
     /// An account DID in a document field identifies no authority on its own.

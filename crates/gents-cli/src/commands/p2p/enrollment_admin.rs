@@ -58,6 +58,17 @@ pub(super) async fn device_membership(args: DeviceGroupMemberArgs, admit: bool) 
 
     let endpoint = resolve_graphql_endpoint(None, args.home.as_deref()).await?;
     let owner = ConfigAccess::Graphql(endpoint);
+    if owner.home_policy_ids().await?
+        == gents_protocol::schemas::HomePolicyIds::embedded_vera_transport_v2()
+    {
+        let node = owner
+            .set_shared_device_membership(&args.group, &args.device, admit)
+            .await?;
+        return print_json(&serde_json::json!({
+            "group": args.group, "device": args.device.as_str(), "member": admit,
+            "publisher_node_id": node,
+        }));
+    }
     if admit {
         owner
             .add_actor_relationship(

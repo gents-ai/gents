@@ -270,6 +270,10 @@ async fn paired_home_reopens_against_the_original_vera_deployment() -> Result<()
         ],
     )?;
     anyhow::ensure!(admitted["member"] == true && admitted["device"] == follower_did);
+    let publisher_node = admitted["publisher_node_id"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .context("registered publisher Node")?;
     paired.extend([
         "--key-path",
         key_path.to_str().context("follower key path")?,
@@ -305,7 +309,7 @@ async fn paired_home_reopens_against_the_original_vera_deployment() -> Result<()
             follower_did,
         ],
     )?;
-    anyhow::ensure!(removed["member"] == false);
+    anyhow::ensure!(removed["member"] == false && removed["publisher_node_id"] == publisher_node);
     let denied = run_cli_failure_stderr(follower.path(), &["runtime", "server"])?;
     anyhow::ensure!(
         denied.contains("no certified group assignment"),
