@@ -1,4 +1,4 @@
-use gents_protocol::schemas::{BuiltInPolicy, ACCOUNT_DEVICE_GROUP_NAME};
+use gents_protocol::schemas::{BuiltInPolicy, ACCOUNT_DEVICE_GROUP, ACCOUNT_DEVICE_GROUP_NAME};
 use identity::Did;
 
 use super::{assignments::AssignmentReadError, ConfigAccess, ConfigClientError};
@@ -59,9 +59,10 @@ impl ConfigAccess {
         }
         self.transact_write("config.create_device_group", |txn| {
             Box::pin(async move {
-                let response = txn.execute_with_variables(
-                    "mutation($account: String!) { create_AccountDeviceGroup(input: {account_did: $account}) { _docID } }",
-                    &serde_json::json!({ "account": account.as_str() }),
+                let response = txn.execute_client_signed_create(
+                    "mutation($input: AccountDeviceGroupMutationInputArg!) { create_AccountDeviceGroup(input: $input) { _docID } }",
+                    &serde_json::json!({ "input": { "account_did": account.as_str() } }),
+                    ACCOUNT_DEVICE_GROUP,
                 ).await?;
                 let id = crate::graphql::created_doc_id(&response, ACCOUNT_DEVICE_GROUP_NAME)?;
                 txn.add_actor_relationship(ACCOUNT_DEVICE_GROUP_NAME, &id, "member", first_device).await?;

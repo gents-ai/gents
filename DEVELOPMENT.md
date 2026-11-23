@@ -48,3 +48,18 @@ without touching your own node.
 
 `AGENTS.md` holds the working rules for changes; the
 [proof map](crates/gents/proofs/README.md) identifies the modeled surfaces.
+
+## Start a Vera home with device enrollment
+
+Build the CLI with `cargo build -p gents-cli --features vera`. For a new home,
+pass `--document-acp vera --create-transport-group` to `gents init` alongside
+your usual model and identity options. The client signs the creation of its
+device group and the admission of this runtime. The JSON result includes
+`transport_group.account` (the client DID) and `transport_group.group` (the
+document ID for later membership changes).
+
+Start the same home with `gents server --transport-account <client-DID>`.
+The server checks the account's certified assignment before opening a listener.
+Registry, endpoint, directory and enrollment operations check membership again
+when they run. Revoking the runtime's membership stops subsequent publication.
+A Vera home started without the account option leaves peer publication idle.

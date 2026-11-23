@@ -139,6 +139,9 @@ pub(crate) struct InitArgs {
     pub(crate) store_key_custody: Option<StoreKeyCustodyArg>,
     #[arg(long, value_enum, hide = true, conflicts_with = "identity_only")]
     pub(crate) document_acp: Option<DocumentAcpArg>,
+    /// Create a device group owned by the signing client and admit this new Vera runtime.
+    #[arg(long, conflicts_with = "identity_only")]
+    pub(crate) create_transport_group: bool,
     #[arg(
         long = "inference-url",
         value_name = "INFERENCE_URL",

@@ -224,12 +224,16 @@ pub(crate) async fn init_home_with_core_packs(
     let client_identity = InitClientIdentity::choose(&home_dir, args.desktop_home.clone())?;
     let tool_package = resolve_initial_tool_package(&args)?;
     validate_init_tool_flags(&args, tool_package)?;
-    admit_document_acp(
+    let requested_acp = admit_document_acp(
         &home_dir,
         args.document_acp,
         args.identity_backend,
         !args.dangerously_overwrite,
     )?;
+    anyhow::ensure!(
+        !args.create_transport_group || !requested_acp.is_local(),
+        "--create-transport-group requires a Vera home"
+    );
     crate::interactive_backend::resolve_backend_interactively(&mut args, || {}).await?;
     if !args.identity_only {
         resolve_init_model_name(&args)?;
@@ -247,6 +251,13 @@ pub(crate) async fn init_home_with_core_packs(
     stage("store_locked");
     let document_acp =
         admit_document_acp(&home_dir, args.document_acp, args.identity_backend, true)?;
+
+    if args.create_transport_group {
+        anyhow::ensure!(
+            fresh_store,
+            "--create-transport-group requires a fresh Vera home"
+        );
+    }
 
     if args.identity_only {
         if args.identity_backend != IdentityBackendArg::File && args.key_path.is_some() {
@@ -499,6 +510,14 @@ pub(crate) async fn init_home_with_core_packs(
         )
         .await?;
         stage("runtime_home_initialized");
+        let transport_group = if args.create_transport_group {
+            let account = identity::Did::new(client_identity.did())?;
+            let device = identity::Did::new(initialized_identity.identity.did())?;
+            let group = access.create_device_group(&account, &device).await?;
+            Some(json!({"account": account.as_str(), "group": group}))
+        } else {
+            None
+        };
         if fresh_store
             && matches!(tool_package, ToolPackageArg::Readonly | ToolPackageArg::Write | ToolPackageArg::Yolo)
         {
@@ -548,7 +567,7 @@ pub(crate) async fn init_home_with_core_packs(
         };
         clear_init_pending(&home_dir)?;
 
-        let output = json!({
+        let mut output = json!({
             "status": "initialized",
             "home": home_dir,
             "node_name": args.node_name,
@@ -593,6 +612,9 @@ pub(crate) async fn init_home_with_core_packs(
             ),
             "init": summary,
         });
+        if let Some(group) = transport_group {
+            output["transport_group"] = group;
+        }
         Ok(output)
     }
     .await;
@@ -3375,6 +3397,7 @@ mod tests {
             secure_enclave_label: None,
             store_key_custody: Some(gents_host::args::StoreKeyCustodyArg::File),
             document_acp: None,
+            create_transport_group: false,
             inference_endpoint: None,
             backend_id: None,
             backend_name: None,
