@@ -43,11 +43,13 @@ jobs:
             "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?status=completed&created=>$(date -u -d '2 days ago' +%Y-%m-%dT%H:%M:%SZ)&per_page=100" \
             --jq '.workflow_runs[].id')"
           for run_id in $run_ids; do
-            # One directory per run: artifact names repeat across runs, and a
-            # shared directory would overwrite earlier samples.
+            # One directory per run and artifact: the unit key inside
+            # record.json identifies the sample, never the artifact name.
             for name in $(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" \
                 --jq '.artifacts[] | select(.name | startswith("ci-latency-")) | .name'); do
-              gh run download "${run_id}" --name "${name}" --dir "${RUNNER_TEMP}/samples/${run_id}" \
+              # One directory per run and artifact: the unit key inside
+              # record.json identifies the sample, never the artifact name.
+              gh run download "${run_id}" --name "${name}" --dir "${RUNNER_TEMP}/samples/${run_id}/${name}" \
                 || echo "::warning::sample ${name} of run ${run_id} did not download"
             done
           done
@@ -85,9 +87,9 @@ jobs:
               continue
             fi
             seen="${seen}${pair}"$'\n'
-            # latency.json holds the gate's {steps: [{step, seconds}],
-            # total_seconds}; wrap it with the record's run and unit. run_id
-            # is a string (GITHUB_RUN_ID through the record), so --arg.
+            # The sample carries the gate's {steps: [{step, seconds}],
+            # total_seconds}; wrap it with the record's run and exact unit.
+            # run_id is a string (GITHUB_RUN_ID through the record), so --arg.
             jq -n --arg job "$(jq -r '.unit' "${record}")" \
                 --arg run_id "$(jq -r '.run_id' "${record}")" \
                 --slurpfile lat "${record%/record.json}/latency.json" \

@@ -23,14 +23,35 @@ runs:
         UNIT: ${{ inputs.unit }}
       run: python3 scripts/ci/gate.py record "${UNIT}"
 
+    - name: Stage the latency sample (W53)
+      id: latency
+      if: steps.record.outputs.name
+      shell: bash
+      env:
+        UNIT: ${{ inputs.unit }}
+      run: |
+        # Unit keys legitimately contain characters GitHub bans in artifact
+        # names — " , : < > | * ? \ / and leading/trailing whitespace — e.g.
+        # build:portable:3 or ts-browser:1/3. The upload name whitelists
+        # [A-Za-z0-9._-]; the exact unit travels inside the sample's
+        # record.json, which is what the ci-latency.yml collector reads.
+        mkdir -p "${RUNNER_TEMP}/latency-sample"
+        python3 -c 'import json, os, sys
+          directory = os.path.join(os.environ["RUNNER_TEMP"], "latency-sample")
+          json.dump({"unit": sys.argv[1], "run_id": os.environ.get("GITHUB_RUN_ID", "")},
+                    open(os.path.join(directory, "record.json"), "w"))' "${UNIT}"
+        cp "${RUNNER_TEMP}/latency.json" "${RUNNER_TEMP}/latency-sample/latency.json"
+        name="ci-latency-$(printf '%s' "${UNIT}" | tr -c 'A-Za-z0-9._-' '-')"
+        printf 'name=%s\n' "${name}" >> "${GITHUB_OUTPUT}"
+
     - name: Upload the latency sample (W53)
       if: steps.record.outputs.name
       uses: actions/upload-artifact@v7
       with:
         # The latency collector (ci-latency.yml) gathers every `ci-latency-*`
         # artifact from recent CI runs and appends them to the data branch.
-        name: ci-latency-${{ inputs.unit }}
-        path: ${{ runner.temp }}/latency.json
+        name: ${{ steps.latency.outputs.name }}
+        path: ${{ runner.temp }}/latency-sample
         if-no-files-found: ignore
         retention-days: 7
 
