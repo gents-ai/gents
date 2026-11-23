@@ -982,15 +982,17 @@ theorem wrong_head_refusal_is_the_observed_claim_refusal :
 
 /-- `begin_owned_execution` takes the request and its generation from its own
 claim, and `authorize_begin` rechecks that generation against the stored
-request row, so no caller supplies an owner for another request; the model
-refuses one. -/
+request row, so no caller supplies an owner for another request
+(`owned_begin_uses_only_its_own_claim_and_rechecks_its_generation` evidences
+both); the model refuses one. -/
 theorem incoherent_owner_is_rejected :
     incoherentOwnerObservation.admitted = false := by native_decide
 
 /-- `claim_pending_durable_with_inputs` moves a request whose interrupt was
 latched before its claim from pending to interrupted and returns without a
-claim, so publication at execution start is never reached for it; the model
-refuses the publication. -/
+claim, so publication at execution start is never reached for it
+(`generated_pending_steering_terminals_retain_signed_admission_without_output`
+evidences it through `claim`); the model refuses the publication. -/
 theorem interrupted_publish_is_rejected : interruptedPublishObservation.admitted = false := by native_decide
 theorem wrong_head_prefix_is_reachable : wrongHeadObservation.prefixAdmitted = true := by native_decide
 theorem incoherent_owner_prefix_is_reachable :
