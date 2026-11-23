@@ -1816,7 +1816,7 @@ async fn a_first_send_starts_a_session_then_a_turn() {
     let started = shell.next().await;
     let request = sent_in(&node, &session).await;
     assert_eq!(started, turn(&session, &request.request_id));
-    reread(&shell, 1).await;
+    first_send_rereads(&shell, &session).await;
     assert_eq!(request.content.as_deref(), Some("hello"));
     let input = request.input.clone().unwrap_or_default();
     let queue = input.queue.expect("a user message is queued");
@@ -1844,7 +1844,7 @@ async fn a_reply_streams_as_deltas() {
     let started = shell.next().await;
     let request = sent_in(&node, &session).await;
     assert_eq!(started, turn(&session, &request.request_id));
-    reread(&shell, 1).await;
+    first_send_rereads(&shell, &session).await;
     node.update(&request, &claimed(&request)).await;
     node.text(&request, 0, MessageRole::User, "hi").await;
     shell.until(is_item).await;
@@ -2718,6 +2718,29 @@ async fn opening(shell: &Shell, session: &str) -> Vec<Update> {
 async fn reread(shell: &Shell, open: usize) -> Vec<Update> {
     let read = take(shell, open + 2).await;
     assert!(is_reread(&read, open), "not only the reread: {read:?}");
+    read
+}
+
+/// Reads exactly the two rereads a first send wakes, each told whole in the order its read
+/// lands: the work reread for its one open session, and the chat reread that lists the session
+/// and its (empty) subagent rows.
+async fn first_send_rereads(shell: &Shell, session: &str) -> Vec<Update> {
+    let read = take(shell, 5).await;
+    let listed = |chat: &[Update]| {
+        matches!(
+            chat,
+            [Update::Sessions(sessions), Update::Running { session: shown, rows }]
+                if sessions.iter().any(|listed| listed.id == session)
+                    && shown == session
+                    && rows.is_empty()
+        )
+    };
+    let work_first = is_reread(&read[..3], 1) && listed(&read[3..]);
+    let chat_first = listed(&read[..2]) && is_reread(&read[2..], 1);
+    assert!(
+        work_first || chat_first,
+        "not only the two rereads: {read:?}"
+    );
     read
 }
 
