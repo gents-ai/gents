@@ -155,7 +155,11 @@ fn wired(tool: &str, selected: bool, script: bool) -> Tools {
 #[test]
 fn wiring_lists_hidden_tools_as_lean_says() {
     gents_lean_vocab::families::tool_presentation_listed_after_wiring::replay(|case| {
-        let tool = if case.default_hidden { "charts" } else { "query" };
+        let tool = if case.default_hidden {
+            "charts"
+        } else {
+            "query"
+        };
         let before = wired(tool, case.selected_before, case.script_before);
         let mut after = wired(tool, case.selected_after, case.script_after);
         if case.listed {
