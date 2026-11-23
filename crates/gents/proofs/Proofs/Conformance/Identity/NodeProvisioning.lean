@@ -136,13 +136,6 @@ def nodeRuntimeGrants : Family NodeRuntimeInput (List String) where
   inputs := [{ recipient := "node" }]
   model := fun _ => GrantSets.nodeRuntimePermissions
 
-/-- model-production-gap: every production node open enables NAC, so no
-production path observes a node whose NAC was never configured. -/
-@[conformance_family]
-def runtimeNacUnreached : Family NacInput NacOutput where
-  inputs := [{ status := .notConfigured, nodeReadsPastDac := false }]
-  model := nacModel
-
 structure CreatorInput where
   name : String
   runtimeMatches : Bool
@@ -160,23 +153,9 @@ private def creatorInput (c : String × AgentCreatorObservation) : CreatorInput 
     signerMatches := c.2.signerMatches, nativeCreate := c.2.nativeCreate
     nativeRelation := c.2.nativeRelation }
 
-/-- The served creation scenario holds a node whose native document ACP admits
-the creator, so it can vary the runtime and the signer but not the native
-create and relation decisions. -/
-private def nativeAdmits (c : String × AgentCreatorObservation) : Bool :=
-  c.2.nativeCreate && c.2.nativeRelation
-
 @[conformance_family]
 def agentCreator : Family CreatorInput Bool where
-  inputs := (NodeProvisioningConformance.agentCreatorCases.filter nativeAdmits).map creatorInput
-  model := fun i => agentCreatorMayPublish i.observation
-
-/-- model-production-gap: no served creation scenario denies the native Agent
-create or its parent relation to an otherwise authorized creator yet. -/
-@[conformance_family]
-def agentCreatorUnreached : Family CreatorInput Bool where
-  inputs :=
-    (NodeProvisioningConformance.agentCreatorCases.filter (!nativeAdmits ·)).map creatorInput
+  inputs := NodeProvisioningConformance.agentCreatorCases.map creatorInput
   model := fun i => agentCreatorMayPublish i.observation
 
 /-- A User-created Engineer on a node the User owns, selected as its default

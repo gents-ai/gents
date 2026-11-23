@@ -664,10 +664,6 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "node_provisioning_node_runtime_grants")
       "identity-permission" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "family" "node_provisioning_runtime_nac_unreached"
-      "model-production-gap: every production node open enables NAC, so no production path observes a node whose NAC was never configured (not_configured).")
-      "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
       "root_admission_contracts_admission")
@@ -2223,11 +2219,6 @@ def caseCoverage : List CoverageEntry :=
       "watcher_actors_scanned_unreached"
       "model-production-gap: the served runtime fixture provisions one Agent, so the mixed candidate set (an available, an unavailable, an unresolved and an unconfigured Agent in one view) is not built by any production test yet.")
       "event-delivery" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "family"
-      "node_provisioning_agent_creator_unreached"
-      "model-production-gap: no served creation scenario denies the native Agent create or its parent relation to an otherwise authorized creator yet (native-create-denied, native-relation-denied).")
-      "identity-permission" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "family"
       "delegated_finality_served_unreached"

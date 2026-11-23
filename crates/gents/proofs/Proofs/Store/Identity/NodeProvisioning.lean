@@ -52,8 +52,16 @@ theorem missing_signer_cannot_publish (o : AgentCreatorObservation)
     (missing : o.signerHeld = false) : agentCreatorMayPublish o = false := by
   simp [agentCreatorMayPublish, missing]
 
+/-- External premise: an enabled Agent's native document create and relation
+permissions are projected from its live Agent document as the Agent baseline,
+so production never observes them denied to an authorized creator; a denial
+still refuses the publication. -/
 theorem native_denial_cannot_publish (o : AgentCreatorObservation)
     (denied : o.nativeCreate = false) : agentCreatorMayPublish o = false := by
+  simp [agentCreatorMayPublish, denied]
+
+theorem native_relation_denial_cannot_publish (o : AgentCreatorObservation)
+    (denied : o.nativeRelation = false) : agentCreatorMayPublish o = false := by
   simp [agentCreatorMayPublish, denied]
 
 /-- The Agent command is exposed by either configured category. This is tool
@@ -195,6 +203,9 @@ again. -/
 def runtimeMayStart (status : NacStatus) (nodeReadsPastDac : Bool) : Bool :=
   status == .enabled && !nodeReadsPastDac
 
+/-- External premise: `FreshBackendStore::initialize` configures NAC on every
+store and native persists that configuration, so a production start observes
+NAC enabled or disabled and never unconfigured; any status but enabled refuses. -/
 theorem runtime_refuses_without_enabled_nac (status : NacStatus) (nodeReadsPastDac : Bool)
     (notEnabled : status ≠ .enabled) : runtimeMayStart status nodeReadsPastDac = false := by
   cases status <;> simp_all [runtimeMayStart]
