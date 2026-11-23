@@ -175,6 +175,8 @@ pub use txn::{
     LocalConfigAccess, NativeOperationAbandoned, ReceiptWriteError, ReentrantEmbeddedWrite,
     TransactionFinalityError,
 };
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use txn::{RelationshipChange, RelationshipChangeKind, RelationshipMatch};
 
 #[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]

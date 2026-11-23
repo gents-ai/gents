@@ -561,6 +561,13 @@ impl ConfigApplyTxn<'_> {
         target: &str,
         delete: bool,
     ) -> Result<()> {
+        #[cfg(any(test, feature = "test-fixtures"))]
+        super::change_fault::before_relationship_change_for_test(
+            self.operation,
+            collection,
+            relation,
+            delete,
+        )?;
         match &self.backend {
             TxnBackend::Embedded {
                 node,
