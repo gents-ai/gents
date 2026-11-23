@@ -4,89 +4,16 @@ Gents is a desktop app for running your own AI agents. A node runs in the
 background on your machine and keeps its agents, configuration, sessions, and
 work as documents in a local, replicated database.
 
-## Install
-
-Download the installer for your platform from the
-[latest GitHub release](https://github.com/gents-ai/gents/releases/latest).
-The app includes everything it needs; you do not need to install Rust, Node.js, or
-a separate command-line tool.
-
-### macOS (Apple Silicon)
-
-1. Download `gents-desktop_<version>_aarch64.dmg`.
-2. Open the disk image and drag **Gents** to **Applications**.
-3. Launch **Gents** from **Applications**. Keep it there so the background
-   node can find it at the next login.
-
-Intel Macs are not supported. The app is signed and notarized. If macOS refuses
-to open it, do not disable Gatekeeper or strip the quarantine attribute;
-[open an issue](https://github.com/gents-ai/gents/issues) with your macOS
-version and the exact error.
-
-### Linux (x86_64)
-
-On Debian 12, Ubuntu, or a compatible newer distribution:
-
-```sh
-sudo apt install ./gents-desktop_<version>_amd64.deb
-```
-
-Then launch **Gents** from your application menu.
-
-Or use the AppImage (glibc 2.36 or newer):
-
-```sh
-chmod +x gents-desktop_<version>_x86_64.AppImage
-./gents-desktop_<version>_x86_64.AppImage
-```
-
-If FUSE is unavailable, run it with `APPIMAGE_EXTRACT_AND_RUN=1`. The
-background node needs a user systemd session.
-
-Installer checksums are attached to each release as
-`SHA256SUMS-desktop-macos.txt` and `SHA256SUMS-desktop-linux.txt`.
-
-### Server / CLI
-
-For a headless runtime, download `gents-<target>.tar.gz` (Linux x86_64/aarch64,
-macOS arm64) from the same release; checksums are in `SHA256SUMS-cli-*.txt`.
-
-Run `gents` in a terminal to set it up. It asks for the folder that holds Gents'
-data (`~/.gents` by default), the folder agents work in, then a model provider,
-model, reasoning effort, temperature and top-p. It installs the Engineer's core
-packs without asking. It does not ask for a node name: the node is named
-`default`, a local label your node's DID does not depend on, and no command
-renames it.
-`gents status` shows the node's readiness afterwards.
-
-## First run
-
-The app walks you through setup: name a local node, choose the folder its
-agents may work in and how much access they get, then connect a model provider.
-Your first agent is the Engineer. Tell it what you need and it builds it on
-your node: the data, the pages you open in the app, and the agents and
-schedules that keep it running. Setup also installs a few starter packs for it
-(web research, workflows, charts, data tables, and pack-building skills).
-
-A home created by v1.0.0-rc1 or earlier does not open on this release. Gents
-shows a screen that backs it up or deletes it and starts fresh; nothing is
-carried over. See [docs/upgrade-from-rc1.md](docs/upgrade-from-rc1.md).
-
-The node keeps running when you close the window or quit the app. Use
-**Stop Node** in the menu bar or tray menu to stop it; **Start at login** is a separate setting.
-
-## Get help
-
-Report problems and questions as
-[GitHub issues](https://github.com/gents-ai/gents/issues). Include your OS and
-version, the Gents version, and the step that failed. Logs help: on macOS, open
-Console.app and filter by subsystem `ai.gents`; on Linux, run
-`journalctl --user -u gents-runtime.service`. Never include credentials, API
-keys, or sign-in callback URLs.
+Installers for macOS (Apple Silicon) and Linux (x86_64), and a command-line
+runtime for headless hosts, are attached to each
+[GitHub release](https://github.com/gents-ai/gents/releases/latest). Installing,
+first run and using Gents are documented at
+[docs.gents.xyz](https://docs.gents.xyz).
 
 ## Contributing
 
-Building from source is covered in [DEVELOPMENT.md](DEVELOPMENT.md).
+Building from source is covered in [DEVELOPMENT.md](DEVELOPMENT.md); the rules
+for changing the code are in [AGENTS.md](AGENTS.md).
 
 ## License
 

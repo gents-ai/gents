@@ -15,8 +15,8 @@ name: Publish staged macOS prerelease (CI control)
 # the default branch is refused unless the operator repeats its full SHA in
 # authorize_off_default_target and names a branch containing it.
 # Two jobs: `collect` (read-only token) builds and uploads the assets;
-# `publish` (contents: write only) downloads them, re-verifies, publishes. See
-# docs/publish-staged-prerelease.md.
+# `publish` (contents: write only) downloads them, re-verifies, publishes.
+# Runbook: https://docs.gents.xyz/docs/operations/publish-staged-prerelease
 
 on:
   workflow_dispatch:

@@ -28,10 +28,9 @@ const client = createDesktopClient(transport);
 
 Direct Tauri API access is centralized in `transport.ts`.
 
-The shared store coalesces aggregate snapshot refreshes; it does not yet contain
-Gents Desktop's active-session polling, restart/backoff, or P2P auto-restart
-coordinator. A downstream that needs Gents-equivalent streaming recovery must
-extract or implement that coordinator explicitly.
+The shared store coalesces aggregate snapshot refreshes. It has no
+active-session polling, restart/backoff, or P2P auto-restart coordinator; a
+downstream that needs streaming recovery provides that coordinator itself.
 
 `createDesktopClient(transport)` exposes both the lifecycle/snapshot methods and
 a full `client.api` adapter bound to that exact transport. Pass `client.api`

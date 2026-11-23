@@ -7,6 +7,51 @@ observed state to an action, with the theorems about it. Models live in
 `Proofs/`, one directory per crate layer, and import only downward. When a
 model and the Rust disagree, the model is changed first and the Rust follows.
 
+## Building
+
+`lake build` (in this directory, with the toolchain in `lean-toolchain`) builds
+the `Proofs` library from `proofRoots` in `lakefile.lean` and runs the default
+checks: `importClosure` refuses a module outside the roots' import closure,
+`importLayers` refuses an import that points up the layers in
+`.github/scripts/lean-import-layers.json` (which also records modules placed
+away from their Rust owner, with the reason), and `canonicalOutputMap` checks
+`contracts/canonical-output-map-*.json`. A module under `Proofs/` with its own
+`main` is listed in `proofRoots`.
+
+## Proof map
+
+Each layer directory under `Proofs/` specifies one crate layer (the JSON above
+names the crates); a model group keeps its path below the directory, so one
+group can span layers.
+
+| Directory | Models |
+| --- | --- |
+| `Shared` | Ids and time, provider-input shaping shared by `gents-protocol`, `gents-loop` and `gents-claude` (rendered capture, tool result text, account rotation, completion retry), canonical output state |
+| `Store` | Store access and its errors (`AccessClassification`, `DecisionRead`, `StorageFailure`), persistence and storage observation, the write gate, home opening and handoff, key custody, subscriptions, and the access policy (`Identity/`; `cargo run -p gents-lean-vocab --example regenerate_household_policy` writes its YAML into `crates/gents-schemas/schemas/agent/` through `GenerateHouseholdPolicy.lean` and `GenerateMailboxPolicy.lean`) |
+| `Documents` | Configuration documents and their publication (`ApplyReconcile/`), defaults, desired state, scope templates, skills, document views |
+| `Inference` | Backend admission and inference calls, scheduling, accounts and their resolver, usage reads, inference recovery |
+| `P2P` | Enrollment, pairing reconcile and routes, peer discovery, the backpressure obligation model |
+| `Pack` | Pack resolution, core packs, plugin wiring, grants and ownership |
+| `Session` | Requests and execution leases, sessions, forks and recovery, the session queue, prompt assembly, compaction and transcripts, command policy, managed execution, workspaces, hooks, client turn-state derivation (`Client/`) |
+| `Tools` | The tool surface, self-config and its grants, tool policy, root admission, edit matching, LSP and MCP health |
+| `ToolCalls` | Tool dispatch, background tool rows, plugin jobs, trigger identity, tool-call recovery |
+| `Automation` | Triggers and event delivery, callbacks, Goals and Goal automation, the mailbox, processes, hook instantiations |
+| `Observe` | File inventory, retry summaries |
+| `Runtime` | The completion loop and its retry, canonical output execution, inference-call composition, runtime reconcile and startup, backend health, evals and optimization, the cross-machine composition and the request/process properties (`Properties/`) |
+| `Clients` | The client shell (`ClientShell/`), observation and sync health, client identity metadata, outbox, installation repair, service lifecycle |
+| `Conformance` | Family emitters, the contract program (`Contracts.lean`), the coverage ledger |
+
+## What a theorem claims
+
+Lean liveness is existential unless a theorem says otherwise: an
+`*_eventually_*` or `*_convergence` name states that a finite legal path
+exists, not that a fair scheduler takes it or that it finishes in bounded time.
+Fair-scheduler progress belongs to TLA+, and deadlines and watchdogs to the
+Rust owners. Time and the request, peer and node ids are abstract naturals
+(`boundary.model.nat-typed-ids-time`). DefraDB storage, merge and event
+delivery, the network, providers, external tools and the OS sandbox are
+premises, each a `boundary.` entry in the coverage ledger.
+
 ## Conformance families
 
 An owner becomes a family that Rust replays:
@@ -91,9 +136,5 @@ consumed family whose test evidences it.
 
 ## TLA+
 
-Specs live in `tla/`. A spec names the Lean owners it reads on its second line
-(`\* lean: Owner.decision`) and takes their tables from `tla/generated`. Each
-configuration `MC_<Spec>_<Name>.cfg` states its expected result on its first
-line (`\* expect: holds` or `\* expect: violates <Property>`). Run one with
-`tla/scripts/run-tlc.sh MC_<Spec>_<Name>`, or compare results with the headers
-with `python3 tla/scripts/tla_check.py run --config MC_<Spec>_<Name>`.
+Specs live in `tla/`; [tla/AGENTS.md](tla/AGENTS.md) gives the header grammar,
+the expected-result rule and the commands.
