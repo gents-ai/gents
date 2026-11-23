@@ -98,6 +98,7 @@ impl SchemaError {
                 Some(IncompatibleStoreKind::OtherVersionSchema)
             }
             Self::BaselineRegister { .. }
+            | Self::SharedTransportAdmission { .. }
             | Self::CollectionMissing { .. }
             | Self::VersionPinMismatch { .. }
             | Self::Node(_)
