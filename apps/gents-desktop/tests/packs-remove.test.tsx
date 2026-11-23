@@ -207,6 +207,16 @@ describe("removing a pack from the Packs page", () => {
       removePack: vi.fn(async (name: string, edited?: string) => {
         calls.push(`remove ${name} (${edited})`);
         const refusal = removals.shift();
+        if (refusal === EDITED)
+          throw Object.assign(new Error(EDITED), {
+            packRefusal: {
+              class: "documents_edited",
+              coordinate: WEB,
+              named: ["Tools/web-researcher-tools"],
+              unnamed: 0,
+              sentence: EDITED,
+            },
+          });
         if (refusal) throw new Error(refusal);
       }),
     };

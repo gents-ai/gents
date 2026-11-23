@@ -213,19 +213,6 @@ fn list_packs(home: &std::path::Path) -> Result<serde_json::Value> {
     }
     Ok(output)
 }
-/// A refused pack operation as the terminal shows it: what happened, then
-/// the command its error names.
-pub(crate) fn refusal(
-    operation: gents_protocol::operations::pack::PackOperation,
-    package: &str,
-    error: gents_protocol::operations::pack::PackOperationError,
-) -> anyhow::Error {
-    if error.passthrough().is_some() {
-        return anyhow::Error::new(error);
-    }
-    let next = crate::next_call::command(error.recovery(operation), Some(package));
-    anyhow::anyhow!("{error}. Next: {next}")
-}
 
 #[cfg(test)]
 mod tests;

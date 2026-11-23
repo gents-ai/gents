@@ -4,6 +4,7 @@ import {
   asBridgeErrorPayload,
   BridgeInvokeError,
   normalizeInvokeError,
+  packInstallRefusal,
 } from "./errors.js";
 
 describe("confirmed Goal-control rejection", () => {
@@ -56,5 +57,46 @@ describe("confirmed Goal-control rejection", () => {
       nextCall: null,
     });
     expect(asBridgeErrorPayload(transport)?.code).toBe("endpointUnreachable");
+  });
+});
+
+describe("a typed pack install refusal", () => {
+  const refusal = {
+    class: "documents_edited",
+    coordinate: "fixture/root",
+    named: ["Tools/literal-tools"],
+    unnamed: 2,
+    sentence:
+      "3 of fixture/root's documents were edited since it was installed.",
+  };
+  const payload = {
+    code: "unknown",
+    message: refusal.sentence,
+    retryable: false,
+    endpoint: null,
+    operationCode: null,
+    nextCall: null,
+    packRefusal: refusal,
+  };
+
+  it("survives host normalization as typed fields", () => {
+    const error = normalizeInvokeError(payload);
+    expect(error).toBeInstanceOf(BridgeInvokeError);
+    expect((error as BridgeInvokeError).packRefusal).toEqual(refusal);
+    expect(packInstallRefusal(error)).toEqual(refusal);
+  });
+
+  it("is never read from an error's text or from an unknown class", () => {
+    expect(
+      packInstallRefusal(new Error("--overwrite documents_edited")),
+    ).toBeNull();
+    expect(
+      packInstallRefusal({
+        packRefusal: { ...refusal, class: "something_else" },
+      }),
+    ).toBeNull();
+    expect(
+      packInstallRefusal({ packRefusal: { ...refusal, unnamed: -1 } }),
+    ).toBeNull();
   });
 });

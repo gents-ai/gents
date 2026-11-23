@@ -37,6 +37,7 @@ const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-loop/src/loop_stream/contract.rs", &["ReplayEvidenceViolation::in_chain"]),
     ("crates/gents-p2p/src/p2p_reconcile/enrollment_store.rs", &["EnrollmentDecisionRefusal::in_chain"]),
     ("crates/gents-p2p/src/p2p_reconcile/trait_def.rs", &["RemoteP2pAdminError::in_error"]),
+    ("crates/gents-pack/src/pack/interpolate.rs", &["UnsetVariables::in_chain"]),
     ("crates/gents-pack/src/pack/registry.rs", &["RegistryError::in_chain"]),
     ("crates/gents-pack/src/plugin.rs", &["GuestTrap::in_chain", "GuestTrap::raised_by"]),
     ("crates/gents-pack/src/plugin/http_calls.rs", &["InternalAddress::in_chain"]),

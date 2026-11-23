@@ -134,6 +134,13 @@ pub mod upgrade;
 
 pub const STORE_ENCRYPTION_VERSION: u32 = 1;
 
+/// Test builds address their own service so no test can read or delete an
+/// operator's store key; see the identity service.
+#[cfg(not(any(test, feature = "test-home-guard")))]
+pub const MACOS_KEYCHAIN_SERVICE: &str = "com.source-inc.gents.store-key";
+#[cfg(any(test, feature = "test-home-guard"))]
+pub const MACOS_KEYCHAIN_SERVICE: &str = "com.source-inc.gents.test.store-key";
+
 const STORE_KEY_LEN: usize = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -445,12 +452,8 @@ mod keychain {
     use super::{Result, StoreKeyError};
     use k256::elliptic_curve::zeroize::Zeroizing;
 
-    /// Test builds address their own service so no test can read or delete
-    /// an operator's store key; see the identity service.
-    #[cfg(all(target_os = "macos", not(any(test, feature = "test-home-guard"))))]
-    const SERVICE: &str = "com.source-inc.gents.store-key";
-    #[cfg(all(target_os = "macos", any(test, feature = "test-home-guard")))]
-    const SERVICE: &str = "com.source-inc.gents.test.store-key";
+    #[cfg(target_os = "macos")]
+    use super::MACOS_KEYCHAIN_SERVICE as SERVICE;
 
     #[cfg(target_os = "macos")]
     pub(super) fn store(label: &str, bytes: &[u8]) -> Result<()> {

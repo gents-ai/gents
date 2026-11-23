@@ -15,12 +15,15 @@ use gents_pack::pack::PackKind;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::router::RuntimeHttpState;
+use failure::SessionFailure;
 use gents_pack::pack::install_flow::DocumentsInstallRequest;
 use gents_pack::pack::resolved_pack::ResolvedPack;
+use gents_protocol::operations::pack::hosted::HostedInstallFailure as Class;
 
+mod failure;
 pub mod session;
 
-const PATH: &str = "/packs/install";
+pub(crate) const PATH: &str = "/packs/install";
 /// The root and its dependencies share one pack's compressed bound, so a
 /// remote install never buffers more archive bytes than one maximal pack.
 pub const MAX_ARCHIVE_BYTES: usize = gents_pack::pack::archive::MAX_PACK_BYTES;
@@ -125,54 +128,6 @@ fn encode_request(
     Ok(serde_json::to_vec(&fields(root, dependencies))?)
 }
 
-pub async fn install_remote(
-    endpoint: &gents_store::config_client::GraphqlEndpoint,
-    owner: &str,
-    pack: &ResolvedPack,
-    dependencies: &[ResolvedPack],
-    args: &DocumentsInstallRequest,
-    explicit: bool,
-) -> Result<serde_json::Value> {
-    let mut url = reqwest::Url::parse(endpoint.url())?;
-    anyhow::ensure!(
-        matches!(url.scheme(), "http" | "https")
-            && url.username().is_empty()
-            && url.password().is_none()
-            && url.query().is_none()
-            && url.fragment().is_none(),
-        "remote pack install requires an HTTP URL without credentials"
-    );
-    let prefix = url
-        .path()
-        .strip_suffix("/api/v0/graphql")
-        .context("remote pack install requires a Gents runtime GraphQL endpoint")?;
-    url.set_path(&format!("{prefix}{PATH}"));
-    let body = encode_install_request(pack, dependencies, args, owner, explicit).await?;
-    let client = tokio::task::spawn_blocking(|| {
-        reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-    })
-    .await??;
-    let response = endpoint
-        .send_resolving(|endpoint| Ok(endpoint.authorize(client.post(url.clone()))?.json(&body)))
-        .await?
-        .context(
-            "remote pack install outcome is unconfirmed; inspect the runtime before retrying",
-        )?;
-    let status = response.status();
-    let body = response.bytes().await.context(
-        "remote pack install response was unreadable; inspect the runtime before retrying",
-    )?;
-    anyhow::ensure!(
-        status.is_success(),
-        "remote pack install returned HTTP {status}: {}",
-        String::from_utf8_lossy(&body)
-    );
-    serde_json::from_slice(&body)
-        .context("remote pack install response was unreadable; inspect the runtime before retrying")
-}
-
 pub async fn encode_install_request(
     pack: &ResolvedPack,
     dependencies: &[ResolvedPack],
@@ -238,12 +193,16 @@ pub async fn encode_install_request(
     .context("packing remote document archives")?
 }
 
-fn refused(status: StatusCode, error: impl std::fmt::Display) -> Response {
-    (
+fn refused(status: StatusCode, class: Class) -> Response {
+    failed(
         status,
-        Json(serde_json::json!({"error": format!("{error:#}"), "outcome": "not_installed"})),
+        SessionFailure::not_installed(class)(anyhow::anyhow!("refused")),
     )
-        .into_response()
+}
+
+fn failed(status: StatusCode, failure: SessionFailure) -> Response {
+    failure.log();
+    (status, Json(failure.body())).into_response()
 }
 
 pub async fn install_handler(
@@ -253,53 +212,41 @@ pub async fn install_handler(
     body: Result<Bytes, BytesRejection>,
 ) -> Response {
     let Some(actor) = identity.did().cloned() else {
-        return refused(
-            StatusCode::UNAUTHORIZED,
-            "Client authentication is required.",
-        );
+        return refused(StatusCode::UNAUTHORIZED, Class::NotAuthorized);
     };
     let Some(home) = state.home.clone() else {
-        return refused(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "runtime plugin store unavailable",
-        );
+        return refused(StatusCode::SERVICE_UNAVAILABLE, Class::RuntimeUnavailable);
     };
     let access = match delegated_install_access(&state, &headers, actor) {
         Ok(access) => access,
-        Err(error) => return refused(StatusCode::UNAUTHORIZED, error),
+        Err(_) => return refused(StatusCode::UNAUTHORIZED, Class::NotAuthorized),
     };
     let body = match body {
         Ok(body) => body,
-        Err(rejection) if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => {
-            return refused(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                format!(
-                    "remote pack install request exceeds the {MAX_BODY} byte bound \
-                     ({MAX_ARCHIVE_BYTES} compressed archive bytes)"
-                ),
-            )
-        }
-        Err(rejection) => return refused(rejection.status(), rejection.body_text()),
+        Err(rejection) => return refused(rejection.status(), Class::InvalidRequest),
     };
     let node_did = state.node_did.clone();
     let received = match tokio::task::spawn_blocking(move || decode_request(&body, &node_did)).await
     {
         Ok(Ok(received)) => received,
-        Ok(Err(error)) => return refused(StatusCode::BAD_REQUEST, error),
-        Err(error) => return refused(StatusCode::INTERNAL_SERVER_ERROR, error),
+        Ok(Err(_)) => return refused(StatusCode::BAD_REQUEST, Class::InvalidRequest),
+        Err(_) => return refused(StatusCode::INTERNAL_SERVER_ERROR, Class::InvalidRequest),
     };
-    if !received.request.wire.is_empty() && !received.request.preview {
-        return refused(
-            StatusCode::BAD_REQUEST,
-            "a remote install carries no wiring; the client wires its plugins after it, signing each write itself",
-        );
+    if (!received.request.wire.is_empty() && !received.request.preview)
+        || received.root.manifest().metadata.kind != PackKind::Documents
+    {
+        return refused(StatusCode::BAD_REQUEST, Class::InvalidRequest);
     }
-    if received.root.manifest().metadata.kind != PackKind::Documents {
-        return refused(
-            StatusCode::BAD_REQUEST,
-            "plugin packs require the reviewed install session",
-        );
-    }
+    let class = if received.request.preview {
+        Class::PreviewFailed
+    } else {
+        Class::ApplyUnconfirmed
+    };
+    let identifiers = failure::RefusalIdentifiers::of(
+        &std::iter::once(&received.root)
+            .chain(received.dependencies.iter())
+            .collect::<Vec<_>>(),
+    );
     // Detached so a dropped client cannot cancel an install mid-commit.
     let result =
         tokio::spawn(
@@ -308,19 +255,14 @@ pub async fn install_handler(
         .await;
     match result {
         Ok(Ok(value)) => Json(value).into_response(),
-        Ok(Err(error)) => (
+        Ok(Err(error)) => failed(
             StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({"error": format!("{error:#}"), "outcome": "unconfirmed"})),
-        )
-            .into_response(),
-        Err(error) => (
+            SessionFailure::change(class, error, &identifiers),
+        ),
+        Err(error) => failed(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({
-                "error": format!("pack install outcome unconfirmed: {error}"),
-                "outcome": "unconfirmed",
-            })),
-        )
-            .into_response(),
+            SessionFailure::unconfirmed(class)(error),
+        ),
     }
 }
 
@@ -430,7 +372,7 @@ async fn install_owned(
     home: PathBuf,
     received: Received,
     access: gents_store::config_client::ConfigAccess,
-) -> Result<serde_json::Value> {
+) -> Result<serde_json::Value, gents_pack::pack::PackChangeError> {
     let Received {
         root,
         dependencies,
@@ -455,7 +397,7 @@ async fn install_owned(
         grant_authority: request.grant_authority,
         wire: request.wire,
     };
-    let result = gents_pack::pack::install_flow::install_documents_pack_resolved(
+    gents_pack::pack::install_flow::install_documents_pack_resolved(
         &access,
         &state.node_did,
         &root,
@@ -465,8 +407,6 @@ async fn install_owned(
         &gents_tools::surface::PackRoots,
     )
     .await
-    .map_err(gents_pack::pack::PackChangeError::into_anyhow)?;
-    Ok(result)
 }
 
 #[cfg(test)]

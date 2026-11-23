@@ -8,7 +8,7 @@ use gents_store::config_client::{ConfigAccess, PackApprovalScope, PackEffectAppr
 use serde_json::json;
 use tokio::sync::Mutex;
 
-use super::{send, Refresher, SessionApprover};
+use super::{send, Class, Refresher, SessionApprover, SessionFailure};
 use crate::http::router::RuntimeHttpState;
 
 /// Wire a new pin as the session's User in the runtime's transaction; the
@@ -21,22 +21,21 @@ pub(super) async fn run(
     user_access: &ConfigAccess,
     refresher: Refresher,
     command: WireCommand,
-) -> std::result::Result<(), (anyhow::Error, &'static str)> {
-    let not_wired = |error: anyhow::Error| (error, "not_installed");
+) -> std::result::Result<(), SessionFailure> {
     let WireCommand { node_did, request } = command;
     if node_did != state.node_did {
-        return Err(not_wired(anyhow::anyhow!(
-            "endpoint serves a different node"
-        )));
+        return Err(SessionFailure::not_installed(Class::InvalidRequest)(
+            anyhow::anyhow!("endpoint serves a different node"),
+        ));
     }
     if request.preview || request.remove {
-        return Err(not_wired(anyhow::anyhow!(
-            "a pack session wires a new pin; preview or remove it over the client's own access"
-        )));
+        return Err(SessionFailure::not_installed(Class::InvalidRequest)(
+            anyhow::anyhow!("a pack session wires a new pin"),
+        ));
     }
     let wire = WirePlan::read(user_access, &state.node_did, store, &request)
         .await
-        .map_err(not_wired)?;
+        .map_err(SessionFailure::not_installed(Class::PreparationFailed))?;
     let scope = PackApprovalScope {
         node_did: state.node_did.clone(),
         pack_digests: vec![wire.plugin.digest.clone()],
@@ -49,7 +48,7 @@ pub(super) async fn run(
         json!({"type": "ready", "scope": scope, "preparation": preparation}),
     )
     .await
-    .map_err(not_wired)?;
+    .map_err(SessionFailure::not_installed(Class::SchemaPreparation))?;
     let approver = Arc::new(SessionApprover {
         socket: socket.clone(),
         refresher,
@@ -73,19 +72,18 @@ pub(super) async fn run(
         })
         .await
         .map_err(|failure| {
-            let outcome = if failure.unconfirmed {
-                "unconfirmed"
+            if failure.unconfirmed {
+                SessionFailure::unconfirmed(Class::ApplyUnconfirmed)(failure.error)
             } else {
-                "not_installed"
-            };
-            (failure.error, outcome)
+                SessionFailure::not_installed(Class::ApplyRejected)(failure.error)
+            }
         })?;
-    let result =
-        wire_outcome(&request, &wire.plugin, &report).map_err(|error| (error, "unconfirmed"))?;
+    let result = wire_outcome(&request, &wire.plugin, &report)
+        .map_err(SessionFailure::unconfirmed(Class::ReceiptFailed))?;
     send(
         &mut *socket.lock().await,
         json!({"type": "finished", "result": result}),
     )
     .await
-    .map_err(|error| (error, "unconfirmed"))
+    .map_err(SessionFailure::unconfirmed(Class::ReceiptFailed))
 }

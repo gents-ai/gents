@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use super::NextCall;
 
+pub mod hosted;
+
 /// Lean `Pack.Operations.Actor`: who signs a pack operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

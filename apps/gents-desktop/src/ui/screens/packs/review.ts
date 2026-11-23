@@ -1,3 +1,4 @@
+import { packInstallRefusal } from "@source-inc/gents-desktop-client";
 import type {
   PackFolderAccess,
   PackInstallReport,
@@ -119,30 +120,35 @@ export function folderAccessOf(
     a listed pack may have no version yet, and a link's pack may not be the
     one it names. Null for a failure that may pass, such as an unreachable
     registry. */
-export function lastingReadFailure(error: string): string | null {
+export function lastingReadFailure(error: string, cause?: unknown): string | null {
   if (/unknown field|manifest is not valid|is not a valid pack/.test(error))
     return "This pack was made for an older version of Gents, so it can't be installed. Its publisher needs to update it.";
   if (error.includes("has no published version"))
     return "This pack has no version to install yet.";
-  if (refusalOf(error) === "changed")
+  if (refusalOf(cause) === "changed")
     return "This isn't the pack the link names: its digest is different, so it isn't offered.";
   return null;
 }
 
 /** Why a pack couldn't be read, in words. The installer's own words stay
     available as detail. */
-export function readFailure(error: string): string {
-  return lastingReadFailure(error) ?? "Couldn't read this pack.";
+export function readFailure(error: string, cause?: unknown): string {
+  return lastingReadFailure(error, cause) ?? "Couldn't read this pack.";
 }
 
 /** Why an install stopped, as the review asks about it: the pack needs
     authority the person hasn't allowed, documents it would replace were
-    edited, or the pack is not the one reviewed. Read from the error's words,
-    since the install reports no typed refusal: replace with typed errors
-    from core. */
-export function refusalOf(text: string): "authority" | "edited" | "changed" | null {
-  if (text.includes("--grant-authority")) return "authority";
-  if (text.includes("--overwrite")) return "edited";
-  if (text.includes("not the expected")) return "changed";
-  return null;
+    edited, or the pack is not the one reviewed. Read from the install's
+    typed refusal only. */
+export function refusalOf(error: unknown): "authority" | "edited" | "changed" | null {
+  switch (packInstallRefusal(error)?.class) {
+    case "authority_required":
+      return "authority";
+    case "documents_edited":
+      return "edited";
+    case "digest_changed":
+      return "changed";
+    default:
+      return null;
+  }
 }

@@ -4899,6 +4899,7 @@ async fn hosted_plugin_root_preserves_existing_pack_documents() -> Result<()> {
                     &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
+                .map_err(PackChangeError::into_anyhow)
             })
         })
         .await;

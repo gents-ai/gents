@@ -26,11 +26,31 @@ pub struct InstallVariableUse {
     pub resolved: String,
 }
 
+/// Install variables a pack reads that have neither a value nor a default.
+/// It holds names only, which the pack authors; never a value.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "the pack reads install variables that have no value: {}; supply each as NAME=VALUE (or \
+     NAMESPACE/PACK:NAME=VALUE for one pack), or give it a value in the installing environment",
+    .names.join(", ")
+)]
+pub struct UnsetVariables {
+    pub names: Vec<String>,
+}
+
+impl UnsetVariables {
+    /// The unset variables a load, preparation or preview stopped on, where
+    /// they are in `error`'s chain.
+    pub fn in_chain<'a>(error: &'a (dyn std::error::Error + 'static)) -> Option<&'a Self> {
+        gents_protocol::error_chain::find_source::<Self>(error)
+    }
+}
+
 /// The paths and final literal values use the same interpolation parser as installation.
 pub fn inspect_install_variables(
     value: &serde_json::Value,
     environment: &dyn Fn(&str) -> Option<String>,
-) -> Result<Vec<InstallVariableUse>, Vec<String>> {
+) -> Result<Vec<InstallVariableUse>, UnsetVariables> {
     fn visit(
         value: &serde_json::Value,
         path: &str,
@@ -71,7 +91,7 @@ pub fn inspect_install_variables(
         Ok(())
     }
     let mut uses = Vec::new();
-    visit(value, "", environment, &mut uses)?;
+    visit(value, "", environment, &mut uses).map_err(|names| UnsetVariables { names })?;
     Ok(uses)
 }
 
@@ -143,10 +163,6 @@ pub fn interpolate_with(
     } else {
         Err(missing)
     }
-}
-
-pub fn interpolate(input: &str) -> Result<String, Vec<String>> {
-    interpolate_with(input, &|name| std::env::var(name).ok())
 }
 
 pub fn escape(text: &str) -> String {
@@ -238,5 +254,21 @@ mod install_variable_conformance {
             Some(&Some("example.test".to_owned()))
         );
         assert!(!escaped.variables.contains_key("LITERAL"));
+    }
+
+    #[test]
+    fn an_unset_variable_is_a_typed_refusal_that_names_it() {
+        let config = serde_json::json!({"tools": [{"display_name": "${TOKEN} ${HOST} ${TOKEN}",
+            "tools_id": "${REGION:-west}"}]});
+        let refusal = inspect_install_variables(&config, &|name| {
+            (name == "HOST").then(|| "sk-live-host".to_owned())
+        })
+        .unwrap_err();
+        assert_eq!(refusal.names, ["TOKEN"]);
+        let text = refusal.to_string();
+        assert!(
+            text.contains("TOKEN") && !text.contains("sk-live-host"),
+            "{text}"
+        );
     }
 }

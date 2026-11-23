@@ -49,7 +49,7 @@ pub fn wire_as_client(
                 })
             })
             .await?;
-        replay.result().await
+        Ok(replay.result().await?)
     })
 }
 

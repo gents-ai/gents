@@ -242,7 +242,7 @@ pub fn runtime_contract_router(
         ));
     let mut router = Router::new()
         .route(
-            "/packs/install",
+            crate::http::pack_install::PATH,
             post(crate::http::pack_install::install_handler).layer(
                 axum::extract::DefaultBodyLimit::max(crate::http::pack_install::MAX_BODY),
             ),

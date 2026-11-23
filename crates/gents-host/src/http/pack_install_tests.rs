@@ -267,12 +267,10 @@ async fn a_remote_install_carries_no_wiring_on_any_home() {
         let home = tempfile::tempdir().unwrap();
         let (status, body) = install_wiring(document_acp, home.path()).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{document_acp:?}: {body}");
-        assert_eq!(body["outcome"], "not_installed");
-        assert!(
-            body["error"]
-                .as_str()
-                .is_some_and(|error| error.contains("the client wires its plugins after it")),
-            "{body}"
+        assert_eq!(
+            body,
+            serde_json::json!({"class": "invalid_request", "outcome": "not_installed", "detail": null}),
+            "{document_acp:?}: the refusal is its class, never runtime text"
         );
         assert_eq!(
             std::fs::read_dir(home.path()).unwrap().count(),

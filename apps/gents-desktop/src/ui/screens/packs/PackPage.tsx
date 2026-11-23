@@ -370,7 +370,7 @@ export function PackPage({
      that may pass leaves Install, whose review reads it again */
   const unreadable =
     previewing && preview?.state === "unread"
-      ? lastingReadFailure(preview.error)
+      ? lastingReadFailure(preview.error, preview.cause)
       : null;
   const blocked = elsewhere(local, name) ?? unreadable;
   const description = text(registry?.description) ?? text(report?.description);
@@ -604,7 +604,7 @@ export function PackPage({
           ) : preview.state === "unread" ? (
             <div className="grid gap-2">
               <p role="alert" className="text-sm text-warning">
-                {readFailure(preview.error)}
+                {readFailure(preview.error, preview.cause)}
               </p>
               <ErrorDetail error={preview.error} />
             </div>

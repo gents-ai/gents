@@ -109,7 +109,7 @@ async fn install_documents_pack_inner(
             }
         }
         if needs_runtime_store && args.preview {
-            return gents_host::http::pack_install::install_remote(
+            return gents_host::http::pack_install_client::preview_remote(
                 endpoint,
                 owner,
                 pack,
@@ -386,7 +386,13 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError
         args.expect_digest.as_deref(),
         pack.digest(),
     )
-    .map_err(|error| super::refusal(PackOperation::Install, &args.package, error))?;
+    .map_err(|error| PackChangeError::Refused {
+        next: crate::next_call::command(
+            error.recovery(PackOperation::Install),
+            Some(&args.package),
+        ),
+        error,
+    })?;
     check_wire_target(pack.manifest(), &args.wire)?;
     args.output.ensure_supported(
         "config pack install",
@@ -408,8 +414,15 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError
                 )
                 .into());
             }
-            let requested = parse_inference_slots(&args.inference_slots)
-                .map_err(|error| super::refusal(PackOperation::Install, &args.package, error))?;
+            let requested = parse_inference_slots(&args.inference_slots).map_err(|error| {
+                PackChangeError::Refused {
+                    next: crate::next_call::command(
+                        error.recovery(PackOperation::Install),
+                        Some(&args.package),
+                    ),
+                    error,
+                }
+            })?;
             if args.scope.graphql.is_some()
                 || (args.scope.node_did.is_some() && requested.is_empty())
                 || args.force_rebind_concrete_did
