@@ -3,6 +3,7 @@ use super::*;
 use gents_inference::views::context::{ContextCallRow, ContextCalls, ContextCursor};
 
 pub const PAGE_SIZE: usize = 128;
+/// Calls shown by the desktop request-context panel, its only production reader; client presentation, not a model-facing limit.
 pub const CONTEXT_CALL_LIMIT: usize = 10;
 
 pub async fn load_latest_session_context_calls(

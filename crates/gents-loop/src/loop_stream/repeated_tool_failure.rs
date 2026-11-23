@@ -6,7 +6,9 @@ use crate::truncation::floor_char_boundary;
 /// Identical failing dispatches of one call before further repeats are
 /// intercepted, when `InferenceExecution.repeated_tool_failure_limit` is unset.
 pub const DEFAULT_REPEATED_TOOL_FAILURE_LIMIT: usize = 3;
+/// Lean `RepeatedToolFailure.suppressionLimit`: one notice, then stop. A fixed protocol, not a budget.
 const SUPPRESSION_LIMIT: u32 = 2;
+/// Lean `RepeatedToolSuccess.limit`, fixed by the model.
 const SUCCESS_LIMIT: u32 = 8;
 /// Bounds the error included in the notice and stop reason; the full error
 /// identity still determines whether dispatched calls failed identically.

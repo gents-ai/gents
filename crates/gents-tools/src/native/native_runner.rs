@@ -12,6 +12,7 @@ const MAX_NATIVE_RUNNER_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 // The runner truncates its own results; an oversized response fails to decode.
 const _: () =
     assert!(gents_fs_runner::MAX_RESPONSE_BYTES + 64 * 1024 < MAX_NATIVE_RUNNER_OUTPUT_BYTES);
+/// Per-call cap on the filesystem runner, applied under the request deadline. It stops a stuck or pathological walk; the model narrows the path or pattern rather than raising it.
 const MAX_FS_RUNNER_SECONDS: i64 = 120;
 
 /// The executables native tools start, named where the process starts.

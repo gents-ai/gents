@@ -19,7 +19,9 @@ use std::path::Path;
 use std::time::Duration;
 use tauri::{AppHandle, Runtime};
 
+/// Longest the desktop waits for the managed service to publish runtime readiness before explaining why it did not; generous for slow first starts, and the user can retry.
 const MANAGED_SERVER_READY_TIMEOUT: Duration = Duration::from_secs(300);
+/// Longest the desktop waits for the user to approve the background item before reporting that approval is required; a human response window.
 pub(super) const BACKGROUND_APPROVAL_TIMEOUT: Duration = Duration::from_secs(600);
 pub(super) const MANAGED_SERVER_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
