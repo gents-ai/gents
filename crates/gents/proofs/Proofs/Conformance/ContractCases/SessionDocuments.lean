@@ -142,7 +142,12 @@ def retryState : SessionState :=
 example : (SessionState.retryFromRows? retryState indexed [old] 101 1 3).isSome = true := by native_decide
 example : SessionState.retryFromRows? retryState indexed [old, newerRequest] 101 1 3 = none := by
   rfl
-example : SessionState.retryFromRows? retryState indexed [old] 999 1 3 = none := by rfl
+/-- A reissue names its parent by node and request id (`RequestRef`) and takes
+the physical parent from the one row that lookup finds, refusing an ambiguous
+lookup, so a caller cannot name another physical document for the parent; the
+model refuses one. -/
+theorem retry_refuses_another_physical_parent :
+    SessionState.retryFromRows? retryState indexed [old] 999 1 3 = none := by rfl
 
 def olderExistingCandidate := request 3 0
 example : SessionState.retryFromRows? retryState indexed [old, olderExistingCandidate] 101 1 3 = none := by rfl
@@ -349,11 +354,8 @@ structure RetryRequestWire where
   requestId : Nat
   state : RequestState
   origin : ExecutionOrigin
-  admission : _root_.AdmissionState
-  deadline : Option Nat
-  currentTime : Nat
   retryCount : Nat
-  maxRetries : Nat
+  retryParent : Option Nat
   deriving Lean.ToJson
 
 structure RetryStateWire where
@@ -363,31 +365,29 @@ structure RetryStateWire where
   requests : List RetryRequestWire
   deriving Lean.ToJson
 
-def RetryStateWire.ofModel (s : SessionState) : RetryStateWire :=
+/-- The stored request rows of the failed parent and its successor. -/
+def RetryStateWire.ofModel (failedId newId : Nat) (s : SessionState) : RetryStateWire :=
   { sessionId := s.sessionId, agent := s.agentDid, latest := s.latest
-    requests := ([1, 3].filter fun id => decide (id ∈ s.requestIds)).map fun id =>
+    requests := ([failedId, newId].filter fun id => decide (id ∈ s.requestIds)).map fun id =>
       let r := s.ctx id
-      { requestId := id, state := r.state, origin := r.origin, admission := r.admission
-        deadline := r.deadline, currentTime := r.currentTime, retryCount := r.retryCount
-        maxRetries := r.maxRetries } }
+      { requestId := id, state := r.state, origin := r.origin, retryCount := r.retryCount
+        retryParent := if id = newId then some failedId else none } }
 
-/-- model-production-gap: the model selects the retry parent from the session's
-interned observation and the exact physical request rows inside one
-transaction; production retry eligibility (`project_retry_eligibility` in
-gents-desktop-bridge and `reissue` in gents-session) reads persisted rows
-without the interned observation, so no production path takes a session
-observation with these rows as an input. The session is `indexed` and the
-retry state `retryState`. -/
+/-- A retry rechecks the session's stored request rows: the parent must be the
+session's newest row and the successor's id unused; the successor is stored
+pending, linked to its parent with the next retry count, and becomes the
+session's newest row. The session is `indexed` and the retry state
+`retryState`. -/
 @[conformance_family]
-def retryUnreached : Family RetryInput (Option RetryStateWire) where
+def retry : Family RetryInput (Option RetryStateWire) where
   inputs :=
-    [ ("exact_parent", [old], 101), ("newer_authoritative_row", [old, newerRequest], 101)
-    , ("wrong_physical_parent", [old], 999)
-    , ("existing_candidate_missing_from_auxiliary_projection", [old, olderExistingCandidate], 101)
-    ].map fun (name, rows, parentDoc) =>
-      { name, rows := rows.map RowWire.ofModel, parentDoc, failedId := 1, newId := 3 }
+    [ ("exact_parent", [old]), ("newer_authoritative_row", [old, newerRequest])
+    , ("existing_candidate_missing_from_auxiliary_projection", [old, olderExistingCandidate])
+    ].map fun (name, rows) =>
+      { name, rows := rows.map RowWire.ofModel, parentDoc := old.observed.docId
+        failedId := 1, newId := 3 }
   model := fun i =>
     (SessionState.retryFromRows? retryState indexed (i.rows.map RowWire.toModel) i.parentDoc
-      i.failedId i.newId).map RetryStateWire.ofModel
+      i.failedId i.newId).map (RetryStateWire.ofModel i.failedId i.newId)
 
 end Conformance.SessionDocuments

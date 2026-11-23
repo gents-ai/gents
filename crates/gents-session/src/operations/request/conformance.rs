@@ -113,3 +113,172 @@ fn interrupt_settled_matches_lean() {
         super::interrupt_settled(i.terminal, i.interrupted)
     });
 }
+
+#[tokio::test]
+async fn generated_retries_recheck_the_stored_request_rows() -> anyhow::Result<()> {
+    use crate::request::lifecycle::{ExecutionOrigin, RequestTerminalOutcome};
+    use gents_lean_vocab::families::session_documents_retry as family;
+    use gents_protocol::document_query::{
+        fields::agent_request as fields, rows, session_scope, Query, Selection,
+    };
+    use gents_protocol::operations::request::{ReissueKind, RequestRef, RequestReissueInput};
+    use gents_protocol::request_lifecycle::RequestLifecycleState;
+    use gents_store::identity::NodeIdentity;
+    let request_id = |n: u64| format!("{n:08}");
+    let session_name = |n: u64| format!("retry-session-{n}");
+    for case in family::cases() {
+        let i = &case.input;
+        let (db, user, client, binding) = gents_inference::test_support::signed_test_node(
+            &format!("generated-retry-{}", i.name),
+            crate::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node_did = db.node_identity.did().to_owned();
+        let base = chrono::SubsecRound::trunc_subsecs(chrono::Utc::now(), 0)
+            - chrono::TimeDelta::minutes(1);
+        let scope = &i
+            .rows
+            .first()
+            .expect("a retry case stores its parent")
+            .scope;
+        let session = session_name(scope.session);
+        let mut parent_doc = None;
+        for row in &i.rows {
+            assert!(
+                (row.scope.node, row.scope.session, row.scope.requester)
+                    == (scope.node, scope.session, scope.requester)
+                    && row.agent == i.rows[0].agent
+                    && row.purpose == "normal",
+                "the fixture stores one session's normal requests"
+            );
+            let created_at = (base + chrono::TimeDelta::seconds(i64::try_from(row.created_at)?))
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+            let mut lifecycle = crate::session::signed_claimed_request(
+                &db,
+                &user,
+                &client,
+                &binding,
+                (&request_id(row.request_id), &session, &created_at),
+                None,
+            )
+            .await;
+            let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
+                db.node.clone(),
+                &lifecycle,
+                std::time::Duration::ZERO,
+            )?;
+            lifecycle.begin_owned_execution(&writer).await?;
+            let outcome = [
+                RequestTerminalOutcome::Completed,
+                RequestTerminalOutcome::Failed,
+                RequestTerminalOutcome::Interrupted,
+                RequestTerminalOutcome::Dead,
+                RequestTerminalOutcome::Superseded,
+            ]
+            .into_iter()
+            .find(|outcome| outcome.request_lifecycle_state() == row.state)
+            .expect("the fixture stores terminal rows");
+            lifecycle
+                .terminalize_owned(
+                    outcome,
+                    gents_protocol::output::TerminalOutput::NoMessage,
+                    None,
+                )
+                .await?;
+            if row.doc_id == i.parent_doc {
+                parent_doc = Some(lifecycle.request().doc_id.clone());
+            }
+        }
+        let parent = super::get(
+            &client,
+            &RequestRef {
+                node_did: node_did.clone(),
+                requester_did: Some(user.did().to_owned()),
+                request_id: request_id(i.failed_id),
+            },
+        )
+        .await?;
+        assert_eq!(
+            parent.doc_id, parent_doc,
+            "the reissue lookup finds the modeled physical parent"
+        );
+        let reissued = super::reissue(
+            &client,
+            &user,
+            RequestReissueInput {
+                kind: ReissueKind::Retry,
+                parent: RequestRef {
+                    node_did: node_did.clone(),
+                    requester_did: Some(user.did().to_owned()),
+                    request_id: request_id(i.failed_id),
+                },
+                request_id: Some(request_id(i.new_id)),
+            },
+        )
+        .await;
+        let stored = match reissued {
+            Err(_) => None,
+            Ok(receipt) => {
+                assert_eq!(receipt.session_id, session);
+                let query = Query::select(
+                    Selection::new()
+                        .field(fields::REQUEST_ID)
+                        .field(fields::AGENT_DID)
+                        .field(fields::LIFECYCLE_STATE)
+                        .field(fields::EXECUTION_ORIGIN)
+                        .field(fields::RETRY_COUNT)
+                        .field(fields::RETRY_PARENT_REQUEST),
+                )
+                .filter(session_scope(&node_did, &session, Some(user.did())))
+                .render();
+                let data = client.read(&query).await?;
+                let stored = rows(&data, "AgentRequest");
+                let text =
+                    |row: &serde_json::Value, field: &str| row[field].as_str().map(str::to_owned);
+                let model_id = |id: &str| id.parse::<u64>().expect("a modeled request id");
+                let latest =
+                    super::read::latest_session_request(&client, &node_did, &session, user.did())
+                        .await?
+                        .expect("the session has requests");
+                assert!(
+                    stored
+                        .iter()
+                        .all(|row| text(row, "agent_did").as_deref()
+                            == Some(binding.agent_did.as_str())),
+                    "every row names the session's Agent"
+                );
+                Some(family::RetryStateWire {
+                    session_id: scope.session,
+                    agent: i.rows[0].agent,
+                    latest: model_id(&latest),
+                    requests: [i.failed_id, i.new_id]
+                        .into_iter()
+                        .filter_map(|id| {
+                            stored
+                                .iter()
+                                .find(|row| text(row, "request_id") == Some(request_id(id)))
+                        })
+                        .map(|row| family::RetryRequestWire {
+                            request_id: model_id(&text(row, "request_id").expect("an id")),
+                            state: serde_json::from_value::<RequestLifecycleState>(
+                                row["lifecycle_state"].clone(),
+                            )
+                            .expect("a stored lifecycle state"),
+                            origin: serde_json::from_value::<ExecutionOrigin>(
+                                row["execution_origin"].clone(),
+                            )
+                            .expect("a stored execution origin"),
+                            retry_count: row["retry_count"].as_u64().unwrap_or(0),
+                            retry_parent: text(row, "retry_parent_request")
+                                .as_deref()
+                                .map(model_id),
+                        })
+                        .collect(),
+                })
+            }
+        };
+        case.check(stored);
+        db.node.shutdown().await?;
+    }
+    Ok(())
+}

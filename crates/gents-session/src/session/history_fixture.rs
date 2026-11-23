@@ -301,6 +301,26 @@ pub async fn signed_claimed_authored_request_with_retry(
     session_id: &str,
     retry: Option<crate::request::lifecycle::RetryLink>,
 ) -> crate::request::lifecycle::RequestLifecycle {
+    let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    signed_claimed_request(
+        db,
+        user,
+        client,
+        binding,
+        (request_id, session_id, &created_at),
+        retry,
+    )
+    .await
+}
+
+pub async fn signed_claimed_request(
+    db: &gents_inference::test_support::TestDb,
+    user: &dyn gents_store::identity::NodeIdentity,
+    client: &gents_store::config_client::ConfigAccess,
+    binding: &gents_protocol::agent_identity::AgentIdentityBinding,
+    (request_id, session_id, created_at): (&str, &str, &str),
+    retry: Option<crate::request::lifecycle::RetryLink>,
+) -> crate::request::lifecycle::RequestLifecycle {
     use crate::request::lifecycle::{
         ClaimOutcome, RequestIdentity, RequestLifecycle, RequestSigner, RequestSpec,
     };
@@ -322,7 +342,7 @@ pub async fn signed_claimed_authored_request_with_retry(
             session_id: session_id.into(),
             content: "race".into(),
             execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
-            created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            created_at: created_at.into(),
         },
         gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
     );
