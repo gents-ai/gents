@@ -23,6 +23,17 @@ runs:
         UNIT: ${{ inputs.unit }}
       run: python3 scripts/ci/gate.py record "${UNIT}"
 
+    - name: Upload the latency sample (W53)
+      if: steps.record.outputs.name
+      uses: actions/upload-artifact@v7
+      with:
+        # The latency collector (ci-latency.yml) gathers every `ci-latency-*`
+        # artifact from recent CI runs and appends them to the data branch.
+        name: ci-latency-${{ inputs.unit }}
+        path: ${{ runner.temp }}/latency.json
+        if-no-files-found: ignore
+        retention-days: 7
+
     - name: Upload the pass record
       if: steps.record.outputs.name
       uses: actions/upload-artifact@v7
