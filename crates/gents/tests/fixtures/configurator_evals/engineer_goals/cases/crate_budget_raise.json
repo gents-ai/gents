@@ -1,0 +1,125 @@
+{
+  "case_id": "crate-budget-raise",
+  "split": "validation",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "crates/CR-1.json",
+        "contents": "{\n  \"crate\": \"CR-1\",\n  \"kg\": 40\n}\n"
+      },
+      {
+        "path": "crates/CR-2.json",
+        "contents": "{\n  \"crate\": \"CR-2\",\n  \"kg\": 35\n}\n"
+      },
+      {
+        "path": "crates/CR-3.json",
+        "contents": "{\n  \"crate\": \"CR-3\",\n  \"kg\": 52\n}\n"
+      },
+      {
+        "path": "crates/CR-4.json",
+        "contents": "{\n  \"crate\": \"CR-4\",\n  \"kg\": 18\n}\n"
+      },
+      {
+        "path": "crates/CR-5.json",
+        "contents": "{\n  \"crate\": \"CR-5\",\n  \"kg\": 27\n}\n"
+      },
+      {
+        "path": "crates/CR-6.json",
+        "contents": "{\n  \"crate\": \"CR-6\",\n  \"kg\": 33\n}\n"
+      },
+      {
+        "path": "crates/CR-7.json",
+        "contents": "{\n  \"crate\": \"CR-7\",\n  \"kg\": 45\n}\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "goal",
+      "settle": true,
+      "prompt": "Set this session's goal to exactly \"Tally the crate weights in crates/ into weights.json\" with a token budget of 400000. Once you've read the crate files, if more than 5 of the crates weigh over 35 kg, raise the goal's token budget to 800000 before you tally; otherwise leave the budget as it is. weights.json should hold {\"total_kg\": N}. Finish the goal when it's written.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "goal",
+          "collection": "Goal",
+          "filter": {
+            "session_id": {
+              "_eq": "$session"
+            }
+          },
+          "fields": [
+            "goal_id",
+            "objective",
+            "status",
+            "token_budget",
+            "completion_evidence",
+            "consecutive_blocked_audits",
+            "last_blocked_reason"
+          ]
+        },
+        {
+          "kind": "file",
+          "name": "weights",
+          "glob": "weights.json"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "create_goal"
+            ],
+            "forbidden": [
+              "bash"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "goal",
+            "expect": [
+              {
+                "field": "objective",
+                "equals": "Tally the crate weights in crates/ into weights.json"
+              },
+              {
+                "field": "token_budget",
+                "equals": 400000
+              },
+              {
+                "field": "status",
+                "equals": "complete"
+              }
+            ],
+            "min_rows": 1,
+            "max_rows": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "weights",
+            "expect": [
+              {
+                "path": "weights.json",
+                "pointer": "/total_kg",
+                "equals": 250
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

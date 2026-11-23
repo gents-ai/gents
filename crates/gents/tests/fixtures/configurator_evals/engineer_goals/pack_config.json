@@ -1,0 +1,37 @@
+{
+  "node": {},
+  "eval_definitions": [
+    {
+      "definition_id": "engineer-goals",
+      "comparability_version": 1,
+      "title": "Goals: durable objectives across turns",
+      "subject": {
+        "kind": "agent",
+        "inference_slots": [
+          "engineer"
+        ],
+        "core_packs": [
+          "gents/pack_builder",
+          "gents/web",
+          "gents/dynamic_workflows",
+          "gents/charts",
+          "gents/data_tables",
+          "gents/script"
+        ]
+      },
+      "cases": [
+        "./cases/no_goal_check.json",
+        "./cases/pallet_totals_goal.json",
+        "./cases/queue_one_per_turn.json",
+        "./cases/no_goal_needed.json",
+        "./cases/narrow_report_objective.json",
+        "./cases/tags_already_owned.json",
+        "./cases/points_partial_blocked.json",
+        "./cases/blocked_manifest.json",
+        "./cases/crate_budget_raise.json",
+        "./cases/greenhouse_water_goal.json",
+        "./cases/shelf_budget_raise.json"
+      ]
+    }
+  ]
+}

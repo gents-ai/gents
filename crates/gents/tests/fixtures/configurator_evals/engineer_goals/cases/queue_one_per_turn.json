@@ -1,0 +1,165 @@
+{
+  "case_id": "queue-one-per-turn",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "queue/delta.json",
+        "contents": "{\n  \"job\": \"delta\",\n  \"pages\": 6\n}\n"
+      },
+      {
+        "path": "queue/alpha.json",
+        "contents": "{\n  \"job\": \"alpha\",\n  \"pages\": 3\n}\n"
+      },
+      {
+        "path": "queue/charlie.json",
+        "contents": "{\n  \"job\": \"charlie\",\n  \"pages\": 9\n}\n"
+      },
+      {
+        "path": "queue/bravo.json",
+        "contents": "{\n  \"job\": \"bravo\",\n  \"pages\": 2\n}\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "goal",
+      "settle": true,
+      "prompt": "Make this a session goal with a token budget of 900000: work through the print jobs in queue/ in alphabetical order of job name, exactly one job per goal turn, starting with one job in this turn. For each job, append {\"job\": NAME, \"pages\": N} to the JSON array in printed.json (create it with the first job), and leave the queue files as they are. Finish the goal after the last job.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "goal",
+          "collection": "Goal",
+          "filter": {
+            "session_id": {
+              "_eq": "$session"
+            }
+          },
+          "fields": [
+            "goal_id",
+            "objective",
+            "status",
+            "token_budget",
+            "completion_evidence",
+            "consecutive_blocked_audits",
+            "last_blocked_reason"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "continuations",
+          "collection": "AgentRequest",
+          "filter": {
+            "session_id": {
+              "_eq": "$session"
+            },
+            "request_id": {
+              "_like": "goal-cont-%"
+            }
+          },
+          "fields": [
+            "request_id",
+            "lifecycle_state"
+          ]
+        },
+        {
+          "kind": "file",
+          "name": "printed",
+          "glob": "printed.json"
+        },
+        {
+          "kind": "file",
+          "name": "queue",
+          "glob": "queue/*.json"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "create_goal"
+            ],
+            "forbidden": [
+              "bash"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "goal",
+            "expect": [
+              {
+                "field": "token_budget",
+                "equals": 900000
+              },
+              {
+                "field": "status",
+                "equals": "complete"
+              },
+              {
+                "field": "completion_evidence",
+                "matches": "\\S"
+              }
+            ],
+            "min_rows": 1,
+            "max_rows": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "continuations",
+                "min": 3
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "printed",
+            "expect": [
+              {
+                "path": "printed.json",
+                "pointer": "",
+                "equals": [
+                  {
+                    "job": "alpha",
+                    "pages": 3
+                  },
+                  {
+                    "job": "bravo",
+                    "pages": 2
+                  },
+                  {
+                    "job": "charlie",
+                    "pages": 9
+                  },
+                  {
+                    "job": "delta",
+                    "pages": 6
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

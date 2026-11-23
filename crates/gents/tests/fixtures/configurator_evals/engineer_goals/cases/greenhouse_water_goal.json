@@ -1,0 +1,113 @@
+{
+  "case_id": "greenhouse-water-goal",
+  "split": "held_out",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "greenhouse/zones.json",
+        "contents": "[\n  {\n    \"zone\": \"Z1\",\n    \"litres\": 120,\n    \"active\": true\n  },\n  {\n    \"zone\": \"Z2\",\n    \"litres\": 80,\n    \"active\": false\n  },\n  {\n    \"zone\": \"Z3\",\n    \"litres\": 45,\n    \"active\": true\n  }\n]\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "goal",
+      "settle": true,
+      "prompt": "I want this tracked as the session's goal, worded exactly \"Report the water use of every active greenhouse zone in water-report.json\" and capped at 350000 tokens. See it through. Inactive zones don't count. water-report.json should hold {\"active_litres\": N, \"zones\": [the active zone ids in order]}.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "goal",
+          "collection": "Goal",
+          "filter": {
+            "session_id": {
+              "_eq": "$session"
+            }
+          },
+          "fields": [
+            "goal_id",
+            "objective",
+            "status",
+            "token_budget",
+            "completion_evidence",
+            "consecutive_blocked_audits",
+            "last_blocked_reason"
+          ]
+        },
+        {
+          "kind": "file",
+          "name": "report",
+          "glob": "water-report.json"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "create_goal"
+            ],
+            "forbidden": [
+              "bash"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "goal",
+            "expect": [
+              {
+                "field": "objective",
+                "equals": "Report the water use of every active greenhouse zone in water-report.json"
+              },
+              {
+                "field": "token_budget",
+                "equals": 350000
+              },
+              {
+                "field": "status",
+                "equals": "complete"
+              },
+              {
+                "field": "completion_evidence",
+                "matches": "(?:^|\\D)165(?:\\D|$)"
+              }
+            ],
+            "min_rows": 1,
+            "max_rows": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "report",
+            "expect": [
+              {
+                "path": "water-report.json",
+                "pointer": "/active_litres",
+                "equals": 165
+              },
+              {
+                "path": "water-report.json",
+                "pointer": "/zones",
+                "equals": [
+                  "Z1",
+                  "Z3"
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}
