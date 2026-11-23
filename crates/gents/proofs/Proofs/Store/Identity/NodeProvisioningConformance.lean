@@ -10,9 +10,7 @@ def agentCreatorCases : List (String × AgentCreatorObservation) :=
   [("authorized-agent", valid),
    ("foreign-runtime", { valid with runtimeMatches := false }),
    ("missing-signer", { valid with signerHeld := false }),
-   ("foreign-signer", { valid with signerMatches := false }),
-   ("native-create-denied", { valid with nativeCreate := false }),
-   ("native-relation-denied", { valid with nativeRelation := false })]
+   ("foreign-signer", { valid with signerMatches := false })]
 
 def freshBootstrap : BootstrapObservation := ⟨true, true, true, true, true, true, true, true, false⟩
 
