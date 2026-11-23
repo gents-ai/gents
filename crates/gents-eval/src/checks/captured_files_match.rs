@@ -9,7 +9,9 @@ use crate::checks::{
     excerpt, graded, graded_reason_codes, grader, Check, CheckDescription, CheckVerdict,
     EXCERPT_CHARS,
 };
-use crate::runner::executor::{CaptureResult, FileRef, StageEvidence, FILE_TEXT_LIMIT_BYTES};
+use crate::runner::executor::{
+    CaptureResult, FileRef, FileText, StageEvidence, FILE_TEXT_LIMIT_BYTES,
+};
 
 /// Grades the files a capture holds when the stage ends, never how they were written. Feedback states the expected content; it is written only on the train split, so the held-out split catches a candidate that hard-codes it.
 pub struct CapturedFilesMatch;
@@ -22,6 +24,8 @@ const GLOB_WALK: glob::MatchOptions = glob::MatchOptions {
 };
 
 const OUTSIDE: &str = "a link that resolves outside the trial workspace";
+
+const NON_FILE: &str = "an entry that is not a regular file (a directory or a dangling link)";
 
 const WHOLE_FILE_POINTER: &str =
     "pointer selects a JSON value, but exists and sha256 test the whole file; drop pointer";
@@ -72,13 +76,25 @@ enum Assertion {
 enum Found<'a> {
     File(&'a FileRef),
     Absent,
-    Outside,
+    Occupied(&'static str),
 }
 
 enum Judgement {
     Held,
     Unmet(String),
-    Unavailable(u64),
+    Unavailable(String),
+}
+
+/// The capture a check ref reads and the paths whose text its expectations test, so the runner keeps text for exactly those.
+pub fn text_paths(params: &Value) -> Option<(String, Vec<String>)> {
+    let plan = plan(params).ok()?;
+    let paths = plan
+        .expect
+        .into_iter()
+        .filter(|expectation| expectation.assertion.reads_text())
+        .map(|expectation| expectation.path)
+        .collect();
+    Some((plan.name, paths))
 }
 
 fn plan(params: &Value) -> Result<Plan, Vec<String>> {
@@ -176,6 +192,13 @@ impl Expectation {
 }
 
 impl Assertion {
+    fn reads_text(&self) -> bool {
+        matches!(
+            self,
+            Self::TextEquals { .. } | Self::Text(_) | Self::Json { .. }
+        )
+    }
+
     fn describe(&self) -> String {
         match self {
             Self::Exists(true) => "present".into(),
@@ -194,7 +217,7 @@ impl Assertion {
                 return Judgement::Unmet(format!("a file of {} bytes", file.bytes))
             }
             (_, Found::Absent) => return Judgement::Unmet("absent".into()),
-            (_, Found::Outside) => return Judgement::Unmet(OUTSIDE.into()),
+            (_, Found::Occupied(what)) => return Judgement::Unmet(what.into()),
             (_, Found::File(file)) => file,
         };
         match self {
@@ -203,17 +226,27 @@ impl Assertion {
                 Judgement::Held
             }
             Self::TextEquals { text, .. } => Judgement::Unmet(match &file.text {
-                Some(actual) => first_difference(text, actual),
-                None => digest_of(file),
+                Some(FileText::Kept(actual)) => first_difference(text, actual),
+                _ => digest_of(file),
             }),
             Self::Sha256(_) => Judgement::Unmet(digest_of(file)),
             Self::Text(test) | Self::Json { test, .. } => {
-                let Some(text) = &file.text else {
-                    return if file.bytes > FILE_TEXT_LIMIT_BYTES {
-                        Judgement::Unavailable(file.bytes)
-                    } else {
-                        Judgement::Unmet("bytes that are not UTF-8 text".into())
-                    };
+                let text = match &file.text {
+                    Some(FileText::Kept(text)) => text,
+                    Some(FileText::NotUtf8) => {
+                        return Judgement::Unmet("bytes that are not UTF-8 text".into())
+                    }
+                    Some(FileText::OverLimit) => {
+                        return Judgement::Unavailable(format!(
+                            "it holds {} bytes and a file capture keeps text only up to {FILE_TEXT_LIMIT_BYTES}",
+                            file.bytes
+                        ))
+                    }
+                    None => {
+                        return Judgement::Unavailable(
+                            "the capture kept no text for it; text is kept only for paths this stage's captured_files_match expectations name".into(),
+                        )
+                    }
                 };
                 let actual = match self {
                     Self::Json { pointer, .. } => match serde_json::from_str::<Value>(text) {
@@ -261,10 +294,17 @@ fn first_difference(expected: &str, actual: &str) -> String {
     )
 }
 
-fn find<'a>(path: &str, files: &'a [FileRef], outside: &[String]) -> Found<'a> {
+fn find<'a>(
+    path: &str,
+    files: &'a [FileRef],
+    outside: &[String],
+    non_files: &[String],
+) -> Found<'a> {
+    let names = |paths: &[String]| paths.iter().any(|named| named == path);
     match files.iter().find(|file| file.path == path) {
         Some(file) => Found::File(file),
-        None if outside.iter().any(|link| link == path) => Found::Outside,
+        None if names(outside) => Found::Occupied(OUTSIDE),
+        None if names(non_files) => Found::Occupied(NON_FILE),
         None => Found::Absent,
     }
 }
@@ -282,7 +322,7 @@ impl Check for CapturedFilesMatch {
         CheckDescription {
             name: self.name().into(),
             version: self.version().into(),
-            summary: format!("Scores the fraction of expectations that hold over a file capture, each naming one workspace-relative path and exactly one test of that file as the stage left it: exists (true present, false absent), sha256 of its bytes, equals (its whole text, or with pointer the JSON value there), contains or matches (its text, or with pointer the value there). A test of an absent file fails. Text is kept for UTF-8 files up to {FILE_TEXT_LIMIT_BYTES} bytes; sha256 and whole-text equals grade a file of any size."),
+            summary: format!("Scores the fraction of expectations that hold over a file capture, each naming one workspace-relative path and exactly one test of that file as the stage left it: exists (true present, false absent), sha256 of its bytes, equals (its whole text, or with pointer the JSON value there), contains or matches (its text, or with pointer the value there). A test of an absent file fails, and so does exists false where a directory or link sits. The capture keeps text only for the paths these expectations name, up to {FILE_TEXT_LIMIT_BYTES} bytes each; sha256 and whole-text equals grade a file of any size."),
             params_schema: json!({
                 "type": "object",
                 "properties": {
@@ -321,7 +361,7 @@ impl Check for CapturedFilesMatch {
                 ("missing_capture", "grader: no file capture of that name"),
                 (
                     "content_unavailable",
-                    "grader: contains, matches or pointer tests a file too large for the capture to keep its text",
+                    "grader: contains, matches or pointer tests a file whose text the capture did not keep (too large, or a path no expectation named when it ran)",
                 ),
             ]),
         }
@@ -333,11 +373,12 @@ impl Check for CapturedFilesMatch {
             Err(problems) => return grader("bad_params", problems.join("; ")),
         };
         let name = &plan.name;
-        let (files, outside) = match stage.captures.get(name) {
+        let (files, outside, non_files) = match stage.captures.get(name) {
             Some(CaptureResult::Files {
                 files,
                 outside_workspace,
-            }) => (files, outside_workspace),
+                non_files,
+            }) => (files, outside_workspace, non_files),
             Some(CaptureResult::Documents { .. } | CaptureResult::Schema { .. }) => {
                 return grader(
                     "missing_capture",
@@ -354,16 +395,16 @@ impl Check for CapturedFilesMatch {
         let mut satisfied = 0;
         let mut lines = Vec::new();
         for FileExpectation { path, assertion } in &plan.expect {
-            match assertion.judge(find(path, files, outside)) {
+            match assertion.judge(find(path, files, outside, non_files)) {
                 Judgement::Held => satisfied += 1,
                 Judgement::Unmet(got) => lines.push(format!(
                     "{path}: expected {}, got {got}",
                     excerpt(&assertion.describe(), EXCERPT_CHARS)
                 )),
-                Judgement::Unavailable(bytes) => {
+                Judgement::Unavailable(why) => {
                     return grader(
                         "content_unavailable",
-                        format!("{path} holds {bytes} bytes, but a file capture keeps text only up to {FILE_TEXT_LIMIT_BYTES}, so contains, matches and pointer cannot test it; sha256 and whole-text equals can"),
+                        format!("{path}: {why}, so contains, matches and pointer cannot test it; sha256 and whole-text equals can"),
                     )
                 }
             }

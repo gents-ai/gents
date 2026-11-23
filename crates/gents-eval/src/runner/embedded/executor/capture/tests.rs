@@ -328,14 +328,25 @@ async fn l1_backend_capture_grades_metadata_without_retaining_auth() {
     home.node.shutdown().await.expect("shutdown node");
 }
 
-fn captured(workspace: &Path, glob: &str) -> (Vec<FileRef>, Vec<String>) {
-    match capture_files(workspace, glob) {
+fn capture(
+    workspace: &Path,
+    glob: &str,
+    text_paths: &[&str],
+) -> (Vec<FileRef>, Vec<String>, Vec<String>) {
+    let text_paths = text_paths.iter().map(|path| (*path).to_owned()).collect();
+    match capture_files(workspace, glob, &text_paths) {
         Some(CaptureResult::Files {
             files,
             outside_workspace,
-        }) => (files, outside_workspace),
+            non_files,
+        }) => (files, outside_workspace, non_files),
         other => panic!("expected a file capture, got {other:?}"),
     }
+}
+
+fn captured(workspace: &Path, glob: &str) -> (Vec<FileRef>, Vec<String>) {
+    let (files, outside_workspace, _) = capture(workspace, glob, &[]);
+    (files, outside_workspace)
 }
 
 #[test]
@@ -346,8 +357,11 @@ fn file_capture_refuses_parent_components() {
     std::fs::write(workspace.join("report.txt"), b"hello").unwrap();
     std::fs::write(dir.path().join("outside.txt"), b"secret").unwrap();
 
-    assert_eq!(capture_files(&workspace, "../*.txt"), None);
-    assert_eq!(capture_files(&workspace, "/etc/*"), None);
+    assert_eq!(
+        capture_files(&workspace, "../*.txt", &BTreeSet::new()),
+        None
+    );
+    assert_eq!(capture_files(&workspace, "/etc/*", &BTreeSet::new()), None);
     let (found, outside) = captured(&workspace, "*.txt");
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].path, "report.txt");
@@ -356,7 +370,7 @@ fn file_capture_refuses_parent_components() {
 }
 
 #[test]
-fn file_capture_retains_text_only_for_utf8_files_within_the_limit() {
+fn file_capture_keeps_text_only_for_named_utf8_files_within_the_limit() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = dir.path();
     let limit = FILE_TEXT_LIMIT_BYTES as usize;
@@ -364,33 +378,153 @@ fn file_capture_retains_text_only_for_utf8_files_within_the_limit() {
     std::fs::write(workspace.join("b-binary.txt"), [0xff, 0xfe, 0x00]).unwrap();
     std::fs::write(workspace.join("c-at-limit.txt"), "x".repeat(limit)).unwrap();
     std::fs::write(workspace.join("d-over-limit.txt"), "x".repeat(limit + 1)).unwrap();
+    std::fs::write(workspace.join("e-unnamed.txt"), "hello\n").unwrap();
 
-    let (files, _) = captured(workspace, "*.txt");
-    let retained: Vec<(&str, u64, Option<usize>)> = files
+    let (files, _, _) = capture(
+        workspace,
+        "*.txt",
+        &[
+            "a-small.txt",
+            "b-binary.txt",
+            "c-at-limit.txt",
+            "d-over-limit.txt",
+        ],
+    );
+    let kept: Vec<(&str, u64, Option<FileText>)> = files
         .iter()
-        .map(|file| {
-            (
-                file.path.as_str(),
-                file.bytes,
-                file.text.as_ref().map(String::len),
-            )
-        })
+        .map(|file| (file.path.as_str(), file.bytes, file.text.clone()))
         .collect();
     assert_eq!(
-        retained,
+        kept,
         [
-            ("a-small.txt", 7, Some(7)),
-            ("b-binary.txt", 3, None),
-            ("c-at-limit.txt", limit as u64, Some(limit)),
-            ("d-over-limit.txt", limit as u64 + 1, None),
+            ("a-small.txt", 7, Some(FileText::Kept("héllo\n".into()))),
+            ("b-binary.txt", 3, Some(FileText::NotUtf8)),
+            (
+                "c-at-limit.txt",
+                limit as u64,
+                Some(FileText::Kept("x".repeat(limit)))
+            ),
+            (
+                "d-over-limit.txt",
+                limit as u64 + 1,
+                Some(FileText::OverLimit)
+            ),
+            ("e-unnamed.txt", 6, None),
         ]
     );
-    assert_eq!(files[0].text.as_deref(), Some("héllo\n"));
     assert_eq!(
         files[3].sha256,
         format!("{:x}", Sha256::digest("x".repeat(limit + 1))),
-        "an unretained file is still graded by its digest"
+        "a file whose text is not kept is still graded by its digest"
     );
+}
+
+#[test]
+fn a_broad_file_capture_keeps_no_more_text_than_its_named_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let page = "x".repeat(4 * 1024);
+    let tree: Vec<(String, &str)> = (0..64)
+        .map(|index| (format!("src/m{index:02}/lib.rs"), page.as_str()))
+        .collect();
+    write_tree(
+        dir.path(),
+        &tree
+            .iter()
+            .map(|(path, contents)| (path.as_str(), *contents))
+            .collect::<Vec<_>>(),
+    );
+
+    let (files, _, _) = capture(dir.path(), "**/*", &["src/m07/lib.rs", "src/m63/lib.rs"]);
+    assert_eq!(files.len(), 64);
+    let kept: Vec<(&str, usize)> = files
+        .iter()
+        .filter_map(|file| match &file.text {
+            Some(FileText::Kept(text)) => Some((file.path.as_str(), text.len())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        kept,
+        [
+            ("src/m07/lib.rs", page.len()),
+            ("src/m63/lib.rs", page.len())
+        ],
+        "kept text is bounded by the named paths, not by the glob"
+    );
+    assert!(files
+        .iter()
+        .filter(|file| !kept.iter().any(|(path, _)| *path == file.path))
+        .all(|file| file.text.is_none()));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_directory_or_dangling_link_at_a_path_is_recorded_and_is_not_absent() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path();
+    std::fs::create_dir_all(workspace.join("out/report.txt")).unwrap();
+    std::fs::create_dir_all(workspace.join("run")).unwrap();
+    std::os::unix::fs::symlink(
+        workspace.join("run/no-such-target"),
+        workspace.join("run/server.lock"),
+    )
+    .unwrap();
+    std::fs::write(workspace.join("notes.txt"), "n").unwrap();
+
+    let (files, outside, non_files) = capture(workspace, "**/*", &[]);
+    assert_eq!(
+        files
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect::<Vec<_>>(),
+        ["notes.txt"]
+    );
+    assert!(outside.is_empty());
+    assert_eq!(
+        non_files,
+        ["out", "out/report.txt", "run", "run/server.lock"]
+    );
+    let (_, _, literal) = capture(workspace, "run/server.lock", &[]);
+    assert_eq!(
+        literal,
+        ["run/server.lock"],
+        "a literal glob reaches a dangling link too"
+    );
+
+    let mut stage = crate::runner::ScriptedExecutor::passed_evidence("did:x", "s", "rows", vec![])
+        .stages
+        .remove(0);
+    stage.captures.insert(
+        "workspace".into(),
+        capture_files(workspace, "**/*", &BTreeSet::new()).unwrap(),
+    );
+    let verdict = crate::checks::CheckRegistry::builtin()
+        .evaluate_bound(
+            "captured_files_match",
+            &json!({"name": "workspace", "expect": [
+                {"path": "out/report.txt", "exists": false},
+                {"path": "run/server.lock", "exists": false},
+                {"path": "out/report.txt", "exists": true},
+                {"path": "gone.txt", "exists": false}
+            ]}),
+            &stage,
+        )
+        .unwrap();
+    assert_eq!(
+        (verdict.kind, verdict.score_bp),
+        (OutcomeKind::ModelAcceptance, Some(2_500)),
+        "{:?}",
+        verdict.feedback
+    );
+    let feedback = verdict.feedback.unwrap_or_default();
+    for path in ["out/report.txt", "run/server.lock"] {
+        assert!(
+            feedback.contains(&format!(
+                "{path}: expected absent, got an entry that is not a regular file"
+            )),
+            "{feedback}"
+        );
+    }
 }
 
 fn write_tree(workspace: &Path, files: &[(&str, &str)]) {
@@ -468,30 +602,65 @@ fn a_file_capture_grades_host_file_content_and_untouched_seeds() {
             ("config/app.toml", "[server]\nport = 8080\n"),
             ("run/status.json", r#"{"state": "running", "pid": 4242}"#),
             ("seed/input.csv", seed),
+            ("notes/unread.md", "not graded"),
         ],
     );
-    let params = json!({"name": "workspace", "expect": [
-        {"path": "config/app.toml", "contains": "port = 8080"},
-        {"path": "run/status.json", "pointer": "/state", "equals": "running"},
-        {"path": "seed/input.csv", "equals": seed},
-        {"path": "seed/input.csv.bak", "exists": false}
-    ]});
+    let case: gents_documents::EvalCase = serde_json::from_value(json!({
+        "case_id": "edit",
+        "split": "train",
+        "stages": [{
+            "stage_id": "edit",
+            "prompt": "Serve on 8080 and leave the seed alone.",
+            "capture": [{"kind": "file", "name": "workspace", "glob": "**/*"}],
+            "checks": [{
+                "check": "captured_files_match",
+                "tier": "acceptance",
+                "params": {"name": "workspace", "expect": [
+                    {"path": "config/app.toml", "contains": "port = 8080"},
+                    {"path": "run/status.json", "pointer": "/state", "equals": "running"},
+                    {"path": "seed/input.csv", "equals": seed},
+                    {"path": "seed/input.csv.bak", "exists": false}
+                ]}
+            }]
+        }]
+    }))
+    .unwrap();
+    let specs = crate::runner::spec::stage_specs(&case, &[]);
+    let check = &case.stages[0].checks[0];
     let registry = crate::checks::CheckRegistry::builtin();
     let grade = || {
-        let (files, outside_workspace) = captured(dir.path(), "**/*");
         let mut stage =
             crate::runner::ScriptedExecutor::passed_evidence("did:x", "s", "rows", vec![])
                 .stages
                 .remove(0);
-        stage.captures.insert(
-            "workspace".into(),
-            CaptureResult::Files {
-                files,
-                outside_workspace,
-            },
+        stage.captures = specs[0]
+            .captures
+            .iter()
+            .filter_map(|capture| match capture {
+                Capture::File {
+                    name,
+                    glob,
+                    text_paths,
+                } => {
+                    capture_files(dir.path(), glob, text_paths).map(|result| (name.clone(), result))
+                }
+                _ => None,
+            })
+            .collect();
+        let CaptureResult::Files { files, .. } = &stage.captures["workspace"] else {
+            panic!("a file capture");
+        };
+        assert_eq!(
+            files
+                .iter()
+                .filter(|file| file.text.is_some())
+                .map(|file| file.path.as_str())
+                .collect::<Vec<_>>(),
+            ["config/app.toml", "run/status.json", "seed/input.csv"],
+            "text is kept for the paths the check reads, and no other"
         );
         registry
-            .evaluate_bound("captured_files_match", &params, &stage)
+            .evaluate_bound(&check.check, &check.params, &stage)
             .unwrap()
     };
     let verdict = grade();
@@ -563,7 +732,7 @@ fn a_file_capture_that_cannot_be_read_is_omitted() {
     }
 
     assert_eq!(
-        capture_files(&workspace, "*.txt"),
+        capture_files(&workspace, "*.txt", &BTreeSet::new()),
         None,
         "a capture that cannot be read is absent, not empty"
     );

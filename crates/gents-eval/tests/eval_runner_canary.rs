@@ -102,6 +102,7 @@ async fn the_canary_runs_two_cases_end_to_end_on_an_embedded_home_with_live_infe
     let CaptureResult::Files {
         files,
         outside_workspace,
+        ..
     } = &recollected.stages[0].captures["notes"]
     else {
         panic!(
@@ -930,6 +931,7 @@ async fn canary_request(endpoint: &str, run_id: &str) -> (Canary, RunRequest) {
             Capture::File {
                 name: "notes".into(),
                 glob: "**/*.txt".into(),
+                text_paths: Default::default(),
             },
         ],
         runs_dir: canary.runs_dir(),

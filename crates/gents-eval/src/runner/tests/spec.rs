@@ -156,6 +156,7 @@ fn a_stage_captures_what_it_declares_and_otherwise_what_the_run_requested() {
             Capture::File {
                 name: "notes".into(),
                 glob: "**/*.txt".into(),
+                text_paths: Default::default(),
             },
         ]
     );
@@ -170,5 +171,96 @@ fn a_stage_captures_what_it_declares_and_otherwise_what_the_run_requested() {
             session_agent_owned: false,
             expired_client_request: false,
         })
+    );
+}
+
+#[test]
+fn a_file_capture_keeps_text_only_for_the_paths_its_stage_checks_read() {
+    let case: EvalCase = serde_json::from_value(json!({
+        "case_id": "k",
+        "split": "train",
+        "stages": [
+            {
+                "stage_id": "edit",
+                "prompt": "p",
+                "capture": [
+                    {"kind": "file", "name": "workspace", "glob": "**/*"},
+                    {"kind": "file", "name": "logs", "glob": "logs/*"}
+                ],
+                "checks": [{
+                    "check": "captured_files_match",
+                    "tier": "acceptance",
+                    "params": {"name": "workspace", "expect": [
+                        {"path": "config/app.toml", "contains": "port"},
+                        {"path": "run/status.json", "pointer": "/state", "equals": "up"},
+                        {"path": "seed/input.csv", "equals": "id\n"},
+                        {"path": "seed/schema.json", "sha256": "0".repeat(64)},
+                        {"path": "run/server.lock", "exists": false}
+                    ]}
+                }, {
+                    "check": "captured_rows_count",
+                    "tier": "acceptance",
+                    "params": {"name": "logs", "min": 1}
+                }]
+            },
+            {
+                "stage_id": "fallback",
+                "prompt": "p",
+                "checks": [{
+                    "check": "captured_files_match",
+                    "tier": "acceptance",
+                    "params": {"name": "notes", "expect": [{"path": "a.txt", "matches": "^a"}]}
+                }]
+            }
+        ]
+    }))
+    .unwrap();
+    let fallback = vec![Capture::File {
+        name: "notes".into(),
+        glob: "*.txt".into(),
+        text_paths: Default::default(),
+    }];
+
+    let stages = stage_specs(&case, &fallback);
+
+    let text_paths = |stage: &StageSpec| -> Vec<(String, Vec<String>)> {
+        stage
+            .captures
+            .iter()
+            .filter_map(|capture| match capture {
+                Capture::File {
+                    name, text_paths, ..
+                } => Some((name.clone(), text_paths.iter().cloned().collect())),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(
+        text_paths(&stages[0]),
+        [
+            (
+                "workspace".to_owned(),
+                vec![
+                    "config/app.toml".to_owned(),
+                    "run/status.json".to_owned(),
+                    "seed/input.csv".to_owned()
+                ]
+            ),
+            ("logs".to_owned(), vec![])
+        ],
+        "exists and sha256 read no text, and an unread capture keeps none"
+    );
+    assert_eq!(
+        text_paths(&stages[1]),
+        [("notes".to_owned(), vec!["a.txt".to_owned()])]
+    );
+    assert_eq!(
+        fallback,
+        vec![Capture::File {
+            name: "notes".into(),
+            glob: "*.txt".into(),
+            text_paths: Default::default(),
+        }],
+        "the run's own captures are not changed"
     );
 }

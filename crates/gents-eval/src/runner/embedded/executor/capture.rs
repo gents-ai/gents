@@ -8,7 +8,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::checks::captured_fields_match::{test, Expectation};
-use crate::runner::executor::{Capture, CaptureResult, FileRef, FILE_TEXT_LIMIT_BYTES};
+use crate::runner::executor::{Capture, CaptureResult, FileRef, FileText, FILE_TEXT_LIMIT_BYTES};
 #[cfg(test)]
 use gents::defra_node::Node as EmbeddedNode;
 #[cfg(test)]
@@ -113,8 +113,12 @@ pub(super) async fn run_captures_with_access(
                     "eval document capture failed; the stage records no capture under that name"
                 ),
             },
-            Capture::File { name, glob } => {
-                if let Some(result) = capture_files(workspace, glob) {
+            Capture::File {
+                name,
+                glob,
+                text_paths,
+            } => {
+                if let Some(result) = capture_files(workspace, glob, text_paths) {
                     results.insert(name.clone(), result);
                 }
             }
@@ -482,12 +486,13 @@ pub(crate) fn render_graphql_input(value: &Value, trial_did: &str) -> String {
     }
 }
 
-fn capture_files(workspace: &Path, glob: &str) -> Option<CaptureResult> {
-    match collect_files(workspace, glob) {
-        Ok((files, outside_workspace)) => Some(CaptureResult::Files {
-            files,
-            outside_workspace,
-        }),
+fn capture_files(
+    workspace: &Path,
+    glob: &str,
+    text_paths: &BTreeSet<String>,
+) -> Option<CaptureResult> {
+    match collect_files(workspace, glob, text_paths) {
+        Ok(result) => Some(result),
         Err(error) => {
             tracing::warn!(
                 error = %format!("{error:#}"),
@@ -499,7 +504,11 @@ fn capture_files(workspace: &Path, glob: &str) -> Option<CaptureResult> {
     }
 }
 
-fn collect_files(workspace: &Path, glob: &str) -> Result<(Vec<FileRef>, Vec<String>)> {
+fn collect_files(
+    workspace: &Path,
+    glob: &str,
+    text_paths: &BTreeSet<String>,
+) -> Result<CaptureResult> {
     anyhow::ensure!(
         Path::new(glob)
             .components()
@@ -516,17 +525,19 @@ fn collect_files(workspace: &Path, glob: &str) -> Result<(Vec<FileRef>, Vec<Stri
     );
     let mut files = Vec::new();
     let mut outside_workspace = Vec::new();
+    let mut non_files = Vec::new();
     for matched in glob::glob(&format!("{root}/{glob}")).context("compiling a capture glob")? {
         let path = matched.context("reading a capture glob match")?;
-        if !path.is_file() {
-            continue;
-        }
         let relative = path
             .strip_prefix(workspace)
             .with_context(|| format!("{} is outside the trial workspace", path.display()))?
             .to_str()
             .with_context(|| format!("{} is not UTF-8", path.display()))?
             .to_string();
+        if !path.is_file() {
+            non_files.push(relative);
+            continue;
+        }
         let inside = path
             .canonicalize()
             .is_ok_and(|resolved| resolved.starts_with(&resolved_workspace));
@@ -541,18 +552,29 @@ fn collect_files(workspace: &Path, glob: &str) -> Result<(Vec<FileRef>, Vec<Stri
         }
         let bytes = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
         let size = bytes.len() as u64;
+        let sha256 = format!("{:x}", Sha256::digest(&bytes));
+        let text = text_paths.contains(&relative).then(|| {
+            if size > FILE_TEXT_LIMIT_BYTES {
+                FileText::OverLimit
+            } else {
+                String::from_utf8(bytes).map_or(FileText::NotUtf8, FileText::Kept)
+            }
+        });
         files.push(FileRef {
             path: relative,
-            sha256: format!("{:x}", Sha256::digest(&bytes)),
+            sha256,
             bytes: size,
-            text: (size <= FILE_TEXT_LIMIT_BYTES)
-                .then(|| String::from_utf8(bytes).ok())
-                .flatten(),
+            text,
         });
     }
     files.sort_by(|left, right| left.path.cmp(&right.path));
     outside_workspace.sort();
-    Ok((files, outside_workspace))
+    non_files.sort();
+    Ok(CaptureResult::Files {
+        files,
+        outside_workspace,
+        non_files,
+    })
 }
 
 #[cfg(test)]

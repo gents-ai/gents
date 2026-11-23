@@ -17,11 +17,15 @@ fn file(path: &str, contents: &[u8]) -> FileRef {
         path: path.into(),
         sha256: digest(contents),
         bytes: contents.len() as u64,
-        text: std::str::from_utf8(contents).ok().map(str::to_owned),
+        text: Some(String::from_utf8(contents.to_vec()).map_or(FileText::NotUtf8, FileText::Kept)),
     }
 }
 
-fn stage(files: Vec<FileRef>, outside: &[&str]) -> StageEvidence {
+fn paths(paths: &[&str]) -> Vec<String> {
+    paths.iter().map(|path| (*path).to_owned()).collect()
+}
+
+fn occupied(files: Vec<FileRef>, outside: &[&str], non_files: &[&str]) -> StageEvidence {
     let mut stage = ScriptedExecutor::passed_evidence("did:x", "s1", "rows", vec![])
         .stages
         .remove(0);
@@ -29,10 +33,15 @@ fn stage(files: Vec<FileRef>, outside: &[&str]) -> StageEvidence {
         CAPTURE.into(),
         CaptureResult::Files {
             files,
-            outside_workspace: outside.iter().map(|path| (*path).to_owned()).collect(),
+            outside_workspace: paths(outside),
+            non_files: paths(non_files),
         },
     );
     stage
+}
+
+fn stage(files: Vec<FileRef>, outside: &[&str]) -> StageEvidence {
+    occupied(files, outside, &[])
 }
 
 fn finished() -> Vec<FileRef> {
@@ -212,10 +221,65 @@ fn a_link_out_of_the_workspace_is_neither_present_nor_absent() {
 }
 
 #[test]
+fn a_directory_or_dangling_link_at_a_path_is_neither_present_nor_absent() {
+    let verdict = judged(
+        json!([
+            {"path": "out/report.txt", "exists": false},
+            {"path": "out/report.txt", "exists": true},
+            {"path": "out/report.txt", "contains": "total"},
+            {"path": "run/server.lock", "exists": false},
+            {"path": "run/other.lock", "exists": false}
+        ]),
+        &occupied(finished(), &[], &["out/report.txt", "run/server.lock"]),
+    );
+    assert_eq!(
+        (verdict.kind, verdict.score_bp),
+        (OutcomeKind::ModelAcceptance, Some(2_000))
+    );
+    assert_eq!(
+        feedback(&verdict)
+            .lines()
+            .filter(|line| line.ends_with(NON_FILE))
+            .count(),
+        4,
+        "{verdict:?}"
+    );
+}
+
+#[test]
+fn a_content_test_of_text_the_capture_did_not_keep_is_a_grader_outcome() {
+    let unread = FileRef {
+        text: None,
+        ..file("notes.md", b"kept elsewhere")
+    };
+    let evidence = stage(vec![unread], &[]);
+    let verdict = judged(json!([{"path": "notes.md", "contains": "kept"}]), &evidence);
+    assert_eq!(
+        (verdict.kind, verdict.score_bp, &verdict.raw["reason_code"]),
+        (OutcomeKind::Grader, None, &json!("content_unavailable"))
+    );
+    assert!(
+        verdict.raw["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("notes.md: the capture kept no text for it"),
+        "{verdict:?}"
+    );
+    let verdict = judged(
+        json!([
+            {"path": "notes.md", "equals": "kept elsewhere"},
+            {"path": "notes.md", "exists": true}
+        ]),
+        &evidence,
+    );
+    assert_eq!(verdict.score_bp, Some(10_000), "{verdict:?}");
+}
+
+#[test]
 fn whole_file_digests_grade_a_file_too_large_to_keep_as_text() {
     let large = "x".repeat(FILE_TEXT_LIMIT_BYTES as usize + 1);
     let kept = FileRef {
-        text: None,
+        text: Some(FileText::OverLimit),
         ..file("big.log", large.as_bytes())
     };
     let evidence = stage(vec![kept], &[]);
@@ -264,6 +328,28 @@ fn a_missing_or_non_file_capture_is_a_grader_outcome() {
             "{name}"
         );
     }
+}
+
+#[test]
+fn the_paths_whose_text_a_check_reads_are_its_content_tests() {
+    assert_eq!(
+        text_paths(&json!({"name": CAPTURE, "expect": [
+            {"path": "a.txt", "exists": true},
+            {"path": "b.txt", "sha256": digest(b"")},
+            {"path": "c.txt", "equals": "c"},
+            {"path": "d.txt", "contains": "d"},
+            {"path": "e.txt", "matches": "e"},
+            {"path": "f.json", "pointer": "/f", "equals": 1}
+        ]})),
+        Some((
+            CAPTURE.to_owned(),
+            paths(&["c.txt", "d.txt", "e.txt", "f.json"])
+        ))
+    );
+    assert_eq!(
+        text_paths(&json!({"name": CAPTURE, "expect": [{"path": "a", "matches": "("}]})),
+        None
+    );
 }
 
 #[test]
