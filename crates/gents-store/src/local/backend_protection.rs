@@ -423,10 +423,14 @@ impl PreflightProtectedBackendStore<'_> {
         if runtime.did() != self.node_did {
             return Err(BackendProtectionError::WrongNode);
         }
+        let mut extensions = composition.clone();
+        if let Some(group) = &self.transport_replica {
+            extensions.attach(Arc::new(group.clone()))?;
+        }
         let started = self
             .start_node_with_plugins(key, runtime, configure, policy, plugins)
             .await?;
-        if let Err(error) = crate::node_extension::attach_all(&started.0, composition) {
+        if let Err(error) = crate::node_extension::attach_all(&started.0, &extensions) {
             let _ = started.0.shutdown().await;
             return Err(error.into());
         }

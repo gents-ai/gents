@@ -24,6 +24,14 @@ async fn the_account_signs_device_admission_and_revocation() -> anyhow::Result<(
     let home = home.reopen_for_replication().await?;
     let account = home.as_user()?;
     let device = &home.node_did;
+    let network = gents_p2p::p2p_reconcile::ensure_enrollment_network(
+        &home.node,
+        home.home.node.as_ref(),
+        "shared home",
+    )
+    .await?
+    .context("admitted home did not publish its enrollment network")?;
+    assert_eq!(network.admin_did, home.node_did.as_str());
     let policy = node_policy_ids(&home.node).id(BuiltInPolicy::Household);
     let provider = home.node.document_acp();
     let owner = provider
@@ -89,6 +97,19 @@ async fn the_account_signs_device_admission_and_revocation() -> anyhow::Result<(
         .await?;
     home.settled(&home.user_did, "device revocation").await?;
     assert!(!can_read().await?);
+    assert!(gents_p2p::p2p_reconcile::ensure_enrollment_network(
+        &home.node,
+        home.home.node.as_ref(),
+        "revoked"
+    )
+    .await
+    .is_err());
+    assert!(gents_store::local::document_acp::ensure_enrollment(
+        &home.node,
+        gents_store::local::document_acp::EnrollmentRequest::Offer
+    )
+    .await
+    .is_err());
     assert!(rules
         .allows_foreign_registration(&network, &outsider, provider.as_ref())
         .await

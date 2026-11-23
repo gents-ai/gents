@@ -13,6 +13,14 @@ use super::{ConfigAccess, DeviceGroupReadError};
 pub(crate) struct TransportReplica(ReplicaGroup);
 
 impl TransportReplica {
+    pub(crate) async fn check_receiver(&self, node: &defra_node::Node) -> acp::Result<bool> {
+        let provider = node.document_acp();
+        let receiver = provider
+            .own_actor()
+            .ok_or(acp::Error::UnsupportedReplicaMembership)?;
+        provider.replica_group_member(&self.0, &receiver).await
+    }
+
     pub(crate) fn reader_manager(&self) -> Subject {
         Subject::entity_set(&self.0.resource, &self.0.object, &self.0.relation)
     }

@@ -53,7 +53,8 @@ impl EnrollmentDecisionService {
         gents_store::local::document_acp::ensure_enrollment(
             &self.node,
             gents_store::local::document_acp::EnrollmentRequest::Pending,
-        )?;
+        )
+        .await?;
         let now = Utc::now();
         gents_p2p::p2p_reconcile::authenticate_operator_query(self.identity.as_ref(), command, now)
             .await?;
@@ -124,6 +125,9 @@ pub fn refusal_status(error: &anyhow::Error) -> axum::http::StatusCode {
     match DocumentAcpError::in_chain(error.as_ref()) {
         Some(DocumentAcpError::TransportGrantsAwaitProvider) => {
             axum::http::StatusCode::NOT_IMPLEMENTED
+        }
+        Some(DocumentAcpError::TransportMembership(_)) => {
+            axum::http::StatusCode::SERVICE_UNAVAILABLE
         }
         _ => axum::http::StatusCode::BAD_REQUEST,
     }

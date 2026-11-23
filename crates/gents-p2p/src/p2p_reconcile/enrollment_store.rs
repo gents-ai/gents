@@ -573,7 +573,7 @@ impl GraphqlEnrollmentStore {
             self.node.node_identity_did() == Some(self.identity.did()),
             "enrollment publication requires the local runtime identity"
         );
-        gents_store::local::document_acp::ensure_node_publication(&self.node)?;
+        gents_store::local::document_acp::ensure_node_publication(&self.node).await?;
         let runtime = identity::Did::new(self.identity.did())?;
         let reader = identity::Did::new(recipient)?;
         let access = ConfigAccess::local_as(self.node.clone(), runtime.clone());

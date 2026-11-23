@@ -1,4 +1,4 @@
-use super::{provider_of, publication, DocumentAcp, DocumentAcpError, Publication, Result};
+use super::{publication, DocumentAcp, Publication, Result};
 
 /// Whether serving creates the runtime's signed `Network` row
 /// (`Identity.NodePublication.enrollmentRoot`).
@@ -39,11 +39,6 @@ pub fn enrollment(provider: DocumentAcp, _: EnrollmentRequest) -> EnrollmentAnsw
 
 /// Refuses `request` on `node` before anything is read or written when the
 /// home serves without an enrollment root.
-pub fn ensure_enrollment(node: &defra_node::Node, request: EnrollmentRequest) -> Result<()> {
-    match enrollment(provider_of(node), request) {
-        EnrollmentAnswer::Served => Ok(()),
-        EnrollmentAnswer::PeerNetworkingUnavailable => {
-            Err(DocumentAcpError::TransportGrantsAwaitProvider)
-        }
-    }
+pub async fn ensure_enrollment(node: &defra_node::Node, _: EnrollmentRequest) -> Result<()> {
+    super::ensure_node_publication(node).await
 }

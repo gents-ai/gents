@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
 use defra_node::Node as EmbeddedNode;
 use gents_protocol::network_token::{derive_network_id, NetworkRecord};
-use gents_store::graphql::{graphql_with_transaction_retry, rows};
+use gents_store::graphql::{read_rendered, rows};
 use gents_store::identity::NodeIdentity;
 use serde::Deserialize;
 
@@ -26,8 +26,8 @@ pub async fn ensure_enrollment_network(
     identity: &dyn NodeIdentity,
     display_name: &str,
 ) -> Result<Option<NetworkRecord>> {
-    use gents_store::local::document_acp::{enrollment_root, provider_of, EnrollmentRoot};
-    if enrollment_root(provider_of(node)) == EnrollmentRoot::Absent {
+    use gents_store::local::document_acp::{node_publication, Publication};
+    if node_publication(node).await? == Publication::AwaitsTransportGrants {
         return Ok(None);
     }
     load_or_create(node, identity, display_name).await.map(Some)
@@ -38,12 +38,22 @@ async fn load_or_create(
     identity: &dyn NodeIdentity,
     display_name: &str,
 ) -> Result<NetworkRecord> {
-    let response = graphql_with_transaction_retry(
-        node,
-        "{ Network { network_id admin_did display_name default_template created_at admin_sig } }",
-        "loading enrollment Network",
+    use gents_protocol::document_query::{fields::network as fields, Filter, Query, Selection};
+
+    let network_id = derive_network_id(identity.did(), "default");
+    let query = Query::select(
+        Selection::new()
+            .field(fields::NETWORK_ID)
+            .field(fields::ADMIN_DID)
+            .field(fields::DISPLAY_NAME)
+            .field(fields::DEFAULT_TEMPLATE)
+            .field(fields::CREATED_AT)
+            .field(fields::ADMIN_SIG),
     )
-    .await?;
+    .filter(Filter::eq(fields::NETWORK_ID, &network_id))
+    .filter(Filter::eq(fields::ADMIN_DID, identity.did()))
+    .render();
+    let response = read_rendered(node, &query, "loading local enrollment Network").await?;
     let existing = rows::<NetworkRow>(&response, "Network")?;
     match existing.as_slice() {
         [row] => {
@@ -74,7 +84,7 @@ async fn load_or_create(
         [] => {
             let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
             let mut record = NetworkRecord {
-                network_id: derive_network_id(identity.did(), "default"),
+                network_id,
                 admin_did: identity.did().to_string(),
                 display_name: display_name.to_string(),
                 default_template: "conversation".to_string(),

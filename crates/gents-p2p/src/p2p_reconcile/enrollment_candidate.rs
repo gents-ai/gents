@@ -659,7 +659,7 @@ pub(super) async fn publish_candidate_document(
         node.node_identity_did() == Some(author_did),
         "enrollment document author must be the local peer identity"
     );
-    gents_store::local::document_acp::ensure_node_publication(node)?;
+    gents_store::local::document_acp::ensure_node_publication(node).await?;
     let runtime = identity::Did::new(author_did)?;
     let reader = identity::Did::new(reader_did)?;
     let access = ConfigAccess::local_as(node.clone(), runtime.clone());

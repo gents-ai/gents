@@ -76,13 +76,14 @@ pub enum DocumentAcpError {
          again"
     )]
     DelegationRequired,
-    /// The provider grants no transport relationships yet (defradb.rs#2980),
-    /// so the runtime publishes no peer records as its Node.
+    /// No account group is available to authorize transport publication.
     #[error(
         "peer networking is not available on this home yet, so it cannot be shared with other \
          devices"
     )]
     TransportGrantsAwaitProvider,
+    #[error("could not verify this runtime's transport device membership")]
+    TransportMembership(#[source] acp::Error),
     #[error(
         "this home was created by another version of Gents or with another device key; open it \
          with the Gents version and key that created it"
@@ -129,6 +130,7 @@ impl DocumentAcpError {
             | Self::NodeKeyCannotSign { .. }
             | Self::HeldUserKey
             | Self::DelegationRequired
+            | Self::TransportMembership(_)
             | Self::TransportGrantsAwaitProvider
             | Self::Inspect { .. } => None,
         }
@@ -198,16 +200,33 @@ pub enum Publication {
 /// Whether the runtime publishes peer records as its Node
 /// (`Identity.NodePublication.publication`).
 pub fn publication(provider: DocumentAcp) -> Publication {
+    publication_with_admission(provider, false)
+}
+
+fn publication_with_admission(provider: DocumentAcp, admitted: bool) -> Publication {
     match provider {
         DocumentAcp::Local => Publication::Proceeds,
+        DocumentAcp::Vera if admitted => Publication::Proceeds,
         DocumentAcp::Vera => Publication::AwaitsTransportGrants,
     }
 }
 
-/// Refuses a Node-run peer publication on `node` before anything is written
-/// while its provider grants no transport relationships.
-pub fn ensure_node_publication(node: &defra_node::Node) -> Result<()> {
-    match publication(provider_of(node)) {
+/// Recheck the configured account's membership at a certified revision before publishing.
+pub async fn node_publication(node: &defra_node::Node) -> Result<Publication> {
+    let Some(group) = crate::node_extension::attached::<
+        crate::config_client::transport_replica::TransportReplica,
+    >(node) else {
+        return Ok(publication(provider_of(node)));
+    };
+    let admitted = group
+        .check_receiver(node)
+        .await
+        .map_err(DocumentAcpError::TransportMembership)?;
+    Ok(publication_with_admission(provider_of(node), admitted))
+}
+
+pub async fn ensure_node_publication(node: &defra_node::Node) -> Result<()> {
+    match node_publication(node).await? {
         Publication::Proceeds => Ok(()),
         Publication::AwaitsTransportGrants => Err(DocumentAcpError::TransportGrantsAwaitProvider),
     }
@@ -265,7 +284,15 @@ pub fn access_wakes(provider: DocumentAcp) -> bool {
 
 /// [`periodic`] for `node`, whose provider is fixed while it runs.
 pub fn node_periodic(node: &defra_node::Node, publication: Periodic) -> PeriodicLoop {
-    periodic(provider_of(node), publication)
+    if crate::node_extension::attached::<crate::config_client::transport_replica::TransportReplica>(
+        node,
+    )
+    .is_some()
+    {
+        PeriodicLoop::Beats
+    } else {
+        periodic(provider_of(node), publication)
+    }
 }
 
 /// `DocumentAcpChoice.PolicyIds`.
