@@ -1,0 +1,305 @@
+{
+  "case_id": "add-chart-keep-css",
+  "split": "validation",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type BerthCount { berth: String vessels: Int }"
+    ],
+    "documents": [
+      {
+        "collection": "BerthCount",
+        "document": {
+          "berth": "North",
+          "vessels": 3
+        }
+      },
+      {
+        "collection": "BerthCount",
+        "document": {
+          "berth": "Pier 2",
+          "vessels": 5
+        }
+      },
+      {
+        "collection": "BerthCount",
+        "document": {
+          "berth": "Dry dock",
+          "vessels": 1
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "setup",
+      "prompt": "Before my real request, set this up exactly as written with one config call, then reply done. Do not check, lint or change anything else: {\"argv\": [\"batch\"], \"options\": {\"operations\": [{\"argv\": [\"datastore\", \"create\"], \"target_id\": \"berth_desk\", \"set\": {\"display_name\": \"Berth desk\", \"entries\": [{\"kind\": \"query\", \"tool_name\": \"list_berths\", \"collection\": \"BerthCount\", \"description\": \"Vessels alongside each berth.\", \"fields\": [\"berth\", \"vessels\"]}]}}, {\"argv\": [\"page\", \"create\"], \"target_id\": \"berth_summary\", \"set\": {\"display_name\": \"Berth Summary\", \"module\": \"import { NAV_AREA, PLUGIN_PAGE_AREA, Page, Table, useQuery } from '@gents/ux-sdk'\\nimport { jsx, jsxs } from 'react/jsx-runtime'\\n\\nfunction BerthSummary({ ctx }) {\\n  const q = useQuery(ctx, 'berth_desk', 'list_berths', { pages: 'all' })\\n  const rows = q.data?.results ?? []\\n  return jsxs(Page, { title: 'Berth Summary', children: [\\n    jsx('p', { className: 'berth-note', children: 'Vessels alongside, by berth.' }),\\n    jsx(Table, { columns: ['berth', 'vessels'], rows, rowKey: 'berth' }),\\n  ] })\\n}\\n\\nexport default {\\n  id: 'berth_summary',\\n  name: 'Berth Summary',\\n  register(ctx) {\\n    ctx.registerMany([\\n      { id: 'nav', area: NAV_AREA, data: { id: 'berth_summary:nav', label: 'Berth Summary', icon: 'anchor', to: { name: 'plugin', pluginId: 'berth_summary' }, placement: 'footer' } },\\n      { id: 'page', area: PLUGIN_PAGE_AREA, render: () => jsx(BerthSummary, { ctx }) },\\n    ])\\n  },\\n}\\n\", \"data\": [{\"surface\": \"berth_desk\", \"tools\": [\"list_berths\"]}], \"css\": \".berth-note { color: var(--text-muted); margin-bottom: 8px; }\"}}]}}",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "pages",
+          "collection": "Page",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "page_id",
+            "display_name",
+            "module",
+            "css",
+            "data",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "surfaces",
+          "collection": "DatastoreToolSurface",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "surface_id": {
+              "_ne": "engineer-mailbox"
+            }
+          },
+          "fields": [
+            "surface_id",
+            "display_name",
+            "entries",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "file_changes",
+          "collection": "ToolFileChange",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "tool_call_doc_id",
+            "session_id",
+            "file_changes"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ]
+          },
+          "tier": "development",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "rows": [
+              {
+                "capture": "pages",
+                "key": "page_id",
+                "id": "berth_summary",
+                "expect": [
+                  {
+                    "field": "module",
+                    "equals": "import { NAV_AREA, PLUGIN_PAGE_AREA, Page, Table, useQuery } from '@gents/ux-sdk'\nimport { jsx, jsxs } from 'react/jsx-runtime'\n\nfunction BerthSummary({ ctx }) {\n  const q = useQuery(ctx, 'berth_desk', 'list_berths', { pages: 'all' })\n  const rows = q.data?.results ?? []\n  return jsxs(Page, { title: 'Berth Summary', children: [\n    jsx('p', { className: 'berth-note', children: 'Vessels alongside, by berth.' }),\n    jsx(Table, { columns: ['berth', 'vessels'], rows, rowKey: 'berth' }),\n  ] })\n}\n\nexport default {\n  id: 'berth_summary',\n  name: 'Berth Summary',\n  register(ctx) {\n    ctx.registerMany([\n      { id: 'nav', area: NAV_AREA, data: { id: 'berth_summary:nav', label: 'Berth Summary', icon: 'anchor', to: { name: 'plugin', pluginId: 'berth_summary' }, placement: 'footer' } },\n      { id: 'page', area: PLUGIN_PAGE_AREA, render: () => jsx(BerthSummary, { ctx }) },\n    ])\n  },\n}\n"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "development",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "chart",
+      "prompt": "On my Berth Summary page, add a bar chart of vessels per berth above the table. Feed the chart from a new read tool, berth_totals, on the existing berth_desk surface, and keep list_berths as it is. Keep the stylesheet exactly as it is and lint the page when you are done.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "pages",
+          "collection": "Page",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "page_id",
+            "display_name",
+            "module",
+            "css",
+            "data",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "surfaces",
+          "collection": "DatastoreToolSurface",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "surface_id": {
+              "_ne": "engineer-mailbox"
+            }
+          },
+          "fields": [
+            "surface_id",
+            "display_name",
+            "entries",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "file_changes",
+          "collection": "ToolFileChange",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "tool_call_doc_id",
+            "session_id",
+            "file_changes"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "file_changes",
+            "min": 0,
+            "max": 0
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "pages",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "surfaces",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "pages",
+                "key": "page_id",
+                "id": "berth_summary",
+                "expect": [
+                  {
+                    "field": "css",
+                    "equals": ".berth-note { color: var(--text-muted); margin-bottom: 8px; }"
+                  },
+                  {
+                    "field": "enabled",
+                    "equals": true
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\bBarChart\\b"
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\bTable\\b"
+                  },
+                  {
+                    "field": "module",
+                    "matches": "['\\\"]berth_totals['\\\"]"
+                  },
+                  {
+                    "field": "module",
+                    "matches": "['\\\"]list_berths['\\\"]"
+                  },
+                  {
+                    "field": "data",
+                    "matches": "\"surface\"\\s*:\\s*\"berth_desk\""
+                  },
+                  {
+                    "field": "data",
+                    "matches": "\"list_berths\""
+                  },
+                  {
+                    "field": "data",
+                    "matches": "\"berth_totals\""
+                  }
+                ]
+              },
+              {
+                "capture": "surfaces",
+                "key": "surface_id",
+                "id": "berth_desk",
+                "expect": [
+                  {
+                    "field": "entries",
+                    "matches": "\"tool_name\"\\s*:\\s*\"list_berths\""
+                  },
+                  {
+                    "field": "entries",
+                    "matches": "\"tool_name\"\\s*:\\s*\"berth_totals\""
+                  },
+                  {
+                    "field": "entries",
+                    "matches": "\"collection\"\\s*:\\s*\"BerthCount\""
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "page",
+                "equals": "berth_summary"
+              },
+              {
+                "field": "admitted",
+                "equals": true
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}
