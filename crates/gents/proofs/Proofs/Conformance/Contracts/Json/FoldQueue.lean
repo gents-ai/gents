@@ -528,7 +528,8 @@ def ManagementInput.ofCase (c : SessionQueue.ManagementCases.Case) : ManagementI
 
 /-- The signed replacement owner issues each replacement as a fresh request in
 the slot it replaces, so a replacement that reuses an original request ID or
-names another slot is not something it can be asked to write. -/
+names another slot is not something it can be asked to write;
+`intake_and_management_decisions` keeps those cases. -/
 def signedReplacement (c : SessionQueue.ManagementCases.Case) : Bool :=
   match c.operation with
   | .replace _ _ offset count replacements =>
@@ -555,15 +556,15 @@ def managementExpiredIntake : Family ManagementInput (Option QueueImageWire) whe
     ManagementInput.ofCase
   model := managementAfter
 
-/-- The signed replacement owner generates replacement
-request IDs and slots itself, and intake at an unsafe stream boundary, from a
-stale head observation, behind an unadmitted, queued, foreign or agent-authored
-row has no served fixture; steering publication and the owned loop replay the
-composed intake. -/
+def isIntake (c : SessionQueue.ManagementCases.Case) : Bool :=
+  match c.operation with
+  | .intake .. => true
+  | .replace .. => false
+
 @[conformance_family]
 def managementUnreached : Family ManagementInput (Option QueueImageWire) where
   inputs := (SessionQueue.ManagementCases.cases.filter fun c =>
-    !signedReplacement c && !servedIntakeNames.contains c.name).map ManagementInput.ofCase
+    isIntake c && !servedIntakeNames.contains c.name).map ManagementInput.ofCase
   model := managementAfter
 
 def roundTrips (entries : List QueueEntry) : Bool :=

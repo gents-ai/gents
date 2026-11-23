@@ -127,24 +127,31 @@ private def handoffOf (i : HandoffInput) : HandoffOutput :=
   | some test => handoffOutput test
   | none => { handoffAccepted := false, storedOpenReceipt := false, linkedReplyAccepted := false }
 
-private def servedNames : List String := ["fresh-linked"]
+/-- The stamped mailbox write takes the question's request, session, owner,
+target node and session binding from the claimed request that files it, so a
+question naming another request, session, tool owner, producer or target, or
+filed under a foreign context, has no stored form. A reply's signed cause is
+fixed when its request is created, before the question it answers exists, so
+the producer request is never a reply to its own question. Those cases stay in
+`generated_case_outcomes_follow_owners`. -/
+private def unstorableNames : List String :=
+  [ "request-mismatch", "session-mismatch", "tool-owner-mismatch", "producer-agent-mismatch"
+  , "producer-requester-mismatch", "unstamped", "wrong-reply-target", "wrong-reply-session"
+  , "same-physical-request" ]
 
-/-- The served-node scenario files the question through the stamped mailbox
-write from the producer's own claimed request and replies through the signed
-reply claim, so it builds only the linked handoff. -/
+private def servedNames : List String := ["fresh-linked", "wrong-reply-source"]
+
+/-- A question filed through the stamped mailbox write from the producer's own
+claimed request, then a signed reply claimed against it. -/
 @[conformance_family]
 def linked : Family HandoffInput HandoffOutput where
   inputs := (cases.filter (servedNames.contains ·.name)).map handoffInput
   model := handoffOf
 
-/-- model-production-gap: the stamped mailbox write takes the question's
-request, session and owner from the filing request itself, so production
-cannot file a question that names another request, session, tool owner or
-producer; and no scenario replays the reply-side mismatches through the
-signed reply claim after a linked handoff. -/
 @[conformance_family]
 def linkedUnreached : Family HandoffInput HandoffOutput where
-  inputs := (cases.filter (!servedNames.contains ·.name)).map handoffInput
+  inputs := (cases.filter fun c =>
+    !servedNames.contains c.name && !unstorableNames.contains c.name).map handoffInput
   model := handoffOf
 
 end Conformance.MailboxHandoffContracts

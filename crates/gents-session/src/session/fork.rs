@@ -551,6 +551,78 @@ fn edit_cut<'a>(
     (matching.next().is_none() && is_user_message(message)).then_some(message.sequence)
 }
 
+struct ForkCut<'h, H> {
+    at_user_turn: u32,
+    cut: u64,
+    retained: Vec<&'h H>,
+}
+
+/// The user turn a boundary names, the exclusive sequence cut, and the source
+/// headers a fork copies: those before the cut, less the runtime context rows
+/// no copied compaction cursor names. Lean `SessionFork.retainedMessages`.
+fn fork_cut<'h, H>(
+    headers: &'h [H],
+    message: impl Fn(&H) -> &TranscriptMessage,
+    boundary: &ForkBoundary<'_>,
+    compacted_through: &[u32],
+) -> Result<ForkCut<'h, H>, ForkError> {
+    let turns = headers
+        .iter()
+        .map(&message)
+        .filter(|header| is_user_message(header))
+        .map(|header| header.sequence)
+        .collect::<Vec<_>>();
+    let total = u32::try_from(turns.len()).map_err(anyhow::Error::from)?;
+    let at_user_turn = match boundary {
+        ForkBoundary::UserTurn(turn) => *turn,
+        ForkBoundary::BeforeMessageKey(key) => {
+            let cut = edit_cut(headers.iter().map(&message), key)
+                .ok_or_else(|| ForkError::ForkMessageNotEditable((*key).to_owned()))?;
+            u32::try_from(
+                turns
+                    .iter()
+                    .position(|sequence| *sequence == cut)
+                    .context("the edit anchor is not a source user turn")?,
+            )
+            .map_err(anyhow::Error::from)?
+        }
+    };
+    if at_user_turn > total {
+        return Err(ForkError::ForkAtUserTurnOutOfRange(at_user_turn, total));
+    }
+    let cut = turns
+        .get(at_user_turn as usize)
+        .copied()
+        .map(u64::from)
+        .unwrap_or_else(|| {
+            headers
+                .iter()
+                .map(|header| message(header).sequence)
+                .max()
+                .map(|sequence| u64::from(sequence) + 1)
+                .unwrap_or(0)
+        });
+    let copied_cursors = compacted_through
+        .iter()
+        .copied()
+        .filter(|through| u64::from(*through) < cut)
+        .collect::<BTreeSet<_>>();
+    let retained = headers
+        .iter()
+        .filter(|header| {
+            let header = message(*header);
+            u64::from(header.sequence) < cut
+                && (!gents_protocol::output::rows::is_runtime_context_key(&header.message_key)
+                    || copied_cursors.contains(&header.sequence))
+        })
+        .collect();
+    Ok(ForkCut {
+        at_user_turn,
+        cut,
+        retained,
+    })
+}
+
 fn fork_header(
     origin_doc_id: String,
     child: &str,
@@ -927,57 +999,21 @@ async fn fork_in_txn(
             return Err(anyhow::anyhow!("fork source has duplicate sequence").into());
         }
     }
-    let turns = headers
-        .iter()
-        .filter(|header| is_user_message(&header.message))
-        .map(|header| header.message.sequence)
-        .collect::<Vec<_>>();
-    let total = u32::try_from(turns.len()).map_err(anyhow::Error::from)?;
-    let at_user_turn = match params.boundary {
-        ForkBoundary::UserTurn(turn) => turn,
-        ForkBoundary::BeforeMessageKey(key) => {
-            let cut = edit_cut(headers.iter().map(|header| &header.message), key)
-                .ok_or_else(|| ForkError::ForkMessageNotEditable(key.to_owned()))?;
-            u32::try_from(
-                turns
-                    .iter()
-                    .position(|sequence| *sequence == cut)
-                    .context("the edit anchor is not a source user turn")?,
-            )
-            .map_err(anyhow::Error::from)?
-        }
-    };
-    if at_user_turn > total {
-        return Err(ForkError::ForkAtUserTurnOutOfRange(at_user_turn, total));
-    }
-    let cut = turns
-        .get(at_user_turn as usize)
-        .copied()
-        .map(u64::from)
-        .unwrap_or_else(|| {
-            sequences
-                .iter()
-                .next_back()
-                .map(|sequence| u64::from(*sequence) + 1)
-                .unwrap_or(0)
-        });
     let compactions = rows(&snapshot, "CompactionEntry")?;
-    let copied_cursors = compactions
+    let cursors = compactions
         .iter()
         .map(|row| ordinal(row, "compacted_through_sequence"))
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .filter(|through| u64::from(*through) < cut)
-        .collect::<BTreeSet<_>>();
-    let retained = headers
-        .iter()
-        .filter(|header| {
-            u64::from(header.message.sequence) < cut
-                && (!gents_protocol::output::rows::is_runtime_context_key(
-                    &header.message.message_key,
-                ) || copied_cursors.contains(&header.message.sequence))
-        })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>>>()?;
+    let ForkCut {
+        at_user_turn,
+        cut,
+        retained,
+    } = fork_cut(
+        &headers,
+        |header| &header.message,
+        &params.boundary,
+        &cursors,
+    )?;
     let retained_sequences = retained
         .iter()
         .map(|header| header.message.sequence)
@@ -1251,8 +1287,19 @@ mod tests {
                 .iter()
                 .map(|message| modeled_message(&serde_json::to_value(message).unwrap()))
                 .collect::<Vec<_>>();
+            let retained = match fork_cut(
+                &messages,
+                |message| message,
+                &ForkBoundary::BeforeMessageKey(&i.key),
+                &[],
+            ) {
+                Ok(fork) => Some(fork.retained.len() as u64),
+                Err(ForkError::ForkMessageNotEditable(key)) if key == i.key => None,
+                Err(error) => panic!("{}: {error}", i.name),
+            };
             gents_lean_vocab::families::contracts_edit_anchor_cut::EditAnchorCut {
                 cut: edit_cut(messages.iter(), &i.key).map(u64::from),
+                retained_count: retained,
             }
         });
     }
