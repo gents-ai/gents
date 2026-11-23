@@ -370,11 +370,11 @@ impl<'a> FreshBackendStore<'a> {
                         Some((url, signer, route, runtime)),
                     ) => {
                         route.serve(&node, runtime);
-                        crate::schema::catalog::SharedTransportHome::create_host(
+                        Box::pin(crate::schema::catalog::SharedTransportHome::create_host(
                             &node, url, signer, account,
-                        )
+                        ))
                         .await
-                        .map_err(BackendProtectionError::Schema)?
+                        .map_err(|error| BackendProtectionError::Schema(error.into()))?
                     }
                     (
                         document_acp::VeraConnection::Follower {

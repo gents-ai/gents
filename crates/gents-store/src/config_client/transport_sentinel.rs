@@ -194,7 +194,7 @@ mod tests {
 
     #[test]
     fn account_signature_binds_the_exact_sentinel_and_deployment() {
-        let account = ClientSigningCapability::from_ed25519_key(&[7; 32]).unwrap();
+        let account = crate::test_support::config_signer();
         let audience = RequestBoundAudience {
             audience: gents_protocol::delegation_audience::DelegationAudience {
                 worker: account.did().to_owned(),

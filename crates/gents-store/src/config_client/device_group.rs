@@ -200,10 +200,8 @@ mod tests {
 
     #[test]
     fn publisher_registration_binds_the_device_and_the_account() {
-        let signer =
-            crate::config_client::ClientSigningCapability::from_ed25519_key(&[1; 32]).unwrap();
-        let other =
-            crate::config_client::ClientSigningCapability::from_ed25519_key(&[2; 32]).unwrap();
+        let signer = crate::test_support::config_signer();
+        let other = crate::test_support::config_signer();
         let account = Did::new(signer.did()).unwrap();
         let device = Did::new(other.did()).unwrap();
         let signed = db::block::builder::ClientCreateSignatures::from_input(

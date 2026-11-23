@@ -115,24 +115,14 @@ mod tests {
             .remove(0);
         assert!(collection.policy.as_ref().unwrap().parent_field.is_some());
         let receiver = TransportReplica(ReplicaGroup {
-            owner: Did::new(
-                crate::config_client::ClientSigningCapability::from_ed25519_key(&[1; 32])
-                    .unwrap()
-                    .did(),
-            )
-            .unwrap(),
+            owner: Did::new(crate::test_support::config_signer().did()).unwrap(),
             policy: policy.into(),
             resource: "device_groups".into(),
             object: "group".into(),
             relation: "member".into(),
         });
         let local = acp::LocalDocumentACP::new(Arc::new(acp::MemoryAcpStore::new()));
-        let creator = Did::new(
-            crate::config_client::ClientSigningCapability::from_ed25519_key(&[2; 32])
-                .unwrap()
-                .did(),
-        )
-        .unwrap();
+        let creator = Did::new(crate::test_support::config_signer().did()).unwrap();
         assert!(!receiver
             .allows_foreign_registration(&collection, &creator, &local)
             .await

@@ -14,19 +14,36 @@ pub(crate) struct SharedTransportHome {
     pub device_node: String,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum HostAdmissionError {
+    #[error("missing host identity")]
+    MissingIdentity,
+    #[error("host has no verified delegation audience")]
+    MissingAudience,
+    #[error(transparent)]
+    Identity(#[from] identity::Error),
+    #[error(transparent)]
+    Endpoint(#[from] crate::node_extension::ExtensionError),
+    #[error(transparent)]
+    Config(#[from] crate::config_client::ConfigClientError),
+    #[error("transport registration failed: {0}")]
+    Registration(#[source] Box<dyn std::error::Error + Send + Sync>),
+}
+
 impl SharedTransportHome {
     pub(crate) async fn create_host(
         node: &std::sync::Arc<Node>,
         url: String,
         signer: crate::config_client::ClientSigningCapability,
         account: &identity::Did,
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self, HostAdmissionError> {
         use crate::config_client::{transport_sentinel, ConfigAccess, GraphqlEndpoint};
         use crate::local::document_acp::{self, DocumentAcp};
-        use anyhow::Context as _;
 
-        let device =
-            identity::Did::new(node.node_identity_did().context("missing host identity")?)?;
+        let device = identity::Did::new(
+            node.node_identity_did()
+                .ok_or(HostAdmissionError::MissingIdentity)?,
+        )?;
         let endpoint = GraphqlEndpoint::as_principal(url, account.as_str())
             .with_client_signing_capability(signer.clone())?
             .with_local_home_schema(node)?
@@ -43,20 +60,26 @@ impl SharedTransportHome {
         let audience = access
             .request_bound_audience()
             .await?
-            .context("host has no verified delegation audience")?;
+            .ok_or(HostAdmissionError::MissingAudience)?;
         let approval =
-            transport_sentinel::prepare_publisher(&signer, &audience, &host_node, account)?;
-        transport_sentinel::submit_publisher(node, account.as_str(), approval).await?;
+            transport_sentinel::prepare_publisher(&signer, &audience, &host_node, account)
+                .map_err(|error| HostAdmissionError::Registration(error.into()))?;
+        transport_sentinel::submit_publisher(node, account.as_str(), approval)
+            .await
+            .map_err(|error| HostAdmissionError::Registration(error.into()))?;
         let ids = HomePolicyIds::embedded_vera_transport_v2();
         for entry in super::runtime_catalog(ids).baseline {
             if resource(ids, entry.name).is_some() {
                 let audience = access
                     .request_bound_audience()
                     .await?
-                    .context("host has no verified delegation audience")?;
+                    .ok_or(HostAdmissionError::MissingAudience)?;
                 let approval =
-                    transport_sentinel::prepare(&signer, &audience, entry.name, &host_node)?;
-                transport_sentinel::submit(node, account.as_str(), approval).await?;
+                    transport_sentinel::prepare(&signer, &audience, entry.name, &host_node)
+                        .map_err(|error| HostAdmissionError::Registration(error.into()))?;
+                transport_sentinel::submit(node, account.as_str(), approval)
+                    .await
+                    .map_err(|error| HostAdmissionError::Registration(error.into()))?;
             }
         }
         Ok(Self {

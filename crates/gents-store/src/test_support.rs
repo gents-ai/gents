@@ -466,3 +466,10 @@ pub async fn unrelated_document_reader(
     .unwrap();
     crate::config_client::ConfigAccess::local_as(node.clone(), actor)
 }
+
+#[cfg(test)]
+pub(crate) fn config_signer() -> crate::config_client::ClientSigningCapability {
+    let key = identity::RawIdentity::from_private_key(crypto::generate_ed25519().unwrap()).unwrap();
+    crate::config_client::ClientSigningCapability::from_ed25519_key(&key.private_key_bytes())
+        .unwrap()
+}
