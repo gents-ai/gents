@@ -1,0 +1,177 @@
+{
+  "case_id": "relay-precedence",
+  "split": "held_out",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type RelayDefault { relay: String enabled: Boolean }",
+      "type RelayOverride { relay: String enabled: Boolean }"
+    ],
+    "documents": [
+      {
+        "collection": "RelayDefault",
+        "document": {
+          "relay": "river",
+          "enabled": true
+        }
+      },
+      {
+        "collection": "RelayDefault",
+        "document": {
+          "relay": "bay",
+          "enabled": true
+        }
+      },
+      {
+        "collection": "RelayDefault",
+        "document": {
+          "relay": "rail",
+          "enabled": false
+        }
+      },
+      {
+        "collection": "RelayDefault",
+        "document": {
+          "relay": "tram",
+          "enabled": true
+        }
+      },
+      {
+        "collection": "RelayDefault",
+        "document": {
+          "relay": "ferry",
+          "enabled": true
+        }
+      },
+      {
+        "collection": "RelayOverride",
+        "document": {
+          "relay": "bay",
+          "enabled": null
+        }
+      },
+      {
+        "collection": "RelayOverride",
+        "document": {
+          "relay": "rail",
+          "enabled": true
+        }
+      },
+      {
+        "collection": "RelayOverride",
+        "document": {
+          "relay": "bus",
+          "enabled": true
+        }
+      },
+      {
+        "collection": "RelayOverride",
+        "document": {
+          "relay": "tram",
+          "enabled": false
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "run",
+      "prompt": "Our relay switches come from RelayDefault records, and RelayOverride records take precedence over the default for the same relay. An override whose enabled value is empty turns that relay off, and an override can switch on a relay that has no default. Use a single script that queries both collections and works out which relays end up on. Return {\"active\": [...]} sorted, and tell me.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "inner_queries",
+          "collection": "AgentToolCall",
+          "filter": {
+            "plugin_parent_tool_call_doc_id": {
+              "_ne": null
+            },
+            "tool_name": {
+              "_eq": "query"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            }
+          },
+          "fields": [
+            "tool_name",
+            "lifecycle_state",
+            "plugin_parent_tool_call_doc_id"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "script",
+              "query"
+            ],
+            "forbidden": [
+              "bash",
+              "write_file",
+              "edit_file",
+              "file_mailbox_item"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "active",
+                "equals": [
+                  "bus",
+                  "ferry",
+                  "rail",
+                  "river"
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "inner_queries",
+                "min": 2
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "bus"
+              },
+              {
+                "matches": "ferry"
+              },
+              {
+                "matches": "rail"
+              },
+              {
+                "matches": "river"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

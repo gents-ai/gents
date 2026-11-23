@@ -1,0 +1,148 @@
+{
+  "case_id": "sensor-recovery",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "sensors/manifest.json",
+        "contents": "{\n  \"files\": [\n    \"sensors/north.ndjson\",\n    \"sensors/east.ndjson\",\n    \"sensors/south.ndjson\"\n  ]\n}\n"
+      },
+      {
+        "path": "sensors/north.ndjson",
+        "contents": "{\"sensor\": \"N1\", \"reading\": 9}\nbroken record\n{\"sensor\": \"N2\", \"reading\": -4}\n"
+      },
+      {
+        "path": "sensors/south.ndjson",
+        "contents": "{\"sensor\": \"S1\", \"reading\": 13}\n{\"sensor\": \"S2\", \"reading\": \"bad\"}\n\n{\"sensor\": \"S3\", \"reading\": 6}\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "run",
+      "prompt": "Total the valid sensor readings from every file listed in sensors/manifest.json, all in one script. Each file holds one JSON record per line; a line is valid when it parses and its reading is a number, blank lines don't count, and any other line is skipped. Some listed files may be missing, so the script should carry on without them instead of failing. Return {total, skipped, missing} where skipped counts the invalid lines and missing lists the paths it could not read, and give me the total.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "inner_reads",
+          "collection": "AgentToolCall",
+          "filter": {
+            "plugin_parent_tool_call_doc_id": {
+              "_ne": null
+            },
+            "tool_name": {
+              "_eq": "read_file"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            }
+          },
+          "fields": [
+            "tool_name",
+            "lifecycle_state",
+            "plugin_parent_tool_call_doc_id"
+          ]
+        },
+        {
+          "kind": "file",
+          "name": "sensors",
+          "glob": "sensors/*"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "script",
+              "read_file"
+            ],
+            "forbidden": [
+              "bash",
+              "write_file",
+              "edit_file"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "total",
+                "equals": 24
+              },
+              {
+                "field": "skipped",
+                "equals": 2
+              },
+              {
+                "field": "missing",
+                "equals": [
+                  "sensors/east.ndjson"
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "inner_reads",
+                "min": 3
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "sensors",
+            "expect": [
+              {
+                "path": "sensors/manifest.json",
+                "sha256": "23e932c390ce1e229e1b88b6cc75140760cce726463b382e433e63c7f4b60b74"
+              },
+              {
+                "path": "sensors/north.ndjson",
+                "sha256": "57630c951b1e11b196fc2042e26f463cd7a17647a8c1329022e00eb817c17580"
+              },
+              {
+                "path": "sensors/south.ndjson",
+                "sha256": "b85f91a61b79ebd4f97777d4695d11ab4644b1d984f2f335ecefcd38c6115d2b"
+              },
+              {
+                "path": "sensors/east.ndjson",
+                "exists": false
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\\b24\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,548 @@
+{
+  "case_id": "redline-follow-up",
+  "split": "validation",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type MeterCheck { reference: String handoff_id: String disposition: String }"
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "configure",
+      "prompt": "Make a meter-check task that runs on every new MeterCheck. It asks for a reply of exactly ACK followed by that check's reference, and it keeps the standard record of whether each run succeeded: a FireOutcome, which carries the check's handoff_id as source_handoff_id and has terminal_state completed when the run succeeded. Then, whenever a meter-check run succeeds for a check whose handoff_id begins with redline-, have a second task ask for a reply of exactly FOLLOW followed by that handoff_id. Checks with other handoff IDs get no follow-up. You handle both tasks. Set it up now; checks arrive later.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "triggers",
+          "collection": "Trigger",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "trigger_id",
+            "task_id",
+            "source",
+            "concurrency",
+            "session_id_template",
+            "create_session",
+            "enabled",
+            "last_status",
+            "last_error"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "sources",
+          "collection": "EventSource",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "event_source_id",
+            "source_collection",
+            "event_kind",
+            "filter",
+            "correlation_field",
+            "group"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "tasks",
+          "collection": "Task",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "task_id",
+            "prompt_template",
+            "emit_outcome",
+            "enabled"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash",
+              "write_file",
+              "edit_file"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "triggers",
+                "min": 2
+              },
+              {
+                "capture": "tasks",
+                "min": 2
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "greenline",
+      "seed": {
+        "collection": "MeterCheck",
+        "document": {
+          "reference": "PC9",
+          "handoff_id": "greenline-7",
+          "disposition": "inspection"
+        }
+      },
+      "deadline_secs": 300,
+      "checks": [],
+      "capture": []
+    },
+    {
+      "stage_id": "redline_one",
+      "seed": {
+        "collection": "MeterCheck",
+        "document": {
+          "reference": "PB6",
+          "handoff_id": "redline-8",
+          "disposition": "inspection"
+        }
+      },
+      "deadline_secs": 300,
+      "settle": true,
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "fires",
+                "min": 2,
+                "max": 2
+              },
+              {
+                "capture": "outcomes",
+                "min": 2,
+                "max": 2
+              },
+              {
+                "capture": "follow_fires",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "follow",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "follow",
+                "key": "lifecycle_state",
+                "id": "completed",
+                "expect": [
+                  {
+                    "field": "content",
+                    "matches": "(?s)\\].*FOLLOW"
+                  },
+                  {
+                    "field": "content",
+                    "matches": "(?s)\\].*redline-8"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "fires",
+          "collection": "TriggerFire",
+          "filter": {
+            "owner_did": {
+              "_eq": "$trial"
+            },
+            "source_collection": {
+              "_eq": "MeterCheck"
+            }
+          },
+          "fields": [
+            "fire_key",
+            "trigger_id",
+            "task_id",
+            "request_id",
+            "session_id",
+            "source_collection",
+            "source_doc_id",
+            "source_handoff_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "outcomes",
+          "collection": "FireOutcome",
+          "filter": {
+            "owner_did": {
+              "_eq": "$trial"
+            },
+            "source_collection": {
+              "_eq": "MeterCheck"
+            }
+          },
+          "fields": [
+            "fire_key",
+            "trigger_id",
+            "request_id",
+            "session_id",
+            "source_collection",
+            "source_doc_id",
+            "source_handoff_id",
+            "terminal_state"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "follow_fires",
+          "collection": "TriggerFire",
+          "filter": {
+            "owner_did": {
+              "_eq": "$trial"
+            },
+            "source_collection": {
+              "_eq": "FireOutcome"
+            }
+          },
+          "fields": [
+            "fire_key",
+            "trigger_id",
+            "task_id",
+            "request_id",
+            "session_id",
+            "source_collection",
+            "source_doc_id",
+            "source_handoff_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "follow",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "caused_by_trigger_id": {
+              "_ne": null
+            },
+            "content": {
+              "_like": "%FOLLOW%"
+            }
+          },
+          "fields": [
+            "request_id",
+            "session_id",
+            "lifecycle_state",
+            "content",
+            "terminal_output",
+            "caused_by_trigger_id",
+            "caused_by_trigger_kind",
+            "caused_by_source_doc_id",
+            "caused_by_correlation",
+            "execution_origin"
+          ]
+        }
+      ]
+    },
+    {
+      "stage_id": "redline_two",
+      "seed": {
+        "collection": "MeterCheck",
+        "document": {
+          "reference": "PY2",
+          "handoff_id": "redline-9",
+          "disposition": "inspection"
+        }
+      },
+      "deadline_secs": 300,
+      "settle": true,
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "fires",
+                "min": 3,
+                "max": 3
+              },
+              {
+                "capture": "outcomes",
+                "min": 3,
+                "max": 3
+              },
+              {
+                "capture": "follow_fires",
+                "min": 2,
+                "max": 2
+              },
+              {
+                "capture": "follow",
+                "min": 2,
+                "max": 2
+              },
+              {
+                "capture": "follow_nine",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "green_follow",
+                "min": 0,
+                "max": 0
+              }
+            ],
+            "rows": [
+              {
+                "capture": "follow_nine",
+                "key": "lifecycle_state",
+                "id": "completed",
+                "expect": [
+                  {
+                    "field": "content",
+                    "matches": "(?s)\\].*FOLLOW"
+                  },
+                  {
+                    "field": "content",
+                    "matches": "(?s)\\].*redline-9"
+                  }
+                ]
+              },
+              {
+                "capture": "outcomes",
+                "key": "source_handoff_id",
+                "id": "redline-9",
+                "expect": [
+                  {
+                    "field": "terminal_state",
+                    "matches": "^(complete|completed)$"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "fires",
+          "collection": "TriggerFire",
+          "filter": {
+            "owner_did": {
+              "_eq": "$trial"
+            },
+            "source_collection": {
+              "_eq": "MeterCheck"
+            }
+          },
+          "fields": [
+            "fire_key",
+            "trigger_id",
+            "task_id",
+            "request_id",
+            "session_id",
+            "source_collection",
+            "source_doc_id",
+            "source_handoff_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "outcomes",
+          "collection": "FireOutcome",
+          "filter": {
+            "owner_did": {
+              "_eq": "$trial"
+            },
+            "source_collection": {
+              "_eq": "MeterCheck"
+            }
+          },
+          "fields": [
+            "fire_key",
+            "trigger_id",
+            "request_id",
+            "session_id",
+            "source_collection",
+            "source_doc_id",
+            "source_handoff_id",
+            "terminal_state"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "follow_fires",
+          "collection": "TriggerFire",
+          "filter": {
+            "owner_did": {
+              "_eq": "$trial"
+            },
+            "source_collection": {
+              "_eq": "FireOutcome"
+            }
+          },
+          "fields": [
+            "fire_key",
+            "trigger_id",
+            "task_id",
+            "request_id",
+            "session_id",
+            "source_collection",
+            "source_doc_id",
+            "source_handoff_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "follow",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "caused_by_trigger_id": {
+              "_ne": null
+            },
+            "content": {
+              "_like": "%FOLLOW%"
+            }
+          },
+          "fields": [
+            "request_id",
+            "session_id",
+            "lifecycle_state",
+            "content",
+            "terminal_output",
+            "caused_by_trigger_id",
+            "caused_by_trigger_kind",
+            "caused_by_source_doc_id",
+            "caused_by_correlation",
+            "execution_origin"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "follow_nine",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "caused_by_trigger_id": {
+              "_ne": null
+            },
+            "_and": [
+              {
+                "content": {
+                  "_like": "%redline-9%"
+                }
+              },
+              {
+                "content": {
+                  "_like": "%FOLLOW%"
+                }
+              }
+            ]
+          },
+          "fields": [
+            "request_id",
+            "session_id",
+            "lifecycle_state",
+            "content",
+            "terminal_output",
+            "caused_by_trigger_id",
+            "caused_by_trigger_kind",
+            "caused_by_source_doc_id",
+            "caused_by_correlation",
+            "execution_origin"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "green_follow",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "caused_by_trigger_id": {
+              "_ne": null
+            },
+            "_and": [
+              {
+                "content": {
+                  "_like": "%greenline-7%"
+                }
+              },
+              {
+                "content": {
+                  "_like": "%FOLLOW%"
+                }
+              }
+            ]
+          },
+          "fields": [
+            "request_id",
+            "session_id",
+            "lifecycle_state",
+            "content",
+            "terminal_output",
+            "caused_by_trigger_id",
+            "caused_by_trigger_kind",
+            "caused_by_source_doc_id",
+            "caused_by_correlation",
+            "execution_origin"
+          ]
+        }
+      ]
+    }
+  ]
+}

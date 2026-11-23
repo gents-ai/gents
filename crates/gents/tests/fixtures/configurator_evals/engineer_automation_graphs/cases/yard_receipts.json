@@ -1,0 +1,374 @@
+{
+  "case_id": "yard-receipts",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type YardSignal { reference: String lane: String units: Int held: Boolean }"
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "configure",
+      "prompt": "Set up receipts for new YardSignal records. A held shipment in the west yard (held is true and lane is \"west\") gets a receipt: start a request to yourself asking for a reply of exactly ACK, one space, and the signal's reference. Every other new YardSignal gets a pass note instead: a request asking for a reply of exactly PASS, one space, and the reference. Each signal gets exactly one of the two, decided by the automation itself: a request asks only for its own reply and never leaves the handler to work out which applies. Set it up now; I'll send records afterwards.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "triggers",
+          "collection": "Trigger",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "trigger_id",
+            "task_id",
+            "source",
+            "concurrency",
+            "session_id_template",
+            "create_session",
+            "enabled",
+            "last_status",
+            "last_error"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "sources",
+          "collection": "EventSource",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "event_source_id",
+            "source_collection",
+            "event_kind",
+            "filter",
+            "correlation_field",
+            "group"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "tasks",
+          "collection": "Task",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "task_id",
+            "prompt_template",
+            "emit_outcome",
+            "enabled"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash",
+              "write_file",
+              "edit_file"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "triggers",
+                "min": 1
+              },
+              {
+                "capture": "tasks",
+                "min": 1
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "east_held",
+      "seed": {
+        "collection": "YardSignal",
+        "document": {
+          "reference": "YB2",
+          "lane": "east",
+          "units": 5,
+          "held": true
+        }
+      },
+      "deadline_secs": 300,
+      "checks": [],
+      "capture": []
+    },
+    {
+      "stage_id": "west_clear",
+      "seed": {
+        "collection": "YardSignal",
+        "document": {
+          "reference": "YF1",
+          "lane": "west",
+          "units": 5,
+          "held": false
+        }
+      },
+      "deadline_secs": 300,
+      "checks": [],
+      "capture": []
+    },
+    {
+      "stage_id": "west_held",
+      "seed": {
+        "collection": "YardSignal",
+        "document": {
+          "reference": "YC8",
+          "lane": "west",
+          "units": 5,
+          "held": true
+        }
+      },
+      "deadline_secs": 300,
+      "settle": true,
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "fires",
+                "min": 3,
+                "max": 3
+              },
+              {
+                "capture": "yb2",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "yf1",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "yc8",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "yb2",
+                "key": "lifecycle_state",
+                "id": "completed",
+                "expect": [
+                  {
+                    "field": "content",
+                    "matches": "(?s)\\].*PASS"
+                  },
+                  {
+                    "field": "content",
+                    "matches": "(?s)\\].*YB2"
+                  }
+                ]
+              },
+              {
+                "capture": "yf1",
+                "key": "lifecycle_state",
+                "id": "completed",
+                "expect": [
+                  {
+                    "field": "content",
+                    "matches": "(?s)\\].*PASS"
+                  },
+                  {
+                    "field": "content",
+                    "matches": "(?s)\\].*YF1"
+                  }
+                ]
+              },
+              {
+                "capture": "yc8",
+                "key": "lifecycle_state",
+                "id": "completed",
+                "expect": [
+                  {
+                    "field": "content",
+                    "matches": "(?s)\\].*ACK"
+                  },
+                  {
+                    "field": "content",
+                    "matches": "(?s)\\].*YC8"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "fires",
+          "collection": "TriggerFire",
+          "filter": {
+            "owner_did": {
+              "_eq": "$trial"
+            },
+            "source_collection": {
+              "_eq": "YardSignal"
+            }
+          },
+          "fields": [
+            "fire_key",
+            "trigger_id",
+            "task_id",
+            "request_id",
+            "session_id",
+            "source_collection",
+            "source_doc_id",
+            "source_handoff_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "yb2",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "caused_by_trigger_id": {
+              "_ne": null
+            },
+            "_and": [
+              {
+                "content": {
+                  "_like": "%YB2%"
+                }
+              },
+              {
+                "content": {
+                  "_nlike": "%ACK%"
+                }
+              }
+            ]
+          },
+          "fields": [
+            "request_id",
+            "session_id",
+            "lifecycle_state",
+            "content",
+            "terminal_output",
+            "caused_by_trigger_id",
+            "caused_by_trigger_kind",
+            "caused_by_source_doc_id",
+            "caused_by_correlation",
+            "execution_origin"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "yf1",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "caused_by_trigger_id": {
+              "_ne": null
+            },
+            "_and": [
+              {
+                "content": {
+                  "_like": "%YF1%"
+                }
+              },
+              {
+                "content": {
+                  "_nlike": "%ACK%"
+                }
+              }
+            ]
+          },
+          "fields": [
+            "request_id",
+            "session_id",
+            "lifecycle_state",
+            "content",
+            "terminal_output",
+            "caused_by_trigger_id",
+            "caused_by_trigger_kind",
+            "caused_by_source_doc_id",
+            "caused_by_correlation",
+            "execution_origin"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "yc8",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "caused_by_trigger_id": {
+              "_ne": null
+            },
+            "_and": [
+              {
+                "content": {
+                  "_like": "%YC8%"
+                }
+              },
+              {
+                "content": {
+                  "_nlike": "%PASS%"
+                }
+              }
+            ]
+          },
+          "fields": [
+            "request_id",
+            "session_id",
+            "lifecycle_state",
+            "content",
+            "terminal_output",
+            "caused_by_trigger_id",
+            "caused_by_trigger_kind",
+            "caused_by_source_doc_id",
+            "caused_by_correlation",
+            "execution_origin"
+          ]
+        }
+      ]
+    }
+  ]
+}

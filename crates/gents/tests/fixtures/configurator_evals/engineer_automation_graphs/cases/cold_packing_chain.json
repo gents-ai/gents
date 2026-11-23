@@ -1,0 +1,331 @@
+{
+  "case_id": "cold-packing-chain",
+  "split": "held_out",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type PackingSlip { slip: String handoff_id: String station: String }"
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "configure",
+      "prompt": "Whenever a PackingSlip is created, have yourself confirm it: the request asks for a reply of exactly PACKED followed by the slip, and keeps the standard success-or-failure record of each run. That record is a FireOutcome; it carries the slip's handoff_id as source_handoff_id, and its terminal_state is completed when the run succeeded. After a confirmation succeeds for a slip whose handoff_id starts with cold-, start a second request to yourself asking for a reply of exactly CHILL followed by that handoff_id. Slips with any other handoff ID get no second step. Configure it now; slips arrive later.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "triggers",
+          "collection": "Trigger",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "trigger_id",
+            "task_id",
+            "source",
+            "concurrency",
+            "session_id_template",
+            "create_session",
+            "enabled",
+            "last_status",
+            "last_error"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "sources",
+          "collection": "EventSource",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "event_source_id",
+            "source_collection",
+            "event_kind",
+            "filter",
+            "correlation_field",
+            "group"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "tasks",
+          "collection": "Task",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "task_id",
+            "prompt_template",
+            "emit_outcome",
+            "enabled"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash",
+              "write_file",
+              "edit_file"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "triggers",
+                "min": 2
+              },
+              {
+                "capture": "tasks",
+                "min": 2
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "dry",
+      "seed": {
+        "collection": "PackingSlip",
+        "document": {
+          "slip": "H7",
+          "handoff_id": "dry-41",
+          "station": "aisle 3"
+        }
+      },
+      "deadline_secs": 300,
+      "checks": [],
+      "capture": []
+    },
+    {
+      "stage_id": "cold",
+      "seed": {
+        "collection": "PackingSlip",
+        "document": {
+          "slip": "H8",
+          "handoff_id": "cold-42",
+          "station": "aisle 9"
+        }
+      },
+      "deadline_secs": 300,
+      "settle": true,
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "fires",
+                "min": 2,
+                "max": 2
+              },
+              {
+                "capture": "outcomes",
+                "min": 2,
+                "max": 2
+              },
+              {
+                "capture": "chill_fires",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "chill",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "packed",
+                "min": 2,
+                "max": 2
+              }
+            ],
+            "rows": [
+              {
+                "capture": "chill",
+                "key": "lifecycle_state",
+                "id": "completed",
+                "expect": [
+                  {
+                    "field": "content",
+                    "matches": "(?s)\\].*CHILL"
+                  },
+                  {
+                    "field": "content",
+                    "matches": "(?s)\\].*cold-42"
+                  }
+                ]
+              },
+              {
+                "capture": "outcomes",
+                "key": "source_handoff_id",
+                "id": "cold-42",
+                "expect": [
+                  {
+                    "field": "terminal_state",
+                    "matches": "^(complete|completed)$"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "fires",
+          "collection": "TriggerFire",
+          "filter": {
+            "owner_did": {
+              "_eq": "$trial"
+            },
+            "source_collection": {
+              "_eq": "PackingSlip"
+            }
+          },
+          "fields": [
+            "fire_key",
+            "trigger_id",
+            "task_id",
+            "request_id",
+            "session_id",
+            "source_collection",
+            "source_doc_id",
+            "source_handoff_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "outcomes",
+          "collection": "FireOutcome",
+          "filter": {
+            "owner_did": {
+              "_eq": "$trial"
+            },
+            "source_collection": {
+              "_eq": "PackingSlip"
+            }
+          },
+          "fields": [
+            "fire_key",
+            "trigger_id",
+            "request_id",
+            "session_id",
+            "source_collection",
+            "source_doc_id",
+            "source_handoff_id",
+            "terminal_state"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "chill_fires",
+          "collection": "TriggerFire",
+          "filter": {
+            "owner_did": {
+              "_eq": "$trial"
+            },
+            "source_collection": {
+              "_eq": "FireOutcome"
+            }
+          },
+          "fields": [
+            "fire_key",
+            "trigger_id",
+            "task_id",
+            "request_id",
+            "session_id",
+            "source_collection",
+            "source_doc_id",
+            "source_handoff_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "chill",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "caused_by_trigger_id": {
+              "_ne": null
+            },
+            "content": {
+              "_like": "%CHILL%"
+            }
+          },
+          "fields": [
+            "request_id",
+            "session_id",
+            "lifecycle_state",
+            "content",
+            "terminal_output",
+            "caused_by_trigger_id",
+            "caused_by_trigger_kind",
+            "caused_by_source_doc_id",
+            "caused_by_correlation",
+            "execution_origin"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "packed",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "caused_by_trigger_id": {
+              "_ne": null
+            },
+            "content": {
+              "_like": "%PACKED%"
+            }
+          },
+          "fields": [
+            "request_id",
+            "session_id",
+            "lifecycle_state",
+            "content",
+            "terminal_output",
+            "caused_by_trigger_id",
+            "caused_by_trigger_kind",
+            "caused_by_source_doc_id",
+            "caused_by_correlation",
+            "execution_origin"
+          ]
+        }
+      ]
+    }
+  ]
+}

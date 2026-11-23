@@ -1,0 +1,140 @@
+{
+  "case_id": "lab-lock-audit",
+  "split": "held_out",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "audit/locks/inventory.csv",
+        "contents": "lock,zone\nK40,lab\nK41,cold\nK42,lab\nK43,lab\nK44,lab\n"
+      },
+      {
+        "path": "audit/locks/events/2026-11/20.ndjson",
+        "contents": "{\"lock\": \"K40\", \"sequence\": 1, \"status\": \"open\"}\n{\"lock\": \"K40\", \"sequence\": 3, \"status\": \"closed\"}\n{\"lock\": \"K41\", \"sequence\": 8, \"status\": \"open\"}\n{\"lock\": \"K44\", \"sequence\": 4, \"status\": \"closed\"}\n"
+      },
+      {
+        "path": "audit/locks/events/2026-11/21.ndjson",
+        "contents": "{\"lock\": \"K40\", \"sequence\": 2, \"status\": \"open\"}\n{\"lock\": \"K43\", \"sequence\": 2, \"status\": \"open\"}\n{\"lock\": \"K44\", \"sequence\": 6, \"status\": \"open\"}\n{\"lock\": \"K43\", \"sequence\": 5, \"status\": \"closed\"}\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "run",
+      "prompt": "Run the lab lock audit as one script. audit/locks/inventory.csv lists every lock and its zone, and the event logs are the .ndjson files somewhere under audit/locks/events/. A lock's current state is the status of its event with the greatest sequence number, whichever log it is in. Which lab locks are currently open or have no event at all? Return {\"open_or_unknown\": [...]} sorted and tell me. Leave the logs alone.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "inner_reads",
+          "collection": "AgentToolCall",
+          "filter": {
+            "plugin_parent_tool_call_doc_id": {
+              "_ne": null
+            },
+            "tool_name": {
+              "_eq": "read_file"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            }
+          },
+          "fields": [
+            "tool_name",
+            "lifecycle_state",
+            "plugin_parent_tool_call_doc_id"
+          ]
+        },
+        {
+          "kind": "file",
+          "name": "audit",
+          "glob": "audit/**/*"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "script",
+              "read_file"
+            ],
+            "forbidden": [
+              "bash",
+              "write_file",
+              "edit_file"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "open_or_unknown",
+                "equals": [
+                  "K42",
+                  "K44"
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "inner_reads",
+                "min": 3
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "audit",
+            "expect": [
+              {
+                "path": "audit/locks/inventory.csv",
+                "sha256": "73f653e6a9dfbcaedbc0f0758cbc7bf08e6b6da7a67d2492ec50b515e72335cf"
+              },
+              {
+                "path": "audit/locks/events/2026-11/20.ndjson",
+                "sha256": "8aeacd2eb6482681e7f5d2a09600c39c4b9ccfb68e736488ba30aa23f9d9b589"
+              },
+              {
+                "path": "audit/locks/events/2026-11/21.ndjson",
+                "sha256": "bf0a94d5a858fab2d4d0b7d10617eb4c315d45315618c98f4ebee7c3aeb3b7a4"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "K42"
+              },
+              {
+                "matches": "K44"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "node": {},
+  "eval_definitions": [
+    {
+      "definition_id": "engineer-automation-graphs",
+      "comparability_version": 1,
+      "title": "Automation graphs: filters, groups, chains, routing and repair",
+      "subject": {
+        "kind": "agent",
+        "inference_slots": [
+          "engineer"
+        ],
+        "core_packs": [
+          "gents/pack_builder",
+          "gents/web",
+          "gents/dynamic_workflows",
+          "gents/charts",
+          "gents/data_tables",
+          "gents/script"
+        ]
+      },
+      "cases": [
+        "./cases/yard_receipts.json",
+        "./cases/inspection_band.json",
+        "./cases/dock_alert_triage.json",
+        "./cases/scale_card_repair.json",
+        "./cases/linen_proof_preview.json",
+        "./cases/proof_slip_run.json",
+        "./cases/declared_quorum.json",
+        "./cases/redline_follow_up.json",
+        "./cases/paired_crate_scans.json",
+        "./cases/desk_ticket_routing.json",
+        "./cases/cold_packing_chain.json",
+        "./cases/bay_thread_per_key.json"
+      ]
+    }
+  ]
+}
