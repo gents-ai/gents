@@ -21,13 +21,14 @@
 # GENTS_EVAL_WEB_PORT: local dashboard port (default 9495).
 # GENTS_BIN: existing gents binary; otherwise builds this checkout.
 # GENTS_EVAL_SHA: commit label for run ids when the tree has no .git.
-# GENTS_EVAL_SUBJECT: subject pack directory every selected suite runs as.
+# GENTS_EVAL_SUBJECT: subject pack directory every selected suite runs as, sessions
+#   and factory-setup included; select one suite to override only its subject.
 # GENTS_EVAL_DEFINITION_SOURCE: definition directory every selected suite applies.
 # Suites are the suite.json files under the eval fixtures (scripts/evals/suites.py);
 # scripts/evals/matrix.json holds the default list `all` runs.
 set -euo pipefail
 
-usage() { sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
+usage() { awk 'NR > 1 { if ($0 !~ /^#/) exit; sub(/^# ?/, ""); print }' "$0"; exit "${1:-2}"; }
 POSITIONAL=()
 TARGET=${GENTS_EVAL_TARGET:-workstation-1}
 NAMED_TRIALS=

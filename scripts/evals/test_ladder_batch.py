@@ -181,6 +181,9 @@ elif args[:2] != ["config", "apply"]:
         result = self.run_ladder("--help")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(self.log.exists())
+        script = (self.scripts / "run-ladder.sh").read_text().splitlines()
+        header = [line[2:] if line.startswith("# ") else line[1:] for line in script[1:script.index("set -euo pipefail")]]
+        self.assertEqual(result.stdout.splitlines(), header)
 
     def test_invalid_matrix_stops_before_any_cli_call(self):
         (self.scripts / "matrix.json").write_text("{invalid")
