@@ -66,9 +66,9 @@ def claimScenario : Family ClaimInput Bool where
   inputs := servedClaims
   model := claimAllowed
 
-/-- model-production-gap: the served claim scenario builds only the agent's own
-client-owned intent at its observed revision; no production test claims as
-another agent, for another owner or invocation, or after a revision change. -/
+/-- The claim scenario builds only the agent's own client-owned intent at its
+observed revision; a claim as another agent, for another owner or invocation,
+or after a revision change has no consumer. -/
 @[conformance_family]
 def claimUnreached : Family ClaimInput Bool where
   inputs := claimInputs.filter fun i => !servedClaims.contains i

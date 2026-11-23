@@ -44,8 +44,8 @@ def reservation : Family ReservationInput Bool where
   inputs := reservationInputs.filter fun i => !i.created || i.fileSynced
   model := fun i => reservationConfirmed i.created i.fileSynced i.directorySynced
 
-/-- model-production-gap: no production path makes the file sync of a newly
-created bootstrap marker fail. -/
+/-- The file sync of a newly created bootstrap marker fails only on an
+operating-system I/O error, which a test home cannot induce. -/
 @[conformance_family]
 def reservationUnreached : Family ReservationInput Bool where
   inputs := reservationInputs.filter fun i => i.created && !i.fileSynced
