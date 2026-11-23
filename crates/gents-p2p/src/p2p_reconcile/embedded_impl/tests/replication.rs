@@ -542,7 +542,8 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         None,
     )
     .await?;
-    let terminal = gents_protocol::graphql::extract_mutation_doc_id(&terminal, terminal_collection)?;
+    let terminal =
+        gents_protocol::graphql::extract_mutation_doc_id(&terminal, terminal_collection)?;
     for (name, actor, permission) in [
         ("admin-terminal-write", &admin, "update"),
         ("candidate-terminal-read", &candidate, "read"),
@@ -552,7 +553,14 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     ] {
         enrollment.insert(
             name,
-            enrollment_case(admin_node, actor, terminal_collection, &terminal, permission).await?,
+            enrollment_case(
+                admin_node,
+                actor,
+                terminal_collection,
+                &terminal,
+                permission,
+            )
+            .await?,
         );
     }
     for actor in [&agent, &sibling, &outsider] {
@@ -953,7 +961,9 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         let allowed = enrollment
             .remove(case.input.name.as_str())
             .unwrap_or_else(|| panic!("the enrollment scenario never reached {}", case.input.name));
-        case.check(gents_lean_vocab::families::identity_operations_enrollment_policy::Allowed { allowed });
+        case.check(
+            gents_lean_vocab::families::identity_operations_enrollment_policy::Allowed { allowed },
+        );
     }
     assert!(
         enrollment.is_empty(),

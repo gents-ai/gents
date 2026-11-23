@@ -7,8 +7,7 @@ use gents_store::identity::NodeIdentity;
 use gents_store::local::runtime_document_projection::RuntimeDocumentProjector;
 
 #[tokio::test]
-async fn installed_projector_links_transport_and_preserves_revocation() -> anyhow::Result<()>
-{
+async fn installed_projector_links_transport_and_preserves_revocation() -> anyhow::Result<()> {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("runtime");
     let runtime = gents_store::identity::KeyIdentity::load_or_create(&path, None)?;
