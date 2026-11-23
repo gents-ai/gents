@@ -218,6 +218,10 @@ async fn paired_home_reopens_against_the_original_vera_deployment() -> Result<()
     let account = provisioned["transport_group"]["account"]
         .as_str()
         .context("transport group owner")?;
+    anyhow::ensure!(
+        provisioned["vera_anchor"]["account"].as_str() == Some(account),
+        "follower must pin the account that owns the host's device group"
+    );
     let device = node_did_from_init(&provisioned)?;
     let mut operators = [account, device.as_str()];
     operators.sort_unstable();

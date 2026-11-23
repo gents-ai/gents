@@ -30,6 +30,7 @@ const DEPLOYMENT_RECORD: &str = ".gents-embedded-vera-deployment";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VeraDeploymentAnchor {
+    pub account: identity::Did,
     pub deployment: u64,
     pub consensus_key: String,
     pub genesis_id: [u8; 32],

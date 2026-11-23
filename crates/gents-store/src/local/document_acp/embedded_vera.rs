@@ -166,15 +166,37 @@ pub(super) fn delegation_audience(
 impl super::VeraDeploymentAnchor {
     /// Read the hosted provider's locally verified genesis. A remote provider
     /// cannot export an anchor through this entry point.
-    pub fn from_host(node: &defra_node::Node) -> Option<Self> {
+    pub fn from_host(
+        node: &defra_node::Node,
+        data: &Path,
+    ) -> Result<Option<Self>, super::DocumentAcpError> {
         use acp::RemotePolicies as _;
-        let hosted = node.embedded_vera_trust()?;
-        let audience = node.vera_acp()?.light_client_status().ok()?.delegation?;
-        (audience.deployment == hosted.chain_id).then_some(Self {
-            deployment: hosted.chain_id,
-            consensus_key: hosted.consensus_key.clone(),
-            genesis_id: audience.genesis_id?,
-        })
+        let Some(deployment) = super::recorded_deployment(data)? else {
+            return Ok(None);
+        };
+        let super::VeraConnection::Host { account, .. } = deployment.connection else {
+            return Ok(None);
+        };
+        let Some(hosted) = node.embedded_vera_trust() else {
+            return Ok(None);
+        };
+        if deployment.consensus_key != hosted.consensus_key {
+            return Err(super::DocumentAcpError::DeploymentReplaced {
+                path: data.join(super::DEPLOYMENT_RECORD),
+            });
+        }
+        let audience = node
+            .vera_acp()
+            .and_then(|provider| provider.light_client_status().ok()?.delegation);
+        Ok(audience.and_then(|audience| {
+            let genesis_id = audience.genesis_id?;
+            (audience.deployment == hosted.chain_id).then(|| Self {
+                account,
+                deployment: hosted.chain_id,
+                consensus_key: hosted.consensus_key.clone(),
+                genesis_id,
+            })
+        }))
     }
 
     /// Configure the paired device's own signer, worker journal and encrypted

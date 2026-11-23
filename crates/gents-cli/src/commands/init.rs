@@ -639,7 +639,7 @@ pub(crate) async fn init_home_with_core_packs(
         });
         #[cfg(feature = "vera")]
         if matches!(connection, VeraConnection::Host { .. }) {
-            let anchor = gents_store::local::document_acp::VeraDeploymentAnchor::from_host(&init_node)
+            let anchor = gents_store::local::document_acp::VeraDeploymentAnchor::from_host(&init_node, &data_dir)?
                 .context("hosted Vera deployment has no verified genesis")?;
             output["vera_anchor"] = serde_json::to_value(anchor)?;
         }

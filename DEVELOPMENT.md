@@ -69,8 +69,7 @@ To share a deployment, initialize the host with `--document-acp vera
 --vera-rpc-port 9841`. Its account and Node are the initial operators, and
 administrative changes require both signatures. Save the `vera_anchor` object
 from the initialization result and give it to the second device over an
-authenticated channel. It identifies the deployment, its consensus key and
-its genesis.
+authenticated channel. It identifies the account, deployment, consensus key and genesis.
 
 Start the host before initializing the follower. On the second device, make
 a private route from a local loopback port to the host's loopback port.
