@@ -1,0 +1,31 @@
+{
+  "manifest_version": 1,
+  "name": "engineer_host_files",
+  "version": "0.1.0",
+  "description": "Native eval definition engineer-host-files: the Engineer reads, searches, writes and edits files in its workspace and leaves the files it was told to keep exactly as they were.",
+  "authors": [
+    "gents-ai contributors"
+  ],
+  "tags": [
+    "eval"
+  ],
+  "kind": "documents",
+  "assets": [
+    "README.md",
+    "cases/pickup_shortfall.json",
+    "cases/dispatch_queue_merge.json",
+    "cases/change_request_apply.json",
+    "cases/product_rename_prose.json",
+    "cases/station_renumber.json",
+    "cases/crew_lists_split.json",
+    "cases/pump_error_tally.json",
+    "cases/retry_callers_audit.json",
+    "cases/heron_current_decisions.json",
+    "cases/berth_overlap_pairs.json",
+    "cases/beacon_live_minutes.json",
+    "cases/chiller_alarm_edit.json",
+    "pack_config.json",
+    "suite.json"
+  ],
+  "config": "pack_config.json"
+}

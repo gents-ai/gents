@@ -1,0 +1,107 @@
+{
+  "case_id": "change-request-apply",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "services/gateway.yaml",
+        "contents": "# gateway service\nname: gateway\ntimeout_ms: 3000\nlegacy_auth: true\npublic_paths:\n  - /login\n  - /status\nlimits:\n  timeout_ms: 800\n  burst: 40\n"
+      },
+      {
+        "path": "services/billing.yaml",
+        "contents": "# billing service\nname: billing\nretries: 2\ncurrency_default: EUR\nreceipts: email\n"
+      },
+      {
+        "path": "services/search.yaml",
+        "contents": "# search service\nname: search\nindex:\n  shards: 4\n  replicas: 1\ncache:\n  shards: 2\n  ttl_s: 300\n"
+      },
+      {
+        "path": "changes/CR-118.md",
+        "contents": "# CR-118 (approved)\n\nApply each item in order:\n\n1. services/gateway.yaml: set the top-level `timeout_ms` to 4500.\n2. services/gateway.yaml: add `/healthz` as the last entry of `public_paths`.\n3. services/billing.yaml: set `retries` to 2.\n4. services/billing.yaml: rename `currency_default` to `default_currency`, keeping its value.\n5. services/ledger.yaml: set `replicas` to 3.\n6. services/search.yaml: set the index's `shards` to 6.\n7. services/gateway.yaml: remove the `legacy_auth` line.\n"
+      },
+      {
+        "path": "changes/CR-119-draft.md",
+        "contents": "# CR-119 (draft, not approved)\n\n1. services/search.yaml: set the index's `shards` to 8.\n2. services/billing.yaml: set `receipts` to `none`.\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "apply",
+      "prompt": "Apply change request changes/CR-118.md to the service configs under services/. Make only the edits it lists and keep everything else in each file as it is. An item that is already in place needs no edit, and an item whose file doesn't exist is skipped, not created. CR-119 is only a draft, so don't apply it. Reply with JSON listing the item numbers: applied, already_applied and skipped.",
+      "capture": [
+        {
+          "kind": "file",
+          "name": "workspace",
+          "glob": "**/*"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "bash"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "workspace",
+            "expect": [
+              {
+                "path": "services/gateway.yaml",
+                "equals": "# gateway service\nname: gateway\ntimeout_ms: 4500\npublic_paths:\n  - /login\n  - /status\n  - /healthz\nlimits:\n  timeout_ms: 800\n  burst: 40\n"
+              },
+              {
+                "path": "services/billing.yaml",
+                "equals": "# billing service\nname: billing\nretries: 2\ndefault_currency: EUR\nreceipts: email\n"
+              },
+              {
+                "path": "services/search.yaml",
+                "equals": "# search service\nname: search\nindex:\n  shards: 6\n  replicas: 1\ncache:\n  shards: 2\n  ttl_s: 300\n"
+              },
+              {
+                "path": "services/ledger.yaml",
+                "exists": false
+              },
+              {
+                "path": "changes/CR-118.md",
+                "sha256": "5aa90aaf4275fd1835532a6a881af932e8012af266c765879580799b44ca5eb2"
+              },
+              {
+                "path": "changes/CR-119-draft.md",
+                "sha256": "652d9639c65e9ce8591f76739ecb3058ad475f561d9e68892d1eb8ef62062c99"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\"applied\"\\s*:\\s*\\[\\s*1\\s*,\\s*2\\s*,\\s*4\\s*,\\s*6\\s*,\\s*7\\s*\\]"
+              },
+              {
+                "matches": "\"already_applied\"\\s*:\\s*\\[\\s*3\\s*\\]"
+              },
+              {
+                "matches": "\"skipped\"\\s*:\\s*\\[\\s*5\\s*\\]"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,99 @@
+{
+  "case_id": "berth-overlap-pairs",
+  "split": "held_out",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "berths/north.csv",
+        "contents": "ref,from_hour,to_hour,state\nBN-11,2,9,held\nBN-12,9,14,held\nBN-13,8,11,released\nBN-14,13,16,held\n"
+      },
+      {
+        "path": "berths/south.csv",
+        "contents": "ref,from_hour,to_hour,state\nBS-21,0,6,held\nBS-22,3,5,held\nBS-23,6,8,held\nBS-24,7,10,held\n"
+      },
+      {
+        "path": "berths/east.csv",
+        "contents": "ref,from_hour,to_hour,state\nBE-31,1,4,held\nBE-32,4,7,held\nBE-33,0,12,released\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "pairs",
+      "prompt": "Our berth bookings live one file per berth under berths/. Find every pair of held bookings on the same berth whose hours overlap; back-to-back bookings (one ends the hour the next starts) are fine, and released bookings don't count. Write out/berth_conflicts.json as a list of [ref, ref] pairs, refs sorted within each pair and the pairs sorted. Answer with JSON whose \"berths\" lists the berths that have a conflict, alphabetically. Leave the booking files as they are.",
+      "capture": [
+        {
+          "kind": "file",
+          "name": "workspace",
+          "glob": "**/*"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "bash"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "workspace",
+            "expect": [
+              {
+                "path": "out/berth_conflicts.json",
+                "pointer": "",
+                "equals": [
+                  [
+                    "BN-12",
+                    "BN-14"
+                  ],
+                  [
+                    "BS-21",
+                    "BS-22"
+                  ],
+                  [
+                    "BS-23",
+                    "BS-24"
+                  ]
+                ]
+              },
+              {
+                "path": "berths/north.csv",
+                "sha256": "2a2d98b6329af30c033890d829da56181b1d2d1d12aff175a895e64b31075723"
+              },
+              {
+                "path": "berths/south.csv",
+                "sha256": "ae19b24442ce0fe2420db8a19fcd9cf0e0297ce9239e6df8ea55a0de1e4d2294"
+              },
+              {
+                "path": "berths/east.csv",
+                "sha256": "ce5311a2730a47d2208c566773839a21b101311fe8ca345b25058e58928ca0ba"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\"berths\"\\s*:\\s*\\[\\s*\"north\"\\s*,\\s*\"south\"\\s*\\]"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

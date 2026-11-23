@@ -1,0 +1,95 @@
+{
+  "case_id": "beacon-live-minutes",
+  "split": "held_out",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "stations/pier/b-alpha.tsv",
+        "contents": "start\tend\tmode\n0\t7\tlive\n4\t15\tlive\n15\t21\tlive\n21\t23\ttest\n22\t44\tlive\n"
+      },
+      {
+        "path": "stations/pier/b-bravo.tsv",
+        "contents": "start\tend\tmode\n-4\t2\tlive\n3\t30\tlive\n10\t11\tlive\n"
+      },
+      {
+        "path": "stations/yard/b-charlie.tsv",
+        "contents": "start\tend\tmode\n0\t47\ttest\n"
+      },
+      {
+        "path": "stations/yard/b-delta.tsv",
+        "contents": "start\tend\tmode\n35\t50\tlive\n5\t9\tlive\n9\t12\tlive\n"
+      },
+      {
+        "path": "stations/README.txt",
+        "contents": "One TSV per beacon, grouped by site. Minutes are relative to shift start.\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "coverage",
+      "prompt": "How many minutes was each beacon live during the shift? The shift runs from minute 0 up to but not including minute 40. Each beacon has a TSV under stations/<site>/ named after it; count only rows whose mode is live, merge overlapping or touching intervals, and clip them to the shift. Save coverage/live_minutes.json mapping each beacon's file name without .tsv to its minutes, including beacons that were never live. Don't edit the station files.",
+      "capture": [
+        {
+          "kind": "file",
+          "name": "workspace",
+          "glob": "**/*"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "bash"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "workspace",
+            "expect": [
+              {
+                "path": "coverage/live_minutes.json",
+                "pointer": "",
+                "equals": {
+                  "b-alpha": 39,
+                  "b-bravo": 29,
+                  "b-charlie": 0,
+                  "b-delta": 12
+                }
+              },
+              {
+                "path": "stations/pier/b-alpha.tsv",
+                "sha256": "c9cb667cd33c377c34df716d8aa5723b62d4d0034cb7456bcdc12411c0a79a75"
+              },
+              {
+                "path": "stations/pier/b-bravo.tsv",
+                "sha256": "cac1c82808ca2e25cc49af506e5a7a734daee9c6b59ff8cfe207ecd581fd7821"
+              },
+              {
+                "path": "stations/yard/b-charlie.tsv",
+                "sha256": "a79981e98f610ca54de615d2542075eb0f20b23253b20e7bf0bba1ba46a29441"
+              },
+              {
+                "path": "stations/yard/b-delta.tsv",
+                "sha256": "4a7f1ac6660c5e9445864b6f2749ff7df5e0b2b6ec9976707dff24437f04eca3"
+              },
+              {
+                "path": "stations/README.txt",
+                "sha256": "85582e80fc08eee4ef0a94fc48a5fd48d88512ecd6a3ed63fec237135adee509"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

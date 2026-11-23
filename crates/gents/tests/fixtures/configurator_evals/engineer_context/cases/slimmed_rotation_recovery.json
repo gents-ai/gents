@@ -1,0 +1,129 @@
+{
+  "case_id": "slimmed-rotation-recovery",
+  "split": "held_out",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "ops/night-rotation.json",
+        "contents": "{\n  \"rotation\": \"night\",\n  \"week\": \"2026-W47\",\n  \"crew\": [\n    {\n      \"call_sign\": \"WREN\",\n      \"name\": \"Wren Adeyemi\",\n      \"extension\": \"4412\",\n      \"role\": \"lead\"\n    },\n    {\n      \"call_sign\": \"SKUA\",\n      \"name\": \"Ola Brandt\",\n      \"extension\": \"4419\",\n      \"role\": \"deck\"\n    },\n    {\n      \"call_sign\": \"GULL\",\n      \"name\": \"Rafe Iqbal\",\n      \"extension\": \"4427\",\n      \"role\": \"deck\"\n    },\n    {\n      \"call_sign\": \"TERN\",\n      \"name\": \"Mina Sato\",\n      \"extension\": \"4431\",\n      \"role\": \"engine\"\n    },\n    {\n      \"call_sign\": \"KITE\",\n      \"name\": \"Luca Ferri\",\n      \"extension\": \"4438\",\n      \"role\": \"engine\"\n    },\n    {\n      \"call_sign\": \"RAIL\",\n      \"name\": \"Esme Oduya\",\n      \"extension\": \"4446\",\n      \"role\": \"galley\"\n    }\n  ]\n}\n"
+      },
+      {
+        "path": "ops/day-rotation.json",
+        "contents": "{\n  \"rotation\": \"day\",\n  \"week\": \"2026-W47\",\n  \"crew\": [\n    {\n      \"call_sign\": \"HAWK\",\n      \"name\": \"Ines Calder\",\n      \"extension\": \"4302\",\n      \"role\": \"lead\"\n    },\n    {\n      \"call_sign\": \"LARK\",\n      \"name\": \"Theo Brandt\",\n      \"extension\": \"4310\",\n      \"role\": \"deck\"\n    },\n    {\n      \"call_sign\": \"COOT\",\n      \"name\": \"Ada Mensah\",\n      \"extension\": \"4315\",\n      \"role\": \"engine\"\n    },\n    {\n      \"call_sign\": \"DOVE\",\n      \"name\": \"Kai Ferri\",\n      \"extension\": \"4321\",\n      \"role\": \"galley\"\n    }\n  ]\n}\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "slim",
+      "prompt": "We're moving the rotation files in ops/ to the slim format. Rewrite each one as an object with only \"rotation\", \"week\" (both unchanged) and \"call_signs\", the crew's call signs in their current order. Drop everything else.",
+      "capture": [
+        {
+          "kind": "file",
+          "name": "ops",
+          "glob": "ops/*"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "bash"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "ops",
+            "expect": [
+              {
+                "path": "ops/night-rotation.json",
+                "pointer": "",
+                "equals": {
+                  "rotation": "night",
+                  "week": "2026-W47",
+                  "call_signs": [
+                    "WREN",
+                    "SKUA",
+                    "GULL",
+                    "TERN",
+                    "KITE",
+                    "RAIL"
+                  ]
+                }
+              },
+              {
+                "path": "ops/day-rotation.json",
+                "pointer": "",
+                "equals": {
+                  "rotation": "day",
+                  "week": "2026-W47",
+                  "call_signs": [
+                    "HAWK",
+                    "LARK",
+                    "COOT",
+                    "DOVE"
+                  ]
+                }
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "recover",
+      "prompt": "Quick one: what was the night lead's phone extension before you slimmed the rotations down?",
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "bash"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "text",
+                "contains": "4412"
+              },
+              {
+                "field": "text",
+                "contains": "WREN"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\\b4412\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

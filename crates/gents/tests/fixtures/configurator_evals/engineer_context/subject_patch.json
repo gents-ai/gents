@@ -1,0 +1,11 @@
+{
+  "tools": {
+    "engineer-tools": {
+      "host": {
+        "files": {
+          "max_read_chars": 4000
+        }
+      }
+    }
+  }
+}

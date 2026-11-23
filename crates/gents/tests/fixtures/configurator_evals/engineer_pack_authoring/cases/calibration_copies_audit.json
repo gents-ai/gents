@@ -1,0 +1,148 @@
+{
+  "case_id": "calibration-copies-audit",
+  "split": "validation",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "incoming/approved/calibration_index/README.md",
+        "contents": "# Calibration index\n\nReference sounding offsets for the survey launch.\n\n## Configuration\n\nNothing to set.\n\n## Usage\n\nInstall the pack.\n"
+      },
+      {
+        "path": "incoming/approved/calibration_index/reference.txt",
+        "contents": "calibration: April 2026\nprobe offset: 0.4m\n"
+      },
+      {
+        "path": "incoming/approved/calibration_index/manifest.json",
+        "contents": "{\n  \"manifest_version\": 1,\n  \"name\": \"calibration_index\",\n  \"namespace\": \"soundings\",\n  \"version\": \"1.0.0\",\n  \"description\": \"Sounding calibration reference.\",\n  \"authors\": [\n    \"soundings contributors\"\n  ],\n  \"kind\": \"assets\",\n  \"assets\": [\n    \"README.md\",\n    \"reference.txt\"\n  ]\n}\n"
+      },
+      {
+        "path": "incoming/received/calibration_index/README.md",
+        "contents": "# Calibration index\n\nReference sounding offsets for the survey launch.\n\n## Configuration\n\nNothing to set.\n\n## Usage\n\nInstall the pack.\n"
+      },
+      {
+        "path": "incoming/received/calibration_index/reference.txt",
+        "contents": "calibration: May 2026\nprobe offset: 0.6m\n"
+      },
+      {
+        "path": "incoming/received/calibration_index/manifest.json",
+        "contents": "{\n  \"manifest_version\": 1,\n  \"name\": \"calibration_index\",\n  \"namespace\": \"soundings\",\n  \"version\": \"1.0.0\",\n  \"description\": \"Sounding calibration reference.\",\n  \"authors\": [\n    \"soundings contributors\"\n  ],\n  \"kind\": \"assets\",\n  \"assets\": [\n    \"README.md\",\n    \"reference.txt\"\n  ]\n}\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "audit",
+      "prompt": "Two copies of the calibration_index pack came in: incoming/approved/calibration_index is the one we signed off, and incoming/received/calibration_index is from the vendor. Both say version 1.0.0. Are they the same release? Compare their pack digests and reply with JSON: approved_digest, received_digest, same_release, and differing_files (the files, by path inside the pack, whose contents differ). Don't install or change either copy.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "install",
+          "collection": "PackInstallation",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "coordinate": {
+              "_eq": "soundings/calibration_index"
+            }
+          },
+          "fields": [
+            "coordinate",
+            "version",
+            "digest",
+            "source"
+          ]
+        },
+        {
+          "kind": "file",
+          "name": "incoming",
+          "glob": "incoming/**/*"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "write_file",
+              "edit_file",
+              "bash"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\"same_release\"\\s*:\\s*false"
+              },
+              {
+                "matches": "\"differing_files\"\\s*:\\s*\\[\\s*\"[^\"]*reference\\.txt\"\\s*\\]"
+              },
+              {
+                "matches": "\"approved_digest\"\\s*:\\s*\"sha256:[0-9a-f]{64}\""
+              },
+              {
+                "matches": "\"received_digest\"\\s*:\\s*\"sha256:[0-9a-f]{64}\""
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "install",
+            "min": 0,
+            "max": 0
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "incoming",
+            "expect": [
+              {
+                "path": "incoming/approved/calibration_index/README.md",
+                "sha256": "8e6af85f7006360119e2401011657b5099a4e6d37558cb93e0196400d5efa6e7"
+              },
+              {
+                "path": "incoming/approved/calibration_index/reference.txt",
+                "sha256": "8f198734d99282a69fa0e9bc10e7a1c3608b904182c4e6b90cdc88b028545000"
+              },
+              {
+                "path": "incoming/approved/calibration_index/manifest.json",
+                "sha256": "fae2d3b92c59e0451687c1e45ed4b2abd05dede16a8870d1479a893dbb274415"
+              },
+              {
+                "path": "incoming/received/calibration_index/README.md",
+                "sha256": "8e6af85f7006360119e2401011657b5099a4e6d37558cb93e0196400d5efa6e7"
+              },
+              {
+                "path": "incoming/received/calibration_index/reference.txt",
+                "sha256": "338a569ed53af8e8cb82b8ddc6a7b3db4cd5943f74da0566341e9def1d8688c8"
+              },
+              {
+                "path": "incoming/received/calibration_index/manifest.json",
+                "sha256": "fae2d3b92c59e0451687c1e45ed4b2abd05dede16a8870d1479a893dbb274415"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

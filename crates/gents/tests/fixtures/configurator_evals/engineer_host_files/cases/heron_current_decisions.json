@@ -1,0 +1,108 @@
+{
+  "case_id": "heron-current-decisions",
+  "split": "validation",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "notes/2026-11-02-kickoff.md",
+        "contents": "# Heron kickoff\nDate: 2026-11-02\nStatus: agreed\n\n- Owner: Priya Nand\n- Launch date: 2026-12-01\n- Budget: 40k\n"
+      },
+      {
+        "path": "notes/2026-11-09-review.md",
+        "contents": "# Heron review\nDate: 2026-11-09\nStatus: agreed\n\n- Launch date moves to 2026-12-15 (vendor delay).\n"
+      },
+      {
+        "path": "notes/2026-11-12-budget.md",
+        "contents": "# Heron budget proposal\nDate: 2026-11-12\nStatus: draft, not agreed\n\n- Budget: 55k\n- Owner: Tom Reyes\n"
+      },
+      {
+        "path": "notes/2026-11-16-steering.md",
+        "contents": "# Steering committee\nDate: 2026-11-16\nStatus: agreed\n\n- Heron budget raised to 48k.\n- Owner stays Priya Nand.\n- Osprey launch date set to 2027-01-10.\n"
+      },
+      {
+        "path": "notes/vendor-followup.md",
+        "contents": "# Vendor follow-up\nDate: 2026-11-19\nStatus: agreed\n\n- The vendor confirmed early delivery, so Heron's launch date goes back to 2026-12-01.\n"
+      },
+      {
+        "path": "notes/2026-11-20-osprey.md",
+        "contents": "# Osprey sync\nDate: 2026-11-20\nStatus: agreed\n\n- Osprey owner: Tom Reyes\n- Osprey budget: 30k\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "decide",
+      "prompt": "From the meeting notes in notes/, work out Heron's current agreed launch date, owner and budget. A later agreed note overrides an earlier one (go by each note's Date line, not its file name), and drafts were never agreed. Save decisions/heron.json with launch_date (YYYY-MM-DD), owner, and budget_k (a number, in thousands). Leave the notes alone.",
+      "capture": [
+        {
+          "kind": "file",
+          "name": "workspace",
+          "glob": "**/*"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "bash"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "workspace",
+            "expect": [
+              {
+                "path": "decisions/heron.json",
+                "pointer": "/launch_date",
+                "equals": "2026-12-01"
+              },
+              {
+                "path": "decisions/heron.json",
+                "pointer": "/owner",
+                "equals": "Priya Nand"
+              },
+              {
+                "path": "decisions/heron.json",
+                "pointer": "/budget_k",
+                "equals": 48
+              },
+              {
+                "path": "notes/2026-11-02-kickoff.md",
+                "sha256": "69418f4a6269959519fac8397491b5f846ba88b061088922cef6b9ff83c121cd"
+              },
+              {
+                "path": "notes/2026-11-09-review.md",
+                "sha256": "404a0f05a64a53f85cf418e51a25e417b52112871f684bc7bca527ed3a1825a6"
+              },
+              {
+                "path": "notes/2026-11-12-budget.md",
+                "sha256": "d369df9f7cbd884f210cff98cf4903647059c982c82d075f23928b0f57f7401f"
+              },
+              {
+                "path": "notes/2026-11-16-steering.md",
+                "sha256": "86920f67f4a19ec50f7aa7592a875e13e93c5b5c76c8e585651e2c2d56f7afa4"
+              },
+              {
+                "path": "notes/vendor-followup.md",
+                "sha256": "15717268d33f3ce1454b8cf92ff1ea5e7ff2d4825c8e7f95be69da82c72adb54"
+              },
+              {
+                "path": "notes/2026-11-20-osprey.md",
+                "sha256": "d304467a6e279869945a96601cd35ac16d7e003443871c6946d838746b8ba396"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,142 @@
+{
+  "case_id": "courier-zones-check-clean",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "packs/courier_zones/README.md",
+        "contents": "# Courier zones\n\nZones and delivery windows for the courier desk.\n"
+      },
+      {
+        "path": "packs/courier_zones/pack_config.json",
+        "contents": "{\n  \"node\": {}\n}\n"
+      },
+      {
+        "path": "packs/courier_zones/schemas/courier_zone.graphql",
+        "contents": "type CourierZone {\n  zone: String\n  courier: String\n  window: String\n}\n"
+      },
+      {
+        "path": "packs/courier_zones/manifest.json",
+        "contents": "{\n  \"manifest_version\": 1,\n  \"name\": \"courier_zones\",\n  \"namespace\": \"fielddesk\",\n  \"version\": \"0.3.0\",\n  \"description\": \"Courier zone reference data.\",\n  \"authors\": [\n    \"fielddesk contributors\"\n  ],\n  \"kind\": \"documents\",\n  \"assets\": [\n    \"README.md\",\n    \"pack_config.json\",\n    \"schemas/courier_zone.graphql\"\n  ],\n  \"schemas\": [\n    \"schemas/courier_zones.graphql\"\n  ],\n  \"config\": \"pack_config.json\"\n}\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "fix",
+      "prompt": "packs/courier_zones fails its pack check. Fix whatever the check reports, re-running it until it passes, without changing the schema file or the pack's version. Then install the pack.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "install",
+          "collection": "PackInstallation",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "coordinate": {
+              "_eq": "fielddesk/courier_zones"
+            }
+          },
+          "fields": [
+            "coordinate",
+            "version",
+            "digest",
+            "source"
+          ]
+        },
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "CourierZone"
+          ]
+        },
+        {
+          "kind": "file",
+          "name": "packs",
+          "glob": "packs/**/*"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "install",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "install",
+                "key": "coordinate",
+                "id": "fielddesk/courier_zones",
+                "expect": [
+                  {
+                    "field": "version",
+                    "equals": "0.3.0"
+                  },
+                  {
+                    "field": "digest",
+                    "matches": "^sha256:[0-9a-f]{64}$"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "schema",
+            "sdl": "type CourierZone { zone: String courier: String window: String }"
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "packs",
+            "expect": [
+              {
+                "path": "packs/courier_zones/manifest.json",
+                "pointer": "/schemas",
+                "contains": "schemas/courier_zone.graphql"
+              },
+              {
+                "path": "packs/courier_zones/README.md",
+                "matches": "(?m)^## "
+              },
+              {
+                "path": "packs/courier_zones/schemas/courier_zone.graphql",
+                "sha256": "426bbcf676c9801577edfbf5aee265a2ea92ff699b81d7d558726dc126c6542a"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

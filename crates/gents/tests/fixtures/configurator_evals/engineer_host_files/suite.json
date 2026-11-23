@@ -1,0 +1,17 @@
+{
+  "id": "engineer-host-files",
+  "title": "Engineer host files",
+  "coverage": [
+    "read-only answers leave inputs untouched",
+    "latest-wins merge into a new file",
+    "one-key edit beside look-alike keys",
+    "change request applied item by item, with no-ops and skips",
+    "grep and glob past archive distractors",
+    "prose-only rename that keeps code untouched",
+    "latest agreed decision across dated notes",
+    "multi-file rename without substring hits",
+    "one output file per group, none for empty groups",
+    "computed JSON artifacts in nested layouts"
+  ],
+  "subject": "engineer_full"
+}

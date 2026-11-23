@@ -1,0 +1,97 @@
+{
+  "case_id": "dispatch-queue-merge",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "dispatch/manual.jsonl",
+        "contents": "{\"job_id\":\"J-27\",\"updated_at\":\"2026-11-06T10:00:00+01:00\",\"state\":\"active\",\"bay\":1}\n{\"job_id\":\"J-19\",\"updated_at\":\"2026-11-06T09:30:00Z\",\"state\":\"cancelled\",\"bay\":4}\n{\"job_id\":\"J-40\",\"updated_at\":\"2026-11-06T10:20:00+02:00\",\"state\":\"active\",\"bay\":6}\n{\"job_id\":\"J-51\",\"updated_at\":\"2026-11-06T11:10:00Z\",\"state\":\"active\",\"bay\":2}\n"
+      },
+      {
+        "path": "dispatch/import.jsonl",
+        "contents": "{\"job_id\":\"J-40\",\"updated_at\":\"2026-11-06T09:00:00Z\",\"state\":\"active\",\"bay\":8}\n{\"job_id\":\"J-27\",\"updated_at\":\"2026-11-06T09:00:00Z\",\"state\":\"active\",\"bay\":9}\n{\"job_id\":\"J-19\",\"updated_at\":\"2026-11-06T11:50:00+03:00\",\"state\":\"active\",\"bay\":5}\n{\"job_id\":\"J-62\",\"updated_at\":\"2026-11-06T08:00:00Z\",\"state\":\"cancelled\",\"bay\":2}\n{\"job_id\":\"J-33\",\"updated_at\":\"2026-11-06T07:45:00Z\",\"state\":\"active\",\"bay\":3}\n{\"job_id\":\"J-51\",\"updated_at\":\"2026-11-06T07:15:00-04:00\",\"state\":\"cancelled\",\"bay\":7}\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "merge",
+      "prompt": "Build the current dispatch queue from dispatch/manual.jsonl and dispatch/import.jsonl. The two feeds stamp updated_at in different time zones. For each job use its most recent entry; when both files have an entry at the same moment, the manual one wins. Drop jobs whose latest entry is cancelled. Save dispatch/queue.json as a JSON array of the remaining original records, sorted by job_id, and leave both inputs untouched. In your reply, give JSON with \"remaining\" (how many jobs are queued).",
+      "capture": [
+        {
+          "kind": "file",
+          "name": "dispatch",
+          "glob": "dispatch/*"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "bash"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "dispatch",
+            "expect": [
+              {
+                "path": "dispatch/manual.jsonl",
+                "sha256": "e0ba6ac1f19e4ab5e97e5383aaacd14a9f915a71199a5f75f6a855fab6174f91"
+              },
+              {
+                "path": "dispatch/import.jsonl",
+                "sha256": "4096ee581261d806a2912cbceb0025124fa6ca2fffb9c8724f606f80471c2358"
+              },
+              {
+                "path": "dispatch/queue.json",
+                "pointer": "",
+                "equals": [
+                  {
+                    "job_id": "J-27",
+                    "updated_at": "2026-11-06T10:00:00+01:00",
+                    "state": "active",
+                    "bay": 1
+                  },
+                  {
+                    "job_id": "J-33",
+                    "updated_at": "2026-11-06T07:45:00Z",
+                    "state": "active",
+                    "bay": 3
+                  },
+                  {
+                    "job_id": "J-40",
+                    "updated_at": "2026-11-06T09:00:00Z",
+                    "state": "active",
+                    "bay": 8
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\"remaining\"\\s*:\\s*3\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,150 @@
+{
+  "case_id": "berth-watch-preview",
+  "split": "validation",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "packs/berth_watch/README.md",
+        "contents": "# Berth watch\n\nAn agent that flags vessels overstaying their berth.\n\n## Configuration\n\nNothing to set.\n\n## Usage\n\nInstall the pack.\n"
+      },
+      {
+        "path": "packs/berth_watch/agents/watcher/system_prompt.md",
+        "contents": "You watch berth logs and report vessels past their departure time.\n"
+      },
+      {
+        "path": "packs/berth_watch/tasks/overstay/prompt.md",
+        "contents": "List every vessel still alongside after its booked departure.\n"
+      },
+      {
+        "path": "packs/berth_watch/pack_config.json",
+        "contents": "{\n  \"node\": {},\n  \"agents\": [\n    {\n      \"agent_slot\": \"berth-watcher\",\n      \"context_id\": \"berth-watcher-context\",\n      \"display_name\": \"Berth watcher\",\n      \"inference_profile_id\": \"gents:inference-slot:watcher\"\n    }\n  ],\n  \"contexts\": [\n    {\n      \"context_id\": \"berth-watcher-context\",\n      \"display_name\": \"Berth watcher\",\n      \"system_prompt\": \"./agents/watcher/system_prompt.md\",\n      \"tools_id\": \"berth-watcher-tools\"\n    }\n  ],\n  \"tools\": [\n    {\n      \"tools_id\": \"berth-watcher-tools\",\n      \"display_name\": \"Berth watcher tools\"\n    }\n  ],\n  \"tasks\": [\n    {\n      \"task_id\": \"berth-overstay-check\",\n      \"display_name\": \"Berth overstay check\",\n      \"agent_did\": \"gents:agent-slot:berth-watcher\",\n      \"prompt_template\": \"./tasks/overstay/prompt.md\"\n    }\n  ]\n}\n"
+      },
+      {
+        "path": "packs/berth_watch/manifest.json",
+        "contents": "{\n  \"manifest_version\": 1,\n  \"name\": \"berth_watch\",\n  \"namespace\": \"harbourdesk\",\n  \"version\": \"0.2.0\",\n  \"description\": \"Watches berths for overstays.\",\n  \"authors\": [\n    \"harbourdesk contributors\"\n  ],\n  \"kind\": \"documents\",\n  \"assets\": [\n    \"README.md\",\n    \"agents/watcher/system_prompt.md\",\n    \"pack_config.json\",\n    \"tasks/overstay/prompt.md\"\n  ],\n  \"config\": \"pack_config.json\",\n  \"inference_slots\": [\n    {\n      \"name\": \"watcher\",\n      \"description\": \"Reads berth logs. Any capable profile.\",\n      \"agents\": [\n        \"berth-watcher\"\n      ]\n    }\n  ]\n}\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "preview",
+      "prompt": "Before I install packs/berth_watch, show me what installing it would do. Preview the install and tell me which documents it would create and which inference slot I'd have to bind. Don't install it.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "install",
+          "collection": "PackInstallation",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "coordinate": {
+              "_eq": "harbourdesk/berth_watch"
+            }
+          },
+          "fields": [
+            "coordinate",
+            "version",
+            "digest",
+            "source"
+          ]
+        },
+        {
+          "kind": "file",
+          "name": "packs",
+          "glob": "packs/**/*"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "write_file",
+              "edit_file",
+              "bash"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "committed",
+                "equals": false
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\\bwatcher\\b"
+              },
+              {
+                "matches": "berth-overstay-check"
+              },
+              {
+                "matches": "berth-watcher"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "install",
+            "min": 0,
+            "max": 0
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "packs",
+            "expect": [
+              {
+                "path": "packs/berth_watch/README.md",
+                "sha256": "fb5b6bb8e6e797381b05c5f23aa7e57d1f79086d9c94fb732cfe2e77000a0413"
+              },
+              {
+                "path": "packs/berth_watch/agents/watcher/system_prompt.md",
+                "sha256": "dcfd15f2f6a9335181b8784d0df94914eeeb9fde316aa1cb928d4770bb669308"
+              },
+              {
+                "path": "packs/berth_watch/tasks/overstay/prompt.md",
+                "sha256": "75398324fc83c445595c20afd87b978aeae5ebd169ee8a597037196b3ca536e5"
+              },
+              {
+                "path": "packs/berth_watch/pack_config.json",
+                "sha256": "9aa2e205a9e7e002c5449a0a46258ca82b4754e741714c67dc9a6419963c5def"
+              },
+              {
+                "path": "packs/berth_watch/manifest.json",
+                "sha256": "6db9c6e59315781f0ac7828868abad418dd531e59a8e519b4f3f0cd191eb5f90"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

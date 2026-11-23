@@ -1,0 +1,259 @@
+{
+  "case_id": "tide-notes-version-bump",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "packs/tide_notes/README.md",
+        "contents": "# Tide notes\n\nSkills for working the harbour tides.\n\n## Configuration\n\nNothing to set.\n\n## Usage\n\nInstall the pack.\n"
+      },
+      {
+        "path": "packs/tide_notes/pack_config.json",
+        "contents": "{\n  \"node\": {},\n  \"skills\": [\n    {\n      \"skill_id\": \"tide-tables\",\n      \"name\": \"tide-tables\",\n      \"description\": \"Load when reading the harbour tide tables.\",\n      \"instructions\": \"./skills/tide_tables/SKILL.md\"\n    }\n  ]\n}\n"
+      },
+      {
+        "path": "packs/tide_notes/skills/tide_tables/SKILL.md",
+        "contents": "---\nname: tide-tables\ndescription: Load when reading the harbour tide tables.\n---\n\n# Tide tables\n\nRead heights from the Larkspur gauge, never the estuary one.\n"
+      },
+      {
+        "path": "packs/tide_notes/manifest.json",
+        "contents": "{\n  \"manifest_version\": 1,\n  \"name\": \"tide_notes\",\n  \"namespace\": \"harbourdesk\",\n  \"version\": \"1.0.0\",\n  \"description\": \"Harbour tide skills.\",\n  \"authors\": [\n    \"harbourdesk contributors\"\n  ],\n  \"kind\": \"documents\",\n  \"assets\": [\n    \"README.md\",\n    \"pack_config.json\",\n    \"skills/tide_tables/SKILL.md\"\n  ],\n  \"config\": \"pack_config.json\"\n}\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "install",
+      "prompt": "Install the pack in packs/tide_notes as it is: check it, build it and install the archive.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "install",
+          "collection": "PackInstallation",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "coordinate": {
+              "_eq": "harbourdesk/tide_notes"
+            }
+          },
+          "fields": [
+            "coordinate",
+            "version",
+            "digest",
+            "source"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "skills",
+          "collection": "Skill",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "skill_id": {
+              "_in": [
+                "tide-tables",
+                "slack-water"
+              ]
+            }
+          },
+          "fields": [
+            "skill_id",
+            "name",
+            "description",
+            "instructions",
+            "enabled"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "install",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "install",
+                "key": "coordinate",
+                "id": "harbourdesk/tide_notes",
+                "expect": [
+                  {
+                    "field": "version",
+                    "equals": "1.0.0"
+                  },
+                  {
+                    "field": "digest",
+                    "matches": "^sha256:[0-9a-f]{64}$"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "bump",
+      "prompt": "Now add a second skill to the tide notes pack. Its id and name are slack-water, its description is \"Load when timing a berth move around slack water.\", and its instructions live in skills/slack_water/SKILL.md and say: Move ships within 20 minutes either side of slack water. Release the pack as 1.1.0 and update the installed pack to it.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "install",
+          "collection": "PackInstallation",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "coordinate": {
+              "_eq": "harbourdesk/tide_notes"
+            }
+          },
+          "fields": [
+            "coordinate",
+            "version",
+            "digest",
+            "source"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "skills",
+          "collection": "Skill",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "skill_id": {
+              "_in": [
+                "tide-tables",
+                "slack-water"
+              ]
+            }
+          },
+          "fields": [
+            "skill_id",
+            "name",
+            "description",
+            "instructions",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "file",
+          "name": "packs",
+          "glob": "packs/**/*"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "install",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "skills",
+                "min": 2,
+                "max": 2
+              }
+            ],
+            "rows": [
+              {
+                "capture": "install",
+                "key": "coordinate",
+                "id": "harbourdesk/tide_notes",
+                "expect": [
+                  {
+                    "field": "version",
+                    "equals": "1.1.0"
+                  },
+                  {
+                    "field": "digest",
+                    "matches": "^sha256:[0-9a-f]{64}$"
+                  }
+                ]
+              },
+              {
+                "capture": "skills",
+                "key": "skill_id",
+                "id": "slack-water",
+                "expect": [
+                  {
+                    "field": "instructions",
+                    "contains": "Move ships within 20 minutes either side of slack water."
+                  },
+                  {
+                    "field": "description",
+                    "equals": "Load when timing a berth move around slack water."
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "packs",
+            "expect": [
+              {
+                "path": "packs/tide_notes/manifest.json",
+                "pointer": "/version",
+                "equals": "1.1.0"
+              },
+              {
+                "path": "packs/tide_notes/skills/tide_tables/SKILL.md",
+                "sha256": "3441cda2cab5d493f7d42707820b61dcd3e2f2281868177f37858845b402e309"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "node": {},
+  "eval_definitions": [
+    {
+      "definition_id": "engineer-pack-authoring",
+      "comparability_version": 1,
+      "title": "Packs: author, check, build, install and audit",
+      "subject": {
+        "kind": "agent",
+        "inference_slots": [
+          "engineer"
+        ],
+        "core_packs": [
+          "gents/pack_builder",
+          "gents/web",
+          "gents/dynamic_workflows",
+          "gents/charts",
+          "gents/data_tables",
+          "gents/script"
+        ]
+      },
+      "cases": [
+        "./cases/stockroom_register_pack.json",
+        "./cases/escalation_surface_export.json",
+        "./cases/handbook_manifest_repair.json",
+        "./cases/tide_notes_version_bump.json",
+        "./cases/courier_zones_check_clean.json",
+        "./cases/pallet_pack_remove.json",
+        "./cases/calibration_copies_audit.json",
+        "./cases/berth_watch_preview.json",
+        "./cases/parts_desk_app_pack.json",
+        "./cases/kiln_runbook_missing_skill.json"
+      ]
+    }
+  ]
+}

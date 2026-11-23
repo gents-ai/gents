@@ -1,0 +1,160 @@
+{
+  "case_id": "kiln-runbook-missing-skill",
+  "split": "held_out",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "packs/kiln_runbook/README.md",
+        "contents": "# Kiln runbook\n\nRunbook skills for the kiln room.\n\n## Configuration\n\nNothing to set.\n\n## Usage\n\nInstall the pack.\n"
+      },
+      {
+        "path": "packs/kiln_runbook/pack_config.json",
+        "contents": "{\n  \"node\": {},\n  \"skills\": [\n    {\n      \"skill_id\": \"glaze-mixing\",\n      \"name\": \"glaze-mixing\",\n      \"description\": \"Load when mixing a glaze batch.\",\n      \"instructions\": \"./skills/glaze_mixing/SKILL.md\"\n    }\n  ]\n}\n"
+      },
+      {
+        "path": "packs/kiln_runbook/skills/glaze_mixing/SKILL.md",
+        "contents": "---\nname: glaze-mixing\ndescription: Load when mixing a glaze batch.\n---\n\n# Glaze mixing\n\nWeigh dry materials to the gram and sieve twice through 80 mesh.\n"
+      },
+      {
+        "path": "packs/kiln_runbook/skills/firing_curve/SKILL.md",
+        "contents": "---\nname: firing-curve\ndescription: Load when programming a firing.\n---\n\n# Firing curve\n\nRamp 100 C an hour to 600 C, then full speed to cone 6 and hold 10 minutes.\n"
+      },
+      {
+        "path": "packs/kiln_runbook/manifest.json",
+        "contents": "{\n  \"manifest_version\": 1,\n  \"name\": \"kiln_runbook\",\n  \"namespace\": \"kilnroom\",\n  \"version\": \"1.2.0\",\n  \"description\": \"Kiln room runbook skills.\",\n  \"authors\": [\n    \"kilnroom contributors\"\n  ],\n  \"kind\": \"documents\",\n  \"assets\": [\n    \"README.md\",\n    \"pack_config.json\",\n    \"skills/glaze_mixing/SKILL.md\",\n    \"skills/firing_curve/SKILL.md\"\n  ],\n  \"config\": \"pack_config.json\"\n}\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "fix",
+      "prompt": "The kiln runbook pack in packs/kiln_runbook checks and installs fine, but the kiln operators say its firing-curve guidance never shows up as a skill. Fix the pack so that guidance registers as a skill with the id firing-curve, keeping the skill text exactly as written, then install the fixed pack here.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "install",
+          "collection": "PackInstallation",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "coordinate": {
+              "_eq": "kilnroom/kiln_runbook"
+            }
+          },
+          "fields": [
+            "coordinate",
+            "version",
+            "digest",
+            "source"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "skills",
+          "collection": "Skill",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "skill_id": {
+              "_in": [
+                "glaze-mixing",
+                "firing-curve"
+              ]
+            }
+          },
+          "fields": [
+            "skill_id",
+            "name",
+            "description",
+            "instructions",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "file",
+          "name": "packs",
+          "glob": "packs/**/*"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "install",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "skills",
+                "min": 2,
+                "max": 2
+              }
+            ],
+            "rows": [
+              {
+                "capture": "install",
+                "key": "coordinate",
+                "id": "kilnroom/kiln_runbook",
+                "expect": [
+                  {
+                    "field": "digest",
+                    "matches": "^sha256:[0-9a-f]{64}$"
+                  }
+                ]
+              },
+              {
+                "capture": "skills",
+                "key": "skill_id",
+                "id": "firing-curve",
+                "expect": [
+                  {
+                    "field": "instructions",
+                    "contains": "cone 6 and hold 10 minutes"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "packs",
+            "expect": [
+              {
+                "path": "packs/kiln_runbook/skills/firing_curve/SKILL.md",
+                "sha256": "8867256d5d0a1435b40a63a3e0ed7e85a8a343099e057afe933379e6cac1fa66"
+              },
+              {
+                "path": "packs/kiln_runbook/skills/glaze_mixing/SKILL.md",
+                "sha256": "592a021b8c56a4648ecb6c63275bc37e188d6a5b74efc12a6de3b638dcaa612d"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

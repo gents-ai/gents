@@ -1,0 +1,61 @@
+{
+  "case_id": "chiller-alarm-edit",
+  "split": "held_out",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "plant/chillers.json",
+        "contents": "{\r\n\t\"site\": \"Larkspur\",\r\n\t\"chillers\": {\r\n\t\t\"CH-1\": {\r\n\t\t\t\"setpoint_c\": 6.5,\r\n\t\t\t\"alarm\": {\r\n\t\t\t\t\"high_c\": 12,\r\n\t\t\t\t\"low_c\": 2\r\n\t\t\t}\r\n\t\t},\r\n\t\t\"CH-2\": {\r\n\t\t\t\"setpoint_c\": 6.5,\r\n\t\t\t\"alarm\": {\r\n\t\t\t\t\"high_c\": 12,\r\n\t\t\t\t\"low_c\": 2\r\n\t\t\t}\r\n\t\t},\r\n\t\t\"CH-3\": {\r\n\t\t\t\"setpoint_c\": 7.0,\r\n\t\t\t\"alarm\": {\r\n\t\t\t\t\"high_c\": 12,\r\n\t\t\t\t\"low_c\": 2\r\n\t\t\t}\r\n\t\t}\r\n\t}\r\n}\r\n"
+      },
+      {
+        "path": "plant/chillers.example.json",
+        "contents": "{\r\n\t\"site\": \"Example\",\r\n\t\"chillers\": {\r\n\t\t\"CH-2\": {\r\n\t\t\t\"setpoint_c\": 6.5,\r\n\t\t\t\"alarm\": {\r\n\t\t\t\t\"high_c\": 12,\r\n\t\t\t\t\"low_c\": 2\r\n\t\t\t}\r\n\t\t}\r\n\t}\r\n}\r\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "edit",
+      "prompt": "Raise chiller CH-2's high-temperature alarm to 14 in plant/chillers.json. That's the only change: the file is read by an old controller, so keep the rest of it byte for byte, including its tabs and Windows line endings. Don't touch plant/chillers.example.json.",
+      "capture": [
+        {
+          "kind": "file",
+          "name": "plant",
+          "glob": "plant/*"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "bash"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "plant",
+            "expect": [
+              {
+                "path": "plant/chillers.json",
+                "equals": "{\r\n\t\"site\": \"Larkspur\",\r\n\t\"chillers\": {\r\n\t\t\"CH-1\": {\r\n\t\t\t\"setpoint_c\": 6.5,\r\n\t\t\t\"alarm\": {\r\n\t\t\t\t\"high_c\": 12,\r\n\t\t\t\t\"low_c\": 2\r\n\t\t\t}\r\n\t\t},\r\n\t\t\"CH-2\": {\r\n\t\t\t\"setpoint_c\": 6.5,\r\n\t\t\t\"alarm\": {\r\n\t\t\t\t\"high_c\": 14,\r\n\t\t\t\t\"low_c\": 2\r\n\t\t\t}\r\n\t\t},\r\n\t\t\"CH-3\": {\r\n\t\t\t\"setpoint_c\": 7.0,\r\n\t\t\t\"alarm\": {\r\n\t\t\t\t\"high_c\": 12,\r\n\t\t\t\t\"low_c\": 2\r\n\t\t\t}\r\n\t\t}\r\n\t}\r\n}\r\n"
+              },
+              {
+                "path": "plant/chillers.example.json",
+                "sha256": "e016567bdbf38ec5357753c8b790fcfa487a3be7b9de9a169c80341e5a686946"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}
