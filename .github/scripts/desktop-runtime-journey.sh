@@ -19,5 +19,5 @@ cargo build "${common[@]}" --bins --test integration
 if [[ "${mode}" == run ]]; then
   # Libtest filters match substrings: the CLI's integration binary is selected
   # too, and its cli_runtime:: suite would otherwise match runtime::.
-  cargo test "${common[@]}" --test integration -- runtime:: --skip cli_runtime::
+  cargo test "${common[@]}" --test integration -- runtime:: --skip cli_runtime:: --test-threads=1
 fi

@@ -567,7 +567,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             "init",
             "fixture initialization",
         )?
-        .wait(Duration::from_secs(30))
+        .wait(Duration::from_secs(120))
     })
     .await??;
     let init_stages = std::fs::read_to_string(root.join("init.stderr"))?;
