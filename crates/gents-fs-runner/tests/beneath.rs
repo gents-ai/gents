@@ -401,3 +401,158 @@ fn a_grep_walk_never_reads_outside_the_root() {
     assert!(matched(swapped, "secret").is_empty());
     fixture.outside_untouched();
 }
+
+/// A root holding `tree/sub/x` and `tree/y`, beside a directory outside it
+/// holding `f`.
+fn tree_fixture() -> Fixture {
+    let fixture = Fixture::new();
+    std::fs::create_dir_all(fixture.root().join("tree/sub")).unwrap();
+    std::fs::write(fixture.root().join("tree/sub/x"), "x").unwrap();
+    std::fs::write(fixture.root().join("tree/y"), "y").unwrap();
+    fixture
+}
+
+/// A root whose walk, just before it looks `name` up in `dir`, moves that
+/// entry aside and links its name to the directory outside the root.
+fn swapping_child(fixture: &Fixture, dir: PathBuf, name: &'static str) -> (RootDir, Arc<Mutex<bool>>) {
+    let outside = fixture.outside.clone();
+    let fired = Arc::new(Mutex::new(false));
+    let seen = Arc::clone(&fired);
+    let hook: LookupHook = Arc::new(move |held: &Path, looked_up: &OsStr| {
+        let mut fired = seen.lock().unwrap();
+        if !*fired && held == dir && looked_up == OsStr::new(name) {
+            *fired = true;
+            let entry = held.join(name);
+            std::fs::rename(&entry, held.join(format!("{name}.held"))).unwrap();
+            symlink(&outside, &entry).unwrap();
+        }
+    });
+    let root = RootDir::open(fixture.root()).unwrap().with_lookup_hook(hook);
+    (root, fired)
+}
+
+#[test]
+fn a_tree_removal_never_removes_outside_the_root_when_a_directory_is_swapped() {
+    let fixture = tree_fixture();
+    let (root, fired) = swapping_child(&fixture, fixture.root().join("tree"), "sub");
+
+    let outcome = root.remove("tree");
+
+    assert!(*fired.lock().unwrap(), "the swap happened mid-walk");
+    fixture.outside_untouched();
+    assert!(
+        std::fs::symlink_metadata(fixture.root().join("tree/sub")).is_err(),
+        "the link that replaced the directory is unlinked itself: {outcome:?}"
+    );
+    assert_eq!(
+        std::fs::read(fixture.root().join("tree/sub.held/x")).unwrap(),
+        b"x",
+        "the directory moved aside mid-walk is beyond the listing and kept"
+    );
+}
+
+#[test]
+fn a_tree_removal_unlinks_links_in_the_tree_without_following_them() {
+    let fixture = tree_fixture();
+    symlink(&fixture.outside, fixture.root().join("tree/out")).unwrap();
+    symlink(fixture.outside.join("f"), fixture.root().join("tree/sub/file_out")).unwrap();
+    let root = RootDir::open(fixture.root()).unwrap();
+
+    root.remove("tree").unwrap();
+
+    assert!(!fixture.root().join("tree").exists());
+    fixture.outside_untouched();
+}
+
+#[test]
+fn a_tree_copy_never_writes_outside_the_destination_when_a_directory_is_swapped() {
+    let fixture = tree_fixture();
+    std::fs::create_dir(fixture.root().join("dest")).unwrap();
+    std::fs::create_dir(fixture.root().join("dest/sub")).unwrap();
+    let (root, fired) = swapping_child(&fixture, fixture.root().join("dest"), "sub");
+    let source = root.subdir("tree").unwrap();
+    let destination = root.subdir("dest").unwrap();
+
+    let outcome = source.copy_into(&destination);
+
+    assert!(*fired.lock().unwrap(), "the swap happened mid-copy");
+    assert!(
+        matches!(outcome, Err(BeneathError::NotADirectory { .. })),
+        "{outcome:?}"
+    );
+    fixture.outside_untouched();
+}
+
+#[test]
+fn a_tree_copy_follows_links_inside_the_source_and_refuses_links_out_of_it() {
+    let fixture = tree_fixture();
+    symlink("y", fixture.root().join("tree/alias")).unwrap();
+    let root = RootDir::open(fixture.root()).unwrap();
+    let destination = root.create_dir_all("copy").unwrap();
+    root.subdir("tree").unwrap().copy_into(&destination).unwrap();
+    assert_eq!(std::fs::read(fixture.root().join("copy/sub/x")).unwrap(), b"x");
+    assert_eq!(std::fs::read(fixture.root().join("copy/alias")).unwrap(), b"y");
+    assert!(!std::fs::symlink_metadata(fixture.root().join("copy/alias"))
+        .unwrap()
+        .file_type()
+        .is_symlink());
+
+    symlink(fixture.outside.join("f"), fixture.root().join("tree/leak")).unwrap();
+    let refused = root
+        .subdir("tree")
+        .unwrap()
+        .copy_into(&root.create_dir_all("again").unwrap());
+    assert!(matches!(refused, Err(BeneathError::Outside { .. })), "{refused:?}");
+    fixture.outside_untouched();
+}
+
+#[test]
+fn a_staged_replace_lands_in_the_directory_it_resolved_when_that_directory_is_swapped() {
+    let fixture = Fixture::new();
+    let root = RootDir::open(fixture.root()).unwrap();
+    let target = fixture.locate(&root, "a/out.pack", Intent::Create).unwrap();
+    fixture.swap_a_for_outside_link();
+
+    target
+        .replace_with(|file| -> Result<(), BeneathError> {
+            std::io::Write::write_all(file, b"packed").unwrap();
+            Ok(())
+        })
+        .unwrap();
+
+    assert_eq!(
+        std::fs::read(fixture.root().join("a.held/out.pack")).unwrap(),
+        b"packed"
+    );
+    let left: Vec<_> = std::fs::read_dir(fixture.root().join("a.held"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(left.len(), 2, "the staged sibling is renamed, not left: {left:?}");
+    fixture.outside_untouched();
+}
+
+#[test]
+fn a_walk_reports_links_and_never_enters_them() {
+    let fixture = tree_fixture();
+    symlink(&fixture.outside, fixture.root().join("tree/out")).unwrap();
+    let root = RootDir::open(fixture.root()).unwrap();
+    let mut seen = Vec::new();
+    root.subdir("tree")
+        .unwrap()
+        .walk(|entry| {
+            seen.push((entry.relative().to_owned(), entry.kind()));
+            Ok(gents_fs_runner::beneath::Walk::Enter)
+        })
+        .unwrap();
+    use gents_fs_runner::beneath::ChildKind;
+    assert_eq!(
+        seen,
+        [
+            (PathBuf::from("out"), ChildKind::Link),
+            (PathBuf::from("sub"), ChildKind::Directory),
+            (PathBuf::from("sub/x"), ChildKind::File),
+            (PathBuf::from("y"), ChildKind::File),
+        ]
+    );
+}

@@ -305,4 +305,79 @@ theorem walk_holds_only_handles_beneath_the_root (kernel : Kernel) (root : Dir)
       simp only [walk, hq]
       exact afterName_beneath kernel root create maxHops _ ih s rest via n hs
 
+/-! Tree operations: a recursive walk, removal, copy and the stage-then-rename
+replace. Each lists a held directory and acts on every entry of the listing
+relative to that held handle: it reads, creates, unlinks or renames the entry
+there, and it enters a listed entry only when `step` descends on it, by a
+lookup that does not follow a link. A link in the tree is a leaf: it is
+unlinked itself, never entered, and its target is read only through `walk`
+from the root. A copy is two such walks in lockstep, one over the source tree
+and one over the directories it creates in the destination, and a replace
+stages a sibling in the held directory and renames it there, so both act only
+on entries of held handles. -/
+
+/-- Whether a tree operation enters a listed entry: `step` on it as a name
+that is not the last, with no link to follow. -/
+def enters (observed : Observed) : Bool :=
+  step .name false false false false false observed == .descend
+
+/-- A tree operation enters only a directory the lookup opened; a link, in
+or out of the root, is never entered. -/
+theorem a_tree_enters_only_directories (observed : Observed) :
+    enters observed = true ↔ observed = .directory := by
+  cases observed <;> decide
+
+/-- The kernel's listing of a held directory at a step; another process may
+change it between any two steps. -/
+abbrev Listing := Nat → Dir → List String
+
+/-- Every entry a tree operation acts on, as the held stack it lies in and its
+name there, entering a directory only when `step` descends on the kernel's
+answer for it. -/
+def treeWalk (kernel : Kernel) (listing : Listing) (root : Dir) :
+    Nat → Nat → List Dir → List (List Dir × String)
+  | 0, _, _ => []
+  | fuel + 1, t, stack =>
+    (listing t (stack.headD root)).flatMap fun n =>
+      (stack, n) ::
+        match step .name false false false false false (kernel t (stack.headD root) n).observed,
+            kernel t (stack.headD root) n with
+        | .descend, .directory d => treeWalk kernel listing root fuel (t + 1) (d :: stack)
+        | _, _ => []
+
+/-- Whatever another process does to the namespace between the steps of a
+tree operation, every entry it reads, creates, unlinks or renames lies in a
+handle that descends from the root handle by lookups the kernel answered. -/
+theorem tree_walk_holds_only_handles_beneath_the_root (kernel : Kernel)
+    (listing : Listing) (root : Dir) :
+    ∀ (fuel t : Nat) (stack : List Dir), Chained kernel root stack →
+      ∀ entry ∈ treeWalk kernel listing root fuel t stack, Chained kernel root entry.1 := by
+  intro fuel
+  induction fuel with
+  | zero => intro t stack _ entry h; simp [treeWalk] at h
+  | succ fuel ih =>
+    intro t stack hs entry h
+    simp only [treeWalk, List.mem_flatMap, List.mem_cons] at h
+    obtain ⟨n, _, h⟩ := h
+    rcases h with h | h
+    · subst h; exact hs
+    · obtain ⟨p, tail, hst⟩ := chained_cons kernel root stack hs
+      have hhead : stack.headD root = p := by simp [hst]
+      revert h
+      generalize hans : kernel t (stack.headD root) n = answer
+      cases answer with
+      | directory d =>
+        intro h
+        simp only [Answer.observed, step, Bool.false_eq_true, ↓reduceIte] at h
+        apply ih (t + 1) (d :: stack) _ entry h
+        rw [hst]
+        exact ⟨⟨t, n, hhead ▸ hans⟩, hst ▸ hs⟩
+      | nonDirectory => intro h; simp [Answer.observed, step] at h
+      | missing => intro h; simp [Answer.observed, step] at h
+      | link text =>
+        cases text with
+        | relative path => intro h; simp [Answer.observed, step] at h
+        | absolute beneath =>
+          cases beneath <;> (intro h; simp [Answer.observed, step] at h)
+
 end PathNamespace

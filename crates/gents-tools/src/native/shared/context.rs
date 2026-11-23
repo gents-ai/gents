@@ -189,6 +189,17 @@ impl ToolContext {
         Ok(located)
     }
 
+    /// An existing directory beneath the effective root, or the effective
+    /// base when `path` names none.
+    pub(crate) fn locate_existing_dir(&self, path: Option<&str>) -> Result<Located> {
+        let path = path.filter(|path| !path.trim().is_empty()).unwrap_or(".");
+        let located = self.locate(path, Intent::Existing)?;
+        if !located.is_dir() {
+            bail!("path is not a directory: {}", located.path().display());
+        }
+        Ok(located)
+    }
+
     /// The content of an existing file, read through its resolved handle off
     /// the runtime's threads.
     pub(crate) async fn read_existing(&self, path: &Path) -> Result<Vec<u8>> {

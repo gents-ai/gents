@@ -129,9 +129,9 @@ impl ConfigCommandTool {
             return self.page_lint(file).await;
         }
         let context = self.authoring_paths("ux lint", false).await?;
-        let path = context.resolve_existing_file(file)?;
-        let display = context.display_path(&path);
-        let findings = tokio::task::spawn_blocking(move || ux::lint_file(&path))
+        let located = context.locate_existing_file(file)?;
+        let display = context.display_path(&located.path());
+        let findings = tokio::task::spawn_blocking(move || ux::lint_file(&located))
             .await
             .context("ux lint task did not finish")??;
         ordered! {

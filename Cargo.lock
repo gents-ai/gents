@@ -6713,6 +6713,7 @@ dependencies = [
  "defra-node",
  "gents-claude",
  "gents-documents",
+ "gents-fs-runner",
  "gents-lean-vocab",
  "gents-loop",
  "gents-protocol",

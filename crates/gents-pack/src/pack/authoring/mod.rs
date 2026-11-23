@@ -9,7 +9,7 @@ pub mod source;
 pub mod template;
 
 pub use build::{
-    build_all, build_pack, build_plugin, built_pack_path, pack_built, plugin_entry,
+    build_all, build_pack, build_plugin, built_pack_name, built_pack_path, pack_built, plugin_entry,
     plugins_with_source, BuildReport, PluginCompiler, PluginReport, BUILDER_ID,
 };
 pub use check::{
@@ -18,7 +18,7 @@ pub use check::{
 };
 pub use edit::{PackAddition, PackEdit, PackPart};
 pub use export::{export_pack, selectable_kind, ExportReport, ExportSelection, SELECTABLE_KINDS};
-pub use inspect::{preview_config, verify_pack_file};
+pub use inspect::{preview_config, verify_located_pack, verify_pack_file};
 pub use names::{pack_name, to_snake_case, Names};
 pub use scaffold::{scaffold, tool_markdown, write_plugin_source, ScaffoldInput, ScaffoldReport};
 pub use source::{

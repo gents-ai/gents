@@ -5,6 +5,9 @@
 //! root. Links are read and resolved again beneath the root.
 
 pub mod decision;
+mod tree;
+
+pub use tree::{Entry, Kind, LocateTarget, OpenRoot, Walk};
 
 use std::collections::VecDeque;
 use std::ffi::{OsStr, OsString};
@@ -95,6 +98,7 @@ pub type LookupHook = Arc<dyn Fn(&Path, &OsStr) + Send + Sync>;
 pub struct RootDir {
     fd: Arc<OwnedFd>,
     path: Arc<PathBuf>,
+    max_hops: usize,
     #[cfg(feature = "test-fixtures")]
     hook: Option<LookupHook>,
 }
@@ -130,6 +134,7 @@ impl RootDir {
         Ok(Self {
             fd: Arc::new(fd),
             path: Arc::new(canonical),
+            max_hops: MAX_LINK_HOPS,
             #[cfg(feature = "test-fixtures")]
             hook: None,
         })
@@ -143,6 +148,13 @@ impl RootDir {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// This root with no link followed beneath it: a link anywhere on a
+    /// resolved path is refused (`PathNamespace.step` with no hop left).
+    pub fn without_links(mut self) -> Self {
+        self.max_hops = 0;
+        self
     }
 
     /// Resolves `requested` (absolute, or relative to `base`, a directory
@@ -220,7 +232,7 @@ impl RootDir {
                 last: queue.is_empty(),
                 create,
                 via_link,
-                hops_left: hops < MAX_LINK_HOPS,
+                hops_left: hops < self.max_hops,
                 observed,
             };
             let name = match comp {

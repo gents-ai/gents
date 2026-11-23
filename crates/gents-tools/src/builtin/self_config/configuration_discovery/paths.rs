@@ -1,5 +1,4 @@
 use super::*;
-use std::fs::{self, Metadata};
 use std::path::{Component, Path, PathBuf};
 
 pub(super) fn layout(
@@ -42,75 +41,11 @@ pub(super) fn layout(
     }
 }
 
-#[derive(Debug)]
-pub(super) enum SafePathError {
-    Symlink,
-    Io,
-}
-
-pub(super) fn reject_symlink_components(
-    root: &Path,
-    relative: &Path,
-) -> Result<Option<Metadata>, SafePathError> {
-    let mut current = root.to_path_buf();
-    for component in relative.components() {
-        let Component::Normal(component) = component else {
-            return Err(SafePathError::Io);
-        };
-        current.push(component);
-        let metadata = match fs::symlink_metadata(&current) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(_) => return Err(SafePathError::Io),
-        };
-        if metadata.file_type().is_symlink() {
-            return Err(SafePathError::Symlink);
-        }
-    }
-    fs::symlink_metadata(current)
-        .map(Some)
-        .map_err(|_| SafePathError::Io)
-}
-
 pub(super) fn safe_relative(path: &Path) -> bool {
     !path.as_os_str().is_empty()
         && path
             .components()
             .all(|component| matches!(component, Component::Normal(_)))
-}
-
-pub(super) fn source_root_unchanged(source: &SourceScan) -> bool {
-    fs::symlink_metadata(&source.root).is_ok_and(|current| {
-        current.is_dir()
-            && !current.file_type().is_symlink()
-            && metadata_same_file(&source.root_metadata, &current)
-    })
-}
-
-#[cfg(unix)]
-pub(super) fn metadata_unchanged(before: &Metadata, after: &Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    before.len() == after.len()
-        && before.mtime() == after.mtime()
-        && before.mtime_nsec() == after.mtime_nsec()
-        && before.ctime() == after.ctime()
-        && before.ctime_nsec() == after.ctime_nsec()
-}
-
-#[cfg(not(unix))]
-pub(super) fn metadata_unchanged(before: &Metadata, after: &Metadata) -> bool {
-    before.len() == after.len() && before.modified().ok() == after.modified().ok()
-}
-
-#[cfg(unix)]
-pub(super) fn metadata_same_file(before: &Metadata, after: &Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    before.dev() == after.dev() && before.ino() == after.ino() && metadata_unchanged(before, after)
-}
-
-#[cfg(not(unix))]
-pub(super) fn metadata_same_file(before: &Metadata, after: &Metadata) -> bool {
-    metadata_unchanged(before, after)
 }
 
 pub(super) fn valid_source_id(value: &str) -> bool {

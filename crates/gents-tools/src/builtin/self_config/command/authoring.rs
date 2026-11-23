@@ -1,10 +1,12 @@
-use std::path::PathBuf;
+use std::path::Path;
 
 use super::*;
+use gents_fs_runner::beneath::{Intent, Located};
 use gents_pack::pack::authoring::{
-    check_dir, export::collection_sdl, export_pack, pack_built, pack_name, plugins_with_source,
-    read_manifest, scaffold, selectable_kind, source as source_pack, verify_pack_file, CheckReport,
-    ExportSelection, Kind, PackAddition, PackEdit, ScaffoldInput, Template, SELECTABLE_KINDS,
+    built_pack_name, check_dir, export::collection_sdl, export_pack, pack_built, pack_name,
+    plugins_with_source, read_manifest, scaffold, selectable_kind, source as source_pack,
+    verify_located_pack, CheckReport, ExportSelection, Kind, PackAddition, PackEdit,
+    ScaffoldInput, Template, SELECTABLE_KINDS,
 };
 use gents_session::session::output_render::ordered;
 
@@ -28,6 +30,9 @@ enum AuthoringCall {
     Add {
         dir: Option<String>,
         addition: PackAddition,
+        /// The file a skill or prebuilt plugin is added from, resolved
+        /// beneath the tool root before the addition reads it.
+        file: Option<String>,
     },
     Build {
         dir: Option<String>,
@@ -161,15 +166,20 @@ fn parse_authoring_args(verb: &str, argv: &[String]) -> Result<AuthoringCall> {
                 "task" => PackAddition::Task { id, agent: required("agent")? },
                 "trigger" => PackAddition::Trigger { id, task: required("task")?, on: required("on")? },
                 "schema" => PackAddition::Schema { collection: id },
-                "skill" => PackAddition::Skill { id, from: optional("from")?.map(PathBuf::from) },
+                "skill" => PackAddition::Skill { id, from: None },
                 "plugin" => PackAddition::Plugin {
                     name: id,
                     language: optional("language")?,
-                    prebuilt: optional("prebuilt")?.map(PathBuf::from),
+                    prebuilt: None,
                 },
                 _ => PackAddition::Page { name: id },
             };
-            Ok(AuthoringCall::Add { dir: optional("dir")?, addition })
+            let file = match part.as_str() {
+                "skill" => optional("from")?,
+                "plugin" => optional("prebuilt")?,
+                _ => None,
+            };
+            Ok(AuthoringCall::Add { dir: optional("dir")?, addition, file })
         }
         "build" | "test" => {
             let case = if verb == "test" {
@@ -249,8 +259,18 @@ fn ensure_mode(mode: gents_documents::FileToolMode, write: bool, operation: &str
     }
 }
 
-fn admit_scaffold_dir(context: &crate::native::ToolContext, name: &str) -> Result<PathBuf> {
-    context.resolve_path_allow_create(name)
+fn admit_scaffold_dir(context: &crate::native::ToolContext, name: &str) -> Result<Located> {
+    context.locate(name, Intent::Create)
+}
+
+/// Runs pack authoring filesystem work on the blocking pool.
+async fn blocking<T>(work: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T>
+where
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(work)
+        .await
+        .context("the pack authoring task did not finish")?
 }
 
 fn check_outcome_fields(report: &CheckReport) -> (bool, String) {
@@ -271,7 +291,11 @@ impl ConfigCommandTool {
             AuthoringCall::Scaffold { name, input } => self.scaffold(&name, &input).await,
             AuthoringCall::Check { dir } => self.check(dir.as_deref()).await,
             AuthoringCall::Verify { pack } => self.verify(&pack).await,
-            AuthoringCall::Add { dir, addition } => self.add_part(dir.as_deref(), addition).await,
+            AuthoringCall::Add {
+                dir,
+                addition,
+                file,
+            } => self.add_part(dir.as_deref(), addition, file).await,
             AuthoringCall::Build { dir } => self.build(dir.as_deref()).await,
             AuthoringCall::Test { dir, case } => self.test(dir.as_deref(), case.as_deref()).await,
             AuthoringCall::Export {
@@ -346,7 +370,8 @@ impl ConfigCommandTool {
     async fn scaffold(&self, name: &str, input: &ScaffoldInput) -> Result<String> {
         let context = self.authoring_paths("scaffold", true).await?;
         let dir = admit_scaffold_dir(&context, &pack_name(name))?;
-        let report = scaffold(&dir, name, input)?;
+        let (name_owned, input) = (name.to_owned(), input.clone());
+        let report = blocking(move || scaffold(&dir, &name_owned, &input)).await?;
         let relative = context.display_path(&report.dir);
         let renamed = report.renamed_from.as_ref().map(|requested| {
             format!(
@@ -417,7 +442,7 @@ impl ConfigCommandTool {
 
     async fn check(&self, dir: Option<&str>) -> Result<String> {
         let context = self.authoring_paths("check", false).await?;
-        let dir = context.resolve_existing_dir(dir)?;
+        let dir = context.locate_existing_dir(dir)?.subroot()?;
         let report = check_dir(&dir).await;
         let (validated, note) = check_outcome_fields(&report);
         let relative = context.display_path(&report.dir);
@@ -434,20 +459,23 @@ impl ConfigCommandTool {
         .pretty()
     }
 
-    async fn add_part(&self, dir: Option<&str>, mut addition: PackAddition) -> Result<String> {
+    async fn add_part(
+        &self,
+        dir: Option<&str>,
+        mut addition: PackAddition,
+        file: Option<String>,
+    ) -> Result<String> {
         let context = self.authoring_paths("add", true).await?;
-        let dir = context.resolve_existing_dir(dir)?;
-        if let PackAddition::Skill {
-            from: Some(path), ..
+        let dir = context.locate_existing_dir(dir)?;
+        if let Some(file) = file {
+            let located = Some(context.locate_existing_file(&file)?);
+            match &mut addition {
+                PackAddition::Skill { from, .. } => *from = located,
+                PackAddition::Plugin { prebuilt, .. } => *prebuilt = located,
+                _ => {}
+            }
         }
-        | PackAddition::Plugin {
-            prebuilt: Some(path),
-            ..
-        } = &mut addition
-        {
-            *path = context.resolve_existing_file(path.to_str().context("path is not UTF-8")?)?;
-        }
-        let pack_dir = dir.clone();
+        let pack_dir = dir.subroot()?;
         let added = tokio::task::spawn_blocking(move || {
             let mut pack = PackEdit::load(&pack_dir)?;
             let before = pack.manifest["assets"].clone();
@@ -466,7 +494,7 @@ impl ConfigCommandTool {
         })
         .await
         .context("pack add task did not finish")??;
-        let relative = context.display_path(&dir);
+        let relative = context.display_path(&dir.path());
         ordered! {
             "completed": true,
             "dir": relative,
@@ -490,11 +518,12 @@ impl ConfigCommandTool {
 
     async fn build(&self, dir: Option<&str>) -> Result<String> {
         let context = self.authoring_paths("build", true).await?;
-        let dir = context.resolve_existing_dir(dir)?;
+        let located = context.locate_existing_dir(dir)?;
         anyhow::ensure!(
-            dir != context.root(),
+            !located.relative().as_os_str().is_empty(),
             "pack build writes the .pack beside the pack directory, which would be outside the tool root; put the pack in a subdirectory"
         );
+        let dir = located.subroot()?;
         let manifest = read_manifest(&dir)?;
         let sources = plugins_with_source(&manifest);
         let sandbox = if sources.is_empty() {
@@ -506,7 +535,7 @@ impl ConfigCommandTool {
                 crate::native::run_plugin_build(
                     &self.envelope,
                     &context.root(),
-                    &dir,
+                    dir.path(),
                     false,
                     self.plugin_builder.as_deref(),
                 )
@@ -514,9 +543,10 @@ impl ConfigCommandTool {
                 .sandbox,
             )
         };
-        let report = tokio::task::spawn_blocking(move || pack_built(&dir, None))
-            .await
-            .context("pack build task did not finish")??;
+        let out = located
+            .parent_root()
+            .locate_relative(Path::new(&built_pack_name(&manifest)), Intent::Create)?;
+        let report = blocking(move || pack_built(&dir, Some(&out))).await?;
         let out = context.display_path(&report.out);
         ordered! {
             "completed": true,
@@ -534,10 +564,10 @@ impl ConfigCommandTool {
 
     async fn test(&self, dir: Option<&str>, case: Option<&str>) -> Result<String> {
         let context = self.authoring_paths("test", true).await?;
-        let dir = context.resolve_existing_dir(dir)?;
+        let dir = context.locate_existing_dir(dir)?.subroot()?;
         let manifest = read_manifest(&dir)?;
         let sources = plugins_with_source(&manifest);
-        let relative = context.display_path(&dir);
+        let relative = context.display_path(dir.path());
         if sources.is_empty() {
             return ordered! {
                 "passed": 0,
@@ -553,7 +583,7 @@ impl ConfigCommandTool {
         let build = crate::native::run_plugin_build(
             &self.envelope,
             &context.root(),
-            &dir,
+            dir.path(),
             true,
             self.plugin_builder.as_deref(),
         )
@@ -622,7 +652,7 @@ impl ConfigCommandTool {
                 .plugins
                 .iter()
                 .filter_map(|plugin| plugin.source.as_ref())
-                .any(|source| dir.join(source).join("tests").join(&file).is_file());
+                .any(|source| dir.is_file(Path::new(source).join("tests").join(&file)));
             if !exists {
                 return Err(CommandGuidance {
                     message: format!("no plugin case {file:?} in this pack; cases are the tests/*.json files beside each plugin's source"),
@@ -658,14 +688,15 @@ impl ConfigCommandTool {
 
     async fn verify(&self, pack: &str) -> Result<String> {
         let context = self.authoring_paths("verify", false).await?;
-        let path = context.resolve_existing_file(pack)?;
+        let located = context.locate_existing_file(pack)?;
+        let path = located.path();
         anyhow::ensure!(
             path.extension()
                 .is_some_and(|extension| extension == gents_pack::pack::archive::EXTENSION),
             "pack verify accepts a built .pack artifact; {} is not one",
             context.display_path(&path)
         );
-        let header = verify_pack_file(&path)?;
+        let header = blocking(move || verify_located_pack(&located)).await?;
         let resolved = context.display_path(&path);
         ordered! {
             "verified": true,
@@ -717,7 +748,7 @@ mod tests {
                 .map(|word| (*word).to_owned())
                 .collect::<Vec<_>>()
         };
-        let AuthoringCall::Add { dir, addition } = parse_authoring_args(
+        let AuthoringCall::Add { dir, addition, .. } = parse_authoring_args(
             "add",
             &argv(&["task", "review", "--agent", "worker", "--dir", "p"]),
         )
@@ -748,7 +779,7 @@ mod tests {
         // against the canonical root, not the caller alias (e.g. /var is a
         // symlink to /private/var on macOS).
         let canonical_root = std::fs::canonicalize(root.path()).unwrap();
-        assert!(inside.starts_with(&canonical_root));
+        assert!(inside.path().starts_with(&canonical_root));
         for escape in ["../escape", "/etc/gents_escape"] {
             let error = admit_scaffold_dir(&context, escape).unwrap_err();
             let message = format!("{error:#}");
@@ -785,7 +816,7 @@ mod tests {
     #[test]
     fn an_unverified_check_never_reports_full_validation() {
         let report = |problems: Vec<String>, unverified: Vec<&'static str>| CheckReport {
-            dir: PathBuf::from("review_toolkit"),
+            dir: std::path::PathBuf::from("review_toolkit"),
             pack: Some("review_toolkit".into()),
             digest: Some("sha256:x".into()),
             problems,

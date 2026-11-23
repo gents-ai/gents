@@ -1,9 +1,10 @@
 //! Importing skill instructions never executes supporting files.
 
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result};
+use gents_fs_runner::beneath::{Access, Located};
 
 use crate::SkillDocument;
 
@@ -65,20 +66,21 @@ pub struct OpenAiTool {
 }
 
 /// Load a single directory containing SKILL.md, or that file directly. The
-/// caller resolves/authorizes each path before reading.
+/// caller resolves and authorizes each path, and every read goes through the
+/// directory handle it was resolved in.
 pub fn load_skill_source(
     source: &Path,
     skill_id: &str,
     node_did: &str,
-    resolve: impl Fn(&Path) -> Result<PathBuf>,
+    resolve: impl Fn(&Path) -> Result<Located>,
 ) -> Result<SkillDocument> {
     anyhow::ensure!(!skill_id.trim().is_empty(), "skill_id must not be blank");
     let source = resolve(source)?;
     let file = if source.is_dir() {
-        resolve(&source.join("SKILL.md"))?
+        resolve(&source.path().join("SKILL.md"))?
     } else {
         anyhow::ensure!(
-            source.file_name().is_some_and(|n| n == "SKILL.md"),
+            source.path().file_name().is_some_and(|n| n == "SKILL.md"),
             "expected a skill directory or a SKILL.md file"
         );
         source
@@ -89,18 +91,23 @@ pub fn load_skill_source(
         !body.is_empty(),
         "SKILL.md must contain instructions after its frontmatter"
     );
-    let metadata_path = file
+    let directory = file
+        .path()
         .parent()
         .context("SKILL.md has no parent directory")?
+        .to_path_buf();
+    let metadata_relative = file
+        .relative()
+        .parent()
+        .unwrap_or(Path::new(""))
         .join("agents/openai.yaml");
-    let metadata = match std::fs::symlink_metadata(&metadata_path) {
-        Ok(_) => {
-            let path = resolve(&metadata_path)?;
-            serde_yaml::from_str::<OpenAiYaml>(&read_source(&path)?)
-                .with_context(|| format!("invalid metadata in {}", path.display()))?
+    let metadata = match file.root().kind(&metadata_relative) {
+        Ok(None) => OpenAiYaml::default(),
+        Ok(Some(_)) | Err(_) => {
+            let located = resolve(&directory.join("agents/openai.yaml"))?;
+            serde_yaml::from_str::<OpenAiYaml>(&read_source(&located)?)
+                .with_context(|| format!("invalid metadata in {}", located.path().display()))?
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => OpenAiYaml::default(),
-        Err(error) => return Err(error).context("checking agents/openai.yaml"),
     };
     let tool_refs = metadata
         .dependencies
@@ -131,8 +138,7 @@ pub fn load_skill_source(
         description: frontmatter.description,
         instructions: Some(body),
         source_directory: Some(
-            file.parent()
-                .context("SKILL.md has no parent directory")?
+            directory
                 .to_str()
                 .context("skill source directory must be UTF-8")?
                 .to_owned(),
@@ -146,20 +152,13 @@ pub fn load_skill_source(
     })
 }
 
-fn read_source(path: &Path) -> Result<String> {
-    anyhow::ensure!(
-        std::fs::metadata(path)?.is_file(),
-        "{} is not a regular file",
-        path.display()
-    );
-    let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
-    anyhow::ensure!(
-        file.metadata()?.is_file(),
-        "{} is not a regular file",
-        path.display()
-    );
+fn read_source(file: &Located) -> Result<String> {
+    let path = file.path();
+    let opened = file
+        .open(Access::Read)
+        .with_context(|| format!("{} is not a regular file", path.display()))?;
     let mut bytes = Vec::new();
-    file.take(MAX_SOURCE_BYTES + 1).read_to_end(&mut bytes)?;
+    opened.take(MAX_SOURCE_BYTES + 1).read_to_end(&mut bytes)?;
     anyhow::ensure!(
         bytes.len() as u64 <= MAX_SOURCE_BYTES,
         "{} exceeds the 1 MiB skill source limit",
@@ -172,8 +171,8 @@ fn read_source(path: &Path) -> Result<String> {
 mod tests {
     use super::*;
 
-    fn resolve(path: &Path) -> Result<PathBuf> {
-        Ok(std::fs::canonicalize(path)?)
+    fn resolve(path: &Path) -> Result<Located> {
+        Ok(Located::at(path, gents_fs_runner::beneath::Intent::Existing)?)
     }
 
     #[test]
@@ -258,15 +257,17 @@ mod tests {
             root.path().join("agents/openai.yaml"),
         )
         .unwrap();
-        let allowed = root.path().canonicalize().unwrap();
+        let allowed = gents_fs_runner::beneath::RootDir::open(root.path()).unwrap();
         let result = load_skill_source(root.path(), "review", "did:test", |path| {
-            let path = resolve(path)?;
-            anyhow::ensure!(path.starts_with(&allowed), "outside allowed root");
-            Ok(path)
+            Ok(allowed.locate(
+                path,
+                allowed.path(),
+                gents_fs_runner::beneath::Intent::Existing,
+            )?)
         });
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("outside allowed root"));
+            .contains("outside the allowed tool root"));
     }
 }

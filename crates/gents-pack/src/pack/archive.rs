@@ -3,6 +3,7 @@ use std::io::Read;
 use std::path::Path;
 
 use anyhow::{ensure, Context, Result};
+use gents_fs_runner::beneath::OpenRoot;
 
 use crate::pack::{is_distributable_asset_path, PackManifest, PackPlugin};
 
@@ -145,19 +146,17 @@ impl PackArchive {
         &self.header.digest
     }
 
-    pub fn write_to(&self, dir: &Path) -> Result<()> {
+    /// Writes every asset beneath `dir`, each created relative to the held
+    /// directory it lands in.
+    pub fn write_to(&self, dir: impl OpenRoot) -> Result<()> {
+        let root = dir.open_root()?;
         for (path, bytes) in &self.assets {
             ensure!(
                 is_distributable_asset_path(path),
                 "refusing to write pack asset {path:?}"
             );
-            let target = dir.join(path);
-            if let Some(parent) = target.parent() {
-                std::fs::create_dir_all(parent)
-                    .with_context(|| format!("creating {}", parent.display()))?;
-            }
-            std::fs::write(&target, bytes.as_slice())
-                .with_context(|| format!("writing {}", target.display()))?;
+            root.write(path, bytes.as_slice())
+                .with_context(|| format!("writing {path} in {}", root.path().display()))?;
         }
         Ok(())
     }
