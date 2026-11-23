@@ -392,7 +392,7 @@ impl ConfigAccess {
             relation: scope.relation.clone(),
             subject: subject.clone(),
             issuer: scope.issuer.clone(),
-            not_before: previous.map(|state| state.position),
+            not_before: previous.as_ref().map(|state| state.position.clone()),
         };
         let certified = self.certified_assignments(query).await?;
         let mut assigned = certified.object_ids;
@@ -402,6 +402,9 @@ impl ConfigAccess {
             position: certified.position,
             assigned,
         };
+        if let Some(previous) = &previous {
+            check(previous, &next)?;
+        }
         let Some(active) = interruptible(runtime.active(), &mut shutdown).await else {
             return Ok(None);
         };
