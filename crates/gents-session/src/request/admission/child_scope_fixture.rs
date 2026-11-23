@@ -77,10 +77,7 @@ async fn write_request(
     let mut mutation = create.graphql_mutation().unwrap();
     if requester.is_none() {
         mutation = mutation.replacen(
-            &format!(
-                "requester_did: \"{}\"",
-                escape_graphql_string(&placeholder)
-            ),
+            &format!("requester_did: \"{}\"", escape_graphql_string(&placeholder)),
             "requester_did: null",
             1,
         );
@@ -118,8 +115,7 @@ impl ChildScopeWorld {
         let root = gents_store::test_support::held_runtime_identity(node_db.node_identity.did());
         let root_access = ConfigAccess::local_as(node.clone(), root.did().parse().unwrap());
         let reader = KeyIdentity::load_or_create(home.path().join("reader.key"), None).unwrap();
-        let stranger =
-            KeyIdentity::load_or_create(home.path().join("stranger.key"), None).unwrap();
+        let stranger = KeyIdentity::load_or_create(home.path().join("stranger.key"), None).unwrap();
         let binding = gents_store::identity::provision_agent_identity(&root).unwrap();
         let agent = gents_store::identity::resolve_agent_identity(&root, &binding).unwrap();
         let foreign_binding = gents_store::identity::provision_agent_identity(&root).unwrap();
@@ -158,8 +154,7 @@ impl ChildScopeWorld {
         )
         .unwrap();
         let reader_access = ConfigAccess::local_as(node.clone(), reader.did().parse().unwrap());
-        let stranger_access =
-            ConfigAccess::local_as(node.clone(), stranger.did().parse().unwrap());
+        let stranger_access = ConfigAccess::local_as(node.clone(), stranger.did().parse().unwrap());
         let mut world = Self {
             node,
             root,
@@ -316,9 +311,14 @@ impl ChildScopeWorld {
                     (&world.foreign_access, world.foreign.as_ref())
                 };
             let requester = world.requester(b.auxiliary_requester.as_deref());
-            world.aux_doc =
-                write_request(access, signer, create, requester, b.auxiliary_signature_valid)
-                    .await;
+            world.aux_doc = write_request(
+                access,
+                signer,
+                create,
+                requester,
+                b.auxiliary_signature_valid,
+            )
+            .await;
         }
         world
     }
@@ -451,7 +451,10 @@ impl ChildScopeWorld {
             "AgentOutputSegment" => {
                 row.insert("creator_did".into(), creator.into());
                 row.insert("parent_linked".into(), false.into());
-                row.insert("request_doc_id".into(), self.doc(&b.child_request_doc).into());
+                row.insert(
+                    "request_doc_id".into(),
+                    self.doc(&b.child_request_doc).into(),
+                );
                 row.insert(
                     "source".into(),
                     serde_json::to_value(self.output_source(input)).unwrap(),
@@ -476,7 +479,10 @@ impl ChildScopeWorld {
             "RenderedRequest" => {
                 let kind = capture_kind(&b.source);
                 row.insert("capture_key".into(), "child-scope".into());
-                row.insert("request_doc_id".into(), self.doc(&b.child_request_doc).into());
+                row.insert(
+                    "request_doc_id".into(),
+                    self.doc(&b.child_request_doc).into(),
+                );
                 row.insert("request_commit_cid".into(), "".into());
                 row.insert("request_id".into(), self.aux_id.clone().into());
                 row.insert("capture_scope".into(), format!("{kind}.1").into());
