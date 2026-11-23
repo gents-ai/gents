@@ -1,0 +1,168 @@
+{
+  "case_id": "west-loading-reconcile",
+  "split": "held_out",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "west-scan.csv",
+        "contents": "pallet,reading\nM08,loaded\nM09,returned\nM13,loaded\nM08,loaded\nM14,loaded\n"
+      },
+      {
+        "path": "dispatch.json",
+        "contents": "[{\"pallet\": \"M08\", \"status\": \"outbound\"}, {\"pallet\": \"M09\", \"status\": \"outbound\"}, {\"pallet\": \"M12\", \"status\": \"outbound\"}, {\"pallet\": \"M13\", \"status\": \"outbound\"}, {\"pallet\": \"M14\", \"status\": \"hold\"}]\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "run",
+      "prompt": "Kick off west-loading-check and send me its job address. Have two worker agents start independently and only read. One should pull the unique loaded pallet IDs from west-scan.csv. The other should read the outbound IDs in dispatch.json. Reconcile their lists in the job result, with missing and unexpected pallet IDs as sorted JSON lists.",
+      "settle": true,
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "finished",
+          "collection": "AgentToolCall",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "tool_name": {
+              "_eq": "workflow"
+            },
+            "session_id": {
+              "_eq": "$session"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            }
+          },
+          "fields": [
+            "_docID",
+            "lifecycle_state"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "children",
+          "collection": "AgentSession",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "session_id": {
+              "_like": "job-session:%"
+            }
+          },
+          "fields": [
+            "session_id",
+            "agent_did"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "segments",
+          "collection": "AgentOutputSegment",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "session_id": {
+              "_eq": "$session"
+            }
+          },
+          "fields": [
+            "_docID",
+            "source",
+            "payload",
+            "close"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "file_changes",
+          "collection": "ToolFileChange",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "tool_call_doc_id",
+            "session_id",
+            "file_changes"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "workflow"
+            ],
+            "forbidden": [
+              "agent_new"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "file_changes",
+            "min": 0,
+            "max": 0
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "finished",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "children",
+                "min": 2,
+                "max": 2
+              }
+            ],
+            "links": [
+              {
+                "capture": "finished",
+                "key": "lifecycle_state",
+                "id": "completed",
+                "field": "_docID",
+                "target_capture": "segments",
+                "target_key": "source.tool_call_doc_id",
+                "expect": [
+                  {
+                    "field": "close",
+                    "matches": "\\\\?\"outcome\\\\?\"\\s*:\\s*\\\\?\"complete\\\\?\""
+                  },
+                  {
+                    "field": "payload",
+                    "matches": "\\\\?\"missing\\\\?\"\\s*:\\s*\\[\\s*\\\\?\"M09\\\\?\"\\s*,\\s*\\\\?\"M12\\\\?\"\\s*\\]"
+                  },
+                  {
+                    "field": "payload",
+                    "matches": "\\\\?\"unexpected\\\\?\"\\s*:\\s*\\[\\s*\\\\?\"M14\\\\?\"\\s*\\]"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 2
+        }
+      ]
+    }
+  ]
+}
