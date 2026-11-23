@@ -96,7 +96,7 @@ def suite(root, suite_id):
 
 
 def select(root, selection, shard):
-    m = matrix(root)
+    """A named suite needs only the registry: a container's fixtures hold the running suite alone."""
     try:
         index, total = map(int, shard.split("/"))
         if not 1 <= index <= total:
@@ -104,9 +104,9 @@ def select(root, selection, shard):
     except ValueError:
         raise SystemExit("GENTS_EVAL_SHARD must be INDEX/COUNT with 1 <= INDEX <= COUNT")
     if selection == "all":
-        matches = m["default"]
+        matches = matrix(root)["default"]
     else:
-        matches = [s["id"] for s in m["suites"] if selection in [s["id"], s["id"].split("-")[0]]]
+        matches = [s["id"] for s in suites(root) if selection in [s["id"], s["id"].split("-")[0]]]
         if len(matches) != 1:
             raise SystemExit("unknown or ambiguous suite: " + selection)
     selected = matches[index - 1::total]

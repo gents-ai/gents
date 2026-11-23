@@ -122,6 +122,12 @@ class PrepareTests(unittest.TestCase):
         (other / "marker").write_text("override")
         self.assertTrue((self.prepare(GENTS_EVAL_SUBJECT=str(other)) / "marker").is_file())
 
+    def test_a_named_suite_is_selected_where_the_default_list_names_absent_suites(self):
+        (self.root / suites.MATRIX).write_text(json.dumps({"default": ["absent"]}))
+        self.assertEqual(suites.select(self.root, "probe", "1/1"), ["probe"])
+        with self.assertRaisesRegex(SystemExit, "default names no suite.json"):
+            suites.select(self.root, "all", "1/1")
+
     def test_unknown_suite_keys_are_refused(self):
         (self.suite / "suite.json").write_text(json.dumps({"id": "probe", "title": "Probe", "coverage": [], "subject": "subject", "split": "train"}))
         with self.assertRaisesRegex(SystemExit, "unknown keys"):
