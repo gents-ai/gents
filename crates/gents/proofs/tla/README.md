@@ -664,6 +664,15 @@ See `../README.md` for how this fits the broader formal-verification model.
   excludes, and a parent read through a reused pid misses the job;
   `ShortBound` gives up before the root of a real chain; `Unbounded` walks
   forever through reused pids.
+- `StopCompletionRace` — a client stop racing a background invocation's
+  completion. The stop loads the row running; the completion commits the row
+  and its delivery, then releases its execution; the stop, finding no live
+  execution, fails the row as lost. Lean `firstTerminalIntent`: the first
+  terminal wins. Green adopts a terminal another writer committed first and
+  names it (`Background.ProcessControl.unownedStopReply`). RED: `NoAdopt`
+  (the failure checked the completion's delivery as its own replay and
+  errored) and `NoCompare` (a terminal write that does not compare from
+  running replaces the completion).
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## Checking

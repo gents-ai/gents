@@ -390,6 +390,29 @@ def firstTerminalIntent (first : Option TerminalIntent) (next : TerminalIntent) 
 theorem existing_terminal_intent_wins (first next : TerminalIntent) :
     firstTerminalIntent (some first) next = first := by rfl
 
+/-- What a stop of an execution this runtime no longer owns reports. Its
+lost-process failure races the owner's own terminal; when the owner's
+terminal committed first the failure loses its compare and adopts it
+(`firstTerminalIntent`), and the stop names that terminal instead of claiming
+the process was lost. -/
+inductive UnownedStopReply where
+  | reply (reply : ManagedExec.CancelReply)
+  | alreadyTerminal (state : ToolExecution.ToolCallState)
+  deriving DecidableEq, Repr
+
+def unownedStopReply (outcome : ManagedExec.StopOutcome) (won : Bool)
+    (durable : ToolExecution.ToolCallState) : UnownedStopReply :=
+  if !won && durable != .pending && durable != .running then .alreadyTerminal durable
+  else .reply (ManagedExec.cancelReply outcome)
+
+theorem lost_failure_names_the_winning_terminal (outcome : ManagedExec.StopOutcome) :
+    unownedStopReply outcome false .completed = .alreadyTerminal .completed := rfl
+
+theorem won_failure_keeps_the_stop_outcome (outcome : ManagedExec.StopOutcome)
+    (durable : ToolExecution.ToolCallState) :
+    unownedStopReply outcome true durable = .reply (ManagedExec.cancelReply outcome) := by
+  simp [unownedStopReply]
+
 /-- Native failure can be decided before cleanup produces the complete tool
 outcome. Its reserved position is resolved only by that failure, and later
 cancellation cannot displace it. -/

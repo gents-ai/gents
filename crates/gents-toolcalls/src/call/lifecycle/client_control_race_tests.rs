@@ -174,6 +174,60 @@ async fn client_cancel_races_completion_without_replacing_terminal_state() {
     let _ = std::fs::remove_dir_all(admission.path);
 }
 
+/// The stop loads the row running; the owner's completion then commits and
+/// releases its execution before the stop looks for it.
+#[tokio::test]
+async fn an_unowned_stop_names_a_completion_that_won() {
+    use gents_lean_vocab::families::process_control_terminal_unowned_stop as family;
+    for case in family::cases::<gents_session::exec::CancelProcessReply, String>() {
+        let completion_first = case.input.completion_first;
+        let (admission, request_owner) =
+            published_admission_with_owner(PublishedAdmissionOptions {
+                name: format!("operator-unowned-stop-{completion_first}"),
+                real_identity: true,
+                await_mode: AwaitMode::Background,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let requester_did = request_owner.request().requester_did.clone();
+        let node = admission.node.clone();
+        let mut tool = admission.tool;
+        let request = OperatorProcessControlRequest {
+            node_did: admission.node_did.clone(),
+            session_id: tool.session_id().to_owned(),
+            tool_call_id: tool.tool_call_id().to_owned(),
+            tool_call_doc_id: tool.doc_id().unwrap().to_owned(),
+        };
+        let loaded = load_as_agent(&request_owner, &request, requester_did.as_deref()).await;
+        if completion_first {
+            tool.complete("finished").await.unwrap();
+        }
+        let outcome = crate::call::control::cancel_loaded_background_tool_call(
+            node.clone(),
+            &BackgroundExecutionRegistry::default(),
+            &gents_session::session::message::NoSessionMessageGoals,
+            loaded,
+            "explicit_cancel",
+        )
+        .await
+        .unwrap();
+        let (cancel_reply, already_terminal_state) = match outcome {
+            ProcessControlOutcome::AlreadyTerminal { state } => (None, Some(state)),
+            other => (Some(cancel_reply_of(&other)), None),
+        };
+        let row = load_as_agent(&request_owner, &request, requester_did.as_deref()).await;
+        case.check(family::UnownedStopOutput {
+            cancel_reply,
+            already_terminal_state,
+            terminal_state: row.state().as_str().to_owned(),
+        });
+        drop(request_owner);
+        node.shutdown().await.expect("shut down test node");
+        let _ = std::fs::remove_dir_all(admission.path);
+    }
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn process_control_terminal_order_matches_lean_model() {
