@@ -689,42 +689,21 @@ theorem other_receiver_reads_only_a_delivered_grant (senderGranted delivered : B
     receiverReads false senderGranted delivered = receiverHasGrant senderGranted delivered := by
   simp [receiverReads, Household.readObserved]
 
-/-- The marker is publication progress for one exact pairing document and
-one exact Agent, not an authorization decision. The native relation is the
-read authority. A new entitlement generation must be explicitly authorized
-by the configuration owner and committed with the relation. Disabling the
-entitlement removes the relation; a revoked relation is not silently restored
-by observing the same generation again. -/
-structure PairingReaderPublication where
-  lastGrantedGeneration : Option Nat
-  readerGranted : Bool
-  deriving Repr, DecidableEq
+/-- A pairing reader is an explicit owner-staged grant or revocation of one
+native relation for one exact pairing document and one exact Agent
+(`ConfigAccess::set_pairing_reader`). The native relation is the read
+authority; nothing restores a revoked reader except another explicit grant,
+and an aborted change leaves the relation as it was. -/
+def setPairingReader (granted grant committed : Bool) : Bool :=
+  if committed then grant else granted
 
-def reconcilePairingReader (state : PairingReaderPublication)
-    (entitled ownerAuthorized committed : Bool) (generation : Nat) : PairingReaderPublication :=
-  if !committed then state
-  else if !entitled then { state with readerGranted := false }
-  else if ownerAuthorized && state.lastGrantedGeneration != some generation then
-    ⟨some generation, true⟩
-  else state
+theorem pairing_revocation_removes_the_reader (granted : Bool) :
+    setPairingReader granted false true = false := by
+  simp [setPairingReader]
 
-theorem pairing_reader_denial_never_grants (state : PairingReaderPublication)
-    (generation : Nat) :
-    (reconcilePairingReader state false true true generation).readerGranted = false := by
-  simp [reconcilePairingReader]
-
-theorem pairing_reader_revocation_is_not_refreshed (generation : Nat) :
-    reconcilePairingReader ⟨some generation, false⟩ true true true generation =
-      ⟨some generation, false⟩ := by simp [reconcilePairingReader]
-
-theorem pairing_reader_new_generation_requires_owner_authorization (generation : Nat) :
-    reconcilePairingReader ⟨none, false⟩ true false true generation = ⟨none, false⟩ := by
-  simp [reconcilePairingReader]
-
-theorem failed_pairing_reader_commit_is_unchanged (state : PairingReaderPublication)
-    (entitled ownerAuthorized : Bool) (generation : Nat) :
-    reconcilePairingReader state entitled ownerAuthorized false generation = state := by
-  simp [reconcilePairingReader]
+theorem failed_pairing_reader_commit_is_unchanged (granted grant : Bool) :
+    setPairingReader granted grant false = granted := by
+  simp [setPairingReader]
 
 /-- A document owner can attach a Node parent without proving that it is the
 Node named by the document. Native ownership and a parent tuple alone therefore

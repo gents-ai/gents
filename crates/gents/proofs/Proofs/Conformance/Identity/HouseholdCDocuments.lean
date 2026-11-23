@@ -59,7 +59,6 @@ structure SessionToolInput where
   session : String
   granted : Bool
   admin : Bool
-  nativeBypass : Bool
   deriving ToJson
 
 def sessionToolAllowed (i : SessionToolInput) : Bool :=
@@ -68,12 +67,7 @@ def sessionToolAllowed (i : SessionToolInput) : Bool :=
       grants := (if i.granted then [ConfigurationFixture.sessionToolSource] else []),
       admins := (if i.admin then [agentDid] else []) }
   Configuration.toolSessionReadAllowed grants ConfigurationFixture.sessionToolHousehold agentDid
-    i.session i.nativeBypass
-
-def sessionToolInputs : List SessionToolInput :=
-  [⟨"owned", true, false, false⟩, ⟨"shared", true, false, false⟩,
-   ⟨"foreign", true, false, false⟩, ⟨"owned", false, false, false⟩,
-   ⟨"foreign", false, true, true⟩, ⟨"foreign", false, true, false⟩]
+    i.session
 
 end Conformance.HouseholdC
 
@@ -109,18 +103,13 @@ def backendCredentialPublication : Family CredentialPublicationInput CredentialV
 no relation to `foreign`, which its sibling owns. For `granted := false` the
 served fixture disables the reading Agent: every live Agent holds
 `read-document` through its projected baseline (`GrantSets.projectedSets`),
-which the model's empty grant projection omits. A managed Agent's session-tool read remains subject to document ACP
-when it holds node administration. -/
+which the model's empty grant projection omits. With `admin` the Agent holds
+native administration, which confers `bypass-dac`; its managed-Agent read is
+still decided by document ACP. -/
 @[conformance_family]
 def sessionToolAccess : Family SessionToolInput Bool where
-  inputs := sessionToolInputs.filter fun i => !i.nativeBypass
-  model := sessionToolAllowed
-
-/-- model-production-gap: the served scenario grants administration, but
-does not separately grant the managed Agent native DAC bypass. -/
-@[conformance_family]
-def sessionToolAccessUnreached : Family SessionToolInput Bool where
-  inputs := sessionToolInputs.filter fun i => i.nativeBypass
+  inputs := [⟨"owned", true, false⟩, ⟨"shared", true, false⟩, ⟨"foreign", true, false⟩,
+    ⟨"owned", false, false⟩, ⟨"foreign", false, true⟩]
   model := sessionToolAllowed
 
 /-- The native-tool scenario revalidates one cached surface tool as a selected

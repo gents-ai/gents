@@ -191,27 +191,15 @@ example : (operationsRuntimeStatus.inputs.map operationsAllowed) =
 structure FreshOriginInput where
   locked : Bool
   empty : Bool
-  unexposed : Bool
-  committed : Bool
   deriving ToJson
 
-def freshOriginCases : List FreshOriginInput :=
-  [(true, true, true, true), (false, true, true, true), (true, false, true, true),
-    (true, true, false, true), (true, true, true, false)].map
-    fun (locked, empty, unexposed, committed) => { locked, empty, unexposed, committed }
-
+/-- `FreshBackendStore::initialize` builds its temporary native Node without
+HTTP or P2P transport, and a failed schema commit makes it return an error
+with no marker, so every witness it mints is unexposed and committed
+(`exposed_fresh_backend_has_no_origin`). -/
 @[conformance_family]
 def freshBackendOrigin : Family FreshOriginInput Bool where
-  inputs := freshOriginCases.filter fun i => i.unexposed && i.committed
-  model := fun i => Configuration.freshBackendOrigin i.locked i.empty i.unexposed i.committed
-
-/-- model-production-gap: `FreshBackendStore::initialize` builds its temporary
-native Node without HTTP or P2P transport and offers no seam that fails its
-schema commit, so an exposed or uncommitted fresh-store baseline cannot be
-driven. -/
-@[conformance_family]
-def freshBackendOriginUnreached : Family FreshOriginInput Bool where
-  inputs := freshOriginCases.filter fun i => !(i.unexposed && i.committed)
-  model := fun i => Configuration.freshBackendOrigin i.locked i.empty i.unexposed i.committed
+  inputs := [(true, true), (false, true), (true, false)].map fun (locked, empty) => { locked, empty }
+  model := fun i => Configuration.freshBackendOrigin i.locked i.empty true true
 
 end Conformance.Household

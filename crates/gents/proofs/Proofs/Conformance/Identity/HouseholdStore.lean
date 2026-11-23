@@ -8,35 +8,20 @@ open Lean Identity Identity.Household Identity.Conformance
 structure DestructiveInput where
   nacEnabled : Bool
   admin : Bool
-  completeInventory : Bool
   deriving ToJson
 
+/-- Every Gents read is filtered by document ACP for its actor
+(`gents_store::config_client::InventoryRead` has only `AcpFiltered`), so a
+destructive decision is always taken over an ACP-filtered inventory. -/
 def DestructiveInput.authority (i : DestructiveInput) : Configuration.DestructiveAuthority :=
-  ⟨i.nacEnabled, i.admin, if i.completeInventory then .complete else .acpFiltered⟩
-
-def destructiveInputs : List DestructiveInput := Id.run do
-  let mut cases := []
-  for nacEnabled in [true, false] do
-    for admin in [true, false] do
-      for completeInventory in [false, true] do
-        cases := cases ++ [⟨nacEnabled, admin, completeInventory⟩]
-  return cases
+  ⟨i.nacEnabled, i.admin, .acpFiltered⟩
 
 def destructiveRefusal (i : DestructiveInput) : Option String :=
   (Configuration.destructiveAdminDecision i.authority).map Configuration.DestructiveRefusal.name
 
 @[conformance_family]
 def destructiveDecision : Family DestructiveInput (Option String) where
-  inputs := destructiveInputs.filter fun i => !i.completeInventory
-  model := destructiveRefusal
-
-/-- model-production-gap: production has no complete-inventory read; every
-Gents read is filtered by document ACP for its actor, so
-`gents_store::config_client::InventoryRead` has only `AcpFiltered` and a
-destructive decision over a complete inventory cannot be driven. -/
-@[conformance_family]
-def destructiveDecisionUnreached : Family DestructiveInput (Option String) where
-  inputs := destructiveInputs.filter fun i => i.completeInventory
+  inputs := [true, false].flatMap fun nacEnabled => [true, false].map fun admin => { nacEnabled, admin }
   model := destructiveRefusal
 
 structure ReopenInput where
@@ -384,29 +369,16 @@ def eventCursorAccess : Family EventCursorInput Bool where
 
 structure FreshAdmissionInput where
   origin : Bool
-  binding : Bool
-  intact : Bool
   deriving ToJson
-
-def freshAdmissionInputs : List FreshAdmissionInput :=
-  [⟨true, true, true⟩, ⟨false, true, true⟩, ⟨true, false, true⟩, ⟨true, true, false⟩]
 
 /-- A fresh store is driven through `FreshBackendStore::observe` and
 `initialize`: the origin knob is whether the data directory is empty when it
 is observed. Initialization installs the private legacy schema itself, so a
-fresh admission always starts bound and intact. -/
+fresh admission always starts bound and intact; an absent or altered binding is
+refused on reopen (`freshBackendReopen`). -/
 @[conformance_family]
 def freshBackendAdmission : Family FreshAdmissionInput Bool where
-  inputs := freshAdmissionInputs.filter fun i => i.binding && i.intact
-  model := fun i => Configuration.freshBackendAdmissionAllowed i.origin i.binding i.intact
-
-/-- model-production-gap: a fresh-store admission cannot observe a missing or
-broken private binding; `FreshBackendStore::initialize` installs the private
-legacy schema itself, and a store whose binding is absent or altered is refused
-only on reopen (`household_fresh_backend_reopen`). -/
-@[conformance_family]
-def freshBackendAdmissionUnreached : Family FreshAdmissionInput Bool where
-  inputs := freshAdmissionInputs.filter fun i => !(i.binding && i.intact)
-  model := fun i => Configuration.freshBackendAdmissionAllowed i.origin i.binding i.intact
+  inputs := [⟨true⟩, ⟨false⟩]
+  model := fun i => Configuration.freshBackendAdmissionAllowed i.origin true true
 
 end Conformance.Household

@@ -20,7 +20,6 @@ structure Allowed where
 def publisherInputs : List PublisherInput :=
   [ { name := "runtime", actor := "runtime", «local» := "runtime", target := "runtime", held := true }
   , { name := "client", actor := "client", «local» := "client", target := "remote", held := true }
-  , { name := "foreign", actor := "other", «local» := "client", target := "remote", held := true }
   , { name := "unheld", actor := "client", «local» := "client", target := "remote", held := false } ]
 
 def publisherAllowed (i : PublisherInput) : Allowed :=
@@ -28,17 +27,12 @@ def publisherAllowed (i : PublisherInput) : Allowed :=
 
 /-- The materialization scenario writes as the held local Node, or as a
 remote identity whose signer the store does not hold, toward the local or a
-remote Node. -/
+remote Node. A store holds only its own Node's signer, so a held signer is the
+local Node's; `desired_route_rejects_foreign_or_unheld_author` pins the foreign
+author. -/
 @[conformance_family]
 def desiredPublisher : Family PublisherInput Allowed where
-  inputs := publisherInputs.filter (·.name ≠ "foreign")
-  model := publisherAllowed
-
-/-- model-production-gap: a store holds only its own Node's signer, so no
-production path writes as a foreign actor whose signer is held. -/
-@[conformance_family]
-def desiredPublisherUnreached : Family PublisherInput Allowed where
-  inputs := publisherInputs.filter (·.name = "foreign")
+  inputs := publisherInputs
   model := publisherAllowed
 
 structure DiscoveryInput where
@@ -144,7 +138,7 @@ def readerPolicy (i : ReaderPolicyInput) : ReaderPolicy :=
 /-- An explicitly revoked reader and a reader whose route and tool grants are
 both revoked see the same: nothing. -/
 example : ((pairingReaderCases.find? (·.name == "explicit-revocation")).map fun c =>
-    (reconcilePairingReader c.before c.entitled c.ownerAuthorized c.committed c.generation).readerGranted) =
+    setPairingReader c.granted c.grant c.committed) =
     some (readerPolicy { name := "both-revoked", actor := "agent" }).read := by native_decide
 
 structure ReaderRead where
@@ -450,23 +444,10 @@ def pairingPartition : Family PartitionInput Selected where
 
 structure PairingReaderInput where
   name : String
-  beforeGeneration : Option Nat
-  beforeGranted : Bool
-  entitled : Bool
-  ownerAuthorized : Bool
+  granted : Bool
+  grant : Bool
   committed : Bool
-  offeredGeneration : Nat
   deriving ToJson
-
-def pairingReaderInputs : List PairingReaderInput :=
-  pairingReaderCases.map fun c =>
-    { name := c.name, beforeGeneration := c.before.lastGrantedGeneration
-      beforeGranted := c.before.readerGranted, entitled := c.entitled
-      ownerAuthorized := c.ownerAuthorized, committed := c.committed, offeredGeneration := c.generation }
-
-def pairingReaderAfter (i : PairingReaderInput) : PairingReaderPublication :=
-  reconcilePairingReader ⟨i.beforeGeneration, i.beforeGranted⟩ i.entitled i.ownerAuthorized
-    i.committed i.offeredGeneration
 
 structure ReaderGranted where
   granted : Bool
@@ -476,25 +457,9 @@ structure ReaderGranted where
 aborts a staged grant and a staged revocation, and revokes the reader. -/
 @[conformance_family]
 def pairingReaderGrant : Family PairingReaderInput ReaderGranted where
-  inputs := pairingReaderInputs.filter (·.name ∈ ["initial-grant", "aborted-grant",
-    "aborted-revoke", "explicit-revocation"])
-  model := fun i => { granted := (pairingReaderAfter i).readerGranted }
-
-structure ReaderPublication where
-  generation : Option Nat
-  granted : Bool
-  deriving ToJson
-
-/-- model-production-gap: production records no owner-authorized reader
-generation, so no production path observes the last granted generation, an
-entitlement withdrawn without a revocation, or a new or unauthorized
-generation. -/
-@[conformance_family]
-def pairingReaderUnreached : Family PairingReaderInput ReaderPublication where
-  inputs := pairingReaderInputs
-  model := fun i =>
-    { generation := (pairingReaderAfter i).lastGrantedGeneration
-      granted := (pairingReaderAfter i).readerGranted }
+  inputs := pairingReaderCases.map fun c =>
+    { name := c.name, granted := c.granted, grant := c.grant, committed := c.committed }
+  model := fun i => { granted := setPairingReader i.granted i.grant i.committed }
 
 structure EnrollmentPolicyInput where
   name : String

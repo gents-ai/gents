@@ -790,16 +790,6 @@ def relinquishment : Family StepInput (Option RelinquishOutput) where
     { request := world.request, generation := leaseGeneration world.lease,
       status := (LeaseWire.ofModel world.lease).status }
 
-/-- model-production-gap: no production owner computes the whole lease world
-(used generations, effective expiry, continuation and token-charge counters);
-native owners replay its admission, renewal and relinquishment projections in
-`admission`, `renewal` and `relinquishment`, and claim, finalization,
-recovery, revocation, observing-replica and clock steps have no native replay. -/
-@[conformance_family]
-def stepWorldUnreached : Family StepInput (Option WorldWire) where
-  inputs := leaseCases.map StepInput.ofCase
-  model := fun i => (stepOf i).map WorldWire.ofModel
-
 example :
     (leaseCases.map fun testCase => (ActionWire.ofModel testCase.action).kind).eraseDups.length = 16 ∧
       ["advance_time", "append_output", "authorize_producer_decision", "begin", "claim", "drop",
@@ -908,7 +898,14 @@ theorem observedLeaseCases_wire_round_trip :
       (ObservedInput.ofCase testCase).toCase == testCase) = true := by
   native_decide
 
-example : observedLeaseCases.length = 8 ∧ observedLeaseCases.all (·.name ≠ "") := by
+/-- A finalization, revocation, drop or competing renewal committed after a
+renewal was admitted leaves that renewal nothing to commit. -/
+theorem intervening_owner_invalidates_admitted_renewal :
+    (observedLeaseCases.filter fun testCase => testCase.name ∈
+      [ "finalization_invalidates_admitted_renewal", "revocation_invalidates_admitted_renewal"
+      , "drop_invalidates_admitted_renewal"
+      , "competing_deadline_cas_invalidates_admitted_renewal" ]).all
+      (fun testCase => (observedLeaseExpected testCase).isNone) = true := by
   native_decide
 
 def observedCasesNamed (names : List String) : List ObservedInput :=
@@ -965,39 +962,5 @@ def observedRecheck : Family RecheckInput Bool where
       fun admitted => (observedCasesNamed ["renewal_admission_after_expiry_is_rejected"]).map
         fun recheck => { admitted, recheck }
   model := fun i => (observedLeaseExpected i.recheck.toCase).isSome
-
-/-- model-production-gap: no production owner computes the whole lease world
-after an observed transaction commits; the served scenarios replay their commit
-outcomes in `observedPublication`, `observedRecovery` and `observedRecheck`, and
-finalization, revocation, drop and competing-renewal interleavings have no
-served scenario. -/
-@[conformance_family]
-def observedWorldUnreached : Family ObservedInput (Option WorldWire) where
-  inputs := observedLeaseCases.map ObservedInput.ofCase
-  model := fun i => (observedLeaseExpected i.toCase).map WorldWire.ofModel
-
-example : leaseTraceCases.all (fun testCase =>
-    (testCase.actions.map ActionWire.ofModel).map ActionWire.toModel == testCase.actions &&
-      (WorldWire.ofModel testCase.pre).toModel == testCase.pre) = true := by
-  native_decide
-
-structure LeaseTraceInput where
-  name : String
-  pre : WorldWire
-  actions : List ActionWire
-  deriving Lean.ToJson
-
-/-- model-production-gap: the native lease owners take one database-backed
-action at a time under the wall clock (the generated drop cases drive
-`relinquish_execution_lease`); no production path replays a multi-action trace
-over a logical clock, so these traces of renewal, expiry, recovery and stale
-owners are not reached. -/
-@[conformance_family]
-def leaseTraceUnreached : Conformance.Family LeaseTraceInput (Option WorldWire) where
-  inputs := leaseTraceCases.map fun testCase =>
-    { name := testCase.name, pre := .ofModel testCase.pre
-      actions := testCase.actions.map ActionWire.ofModel }
-  model := fun i =>
-    (replay? i.pre.toModel (i.actions.map ActionWire.toModel)).map WorldWire.ofModel
 
 end Conformance.RequestExecutionLeaseContracts

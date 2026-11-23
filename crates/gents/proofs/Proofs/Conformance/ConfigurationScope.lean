@@ -233,7 +233,6 @@ structure DiscoveryInput where
   requestedOwner : String
   requestedBackend : String
   requestedCredentials : Option String
-  observedOwner : String
   observedCredentials : Option String
   deriving ToJson
 
@@ -244,36 +243,26 @@ structure CatalogObservation where
   deriving ToJson
 
 private def discoveryInputs : List DiscoveryInput :=
-  [ ⟨"same_owner_shared_credentials", "alice", "backend", none, "alice", none⟩
-  , ⟨"foreign_owner_same_label_shared_credentials", "alice", "backend", none, "bob", none⟩
-  , ⟨"wrong_backend", "alice", "other", none, "alice", none⟩
-  , ⟨"matching_oauth_scope", "alice", "backend", some "alice", "alice", some "alice"⟩
-  , ⟨"foreign_oauth_scope", "alice", "backend", some "alice", "alice", some "bob"⟩
-  , ⟨"oauth_is_not_shared_credentials", "alice", "backend", none, "alice", some "alice"⟩
-  , ⟨"shared_catalog_is_not_oauth", "alice", "backend", some "alice", "alice", none⟩
-  , ⟨"oauth_catalog_still_requires_backend_owner", "alice", "backend", some "alice", "bob",
-      some "alice"⟩ ]
+  [ ⟨"same_owner_shared_credentials", "alice", "backend", none, none⟩
+  , ⟨"wrong_backend", "alice", "other", none, none⟩
+  , ⟨"matching_oauth_scope", "alice", "backend", some "alice", some "alice"⟩
+  , ⟨"foreign_oauth_scope", "alice", "backend", some "alice", some "bob"⟩
+  , ⟨"oauth_is_not_shared_credentials", "alice", "backend", none, some "alice"⟩
+  , ⟨"shared_catalog_is_not_oauth", "alice", "backend", some "alice", none⟩ ]
 
 private def discoveryModel (i : DiscoveryInput) : Option CatalogObservation :=
   (catalogFor i.requestedOwner i.requestedBackend i.requestedCredentials
-    (some ⟨i.observedOwner, advertisement i.observedCredentials⟩)).map fun catalog =>
+    (some ⟨i.requestedOwner, advertisement i.observedCredentials⟩)).map fun catalog =>
       { backendId := catalog.backendId, credentialNode := catalog.nodeDid
         modelNamesWithUnknownCapabilities := catalog.models.map (·.modelName) }
 
 /-- `backend_catalog` reads the observation of the backend document it was
-given, so it only sees catalogs whose backend owner is the requested owner. -/
+given, and a backend observation carries no owner of its own, so every
+observation it sees belongs to the requested owner. Owner rejection is pinned
+by the examples above. -/
 @[conformance_family]
 def discovery : Conformance.Family DiscoveryInput (Option CatalogObservation) where
-  inputs := discoveryInputs.filter fun i => i.observedOwner == i.requestedOwner
-  model := discoveryModel
-
-/-- model-production-gap: a backend observation carries no owner of its own;
-production reaches a catalog only through the owner-qualified backend document
-that holds it, so no production call is handed another owner's catalog for a
-same-labelled backend and these owner-rejection cases are not reached. -/
-@[conformance_family]
-def discoveryUnreached : Conformance.Family DiscoveryInput (Option CatalogObservation) where
-  inputs := discoveryInputs.filter fun i => i.observedOwner != i.requestedOwner
+  inputs := discoveryInputs
   model := discoveryModel
 
 end Conformance.ConfigurationScope

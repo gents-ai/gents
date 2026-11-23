@@ -308,11 +308,10 @@ def runtimeReaderChanges : List Action :=
   , .check runtimeDid "agents" "general" "read" ]
 
 def selfConfigLookupCases : List (String × SelfConfigAttempt) :=
-  [("absent", ⟨false, false, false, false⟩),
-   ("hidden", ⟨true, false, true, true⟩),
-   ("manager_denied", ⟨true, true, true, false⟩),
-   ("manager_allowed", ⟨true, true, true, true⟩),
-   ("stale_generation", ⟨true, true, false, true⟩)]
+  [("absent", ⟨false, false, false⟩),
+   ("hidden", ⟨true, false, true⟩),
+   ("manager_denied", ⟨true, true, false⟩),
+   ("manager_allowed", ⟨true, true, true⟩)]
 
 def matrix : List Action :=
   [userDid, runtimeDid, agentDid, siblingDid, otherAgentDid, readerDid, strangerDid].flatMap
@@ -492,9 +491,9 @@ theorem unattended_request_preserves_agent_ownership_and_user_access :
     [true, true, true, false, false, false] := by native_decide
 
 theorem unattended_checkpoint_uses_request_visibility :
-    [Identity.Automation.checkpointTaskArrival initial runtimeDid "automated-request" true true true 0 1,
-     Identity.Automation.checkpointTaskArrival initial agentDid "automated-request" true true true 0 1,
-     Identity.Automation.checkpointTaskArrival initial agentDid "automated-request" true true true 1 1] =
+    [Identity.Automation.checkpointTaskArrival initial runtimeDid agentDid "automated-request" true true true 0 1,
+     Identity.Automation.checkpointTaskArrival initial agentDid agentDid "automated-request" true true true 0 1,
+     Identity.Automation.checkpointTaskArrival initial agentDid agentDid "automated-request" true true true 1 1] =
     [0, 1, 1] := by native_decide
 
 theorem agent_children_inherit_only_their_agent_household :
@@ -659,10 +658,10 @@ def sessionToolHousehold : State :=
 theorem session_tool_still_requires_session_access :
     let grants : Configuration.ToolGrantProjection :=
       { enabled := [sessionToolSource], grants := [sessionToolSource] }
-    [Configuration.toolSessionReadAllowed grants sessionToolHousehold agentDid "owned" false,
-     Configuration.toolSessionReadAllowed grants sessionToolHousehold agentDid "shared" false,
-     Configuration.toolSessionReadAllowed grants sessionToolHousehold agentDid "foreign" false,
-     Configuration.toolSessionReadAllowed {} sessionToolHousehold agentDid "owned" false] =
+    [Configuration.toolSessionReadAllowed grants sessionToolHousehold agentDid "owned",
+     Configuration.toolSessionReadAllowed grants sessionToolHousehold agentDid "shared",
+     Configuration.toolSessionReadAllowed grants sessionToolHousehold agentDid "foreign",
+     Configuration.toolSessionReadAllowed {} sessionToolHousehold agentDid "owned"] =
        [true, true, false, false] := by native_decide
 
 def toolGrantorHousehold : State :=

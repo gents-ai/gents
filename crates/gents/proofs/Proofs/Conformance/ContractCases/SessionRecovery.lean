@@ -159,21 +159,8 @@ def recoveryRequest (state : RequestState) (admission : AdmissionState)
     (retryCount currentTime : Nat) (origin : ExecutionOrigin := .interactive) : RecoveryRequest :=
   { state, origin, admission, retryCount, maxRetries := 3, deadline := 10, currentTime }
 
-inductive RecoveryAction where
-  | reissueFailed
-  deriving Lean.ToJson
-
-def RecoveryAction.toContract : RecoveryAction → String
-  | .reissueFailed => "reissueFailed"
-
-attribute [conformance_vocabulary] RecoveryAction.toContract
-
-def RecoveryAction.toModel (failedId newId : RequestId) : RecoveryAction → SessionState.Action
-  | .reissueFailed => .reissueFailed failedId newId
-
 structure RecoveryInput where
   name : String
-  action : RecoveryAction := .reissueFailed
   failed : RecoveryRequest
   latest : RecoveryRequest
   latestId : Nat
@@ -184,32 +171,6 @@ structure RecoveryInput where
 
 def RecoveryInput.pre (i : RecoveryInput) : SessionState :=
   recoveryPre i.failed.toModel i.latest.toModel i.latestId i.requestIds.toFinset
-
-structure RecoveryPost where
-  latestState : RequestState
-  failedState : RequestState
-  newState : RequestState
-  latestAdmission : AdmissionState
-  failedAdmission : AdmissionState
-  newAdmission : AdmissionState
-  newOrigin : ExecutionOrigin
-  latestId : Nat
-  sessionId : Nat
-  agentDid : Nat
-  requestCount : Nat
-  retryCount : Nat
-  deadlineExceeded : Bool
-  failedIsLatest : Bool
-  newIsLatest : Bool
-  oldRequestRetained : Bool
-  newRequestInserted : Bool
-  originPreserved : Bool
-  deriving Lean.ToJson
-
-structure RecoveryOutcome where
-  legal : Bool
-  post : Option RecoveryPost
-  deriving Lean.ToJson
 
 def recoveryInputs : List RecoveryInput :=
   let initialFailed := recoveryRequest .failed .released 0 5
@@ -246,32 +207,5 @@ def recoveryInputs : List RecoveryInput :=
 
 def sessionRecoveryCases : List SessionRecoveryCase :=
   recoveryInputs.map fun i => recoveryCaseFromStep i.name i.pre i.failedId i.newId
-
-/-- model-production-gap: the model reissues over a session whose requests each
-carry an admission lease and a deadline clock; production `reissue` in
-gents-session publishes a successor from persisted request rows on a served
-node and records no per-request admission, so no production path takes these
-session states as an input. The eligibility decision itself is replayed by
-`session_operations_reissue_decision`. -/
-@[conformance_family]
-def sessionRecoveryUnreached : Family RecoveryInput RecoveryOutcome where
-  inputs := recoveryInputs
-  model := fun i =>
-    let pre := i.pre
-    let step := SessionState.step? pre (i.action.toModel i.failedId i.newId)
-    { legal := step.isSome, post := step.map fun post =>
-      let failed := post.ctx i.failedId
-      let fresh := post.ctx i.newId
-      let latest := post.ctx post.latest
-      { latestState := latest.state, failedState := failed.state, newState := fresh.state
-        latestAdmission := latest.admission, failedAdmission := failed.admission
-        newAdmission := fresh.admission, newOrigin := fresh.origin, latestId := post.latest
-        sessionId := post.sessionId, agentDid := post.agentDid
-        requestCount := post.requestIds.card, retryCount := fresh.retryCount
-        deadlineExceeded := decide fresh.deadlineExceeded
-        failedIsLatest := i.failedId == post.latest, newIsLatest := i.newId == post.latest
-        oldRequestRetained := decide (i.failedId ∈ post.requestIds)
-        newRequestInserted := decide (i.newId ∈ post.requestIds)
-        originPreserved := decide (fresh.origin = (pre.ctx i.failedId).origin) } }
 
 end Conformance.ContractCases

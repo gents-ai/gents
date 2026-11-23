@@ -70,6 +70,16 @@ async fn cursor_update(access: &ConfigAccess, doc: &str, value: &str) -> Result<
     }
 }
 
+async fn cursor_after(access: &ConfigAccess, doc: &str) -> Result<Value> {
+    let rows = access
+        .execute(&format!(
+            "{{EventSourceCursor(filter:{{_docID:{{_eq:\"{}\"}}}}){{after}}}}",
+            escape_graphql_string(doc)
+        ))
+        .await?;
+    Ok(rows["data"]["EventSourceCursor"][0]["after"].clone())
+}
+
 fn modeled_source(generation: &Value, owner: &str) -> Value {
     let expected = if generation["expected_count"].is_number() {
         generation["expected_count"].clone()
@@ -519,7 +529,8 @@ async fn event_configuration_publication_rebinding_and_revocation_use_native_gra
             "agent" => &first_access,
             _ => &second_access,
         };
-        let advanced = checkpointer
+        let before = cursor_after(&user, cursor_doc).await?;
+        let attempt = checkpointer
             .transact_write("test.event_rebind_uncheckpointed", |txn| {
                 Box::pin(async move {
                     gents_documents::event_consumer::checkpoint_prefix(
@@ -535,7 +546,13 @@ async fn event_configuration_publication_rebinding_and_revocation_use_native_gra
                     .await
                 })
             })
-            .await?;
+            .await;
+        let advanced = attempt.unwrap_or(false);
+        anyhow::ensure!(
+            advanced || cursor_after(&user, cursor_doc).await? == before,
+            "a checkpoint by {} that did not advance moved the cursor",
+            case.input.role
+        );
         case.check(u64::from(advanced));
     }
     user.add_actor_relationship(
