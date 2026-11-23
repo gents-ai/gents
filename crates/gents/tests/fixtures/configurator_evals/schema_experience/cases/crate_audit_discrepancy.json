@@ -1,0 +1,697 @@
+{
+  "case_id": "crate-audit-discrepancy",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type CrateCount { ticket: String @index(unique: true) expected: Int site: String }",
+      "type CrateAudit { event: String @index(unique: true) ticket: String edition: Int disposition: String counted: Int }"
+    ],
+    "documents": [
+      {
+        "collection": "CrateCount",
+        "document": {
+          "ticket": "CT-102",
+          "expected": 3,
+          "site": "west"
+        }
+      },
+      {
+        "collection": "CrateCount",
+        "document": {
+          "ticket": "CT-109",
+          "expected": 0,
+          "site": "east"
+        }
+      },
+      {
+        "collection": "CrateCount",
+        "document": {
+          "ticket": "CT-111",
+          "expected": 5,
+          "site": "west"
+        }
+      },
+      {
+        "collection": "CrateCount",
+        "document": {
+          "ticket": "CT-114",
+          "expected": 7,
+          "site": "east"
+        }
+      },
+      {
+        "collection": "CrateCount",
+        "document": {
+          "ticket": "CT-120",
+          "expected": 4,
+          "site": "west"
+        }
+      },
+      {
+        "collection": "CrateAudit",
+        "document": {
+          "event": "CA-100",
+          "ticket": "CT-102",
+          "edition": 1,
+          "disposition": "approved",
+          "counted": 3
+        }
+      },
+      {
+        "collection": "CrateAudit",
+        "document": {
+          "event": "CA-101",
+          "ticket": "CT-102",
+          "edition": 2,
+          "disposition": "void",
+          "counted": 30
+        }
+      },
+      {
+        "collection": "CrateAudit",
+        "document": {
+          "event": "CA-102",
+          "ticket": "CT-109",
+          "edition": 3,
+          "disposition": "approved",
+          "counted": 0
+        }
+      },
+      {
+        "collection": "CrateAudit",
+        "document": {
+          "event": "CA-103",
+          "ticket": "CT-109",
+          "edition": 1,
+          "disposition": "approved",
+          "counted": 9
+        }
+      },
+      {
+        "collection": "CrateAudit",
+        "document": {
+          "event": "CA-104",
+          "ticket": "CT-111",
+          "edition": 1,
+          "disposition": "provisional",
+          "counted": 7
+        }
+      },
+      {
+        "collection": "CrateAudit",
+        "document": {
+          "event": "CA-105",
+          "ticket": "CT-114",
+          "edition": 6,
+          "disposition": "approved",
+          "counted": 1
+        }
+      },
+      {
+        "collection": "CrateAudit",
+        "document": {
+          "event": "CA-106",
+          "ticket": "CT-114",
+          "edition": 9,
+          "disposition": "approved",
+          "counted": 8
+        }
+      },
+      {
+        "collection": "CrateAudit",
+        "document": {
+          "event": "CA-107",
+          "ticket": "CT-114",
+          "edition": 4,
+          "disposition": "approved",
+          "counted": 99
+        }
+      },
+      {
+        "collection": "CrateAudit",
+        "document": {
+          "event": "CA-108",
+          "ticket": "CT-120",
+          "edition": 3,
+          "disposition": "approved"
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "access",
+      "prompt": "I keep application records in CrateCount and CrateAudit. Enable your general read access only to those collections, and general create/update/delete access only to CrateCount if your native tools support it. Keep shell execution off and leave all other collection permissions alone. Inspect the available fields before working with records. Set up only the access now; do not change any records or collection definitions until I send the change request.",
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "schema",
+            "sdl": "type CrateCount { ticket: String @index(unique: true) expected: Int site: String }\ntype CrateAudit { event: String @index(unique: true) ticket: String edition: Int disposition: String counted: Int }",
+            "exact_nullability": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "agents": {
+              "agents": "agents",
+              "contexts": "contexts",
+              "tools": "tools",
+              "expect": [
+                {
+                  "agent_did": "gents:agent-slot:engineer",
+                  "tools": [
+                    {
+                      "field": "host.bash.mode",
+                      "matches": "^(null|Off)$"
+                    },
+                    {
+                      "field": "datastore.write_collections",
+                      "equals": [
+                        "CrateCount"
+                      ]
+                    },
+                    {
+                      "field": "datastore.defra_query_collections",
+                      "contains": "\"CrateCount\""
+                    },
+                    {
+                      "field": "datastore.defra_query_collections",
+                      "contains": "\"CrateAudit\""
+                    }
+                  ]
+                }
+              ]
+            },
+            "present": [
+              {
+                "capture": "CrateCount",
+                "min": 5,
+                "max": 5
+              },
+              {
+                "capture": "CrateAudit",
+                "min": 9,
+                "max": 9
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name",
+            "context_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "contexts",
+          "collection": "AgentContext",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "context_id",
+            "tools_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "tools",
+          "collection": "Tools",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "tools_id",
+            "host",
+            "datastore"
+          ]
+        },
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "CrateCount",
+            "CrateAudit"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "CrateCount",
+          "collection": "CrateCount",
+          "filter": {},
+          "fields": [
+            "ticket",
+            "expected",
+            "site"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "CrateAudit",
+          "collection": "CrateAudit",
+          "filter": {},
+          "fields": [
+            "event",
+            "ticket",
+            "edition",
+            "disposition",
+            "counted"
+          ]
+        }
+      ]
+    },
+    {
+      "stage_id": "migrate",
+      "prompt": "Crate audit 10 needs an optional integer discrepancy on CrateCount. For each ticket use the approved CrateAudit with the highest edition and subtract the expected amount from its counted amount. A counted zero is a reading. Leave discrepancy unset if that audit is missing or has no counted amount. Preserve the records and all existing fields. Reply with one JSON object whose \"missing\" array lists the ticket values.",
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "bash"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "schema",
+            "sdl": "type CrateCount { ticket: String @index(unique: true) expected: Int site: String discrepancy: Int }\ntype CrateAudit { event: String @index(unique: true) ticket: String edition: Int disposition: String counted: Int }",
+            "exact_nullability": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "CrateCount",
+                "min": 5,
+                "max": 5
+              },
+              {
+                "capture": "CrateAudit",
+                "min": 9,
+                "max": 9
+              }
+            ],
+            "rows": [
+              {
+                "capture": "CrateCount",
+                "key": "ticket",
+                "id": "CT-102",
+                "expect": [
+                  {
+                    "field": "expected",
+                    "equals": 3
+                  },
+                  {
+                    "field": "site",
+                    "equals": "west"
+                  },
+                  {
+                    "field": "discrepancy",
+                    "equals": 0
+                  }
+                ]
+              },
+              {
+                "capture": "CrateCount",
+                "key": "ticket",
+                "id": "CT-109",
+                "expect": [
+                  {
+                    "field": "expected",
+                    "equals": 0
+                  },
+                  {
+                    "field": "site",
+                    "equals": "east"
+                  },
+                  {
+                    "field": "discrepancy",
+                    "equals": 0
+                  }
+                ]
+              },
+              {
+                "capture": "CrateCount",
+                "key": "ticket",
+                "id": "CT-111",
+                "expect": [
+                  {
+                    "field": "expected",
+                    "equals": 5
+                  },
+                  {
+                    "field": "site",
+                    "equals": "west"
+                  },
+                  {
+                    "field": "discrepancy",
+                    "equals": null
+                  }
+                ]
+              },
+              {
+                "capture": "CrateCount",
+                "key": "ticket",
+                "id": "CT-114",
+                "expect": [
+                  {
+                    "field": "expected",
+                    "equals": 7
+                  },
+                  {
+                    "field": "site",
+                    "equals": "east"
+                  },
+                  {
+                    "field": "discrepancy",
+                    "equals": 1
+                  }
+                ]
+              },
+              {
+                "capture": "CrateCount",
+                "key": "ticket",
+                "id": "CT-120",
+                "expect": [
+                  {
+                    "field": "expected",
+                    "equals": 4
+                  },
+                  {
+                    "field": "site",
+                    "equals": "west"
+                  },
+                  {
+                    "field": "discrepancy",
+                    "equals": null
+                  }
+                ]
+              },
+              {
+                "capture": "CrateAudit",
+                "key": "event",
+                "id": "CA-100",
+                "expect": [
+                  {
+                    "field": "ticket",
+                    "equals": "CT-102"
+                  },
+                  {
+                    "field": "edition",
+                    "equals": 1
+                  },
+                  {
+                    "field": "disposition",
+                    "equals": "approved"
+                  },
+                  {
+                    "field": "counted",
+                    "equals": 3
+                  }
+                ]
+              },
+              {
+                "capture": "CrateAudit",
+                "key": "event",
+                "id": "CA-101",
+                "expect": [
+                  {
+                    "field": "ticket",
+                    "equals": "CT-102"
+                  },
+                  {
+                    "field": "edition",
+                    "equals": 2
+                  },
+                  {
+                    "field": "disposition",
+                    "equals": "void"
+                  },
+                  {
+                    "field": "counted",
+                    "equals": 30
+                  }
+                ]
+              },
+              {
+                "capture": "CrateAudit",
+                "key": "event",
+                "id": "CA-102",
+                "expect": [
+                  {
+                    "field": "ticket",
+                    "equals": "CT-109"
+                  },
+                  {
+                    "field": "edition",
+                    "equals": 3
+                  },
+                  {
+                    "field": "disposition",
+                    "equals": "approved"
+                  },
+                  {
+                    "field": "counted",
+                    "equals": 0
+                  }
+                ]
+              },
+              {
+                "capture": "CrateAudit",
+                "key": "event",
+                "id": "CA-103",
+                "expect": [
+                  {
+                    "field": "ticket",
+                    "equals": "CT-109"
+                  },
+                  {
+                    "field": "edition",
+                    "equals": 1
+                  },
+                  {
+                    "field": "disposition",
+                    "equals": "approved"
+                  },
+                  {
+                    "field": "counted",
+                    "equals": 9
+                  }
+                ]
+              },
+              {
+                "capture": "CrateAudit",
+                "key": "event",
+                "id": "CA-104",
+                "expect": [
+                  {
+                    "field": "ticket",
+                    "equals": "CT-111"
+                  },
+                  {
+                    "field": "edition",
+                    "equals": 1
+                  },
+                  {
+                    "field": "disposition",
+                    "equals": "provisional"
+                  },
+                  {
+                    "field": "counted",
+                    "equals": 7
+                  }
+                ]
+              },
+              {
+                "capture": "CrateAudit",
+                "key": "event",
+                "id": "CA-105",
+                "expect": [
+                  {
+                    "field": "ticket",
+                    "equals": "CT-114"
+                  },
+                  {
+                    "field": "edition",
+                    "equals": 6
+                  },
+                  {
+                    "field": "disposition",
+                    "equals": "approved"
+                  },
+                  {
+                    "field": "counted",
+                    "equals": 1
+                  }
+                ]
+              },
+              {
+                "capture": "CrateAudit",
+                "key": "event",
+                "id": "CA-106",
+                "expect": [
+                  {
+                    "field": "ticket",
+                    "equals": "CT-114"
+                  },
+                  {
+                    "field": "edition",
+                    "equals": 9
+                  },
+                  {
+                    "field": "disposition",
+                    "equals": "approved"
+                  },
+                  {
+                    "field": "counted",
+                    "equals": 8
+                  }
+                ]
+              },
+              {
+                "capture": "CrateAudit",
+                "key": "event",
+                "id": "CA-107",
+                "expect": [
+                  {
+                    "field": "ticket",
+                    "equals": "CT-114"
+                  },
+                  {
+                    "field": "edition",
+                    "equals": 4
+                  },
+                  {
+                    "field": "disposition",
+                    "equals": "approved"
+                  },
+                  {
+                    "field": "counted",
+                    "equals": 99
+                  }
+                ]
+              },
+              {
+                "capture": "CrateAudit",
+                "key": "event",
+                "id": "CA-108",
+                "expect": [
+                  {
+                    "field": "ticket",
+                    "equals": "CT-120"
+                  },
+                  {
+                    "field": "edition",
+                    "equals": 3
+                  },
+                  {
+                    "field": "disposition",
+                    "equals": "approved"
+                  },
+                  {
+                    "field": "counted",
+                    "equals": null
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\"missing\"\\s*:\\s*\\[\\s*(?:\"CT-111\"\\s*,\\s*\"CT-120\"|\"CT-120\"\\s*,\\s*\"CT-111\")\\s*\\]"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "CrateCount",
+            "CrateAudit"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "CrateCount",
+          "collection": "CrateCount",
+          "filter": {},
+          "fields": [
+            "ticket",
+            "expected",
+            "site",
+            "discrepancy"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "CrateAudit",
+          "collection": "CrateAudit",
+          "filter": {},
+          "fields": [
+            "event",
+            "ticket",
+            "edition",
+            "disposition",
+            "counted"
+          ]
+        }
+      ]
+    }
+  ]
+}

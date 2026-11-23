@@ -1,0 +1,541 @@
+{
+  "case_id": "board-open-receiving-tickets",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type DispatchThread { ticket: String @index(unique: true) desk: String }",
+      "type DispatchChange { event: String @index(unique: true) thread: String ordinal: Int phase: String }"
+    ],
+    "documents": [
+      {
+        "collection": "DispatchThread",
+        "document": {
+          "ticket": "B-14",
+          "desk": "receiving"
+        }
+      },
+      {
+        "collection": "DispatchThread",
+        "document": {
+          "ticket": "B-18",
+          "desk": "receiving"
+        }
+      },
+      {
+        "collection": "DispatchThread",
+        "document": {
+          "ticket": "B-22",
+          "desk": "receiving"
+        }
+      },
+      {
+        "collection": "DispatchThread",
+        "document": {
+          "ticket": "B-31",
+          "desk": "dispatch"
+        }
+      },
+      {
+        "collection": "DispatchThread",
+        "document": {
+          "ticket": "B-37",
+          "desk": "receiving"
+        }
+      },
+      {
+        "collection": "DispatchChange",
+        "document": {
+          "event": "e2",
+          "thread": "B-14",
+          "ordinal": 2,
+          "phase": "closed"
+        }
+      },
+      {
+        "collection": "DispatchChange",
+        "document": {
+          "event": "e5",
+          "thread": "B-22",
+          "ordinal": 1,
+          "phase": "open"
+        }
+      },
+      {
+        "collection": "DispatchChange",
+        "document": {
+          "event": "e1",
+          "thread": "B-14",
+          "ordinal": 1,
+          "phase": "open"
+        }
+      },
+      {
+        "collection": "DispatchChange",
+        "document": {
+          "event": "e4",
+          "thread": "B-18",
+          "ordinal": 2,
+          "phase": "open"
+        }
+      },
+      {
+        "collection": "DispatchChange",
+        "document": {
+          "event": "e6",
+          "thread": "B-31",
+          "ordinal": 1,
+          "phase": "open"
+        }
+      },
+      {
+        "collection": "DispatchChange",
+        "document": {
+          "event": "e3",
+          "thread": "B-18",
+          "ordinal": 1,
+          "phase": "closed"
+        }
+      },
+      {
+        "collection": "DispatchChange",
+        "document": {
+          "event": "e8",
+          "thread": "B-37",
+          "ordinal": 2,
+          "phase": "closed"
+        }
+      },
+      {
+        "collection": "DispatchChange",
+        "document": {
+          "event": "e7",
+          "thread": "B-37",
+          "ordinal": 1,
+          "phase": "open"
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "access",
+      "prompt": "I keep application records in DispatchThread and DispatchChange. Enable your general read access only to those collections, with no create, update or delete access. Keep shell execution off and leave all other collection permissions alone. Inspect the available fields before working with records.",
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "agents": {
+              "agents": "agents",
+              "contexts": "contexts",
+              "tools": "tools",
+              "expect": [
+                {
+                  "agent_did": "gents:agent-slot:engineer",
+                  "tools": [
+                    {
+                      "field": "host.bash.mode",
+                      "matches": "^(null|Off)$"
+                    },
+                    {
+                      "field": "datastore.write_collections",
+                      "matches": "^(null|\\[\\])$"
+                    },
+                    {
+                      "field": "datastore.defra_query_collections",
+                      "contains": "\"DispatchThread\""
+                    },
+                    {
+                      "field": "datastore.defra_query_collections",
+                      "contains": "\"DispatchChange\""
+                    }
+                  ]
+                }
+              ]
+            },
+            "present": [
+              {
+                "capture": "DispatchThread",
+                "min": 5,
+                "max": 5
+              },
+              {
+                "capture": "DispatchChange",
+                "min": 8,
+                "max": 8
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name",
+            "context_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "contexts",
+          "collection": "AgentContext",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "context_id",
+            "tools_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "tools",
+          "collection": "Tools",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "tools_id",
+            "host",
+            "datastore"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "DispatchThread",
+          "collection": "DispatchThread",
+          "filter": {},
+          "fields": [
+            "ticket",
+            "desk"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "DispatchChange",
+          "collection": "DispatchChange",
+          "filter": {},
+          "fields": [
+            "event",
+            "thread",
+            "ordinal",
+            "phase"
+          ]
+        }
+      ]
+    },
+    {
+      "stage_id": "ask",
+      "prompt": "Which bulletin-board tickets are open for the receiving desk? A ticket's current state is the phase of its change with the greatest ordinal; storage order means nothing. Give me the count and the IDs as JSON with a numeric \"count\" and an \"ids\" array. Do not change any records.",
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "bash",
+              "schema",
+              "write"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "DispatchThread",
+                "min": 5,
+                "max": 5
+              },
+              {
+                "capture": "DispatchChange",
+                "min": 8,
+                "max": 8
+              }
+            ],
+            "rows": [
+              {
+                "capture": "DispatchThread",
+                "key": "ticket",
+                "id": "B-14",
+                "expect": [
+                  {
+                    "field": "desk",
+                    "equals": "receiving"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchThread",
+                "key": "ticket",
+                "id": "B-18",
+                "expect": [
+                  {
+                    "field": "desk",
+                    "equals": "receiving"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchThread",
+                "key": "ticket",
+                "id": "B-22",
+                "expect": [
+                  {
+                    "field": "desk",
+                    "equals": "receiving"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchThread",
+                "key": "ticket",
+                "id": "B-31",
+                "expect": [
+                  {
+                    "field": "desk",
+                    "equals": "dispatch"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchThread",
+                "key": "ticket",
+                "id": "B-37",
+                "expect": [
+                  {
+                    "field": "desk",
+                    "equals": "receiving"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchChange",
+                "key": "event",
+                "id": "e2",
+                "expect": [
+                  {
+                    "field": "thread",
+                    "equals": "B-14"
+                  },
+                  {
+                    "field": "ordinal",
+                    "equals": 2
+                  },
+                  {
+                    "field": "phase",
+                    "equals": "closed"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchChange",
+                "key": "event",
+                "id": "e5",
+                "expect": [
+                  {
+                    "field": "thread",
+                    "equals": "B-22"
+                  },
+                  {
+                    "field": "ordinal",
+                    "equals": 1
+                  },
+                  {
+                    "field": "phase",
+                    "equals": "open"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchChange",
+                "key": "event",
+                "id": "e1",
+                "expect": [
+                  {
+                    "field": "thread",
+                    "equals": "B-14"
+                  },
+                  {
+                    "field": "ordinal",
+                    "equals": 1
+                  },
+                  {
+                    "field": "phase",
+                    "equals": "open"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchChange",
+                "key": "event",
+                "id": "e4",
+                "expect": [
+                  {
+                    "field": "thread",
+                    "equals": "B-18"
+                  },
+                  {
+                    "field": "ordinal",
+                    "equals": 2
+                  },
+                  {
+                    "field": "phase",
+                    "equals": "open"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchChange",
+                "key": "event",
+                "id": "e6",
+                "expect": [
+                  {
+                    "field": "thread",
+                    "equals": "B-31"
+                  },
+                  {
+                    "field": "ordinal",
+                    "equals": 1
+                  },
+                  {
+                    "field": "phase",
+                    "equals": "open"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchChange",
+                "key": "event",
+                "id": "e3",
+                "expect": [
+                  {
+                    "field": "thread",
+                    "equals": "B-18"
+                  },
+                  {
+                    "field": "ordinal",
+                    "equals": 1
+                  },
+                  {
+                    "field": "phase",
+                    "equals": "closed"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchChange",
+                "key": "event",
+                "id": "e8",
+                "expect": [
+                  {
+                    "field": "thread",
+                    "equals": "B-37"
+                  },
+                  {
+                    "field": "ordinal",
+                    "equals": 2
+                  },
+                  {
+                    "field": "phase",
+                    "equals": "closed"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchChange",
+                "key": "event",
+                "id": "e7",
+                "expect": [
+                  {
+                    "field": "thread",
+                    "equals": "B-37"
+                  },
+                  {
+                    "field": "ordinal",
+                    "equals": 1
+                  },
+                  {
+                    "field": "phase",
+                    "equals": "open"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\"count\"\\s*:\\s*2\\b"
+              },
+              {
+                "matches": "\"ids\"\\s*:\\s*\\[\\s*(?:\"B-18\"\\s*,\\s*\"B-22\"|\"B-22\"\\s*,\\s*\"B-18\")\\s*\\]"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "DispatchThread",
+          "collection": "DispatchThread",
+          "filter": {},
+          "fields": [
+            "ticket",
+            "desk"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "DispatchChange",
+          "collection": "DispatchChange",
+          "filter": {},
+          "fields": [
+            "event",
+            "thread",
+            "ordinal",
+            "phase"
+          ]
+        }
+      ]
+    }
+  ]
+}

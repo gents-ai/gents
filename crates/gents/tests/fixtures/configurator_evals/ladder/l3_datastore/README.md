@@ -1,8 +1,12 @@
 # configurator-l3-datastore
 
+## Configuration
+
 Draft component eval of the configurator ladder. The Engineer registers a schema, creates a DatastoreToolSurface for it, selects it in Tools and makes a successful call; all four must hold together. The subject is
 `../engineer_subject`. Checks grade stored documents and runtime rows; model
 quality is graded data, not a gate.
+
+## Usage
 
 ```sh
 gents config apply --root <this directory> --bind-node-did home --home <served home>

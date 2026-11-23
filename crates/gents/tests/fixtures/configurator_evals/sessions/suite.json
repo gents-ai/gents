@@ -5,7 +5,8 @@
     "canonical discovery",
     "exact ACP-visible count",
     "wrong ID recovery",
-    "filtered discovery"
+    "filtered discovery",
+    "prior-session lookups"
   ],
   "subject": "sessions/subject",
   "preset_self_config": true

@@ -3,7 +3,7 @@
   "eval_definitions": [
     {
       "definition_id": "engineer-schema-experience",
-      "comparability_version": 4,
+      "comparability_version": 5,
       "title": "Engineer schema experience",
       "subject": {
         "kind": "agent",
@@ -21,7 +21,12 @@
         "./cases/editorial_relationships.json",
         "./cases/spanish_knowledge_base.json",
         "./cases/guest_bookings.json",
-        "./cases/admiral_report_search.json"
+        "./cases/admiral_report_search.json",
+        "./cases/board_category_migration.json",
+        "./cases/cooler_target_temperature.json",
+        "./cases/crate_audit_discrepancy.json",
+        "./cases/workshop_shift_priority.json",
+        "./cases/archive_return_seal.json"
       ]
     }
   ]

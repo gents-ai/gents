@@ -6,7 +6,8 @@
     "least privilege",
     "protected Engineer",
     "in-place edits",
-    "reentry"
+    "reentry",
+    "restore a prompt in place"
   ],
   "subject": "ladder/engineer_subject",
   "preset_self_config": true
