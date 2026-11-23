@@ -19,6 +19,11 @@ use gents_documents::EvalCapture;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Isolation {
     Embedded,
+    /// Embedded trials in a process its launcher declared to run inside a
+    /// container (`--allow-host-bash`). The runner cannot verify the claim;
+    /// the container, not the runner, is the boundary of the host bash a
+    /// subject opting in may then hold.
+    Contained,
     Process,
 }
 

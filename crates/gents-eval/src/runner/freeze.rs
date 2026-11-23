@@ -125,7 +125,17 @@ pub async fn freeze(
     let run_dir = request.runs_dir.join(&request.run_id);
     let mut validated = Vec::with_capacity(request.cells.len());
     for cell in &request.cells {
-        validated.push(validate_cell(access, request, cell, isolation, &run_dir).await?);
+        validated.push(
+            validate_cell(
+                access,
+                request,
+                cell,
+                isolation,
+                definition.subject.host_bash,
+                &run_dir,
+            )
+            .await?,
+        );
     }
     for (cell, pack) in &validated {
         validate_core_pack_installer(
@@ -268,7 +278,7 @@ pub(crate) async fn thaw(
         )?;
         let inference =
             inference_binding(access, owner, &spec.cell_id, &spec.inference_profile_id).await?;
-        let unrestricted = refuse_host_bash(&pack.config, isolation)?;
+        let unrestricted = refuse_host_bash(&pack.config, isolation, definition.subject.host_bash)?;
         cells.push(FrozenCell {
             spec: spec.clone(),
             pack_dir,

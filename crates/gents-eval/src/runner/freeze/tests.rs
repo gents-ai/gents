@@ -720,6 +720,108 @@ async fn freeze_refuses_any_host_bash_under_embedded_but_not_under_process() {
 }
 
 #[tokio::test]
+async fn host_bash_holds_only_when_the_subject_and_the_launcher_both_ask_for_it() {
+    let launching = Launching::new().await;
+    let mut opted_in = definition(launching.owner());
+    opted_in["definition_id"] = json!("monitor-findings-bash");
+    opted_in["subject"]["host_bash"] = json!(true);
+    launching
+        .install(vec![(Collection::EvalDefinition, opted_in)])
+        .await;
+    let request = |run_id: &str, pack: &Path, host_bash: bool| {
+        let mut request = launching.request(run_id, pack);
+        if host_bash {
+            request.definition_id = "monitor-findings-bash".into();
+        }
+        request
+    };
+    let unrestricted = launching.pack("bash-Unrestricted", "Unrestricted");
+
+    let error = freeze(
+        &launching.access,
+        &request("no-switch", &unrestricted, true),
+        Isolation::Embedded,
+    )
+    .await
+    .unwrap_err();
+    let reason = refusal(&error);
+    assert!(
+        reason.contains("--allow-host-bash")
+            && reason.contains("GENTS_EVAL_ALLOW_HOST_BASH")
+            && reason.contains("container"),
+        "{reason}"
+    );
+    assert!(!launching.runs_dir().join("no-switch").exists());
+
+    let error = freeze(
+        &launching.access,
+        &request("no-opt-in", &unrestricted, false),
+        Isolation::Contained,
+    )
+    .await
+    .unwrap_err();
+    let reason = refusal(&error);
+    assert!(
+        reason.contains("monitor-tools") && reason.contains("host_bash"),
+        "{reason}"
+    );
+    assert!(!launching.runs_dir().join("no-opt-in").exists());
+
+    let off = launching.pack("pack", "Off");
+    let frozen = freeze(
+        &launching.access,
+        &request("switch-alone", &off, false),
+        Isolation::Contained,
+    )
+    .await
+    .unwrap();
+    assert!(!frozen.cells[0].tools_unrestricted_bash);
+
+    let read_only = launching.pack("bash-ReadOnly", "ReadOnly");
+    freeze(
+        &launching.access,
+        &request("both-read-only", &read_only, true),
+        Isolation::Contained,
+    )
+    .await
+    .unwrap();
+
+    let frozen = freeze(
+        &launching.access,
+        &request("both", &unrestricted, true),
+        Isolation::Contained,
+    )
+    .await
+    .unwrap();
+    assert!(frozen.cells[0].tools_unrestricted_bash);
+    assert!(frozen.definition.subject.host_bash);
+
+    let error = thaw(
+        &launching.access,
+        launching.owner(),
+        "both",
+        &launching.runs_dir(),
+        Isolation::Embedded,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        refusal(&error).contains("--allow-host-bash"),
+        "a contained run resumes only contained: {error:#}"
+    );
+    let thawed = thaw(
+        &launching.access,
+        launching.owner(),
+        "both",
+        &launching.runs_dir(),
+        Isolation::Contained,
+    )
+    .await
+    .unwrap();
+    assert!(thawed.cells[0].tools_unrestricted_bash);
+}
+
+#[tokio::test]
 async fn freeze_refuses_an_oauth_backend() {
     let launching = Launching::new().await;
     launching

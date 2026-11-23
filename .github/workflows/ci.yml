@@ -311,6 +311,10 @@ jobs:
           python3 scripts/evals/test_ladder_batch.py
           python3 scripts/evals/test_ladder_baseline.py
           python3 scripts/evals/test_live_engineer_eval.py
+          bash -n scripts/evals/run-container.sh scripts/evals/container/entrypoint.sh
+          shellcheck scripts/evals/run-container.sh scripts/evals/container/entrypoint.sh
+          python3 scripts/evals/container/test_relay.py
+          python3 scripts/evals/container/test_orchestrate.py
 
       - name: Check compiler-tool download recovery
         run: |

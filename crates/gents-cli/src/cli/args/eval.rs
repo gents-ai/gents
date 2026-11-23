@@ -11,6 +11,27 @@ pub(crate) struct EvalScopeArgs {
     pub(crate) graphql: Option<String>,
 }
 
+/// The process-wide switch for host bash; a batch plan's entries use the
+/// batch's.
+#[derive(clap::Args, Clone, Copy, Debug, Default)]
+pub(crate) struct EvalHostBashArgs {
+    /// For a run inside the eval container only (scripts/evals/run-container.sh):
+    /// declare the process contained, so a subject whose definition opts in
+    /// (`subject.host_bash`) holds the host bash its pack grants, unsandboxed,
+    /// with the container as its boundary. Refused anywhere else.
+    #[arg(long, env = "GENTS_EVAL_ALLOW_HOST_BASH", value_parser = parse_switch)]
+    pub(crate) allow_host_bash: bool,
+}
+
+/// An empty value leaves a switch off, as an unset one does.
+pub(crate) fn parse_switch(raw: &str) -> Result<bool, String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "" | "0" | "false" | "no" | "off" => Ok(false),
+        "1" | "true" | "yes" | "on" => Ok(true),
+        _ => Err(format!("{raw:?} is not a switch value; use 1 or 0")),
+    }
+}
+
 #[derive(Subcommand)]
 pub(crate) enum EvalCommand {
     #[command(
@@ -65,6 +86,15 @@ pub(crate) enum EvalCommand {
 }
 
 impl EvalCommand {
+    pub(crate) fn allows_host_bash(&self) -> bool {
+        match self {
+            Self::Run(args) => args.host_bash.allow_host_bash,
+            Self::Batch(args) => args.host_bash.allow_host_bash,
+            Self::Resume(args) => args.host_bash.allow_host_bash,
+            _ => false,
+        }
+    }
+
     pub(crate) fn scope(&self) -> &EvalScopeArgs {
         match self {
             Self::Run(args) => &args.scope,
@@ -360,6 +390,8 @@ pub(crate) struct EvalBatchArgs {
     #[arg(long)]
     pub(crate) json: bool,
     #[command(flatten)]
+    pub(crate) host_bash: EvalHostBashArgs,
+    #[command(flatten)]
     pub(crate) scope: EvalScopeArgs,
 }
 
@@ -377,9 +409,14 @@ pub(crate) struct EvalRunArgs {
     pub(crate) profiles: Vec<(String, String)>,
     #[arg(long, value_parser = parse_split, default_value = "validation")]
     pub(crate) split: gents_documents::EvalSplit,
+    /// Run only these cases of the split, once each or comma-separated;
+    /// every case of the split when absent.
+    #[arg(long = "case", env = "GENTS_EVAL_CASES", value_delimiter = ',')]
+    pub(crate) cases: Vec<String>,
     #[arg(long, default_value_t = 2)]
     pub(crate) trials: u32,
-    #[arg(long, default_value_t = 1000)]
+    /// Trial `i` of every case samples with seed `seed_base + i`.
+    #[arg(long, default_value_t = 1000, env = "GENTS_EVAL_SEED_BASE")]
     pub(crate) seed_base: i64,
     /// Trials run at once; embedded trials never exceed the runner's
     /// per-process ceiling.
@@ -401,6 +438,8 @@ pub(crate) struct EvalRunArgs {
     pub(crate) registry: Option<String>,
     #[arg(long)]
     pub(crate) json: bool,
+    #[command(flatten)]
+    pub(crate) host_bash: EvalHostBashArgs,
     #[command(flatten)]
     pub(crate) scope: EvalScopeArgs,
 }
@@ -462,6 +501,8 @@ pub(crate) struct EvalResumeArgs {
     pub(crate) run_id: String,
     #[arg(long)]
     pub(crate) json: bool,
+    #[command(flatten)]
+    pub(crate) host_bash: EvalHostBashArgs,
     #[command(flatten)]
     pub(crate) scope: EvalScopeArgs,
 }
