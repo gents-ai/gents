@@ -67,11 +67,13 @@ A Vera home started without the account option leaves peer publication idle.
 By default a Vera home runs in process with its Node as the sole operator.
 To share a deployment, initialize the host with `--document-acp vera
 --vera-rpc-port 9841`. Its account and Node are the initial operators, and
-administrative changes require both signatures. Save the `vera_anchor` object
+administrative changes require both signatures. Initialization creates a device group owned by the account and admits the host. Save the `vera_anchor` object
 from the initialization result and give it to the second device over an
 authenticated channel. It identifies the account, deployment, consensus key and genesis.
 
-Start the host before initializing the follower. On the second device, make
+Start the host before initializing the follower. Use the host account to add
+the follower device’s DID to the group’s `member` relation. The anchor identifies
+the deployment, while that signed grant admits the device. On the second device, make
 a private route from a local loopback port to the host's loopback port.
 Initialize a fresh follower with `--document-acp vera --vera-rpc-port 9841
 --vera-anchor host-anchor.json`, using the local end of that route as the

@@ -534,7 +534,7 @@ pub(crate) async fn init_home_with_core_packs(
         )
         .await?;
         stage("runtime_home_initialized");
-        let transport_group = if args.create_transport_group {
+        let transport_group = if args.create_transport_group || matches!(connection, VeraConnection::Host { .. }) {
             let account = identity::Did::new(client_identity.did())?;
             let device = identity::Did::new(initialized_identity.identity.did())?;
             let group = access.create_device_group(&account, &device).await?;

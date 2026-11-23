@@ -208,9 +208,7 @@ async fn paired_home_reopens_against_the_original_vera_deployment() -> Result<()
         "--vera-rpc-port",
         &port,
     ];
-    let mut host_args = init_args.to_vec();
-    host_args.push("--create-transport-group");
-    let provisioned = run_init_json(host.path(), &host_args)?;
+    let provisioned = run_init_json(host.path(), &init_args)?;
     let home = provisioned["home"].as_str().context("host home path")?;
     let data = gents_store::local::home::default_data_dir(Path::new(home));
     let genesis: Value =

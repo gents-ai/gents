@@ -72,7 +72,7 @@ pub enum BackendProtectionError {
     NodeAcpRead(#[source] db::nac::Error),
     #[error("node access control must be owned by the home's User, not its Node")]
     NodeOwnedNodeAcp,
-    #[error("the requested transport account differs from the follower’s deployment anchor")]
+    #[error("the requested transport account differs from the shared home’s account")]
     WrongTransportAccount,
     #[error("the shared Vera operator must be the home’s account")]
     WrongVeraAccount,
@@ -386,15 +386,16 @@ impl<'a> ProtectedBackendStore<'a> {
     ) -> Result<PreflightProtectedBackendStore<'a>> {
         let did = node_did(node)?;
         let connection = document_acp::recorded_connection(&self.data)?;
-        let account = match &connection {
-            Some(document_acp::VeraConnection::Follower { anchor, .. }) => {
-                if account.is_some_and(|requested| requested != &anchor.account) {
-                    return Err(BackendProtectionError::WrongTransportAccount);
-                }
-                Some(&anchor.account)
-            }
-            _ => account,
+        let shared_account = match &connection {
+            Some(document_acp::VeraConnection::Host { account, .. }) => Some(account),
+            Some(document_acp::VeraConnection::Follower { anchor, .. }) => Some(&anchor.account),
+            _ => None,
         };
+        if matches!((account, shared_account), (Some(requested), Some(bound)) if requested != bound)
+        {
+            return Err(BackendProtectionError::WrongTransportAccount);
+        }
+        let account = shared_account.or(account);
         let ids = document_acp::policy_ids_for_connection(connection.as_ref());
         let stamped = super::store_compat::stamped(&self.data, ids);
         if !stamped {
