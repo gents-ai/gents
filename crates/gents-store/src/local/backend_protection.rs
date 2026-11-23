@@ -87,9 +87,15 @@ pub enum BackendProtectionError {
     #[error("this device has no certified group assignment from transport account {0}")]
     DeviceNotAdmitted(identity::Did),
     #[error("reading the account device group during preflight")]
-    DeviceGroup(#[from] crate::config_client::DeviceGroupReadError),
+    DeviceGroup(#[source] Box<crate::config_client::DeviceGroupReadError>),
     #[error(transparent)]
     DocumentAcp(#[from] DocumentAcpError),
+}
+
+impl From<crate::config_client::DeviceGroupReadError> for BackendProtectionError {
+    fn from(error: crate::config_client::DeviceGroupReadError) -> Self {
+        Self::DeviceGroup(Box::new(error))
+    }
 }
 
 impl BackendProtectionError {
