@@ -11,11 +11,13 @@ Everything here is a document owned by this node's DID. The config tool reads an
   - built-ins such as session history;
   - datastore: surfaces and read-only query;
   - remote MCP services and integrations;
-  - plugin tools, such as workflows, from installed packs;
+  - plugin tools from installed packs, such as charts, data tables, a browser and workflows;
   - the mailbox;
   - self-config, which is this config tool.
 
   The node's process ceiling bounds every grant. Prompts and skills grant nothing. What an agent can actually do is what its Tools resolve to, so read that back instead of assuming it.
+
+  Some granted tools are not sent with each request: those its Tools list in `hidden_tool_names`, by default `charts`, `data_tables` and `browser_exec`. Call them inside `script`, whose description names them: read `tools.NAME.description` and `tools.NAME.parameters`, then `await tools.NAME({...})`.
 - **Data.** The schema tool creates and evolves collections for the whole node; config manages agents and their tools. A DatastoreToolSurface turns that collection into tools, and selecting the surface in an agent's Tools gives that agent those tools. Only a successful call from that agent proves the whole chain. DefraDB ACP still decides who can read and write each document.
 - **Automation.** An EventSource watches for new documents in a collection, or a Schedule keeps time. A Trigger links a source to a Task, and the Task runs an agent with a prompt rendered from the source document. Each fire becomes a request, delivered in a new session, in parallel, queued serially, or into an existing session. With emit_outcome, the finished request writes a FireOutcome that other automation can watch for recovery.
 - **Composition.** A stage's task writes its output document through a surface, and that document is the next stage's event. Chained this way, agents, data and automation compose into arbitrary agent execution graphs: pipelines, fan-out across many workers, and fan-in that waits for a group of documents.

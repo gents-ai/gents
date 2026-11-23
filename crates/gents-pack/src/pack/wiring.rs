@@ -190,12 +190,12 @@ impl PluginWiring {
     async fn wired(
         &self,
         txn: &ConfigApplyTxn<'_>,
-        tools: &Tools,
+        before: &Tools,
         context: &AgentContext,
     ) -> Result<(Tools, AgentContext, WireReport)> {
         let (mut tools, context, mut report) = if self.remove {
             unwire_plugin(
-                tools,
+                before,
                 context,
                 &self.plugin,
                 &self.skill_ids,
@@ -220,7 +220,7 @@ impl PluginWiring {
                 }
             };
             wire_plugin(
-                tools,
+                before,
                 context,
                 &self.plugin,
                 job.as_ref(),
@@ -231,6 +231,9 @@ impl PluginWiring {
         if self.tool_calls_consent && !self.remove {
             consent_tool_calls(&mut tools, &self.coordinate(), &mut report);
         }
+        let listed = tools.hidden_tool_names.clone();
+        tools.list_hidden_after_wiring(before);
+        report_presentation(&mut report, &listed, &tools.hidden_tool_names);
         tools.validate()?;
         Ok((tools, context, report))
     }
@@ -263,6 +266,32 @@ impl PluginWiring {
             }
         }
         Ok(None)
+    }
+}
+
+/// Names in `report` the tools a wiring hid from direct calls or showed again.
+fn report_presentation(report: &mut WireReport, before: &[String], after: &[String]) {
+    let hidden: Vec<&str> = after
+        .iter()
+        .filter(|name| !before.contains(name))
+        .map(String::as_str)
+        .collect();
+    if !hidden.is_empty() {
+        report.changed.push(format!(
+            "hid {} from direct calls: the model reaches them through script; remove them from hidden_tool_names to show them",
+            hidden.join(", ")
+        ));
+    }
+    let shown: Vec<&str> = before
+        .iter()
+        .filter(|name| !after.contains(name))
+        .map(String::as_str)
+        .collect();
+    if !shown.is_empty() {
+        report.changed.push(format!(
+            "showed {} again: hiding needs script selected with tool_calls",
+            shown.join(", ")
+        ));
     }
 }
 

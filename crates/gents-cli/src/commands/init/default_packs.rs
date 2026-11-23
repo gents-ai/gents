@@ -1064,7 +1064,7 @@ mod tests {
 
     /// Fixture core packs `gents/<name>`, each shipping one skill and what
     /// makes the rest of its Lean `Wiring` observable: `gents/web` a plugin
-    /// that requests a permission, `gents/script` a plugin its consent lets
+    /// hidden by default that requests a permission, `gents/script` a plugin its consent lets
     /// call the Engineer's tools, and `gents/dynamic_workflows` a job plugin
     /// whose pack Tools ship its block at `check`, with a worker agent whose
     /// rootless host Tools take the Engineer's root.
@@ -1078,7 +1078,7 @@ mod tests {
             })
         };
         let (web, workflow, script) =
-            tokio::join!(build("web_fetch"), build("workflow"), build("script"));
+            tokio::join!(build("browser_exec"), build("workflow"), build("script"));
         let (web, workflow, script) = (web.unwrap(), workflow.unwrap(), script.unwrap());
         let packs = tempfile::tempdir().unwrap();
         CorePack::ALL
@@ -1101,7 +1101,7 @@ mod tests {
                 });
                 let shipped = match pack {
                     CorePack::Web => Some((
-                        "web_fetch",
+                        "browser_exec",
                         &web,
                         json!({"AllowList": ["CORE_FIXTURE"]}),
                         false,
@@ -1242,6 +1242,24 @@ mod tests {
             .unwrap()
     }
 
+    async fn engineer_hidden_tools(home: &Path) -> Vec<String> {
+        let (access, owner) = command::resolve_scope_owner(&scope(home)).await.unwrap();
+        let engineer = engineer_of(&access, &owner).await.unwrap().unwrap();
+        let tools = access
+            .transact_readonly("cli.core_packs.test", |txn| {
+                let (owner, engineer) = (&owner, &engineer);
+                Box::pin(async move {
+                    gents_documents::load_agent_context_and_tools_in_txn(txn, owner, engineer).await
+                })
+            })
+            .await
+            .unwrap()
+            .1
+            .unwrap();
+        release(access).await;
+        tools.hidden_tool_names
+    }
+
     /// Lean `Pack.CorePacks.initWiring` replayed against a home's core packs
     /// right after init, with or without inference.
     fn replay_init_wiring(at_init: &[(CorePack, Wiring)]) {
@@ -1373,6 +1391,11 @@ mod tests {
         assert_eq!(report["not_installed"], json!([]), "{report}");
         let at_init = observed(home.path(), &report["installed"]).await;
         replay_init_wiring(&at_init);
+        assert_eq!(
+            engineer_hidden_tools(home.path()).await,
+            ["browser_exec"],
+            "script wired after web hides browser_exec"
+        );
 
         let listed = status(home.path(), &archives).await.unwrap();
         for pack in &listed {
@@ -1397,6 +1420,11 @@ mod tests {
         assert!(
             listed.iter().all(|pack| pack.state == PackState::Installed),
             "{listed:?}"
+        );
+        assert_eq!(
+            engineer_hidden_tools(home.path()).await,
+            ["browser_exec"],
+            "wiring again leaves the list as it was"
         );
         let workflows = enabled["enabled"]
             .as_array()

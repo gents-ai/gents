@@ -141,6 +141,35 @@ fn hiding_configuration_conforms_to_lean() {
     });
 }
 
+fn wired(tool: &str, selected: bool, script: bool) -> Tools {
+    let mut plugins = Vec::new();
+    if selected {
+        plugins.push(json!({"plugin": format!("gents/{tool}")}));
+    }
+    if script {
+        plugins.push(json!({"plugin": "gents/script", "tool_calls": true}));
+    }
+    document(json!({"integrations": {"plugins": plugins}}))
+}
+
+#[test]
+fn wiring_lists_hidden_tools_as_lean_says() {
+    gents_lean_vocab::families::tool_presentation_listed_after_wiring::replay(|case| {
+        let tool = if case.default_hidden {
+            "charts"
+        } else {
+            "query"
+        };
+        let before = wired(tool, case.selected_before, case.script_before);
+        let mut after = wired(tool, case.selected_after, case.script_after);
+        if case.listed {
+            after.hidden_tool_names = vec![tool.to_owned()];
+        }
+        after.list_hidden_after_wiring(&before);
+        after.hidden_tool_names.iter().any(|name| name == tool)
+    });
+}
+
 #[test]
 fn hidden_names_are_exact_and_round_trip_but_bind_only_writes() {
     let tools = hiding(&["schema"], true);
