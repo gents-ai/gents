@@ -64,6 +64,7 @@
             "forbidden": [
               "write",
               "bash",
+              "bash_unrestricted",
               "write_file",
               "edit_file",
               "file_mailbox_item"
@@ -146,6 +147,7 @@
             "forbidden": [
               "write",
               "bash",
+              "bash_unrestricted",
               "write_file",
               "edit_file",
               "file_mailbox_item"
@@ -231,6 +233,7 @@
             "forbidden": [
               "write",
               "bash",
+              "bash_unrestricted",
               "write_file",
               "edit_file"
             ],
@@ -351,6 +354,7 @@
             "forbidden": [
               "write",
               "bash",
+              "bash_unrestricted",
               "write_file",
               "edit_file"
             ],

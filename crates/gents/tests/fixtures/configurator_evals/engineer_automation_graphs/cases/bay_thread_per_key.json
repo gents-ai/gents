@@ -89,6 +89,7 @@
             ],
             "forbidden": [
               "bash",
+              "bash_unrestricted",
               "write_file",
               "edit_file"
             ]

@@ -5,7 +5,7 @@
   "stages": [
     {
       "stage_id": "file",
-      "prompt": "Put a reminder called “Door interlock review” in my inbox. The note should say “Call Imogen about the dock interlock before unloading.”",
+      "prompt": "Put a reminder called \u201cDoor interlock review\u201d in my inbox. The note should say \u201cCall Imogen about the dock interlock before unloading.\u201d",
       "capture": [
         {
           "kind": "documents",
@@ -66,6 +66,7 @@
             "forbidden": [
               "write",
               "bash",
+              "bash_unrestricted",
               "write_file",
               "edit_file"
             ],
@@ -144,7 +145,7 @@
     },
     {
       "stage_id": "second",
-      "prompt": "Add another reminder for me: “Forklift 3 inspection”, with the note “Forklift 3 is due for inspection at 14:00.” Keep the dock interlock reminder as it is.",
+      "prompt": "Add another reminder for me: \u201cForklift 3 inspection\u201d, with the note \u201cForklift 3 is due for inspection at 14:00.\u201d Keep the dock interlock reminder as it is.",
       "capture": [
         {
           "kind": "documents",
@@ -205,6 +206,7 @@
             "forbidden": [
               "write",
               "bash",
+              "bash_unrestricted",
               "write_file",
               "edit_file"
             ],

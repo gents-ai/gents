@@ -26,7 +26,8 @@
           "check": "tool_calls_expected",
           "params": {
             "forbidden": [
-              "bash"
+              "bash",
+              "bash_unrestricted"
             ],
             "config_read_only": true
           },
@@ -69,7 +70,8 @@
           "check": "tool_calls_expected",
           "params": {
             "forbidden": [
-              "bash"
+              "bash",
+              "bash_unrestricted"
             ],
             "config_read_only": true
           },

@@ -40,7 +40,8 @@
               "schema"
             ],
             "forbidden": [
-              "bash"
+              "bash",
+              "bash_unrestricted"
             ],
             "config_read_only": true
           },

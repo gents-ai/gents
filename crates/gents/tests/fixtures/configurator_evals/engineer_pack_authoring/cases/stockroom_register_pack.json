@@ -47,7 +47,8 @@
               "config"
             ],
             "forbidden": [
-              "bash"
+              "bash",
+              "bash_unrestricted"
             ]
           },
           "tier": "acceptance",

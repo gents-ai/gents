@@ -98,7 +98,8 @@
               "file_mailbox_item"
             ],
             "forbidden": [
-              "bash"
+              "bash",
+              "bash_unrestricted"
             ],
             "config_read_only": true
           },
