@@ -1,5 +1,6 @@
 import Proofs.Documents.Configuration
 import Proofs.Store.Identity.State
+import Proofs.Store.TransactionReplay
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.Family
 
@@ -153,28 +154,36 @@ def finalityInputs (histories : List (List Configuration.PackAttemptEvidence)) :
     List FinalityInput :=
   histories.map fun attempts => { attempts }
 
-/-- A store transaction scenario builds one attempt: a rejected callback (no
-commit) or a commit whose receipt is lost (unknown commit). -/
+/-- Whether the transaction owner runs another attempt after this one. A
+rejected attempt that the store confirms aborted may be repeated; an attempt
+whose commit outcome is unknown is never repeated
+(`TransactionReplay.clientMayRepeat` at the commit stage without a confirmed
+abort), so it ends the history. -/
+def attemptRepeated : Configuration.PackAttemptEvidence → Bool
+  | .noCommit => TransactionReplay.clientMayRepeat .commit .conflict true
+  | .unknownCommit => TransactionReplay.clientMayRepeat .commit .conflict false
+
+/-- A failed write's attempt history as the transaction owner produces it:
+at least one attempt, and every attempt before the last one repeated. -/
+def ownerHistory (attempts : List Configuration.PackAttemptEvidence) : Bool :=
+  !attempts.isEmpty && (attempts.dropLast.all attemptRepeated)
+
+theorem unknown_commit_ends_the_history :
+    Configuration.packFinalityCases.filter ownerHistory =
+      [[.noCommit], [.noCommit, .noCommit], [.unknownCommit]] := by decide
+
+/-- A store transaction scenario drives every history the owner produces: a
+rejected callback, a confirmed conflict abort followed by a rejected callback,
+and a commit whose receipt is lost. -/
 @[conformance_family]
 def finalityTransaction : Conformance.Family FinalityInput FinalityOutput where
-  inputs := finalityInputs (Configuration.packFinalityCases.filter
-    (· ∈ [[.noCommit], [.unknownCommit]]))
+  inputs := finalityInputs (Configuration.packFinalityCases.filter ownerHistory)
   model := fun i => { unconfirmed := Configuration.packCommitUnconfirmed i.attempts }
 
 /-- The staged plugin scenario times out one commit acknowledgement. -/
 @[conformance_family]
 def finalityStagedPlugin : Conformance.Family FinalityInput FinalityOutput where
   inputs := finalityInputs (Configuration.packFinalityCases.filter (· == [.unknownCommit]))
-  model := fun i => { unconfirmed := Configuration.packCommitUnconfirmed i.attempts }
-
-/-- model-production-gap: the shared transaction owner folds the attempts of
-one write into a sticky unconfirmed flag inside its retry loop, and no
-scenario drives several commit attempts of one transaction or a write with
-no failed attempt to an error, so these histories have no production run. -/
-@[conformance_family]
-def finalityUnreached : Conformance.Family FinalityInput FinalityOutput where
-  inputs := finalityInputs (Configuration.packFinalityCases.filter
-    (· ∉ [[.noCommit], [.unknownCommit]]))
   model := fun i => { unconfirmed := Configuration.packCommitUnconfirmed i.attempts }
 
 example : Configuration.packCommitUnconfirmed [.noCommit] = false := by decide

@@ -3,7 +3,7 @@ use anyhow::Context;
 use gents::defra_node::Node as EmbeddedNode;
 use gents::eval::documents::*;
 use gents_documents::EvalSplit;
-use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
+use gents_store::config_client::{ConfigAccess, ConfigApplyTxn, RelationshipMatch};
 use serde_json::json;
 use std::sync::Arc;
 #[tokio::test]
@@ -304,6 +304,35 @@ async fn model_driven_held_client_eval_and_optimization_records_are_private() ->
                         .is_some()
                         || load_run(&access, runtime.did(), name).await?.is_some(),
                     user_read: load_run(&access, runtime.did(), name).await?.is_some(),
+                    stranger_read: load_run(&outsider_access, runtime.did(), name)
+                        .await?
+                        .is_some(),
+                }
+            }
+            "relationship-failed" => {
+                let (created, trace) = ConfigApplyTxn::with_relationship_change_failure(
+                    Some(RelationshipMatch::first("EvalRun", "parent")),
+                    create_run(
+                        &access,
+                        name,
+                        runtime.did(),
+                        user.did(),
+                        &origin(EvalSplit::Train),
+                    ),
+                )
+                .await;
+                assert!(
+                    trace.iter().any(|change| change.collection == "EvalRun"),
+                    "the run's Node parent is attempted"
+                );
+                assert!(created.is_err(), "the failed Node parent fails the create");
+                let user_read = load_run(&access, runtime.did(), name).await?.is_some();
+                PublishOutput {
+                    created: user_read
+                        || load_run(&runtime_access, runtime.did(), name)
+                            .await?
+                            .is_some(),
+                    user_read,
                     stranger_read: load_run(&outsider_access, runtime.did(), name)
                         .await?
                         .is_some(),

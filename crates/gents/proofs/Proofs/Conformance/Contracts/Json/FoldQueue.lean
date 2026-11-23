@@ -528,7 +528,8 @@ def ManagementInput.ofCase (c : SessionQueue.ManagementCases.Case) : ManagementI
 
 /-- The signed replacement owner issues each replacement as a fresh request in
 the slot it replaces, so a replacement that reuses an original request ID or
-names another slot is not something it can be asked to write. -/
+names another slot is not something it can be asked to write;
+`intake_and_management_decisions` keeps those cases. -/
 def signedReplacement (c : SessionQueue.ManagementCases.Case) : Bool :=
   match c.operation with
   | .replace _ _ offset count replacements =>
@@ -555,15 +556,15 @@ def managementExpiredIntake : Family ManagementInput (Option QueueImageWire) whe
     ManagementInput.ofCase
   model := managementAfter
 
-/-- The signed replacement owner generates replacement
-request IDs and slots itself, and intake at an unsafe stream boundary, from a
-stale head observation, behind an unadmitted, queued, foreign or agent-authored
-row has no served fixture; steering publication and the owned loop replay the
-composed intake. -/
+def isIntake (c : SessionQueue.ManagementCases.Case) : Bool :=
+  match c.operation with
+  | .intake .. => true
+  | .replace .. => false
+
 @[conformance_family]
 def managementUnreached : Family ManagementInput (Option QueueImageWire) where
   inputs := (SessionQueue.ManagementCases.cases.filter fun c =>
-    !signedReplacement c && !servedIntakeNames.contains c.name).map ManagementInput.ofCase
+    isIntake c && !servedIntakeNames.contains c.name).map ManagementInput.ofCase
   model := managementAfter
 
 def roundTrips (entries : List QueueEntry) : Bool :=
@@ -826,23 +827,6 @@ def inputEditIdenticalRepublish : Family InputEditCaseWire (Option EndpointObser
   inputs := inputEditCasesNamed ["exact_replay_after_expiry"]
   model := endpointObservation
 
-/-- `process_command` leaves a command unanswered when
-another physical command shares its ID, but no production path stores two.
-Locally the unique `command_id` index (agent_session_input_edit.graphql:5)
-refuses the second create. A twin could only arrive by replication, where
-DefraDB resolves a live unique-index conflict by keeping the smallest docID
-rather than rejecting it (defradb.rs crates/defra-core/src/merge.rs:101-104),
-but Gents never replicates AgentSessionInputEdit: it is a managed collection
-(gents-protocol peer_schema.rs:12) that application pairing refuses
-(gents-p2p templates.rs:243) and not a replicated protocol collection
-(gents-schemas lib.rs:388). The twin branch therefore guards a replication
-path Gents does not open. -/
-@[conformance_family]
-def inputEditUnreached : Family InputEditCaseWire (Option InputEditObservation) where
-  inputs := (SessionQueue.InputEditCases.cases.filter (!atomicOwnerCase ·)).map
-    InputEditCaseWire.ofCase
-  model := inputEditObservation
-
 example : (EditStateWire.ofModel SessionQueue.InputEditCases.state).toModel =
     SessionQueue.InputEditCases.state := by native_decide
 
@@ -857,8 +841,20 @@ example : (SessionQueue.InputEditCases.cases.filter (!atomicOwnerCase ·)).map (
     ["simultaneous_command_identity_collision", "observed_collision_preserves_prior_receipt",
      "cross_session_collision_preserves_prior_receipt"] := by native_decide
 
-example : (SessionQueue.InputEditCases.cases.filter (!atomicOwnerCase ·)).all fun c =>
-    SessionQueue.InputEditCases.run c = (c.before, none) := by native_decide
+/-- `process_command` leaves a command unanswered when another physical command
+shares its ID, and production never stores two. The unique `command_id` index
+(agent_session_input_edit.graphql) refuses a second local create, which the
+endpoint tests `different_edit_intents_racing_for_one_command_id_admit_one`,
+`late_command_id_twin_in_another_session_is_refused` and
+`identical_edit_republished_after_receipt_is_refused` observe; and a peer
+cannot deliver a twin, because AgentSessionInputEdit is a runtime-local managed
+collection that `add_replicator` refuses
+(`protocol_allowlist_rejects_local_data_before_transport`). The cases with a
+non-unique command identity are therefore no family: the model leaves each
+unanswered with the queue unchanged. -/
+theorem command_identity_twins_stay_unanswered :
+    (SessionQueue.InputEditCases.cases.filter (!atomicOwnerCase ·)).all fun c =>
+      SessionQueue.InputEditCases.run c = (c.before, none) := by native_decide
 
 example : (SessionQueue.InputEditCases.cases.find? (·.name == "exact_replay_after_expiry")).all
     fun replay => (SessionQueue.InputEditCases.run replay).1 == replay.before &&

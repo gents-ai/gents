@@ -2288,46 +2288,96 @@ async fn apply_control_update_evicts_surface_when_ownership_moves_away() {
 }
 
 #[tokio::test]
-async fn unavailable_agent_scan_identity_follows_lean_candidates() {
-    let (db, _user, _access, binding) =
-        crate::test_support::root::signed_test_node("unavailable-scan-root").await;
+async fn watcher_scan_identities_follow_lean_candidates() {
+    let (db, user, access, binding) =
+        crate::test_support::root::signed_test_node("watcher-scan-root").await;
     let node = db.node.clone();
     let root = db.node_identity.clone();
-    let did = binding.agent_did;
+    let cases = gents_lean_vocab::families::watcher_actors_scanned::cases();
+    let agents = cases
+        .iter()
+        .map(|case| case.input.candidates.len())
+        .max()
+        .unwrap_or(0);
+    let mut dids = vec![binding.agent_did];
+    while dids.len() < agents {
+        let extra = gents_store::identity::provision_agent_identity_authorized(
+            &node,
+            root.as_ref(),
+            &identity::Did::new(user.did()).unwrap(),
+        )
+        .await
+        .unwrap();
+        gents_inference::test_support::install_test_agent_binding_with_access(
+            root.did(),
+            &format!("scan-{}", dids.len()),
+            &extra,
+            &access,
+        )
+        .await;
+        dids.push(extra.agent_did);
+    }
     let context = DocumentResolveContext::for_tests(
         root.clone(),
         ToolCeiling::readonly(),
         gents_inference::backends::health::BackendHealthMap::new(),
     );
     let original = load_document_runtime_view(&node, root.did()).await.unwrap();
-    for case in gents_lean_vocab::families::watcher_actors_scanned::cases() {
+    for case in cases {
         let name = case.input.name.as_str();
-        let [candidate] = case.input.candidates.as_slice() else {
-            panic!("{name}: the served view holds one Agent");
-        };
+        let candidates = &case.input.candidates;
         let mut view = original.clone();
-        let agent = &mut view.agents.get_mut(&did).unwrap().value;
-        agent.enabled = candidate.enabled;
-        if !candidate.identity_resolved {
-            agent.creation_nonce = "invalid".into();
+        view.agents
+            .retain(|did, _| dids[..candidates.len()].contains(did));
+        for (candidate, did) in candidates.iter().zip(&dids) {
+            let agent = &mut view.agents.get_mut(did).unwrap().value;
+            agent.enabled = candidate.enabled;
+            if !candidate.configured {
+                agent.node_did = "did:key:zWatcherScanForeignNode".into();
+            }
+            if !candidate.identity_resolved {
+                agent.creation_nonce = "invalid".into();
+            }
+            if !candidate.available {
+                let backend = view.inference_profiles[&agent.inference_profile_id]
+                    .value
+                    .backend_id
+                    .clone();
+                view.unknown_kind_backends
+                    .insert(backend, "WatcherScanUnavailableKind".into());
+            }
         }
         let snapshot = resolve_document_runtime_snapshot_from_view(&node, &context, &view)
             .await
             .unwrap();
-        assert_eq!(
-            snapshot.unavailable_agents[&did].public_reason,
-            gents_protocol::node_readiness::AgentReadinessUnavailableReason::AgentDisabled
-        );
+        for (candidate, did) in candidates.iter().zip(&dids) {
+            assert_eq!(
+                snapshot.agents.contains_key(did),
+                candidate.available,
+                "{name}: the fixture did not build {}'s availability; unavailable: {:?}",
+                candidate.did,
+                snapshot.unavailable_agents
+            );
+        }
         let active = snapshot.activate(1, Default::default());
-        let scanned = active
-            .watcher_identities()
-            .unwrap()
-            .iter()
-            .map(|identity| {
-                assert_eq!(identity.did(), did, "{name}: a foreign identity is scanned");
-                candidate.did.clone()
-            })
-            .collect::<Vec<_>>();
+        let identities = active.watcher_identities().unwrap();
+        let mut scanned = Vec::new();
+        for (candidate, did) in candidates.iter().zip(&dids) {
+            match identities
+                .iter()
+                .filter(|identity| identity.did() == did.as_str())
+                .count()
+            {
+                0 => {}
+                1 => scanned.push(candidate.did.clone()),
+                n => panic!("{name}: {} is scanned {n} times", candidate.did),
+            }
+        }
+        assert_eq!(
+            identities.len(),
+            scanned.len(),
+            "{name}: a foreign identity is scanned"
+        );
         case.check(scanned);
     }
     node.shutdown().await.unwrap();

@@ -70,17 +70,29 @@ def offer : Family IntentInput Offer where
   inputs := intentInputs.filter fun i => i.name ∈ offerScenarioNames
   model := fun i => { allowed := mayOffer i.current.toModel i.intent i.now i.window i.maxValidity }
 
-/-- model-production-gap: `issue_renewal_offer` is reached only through a
-served two-node offer exchange whose fixture holds one enabled current
-generation; no production scenario builds a conflicted, revoked or expired
-generation, a transport identity mismatch, or a re-signed intent with another
-network, member, sequence or validity window per case. `intentProjection`
-replays the generation and window checks of every case through
-`current_for_renewal_intent`. -/
+/-- A transport identity mismatch. `issue_renewal_offer` refuses it, but
+approval (`decide_request_with_lease`) already refuses a generation whose
+candidate transport identity differs from its signed DID, so the offer
+scenario reaches it only once a member's transport identity changes after
+approval. -/
+def offerTransportNames : List String := ["wrong_transport"]
+
 @[conformance_family]
 def offerUnreached : Family IntentInput Offer where
-  inputs := intentInputs.filter fun i => i.name ∉ offerScenarioNames
+  inputs := intentInputs.filter fun i => i.name ∈ offerTransportNames
   model := fun i => { allowed := mayOffer i.current.toModel i.intent i.now i.window i.maxValidity }
+
+/-- Every other intent case keeps the policy switch, verification, signature
+and transport authentication the projection fixes, so `mayOffer` agrees with
+`offerProjection` on it: `intentProjection` replays it through
+`current_for_renewal_intent`, which `issue_renewal_offer` runs before its own
+checks. -/
+theorem offer_outside_scenario_is_projection :
+    (intentInputs.filter fun i =>
+      i.name ∉ offerScenarioNames ∧ i.name ∉ offerTransportNames).all (fun i =>
+      mayOffer i.current.toModel i.intent i.now i.window i.maxValidity ==
+        offerProjection i.current.toModel i.intent i.now i.window i.maxValidity) = true := by
+  native_decide
 
 structure AdminPinWire where
   owner : String

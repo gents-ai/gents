@@ -36,67 +36,37 @@ def reservationInputs : List ReservationInput :=
     fun (name, created, fileSynced, directorySynced) =>
       { name, created, fileSynced, directorySynced }
 
-/-- A home can already hold the marker, and a home that cannot be opened for its
-directory sync fails that step after the marker is written; nothing makes a
-created marker's own file sync fail. -/
+/-- A home can already hold the marker; the home's filesystem can fail the
+created marker's sync (the reservation's sync step is injected); and a home
+that cannot be opened for its directory sync fails that step after the marker
+is written. -/
 @[conformance_family]
 def reservation : Family ReservationInput Bool where
-  inputs := reservationInputs.filter fun i => !i.created || i.fileSynced
-  model := fun i => reservationConfirmed i.created i.fileSynced i.directorySynced
-
-/-- The file sync of a newly created bootstrap marker fails only on an
-operating-system I/O error, which a test home cannot induce. -/
-@[conformance_family]
-def reservationUnreached : Family ReservationInput Bool where
-  inputs := reservationInputs.filter fun i => i.created && !i.fileSynced
+  inputs := reservationInputs
   model := fun i => reservationConfirmed i.created i.fileSynced i.directorySynced
 
 structure BootstrapInput where
   name : String
   exclusive : Bool
-  matchingRuntime : Bool
-  authenticatedClient : Bool
-  nodeAbsentObserved : Bool
   storeEmptyObserved : Bool
   reservationDurable : Bool
-  nacEnabled : Bool
   freshEvidence : Bool
-  configurationPublished : Bool
   deriving ToJson
 
 def BootstrapInput.ofModel (name : String) (o : BootstrapObservation) : BootstrapInput :=
-  { name, exclusive := o.exclusive, matchingRuntime := o.matchingRuntime,
-    authenticatedClient := o.authenticatedClient, nodeAbsentObserved := o.nodeAbsentObserved,
-    storeEmptyObserved := o.storeEmptyObserved, reservationDurable := o.reservationDurable,
-    nacEnabled := o.nacEnabled, freshEvidence := o.freshEvidence,
-    configurationPublished := o.configurationPublished }
+  { name, exclusive := o.exclusive, storeEmptyObserved := o.storeEmptyObserved,
+    reservationDurable := o.reservationDurable, freshEvidence := o.freshEvidence }
 
 def BootstrapInput.toModel (i : BootstrapInput) : BootstrapObservation :=
-  ⟨i.exclusive, i.matchingRuntime, i.authenticatedClient, i.nodeAbsentObserved,
-    i.storeEmptyObserved, i.reservationDurable, i.nacEnabled, i.freshEvidence,
-    i.configurationPublished⟩
+  ⟨i.exclusive, i.storeEmptyObserved, i.reservationDurable, i.freshEvidence⟩
 
-/-- Init reaches a fresh home, a home whose marker survived a crash before its
+/-- Init runs on a fresh home, a home whose marker survived a crash before its
 grants, a store another holder has locked, a data directory that is not empty,
 and a home whose directory cannot be opened to sync the new marker. -/
-def bootstrapReached : List String :=
-  ["fresh", "not-exclusive", "store-not-fresh", "reservation-not-durable",
-    "crash-after-reservation"]
-
 @[conformance_family]
 def bootstrapGrant : Family BootstrapInput Bool where
-  inputs := (Identity.NodeProvisioningConformance.bootstrapCases.filter
-    fun (name, _) => name ∈ bootstrapReached).map fun (name, o) => BootstrapInput.ofModel name o
-  model := fun i => bootstrapMayGrant i.toModel
-
-/-- Init builds these observations itself: it opens the node under the runtime
-key it holds, signs as the client key it holds, observes an empty store, which
-holds no Node and no published configuration, and configures NAC on that store
-before it opens it. -/
-@[conformance_family]
-def bootstrapGrantUnreached : Family BootstrapInput Bool where
-  inputs := (Identity.NodeProvisioningConformance.bootstrapCases.filter
-    fun (name, _) => name ∉ bootstrapReached).map fun (name, o) => BootstrapInput.ofModel name o
+  inputs := Identity.NodeProvisioningConformance.bootstrapCases.map
+    fun (name, o) => BootstrapInput.ofModel name o
   model := fun i => bootstrapMayGrant i.toModel
 
 deriving instance ToJson for NacStatus

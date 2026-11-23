@@ -34,10 +34,9 @@ abbrev NodeDid := Nat
 
 /-- Identity of exactly one provider attempt: node, session, request `_docID`
 (DefraDB document identity, not the non-unique `AgentRequest.request_id` field),
-turn, and attempt within the turn. The durable column encoding must be injective
-on this tuple (`boundary.rendered-capture.key-encoding-injectivity`); the shipped
-unescaped `"{session_id}:{tool_call_id}"` key is a live instance of that defect
-class. -/
+turn, and attempt within the turn. The durable key is the SHA-256 digest of a
+canonical JSON array of this tuple (`capture_key` in gents-loop), injective while
+SHA-256 is collision-free (`boundary.rendered-capture.key-encoding-injectivity`). -/
 structure CaptureKey where
   nodeDid : NodeDid
   sessionId : SessionId
@@ -46,6 +45,9 @@ structure CaptureKey where
   attempt : Nat
   deriving DecidableEq, Repr
 
+/-- The final HTTP JSON body as capture stores it: parsed and canonicalized
+(`canonical_json` in gents-loop), so two captures are equal when their canonical
+JSON is, and the body's original key order and whitespace are not retained. -/
 structure CanonicalRequest where
   value : Nat
   deriving DecidableEq, Repr

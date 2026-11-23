@@ -2183,15 +2183,34 @@ mod tests {
             )
             .await
             .is_err());
-            let recovered = reconcile_client_retry(
+            let recover = reconcile_client_retry(
                 if input.same_signer { &access } else { &wrong },
                 runtime.did(),
                 "retry-session",
                 user.did(),
                 &parent_doc,
-            )
-            .await;
-            if input.matching_signature {
+            );
+            let recovered = if input.grants_ok {
+                recover.await
+            } else {
+                let (recovered, trace) =
+                    gents_store::config_client::ConfigApplyTxn::with_relationship_change_failure(
+                        Some(gents_store::config_client::RelationshipMatch::first(
+                            "AgentRequest",
+                            "working_agent",
+                        )),
+                        recover,
+                    )
+                    .await;
+                assert!(
+                    trace
+                        .iter()
+                        .any(|change| change.relation == "working_agent"),
+                    "{name} attempts the working Agent grant"
+                );
+                recovered
+            };
+            if input.matching_signature && input.grants_ok {
                 assert_eq!(
                     recovered.unwrap().as_deref(),
                     input.same_signer.then_some(name.as_str())
@@ -2199,7 +2218,7 @@ mod tests {
             } else {
                 assert!(
                     recovered.is_err(),
-                    "{name} recovers a request whose signature differs"
+                    "{name} reports a recovery it could not complete"
                 );
             }
             case.check(observe(name).await.1);

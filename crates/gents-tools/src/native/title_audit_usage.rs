@@ -8,6 +8,29 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use gents_store::config_client::ConfigRead;
 use gents_store::graphql::escape_graphql_string;
 
+/// Why a parent's audit, budget or goal usage cannot be observed. Each refusal
+/// fails the whole catalog: no row it covers is left out silently.
+#[derive(Debug, thiserror::Error)]
+pub enum TitleUsageError {
+    /// A request receipt in the catalog fails historical verification against
+    /// its parent: a bad signature, or a parent link that names the parent's
+    /// physical request but not its logical request, node, session or agent.
+    #[error("audit usage request receipt is not bound to its parent")]
+    Receipt(#[from] gents_store::identity::request_receipt::RequestReceiptError),
+    #[error("inference call logical request disagrees with its physical owner")]
+    CallLogicalScope,
+    #[error("one call ID has conflicting persisted rows")]
+    ConflictingCall,
+    #[error("budget restart requires reported provider usage for call {0}")]
+    UnreportedUsage(String),
+    #[error("audit usage read failed")]
+    Read(#[from] gents_store::config_client::ConfigClientError),
+    #[error("audit usage observation is unavailable")]
+    Unavailable(#[from] anyhow::Error),
+}
+
+type UsageResult<T> = std::result::Result<T, TitleUsageError>;
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditUsageTokens {
     pub prompt_tokens: u64,
@@ -118,7 +141,7 @@ fn add_usage(total: &mut AuditUsageTokens, usage: AuditUsageTokens) -> Result<()
 fn coherent_calls(
     request_ids: &BTreeMap<String, String>,
     calls: Vec<CallRow>,
-) -> Result<BTreeMap<String, CallRow>> {
+) -> UsageResult<BTreeMap<String, CallRow>> {
     let mut by_call = BTreeMap::<String, CallRow>::new();
     let mut by_doc = BTreeMap::<String, String>::new();
     for call in calls {
@@ -129,21 +152,20 @@ fn coherent_calls(
         let logical = request_ids
             .get(&call.request_doc_id)
             .context("inference call crossed selected physical request scope")?;
-        anyhow::ensure!(
-            call.request_id == *logical,
-            "inference call logical request disagrees with physical owner"
-        );
+        if call.request_id != *logical {
+            return Err(TitleUsageError::CallLogicalScope);
+        }
         if let Some(previous) = by_doc.insert(call.doc_id.clone(), call.call_id.clone()) {
-            anyhow::ensure!(
-                previous == call.call_id,
-                "one inference document has conflicting call IDs"
-            );
+            if previous != call.call_id {
+                return Err(
+                    anyhow::anyhow!("one inference document has conflicting call IDs").into(),
+                );
+            }
         }
         if let Some(previous) = by_call.get(&call.call_id) {
-            anyhow::ensure!(
-                previous == &call,
-                "one call ID has conflicting persisted rows"
-            );
+            if previous != &call {
+                return Err(TitleUsageError::ConflictingCall);
+            }
         } else {
             by_call.insert(call.call_id.clone(), call);
         }
@@ -157,7 +179,7 @@ fn project_catalog(
     parent_id: &str,
     request_ids: &BTreeMap<String, String>,
     calls: Vec<CallRow>,
-) -> Result<ParentAuditUsage> {
+) -> UsageResult<ParentAuditUsage> {
     let by_call = coherent_calls(request_ids, calls)?;
     let mut normal_public = AuditUsageTokens::default();
     let mut parent_inclusive_audit = AuditUsageTokens::default();
@@ -179,21 +201,18 @@ fn project_catalog(
 fn project_budget_catalog(
     request_ids: &BTreeMap<String, String>,
     calls: Vec<CallRow>,
-) -> Result<u64> {
+) -> UsageResult<u64> {
     coherent_calls(request_ids, calls)?
         .values()
         .try_fold(0_u64, |used, call| {
             let charged = observed_usage(call)?
-                .charged_tokens()?
+                .charged_tokens()
+                .map_err(anyhow::Error::from)?
                 .filter(|charged| *charged > 0)
-                .with_context(|| {
-                    format!(
-                        "budget restart requires reported provider usage for call {}",
-                        call.call_id
-                    )
-                })?;
-            used.checked_add(charged)
-                .context("budget restart usage overflow")
+                .ok_or_else(|| TitleUsageError::UnreportedUsage(call.call_id.clone()))?;
+            Ok(used
+                .checked_add(charged)
+                .context("budget restart usage overflow")?)
         })
 }
 
@@ -208,14 +227,15 @@ struct ParentUsageCatalog {
 fn project_goal_catalog(
     request_ids: &BTreeMap<String, String>,
     calls: Vec<CallRow>,
-) -> Result<gents_protocol::session_token_usage::SessionTokenUsage> {
+) -> UsageResult<gents_protocol::session_token_usage::SessionTokenUsage> {
     let calls = coherent_calls(request_ids, calls)?;
     let parts = || {
         calls
             .values()
             .map(|call| (call.usage.prompt_tokens, call.usage.completion_tokens))
     };
-    let total = gents_loop::provider_usage::sum_charged_from_persisted_parts(parts())?;
+    let total = gents_loop::provider_usage::sum_charged_from_persisted_parts(parts())
+        .map_err(anyhow::Error::from)?;
     let (input, output, _) = gents_loop::provider_usage::sum_persisted_usage_columns(
         parts().map(|(prompt, completion)| (prompt, completion, None)),
     );
@@ -232,7 +252,7 @@ pub async fn load_session_goal_usage(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,
-) -> Result<gents_protocol::session_token_usage::SessionTokenUsage> {
+) -> UsageResult<gents_protocol::session_token_usage::SessionTokenUsage> {
     let rendered = {
         use gents_protocol::document_query::{
             fields::agent_request as fields, Filter, Query, Selection,
@@ -260,7 +280,7 @@ pub async fn session_goal_usage_from_rows(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     rows: &[AgentRequestRow],
-) -> Result<gents_protocol::session_token_usage::SessionTokenUsage> {
+) -> UsageResult<gents_protocol::session_token_usage::SessionTokenUsage> {
     let requests: Vec<&AgentRequestRow> = rows
         .iter()
         .filter(|request| {
@@ -273,10 +293,9 @@ pub async fn session_goal_usage_from_rows(
     let mut by_doc = BTreeMap::new();
     for request in requests.iter().copied() {
         let doc = nonempty(request.doc_id.as_deref(), "goal physical request")?;
-        anyhow::ensure!(
-            by_doc.insert(doc, request).is_none(),
-            "duplicate goal request physical identity"
-        );
+        if by_doc.insert(doc, request).is_some() {
+            return Err(anyhow::anyhow!("duplicate goal request physical identity").into());
+        }
     }
     let mut request_ids = BTreeMap::new();
     for request in requests.iter().copied() {
@@ -365,7 +384,7 @@ pub fn register_lifecycle_reads(registry: &mut gents_session::request::hooks::re
 pub async fn load_parent_inclusive_audit_usage(
     access: &dyn ConfigRead,
     exact_parent: &AgentRequestRow,
-) -> Result<ParentAuditUsage> {
+) -> UsageResult<ParentAuditUsage> {
     let catalog = load_parent_catalog(access, exact_parent).await?;
     project_catalog(
         &catalog.parent_doc_id,
@@ -378,7 +397,7 @@ pub async fn load_parent_inclusive_audit_usage(
 pub async fn load_parent_inclusive_budget_usage(
     access: &dyn ConfigRead,
     request: &gents_protocol::row::AgentRequest,
-) -> Result<u64> {
+) -> UsageResult<u64> {
     let scope = AgentRequestRow {
         doc_id: Some(request.doc_id.clone()),
         request_id: request.request_id.clone(),
@@ -389,17 +408,19 @@ pub async fn load_parent_inclusive_budget_usage(
         ..Default::default()
     };
     let catalog = load_parent_catalog(access, &scope).await?;
-    anyhow::ensure!(
-        catalog.max_total_tokens == request.max_total_tokens,
-        "budget restart disagrees with the execution owner's pinned limit"
-    );
+    if catalog.max_total_tokens != request.max_total_tokens {
+        return Err(anyhow::anyhow!(
+            "budget restart disagrees with the execution owner's pinned limit"
+        )
+        .into());
+    }
     project_budget_catalog(&catalog.request_ids, catalog.calls)
 }
 
 async fn load_parent_catalog(
     access: &dyn ConfigRead,
     exact_parent: &AgentRequestRow,
-) -> Result<ParentUsageCatalog> {
+) -> UsageResult<ParentUsageCatalog> {
     let parent_doc_id = nonempty(exact_parent.doc_id.as_deref(), "parent physical request")?;
     let parent_id = nonempty(Some(&exact_parent.request_id), "parent logical request")?;
     let agent = nonempty(exact_parent.node_did.as_deref(), "parent agent")?;
@@ -413,21 +434,22 @@ async fn load_parent_catalog(
     )
     .await?;
     let parents: Vec<AgentRequestRow> = required_rows(&response, "AgentRequest")?;
-    anyhow::ensure!(
-        parents.len() == 1,
-        "audit usage parent is missing or ambiguous"
-    );
+    if parents.len() != 1 {
+        return Err(anyhow::anyhow!("audit usage parent is missing or ambiguous").into());
+    }
     let parent = &parents[0];
-    anyhow::ensure!(
-        parent.doc_id.as_deref() == Some(parent_doc_id)
-            && parent.request_id == parent_id
-            && parent.node_did.as_deref() == Some(agent)
-            && parent.session_id.as_deref() == Some(session)
-            && parent.requester_did == exact_parent.requester_did
-            && parent.agent_did == exact_parent.agent_did
-            && parent.purpose == Some(RequestPurpose::Normal),
-        "audit usage parent crossed its exact normal request scope"
-    );
+    if !(parent.doc_id.as_deref() == Some(parent_doc_id)
+        && parent.request_id == parent_id
+        && parent.node_did.as_deref() == Some(agent)
+        && parent.session_id.as_deref() == Some(session)
+        && parent.requester_did == exact_parent.requester_did
+        && parent.agent_did == exact_parent.agent_did
+        && parent.purpose == Some(RequestPurpose::Normal))
+    {
+        return Err(
+            anyhow::anyhow!("audit usage parent crossed its exact normal request scope").into(),
+        );
+    }
     gents_store::identity::request_receipt::verify_request_receipt_signature(parent)?;
 
     let response = access.execute_read(
@@ -445,12 +467,12 @@ async fn load_parent_catalog(
             request, parent,
         )?;
         let request_doc = nonempty(request.doc_id.as_deref(), "auxiliary physical request")?;
-        anyhow::ensure!(
-            request_ids
-                .insert(request_doc.to_owned(), request.request_id.clone())
-                .is_none(),
-            "duplicate auxiliary request physical identity"
-        );
+        if request_ids
+            .insert(request_doc.to_owned(), request.request_id.clone())
+            .is_some()
+        {
+            return Err(anyhow::anyhow!("duplicate auxiliary request physical identity").into());
+        }
     }
 
     let docs = request_ids
@@ -522,186 +544,388 @@ mod tests {
     }
 
     type UsageInput = gents_lean_vocab::families::title_usage_catalog::UsageInput<String, String>;
+    type ModelUsage = gents_lean_vocab::families::title_usage_catalog::PersistedUsage;
+
+    const CREATED_AT: &str = "2026-11-01T00:00:00Z";
+
+    fn node_label(label: u64) -> String {
+        format!("node-{label}")
+    }
+
+    fn session_label(label: u64) -> String {
+        format!("session-{label}")
+    }
+
+    fn request_label(label: u64) -> String {
+        format!("request-{label}")
+    }
 
     fn purpose(wire: &str) -> RequestPurpose {
         serde_json::from_value(serde_json::Value::String(wire.to_owned()))
             .unwrap_or_else(|error| panic!("unknown signed purpose {wire:?}: {error}"))
     }
 
-    fn native_catalog(
-        input: &UsageInput,
-        after_action: bool,
-    ) -> (BTreeMap<String, String>, Vec<CallRow>) {
-        let mut request_ids = BTreeMap::new();
-        request_ids.insert(
-            format!("request-{}", input.parent.physical),
-            input.parent.logical.to_string(),
+    /// A served node holding one case's signed requests and inference calls,
+    /// read as the node root that wrote them.
+    struct Materialized {
+        _identities: tempfile::TempDir,
+        db: gents_inference::test_support::TestDb,
+        access: gents_store::config_client::ConfigAccess,
+        root: identity::Did,
+        parent_doc: String,
+        call_docs: BTreeMap<u64, String>,
+    }
+
+    async fn write(
+        node: &std::sync::Arc<defra_node::Node>,
+        root: &identity::Did,
+        mutation: String,
+    ) -> String {
+        gents_store::config_client::ConfigAccess::local_as(node.clone(), root.clone())
+            .transact_write("test.title_usage.write", |txn| {
+                let mutation = &mutation;
+                Box::pin(async move {
+                    let response = txn.execute(mutation).await?;
+                    let collection = if mutation.contains("create_AgentRequest") {
+                        "AgentRequest"
+                    } else {
+                        "InferenceCall"
+                    };
+                    Ok::<_, anyhow::Error>(gents_store::graphql::created_doc_id(
+                        &response, collection,
+                    )?)
+                })
+            })
+            .await
+            .expect("write case row")
+    }
+
+    /// Call rows are written without an actor, as public rows every reader
+    /// sees: the catalog reads calls by their request documents, not by who
+    /// may read them.
+    async fn write_call(node: &std::sync::Arc<defra_node::Node>, mutation: &str) -> String {
+        let response = node.execute(mutation).await;
+        assert!(
+            !response.has_errors(),
+            "call row write failed: {:?}",
+            response.errors
         );
+        let response = serde_json::json!({ "data": response.data });
+        if mutation.contains("create_InferenceCall") {
+            gents_store::graphql::created_doc_id(&response, "InferenceCall").unwrap()
+        } else {
+            String::new()
+        }
+    }
+
+    fn usage_fields(usage: Option<&ModelUsage>) -> String {
+        usage.map_or_else(String::new, |usage| {
+            format!(
+                "prompt_tokens: {}, completion_tokens: {}, usage_completeness: \"complete\",",
+                usage.prompt_tokens, usage.completion_tokens
+            )
+        })
+    }
+
+    /// Writes the parent as a signed normal request, each auxiliary as the
+    /// signed local-control receipt its binding describes (the receipt is its
+    /// own binding), and each call row under the call ID that keys it.
+    async fn materialize(input: &UsageInput) -> Materialized {
+        let identities = tempfile::tempdir().unwrap();
+        let root_identity =
+            gents_store::test_support::pin_fixed_signing_identity(identities.path());
+        let db = gents_inference::test_support::test_db_as(
+            "title-usage",
+            gents_store::test_support::PIN_FIXED_DID,
+            gents_session::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let root: identity::Did = gents_store::test_support::PIN_FIXED_DID.parse().unwrap();
+        let agent =
+            gents_store::identity::derive_agent_identity(&root_identity, &"a".repeat(64)).unwrap();
+        let parent = &input.parent;
+
+        let mut parent_create = gents_protocol::request_admission::AgentRequestCreate::base(
+            RequestPurpose::Normal,
+            request_label(parent.logical),
+            gents_protocol::request_admission::RequestScope::new(
+                node_label(parent.node),
+                agent.did(),
+                agent.did(),
+                session_label(parent.session),
+            ),
+            "work",
+            "interactive",
+            CREATED_AT,
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(agent.did()),
+        );
+        gents_session::request::admission::sign_agent_request_create(
+            agent.as_ref(),
+            &mut parent_create,
+        )
+        .await
+        .unwrap();
+        let parent_doc = write(&db.node, &root, parent_create.graphql_mutation().unwrap()).await;
+        let mut request_docs = BTreeMap::from([(parent.physical, parent_doc.clone())]);
+
         for fact in &input.signed_purposes {
-            if purpose(&fact.purpose).is_auxiliary() {
-                request_ids.insert(
-                    format!("request-{}", fact.physical),
-                    input
-                        .title_bindings
-                        .iter()
-                        .find(|binding| binding.physical == fact.physical)
-                        .map_or_else(String::new, |binding| binding.binding.logical.to_string()),
-                );
+            if fact.physical == parent.physical {
+                assert_eq!(purpose(&fact.purpose), RequestPurpose::Normal);
+                continue;
+            }
+            let binding = &input
+                .title_bindings
+                .iter()
+                .find(|binding| binding.physical == fact.physical)
+                .expect("a built auxiliary carries its own binding")
+                .binding;
+            assert_eq!(binding.purpose, fact.purpose);
+            assert_eq!(binding.physical, fact.physical);
+            let source = request_label(binding.parent_logical);
+            let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+                purpose(&fact.purpose),
+                request_label(binding.logical),
+                gents_protocol::request_admission::RequestScope::new(
+                    node_label(binding.node),
+                    agent.did(),
+                    agent.did(),
+                    session_label(binding.session),
+                ),
+                "audit",
+                "interactive",
+                CREATED_AT,
+                gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_control(
+                    agent.did(),
+                    &source,
+                ),
+            );
+            create.caused_by_parent_request_id = Some(source);
+            create.caused_by_parent_request_doc_id = Some(
+                request_docs
+                    .get(&binding.parent_physical)
+                    .cloned()
+                    .unwrap_or_else(|| format!("doc-{}", binding.parent_physical)),
+            );
+            gents_session::request::admission::sign_agent_request_create(
+                agent.as_ref(),
+                &mut create,
+            )
+            .await
+            .unwrap();
+            if !binding.authenticated {
+                create.content.push_str(" tampered");
+            }
+            let doc = write(&db.node, &root, create.graphql_mutation().unwrap()).await;
+            request_docs.insert(fact.physical, doc);
+        }
+
+        let mut call_docs = BTreeMap::new();
+        for row in &input.rows {
+            assert_eq!(row.key, row.call_id, "the catalog is keyed by call ID");
+            let ended_at = row.terminal_stamp.map_or_else(String::new, |stamp| {
+                format!(
+                    "ended_at: \"{}\",",
+                    chrono::DateTime::from_timestamp(i64::try_from(stamp).unwrap(), 0)
+                        .unwrap()
+                        .to_rfc3339()
+                )
+            });
+            let mutation = format!(
+                r#"mutation {{ create_InferenceCall(input: {{ call_id: "call-{}", request_doc_id: "{}", request_id: "{}", backend_id: "{}", call_state: "{}", node_did: "{}", {ended_at} {} }}) {{ _docID }} }}"#,
+                row.call_id,
+                request_docs
+                    .get(&row.request_physical)
+                    .expect("a call row belongs to a written request"),
+                request_label(row.request_logical),
+                escape_graphql_string(&row.backend),
+                row.state,
+                node_label(parent.node),
+                usage_fields(row.usage.as_ref()),
+            );
+            call_docs.insert(row.call_id, write_call(&db.node, &mutation).await);
+        }
+        Materialized {
+            _identities: identities,
+            access: gents_store::config_client::ConfigAccess::local_as(
+                db.node.clone(),
+                root.clone(),
+            ),
+            db,
+            root,
+            parent_doc,
+            call_docs,
+        }
+    }
+
+    impl Materialized {
+        async fn apply(&self, input: &UsageInput) {
+            if let Some(action) = &input.usage_action {
+                let doc = &self.call_docs[&action.call_id];
+                write_call(
+                    &self.db.node,
+                    &format!(
+                        r#"mutation {{ update_InferenceCall(docID: "{doc}", input: {{ {} }}) {{ _docID }} }}"#,
+                        usage_fields(Some(&action.usage))
+                    ),
+                )
+                .await;
             }
         }
-        let calls = input
-            .rows
-            .iter()
-            .map(|row| {
-                let usage = if after_action {
-                    input
-                        .usage_action
-                        .as_ref()
-                        .filter(|action| action.call_id == row.call_id)
-                        .map(|action| &action.usage)
-                        .or(row.usage.as_ref())
-                } else {
-                    row.usage.as_ref()
-                };
-                CallRow {
-                    doc_id: format!("call-{}", row.key),
-                    call_id: row.call_id.to_string(),
-                    request_doc_id: format!("request-{}", row.request_physical),
-                    request_id: row.request_logical.to_string(),
-                    backend_id: row.backend.clone(),
-                    call_state: row.state.clone(),
-                    ended_at: row.terminal_stamp.map(|stamp| stamp.to_string()),
-                    usage: gents_protocol::usage::TokenUsageColumns {
-                        prompt_tokens: usage.map(|usage| usage.prompt_tokens as i64),
-                        completion_tokens: usage.map(|usage| usage.completion_tokens as i64),
-                        usage_completeness: usage
-                            .map(|_| gents_protocol::usage::UsageCompleteness::Complete),
-                        ..Default::default()
-                    },
-                }
-            })
-            .collect();
-        (request_ids, calls)
-    }
 
-    fn catalog_error(name: &str, error: &anyhow::Error) -> String {
-        match error.root_cause().to_string().as_str() {
-            "one call ID has conflicting persisted rows" => "conflicting_call_id".to_owned(),
-            other => panic!("{name} failed outside the modeled catalog errors: {other}"),
+        async fn parent(&self) -> gents_protocol::row::AgentRequest {
+            let response = self
+                .access
+                .execute(&format!(
+                    "{{ AgentRequest(docIDs: [\"{}\"]) {{ {} }} }}",
+                    escape_graphql_string(&self.parent_doc),
+                    gents_protocol::row::AGENT_REQUEST_FIELDS,
+                ))
+                .await
+                .unwrap();
+            let rows: Vec<AgentRequestRow> =
+                serde_json::from_value(response["data"]["AgentRequest"].clone()).unwrap();
+            gents_protocol::row::AgentRequest::try_from(rows[0].clone()).unwrap()
+        }
+
+        async fn catalog(&self) -> UsageResult<ParentAuditUsage> {
+            let parent = self.parent().await;
+            let scope = AgentRequestRow {
+                doc_id: Some(parent.doc_id.clone()),
+                request_id: parent.request_id.clone(),
+                node_did: Some(parent.node_did.clone()),
+                requester_did: parent.requester_did.clone(),
+                agent_did: Some(parent.agent_did.clone()),
+                session_id: Some(parent.session_id.clone()),
+                ..Default::default()
+            };
+            load_parent_inclusive_audit_usage(&self.access, &scope).await
+        }
+
+        async fn budget(&self) -> UsageResult<u64> {
+            load_parent_inclusive_budget_usage(&self.access, &self.parent().await).await
+        }
+
+        async fn goal(&self) -> UsageResult<u64> {
+            let parent = self.parent().await;
+            gents_store::config_client::ConfigAccess::transact_local_readonly(
+                &self.db.node,
+                Some(self.root.clone()),
+                "test.title_usage.goal",
+                |txn| {
+                    let parent = &parent;
+                    Box::pin(async move {
+                        Ok::<_, anyhow::Error>(
+                            load_session_goal_usage(txn, &parent.node_did, &parent.session_id)
+                                .await
+                                .map(|usage| usage.total),
+                        )
+                    })
+                },
+            )
+            .await
+            .unwrap()
+        }
+
+        async fn shutdown(self) {
+            self.db.node.shutdown().await.expect("node shutdown");
         }
     }
 
-    fn budget_error(name: &str, error: &anyhow::Error) -> String {
-        if error
-            .to_string()
-            .contains("requires reported provider usage")
-        {
-            "unreported_usage".to_owned()
-        } else {
-            catalog_error(name, error)
+    /// The model's name for the refusal production returned.
+    fn refusal(name: &str, error: &TitleUsageError) -> String {
+        match error {
+            TitleUsageError::Receipt(_) | TitleUsageError::CallLogicalScope => {
+                "invalid_title_binding"
+            }
+            TitleUsageError::ConflictingCall => "conflicting_call_id",
+            TitleUsageError::UnreportedUsage(_) => "unreported_usage",
+            other => panic!("{name} failed outside the modeled refusals: {other:#}"),
         }
+        .to_owned()
     }
 
-    #[test]
-    fn generated_title_usage_cases_bind_native_catalog_and_late_usage() {
-        use gents_lean_vocab::families::title_usage_catalog::{
-            CatalogOutput, TokenPair, TotalsResult,
-        };
-        let observe = |input: &UsageInput, after_action: bool| {
-            let (request_ids, calls) = native_catalog(input, after_action);
-            match project_catalog(
-                &format!("request-{}", input.parent.physical),
-                &input.parent.logical.to_string(),
-                &request_ids,
-                calls,
-            ) {
-                Ok(totals) => TotalsResult {
-                    kind: "ok".to_owned(),
-                    normal_public: Some(TokenPair {
-                        prompt_tokens: totals.normal_public.prompt_tokens,
-                        completion_tokens: totals.normal_public.completion_tokens,
-                    }),
-                    parent_inclusive_audit: Some(TokenPair {
+    #[tokio::test]
+    async fn generated_title_usage_cases_bind_the_signed_catalog() {
+        let catalog = |name: &str, result: UsageResult<ParentAuditUsage>| match result {
+            Ok(totals) => gents_lean_vocab::families::title_usage_catalog::TotalsResult {
+                kind: "ok".to_owned(),
+                normal_public: Some(gents_lean_vocab::families::title_usage_catalog::TokenPair {
+                    prompt_tokens: totals.normal_public.prompt_tokens,
+                    completion_tokens: totals.normal_public.completion_tokens,
+                }),
+                parent_inclusive_audit: Some(
+                    gents_lean_vocab::families::title_usage_catalog::TokenPair {
                         prompt_tokens: totals.parent_inclusive_audit.prompt_tokens,
                         completion_tokens: totals.parent_inclusive_audit.completion_tokens,
-                    }),
-                    error: None,
-                },
-                Err(error) => TotalsResult {
-                    kind: "error".to_owned(),
-                    normal_public: None,
-                    parent_inclusive_audit: None,
-                    error: Some(catalog_error(&input.name, &error)),
-                },
-            }
+                    },
+                ),
+                error: None,
+            },
+            Err(error) => gents_lean_vocab::families::title_usage_catalog::TotalsResult {
+                kind: "error".to_owned(),
+                normal_public: None,
+                parent_inclusive_audit: None,
+                error: Some(refusal(name, &error)),
+            },
         };
-        gents_lean_vocab::families::title_usage_catalog::replay::<String, String>(|input| {
-            CatalogOutput {
-                expected_before: observe(input, false),
-                expected_after: observe(input, true),
-            }
-        });
-    }
-
-    #[test]
-    fn generated_budget_recovery_cases_bind_signed_catalog_usage() {
-        use gents_lean_vocab::families::title_usage_budget::{BudgetOutput, BudgetResult};
-        let observe = |input: &UsageInput, after_action: bool| {
-            let (request_ids, calls) = native_catalog(input, after_action);
-            match project_budget_catalog(&request_ids, calls) {
-                Ok(used) => BudgetResult {
-                    kind: "ok".to_owned(),
-                    used: Some(used),
-                    error: None,
-                },
-                Err(error) => BudgetResult {
-                    kind: "error".to_owned(),
-                    used: None,
-                    error: Some(budget_error(&input.name, &error)),
-                },
-            }
+        let used = |name: &str, result: UsageResult<u64>| match result {
+            Ok(used) => gents_lean_vocab::families::title_usage_budget::BudgetResult {
+                kind: "ok".to_owned(),
+                used: Some(used),
+                error: None,
+            },
+            Err(error) => gents_lean_vocab::families::title_usage_budget::BudgetResult {
+                kind: "error".to_owned(),
+                used: None,
+                error: Some(refusal(name, &error)),
+            },
         };
-        gents_lean_vocab::families::title_usage_budget::replay::<String, String>(|input| {
-            let input: UsageInput = gents_lean_vocab::family::recode(input);
-            BudgetOutput {
-                budget_before: observe(&input, false),
-                budget_after: observe(&input, true),
-            }
-        });
-    }
-
-    #[test]
-    fn generated_goal_usage_cases_bind_goal_catalog() {
-        use gents_lean_vocab::families::title_usage_goal::{BudgetResult, GoalOutput};
-        let observe = |input: &UsageInput, after_action: bool| {
-            let (mut request_ids, mut calls) = native_catalog(input, after_action);
-            let titles: Vec<_> = input
-                .signed_purposes
+        let catalog_cases =
+            gents_lean_vocab::families::title_usage_catalog::cases::<String, String>();
+        let budget_cases =
+            gents_lean_vocab::families::title_usage_budget::cases::<String, String>();
+        let goal_cases = gents_lean_vocab::families::title_usage_goal::cases::<String, String>();
+        for case in &catalog_cases {
+            let input = &case.input;
+            let budget_case = budget_cases
                 .iter()
-                .filter(|fact| purpose(&fact.purpose) == RequestPurpose::TitleAudit)
-                .map(|fact| format!("request-{}", fact.physical))
-                .collect();
-            request_ids.retain(|doc, _| !titles.contains(doc));
-            calls.retain(|call| request_ids.contains_key(&call.request_doc_id));
-            match project_goal_catalog(&request_ids, calls) {
-                Ok(usage) => BudgetResult {
-                    kind: "ok".to_owned(),
-                    used: Some(usage.total),
-                    error: None,
+                .find(|other| other.input.name == input.name)
+                .expect("the budget family shares the catalog's cases");
+            let goal_case = goal_cases
+                .iter()
+                .find(|other| other.input.name == input.name)
+                .expect("the goal family shares the catalog's cases");
+            let world = materialize(input).await;
+            let before = (
+                catalog(&input.name, world.catalog().await),
+                used(&input.name, world.budget().await),
+                used(&input.name, world.goal().await),
+            );
+            world.apply(input).await;
+            let after = (
+                catalog(&input.name, world.catalog().await),
+                used(&input.name, world.budget().await),
+                used(&input.name, world.goal().await),
+            );
+            world.shutdown().await;
+            case.check(
+                gents_lean_vocab::families::title_usage_catalog::CatalogOutput {
+                    expected_before: before.0,
+                    expected_after: after.0,
                 },
-                Err(error) => BudgetResult {
-                    kind: "error".to_owned(),
-                    used: None,
-                    error: Some(catalog_error(&input.name, &error)),
+            );
+            budget_case.check(
+                gents_lean_vocab::families::title_usage_budget::BudgetOutput {
+                    budget_before: before.1,
+                    budget_after: after.1,
                 },
-            }
-        };
-        gents_lean_vocab::families::title_usage_goal::replay::<String, String>(|input| {
-            let input: UsageInput = gents_lean_vocab::family::recode(input);
-            GoalOutput {
-                goal_before: observe(&input, false),
-                goal_after: observe(&input, true),
-            }
-        });
+            );
+            goal_case.check(gents_lean_vocab::families::title_usage_goal::GoalOutput {
+                goal_before: gents_lean_vocab::family::recode(&before.2),
+                goal_after: gents_lean_vocab::family::recode(&after.2),
+            });
+        }
+        assert_eq!(budget_cases.len(), catalog_cases.len());
+        assert_eq!(goal_cases.len(), catalog_cases.len());
     }
 }

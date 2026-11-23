@@ -50,6 +50,7 @@ pub use history_fixture::{import_history_observation, HistoryObservation};
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use history_fixture::{
     signed_claimed_authored_request, signed_claimed_authored_request_with_retry,
+    signed_claimed_request,
 };
 
 pub use crate::tool_call::query::result::{

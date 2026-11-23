@@ -472,13 +472,24 @@ async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
             "open"
         );
 
-        let reply = signed_reply(&node, &identity, &filed, "reply-request").await;
+        let source = if modeled.reply_source_doc_id == modeled.mailbox_doc_id {
+            mailbox_doc_id
+        } else {
+            modeled.reply_source_doc_id.as_str()
+        };
+        let reply = persisted_request(
+            &node,
+            &identity,
+            Some(source),
+            "reply-request",
+            false,
+            "Approved",
+            None,
+        )
+        .await;
         assert_ne!(reply.doc_id, producer.doc_id);
         assert_eq!(reply.session_id, producer.session_id);
-        assert_eq!(
-            reply.caused_by_source_doc_id.as_deref(),
-            Some(mailbox_doc_id)
-        );
+        assert_eq!(reply.caused_by_source_doc_id.as_deref(), Some(source));
         let mut reply_lifecycle = RequestLifecycle::new_with_execution_binding(
             node.clone(),
             reply.clone(),
@@ -491,7 +502,10 @@ async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
                 gents_store::test_support::fixture_agent(tests::AGENT_NONCE).as_ref(),
             )
             .unwrap();
-        let claimed = reply_lifecycle.claim_with_identity().await.unwrap() == ClaimOutcome::Claimed;
+        let claimed = matches!(
+            reply_lifecycle.claim_with_identity().await,
+            Ok(ClaimOutcome::Claimed)
+        );
         let consumed = tests::load_as_creator(&node, mailbox_doc_id)
             .await
             .unwrap()

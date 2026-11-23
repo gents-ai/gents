@@ -367,12 +367,14 @@ inductive ToolsWrapper where
   | schemaIdentityErrorConfigClient
   | registryReadErrorView
   | queryCommandErrorAccess
+  | titleUsageErrorRead
   deriving DecidableEq, Repr
 
 def ToolsWrapper.wrap : ToolsWrapper → Failure → Error
   | .registryReadErrorView, failure => .wrapper .transparent (StoreWrapper.viewErrorExecute.wrap failure)
   | .schemaIdentityErrorConfigClient, failure => .wrapper .sourced (.owner failure)
   | .queryCommandErrorAccess, failure => .wrapper .sourced (.owner failure)
+  | .titleUsageErrorRead, failure => .wrapper .sourced (.owner failure)
 
 /-- `gents-automation`. -/
 inductive AutomationWrapper where

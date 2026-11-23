@@ -519,6 +519,23 @@ fn rust_inference_call_state_vocabulary_matches_lean_model() {
 }
 
 #[test]
+fn persisted_call_start_source_follows_lean() {
+    gents_lean_vocab::families::inference_call_persistence_may_start::replay::<String>(|input| {
+        input.current == super::persistence::START_SOURCE
+    });
+}
+
+#[test]
+fn persisted_call_terminal_write_sources_follow_lean() {
+    gents_lean_vocab::families::inference_call_persistence_may_install_terminal::replay::<String>(
+        |input| {
+            super::persistence::terminal_write_sources(&input.target)
+                .is_some_and(|sources| sources.contains(&input.current.as_str()))
+        },
+    );
+}
+
+#[test]
 fn rust_inference_call_terminal_reason_vocabulary_matches_lean_model() {
     let rust_reasons: Vec<String> = rust_literal_terminal_reasons_from_admission_sources()
         .into_iter()

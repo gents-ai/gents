@@ -1,5 +1,9 @@
 import Proofs.Shared.Basic
 
+/-- A request's persistence as the store adapter's commit acknowledgement reports
+it. The database keeps no per-request persistence document, so this state is
+observed only through that acknowledgement
+(`boundary.storage.observation-daemon-visible`). -/
 inductive PersistenceState where
   | uncommitted
   | committing

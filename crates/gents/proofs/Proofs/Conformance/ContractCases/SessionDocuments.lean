@@ -142,7 +142,12 @@ def retryState : SessionState :=
 example : (SessionState.retryFromRows? retryState indexed [old] 101 1 3).isSome = true := by native_decide
 example : SessionState.retryFromRows? retryState indexed [old, newerRequest] 101 1 3 = none := by
   rfl
-example : SessionState.retryFromRows? retryState indexed [old] 999 1 3 = none := by rfl
+/-- A reissue names its parent by node and request id (`RequestRef`) and takes
+the physical parent from the one row that lookup finds, refusing an ambiguous
+lookup, so a caller cannot name another physical document for the parent; the
+model refuses one. -/
+theorem retry_refuses_another_physical_parent :
+    SessionState.retryFromRows? retryState indexed [old] 999 1 3 = none := by rfl
 
 def olderExistingCandidate := request 3 0
 example : SessionState.retryFromRows? retryState indexed [old, olderExistingCandidate] 101 1 3 = none := by rfl
@@ -214,7 +219,13 @@ def nestedAuthorization : SessionFork.SourceAuthorization :=
     copied.closures.map (·.id)⟩
 example : (publish copied child grandchild regrant childKey 1 nestedAuthorization true true).map
     (·.closures) = some [⟨3101, grandchild.session, 101⟩] := by decide
-example : publish history scope { child with requester := none } remap childKey 1 sourceAuthorization true true = none := by decide
+/-- A fork's child takes the fork caller's requester, and the fork refuses a
+caller whose requester is not the source session's (`ForkParams` has no field
+naming a requester for the child), so a child with another requester has no
+production form; the model refuses it. -/
+theorem fork_to_another_requester_is_refused :
+    publish history scope { child with requester := none } remap childKey 1
+      sourceAuthorization true true = none := by decide
 example : publish history scope child remap childKey 1 sourceAuthorization false true = none := by decide
 example : publish history scope child remap childKey 1 sourceAuthorization true false = none := by decide
 example : publish history scope child remap childKey 1 wrongAgentAuthorization true true = none := by decide
@@ -227,7 +238,11 @@ example : publish { history with compactions := [⟨4, scope.session, 1, 99⟩] 
 
 def duplicateSequenceHistory : History :=
   { messages := [sourceMessage 1 0, sourceMessage 2 0], compactions := [] }
-example : publish duplicateSequenceHistory scope child remap childKey 1
+/-- `AgentMessage` has a unique index on `(node_did, session_id, sequence)`,
+so the store holds no source with two messages at one sequence
+(`single_header_transaction_matches_bulk_coordinate_validation` evidences the
+refusal); the model refuses such a source. -/
+theorem fork_of_duplicate_message_sequence_is_refused : publish duplicateSequenceHistory scope child remap childKey 1
     (SessionFork.SourceAuthorization.mk scope
       (duplicateSequenceHistory.messages.map (·.header.id))
       (duplicateSequenceHistory.compactions.map (·.id))
@@ -253,6 +268,13 @@ def threeUserHistory : History :=
   { messages := [editUser 1 1, editUser 2 2, editUser 3 3]
     compactions := [] }
 
+def contextHistory : History :=
+  { messages := [editUser 1 1, { editUser 2 2 with key := "authored:9:context" }, editUser 3 3]
+    compactions := [] }
+
+example : editCut contextHistory "authored:9:context" = none := by decide
+example : (retainedMessages contextHistory 3).map (·.key) = ["origin-1"] := by decide
+
 def editAnchorCases : List EditAnchorCase :=
   [ ⟨"three_user_turns", threeUserHistory, "origin-3"⟩
   , ⟨"first_user_turn", editHistory, "origin-1"⟩
@@ -264,7 +286,9 @@ def editAnchorCases : List EditAnchorCase :=
   , ⟨"ambiguous_key", { editHistory with messages :=
         editHistory.messages ++ [{ editUser 5 4 with key := "origin-1" }] }, "origin-1"⟩
   , ⟨"empty_user_message", { editHistory with messages :=
-        [{ editUser 1 0 with blocks := [] }] }, "origin-1"⟩ ]
+        [{ editUser 1 0 with blocks := [] }] }, "origin-1"⟩
+  , ⟨"runtime_context_row", contextHistory, "authored:9:context"⟩
+  , ⟨"user_turn_after_runtime_context", contextHistory, "origin-3"⟩ ]
 
 example : editCut editHistory "origin-1" = some 0 := by decide
 example : editCut editHistory "origin-4" = some 3 := by decide
@@ -330,11 +354,8 @@ structure RetryRequestWire where
   requestId : Nat
   state : RequestState
   origin : ExecutionOrigin
-  admission : _root_.AdmissionState
-  deadline : Option Nat
-  currentTime : Nat
   retryCount : Nat
-  maxRetries : Nat
+  retryParent : Option Nat
   deriving Lean.ToJson
 
 structure RetryStateWire where
@@ -344,31 +365,29 @@ structure RetryStateWire where
   requests : List RetryRequestWire
   deriving Lean.ToJson
 
-def RetryStateWire.ofModel (s : SessionState) : RetryStateWire :=
+/-- The stored request rows of the failed parent and its successor. -/
+def RetryStateWire.ofModel (failedId newId : Nat) (s : SessionState) : RetryStateWire :=
   { sessionId := s.sessionId, agent := s.agentDid, latest := s.latest
-    requests := ([1, 3].filter fun id => decide (id ∈ s.requestIds)).map fun id =>
+    requests := ([failedId, newId].filter fun id => decide (id ∈ s.requestIds)).map fun id =>
       let r := s.ctx id
-      { requestId := id, state := r.state, origin := r.origin, admission := r.admission
-        deadline := r.deadline, currentTime := r.currentTime, retryCount := r.retryCount
-        maxRetries := r.maxRetries } }
+      { requestId := id, state := r.state, origin := r.origin, retryCount := r.retryCount
+        retryParent := if id = newId then some failedId else none } }
 
-/-- model-production-gap: the model selects the retry parent from the session's
-interned observation and the exact physical request rows inside one
-transaction; production retry eligibility (`project_retry_eligibility` in
-gents-desktop-bridge and `reissue` in gents-session) reads persisted rows
-without the interned observation, so no production path takes a session
-observation with these rows as an input. The session is `indexed` and the
-retry state `retryState`. -/
+/-- A retry rechecks the session's stored request rows: the parent must be the
+session's newest row and the successor's id unused; the successor is stored
+pending, linked to its parent with the next retry count, and becomes the
+session's newest row. The session is `indexed` and the retry state
+`retryState`. -/
 @[conformance_family]
-def retryUnreached : Family RetryInput (Option RetryStateWire) where
+def retry : Family RetryInput (Option RetryStateWire) where
   inputs :=
-    [ ("exact_parent", [old], 101), ("newer_authoritative_row", [old, newerRequest], 101)
-    , ("wrong_physical_parent", [old], 999)
-    , ("existing_candidate_missing_from_auxiliary_projection", [old, olderExistingCandidate], 101)
-    ].map fun (name, rows, parentDoc) =>
-      { name, rows := rows.map RowWire.ofModel, parentDoc, failedId := 1, newId := 3 }
+    [ ("exact_parent", [old]), ("newer_authoritative_row", [old, newerRequest])
+    , ("existing_candidate_missing_from_auxiliary_projection", [old, olderExistingCandidate])
+    ].map fun (name, rows) =>
+      { name, rows := rows.map RowWire.ofModel, parentDoc := old.observed.docId
+        failedId := 1, newId := 3 }
   model := fun i =>
     (SessionState.retryFromRows? retryState indexed (i.rows.map RowWire.toModel) i.parentDoc
-      i.failedId i.newId).map RetryStateWire.ofModel
+      i.failedId i.newId).map (RetryStateWire.ofModel i.failedId i.newId)
 
 end Conformance.SessionDocuments

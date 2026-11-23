@@ -318,9 +318,11 @@ structure StagedOutput where
   allowed : Bool
   deriving Lean.ToJson
 
-/-- The claimed-publication fixture stages a continuation from its one parent
-request, which the selected Agent owns, so only cases whose parent is the
-selected identity can be staged. -/
+/-- A claimed continuation stages from a parent request of its own session.
+A session's Agent is immutable (`AgentSession.agent_did` is `@immutable`) and
+request submission refuses a request whose Agent differs from its session's
+(`ensure_request_session_in_txn`), so the parent's Agent is the selected one
+and only those cases are staged. -/
 def identityStagedCases : List (String × String × String × String) :=
   identityCases.filter fun (selected, _, _, parent) => parent == selected
 
@@ -329,15 +331,11 @@ def identityStaged : Family IdentityInput StagedOutput where
   inputs := identityStagedCases.map IdentityInput.ofCase
   model := fun i => { allowed := continuationIdentityValid i.selected i.signer i.actor i.parent }
 
-/-- model-production-gap: no production scenario stages a claimed continuation
-from a parent request owned by another identity; the goal source never offers
-such a parent (`identityCandidate`), and the staging fixture has no foreign
-parent request. -/
-@[conformance_family]
-def identityStagedUnreached : Family IdentityInput StagedOutput where
-  inputs := (identityCases.filter fun (selected, _, _, parent) => parent != selected).map
-    IdentityInput.ofCase
-  model := fun i => { allowed := continuationIdentityValid i.selected i.signer i.actor i.parent }
+/-- A parent of another identity is refused. -/
+theorem foreign_parent_is_not_staged :
+    (identityCases.filter fun (selected, _, _, parent) => parent != selected).all
+      (fun (selected, signer, actor, parent) =>
+        !continuationIdentityValid selected signer actor parent) = true := by decide
 
 structure TargetInput where
   name : String
