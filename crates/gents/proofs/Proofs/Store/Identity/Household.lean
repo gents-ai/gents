@@ -1249,9 +1249,17 @@ def typeAdmitted (definitions : List ResourceDefinition) (resource relation type
   | none => false
 
 def subjectAdmittedIn (definitions : List ResourceDefinition) (relation : Relation) : Bool :=
-  typeAdmitted definitions relation.resource relation.relation (subjectType relation.subject)
+  typeAdmitted definitions relation.resource relation.relation (subjectType relation.subject) ||
+    match relation.subject with
+    | .actor _ => typeAdmitted definitions relation.resource relation.relation "actor:individual"
+    | _ => false
 
 def subjectAdmitted (relation : Relation) : Bool := subjectAdmittedIn policy relation
+
+theorem transport_v2_admits_individuals_not_wildcards :
+    (subjectAdmittedIn transportV2Policy ⟨"nodes", "node", "transport_publisher", .actor "device"⟩,
+     subjectAdmittedIn transportV2Policy ⟨"nodes", "node", "transport_publisher", .wildcard⟩) =
+      (true, false) := by native_decide
 
 /-- A relation's declared types name subject shapes, never kinds of actor: no
 policy admits one actor DID as a relation's subject and refuses another. A

@@ -107,7 +107,7 @@ impl HomePolicyIds {
             for resource in ["discovery", "scoped_discovery", "enrollment_records"] {
                 let before = format!("resource: \"{resource}\") @branchable {{");
                 let after = format!(
-                    "resource: \"{resource}\", parentField: \"publisher_node_id\") @branchable {{\n    publisher_node_id: String!"
+                    "resource: \"{resource}\", parentField: \"publisher_node_id\") @branchable {{\n    publisher_node_id: String! @immutable"
                 );
                 rendered = rendered.replace(&before, &after);
             }
@@ -154,7 +154,7 @@ mod tests {
                 path.display()
             );
             assert_eq!(
-                v2_sdl.contains("publisher_node_id: String!"),
+                v2_sdl.contains("publisher_node_id: String! @immutable"),
                 transport,
                 "{}",
                 path.display()
