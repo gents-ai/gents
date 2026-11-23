@@ -178,7 +178,7 @@ struct LifecycleRow {
     lifecycle_state: Option<String>,
 }
 
-fn request_lifecycle(data: &serde_json::Value, request_id: &str) -> Option<String> {
+pub fn request_lifecycle(data: &serde_json::Value, request_id: &str) -> Option<String> {
     assert!(
         data["AgentRequest"].as_array().map_or(0, Vec::len) <= 1,
         "live test request label is ambiguous: {request_id}"
@@ -192,6 +192,16 @@ fn request_lifecycle(data: &serde_json::Value, request_id: &str) -> Option<Strin
 /// not changed for
 /// [`STALL_CEILING`](gents_store::test_support::STALL_CEILING).
 pub async fn wait_for_request_terminal<R>(reader: &R, request_id: &str) -> String
+where
+    R: SnapshotReader + ?Sized,
+{
+    let rows = request_terminal_rows(reader, request_id).await;
+    request_lifecycle(&rows, request_id).expect("terminal row carries lifecycle_state")
+}
+
+/// The terminal request's row with its inference and tool calls, read once its
+/// lifecycle is terminal.
+pub async fn request_terminal_rows<R>(reader: &R, request_id: &str) -> serde_json::Value
 where
     R: SnapshotReader + ?Sized,
 {
@@ -210,11 +220,10 @@ where
             }}
         }}"#
     );
-    let rows = rows_when(reader, "AgentRequest", &query, |data| {
+    rows_when(reader, "AgentRequest", &query, |data| {
         request_lifecycle(data, request_id).is_some_and(|state| is_terminal(&state))
     })
-    .await;
-    request_lifecycle(&rows, request_id).expect("terminal row carries lifecycle_state")
+    .await
 }
 
 /// Resolves with the first read of `query` that satisfies `predicate`,
