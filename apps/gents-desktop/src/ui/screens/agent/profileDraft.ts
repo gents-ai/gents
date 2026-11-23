@@ -36,9 +36,13 @@ export function profileDraftFrom(profile: InferenceProfile, deployment: NodeView
     executionId: profile.execution_id ?? "",
     maxTurns: str(execution?.max_turns),
     maxTotalTokens: str(execution?.max_total_tokens),
+    maxInvalidToolCalls: str(execution?.max_invalid_tool_calls),
+    repeatedToolFailureLimit: str(execution?.repeated_tool_failure_limit),
+    maxRequestRetries: str(execution?.max_request_retries),
     streamBatchMs: str(execution?.stream_batch_ms),
     streamLivenessSecs: str(execution?.stream_liveness_timeout_secs),
     providerIdleSecs: str(execution?.provider_idle_timeout_secs),
+    titleTimeoutSecs: str(execution?.title_timeout_secs),
     deadlineSecs: str(execution?.deadline_duration_secs),
     retryPolicyId: execution?.retry_policy_id ?? "",
     tags: profile.tags ?? [],
@@ -66,22 +70,36 @@ export const PROFILE_NUMBERS = {
   },
   maxTurns: { label: "Max turns", integer: true, min: 1 },
   maxTotalTokens: { label: "Max total tokens", integer: true, min: 1 },
+  maxInvalidToolCalls: { label: "Max invalid tool calls", integer: true, min: 1 },
+  repeatedToolFailureLimit: {
+    label: "Repeated tool failure limit",
+    integer: true,
+    min: 1,
+  },
+  maxRequestRetries: { label: "Max request retries", integer: true, min: 0 },
   streamBatchMs: { label: "Stream batch ms", integer: true, min: 1 },
   streamLivenessSecs: { label: "Execution lease seconds", integer: true, min: 1 },
   providerIdleSecs: { label: "Provider idle seconds", integer: true, min: 1 },
+  titleTimeoutSecs: { label: "Title timeout seconds", integer: true, min: 1 },
   deadlineSecs: { label: "Deadline seconds", integer: true, min: 1 },
 } as const satisfies Partial<Record<keyof ProfileDraft, NumberSpec>>;
 
 export type ProfileNumber = keyof typeof PROFILE_NUMBERS;
 
-const EXECUTION_FIELDS = [
+export const EXECUTION_FIELDS = [
   "maxTurns",
   "maxTotalTokens",
+  "maxInvalidToolCalls",
+  "repeatedToolFailureLimit",
+  "maxRequestRetries",
   "streamBatchMs",
   "streamLivenessSecs",
   "providerIdleSecs",
+  "titleTimeoutSecs",
   "deadlineSecs",
 ] as const satisfies readonly ProfileNumber[];
+
+export type ExecutionField = (typeof EXECUTION_FIELDS)[number];
 
 export type ProfileContext = {
   deployment: NodeView;
