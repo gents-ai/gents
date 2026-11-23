@@ -99,3 +99,28 @@ fn dotfiles_remain_visible_to_walks_and_listings() {
         "{entries:?}"
     );
 }
+
+#[test]
+fn default_ignored_names_are_reported_only_when_the_walk_skipped_one() {
+    let root = support::unique_root("default-ignored-report");
+    std::fs::create_dir_all(root.join("node_modules/pkg")).unwrap();
+    std::fs::write(root.join("node_modules/pkg/index.js"), "needle").unwrap();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(root.join("src/main.rs"), "needle").unwrap();
+
+    let skipped = support::run_grep(&root, "needle", true);
+    let plain = support::run_grep(&root.join("src"), "needle", true);
+    let globbed = support::run_glob(&root, "**/*.rs");
+
+    let _ = std::fs::remove_dir_all(&root);
+    assert_eq!(skipped["returned_count"], 1, "{skipped}");
+    assert_eq!(
+        skipped["default_ignored"],
+        serde_json::json!(["node_modules"])
+    );
+    assert_eq!(
+        globbed["default_ignored"],
+        serde_json::json!(["node_modules"])
+    );
+    assert!(plain.get("default_ignored").is_none(), "{plain}");
+}

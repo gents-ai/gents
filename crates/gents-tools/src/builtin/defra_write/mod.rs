@@ -426,7 +426,7 @@ pub(crate) fn write_grant_guidance(
     if !holds_tools {
         return json!({
             "writable": false,
-            "how": format!("Writes go through the write tool, which takes the exact collection names in your Tools' datastore.write_collections; {names} is not there and you do not hold the tools category of config, so you cannot add it. The node's User, or an agent that configures your Tools (the Engineer), adds it with config {{\"argv\":[\"tools\",\"edit\"],\"options\":{{\"agent\":YOUR_AGENT_DID}},\"set\":{{\"datastore\":{{...}}}}}}."),
+            "how": format!("Writes go through the write tool, which takes the exact collection names in your Tools' datastore.write_collections; {names} is not there and you do not hold the tools category of config, so you cannot add it. The node's User, or an agent that configures your Tools (the Engineer), adds it with config {{\"argv\":[\"tools\",\"update\"],\"options\":{{\"agent\":YOUR_AGENT_DID}},\"set\":{{\"datastore\":{{...}}}}}}."),
         });
     }
     let how = format!("Writes go through the write tool, which takes the exact collection names in your Tools' datastore.write_collections; {names} is not there yet. Add it with next_call, then write in a fresh request.");
@@ -442,13 +442,13 @@ pub(crate) fn write_grant_guidance(
             json!({
                 "writable": false,
                 "how": how,
-                "next_call": {"tool": "config", "args": {"argv": ["tools", "edit"], "set": {"datastore": group}}},
+                "next_call": {"tool": "config", "args": {"argv": ["tools", "update"], "set": {"datastore": group}}},
             })
         }
         None => json!({
             "writable": false,
             "how": format!("{how} A set replaces the whole datastore group: read yours with config [\"tools\",\"get\"] and send it back with write_collections extended."),
-            "next_call": {"tool": "config", "args": {"argv": ["tools", "edit"], "set": {"datastore": {"write_collections": collections}}}},
+            "next_call": {"tool": "config", "args": {"argv": ["tools", "update"], "set": {"datastore": {"write_collections": collections}}}},
         }),
     }
 }

@@ -39,4 +39,6 @@ pub(crate) struct WalkStats {
     pub(crate) elapsed_ms: u64,
     pub(crate) budget_exhausted: bool,
     pub(crate) stopped_at: Option<String>,
+    #[serde(skip)]
+    pub(crate) default_ignored: Vec<&'static str>,
 }

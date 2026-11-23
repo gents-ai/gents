@@ -71,6 +71,8 @@ pub struct Input {
     pub output: Option<String>,
     pub format: Option<ExportFormat>,
     pub overwrite: Option<bool>,
+    /// A help topic to return instead of running.
+    pub help: Option<String>,
 }
 
 fn within(name: &str, v: Option<u64>, lo: u64, hi: u64, default: u64) -> Res<u64> {

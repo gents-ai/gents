@@ -1,3 +1,4 @@
+use gents_protocol::tool_names::DEFRA_QUERY_TOOL_NAME;
 use serde_json::{json, Value};
 
 use super::query::{collect_filter_field_keys, is_restricted_field, DefraQueryParams};
@@ -98,16 +99,19 @@ pub fn diagnose_failed_query(
 }
 
 pub fn discovery_payload(collection: &str, schema: &CollectionSchema) -> Value {
-    let fields: Vec<Value> = visible_fields(schema, collection)
+    let visible = visible_fields(schema, collection);
+    let fields: Vec<Value> = visible
         .iter()
         .map(|f| json!({ "name": f.name, "type": f.type_name }))
         .collect();
+    let names: Vec<&str> = visible.iter().map(|f| f.name.as_str()).collect();
     json!({
         "collection": collection,
         "discovery": true,
         "count": fields.len(),
         "fields": fields,
-        "note": "Field inventory (restricted fields excluded). Call defra_query again with specific field names.",
+        "note": "Field inventory (restricted fields excluded). Read rows with next_call, keeping only the fields you need.",
+        "next_call": {"tool": DEFRA_QUERY_TOOL_NAME, "args": {"argv": ["find"], "collection": collection, "options": {"fields": names}}},
     })
 }
 
@@ -135,5 +139,19 @@ mod tests {
             .map(|f| f.name.clone())
             .collect();
         assert!(suggest_fields("auths", &candidates).is_empty());
+    }
+
+    #[test]
+    fn the_field_inventory_names_a_query_call_that_reads_the_visible_fields() {
+        let schema = schema_from(&[("backend_id", "String"), ("auth", "JSON")]);
+        let payload = discovery_payload("InferenceBackend", &schema);
+        assert_eq!(
+            payload["next_call"],
+            json!({"tool": "query", "args": {"argv": ["find"], "collection": "InferenceBackend", "options": {"fields": ["backend_id"]}}})
+        );
+        assert_eq!(
+            payload["note"],
+            "Field inventory (restricted fields excluded). Read rows with next_call, keeping only the fields you need."
+        );
     }
 }

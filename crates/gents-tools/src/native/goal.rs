@@ -117,7 +117,7 @@ impl Tool for UpdateGoalTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Edit the active goal's objective or token budget, or mark it complete or blocked. Omit status when editing; edits apply only while the goal is active. Completion requires the objective to be achieved; blocked requires the same condition across at least three consecutive goal turns. When the goal is blocked, paused, or usage_limited, edits and reactivation are refused: an operator resumes it with `gents automation goal resume-request --session SESSION --from REQUEST_ID`. For usage_limited, the operator must also resolve the account limit before resuming. A complete goal is terminal and a budget_limited goal cannot be reactivated: neither has a resume path.".to_string(),
+            description: "Edit the active goal's objective or token budget, or mark it complete or blocked. Omit status when editing; edits apply only while the goal is active, and a refusal says how that goal can run again. Completion requires the objective to be achieved; blocked requires the same condition across at least three consecutive goal turns.".to_string(),
             parameters: json!({
                 "type": "object",
                 "additionalProperties": false,
@@ -244,9 +244,21 @@ mod tests {
         assert!(definition
             .description
             .contains("edits apply only while the goal is active"));
-        assert!(definition
-            .description
-            .contains("gents automation goal resume-request --session SESSION --from REQUEST_ID"));
+        assert!(
+            definition
+                .description
+                .contains("a refusal says how that goal can run again")
+                && !definition.description.contains("gents automation"),
+            "the operator command lives in the refusal, not the description: {}",
+            definition.description
+        );
+        assert!(
+            gents_protocol::operations::goal::GoalOperationError::NotEditable(
+                gents_protocol::goal_status::GoalStatus::Blocked
+            )
+            .to_string()
+            .contains("gents automation goal resume-request --session SESSION --from REQUEST_ID")
+        );
         let description = definition.parameters["properties"]["token_budget"]["description"]
             .as_str()
             .expect("budget description");

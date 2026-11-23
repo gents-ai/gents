@@ -1654,7 +1654,7 @@ async fn schema_preview_and_publication_expose_ignored_native_directives() {
     assert_eq!(access["next_call"]["tool"], "config", "{created}");
     assert_eq!(
         access["next_call"]["args"]["argv"],
-        json!(["tools", "edit"]),
+        json!(["tools", "update"]),
         "{created}"
     );
     assert_eq!(
@@ -1672,4 +1672,47 @@ async fn schema_preview_and_publication_expose_ignored_native_directives() {
     .await;
     assert!(valid.get("warnings").is_none(), "{valid}");
     db.node.shutdown().await.unwrap();
+}
+
+#[test]
+fn collection_listing_matches_lean() {
+    gents_lean_vocab::families::schema_collections_listed::replay(|i| {
+        lists_collection(i.include_runtime, i.runtime_managed)
+    });
+}
+
+#[tokio::test]
+async fn collection_list_names_application_collections_unless_all_are_asked_for() {
+    let db = node().await;
+    let node = db.node.clone();
+    let tool = SchemaTool::new(node.clone());
+    ConfigAccess::local(node.clone())
+        .add_collection("type ListedProbe { value: Int }")
+        .await
+        .unwrap();
+    let runtime = gents_store::schema::catalog::runtime_collection_names()
+        .next()
+        .unwrap();
+
+    let apps = call(&tool, json!({"argv":["collection","list"]})).await;
+    let listed = apps["collections"].as_array().unwrap();
+    assert!(listed.contains(&json!("ListedProbe")), "{apps}");
+    assert!(!listed.contains(&json!(runtime)), "{apps}");
+    assert!(
+        apps["runtime_collections_hidden"].as_u64().unwrap() > 0,
+        "{apps}"
+    );
+    assert_eq!(
+        apps["next_call"],
+        json!({"tool":"schema","args":{"argv":["collection","list"],"options":{"scope":"all"}}})
+    );
+
+    let all = call(&tool, apps["next_call"]["args"].clone()).await;
+    let listed = all["collections"].as_array().unwrap();
+    assert!(
+        listed.contains(&json!("ListedProbe")) && listed.contains(&json!(runtime)),
+        "{all}"
+    );
+    assert!(all.get("next_call").is_none(), "{all}");
+    node.shutdown().await.unwrap();
 }

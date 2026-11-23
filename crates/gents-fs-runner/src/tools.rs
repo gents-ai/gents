@@ -7,10 +7,9 @@ use globset::GlobBuilder;
 
 use crate::context::RunnerContext;
 use crate::output::{
-    default_ignored_names, echoed_pattern, format_entries, format_grep_matches, render_tool_output,
-    render_within_budget, summarize_entries, total_count, truncate_grep_preview, GlobMetadata,
-    GlobOutput, GrepMetadata, GrepOutput, GrepOutputMatch, ListFilesMetadata, ListFilesOutput,
-    MAX_RESPONSE_BYTES,
+    echoed_pattern, format_entries, format_grep_matches, render_tool_output, render_within_budget,
+    summarize_entries, total_count, truncate_grep_preview, GlobMetadata, GlobOutput, GrepMetadata,
+    GrepOutput, GrepOutputMatch, ListFilesMetadata, ListFilesOutput, MAX_RESPONSE_BYTES,
 };
 use crate::protocol::{GlobArgs, GrepArgs, ListFilesArgs, NativeFsRunnerRequest};
 use crate::traversal::{
@@ -120,7 +119,7 @@ fn list_files(context: &RunnerContext, args: ListFilesArgs) -> Result<String> {
                     returned_count: items.len(),
                     total_count: total_count(items.len(), truncated),
                     truncated,
-                    default_ignored: default_ignored_names(),
+                    default_ignored: entries.walk.default_ignored.clone(),
                     summary: summarize_entries(items),
                     walk: entries.walk.clone(),
                 },
@@ -211,7 +210,7 @@ fn glob(context: &RunnerContext, args: GlobArgs) -> Result<String> {
                     returned_count: items.len(),
                     total_count: total_count(items.len(), truncated),
                     truncated,
-                    default_ignored: default_ignored_names(),
+                    default_ignored: matches.walk.default_ignored.clone(),
                     walk: matches.walk.clone(),
                 },
                 matches: items.to_vec(),
@@ -284,7 +283,7 @@ fn grep(context: &RunnerContext, args: GrepArgs) -> Result<String> {
                     total_count: total_count(items.len(), truncated),
                     files_with_matches,
                     truncated,
-                    default_ignored: default_ignored_names(),
+                    default_ignored: collected.walk.default_ignored.clone(),
                     bytes_read,
                     skipped_large_files: file_stats.skipped_large_files,
                     skipped_binary_files: file_stats.skipped_binary_files,

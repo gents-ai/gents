@@ -25,10 +25,10 @@ fn action_help(topic: Option<&str>) -> Result<&'static str> {
             r#"{"action":"get","session_id":"<ID>"}. Session ID is required; discover it with list or search. Returns the session's identity, state and latest request. details=true adds the whole session document with its signed creation receipt, plus timeline, tool/token/context accounting and compaction observations."#
         }
         Some("transcript") => {
-            r#"{"action":"transcript","session_id":"<ID>","limit":6}. Session ID is required; discover it with list or search. Returns canonical text by sequence and role, up to six messages and 8000 characters per chunk; text_offset and text_complete appear only on a split message. details=true adds physical message IDs and payload references. Pass next_cursor as cursor with the same session_id to continue."#
+            r#"{"action":"transcript","session_id":"<ID>","limit":6}. Session ID is required; discover it with list or search. Returns canonical text by sequence and role, up to six messages and 8000 characters per chunk; text_offset and text_complete appear only on a split message. A message that called tools lists them in tool_calls, each with the call_id that action output reads. details=true adds physical message IDs and payload references. Pass next_cursor as cursor with the same session_id to continue."#
         }
         Some("output") => {
-            r#"{"action":"output","call_id":"<call_id>"}. Returns a tool call's full stored output, including bytes trimmed from the model's view, 16000 bytes per page. call_id comes from a tool result or a [tool: …] stub; session_id defaults to the current session. Continue with the returned next_call: its offset_bytes and expected_hash keep pages from mixing output versions. If a call_id is ambiguous, pass the tool_call_doc_id the error lists."#
+            r#"{"action":"output","call_id":"<call_id>"}. Returns a tool call's full stored output, including bytes trimmed from the model's view, 16000 bytes per page. call_id comes from a transcript entry's tool_calls, a tool result or a [tool: …] stub; session_id defaults to the current session. Continue with the returned next_call: its offset_bytes and expected_hash keep pages from mixing output versions. If a call_id is ambiguous, pass the tool_call_doc_id the error lists."#
         }
         Some(_) => bail!(guided("unknown help topic", json!({"action":"help"}))),
     })
@@ -592,7 +592,7 @@ async fn tool_output(
             }
             match docs.len() {
                 0 => bail!(guided(
-                    format!("no tool call with call_id {key} in session {session_id}"),
+                    format!("no tool call with call_id {key} in session {session_id}; transcript lists each message's tool_calls with their call_id"),
                     transcript_call
                 )),
                 1 => docs.pop_first().unwrap(),
@@ -750,6 +750,10 @@ async fn transcript(
         let complete = presentation.body_markdown.chars().count() <= consumed;
         let mut entry =
             json!({"sequence":header.sequence,"role":presentation.role.label(),"text":text});
+        let calls = tool_calls(&header.blocks);
+        if !calls.is_empty() {
+            entry["tool_calls"] = json!(calls);
+        }
         if offset != 0 || !complete {
             entry["text_offset"] = json!(offset);
             entry["text_complete"] = json!(complete);
@@ -776,6 +780,18 @@ async fn transcript(
         }
     }
     Ok(json!({"messages":messages,"session_id":id,"next_cursor":next}))
+}
+
+fn tool_calls(blocks: &[gents_protocol::output::MessageBlock]) -> Vec<Value> {
+    blocks
+        .iter()
+        .filter_map(|block| match block {
+            gents_protocol::output::MessageBlock::ToolCall {
+                id, call_id, name, ..
+            } => Some(json!({"call_id": call_id.as_deref().unwrap_or(id), "tool": name})),
+            _ => None,
+        })
+        .collect()
 }
 
 async fn search_session(
