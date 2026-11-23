@@ -1421,9 +1421,13 @@ mod tests {
         let archives = fixture_archives().await;
         let archives = borrowed(&archives);
         let home = tempfile::tempdir().unwrap();
-        crate::commands::init::init_home_with_core_packs(init_args(home.path(), &[]), &archives)
-            .await
-            .unwrap();
+        crate::commands::init::init_home_with_core_packs(
+            init_args(home.path(), &[]),
+            &archives,
+            InitEntryPoint::Cli,
+        )
+        .await
+        .unwrap();
         enable(home.path(), &archives, &[CorePack::DynamicWorkflows], None)
             .await
             .unwrap();
