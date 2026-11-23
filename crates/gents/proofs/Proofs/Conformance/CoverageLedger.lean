@@ -78,8 +78,7 @@ def boundaries : List Boundary :=
 scan refuses a family missing from this list and a name here that a test
 consumes, so the list only shrinks: a new family arrives with its consumer. -/
 def openFamilies : List String :=
-  [ "apply_reconcile_contract_cases_publish_cases"
-  , "contracts_atomic_admission_unreached"
+  [ "contracts_atomic_admission_unreached"
   , "contracts_background_wake_rows_unreached"
   , "contracts_edit_anchor_fork_unreached"
   , "contracts_fork_publication_unreached"

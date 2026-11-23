@@ -281,7 +281,7 @@ The configuration and session contracts, and the owner each one keeps:
 | Plugin access answers | `ToolPolicy/PluginApproval` admits an answer only for the same unanswered question before its waiter deadline. Cancellation removes the question while preserving existing grants; duplicate answers cannot widen access. The `plugin_approval_unscoped_step`, `plugin_approval_scoped_step` and `plugin_approval_delivery` families drive the native queue, answer and grant files. Native locks serialize filesystem operations; cross-file I/O atomicity is not modeled. |
 | Event groups | Trigger and callback consumers share `EventGroupKey`, candidate eligibility and the durable clock in `EventDelivery/Group`. Callback input and group origin live on the existing invocation and survive its transitions; retries do not reproject live sources. |
 | Self-configuration | Existing patch/validate/guard owner remains. Canonical nested fields replace flattened legacy fields; the opt-in no-lockout guard (`keepsControl`) consumes decoded self-config and agents enablement and is the only lockout protection; the always-on `keepsGrants` bounds each operator-managed grant on its own, and pack installation may be raised only within what the stored Tools carry or the invoking agent holds; `reselectionKeepsGrants` applies the same bound to Context and Agent re-points, new Contexts and clones; `SelfConfig/Auth` permits environment/OAuth reference edits while preventing new raw-key writes, which includes the static `awsCredentials` and `googleCredentials` auth. `Configuration/ClaudePlatform` fixes which `claude_platform` settings each Claude platform provider kind requires or refuses and the default base URL they derive; its generated cases bind the Rust validation and URL derivation. |
-| Installation | `ApplyReconcile/Publication` validates same-owner reference closure and publishes atomically without altering observations. There is one publication model; reference cycles are supported. Document references carry their node once, so same-label documents from different nodes coexist. The runtime bridge requires successful complete configuration resolution and a separate availability observation; document presence does not imply readiness. Authored IDs use an injective mapping to lifecycle IDs. Candidate construction, ACP checks, and transaction implementation are refinement boundaries. `publishIf` adds an expected-field precondition on the same publication; a stale expectation leaves state unchanged and an empty scope is `publish`. |
+| Installation | `ApplyReconcile/Publication` owns two decisions. `applyPlan` merges a plan (writes and removals) over the stored desired documents, keeps every document the plan does not name, and re-checks the affected documents' same-owner references against the result atomically without altering observations; an application never leaves a dangling reference (`application_preserves_closure`) and a removal a retained document still references is refused (`removal_of_referenced_rejects`). `prune` names the stored documents the authored state leaves out that nothing else references (`pruned_removals_keep_closure`). Reference cycles are supported. Document references carry their node once, so same-label documents from different nodes coexist. The runtime bridge requires successful complete configuration resolution and a separate availability observation; document presence does not imply readiness. Authored IDs use an injective mapping to lifecycle IDs. ACP checks and transaction implementation are refinement boundaries. `applyPlanIf` adds an expected-field precondition on the same application; a stale expectation leaves state unchanged and an empty scope is `applyPlan`. Families `apply_reconcile_contract_cases_apply_cases`, `_apply_if_cases` and `_prune_cases` replay `apply_desired_state_plan` and the CLI's `prune_safe_deletes`. |
 | Execution | Tool execution removes per-call approval states/transitions. Request terminalization, managed execution, foreground progress, and enrollment authorization retain their owners. `TaskHooks` command results are external observations; the hook contract covers sequencing and failure handling, not exactly-once host effects. |
 | Identity | `Identity` resolves agent labels with an explicit node; shared labels never determine permissions or imply a global ID-to-node mapping. Structural fixture results evaluate the actual well-formedness predicate. |
 | Session title text | `TitleText` owns generated phrases, bounds, provider instructions, and preservation of user-authored names. |
@@ -684,7 +684,7 @@ Semantic submodules:
 | `Proofs.Session.RequestExecutionLease` | `State`, `Transition`, `Properties` |
 | `Proofs.Runtime.InferenceCall` | `State`, `Transition`, `Executable`, `Properties`, `SlotAccounting`, `ControllerBookkeeping`, `Registry`, `Persistence` |
 | `Proofs.Runtime.RuntimeReconcile` | `State`, `Transition`, `Executable` |
-| `Proofs.Runtime.ApplyReconcile` | `Collections`, `Manifest`, `Publication` (includes digest-guarded `publishIf`), `Convergence`, `RuntimeBridge` |
+| `Proofs.Runtime.ApplyReconcile` | `Collections`, `Manifest`, `Publication` (`applyPlan`, digest-guarded `applyPlanIf`, `prune`), `Convergence`, `RuntimeBridge` |
 | `Proofs.Automation.Triggers` | `Types`, `Dispatch`, `Reachability`, `SerialSupport`, `Serial`, `LatestOnly`, `Lineage`, `Groups`, `Identity`, `Queue`, `Durable`, `Refinement` |
 | `Proofs.Automation.Triggers.SerialSupport` | `Counting`, `Preservation` |
 | `Proofs.Session.Client` | `Types`, `Lifecycle`, `Terminal`, `Replacement`, `Output` |
@@ -1121,18 +1121,15 @@ snapshots.
 
 ### Apply/Reconcile
 
-`Proofs/Runtime/ApplyReconcile.lean` models one atomic publication path:
+`Proofs/Runtime/ApplyReconcile.lean` models one atomic application path:
 
 - ordinary references resolve to documents with the same owner; cycles are allowed
-- accepted publication replaces the complete desired snapshot and preserves observations
-- rejected publication changes nothing; repeating publication is idempotent
+- an admitted plan merges over the stored desired documents, keeps what it does not name and preserves observations
+- references of affected documents resolve against the stored documents and the plan together; no application leaves a dangling reference
+- prune removes only stored documents the authored state leaves out and nothing else references
+- a refused application changes nothing; repeating an application is idempotent
 - the common context/inference resolver determines configuration readiness
 - runtime availability remains a separate observation; invalid configuration stays unavailable
-- executable fixture rows invoke `publish` directly
-
-The conformance layer must regenerate these fixtures and wire the transaction/decoder
-bridge to this model. No collection ranking, partial-write installer, or separate
-fixture implementation remains in the formal layer.
 
 ### Triggers
 

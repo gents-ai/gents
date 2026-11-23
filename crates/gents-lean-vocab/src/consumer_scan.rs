@@ -277,7 +277,6 @@ mod tests {
     /// only shrinks: a family leaves it when its consumer is written or Lean
     /// stops emitting it, and a new family arrives with its consumer.
     const OPEN: &[&str] = &[
-        "apply_reconcile_contract_cases_publish_cases",
         "contracts_atomic_admission_unreached",
         "contracts_background_wake_rows_unreached",
         "contracts_edit_anchor_fork_unreached",
