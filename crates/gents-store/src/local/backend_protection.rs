@@ -532,7 +532,15 @@ impl<'a> ProtectedBackendStore<'a> {
             validate_binding(&node).await?;
             match account {
                 None => Ok(None),
-                Some(account) => Ok(Some(require_device_group(&node, &did, account).await?)),
+                Some(account) => {
+                    let group = require_device_group(&node, &did, account).await?;
+                    if shared_account.is_some() {
+                        crate::schema::catalog::verify_installed_transport(&node)
+                            .await
+                            .map_err(|error| BackendProtectionError::Schema(error.into()))?;
+                    }
+                    Ok(Some(group))
+                }
             }
         }
         .await;

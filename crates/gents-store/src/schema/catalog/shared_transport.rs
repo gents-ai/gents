@@ -106,6 +106,25 @@ pub(super) fn resource(ids: &HomePolicyIds, collection: &str) -> Option<&'static
     })
 }
 
+/// Recheck every installed collection against its certified registration before
+/// serving a reopened shared home. This path must not recreate a withdrawn grant.
+pub(crate) async fn verify_installed_transport(node: &Node) -> Result<(), SchemaError> {
+    let ids = crate::local::document_acp::node_policy_ids(node);
+    for entry in super::runtime_catalog(ids).baseline {
+        let Some(resource) = resource(ids, entry.name) else {
+            continue;
+        };
+        let proof = verify(node, entry, resource).await?;
+        let installed = node.get_collection(entry.name)?;
+        if !installed.is_some_and(|collection| collection.collection_id == proof.child) {
+            return Err(SchemaError::SharedTransportAdmission {
+                collection: entry.name.to_owned(),
+            });
+        }
+    }
+    Ok(())
+}
+
 pub(super) async fn verify(
     node: &Node,
     entry: &BaselineCollection<'_>,
