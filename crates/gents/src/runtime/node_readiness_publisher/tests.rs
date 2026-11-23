@@ -748,21 +748,16 @@ async fn published_readiness_observation_matches_model() {
                 }
             }
         }
-        let doc = escape_graphql_string(&fixture.doc);
-        match name {
-            "no-readiness" => {
-                fixture
-                    .runtime_access
-                    .write(
-                        "test.readiness.delete",
-                        &format!(
-                            r#"mutation {{ delete_NodeReadiness(docID: "{doc}") {{_docID}} }}"#
-                        ),
-                    )
-                    .await
-                    .unwrap();
-            }
-            _ => {}
+        if name == "no-readiness" {
+            let doc = escape_graphql_string(&fixture.doc);
+            fixture
+                .runtime_access
+                .write(
+                    "test.readiness.delete",
+                    &format!(r#"mutation {{ delete_NodeReadiness(docID: "{doc}") {{_docID}} }}"#),
+                )
+                .await
+                .unwrap();
         }
         let requested = identity::Did::new(fixture.runtime.did()).unwrap();
         let observer = if name == "foreign-runtime" {
