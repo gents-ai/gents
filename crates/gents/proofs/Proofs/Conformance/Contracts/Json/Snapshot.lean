@@ -13,6 +13,7 @@ import Proofs.Conformance.WorkspaceFileConsent
 import Proofs.Conformance.AuthoringFileMode
 import Proofs.Conformance.DiscoveryFieldVisibility
 import Proofs.Conformance.DatastoreProtection
+import Proofs.Conformance.SessionCustody
 import Proofs.Conformance.Identity.DelegatedPublicationRecovery
 import Proofs.Conformance.SelfConfigStructured
 import Proofs.Conformance.Recovery.PeriodicRegistry
