@@ -45,6 +45,15 @@ impl ReplicaOwnership for TransportReplica {
         creator: &Did,
         provider: &dyn acp::DocumentACP,
     ) -> acp::Result<bool> {
+        // A gated genesis must be registered by its publisher. Registering it
+        // as the receiver would lend the receiver's parent permission to the signer.
+        if collection
+            .policy
+            .as_ref()
+            .is_some_and(|policy| policy.parent_field.is_some())
+        {
+            return Ok(false);
+        }
         let expected_resource = identity_policy_resource(&collection.name);
         if !collection.is_branchable
             || !collection.policy.as_ref().is_some_and(|policy| {
@@ -89,5 +98,44 @@ impl ConfigAccess {
             object,
         };
         Ok(Some(TransportReplica(group)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn receiver_cannot_lend_its_registration_permission_to_a_replica_signer() {
+        use gents_protocol::schemas::{HomePolicyIds, PEER_REGISTRY};
+        let ids = HomePolicyIds::embedded_vera_transport_v2();
+        let policy = ids.id(BuiltInPolicy::Household);
+        let collection = query::parse_sdl(&ids.render(PEER_REGISTRY))
+            .unwrap()
+            .remove(0);
+        assert!(collection.policy.as_ref().unwrap().parent_field.is_some());
+        let receiver = TransportReplica(ReplicaGroup {
+            owner: Did::new(
+                crate::config_client::ClientSigningCapability::from_ed25519_key(&[1; 32])
+                    .unwrap()
+                    .did(),
+            )
+            .unwrap(),
+            policy: policy.into(),
+            resource: "device_groups".into(),
+            object: "group".into(),
+            relation: "member".into(),
+        });
+        let local = acp::LocalDocumentACP::new(Arc::new(acp::MemoryAcpStore::new()));
+        let creator = Did::new(
+            crate::config_client::ClientSigningCapability::from_ed25519_key(&[2; 32])
+                .unwrap()
+                .did(),
+        )
+        .unwrap();
+        assert!(!receiver
+            .allows_foreign_registration(&collection, &creator, &local)
+            .await
+            .unwrap());
     }
 }
