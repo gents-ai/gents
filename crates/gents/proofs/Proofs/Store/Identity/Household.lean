@@ -225,7 +225,7 @@ def policy : List ResourceDefinition :=
 
 def transportV2Policy : List ResourceDefinition := policy.map fun resource =>
   if resource.name == "nodes" then
-    { resource with relations := resource.relations ++ [⟨"transport_publisher", ["actor"], []⟩] }
+    { resource with relations := resource.relations ++ [⟨"transport_publisher", ["actor:individual"], []⟩] }
   else if ["discovery", "scoped_discovery", "enrollment_records"].contains resource.name then
     { resource with create := some ("parent", "transport_publisher") }
   else resource

@@ -10,7 +10,7 @@ resources:
       - name: agent_manager
         types: [nodes->administrator]
       - name: transport_publisher
-        types: [actor]
+        types: [actor:individual]
     permissions:
       - name: read
         expr: administrator + runtime_reader

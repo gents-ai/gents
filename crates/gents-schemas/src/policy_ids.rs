@@ -81,7 +81,7 @@ impl HomePolicyIds {
 
     pub fn embedded_vera_transport_v2() -> &'static Self {
         static V2: HomePolicyIds = HomePolicyIds {
-            household: "27464a372efbc99c67939a6f4c26556d01713f83a0a6af53eb30c42489c9c0a8",
+            household: "8a1056bb86c3b1589858e977696432b78b5071ff9a6432433223826c50b2fbd0",
             mailbox: "5324b84ea41dc068f4d6d29428ace86915d450831862bbb25c3e322c09b603af",
             client_journal: "892a0e58078046d272f53661a1d1ec4091d13948122b4dc82a14eeddb3955618",
             tool_file_change: "da40747a0af6694036fad9782e338525e2ad60b41e1eebd234c22916c2beff53",
