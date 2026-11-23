@@ -1,0 +1,243 @@
+{
+  "case_id": "pallet-pack-remove",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "packs/pallet_labels/README.md",
+        "contents": "# Pallet labels\n\nThe PalletLabel collection and a labelling skill.\n\n## Configuration\n\nNothing to set.\n\n## Usage\n\nInstall the pack.\n"
+      },
+      {
+        "path": "packs/pallet_labels/pack_config.json",
+        "contents": "{\n  \"node\": {},\n  \"skills\": [\n    {\n      \"skill_id\": \"pallet-labelling\",\n      \"name\": \"pallet-labelling\",\n      \"description\": \"Load when printing pallet labels.\",\n      \"instructions\": \"./skills/pallet_labelling/SKILL.md\"\n    }\n  ]\n}\n"
+      },
+      {
+        "path": "packs/pallet_labels/schemas/pallet_label.graphql",
+        "contents": "type PalletLabel {\n  pallet: String\n  bay: String\n  weightKg: Int\n}\n"
+      },
+      {
+        "path": "packs/pallet_labels/skills/pallet_labelling/SKILL.md",
+        "contents": "---\nname: pallet-labelling\ndescription: Load when printing pallet labels.\n---\n\n# Pallet labels\n\nPrint the bay and weight on two sides of every pallet.\n"
+      },
+      {
+        "path": "packs/pallet_labels/manifest.json",
+        "contents": "{\n  \"manifest_version\": 1,\n  \"name\": \"pallet_labels\",\n  \"namespace\": \"yardworks\",\n  \"version\": \"1.0.0\",\n  \"description\": \"Pallet labels.\",\n  \"authors\": [\n    \"yardworks contributors\"\n  ],\n  \"kind\": \"documents\",\n  \"assets\": [\n    \"README.md\",\n    \"pack_config.json\",\n    \"schemas/pallet_label.graphql\",\n    \"skills/pallet_labelling/SKILL.md\"\n  ],\n  \"schemas\": [\n    \"schemas/pallet_label.graphql\"\n  ],\n  \"config\": \"pack_config.json\"\n}\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "install",
+      "prompt": "Install the pack in packs/pallet_labels.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "install",
+          "collection": "PackInstallation",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "coordinate": {
+              "_eq": "yardworks/pallet_labels"
+            }
+          },
+          "fields": [
+            "coordinate",
+            "version",
+            "digest",
+            "source"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "skills",
+          "collection": "Skill",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "skill_id": {
+              "_in": [
+                "pallet-labelling"
+              ]
+            }
+          },
+          "fields": [
+            "skill_id",
+            "name",
+            "description",
+            "instructions",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "PalletLabel"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "install",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "skills",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "install",
+                "key": "coordinate",
+                "id": "yardworks/pallet_labels",
+                "expect": [
+                  {
+                    "field": "version",
+                    "equals": "1.0.0"
+                  },
+                  {
+                    "field": "digest",
+                    "matches": "^sha256:[0-9a-f]{64}$"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "schema",
+            "sdl": "type PalletLabel { pallet: String bay: String weightKg: Int }"
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "remove",
+      "prompt": "We're done with the pallet labels pack. Remove it from this node, but keep the PalletLabel collection: other tools still read it.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "install",
+          "collection": "PackInstallation",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "coordinate": {
+              "_eq": "yardworks/pallet_labels"
+            }
+          },
+          "fields": [
+            "coordinate",
+            "version",
+            "digest",
+            "source"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "skills",
+          "collection": "Skill",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "skill_id": {
+              "_in": [
+                "pallet-labelling"
+              ]
+            }
+          },
+          "fields": [
+            "skill_id",
+            "name",
+            "description",
+            "instructions",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "PalletLabel"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "install",
+                "min": 0,
+                "max": 0
+              },
+              {
+                "capture": "skills",
+                "min": 0,
+                "max": 0
+              }
+            ],
+            "rows": []
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "schema",
+            "sdl": "type PalletLabel { pallet: String bay: String weightKg: Int }"
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}
