@@ -423,6 +423,10 @@ fn recorded_deployment(data: &Path) -> Result<Option<Deployment>> {
         .map_err(|source| DocumentAcpError::Record { path, source })
 }
 
+pub(super) fn recorded_connection(data: &Path) -> Result<Option<VeraConnection>> {
+    Ok(recorded_deployment(data)?.map(|deployment| deployment.connection))
+}
+
 /// The provider the store at `data` was created with.
 pub(crate) fn recorded(data: &Path) -> Result<DocumentAcp> {
     Ok(match recorded_deployment(data)? {

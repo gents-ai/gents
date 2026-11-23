@@ -72,6 +72,8 @@ pub enum BackendProtectionError {
     NodeAcpRead(#[source] db::nac::Error),
     #[error("node access control must be owned by the home's User, not its Node")]
     NodeOwnedNodeAcp,
+    #[error("the requested transport account differs from the follower’s deployment anchor")]
+    WrongTransportAccount,
     #[error("the shared Vera operator must be the home’s account")]
     WrongVeraAccount,
     #[error("the store could not be checked on a copy; the original was not opened")]
@@ -274,14 +276,18 @@ impl<'a> FreshBackendStore<'a> {
             node,
             connection,
         )?;
-        let node = start(builder).await?;
+        let node = Arc::new(start(builder).await?);
         let result: Result<_> = async {
+            let deployment = document_acp::created(&node, document_acp, connection)?;
             grant_node_runtime(&node, nac_owner, &did).await?;
+            if let document_acp::VeraConnection::Follower { anchor, .. } = connection {
+                require_device_group(&node, &did, &anchor.account).await?;
+            }
             crate::schema::ensure_runtime_schemas(&node)
                 .await
                 .map_err(BackendProtectionError::Schema)?;
             validate_binding(&node).await?;
-            Ok(document_acp::created(&node, document_acp, connection)?)
+            Ok(deployment)
         }
         .await;
         let shutdown = node.shutdown().await;
@@ -367,7 +373,21 @@ impl<'a> ProtectedBackendStore<'a> {
         account: Option<&identity::Did>,
     ) -> Result<PreflightProtectedBackendStore<'a>> {
         let did = node_did(node)?;
-        let ids = document_acp::home_policy_ids(document_acp::recorded(&self.data)?);
+        let connection = document_acp::recorded_connection(&self.data)?;
+        let account = match &connection {
+            Some(document_acp::VeraConnection::Follower { anchor, .. }) => {
+                if account.is_some_and(|requested| requested != &anchor.account) {
+                    return Err(BackendProtectionError::WrongTransportAccount);
+                }
+                Some(&anchor.account)
+            }
+            _ => account,
+        };
+        let ids = document_acp::home_policy_ids(if connection.is_some() {
+            DocumentAcp::Vera
+        } else {
+            DocumentAcp::Local
+        });
         let stamped = super::store_compat::stamped(&self.data, ids);
         if !stamped {
             checked_copy(
@@ -390,15 +410,7 @@ impl<'a> ProtectedBackendStore<'a> {
             validate_binding(&node).await?;
             match account {
                 None => Ok(None),
-                Some(account) => {
-                    let actor =
-                        identity::Did::new(&did).map_err(|_| BackendProtectionError::WrongNode)?;
-                    let access = crate::config_client::ConfigAccess::local_as(node.clone(), actor);
-                    let group = access.transport_replica(account).await?.ok_or_else(|| {
-                        BackendProtectionError::DeviceNotAdmitted(account.clone())
-                    })?;
-                    Ok(Some(group))
-                }
+                Some(account) => Ok(Some(require_device_group(&node, &did, account).await?)),
             }
         }
         .await;
@@ -534,6 +546,18 @@ impl BackendAdmission {
         }
         validate_binding(node).await
     }
+}
+
+async fn require_device_group(
+    node: &Arc<defra_node::Node>,
+    device: &str,
+    account: &identity::Did,
+) -> Result<crate::config_client::transport_replica::TransportReplica> {
+    let actor = identity::Did::new(device).map_err(|_| BackendProtectionError::WrongNode)?;
+    crate::config_client::ConfigAccess::local_as(node.clone(), actor)
+        .transport_replica(account)
+        .await?
+        .ok_or_else(|| BackendProtectionError::DeviceNotAdmitted(account.clone()))
 }
 
 /// The owner grants the Node `Identity.GrantSets.nodeRuntimePermissions` once,
