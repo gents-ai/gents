@@ -45,7 +45,14 @@ inductive Origin
 permissions its plugins request, a reader on the Engineer's tool root, or a
 consent. Installing Gents is the consent to the core packs its release
 carries (maintainer decision 2026-11-13), so a release archive installs
-without asking; any other archive that grants something asks. -/
+without asking; any other archive that grants something asks.
+
+An eval trial's node is set up the same way (eval foundation, 2026-11-22): a
+trial is a node the run creates for its subject and discards, its definition
+names the core packs that subject starts with, and the operator who starts
+the run consents to the archives the running release carries for it. So a
+trial installs them as `init` does, with this consent and `initWiring`, and
+an archive from anywhere else still asks. -/
 def approvalRequired (origin : Origin) (grants : Bool) : Bool :=
   grants && origin == .other
 
@@ -197,6 +204,15 @@ inductive EnableRoute
 
 def enableRoute (served installed : Bool) : EnableRoute :=
   if !served then .home else if installed then .runtime else .stopFirst
+
+/-- A node being set up writes through its own store whether or not it has
+the pack: `init` installs before the node's runtime first starts, and so
+does an eval trial, whose process holds the trial node's store and starts
+its runtime only after its core packs are installed. Neither is served
+while it installs, so neither is ever told to stop first. -/
+theorem setup_before_the_runtime_writes_through_the_home (installed : Bool) :
+    enableRoute false installed = .home := by
+  cases installed <;> rfl
 
 /-- The enable `init` names for dynamic workflows, which init installed,
 needs no stop. -/
