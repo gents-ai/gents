@@ -193,3 +193,32 @@ impl ConfigAccess {
         }).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn publisher_registration_binds_the_device_and_the_account() {
+        let signer =
+            crate::config_client::ClientSigningCapability::from_ed25519_key(&[1; 32]).unwrap();
+        let other =
+            crate::config_client::ClientSigningCapability::from_ed25519_key(&[2; 32]).unwrap();
+        let account = Did::new(signer.did()).unwrap();
+        let device = Did::new(other.did()).unwrap();
+        let signed = db::block::builder::ClientCreateSignatures::from_input(
+            &storage::Crdts::default(),
+            &publisher_schema().unwrap(),
+            &publisher_input(&device),
+            &signer.config,
+        )
+        .unwrap();
+        let evidence = serde_json::to_value(signed.evidence()).unwrap();
+        assert_eq!(
+            verified_publisher_node(evidence.clone(), &device, &account).unwrap(),
+            signed.doc_id()
+        );
+        assert!(verified_publisher_node(evidence.clone(), &account, &account).is_err());
+        assert!(verified_publisher_node(evidence, &device, &device).is_err());
+    }
+}
