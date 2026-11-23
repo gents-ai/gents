@@ -112,7 +112,6 @@ def openFamilies : List String :=
   , "household_tool_grant_rebinding_unreached"
   , "household_unattended_receipt_unreached"
   , "identity_operations_readiness_recovery_unreached"
-  , "mailbox_handoff_contracts_linked_unreached"
   , "native_completion_trace_unreached"
   , "native_refinement_claim_unreached"
   , "node_provisioning_bootstrap_grant_unreached"
