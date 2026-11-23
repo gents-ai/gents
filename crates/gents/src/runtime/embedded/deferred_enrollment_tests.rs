@@ -185,8 +185,8 @@ async fn deferred_enrollment_documents_remain_private_then_follow_the_node() -> 
         r#"mutation {{ create_Node(input: {{node_did: "{}"}}) {{_docID}} }}"#,
         escape_graphql_string(runtime.did()),
     );
-    let unregistered = ConfigAccess::write_local(&node, "test.deferred.unregistered_node", &node_mutation)
-        .await?;
+    let unregistered =
+        ConfigAccess::write_local(&node, "test.deferred.unregistered_node", &node_mutation).await?;
     let unregistered = gents_protocol::graphql::extract_mutation_doc_id(&unregistered, "Node")?;
     node.document_acp()
         .unregister_doc_object(
@@ -217,8 +217,14 @@ async fn deferred_enrollment_documents_remain_private_then_follow_the_node() -> 
         observe(
             &mut observed,
             "unregistered-node",
-            deferred_state(&runtime_access, &user_access, collection, doc, Some(unregistered.as_str()))
-                .await?,
+            deferred_state(
+                &runtime_access,
+                &user_access,
+                collection,
+                doc,
+                Some(unregistered.as_str()),
+            )
+            .await?,
         );
     }
     ConfigAccess::write_local(
@@ -268,7 +274,14 @@ async fn deferred_enrollment_documents_remain_private_then_follow_the_node() -> 
         observe(
             &mut observed,
             "foreign-runtime",
-            deferred_state(&runtime_access, &user_access, collection, doc, Some(parent.as_str())).await?,
+            deferred_state(
+                &runtime_access,
+                &user_access,
+                collection,
+                doc,
+                Some(parent.as_str()),
+            )
+            .await?,
         );
     }
     let (aborted_collection, aborted_doc) = &created[0];
@@ -326,7 +339,14 @@ async fn deferred_enrollment_documents_remain_private_then_follow_the_node() -> 
         observe(
             &mut observed,
             "success",
-            deferred_state(&runtime_access, &user_access, collection, doc, Some(parent.as_str())).await?,
+            deferred_state(
+                &runtime_access,
+                &user_access,
+                collection,
+                doc,
+                Some(parent.as_str()),
+            )
+            .await?,
         );
         let mutation = format!(
             r#"mutation {{ update_{collection}(docID: "{}", input: {{node_doc_id: "forged"}}) {{_docID}} }}"#,
@@ -378,7 +398,14 @@ async fn deferred_enrollment_documents_remain_private_then_follow_the_node() -> 
         observe(
             &mut observed,
             "revoked-after-publication",
-            deferred_state(&runtime_access, &user_access, collection, doc, Some(parent.as_str())).await?,
+            deferred_state(
+                &runtime_access,
+                &user_access,
+                collection,
+                doc,
+                Some(parent.as_str()),
+            )
+            .await?,
         );
     }
     node.shutdown().await?;
@@ -407,7 +434,14 @@ async fn deferred_enrollment_documents_remain_private_then_follow_the_node() -> 
         observe(
             &mut observed,
             "revoked-after-publication",
-            deferred_state(&runtime_access, &user_access, collection, doc, Some(parent.as_str())).await?,
+            deferred_state(
+                &runtime_access,
+                &user_access,
+                collection,
+                doc,
+                Some(parent.as_str()),
+            )
+            .await?,
         );
     }
     let foreign = user_access.write("test.deferred.foreign", r#"mutation { create_NetworkAdminPin(input: {pin_key:"foreign-pin", network_id:"foreign", admin_did:"did:test:admin", offer_id:"foreign", confirmed_at:"2026-01-01T00:00:00Z", parent_linked:false}) {_docID} }"#).await?;
@@ -474,7 +508,8 @@ async fn deferred_state(
         .as_bool()
         .context("parent_linked marker")?;
     let read = parent_reader.execute(&query).await?;
-    let granted = !gents_protocol::graphql::graphql_rows_from_response(&read, collection).is_empty();
+    let granted =
+        !gents_protocol::graphql::graphql_rows_from_response(&read, collection).is_empty();
     Ok((parent, granted, linked))
 }
 

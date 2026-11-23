@@ -578,29 +578,7 @@ async fn recovery_fixture(name: &str, pending: bool) -> RecoveryFixture {
     } else {
         runtime.did()
     };
-    let publish = upsert_node_readiness(&node, selected, &snapshot, "2026-01-01T00:00:01Z");
-    let result = match name {
-        "mark-failed" | "retry-mark" => {
-            let (result, trace) =
-                gents_store::config_client::ConfigApplyTxn::with_successful_mutation_failure_and_trace(
-                    Some(2),
-                    publish,
-                )
-                .await;
-            assert_eq!(
-                trace.last(),
-                Some(&Some("readiness.mark_parent_linked")),
-                "the injected failure targets the publication mark: {trace:?}"
-            );
-            assert!(result.is_err());
-            if name == "retry-mark" {
-                upsert_node_readiness(&node, selected, &snapshot, "2026-01-01T00:00:02Z").await
-            } else {
-                result
-            }
-        }
-        _ => publish.await,
-    };
+    let result = upsert_node_readiness(&node, selected, &snapshot, "2026-01-01T00:00:01Z").await;
     let observation_access = if name == "owner-mismatch" {
         &user_access
     } else {
@@ -721,8 +699,7 @@ async fn published_readiness_observation_matches_model() {
     for case in gents_lean_vocab::families::identity_operations_readiness_observation::cases() {
         let name = case.input.name.as_str();
         let (fixture_name, pending, mark) = match name {
-            "valid" | "foreign-runtime" | "duplicate-node" | "no-readiness"
-            | "duplicate-readiness" | "missing-parent" => ("success", true, false),
+            "valid" | "foreign-runtime" | "no-readiness" => ("success", true, false),
             "readiness-unregistered" => ("owner-unknown", true, true),
             "foreign-readiness" => ("owner-mismatch", true, true),
             "replaced-parent" => ("parent-mismatch", true, true),
@@ -771,33 +748,8 @@ async fn published_readiness_observation_matches_model() {
                 }
             }
         }
-        let runtime_did = escape_graphql_string(fixture.runtime.did());
         let doc = escape_graphql_string(&fixture.doc);
         match name {
-            "duplicate-node" => {
-                let second = fixture
-                    .user_access
-                    .write(
-                        "test.readiness.second_node",
-                        &format!(
-                            r#"mutation {{ create_Node(input: {{node_did: "{runtime_did}"}}) {{_docID}} }}"#
-                        ),
-                    )
-                    .await
-                    .unwrap();
-                let second =
-                    gents_protocol::graphql::extract_mutation_doc_id(&second, "Node").unwrap();
-                fixture
-                    .user_access
-                    .add_actor_relationship(
-                        "Node",
-                        &second,
-                        "runtime_reader",
-                        &identity::Did::new(fixture.runtime.did()).unwrap(),
-                    )
-                    .await
-                    .unwrap();
-            }
             "no-readiness" => {
                 fixture
                     .runtime_access
@@ -805,42 +757,6 @@ async fn published_readiness_observation_matches_model() {
                         "test.readiness.delete",
                         &format!(
                             r#"mutation {{ delete_NodeReadiness(docID: "{doc}") {{_docID}} }}"#
-                        ),
-                    )
-                    .await
-                    .unwrap();
-            }
-            "duplicate-readiness" => {
-                let row = fixture
-                    .runtime_access
-                    .execute(&format!(
-                        r#"{{ NodeReadiness(filter: {{_docID: {{_eq: "{doc}"}}}}) {{node_doc_id}} }}"#
-                    ))
-                    .await
-                    .unwrap();
-                let parent = row["data"]["NodeReadiness"][0]["node_doc_id"]
-                    .as_str()
-                    .unwrap()
-                    .to_owned();
-                fixture
-                    .runtime_access
-                    .write(
-                        "test.readiness.second_row",
-                        &format!(
-                            r#"mutation {{ create_NodeReadiness(input: {{node_did: "{runtime_did}", node_doc_id: "{}", parent_linked: true, snapshot_json: "{{}}", updated_at: "2026-01-01T00:00:02Z"}}) {{_docID}} }}"#,
-                            escape_graphql_string(&parent)
-                        ),
-                    )
-                    .await
-                    .unwrap();
-            }
-            "missing-parent" => {
-                fixture
-                    .runtime_access
-                    .write(
-                        "test.readiness.clear_parent",
-                        &format!(
-                            r#"mutation {{ update_NodeReadiness(docID: "{doc}", input: {{node_doc_id: null}}) {{_docID}} }}"#
                         ),
                     )
                     .await

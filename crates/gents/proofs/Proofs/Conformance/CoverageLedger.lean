@@ -2173,7 +2173,12 @@ def caseCoverage : List CoverageEntry :=
   , tagged (boundaryCoverage
       "family"
       "identity_operations_readiness_recovery_unreached"
-      "grant-failed, retry-grant-failed: the parent grant is a native relationship change, and the store's fault seams fail only document mutations, so no fixture fails that grant alone.")
+      "grant-failed, retry-grant-failed, mark-failed, retry-mark: the parent grant is a native relationship change and the publication mark is an auto-commit write after it; the store's fault seams fail only mutations inside an apply transaction, so no fixture fails the grant or the mark alone.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage
+      "family"
+      "identity_operations_readiness_observation_unreached"
+      "duplicate-node, duplicate-readiness, missing-parent: node_did carries a unique index on Node and NodeReadiness and a readiness row's node_doc_id is immutable, so one store holds no second Node or readiness row for a runtime and no readiness row whose recorded parent was cleared.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "family"
