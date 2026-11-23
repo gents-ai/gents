@@ -30,9 +30,10 @@ end ClientSyncHealth
 
 namespace RuntimeConnectionObservation
 
-deriving instance Lean.ToJson for Event, SnapshotOutcome, Origin
+deriving instance Lean.ToJson for Event, SnapshotOutcome, Origin, Status
 
 attribute [conformance_function] armedEvent armedAfter snapshotEvent selectedRootSnapshot failedSnapshot reconnects
+  selectionReads
 
 end RuntimeConnectionObservation
 

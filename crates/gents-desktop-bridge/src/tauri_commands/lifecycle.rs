@@ -264,7 +264,10 @@ where
         core
     };
 
-    if let Some(did_str) = did {
+    let reads_now = did
+        .as_deref()
+        .is_none_or(|did| selection_reads_node(core.stores().runtime_connection(did)));
+    if let Some(did_str) = did.filter(|_| reads_now) {
         let core_arc = Arc::clone(&core);
         tauri::async_runtime::spawn(async move {
             if let Err(err) = core_arc.refresh_node(&did_str).await {
@@ -277,6 +280,17 @@ where
         });
     }
     Ok(())
+}
+
+/// Whether selecting a node reads it at once. While its observer is still
+/// connecting, the observer's own first read is what makes the node current;
+/// a second full read beside it only collided with that one (one was
+/// discarded or read again), doubling a launch's requests and holding
+/// "connected" until a third read.
+fn selection_reads_node(
+    observer: Option<gents_observe::client_projection::observe::RuntimeConnectionStatus>,
+) -> bool {
+    observer != Some(gents_observe::client_projection::observe::RuntimeConnectionStatus::Connecting)
 }
 
 const NODE_RECONNECT_ANSWER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
