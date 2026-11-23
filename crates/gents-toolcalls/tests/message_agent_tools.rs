@@ -1249,3 +1249,52 @@ async fn caused_session_records_its_opening_request() {
     node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
+
+/// ACP decides a session interrupt, not `agent_interrupt_allowed`: an Agent
+/// that is not the target session's working Agent and holds no relation to it
+/// cannot read the session's requests, so the owner the message tools and job
+/// effects call refuses and latches nothing; the working Agent latches.
+#[tokio::test]
+async fn an_agent_without_a_relation_to_the_target_session_cannot_interrupt_it() {
+    let (message, _caller, caused) = started(
+        "agent-interrupt-foreign-agent",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = message.admission.node.clone();
+    let scope = SessionScope::of_request(&caused);
+    set_state(
+        &owner(&message),
+        &message.caused_request_doc_id,
+        "processing",
+    )
+    .await;
+    let runtime = message.admission.runtime.clone();
+    let binding = gents_store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
+    let identity =
+        gents_store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
+    let foreign = gents_store::config_client::ConfigAccess::local_managed_agent(
+        node.clone(),
+        binding.agent_did.parse().unwrap(),
+        identity.as_ref(),
+    )
+    .unwrap();
+    let foreign_result = interrupt_session_with_access(&node, &foreign, &scope).await;
+    let latch = || async {
+        owner(&message)
+            .execute(&format!(
+                r#"{{ AgentRequest(docIDs: ["{}"]) {{ interrupt_requested_at }} }}"#,
+                escape_graphql_string(&message.caused_request_doc_id)
+            ))
+            .await
+            .unwrap()["data"]["AgentRequest"][0]["interrupt_requested_at"]
+            .clone()
+    };
+    assert!(foreign_result.is_err(), "{foreign_result:?}");
+    assert!(latch().await.is_null());
+    let own = interrupt_session_with_access(&node, &owner(&message), &scope).await;
+    assert_eq!(own.unwrap().as_deref(), Some(caused.request_id.as_str()));
+    assert!(!latch().await.is_null());
+    node.shutdown().await.expect("shut down test node");
+    std::fs::remove_dir_all(&message.admission.path).unwrap();
+}
