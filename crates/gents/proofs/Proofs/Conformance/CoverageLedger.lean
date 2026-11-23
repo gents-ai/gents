@@ -103,7 +103,6 @@ def openFamilies : List String :=
   , "contracts_self_config_job_guard_unreached"
   , "contracts_session_advance_unreached"
   , "contracts_session_refresh_unreached"
-  , "contracts_title_admission_fresh_verifier_unreached"
   , "contracts_workspace_transition_unreached"
   , "cross_actor_authorization_unreached"
   , "enrollment_auto_renewal_offer_unreached"
