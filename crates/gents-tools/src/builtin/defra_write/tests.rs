@@ -812,7 +812,10 @@ fn write_grant_guidance_names_the_call_that_keeps_the_callers_datastore_group() 
     let held = super::write_grant_guidance(true, Some(&group), &names);
     assert_eq!(held["writable"], false);
     assert_eq!(held["next_call"]["tool"], "config");
-    assert_eq!(held["next_call"]["args"]["argv"], json!(["tools", "edit"]));
+    assert_eq!(
+        held["next_call"]["args"]["argv"],
+        json!(["tools", "update"])
+    );
     let set = &held["next_call"]["args"]["set"]["datastore"];
     assert_eq!(set["write_collections"], json!(["Kept", "Board"]));
     assert_eq!(

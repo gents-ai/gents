@@ -21,15 +21,14 @@ deriving instance ToJson for QueuedSteering.AgentDelivery
 
 structure Input where
   delivery : Option QueuedSteering.AgentDelivery
-  interrupt : Option Bool
   deriving ToJson
 
 end AgentDelivery
 
 @[conformance_family]
-def agentDelivery : Family AgentDelivery.Input (Option QueuedSteering.AgentDelivery) where
-  inputs := QueuedSteering.agentDeliveryCases.map fun (delivery, interrupt) => { delivery, interrupt }
-  model := fun i => QueuedSteering.resolveAgentDelivery i.delivery i.interrupt
+def agentDelivery : Family AgentDelivery.Input QueuedSteering.AgentDelivery where
+  inputs := QueuedSteering.agentDeliveryCases.map fun delivery => { delivery }
+  model := fun i => QueuedSteering.resolveAgentDelivery i.delivery
 
 structure InterruptDeliveryInput where
   planned : Option Nat

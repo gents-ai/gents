@@ -4,9 +4,7 @@ use anyhow::Result;
 
 use crate::context::RunnerContext;
 use crate::model::{Collected, GrepMatch};
-use crate::traversal::common::{
-    admit_next, should_ignore_path, sorted_children, Admitted, Sweep, WalkState,
-};
+use crate::traversal::common::{admit_next, sorted_children, Admitted, Sweep, WalkState};
 
 const MAX_GREP_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const BINARY_SNIFF_BYTES: usize = 4096;
@@ -140,7 +138,7 @@ fn grep_file(
     file_stats: &mut GrepFileStats,
     explicit_file: bool,
 ) -> Result<()> {
-    if should_ignore_path(scan.traversal_root, path) {
+    if sweep.walk.skips_default_ignored(scan.traversal_root, path) {
         return Ok(());
     }
     let Ok(file_metadata) = std::fs::metadata(path) else {

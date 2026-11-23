@@ -338,7 +338,8 @@ impl SchemaTool {
             ["collection", "update"] => &["patch"],
             ["view", "create"] => &["query", "sdl"],
             ["migration", "set"] => &["config"],
-            ["collection", "list" | "get" | "materialize" | "empty" | "remove"] | ["version", "list" | "get" | "activate"] => &[],
+            ["collection", "list"] => &["scope"],
+            ["collection", "get" | "materialize" | "empty" | "remove"] | ["version", "list" | "get" | "activate"] => &[],
             _ => bail!("unknown schema command; use RESOURCE VERB [ID]. Read [\"help\"] for resources, or RESOURCE VERB --help for parameters"),
         };
         for key in args.options.keys() {
@@ -362,7 +363,31 @@ impl SchemaTool {
         );
         match words.as_slice() {
             ["collection", "list"] => {
-                return Ok(Ok(json!({"collections":access.collection_names().await?})))
+                let include_runtime = match args.options.get("scope") {
+                    None => false,
+                    Some(scope) if scope == "app" => false,
+                    Some(scope) if scope == "all" => true,
+                    Some(other) => bail!(
+                        "options.scope {other} is not a scope; use \"app\" (default) or \"all\""
+                    ),
+                };
+                let names = access.collection_names().await?;
+                let total = names.len();
+                let collections: Vec<String> = names
+                    .into_iter()
+                    .filter(|name| {
+                        lists_collection(
+                            include_runtime,
+                            gents_store::schema::catalog::is_runtime_collection(name),
+                        )
+                    })
+                    .collect();
+                let mut listed = json!({"collections":collections});
+                if collections.len() < total {
+                    listed["runtime_collections_hidden"] = json!(total - collections.len());
+                    listed["next_call"] = json!({"tool":SCHEMA_TOOL_NAME,"args":{"argv":["collection","list"],"options":{"scope":"all"}}});
+                }
+                return Ok(Ok(listed));
             }
             ["collection", "get"] => {
                 return Ok(Ok(
@@ -581,6 +606,11 @@ async fn find_version(access: &ConfigAccess, id: &str) -> Result<Value> {
         .into_iter()
         .find(|v| v["VersionID"].as_str() == Some(id))
         .context("version not found; use version list and copy its VersionID")
+}
+
+/// Lean `SchemaCollections.listed`.
+fn lists_collection(include_runtime: bool, runtime_managed: bool) -> bool {
+    include_runtime || !runtime_managed
 }
 
 fn ensure_application_collection(name: &str) -> Result<()> {

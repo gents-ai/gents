@@ -252,7 +252,7 @@ async fn read_tool_output_running_returns_live_stream_tail() {
     assert_eq!(result["total_bytes"].as_u64(), Some(4));
     assert_eq!(result["has_more"].as_bool(), Some(false));
     assert_eq!(result["exited"].as_bool(), Some(false));
-    assert!(result["exit_code"].is_null());
+    assert!(result.get("exit_code").is_none(), "{result}");
 
     gate.close().expect("release the background process");
     let waited = wait_tool(&hook, "wait-running-terminal", tool_call_id).await;
@@ -301,7 +301,7 @@ async fn read_tool_output_terminal_reads_persisted_result() {
     assert_eq!(result["next_offset"].as_u64(), Some(5));
     assert_eq!(result["has_more"].as_bool(), Some(false));
     assert_eq!(result["exited"].as_bool(), Some(true));
-    assert!(result["exit_code"].is_null());
+    assert!(result.get("exit_code").is_none(), "{result}");
 }
 
 #[tokio::test]
@@ -353,8 +353,8 @@ async fn read_tool_output_terminal_preserves_native_command_envelope() {
     assert_eq!(result["has_more"].as_bool(), Some(false));
     assert_eq!(result["exited"].as_bool(), Some(true));
     assert!(
-        result["exit_code"].is_null(),
-        "read_process does not re-interpret the native result envelope"
+        result.get("exit_code").is_none(),
+        "read_process does not re-interpret the native result envelope; wait_process returns it"
     );
 }
 

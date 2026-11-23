@@ -8,6 +8,7 @@ import Proofs.Tools.ToolPolicy.CallEnvelope
 import Proofs.Tools.ToolPolicy.WorkspacePermissions
 import Proofs.Tools.SelfConfig.ToolsSave
 import Proofs.Tools.WorkspaceRootOperations
+import Proofs.Tools.SchemaCollections
 import Proofs.Conformance.Family
 import Proofs.Conformance.Functions.Documents
 
@@ -43,6 +44,7 @@ attribute [conformance_function]
   ToolPolicy.PluginCalls.structuredByDefault
   ToolPolicy.WorkspacePermissions.governingSettings
   Proofs.MCPHealth.healthProjection
+  SchemaCollections.listed
 
 namespace DocumentOperations
 

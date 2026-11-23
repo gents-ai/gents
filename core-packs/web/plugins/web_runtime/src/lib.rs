@@ -1140,7 +1140,6 @@ fn validate_args(tool: &str, args: &Value) -> Result<(), String> {
             "per_page_max",
             "include_paths",
             "exclude_paths",
-            "same_host",
             "respect_robots",
             "deadline_s",
             "dataset",
@@ -1187,15 +1186,6 @@ fn validate_args(tool: &str, args: &Value) -> Result<(), String> {
             if obj.contains_key(k) {
                 return Err(format!("{k} is not supported by this runtime"));
             }
-        }
-        if obj
-            .get("same_host")
-            .is_some_and(|v| !v.is_null() && !v.is_boolean())
-        {
-            return Err("same_host must be a boolean".into());
-        }
-        if obj.get("same_host").and_then(Value::as_bool) == Some(false) {
-            return Err("same_host=false is unsupported; crawl is same-origin only".into());
         }
     }
     let allowed_enum: &[(&str, &[&str])] = match tool {
@@ -1405,9 +1395,7 @@ fn enqueue_crawl_url(
     {
         return;
     }
-    if args.get("same_host").and_then(Value::as_bool) != Some(false)
-        && seed.is_some_and(|s| s.origin() != u.origin())
-    {
+    if seed.is_some_and(|s| s.origin() != u.origin()) {
         return;
     }
     if args

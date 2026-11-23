@@ -1235,7 +1235,7 @@ async fn job_block_help_topic_states_bounds_defaults_and_policy() {
         "{page}"
     );
     assert!(
-        page.contains(r#"["tools","edit","--help","integrations"]"#),
+        page.contains(r#"["tools","update","--help","integrations"]"#),
         "{page}"
     );
     let shapes = call_config_tool(

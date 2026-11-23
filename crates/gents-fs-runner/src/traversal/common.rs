@@ -45,6 +45,7 @@ pub(crate) struct WalkState {
     bytes_read: u64,
     stopped_at: Option<String>,
     exhausted: bool,
+    default_ignored: std::collections::BTreeSet<&'static str>,
 }
 
 impl WalkState {
@@ -56,6 +57,7 @@ impl WalkState {
             bytes_read: 0,
             stopped_at: None,
             exhausted: false,
+            default_ignored: std::collections::BTreeSet::new(),
         }
     }
 
@@ -99,7 +101,29 @@ impl WalkState {
             elapsed_ms: self.started.elapsed().as_millis() as u64,
             budget_exhausted: self.exhausted,
             stopped_at: self.stopped_at,
+            default_ignored: self.default_ignored.into_iter().collect(),
         }
+    }
+
+    /// Whether `path` carries a default-ignored name below `traversal_root`;
+    /// the names it skipped are reported with the walk.
+    pub(crate) fn skips_default_ignored(&mut self, traversal_root: &Path, path: &Path) -> bool {
+        if path == traversal_root {
+            return false;
+        }
+        let Some(name) = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| {
+                DEFAULT_IGNORED_NAMES
+                    .iter()
+                    .find(|ignored| **ignored == name)
+            })
+        else {
+            return false;
+        };
+        self.default_ignored.insert(name);
+        true
     }
 
     pub(crate) fn dir_scan_should_stop(
@@ -221,23 +245,13 @@ pub(super) fn admit_next(
         return Admitted::Skip;
     };
     let is_dir = file_type.is_dir();
-    if should_ignore_path(traversal_root, &path) || ignores.is_ignored(&path, is_dir) {
+    if walk.skips_default_ignored(traversal_root, &path) || ignores.is_ignored(&path, is_dir) {
         return Admitted::Skip;
     }
     if !walk.admit_entry(context, &path) {
         return Admitted::Stop;
     }
     Admitted::Entry { path, is_dir }
-}
-
-pub(super) fn should_ignore_path(traversal_root: &Path, path: &Path) -> bool {
-    if path == traversal_root {
-        return false;
-    }
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .map(|name| DEFAULT_IGNORED_NAMES.contains(&name))
-        .unwrap_or(false)
 }
 
 fn should_skip_io_error(error: &std::io::Error) -> bool {
