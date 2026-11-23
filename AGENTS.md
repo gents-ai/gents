@@ -50,7 +50,10 @@ model. For a transition, invariant, access rule or provider input:
 2. **Conformance.** Mark the owner `@[conformance_function]` (its whole domain
    becomes cases) or `@[conformance_family]` (chosen cases), run
    `make lean-regen`, and replay it against the production function in exactly
-   one test (`every_emitted_family_has_a_consumer_or_a_ledger_reason`).
+   one test, written in the same change as the family
+   (`every_emitted_family_has_one_consumer_or_a_ledger_entry`; the ledger
+   holds only boundaries and a shrinking open list, see
+   [the proofs guide](crates/gents/proofs/AGENTS.md)).
    Expectations come only from running the model: no fixture constants, no
    Rust mirror of its policy.
 3. **Rust.** Make the owner satisfy the contract.

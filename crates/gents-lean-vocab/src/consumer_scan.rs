@@ -1,20 +1,21 @@
+//! The conformance rule: every family the Lean snapshot emits is replayed by
+//! exactly one native test. The scan finds that test from the family's
+//! snapshot key, in a Rust file some target compiles (`module_tree`) or a
+//! TypeScript file, so a consumed family needs no ledger entry. A family no test
+//! replays is refused unless the coverage ledger
+//! (`Proofs/Conformance/CoverageLedger.lean`) lists it as a boundary or as
+//! open; a ledger entry naming a consumed or unemitted family is refused.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
 use serde_json::Value;
 
-const CONTRACT_METADATA: &[&str] = &[
-    "coverage_ledger",
-    "feature_matrix",
-    "feature_surface_requirements",
-];
-
-const DOMAIN_FAMILIES: &[(&str, &str)] = &[];
+const CONTRACT_METADATA: &[&str] = &["coverage_ledger", "feature_surface_requirements"];
 
 const DERIVED_FAMILIES: &str = "families";
 const DERIVED_VOCABULARIES: &str = "family_vocabularies";
-const DERIVED_LEDGER_CATEGORY: &str = "family";
 
 const SOURCE_ROOTS: &[&str] = &["crates", "apps", "packages"];
 const SKIPPED_DIRECTORIES: &[&str] = &["target", "node_modules", "proofs", "dist", "gen"];
@@ -51,25 +52,15 @@ fn families_read(
     loaders: &BTreeMap<String, BTreeSet<String>>,
 ) -> BTreeSet<String> {
     let mut read = BTreeSet::new();
-    let mut quoted = BTreeSet::new();
     for (before, identifier, after) in identifiers(source) {
         let is_quoted = before == b'"' && after == b'"';
         if (before == b'.' || is_quoted) && families.contains(identifier) {
             read.insert(identifier.to_owned());
         }
-        if is_quoted {
-            quoted.insert(identifier);
-        }
         if after == b'(' {
             if let Some(keys) = loaders.get(identifier) {
                 read.extend(keys.iter().cloned());
             }
-        }
-    }
-    for (key, _) in DOMAIN_FAMILIES {
-        if read.contains(*key) {
-            let domains = quoted.iter().map(|domain| format!("{key}/{domain}"));
-            read.extend(domains.filter(|family| families.contains(family)));
         }
     }
     read
@@ -172,12 +163,6 @@ pub fn emitted_families(snapshot: &Value) -> BTreeSet<String> {
         })
         .map(|(key, _)| key.clone())
         .collect();
-    for (key, _) in DOMAIN_FAMILIES {
-        for entry in snapshot[*key].as_array().expect("domain families") {
-            let domain = entry["domain"].as_str().expect("family domain");
-            families.insert(format!("{key}/{domain}"));
-        }
-    }
     for derived in [DERIVED_FAMILIES, DERIVED_VOCABULARIES] {
         let derived = snapshot[derived].as_object().expect("derived families");
         families.extend(
@@ -189,17 +174,12 @@ pub fn emitted_families(snapshot: &Value) -> BTreeSet<String> {
     families
 }
 
-pub fn ledger_family(category: &str, domain: &str) -> String {
-    if category == DERIVED_LEDGER_CATEGORY {
-        return format!("{DERIVED_FAMILIES}/{domain}");
-    }
-    match DOMAIN_FAMILIES
-        .iter()
-        .find(|(_, row_category)| *row_category == category)
-    {
-        Some((key, _)) => format!("{key}/{domain}"),
-        None => category.to_owned(),
-    }
+/// The emitted family a ledger name denotes: a derived family by its key, or
+/// a top-level snapshot key.
+pub fn ledger_family(name: &str, families: &BTreeSet<String>) -> Option<String> {
+    [format!("{DERIVED_FAMILIES}/{name}"), name.to_owned()]
+        .into_iter()
+        .find(|family| families.contains(family))
 }
 
 pub fn consumer_sites(
@@ -223,11 +203,15 @@ pub fn consumer_sites(
         .iter()
         .map(|family| (family.clone(), BTreeSet::new()))
         .collect();
+    let compiled = crate::module_tree::module_tree(workspace).compiled;
     let mut files = Vec::new();
     for root in SOURCE_ROOTS {
         source_files(&workspace.join(root), &mut files);
     }
-    for path in files {
+    let runs = |path: &Path| {
+        path.extension().is_none_or(|extension| extension != "rs") || compiled.contains(path)
+    };
+    for path in files.into_iter().filter(|path| runs(path)) {
         let relative = path
             .strip_prefix(workspace)
             .expect("workspace file")
@@ -283,14 +267,137 @@ pub fn consumer_sites(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::OnceLock;
+
     use super::*;
 
-    const UNSCANNED_CATEGORIES: &[&str] = &[
-        "follow_up_hook",
-        "state_machine",
-        "premise",
-        "Proofs.Conformance.",
+    const PREMISE_PREFIX: &str = "boundary.";
+
+    /// Each name is an emitted family that no native test replays. The list
+    /// only shrinks: a family leaves it when its consumer is written or Lean
+    /// stops emitting it, and a new family arrives with its consumer.
+    const OPEN: &[&str] = &[
+        "admission_handoff_unreached",
+        "agent_identity_permission_selection_unreached",
+        "aggregate_budget_ledger_unreached",
+        "apply_reconcile_contract_cases_publish_cases",
+        "client_window_scope_bound_delivers",
+        "compaction_canonical_projection_unreached",
+        "completion_retry_contracts_retraction_unreached",
+        "configuration_scope_discovery_unreached",
+        "conformance_contract_cases_recovery_action_vocabulary",
+        "contract_cases_compaction_canonical_projection_repaired_admission_unreached",
+        "contract_cases_compaction_projection_join_projection_join",
+        "contract_cases_session_recovery_unreached",
+        "contracts_archive_transition_unreached",
+        "contracts_atomic_admission_unreached",
+        "contracts_background_wake_rows_unreached",
+        "contracts_callback_transition_unreached",
+        "contracts_compaction_reducer_apply_unreached",
+        "contracts_compaction_reducer_identity_gate_unreached",
+        "contracts_edit_anchor_fork_unreached",
+        "contracts_fork_publication_unreached",
+        "contracts_pack_installation_finality_unreached",
+        "contracts_pack_installation_hosted_plugin_unreached",
+        "contracts_queued_steering_guard_unreached",
+        "contracts_queued_steering_trace_trace_unreached",
+        "contracts_runtime_reconcile_unreached",
+        "contracts_self_config_job_guard_unreached",
+        "contracts_session_advance_unreached",
+        "contracts_session_refresh_unreached",
+        "contracts_title_admission_fresh_verifier_unreached",
+        "contracts_tool_retry_unreached",
+        "contracts_workspace_transition_unreached",
+        "cross_actor_authorization_unreached",
+        "delegated_finality_served_unreached",
+        "delegated_publication_unreached",
+        "enrollment_auto_renewal_offer_unreached",
+        "eval_records_published_unreached",
+        "event_delivery_group_capture_unreached",
+        "event_delivery_group_clock_unreached",
+        "fold_queue_contracts_management_unreached",
+        "fold_queue_contracts_publication_unsafe_boundary_unreached",
+        "goal_claimed_publication_contracts_identity_staged_unreached",
+        "hook_persistence_visibility_unreached",
+        "hooks_contracts_grant_validity_unreached",
+        "hooks_contracts_must_commit_staging_unreached",
+        "household_callback_module_claim_unreached",
+        "household_destructive_decision_unreached",
+        "household_event_rebound_cursor_unreached",
+        "household_fresh_backend_admission_unreached",
+        "household_fresh_backend_origin_unreached",
+        "household_runtime_default_account_read_unreached",
+        "household_self_config_lookup_unreached",
+        "household_session_tool_access_unreached",
+        "household_tool_grant_group_unreached",
+        "household_tool_grant_projection_unreached",
+        "household_tool_grant_rebinding_unreached",
+        "household_unattended_receipt_unreached",
+        "identity_operations_deferred_unreached",
+        "identity_operations_desired_publisher_unreached",
+        "identity_operations_enrollment_policy_unreached",
+        "identity_operations_pairing_reader_unreached",
+        "identity_operations_reader_policy_unreached",
+        "identity_operations_readiness_observation_unreached",
+        "identity_operations_readiness_recovery_unreached",
+        "identity_operations_registry_writer_unreached",
+        "identity_operations_replica_grant_unreached",
+        "mailbox_access_claimed_recipient_unreached",
+        "mailbox_handoff_contracts_linked_unreached",
+        "native_completion_trace_unreached",
+        "native_execution_contracts_script_unreached",
+        "native_refinement_claim_unreached",
+        "native_refinement_grant_unreached",
+        "node_provisioning_agent_creator_unreached",
+        "node_provisioning_bootstrap_grant_unreached",
+        "node_provisioning_runtime_nac_unreached",
+        "optimization_promotion_held_transition_unreached",
+        "plugin_resources_call_admissions_unreached",
+        "reasoning_audit_signature_unreached",
+        "recovery_sweep_ids",
+        "remote_delivery_claim_unreached",
+        "remote_delivery_delivery_unreached",
+        "remote_delivery_recovery_unreached",
+        "remote_delivery_response_unreached",
+        "request_execution_lease_contracts_lease_trace_unreached",
+        "request_execution_lease_contracts_observed_world_unreached",
+        "request_execution_lease_contracts_step_world_unreached",
+        "session_child_child_scope_binding_unreached",
+        "session_child_child_scope_repair_unreached",
+        "session_child_client_request_recovery_unreached",
+        "session_documents_retry_unreached",
+        "state_machines_catalog_unreached",
+        "title_admission_join_unreached",
+        "title_usage_budget_unreached",
+        "title_usage_catalog_unreached",
+        "title_usage_goal_unreached",
+        "trigger_delivery_arrival_cursor_pending",
+        "watcher_actors_scanned_unreached",
     ];
+
+    struct Scan {
+        families: BTreeSet<String>,
+        sites: BTreeMap<String, BTreeSet<String>>,
+    }
+
+    impl Scan {
+        fn consumed(&self, family: &str) -> bool {
+            self.sites
+                .get(family)
+                .is_some_and(|found| !found.is_empty())
+        }
+    }
+
+    fn scan() -> &'static Scan {
+        static SCAN: OnceLock<Scan> = OnceLock::new();
+        SCAN.get_or_init(|| {
+            let json = gents_lean_contract::load_contract_json().expect("Lean contract JSON");
+            let snapshot: Value = serde_json::from_str(&json).expect("snapshot JSON");
+            let families = emitted_families(&snapshot);
+            let sites = consumer_sites(&workspace(), &families);
+            Scan { families, sites }
+        })
+    }
 
     fn workspace() -> std::path::PathBuf {
         std::path::PathBuf::from(
@@ -301,60 +408,142 @@ mod tests {
         .expect("workspace root")
     }
 
-    #[test]
-    fn every_emitted_family_has_a_consumer_or_a_ledger_reason() {
-        let json = gents_lean_contract::load_contract_json().expect("Lean contract JSON");
-        let snapshot: Value = serde_json::from_str(&json).expect("snapshot JSON");
-        let families = emitted_families(&snapshot);
-        let sites = consumer_sites(&workspace(), &families);
+    fn is_unreached(family: &str) -> bool {
+        family.ends_with("_unreached") || family.ends_with("Unreached")
+    }
 
-        let mut consumed = BTreeSet::new();
-        let mut unconsumed = BTreeSet::new();
-        let mut unknown = Vec::new();
-        for row in &crate::lean_contract_snapshot().coverage_ledger {
-            let family = ledger_family(&row.category, &row.domain);
-            let names_a_family = families.contains(&family)
-                || UNSCANNED_CATEGORIES
-                    .iter()
-                    .any(|prefix| row.category.starts_with(prefix));
-            if !names_a_family {
-                unknown.push(family.clone());
-            }
-            if row.consumed {
-                consumed.insert(family);
-            } else {
-                unconsumed.insert(family);
+    #[test]
+    fn every_emitted_family_has_one_consumer_or_a_ledger_entry() {
+        let scan = scan();
+        let ledger = &crate::lean_contract_snapshot().coverage_ledger;
+        let names = ledger
+            .boundaries
+            .iter()
+            .map(|boundary| boundary.name.as_str())
+            .filter(|name| !name.starts_with(PREMISE_PREFIX))
+            .chain(ledger.open.iter().map(String::as_str));
+
+        let mut listed = BTreeSet::new();
+        let mut refused = Vec::new();
+        for name in names {
+            match ledger_family(name, &scan.families) {
+                Some(family) if !scan.consumed(&family) => {
+                    listed.insert(family);
+                }
+                _ => refused.push(name),
             }
         }
-
         assert!(
-            unknown.is_empty(),
-            "coverage ledger rows name families the snapshot does not emit: {unknown:?}"
+            refused.is_empty(),
+            "coverage ledger entries name families that a test replays or the snapshot \
+             does not emit; delete them from Proofs/Conformance/CoverageLedger.lean: {refused:?}"
         );
 
-        let unread: Vec<&str> = sites
+        let premises_naming_families: Vec<&str> = ledger
+            .boundaries
             .iter()
-            .filter(|(family, found)| {
-                found.is_empty() && (consumed.contains(*family) || !unconsumed.contains(*family))
-            })
-            .map(|(family, _)| family.as_str())
+            .map(|boundary| boundary.name.as_str())
+            .filter(|name| name.starts_with(PREMISE_PREFIX))
+            .filter(|name| ledger_family(name, &scan.families).is_some())
             .collect();
         assert!(
-            unread.is_empty(),
-            "no native test reads these emitted families, and the coverage ledger does not say why: {unread:?}"
+            premises_naming_families.is_empty(),
+            "a boundary named `{PREMISE_PREFIX}*` is a premise, not a family: {premises_naming_families:?}"
+        );
+
+        let unlisted: Vec<&str> = scan
+            .families
+            .iter()
+            .filter(|family| !scan.consumed(family) && !listed.contains(*family))
+            .map(String::as_str)
+            .collect();
+        assert!(
+            unlisted.is_empty(),
+            "no native test replays these emitted families; write each family's consumer \
+             in the same change as the family: {unlisted:?}"
         );
 
         let prefix = format!("{DERIVED_FAMILIES}/");
-        let misplaced: Vec<_> = sites
+        let replayed_twice: Vec<_> = scan
+            .sites
             .iter()
-            .filter(|(family, found)| {
-                family.starts_with(&prefix)
-                    && found.len() != usize::from(!unconsumed.contains(*family))
-            })
+            .filter(|(family, found)| family.starts_with(&prefix) && found.len() > 1)
             .collect();
         assert!(
-            misplaced.is_empty(),
-            "a derived family is replayed by exactly one test: {misplaced:?}"
+            replayed_twice.is_empty(),
+            "a derived family is replayed by exactly one test: {replayed_twice:?}"
+        );
+    }
+
+    #[test]
+    fn open_only_shrinks() {
+        let ledger = &crate::lean_contract_snapshot().coverage_ledger;
+        let open: BTreeSet<&str> = ledger.open.iter().map(String::as_str).collect();
+        let pinned: BTreeSet<&str> = OPEN.iter().copied().collect();
+        let added: Vec<_> = open.difference(&pinned).collect();
+        assert!(
+            added.is_empty(),
+            "the coverage ledger's open list only shrinks; write these families' consumers \
+             in the same change as the families: {added:?}"
+        );
+        let removed: Vec<_> = pinned.difference(&open).collect();
+        assert!(
+            removed.is_empty(),
+            "these families left the coverage ledger's open list; delete them from OPEN: {removed:?}"
+        );
+    }
+
+    #[test]
+    fn no_new_family_splits_off_its_unreached_cases() {
+        let scan = scan();
+        let ledger = &crate::lean_contract_snapshot().coverage_ledger;
+        let allowed: BTreeSet<String> = OPEN
+            .iter()
+            .copied()
+            .chain(
+                ledger
+                    .boundaries
+                    .iter()
+                    .map(|boundary| boundary.name.as_str()),
+            )
+            .filter_map(|name| ledger_family(name, &scan.families))
+            .collect();
+        let prefix = format!("{DERIVED_FAMILIES}/");
+        let split: Vec<&str> = scan
+            .families
+            .iter()
+            .filter(|family| is_unreached(family.strip_prefix(&prefix).unwrap_or(family.as_str())))
+            .filter(|family| !allowed.contains(*family))
+            .map(String::as_str)
+            .collect();
+        assert!(
+            split.is_empty(),
+            "an owner emits one family over the cases production reaches, never an \
+             `_unreached` complement; fold these cases into the replayed family or keep \
+             them as Lean theorems: {split:?}"
+        );
+    }
+
+    #[test]
+    fn feature_surfaces_name_consumed_families() {
+        let scan = scan();
+        let unproven: Vec<_> = crate::lean_feature_surface_requirements()
+            .iter()
+            .flat_map(|requirement| {
+                requirement
+                    .required
+                    .iter()
+                    .map(move |evidence| (requirement.feature.as_str(), evidence))
+            })
+            .filter(|(_, evidence)| {
+                !ledger_family(&evidence.family, &scan.families)
+                    .is_some_and(|family| scan.consumed(&family))
+            })
+            .map(|(feature, evidence)| (feature, evidence.surface, evidence.family.as_str()))
+            .collect();
+        assert!(
+            unproven.is_empty(),
+            "a required feature surface names a family a native test replays: {unproven:?}"
         );
     }
 }
