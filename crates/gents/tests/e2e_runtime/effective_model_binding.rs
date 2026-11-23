@@ -172,3 +172,158 @@ async fn a_claimed_request_records_the_settings_its_dispatch_bound() {
 
     runtime.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn profile_model_line_changes_on_the_next_request_in_the_same_session() {
+    use crate::support::live_inference::rows_when;
+    use crate::support::streaming_backend::{MockStreamingBackend, StreamScript};
+    use gents_protocol::node_readiness::{decode_node_readiness_snapshot, NodeReadinessRow};
+
+    let db = test_db("profile-model-line").await;
+    let session = "profile-line-session";
+    let (prepared, turn) = prepare_signed_mailbox_turn(
+        &db,
+        BACKEND_ID,
+        MODEL,
+        "profile-first",
+        session,
+        "first-model",
+        vec![StreamChunk::text("first")],
+    )
+    .await
+    .unwrap();
+    let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
+    let agent = gents::Gents::from_default_agent_documents(
+        db.node.clone(),
+        identity,
+        gents::DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let runtime = boot_prepared_accepted_turn(&db, prepared, agent).await;
+    assert_eq!(
+        wait_for_request_terminal(&turn.client, "profile-first").await,
+        "completed"
+    );
+    let first = runtime.backend.observed_turn_completion_bodies();
+    assert_eq!(first.len(), 1);
+    assert!(first[0]["messages"]
+        .to_string()
+        .contains(&format!("Your profile's model: {MODEL}.")));
+    let generation = request_row(&turn, "profile-first").await["executed_runtime_generation"]
+        .as_u64()
+        .unwrap();
+
+    let next_model = "profile-next-model";
+    let backend = MockStreamingBackend::start(
+        next_model,
+        vec![StreamScript::completes("second-model", ["second"])],
+    )
+    .unwrap();
+    let profile = serde_json::json!({
+        "node_did":turn.node_did, "profile_id":format!("{}:profile", turn.agent.did()),
+        "backend_id":"profile-next-backend", "model_name":next_model,
+    });
+    let backend_doc = serde_json::json!({
+        "node_did":turn.node_did, "backend_id":"profile-next-backend", "name":"profile-next-backend",
+        "provider_kind":"OpenAiCompatible", "openai_wire_api":"chat_completions",
+        "auth":{"kind":"unauthenticated"}, "endpoint":backend.endpoint(),
+        "max_concurrent":1, "max_queue_depth":100, "enabled":true,
+    });
+    let plan = DesiredStateApplyPlan::new(vec![
+        DesiredStateApplyDocument {
+            collection: Collection::InferenceBackend,
+            add: backend_doc.clone(),
+            update: backend_doc,
+        },
+        DesiredStateApplyDocument {
+            collection: Collection::InferenceProfile,
+            add: profile.clone(),
+            update: profile,
+        },
+    ])
+    .unwrap();
+    turn.client
+        .transact_write("test.profile_model.change", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                gents_documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
+    let query = format!(
+        r#"{{NodeReadiness(filter: {{node_did: {{_eq: "{}"}}}}) {{node_did snapshot_json updated_at}}}}"#,
+        escape_graphql_string(&turn.node_did)
+    );
+    rows_when(&turn.client, "NodeReadiness", &query, |data| {
+        data["NodeReadiness"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|row| {
+                let row: NodeReadinessRow = serde_json::from_value(row.clone()).unwrap();
+                let snapshot = decode_node_readiness_snapshot(&row, &turn.node_did).unwrap();
+                snapshot.process_state.accepts_work()
+                    && snapshot.active_generation > generation
+                    && snapshot.router_generation == snapshot.active_generation
+            })
+    })
+    .await;
+    turn.submit(turn.request("profile-second", session, "second-model"))
+        .await
+        .unwrap();
+    assert_eq!(
+        wait_for_request_terminal(&turn.client, "profile-second").await,
+        "completed"
+    );
+    let second = backend.observed_turn_completion_bodies();
+    assert_eq!(second.len(), 1);
+    assert_eq!(second[0]["model"], next_model);
+    let contexts: Vec<_> = second[0]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|message| {
+            message["role"] == "user" && message.to_string().contains("Your profile's model:")
+        })
+        .collect();
+    let latest = contexts
+        .last()
+        .expect("request context names the current model")
+        .to_string();
+    assert!(
+        latest.contains(&format!("Your profile's model: {next_model}.")),
+        "{latest}"
+    );
+    assert!(
+        !latest.contains(&format!("Your profile's model: {MODEL}.")),
+        "{latest}"
+    );
+    let system = |body: &Value| {
+        body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|message| message["role"] == "system")
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        system(&first[0]),
+        system(&second[0]),
+        "profile changes preserve the stable preamble"
+    );
+    assert!(!system(&second[0])
+        .iter()
+        .any(|message| message.to_string().contains("Your profile's model:")));
+    runtime.shutdown().await;
+}

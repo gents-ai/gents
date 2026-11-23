@@ -18,6 +18,14 @@ pub fn policy_valid(agent_targets: &[String], policy: &JobPolicy) -> bool {
             .all(|target| agent_targets.contains(target))
 }
 
+/// Lean `jobTargetsConfigured`: a job names only targets the caller's own
+/// Tools document lists.
+pub fn job_targets_configured(caller_targets: &[String], job_targets: &[String]) -> bool {
+    job_targets
+        .iter()
+        .all(|target| caller_targets.contains(target))
+}
+
 /// Lean `wireTargetsFrom`: wiring a pack trusts it, adds its targets to the
 /// job's and adds the job's targets to the caller's.
 pub fn wire_targets_from(
@@ -98,6 +106,13 @@ mod conformance {
             dynamic_targets: policy.dynamic_targets.clone(),
             trusted_packs: policy.trusted_packs.clone(),
         }
+    }
+
+    #[test]
+    fn configured_job_targets_match_lean() {
+        gents_lean_vocab::families::plugin_job_configured_job_targets::replay(|i| {
+            job_targets_configured(&i.caller_targets, &i.job_targets)
+        });
     }
 
     #[test]

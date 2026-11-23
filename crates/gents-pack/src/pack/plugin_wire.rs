@@ -286,7 +286,13 @@ async fn wire_batch_owned(
             "cannot publish a plugin pin through GraphQL because the commit outcome may be unknown; stop the runtime serving the owning node home, then run `gents config pack wire {} --agent {} --home <node-home>` without --graphql",
             request.plugin, request.agent);
     }
-    let plan = WirePlan::read(access, owner, home, requests).await?;
+    let plan = WirePlan::read(
+        access,
+        owner,
+        &crate::plugin::store::StoreWriter::Offline(home.to_owned()),
+        requests,
+    )
+    .await?;
     let reports = if preview {
         access
             .transact_readonly("cli.pack.wire.preview", |txn| {
@@ -374,10 +380,10 @@ impl WirePlan {
     pub async fn read(
         access: &ConfigAccess,
         owner: &str,
-        home: &Path,
+        writer: &crate::plugin::store::StoreWriter,
         requests: &[WireRequest],
     ) -> Result<Self> {
-        Self::read_holding(access, owner, home, requests, true).await
+        Self::read_holding(access, owner, writer.home(), requests, Some(writer.clone())).await
     }
 
     /// The plans a client makes beside the runtime that holds the plugin
@@ -400,7 +406,7 @@ impl WirePlan {
                         owner,
                         home,
                         std::slice::from_ref(&request),
-                        false,
+                        None,
                     )
                     .await?;
                     read.wires.remove(0)
@@ -450,17 +456,22 @@ impl WirePlan {
         owner: &str,
         home: &Path,
         requests: &[WireRequest],
-        hold: bool,
+        holder: Option<crate::plugin::store::StoreWriter>,
     ) -> Result<Self> {
         let home_for_read = home.to_owned();
         let names: Vec<String> = requests
             .iter()
             .map(|request| request.plugin.clone())
             .collect();
+        let guard = match &holder {
+            Some(writer) => Some(
+                writer
+                    .lock_until(tokio::time::Instant::now() + crate::plugin::store::LEASE_WAIT)
+                    .await?,
+            ),
+            None => None,
+        };
         let (store_guard, plugins) = tokio::task::spawn_blocking(move || {
-            let guard = hold
-                .then(|| crate::plugin::store::try_lock_store(&home_for_read))
-                .transpose()?;
             let plugins = names
                 .iter()
                 .map(|plugin_name| {

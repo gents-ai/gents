@@ -151,6 +151,10 @@ impl ToolRuntimeContext {
         self
     }
 
+    pub fn plugin_store_pin(&self) -> Option<&gents_pack::plugin::store::StoreReadPin> {
+        self.plugins.store_pin()
+    }
+
     pub fn plugin_home(&self) -> Option<&std::path::Path> {
         self.plugins.home()
     }

@@ -1094,6 +1094,7 @@ mod tests {
                                 "display_name": "Read-only files",
                                 "host": {"files": {"mode": "ReadOnly"}}},
                             {"tools_id": "workflow-caller", "display_name": "Workflow caller",
+                                "agents": {"target_ids": ["wf-read-only"]},
                                 "integrations": {"plugins": [{"plugin": "gents/workflow",
                                     "job": {"agent_targets": ["wf-read-only"],
                                         "policy": {"dynamic": "check"}}}]}},

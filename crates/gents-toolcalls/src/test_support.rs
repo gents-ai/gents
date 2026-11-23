@@ -74,7 +74,8 @@ impl gents_store::agent_identity_watch::AgentIdentityWatch for FixedAgentIdentit
     }
 }
 
-/// Makes the process retained-record events visible to a scoped subscriber:
+/// Makes the process retained-record and plugin publication wait events
+/// visible to a scoped subscriber:
 /// tracing caches callsite interest globally, so a scoped subscriber sees an
 /// event only when a global default has enabled its target first.
 #[cfg(test)]
@@ -93,6 +94,7 @@ struct CapturedTargetSubscriber;
 impl tracing::Subscriber for CapturedTargetSubscriber {
     fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
         metadata.target().starts_with("gents_toolcalls::call::hook")
+            || metadata.target() == gents_tools::surface::PLUGIN_PUBLICATION_WAIT_EVENT_TARGET
     }
 
     fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::Id {

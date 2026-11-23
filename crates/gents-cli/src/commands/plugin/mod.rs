@@ -107,8 +107,9 @@ fn list(args: PluginListArgs) -> Result<()> {
 async fn remove(args: PluginRemoveArgs) -> Result<()> {
     let (namespace, name) = gents_pack::pack::registry::split_pack_coordinate(&args.name);
     let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
-    let lock_home = home.clone();
-    let guard = tokio::task::spawn_blocking(move || store::try_lock_store(&lock_home)).await??;
+    let guard = store::StoreWriter::Offline(home.clone())
+        .lock_until(tokio::time::Instant::now() + store::LEASE_WAIT)
+        .await?;
     // A pack's home record lists its plugins: release both through the pack
     // removal owner, never the plugin record alone.
     let owner = store::read_record(&home, namespace, name)

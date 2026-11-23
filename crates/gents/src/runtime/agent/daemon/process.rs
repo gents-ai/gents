@@ -85,6 +85,10 @@ where
             .set_executed_inference(self.agent_config.executed_inference(self.slot_generation));
         lifecycle.set_execution_lease_duration(self.agent_config.stream_liveness_timeout);
         lifecycle.set_configured_max_total_tokens(self.agent_config.max_total_tokens);
+        lifecycle.set_configured_max_request_retries(
+            self.agent_config.max_request_retries,
+            self.agent_config.node.identity.clone(),
+        );
         let parked = if request.execution_generation.is_some() {
             match lifecycle.is_waiting_for_backend().await {
                 Ok(parked) => parked,

@@ -624,19 +624,6 @@ async fn a_client_wires_a_plugin_through_the_runtime_signing_each_write_itself()
         })
         .await
         .unwrap();
-    let runtime = gents::Gents::builder()
-        .node(home.node().clone())
-        .backend_admission(home.home.backend_admission())
-        .identity(identity.clone())
-        .tool_ceiling(gents_tools::surface::ToolCeiling::meta_only())
-        .agent("fixture")
-        .identity_binding(binding.clone())
-        .backend_id(format!("{}:backend", binding.agent_did))
-        .model_name("test-model")
-        .done()
-        .build()
-        .await
-        .unwrap();
     let (mut plugin, artifact) = gents_pack::plugin::test_fixtures::build_plugin_pack(
         "client_wire",
         &gents_pack::plugin::test_fixtures::constant_output_wat(br#"{}"#),
@@ -645,6 +632,20 @@ async fn a_client_wires_a_plugin_through_the_runtime_signing_each_write_itself()
     plugin.name = "tool".into();
     for document_acp in [DocumentAcp::Local, DocumentAcp::Vera] {
         let plugin_home = tempfile::tempdir().unwrap();
+        let runtime = gents::Gents::builder()
+            .node(home.node().clone())
+            .backend_admission(home.home.backend_admission())
+            .identity(identity.clone())
+            .tool_ceiling(gents_tools::surface::ToolCeiling::meta_only())
+            .agent("fixture")
+            .identity_binding(binding.clone())
+            .backend_id(format!("{}:backend", binding.agent_did))
+            .model_name("test-model")
+            .done()
+            .plugin_home(plugin_home.path())
+            .build()
+            .await
+            .unwrap();
         let installed = gents_pack::plugin::install::install_from_pack(
             plugin_home.path(),
             &gents_pack::plugin::install::OwningPack {

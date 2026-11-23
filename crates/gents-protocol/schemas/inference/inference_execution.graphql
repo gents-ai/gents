@@ -6,6 +6,7 @@ type InferenceExecution @policy(id: "$household", resource: "configuration") @in
     max_total_tokens: Int
     max_invalid_tool_calls: Int
     repeated_tool_failure_limit: Int
+    max_request_retries: Int
     stream_batch_ms: Int
     stream_liveness_timeout_secs: Int
     provider_idle_timeout_secs: Int

@@ -240,6 +240,26 @@ async fn resolve_startup(
     Option<super::control_watcher::ControlSubscription>,
     gents_automation::triggers::runtime_snapshot::ResolvedRuntimeSnapshot,
 )> {
+    resolve_startup_until(
+        agent,
+        tool_runtime,
+        runtime_status,
+        tokio::time::Instant::now() + gents_tools::surface::PUBLICATION_WAIT,
+    )
+    .await
+}
+
+/// Startup's configuration, read under the plugin store's publication lease
+/// when it selects plugins, waiting for an installer until `deadline`.
+pub(super) async fn resolve_startup_until(
+    agent: &Gents,
+    tool_runtime: &ToolRuntimeContext,
+    runtime_status: &RuntimeStatusHandle,
+    deadline: tokio::time::Instant,
+) -> Result<(
+    Option<super::control_watcher::ControlSubscription>,
+    gents_automation::triggers::runtime_snapshot::ResolvedRuntimeSnapshot,
+)> {
     // Subscribe before reading startup configuration so racing commits remain pending.
     let control_subscription = match agent
         .document_runtime_context()
@@ -259,10 +279,54 @@ async fn resolve_startup(
             return Err(error);
         }
     };
-    if let Err(error) = validate_startup_snapshot(agent, tool_runtime, &mut resolved_snapshot).await
+    let publication = if snapshot::depends_on_publication(&resolved_snapshot) {
+        let lease = match gents_tools::surface::publication_guard_until(
+            tool_runtime.plugin_store_pin(),
+            deadline,
+        )
+        .await
+        {
+            Ok(guard) => guard,
+            Err(gents_pack::plugin::store::PublishedPluginReadError::Busy) => None,
+            Err(gents_pack::plugin::store::PublishedPluginReadError::Absent(
+                gents_pack::plugin::store::StoreAbsent::Missing,
+            )) if tool_runtime
+                .plugin_store_pin()
+                .is_some_and(|pin| !pin.is_captured()) =>
+            {
+                None
+            }
+            Err(error) => {
+                runtime_status.publish_error(&format!("{error:#}")).await;
+                return Err(error.into());
+            }
+        };
+        // Re-resolve after the wait, held or not: a change committed while
+        // startup waited must not wait for the watcher's own epoch.
+        resolved_snapshot = match resolve_startup_snapshot(agent).await {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                runtime_status.publish_error(&format!("{error:#}")).await;
+                return Err(error);
+            }
+        };
+        lease
+    } else {
+        None
+    };
+    if let Err(error) =
+        validate_startup_snapshot(agent, tool_runtime, &mut resolved_snapshot, deadline).await
     {
         runtime_status.publish_error(&format!("{error:#}")).await;
         return Err(error);
+    }
+    drop(publication);
+    if resolved_snapshot
+        .unavailable_agents
+        .values()
+        .any(|unavailable| unavailable.publication_busy)
+    {
+        runtime_status.request_publication_recovery();
     }
     log_recovery(
         &agent.node,
@@ -331,8 +395,11 @@ async fn run_agent_owned(
     .with_native_executables(agent.native_executables().clone());
     registry::probe_and_promote_enabled_backends(&agent.node).await;
 
-    let (control_subscription, resolved_snapshot) =
-        resolve_startup(&agent, &tool_runtime, &runtime_status).await?;
+    let (control_subscription, resolved_snapshot) = tokio::select! {
+        biased;
+        _ = external_shutdown.changed() => return Ok(()),
+        resolved = resolve_startup(&agent, &tool_runtime, &runtime_status) => resolved?,
+    };
 
     let startup_barrier = Arc::new(StartupBarrier::new(
         &resolved_snapshot

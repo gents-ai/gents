@@ -267,7 +267,6 @@ pub struct RetryLink {
     pub parent_request_doc_id: Option<String>,
     pub root_request_id: String,
     pub retry_count: i64,
-    pub max_retries: i64,
 }
 
 pub struct RequestSpec {
@@ -380,16 +379,6 @@ pub fn build_request(
         retry
             .as_ref()
             .map_or_else(|| request_id.clone(), |link| link.root_request_id.clone()),
-    );
-    create.max_retries = retry.as_ref().map_or(
-        match purpose {
-            gents_protocol::request_admission::RequestPurpose::Normal => {
-                i64::from(DEFAULT_REQUEST_MAX_RETRIES)
-            }
-            gents_protocol::request_admission::RequestPurpose::TitleAudit
-            | gents_protocol::request_admission::RequestPurpose::AccessReview => 0,
-        },
-        |link| link.max_retries,
     );
     create.retry_count = retry.as_ref().map_or(0, |link| link.retry_count);
     if let Some(link) = retry {
@@ -718,6 +707,9 @@ impl RequestLifecycle {
             request_commit_cid: None,
             deadline_duration_secs,
             configured_max_total_tokens: None,
+            configured_max_request_retries:
+                gents_documents::inference_defaults::DEFAULT_REQUEST_MAX_RETRIES,
+            retry_budget_pin_writer: None,
             claimed_deadline_at: None,
             background_completion_input_through_sequence: None,
             state: LocalLifecycleState::Pending,

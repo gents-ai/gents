@@ -4,7 +4,6 @@ use gents_protocol::row::AgentRequest;
 use gents_session::request::lifecycle::claim::*;
 use gents_session::request::lifecycle::{
     ClaimOutcome, ExecutionOrigin, LocalLifecycleState, RequestLifecycle,
-    DEFAULT_REQUEST_MAX_RETRIES,
 };
 use gents_store::graphql::escape_graphql_string;
 use gents_store::test_support::{
@@ -161,11 +160,9 @@ async fn insert_pending_request_for_owner(
                     failure_reason: "",
                     created_at: "{escaped_created_at}",
                     retry_count: 0,
-                    max_retries: {max_retries},
                     request_hop: 0
                 }}) {{ {fields} }}
             }}"#,
-        max_retries = DEFAULT_REQUEST_MAX_RETRIES,
         fields = gents_protocol::row::AGENT_REQUEST_FIELDS,
     );
     let agent = identity::Did::new(fixture_agent_did(FIXTURE_AGENT_NONCE)).unwrap();

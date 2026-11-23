@@ -34,9 +34,10 @@ pub async fn create_started_session(
     source: gents_protocol::session::SessionReference,
     parent: &str,
     opening: &str,
+    cause: gents_protocol::session::SessionCreationCause,
 ) -> String {
     use gents_protocol::session::{
-        SessionCreationCause, SessionCreationReceipt, SessionCreationStarter, SessionProvenance,
+        SessionCreationReceipt, SessionCreationStarter, SessionProvenance,
     };
     use gents_store::identity::NodeIdentity as _;
     assert_eq!(
@@ -65,7 +66,7 @@ pub async fn create_started_session(
         requester_did: session.requester_did.clone(),
         agent_did: session.agent_did.clone(),
         opening_request_doc_id: opening.to_owned(),
-        cause: SessionCreationCause::AgentNew,
+        cause,
         cause_binding: "fixture-call".to_owned(),
         starter: Some(SessionCreationStarter {
             source,
@@ -131,14 +132,14 @@ fn request_input(
     did: &str,
     ids: &BTreeMap<String, String>,
     case_ids: &[&str],
-    max_retries: u32,
+    nonce: u32,
 ) -> String {
     let quoted = |text: &str| format!("\"{}\"", escape_graphql_string(text));
     let mut input = vec![
         format!("node_did: {}", quoted(did)),
         format!("requester_did: {}", quoted(did)),
         r#"agent_did: "worker", content: "work", lifecycle_state: "completed", backend_id: "", execution_origin: "interactive", failure_reason: "", retry_count: 0"#.to_owned(),
-        format!("max_retries: {max_retries}"),
+        format!("execution_lease_secs: {nonce}"),
     ];
     for (field, value) in row.as_object().expect("case row") {
         match (field.as_str(), value) {
@@ -209,7 +210,7 @@ fn ready_to_write(group: &[&Value], ids: &BTreeMap<String, String>, case_ids: &[
 ///
 /// DefraDB derives a native `_docID` from document content, so ids cannot
 /// follow the model's id order. Rows of one session that share `created_at`
-/// are written as one group, re-created with a different `max_retries`
+/// are written as one group, re-created with a different `execution_lease_secs`
 /// (which no reader selects) until their native order matches the model's.
 pub async fn seed_lineage_case(
     node: &defra_node::Node,
@@ -303,6 +304,7 @@ pub async fn seed_lineage_case(
                 },
                 &mapped(parent),
                 &mapped(opening),
+                gents_protocol::session::SessionCreationCause::AgentNew,
             )
             .await;
             continue;

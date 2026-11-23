@@ -942,7 +942,6 @@ async fn interactive_claim_snapshot_matches_claimed_waiting() {
             retry_root_request: request_id.clone(),
             superseded_by_request: "".into(),
             retry_count: 0,
-            max_retries: gents_session::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
             claimed_at_present: true,
             deadline_present: true,
             failure_reason: "".into(),
@@ -993,7 +992,6 @@ async fn interactive_admission_and_progress_snapshots_match_execution_flow() {
             retry_root_request: request_id.clone(),
             superseded_by_request: "".into(),
             retry_count: 0,
-            max_retries: gents_session::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
             claimed_at_present: true,
             deadline_present: true,
             failure_reason: "".into(),
@@ -1057,7 +1055,6 @@ async fn interactive_fail_before_stream_snapshot_matches_failed_released() {
             retry_root_request: request_id.clone(),
             superseded_by_request: "".into(),
             retry_count: 0,
-            max_retries: gents_session::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
             claimed_at_present: true,
             deadline_present: true,
             failure_reason: "".into(),
@@ -1111,7 +1108,6 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
             retry_root_request: lifecycle.request().request_id.clone(),
             superseded_by_request: "".into(),
             retry_count: 0,
-            max_retries: gents_session::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
             claimed_at_present: true,
             deadline_present: true,
             failure_reason: "".into(),
@@ -1926,7 +1922,6 @@ async fn terminal_repair_sweep_follows_the_lean_scope_model() {
                     "execution_origin": "interactive",
                     "created_at": created_at,
                     "retry_count": 0,
-                    "max_retries": 3,
                 });
                 let agent = ::identity::Did::new(actors.agent_did()).unwrap();
                 let doc = gents_store::config_client::ConfigAccess::local_as(
@@ -2003,7 +1998,7 @@ async fn fetch_request_snapshot_with_access(
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}, limit: 1) {{
             request_id lifecycle_state agent_did backend_id execution_origin
-            retry_parent_request retry_root_request superseded_by_request retry_count max_retries
+            retry_parent_request retry_root_request superseded_by_request retry_count
             claimed_at deadline failure_reason
         }} }}"#,
             escape_graphql_string(doc_id),

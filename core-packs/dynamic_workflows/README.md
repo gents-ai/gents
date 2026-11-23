@@ -29,7 +29,10 @@ gents config pack wire gents/workflow --agent <A> --targets-from gents/dynamic_w
 `--wire <agent-did>` does the same wiring in one step.
 
 The wired job block copies `Tools/workflow-caller`: `agent_targets` and
-`dynamic_targets` are `wf-read-only`. A pack may ship `policy.dynamic` only as
+`dynamic_targets` are `wf-read-only`, and the caller's `agents.target_ids`
+lists it too, since a Tools document whose job names a target its own
+`agents.target_ids` leaves out is refused when written. `agents.enabled`
+stays off, so the agent cannot start the worker directly. A pack may ship `policy.dynamic` only as
 `off` or `check` (gents `job_block_admissible`), and `check` refuses every
 dynamic spawn and message, so no workflow runs until the agent's Tools say
 `run`. Wiring never sets `run` and never changes a policy the operator set;

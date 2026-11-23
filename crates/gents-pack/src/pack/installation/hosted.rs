@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -115,7 +114,7 @@ impl HostedRejection {
 
 pub async fn stage_hosted_pack(
     owner: &str,
-    home: &Path,
+    writer: &crate::plugin::store::StoreWriter,
     archive: Arc<PackArchive>,
     prepared: Arc<PreparedDocumentPackInstall>,
     consent: bool,
@@ -138,7 +137,7 @@ pub async fn stage_hosted_pack(
         Ok::<_, anyhow::Error>((stages, graph))
     })
     .await??;
-    let stage = stage_document_plugins(&stages, Some(home), consent, owner).await?;
+    let stage = stage_document_plugins(&stages, Some(writer), consent, owner).await?;
     let installed = stage
         .as_ref()
         .map(|stage| stage.installed.clone())
@@ -156,7 +155,7 @@ pub async fn stage_hosted_pack(
             )
         })
         .collect();
-    let home = home.to_owned();
+    let home = writer.home().to_owned();
     let preparation = tokio::task::spawn_blocking(move || {
         let refs = references
             .iter()

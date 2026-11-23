@@ -7,8 +7,8 @@ use gents_documents::{
 use gents_documents::{Agent, AgentContext, BashTools, BuiltInTools, FileTools, HostTools, Tools};
 use gents_protocol::agent_identity::{AgentAdmissionFacts, AgentIdentityBinding};
 use gents_protocol::operations::agent::{
-    AgentCreateInput, AgentCreateOperation, AgentOperationError, AgentOperationKind, AgentOutcome,
-    AgentReceipt,
+    AgentCreateInput, AgentCreateOperation, AgentOmittedCapability, AgentOperationError,
+    AgentOperationKind, AgentOutcome, AgentReceipt,
 };
 use gents_protocol::operations::NextCall;
 use gents_session::session::output_render::Ordered;
@@ -863,6 +863,9 @@ async fn agent_apply_in_txn(
     let mut documents = Vec::new();
     let doc: Agent;
     let mut root_access = None;
+    let mut not_copied = Vec::new();
+    let mut overridden_on_request = Vec::new();
+    let mut prompt_warning = None;
     match &op {
         agent::AgentOperation::Create(input) if args.context_id.is_present() => {
             let context_id = args
@@ -923,11 +926,23 @@ async fn agent_apply_in_txn(
                 )?)?),
                 None => None,
             };
-            if operation == "clone" {
-                if let Some(tools) = tools.as_mut() {
-                    tools.self_config = None;
-                }
-            }
+            let is_clone = operation == "clone";
+            let source_overrides = tools
+                .as_ref()
+                .filter(|_| is_clone)
+                .map(clone_override_values);
+            let dropped_self_config = tools
+                .as_mut()
+                .filter(|_| is_clone)
+                .and_then(|tools| tools.self_config.take());
+            let report = clone_report(
+                is_clone,
+                dropped_self_config.is_some(),
+                context
+                    .system_prompt
+                    .as_deref()
+                    .is_some_and(prompt_mentions_config),
+            );
             if let Some(preset) = args.preset.value() {
                 admit(
                     operation != "clone",
@@ -996,6 +1011,35 @@ async fn agent_apply_in_txn(
                     stored_root.as_deref(),
                 )?;
                 apply_tool_grant_selection(&mut tools, args.enable_lsp, args.network_mode);
+                if let Some(source) = source_overrides {
+                    let requested = [
+                        args.root.is_present(),
+                        args.network_mode.is_some(),
+                        args.enable_lsp.is_some(),
+                    ];
+                    for (((name, before), (_, after)), requested) in source
+                        .into_iter()
+                        .zip(clone_override_values(&tools))
+                        .zip(requested)
+                    {
+                        if override_reported(requested, before != after) {
+                            overridden_on_request.push(format!(
+                                "{name}: overridden on request (source value: {before})"
+                            ));
+                        }
+                    }
+                }
+                if let (true, Some(dropped)) = (report.self_config_not_copied, dropped_self_config)
+                {
+                    not_copied.push(AgentOmittedCapability::new(
+                        "self_config",
+                        &json!({"tools_id": tools.tools_id, "node_did": owner, "self_config": dropped}),
+                        home,
+                    ));
+                }
+                if report.prompt_warning {
+                    prompt_warning = Some("The cloned prompt names config, but the clone does not have self_config. To grant it, run not_copied[0].grant_command against the intended node.".to_owned());
+                }
                 // A new Agent DID holds no WorkspaceRoot relationship yet.
                 let published =
                     match crate::surface::tools_root_reader_in_txn(txn, owner, &policy, &tools)
@@ -1183,9 +1227,62 @@ async fn agent_apply_in_txn(
         operation: kind,
         agent_did: id,
         host_root_access: root_access,
+        not_copied,
+        overridden_on_request,
+        prompt_warning,
         agent: doc,
         make_default: args.make_default,
     })
+}
+
+/// Lean `SelfConfig.CloneReceipt.report`.
+fn clone_report(
+    is_clone: bool,
+    source_has_self_config: bool,
+    prompt_mentions_config: bool,
+) -> CloneReport {
+    let dropped = is_clone && source_has_self_config;
+    CloneReport {
+        self_config_not_copied: dropped,
+        prompt_warning: dropped && prompt_mentions_config,
+    }
+}
+
+struct CloneReport {
+    self_config_not_copied: bool,
+    prompt_warning: bool,
+}
+
+/// Lean `SelfConfig.CloneReceipt.overrideReported`.
+fn override_reported(requested: bool, changed: bool) -> bool {
+    requested && changed
+}
+
+/// Lean `SelfConfig.CloneReceipt.mentionsConfig`.
+fn prompt_mentions_config(prompt: &str) -> bool {
+    prompt
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .any(|word| word.eq_ignore_ascii_case("config") || word.eq_ignore_ascii_case("self_config"))
+}
+
+fn clone_override_values(tools: &Tools) -> [(&'static str, Value); 3] {
+    let host = tools.host.as_ref();
+    [
+        ("host.root", json!(host.and_then(|host| host.root.as_ref()))),
+        (
+            "host.bash.network_mode",
+            json!(host
+                .and_then(|host| host.bash.as_ref())
+                .and_then(|bash| bash.network_mode)),
+        ),
+        (
+            "integrations.lsp.enabled",
+            json!(tools
+                .integrations
+                .as_ref()
+                .is_some_and(|integrations| integrations.lsp.is_some())),
+        ),
+    ]
 }
 
 /// Lean `SelfConfig.yoloGroup`: the User grants `agent_did`, an Agent the
@@ -1232,4 +1329,38 @@ pub async fn grant_own_self_configuration(
             })
         })
         .await
+}
+
+#[cfg(test)]
+mod clone_receipt_conformance {
+    use gents_lean_vocab::families;
+
+    #[test]
+    fn clone_report_matches_lean() {
+        families::self_config_clone_receipt_report::replay(|i| {
+            let report = super::clone_report(
+                i.is_clone,
+                i.source_has_self_config,
+                i.prompt_mentions_config,
+            );
+            families::self_config_clone_receipt_report::Report {
+                self_config_not_copied: report.self_config_not_copied,
+                prompt_warning: report.prompt_warning,
+            }
+        });
+    }
+
+    #[test]
+    fn override_report_matches_lean() {
+        families::self_config_clone_receipt_override_reported::replay(|i| {
+            super::override_reported(i.requested, i.changed)
+        });
+    }
+
+    #[test]
+    fn prompt_mentions_match_lean() {
+        families::clone_receipt_prompt_mention::replay(|i| {
+            super::prompt_mentions_config(&i.prompt)
+        });
+    }
 }

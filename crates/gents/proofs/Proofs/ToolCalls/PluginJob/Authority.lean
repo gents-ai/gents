@@ -192,6 +192,28 @@ is not `off`. The type default of `dynamicTargets` is the empty list. -/
 def Policy.valid (agentTargets : List String) (p : Policy) : Bool :=
   p.mode == .off || decide (p.dynamicTargets ⊆ agentTargets)
 
+/-- A plugin's job block names only targets its own Tools document lets the
+caller start: every `job.agent_targets` entry is one of that document's
+`agents.target_ids`. At runtime a job spawns only where both lists permit it
+(`effectiveTargets`), so a target missing from the caller's list could never
+start; the write is refused instead of the job's first call. Direct starts
+(`agents.enabled`) are a separate grant and are not required.
+
+Maintainer decision (2026-11-16): checked when a Tools document is created or
+edited, never when a stored document is loaded or the node starts, so an
+existing node keeps working and diagnose reports its documents. -/
+def jobTargetsConfigured (callerTargets jobTargets : List String) : Bool :=
+  decide (jobTargets ⊆ callerTargets)
+
+theorem configured_job_targets_are_caller_targets (callerTargets jobTargets : List String)
+    (h : jobTargetsConfigured callerTargets jobTargets = true) :
+    ∀ t ∈ jobTargets, t ∈ callerTargets := by
+  simpa [jobTargetsConfigured] using h
+
+theorem no_caller_targets_configure_no_job (jobTarget : String) (rest : List String) :
+    jobTargetsConfigured [] (jobTarget :: rest) = false := by
+  simp [jobTargetsConfigured]
+
 /-- A job block a pack ships in its Tools document. `targetsFrom` and
 `trusted` are pack coordinates. -/
 structure PackJobBlock where

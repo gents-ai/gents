@@ -1,0 +1,3 @@
+---- MODULE MCPluginPublicationRevocationDemotesEarly ----
+EXTENDS PluginPublicationRevocation
+====

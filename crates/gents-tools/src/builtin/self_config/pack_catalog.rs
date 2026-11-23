@@ -125,8 +125,7 @@ impl PackInstaller {
         cause: anyhow::Error,
     ) -> anyhow::Error {
         let Some(Ok(Some(record))) = self
-            .home
-            .as_deref()
+            .home()
             .map(|home| node_packs::read_home_install(home, coordinate))
         else {
             return cause;
@@ -173,7 +172,7 @@ impl PackInstaller {
             .await?
             .with_context(|| format!("{coordinate} is not installed; see pack list"))?;
         let edited = self.edited_documents(&coordinate, true).await?;
-        let collections = match &self.home {
+        let collections = match self.home() {
             Some(home) => {
                 let pack = crate::collection_use::pack_collections(
                     &access,
@@ -283,8 +282,8 @@ impl PackInstaller {
         }
         let declared = if with_collections {
             let home = self
-                .home
-                .clone()
+                .home()
+                .map(std::path::Path::to_path_buf)
                 .context("--with-collections reads the pack's SDL from the node home, which this runtime does not have; remove without it, then use schema collection preview remove NAME")?;
             crate::collection_use::pack_collections(
                 &access,
@@ -323,7 +322,7 @@ impl PackInstaller {
         };
         let collections = crate::collection_use::remove_unused_collections(
             &access,
-            self.home.as_deref(),
+            self.home(),
             self.core.node_did(),
             &declared,
         )

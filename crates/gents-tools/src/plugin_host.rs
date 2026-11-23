@@ -27,6 +27,19 @@ pub struct PluginRunAgent<'a> {
 pub trait PluginHost: Send + Sync {
     fn home(&self) -> Option<&Path>;
 
+    /// The plugin store identity this host reads through, when it has a home.
+    fn store_pin(&self) -> Option<&gents_pack::plugin::store::StoreReadPin> {
+        None
+    }
+
+    /// The writer of this host's plugin store: the runtime's, pinned to the
+    /// home it started in.
+    fn store_writer(&self) -> Option<gents_pack::plugin::store::StoreWriter> {
+        self.store_pin()
+            .cloned()
+            .map(gents_pack::plugin::store::StoreWriter::Runtime)
+    }
+
     /// Every plugin record in the plugin home.
     fn installed(&self) -> Result<Vec<InstalledPlugin>>;
 

@@ -100,7 +100,7 @@ pub(super) fn agent_context_documents(
     let (tool_selection, agents) = match tools {
         None => (ResolvedToolSelection::default(), AgentToolConfig::default()),
         Some(tools) => {
-            tools.validate()?;
+            tools.validate_stored()?;
             if let Some(remote) = &tools.remote {
                 for service in &remote.services {
                     owned_doc!(&view.tool_services, service.mcp_service_id.as_str(), scope)?;
@@ -243,7 +243,15 @@ pub(super) async fn resolve_behavior_surfaces(
                     agent_config.agent.agent_did.clone(),
                     UnavailableAgent::new(
                         AgentReadinessUnavailableReason::ToolSurfaceUnavailable,
-                        error.to_string(),
+                        format!(
+                            "{}",
+                            gents_protocol::error_chain::ErrorChain(error.as_ref())
+                        ),
+                    )
+                    .with_publication_busy(
+                        gents_pack::plugin::store::PublishedPluginReadError::error_chain_is_busy(
+                            error.as_ref(),
+                        ),
                     ),
                 );
             }

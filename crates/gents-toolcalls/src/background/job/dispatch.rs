@@ -97,14 +97,20 @@ pub async fn run_step0(
     {
         Ok(installed) => installed,
         Err(error) => {
+            let reason = gents_protocol::error_chain::ErrorChain(&error).to_string();
+            let next = if error.is_busy() {
+                format!("Next: call `{tool}` again once the pack operation holding the plugin store finishes")
+            } else {
+                format!("Next: ask the operator to reinstall the pack that provides {coordinate}")
+            };
             return refuse(
                 lifecycle,
                 FailureClass::ServiceUnavailable,
                 Refusal::NotAvailable.code(),
-                &format!("{error:#}"),
-                &format!("Next: ask the operator to reinstall the pack that provides {coordinate}"),
+                &reason,
+                &next,
             )
-            .await
+            .await;
         }
     };
     let access = runtime.agent_access(lifecycle.actor())?;

@@ -287,6 +287,10 @@ where
         lifecycle.set_client_claim_admission(client_claim);
         lifecycle.set_execution_lease_duration(self.agent_config.stream_liveness_timeout);
         lifecycle.set_configured_max_total_tokens(self.agent_config.max_total_tokens);
+        lifecycle.set_configured_max_request_retries(
+            self.agent_config.max_request_retries,
+            self.agent_config.node.identity.clone(),
+        );
         let expiry_clock = Arc::clone(&self.expiry_clock);
         match lifecycle
             .claim_with_identity_at(move || expiry_clock())
@@ -532,8 +536,10 @@ where
                 config.max_tokens =
                     title_max_tokens(config.additional_params.as_ref(), config.max_tokens);
                 config.max_turns = 1;
-                config.retry_policy =
-                    gents_loop::completion_retry::CompletionRetryPolicy::no_retry();
+                config.retry_policy = gents_loop::completion_retry::CompletionRetryPolicy {
+                    max_rate_limit_wait: config.retry_policy.max_rate_limit_wait,
+                    ..gents_loop::completion_retry::CompletionRetryPolicy::no_retry()
+                };
                 let access = gents_store::config_client::ConfigAccess::local_managed_agent(
                     self.node.clone(),
                     identity::Did::new(request.agent_did.clone())?,

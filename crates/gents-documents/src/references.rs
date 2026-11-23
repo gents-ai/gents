@@ -280,7 +280,11 @@ impl ConfigReferences {
                     changed.contains(&(reference.collection, reference.id.clone()))
                 })
             {
-                self.validate_document(*collection, document)?;
+                self.validate_document_as(
+                    *collection,
+                    document,
+                    changed.contains(&(*collection, id.clone())),
+                )?;
             }
         }
         Ok(())
@@ -329,12 +333,23 @@ impl ConfigReferences {
             "configuration selected for removal does not exist"
         );
         for ((kind, _), document) in &self.documents {
-            candidate.validate_document(*kind, document)?;
+            candidate.validate_document_as(*kind, document, false)?;
         }
         Ok(())
     }
 
     pub fn validate_document(&self, collection: Collection, value: &Value) -> Result<()> {
+        self.validate_document_as(collection, value, true)
+    }
+
+    /// `written` holds a document to the rules only a create or an edit
+    /// meets; a stored consumer re-checked beside it is held to its shape.
+    fn validate_document_as(
+        &self,
+        collection: Collection,
+        value: &Value,
+        written: bool,
+    ) -> Result<()> {
         ensure!(
             value["node_did"].as_str() == Some(&self.node_did),
             "{} configuration owner does not match reference scope",
@@ -392,7 +407,11 @@ impl ConfigReferences {
             }
             Collection::Tools => {
                 let doc: Tools = decode(value)?;
-                doc.validate()?;
+                if written {
+                    doc.validate()?;
+                } else {
+                    doc.validate_stored()?;
+                }
                 let surfaces = self
                     .documents
                     .iter()

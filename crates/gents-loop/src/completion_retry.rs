@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use rand::Rng;
 
 use crate::error::{ClassifiedFailure, ContextOverflow, InferenceError};
+use crate::provider_limit::{ProviderLimit, UsageLimit, LONG_RATE_LIMIT_WAIT};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CompletionRetryProfileFields {
@@ -12,6 +13,21 @@ pub struct CompletionRetryProfileFields {
     pub retry_max_resample: Option<i64>,
     pub retry_allow_repair: Option<bool>,
     pub retry_interactive_max: Option<i64>,
+    pub retry_max_rate_limit_wait_ms: Option<i64>,
+}
+
+impl CompletionRetryProfileFields {
+    /// The agent's rate-limit wait cap, whatever the execution origin
+    /// (Lean: `Runtime.CompletionConfig.maxWaitMs`). The owned loop holds a
+    /// provider throttle up to it, and every admitted model built for the
+    /// agent carries it to the call's permit.
+    pub fn max_rate_limit_wait(&self) -> Duration {
+        self.retry_max_rate_limit_wait_ms
+            .and_then(|value| u64::try_from(value).ok())
+            .filter(|value| *value > 0)
+            .map(Duration::from_millis)
+            .unwrap_or(LONG_RATE_LIMIT_WAIT)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,6 +75,11 @@ pub struct CompletionRetryPolicy {
     pub allow_repair: bool,
     /// Other eligible accounts of the pool: one immediate reissue each.
     pub account_hops: u32,
+    /// Longest transport wait held before a retry
+    /// (Lean: `CompletionRetry.Budget.maxWait`); a provider rate-limit wait
+    /// beyond it fails the completion as the provider's usage limit, and the
+    /// policy's own backoff steps are clamped to it.
+    pub max_rate_limit_wait: Duration,
 }
 
 impl CompletionRetryPolicy {
@@ -98,6 +119,7 @@ impl CompletionRetryPolicy {
                 .unwrap_or(default.max_empty_resample),
             allow_repair: fields.retry_allow_repair.unwrap_or(default.allow_repair),
             account_hops: 0,
+            max_rate_limit_wait: fields.max_rate_limit_wait(),
         }
     }
 
@@ -119,6 +141,7 @@ impl CompletionRetryPolicy {
             max_empty_resample: 1,
             allow_repair: true,
             account_hops: 0,
+            max_rate_limit_wait: LONG_RATE_LIMIT_WAIT,
         }
     }
 
@@ -129,6 +152,7 @@ impl CompletionRetryPolicy {
             max_empty_resample: 1,
             allow_repair: true,
             account_hops: 0,
+            max_rate_limit_wait: LONG_RATE_LIMIT_WAIT,
         }
     }
 
@@ -139,6 +163,7 @@ impl CompletionRetryPolicy {
             max_empty_resample: 0,
             allow_repair: false,
             account_hops: 0,
+            max_rate_limit_wait: LONG_RATE_LIMIT_WAIT,
         }
     }
 
@@ -153,6 +178,7 @@ impl CompletionRetryPolicy {
             max_empty_resample: 3,
             allow_repair: false,
             account_hops: 0,
+            max_rate_limit_wait: LONG_RATE_LIMIT_WAIT,
         }
     }
 }
@@ -274,6 +300,25 @@ impl CompletionRetryState {
         self.empty_used = 0;
     }
 
+    /// The failure as this policy reads it: a provider rate-limit wait beyond
+    /// `max_rate_limit_wait` is the provider's usage limit, resetting when
+    /// that wait ends (Lean: `CompletionRetry.step?` fails a transport wake
+    /// beyond `Budget.maxWait` permanently). The loop reads every attempt
+    /// failure through it before choosing a lane.
+    pub fn read_failure(
+        &self,
+        failure: ClassifiedFailure,
+        now: DateTime<Utc>,
+    ) -> ClassifiedFailure {
+        match provider_limit_verdict(&failure, now, self.policy.max_rate_limit_wait) {
+            Some(ProviderLimit::UsageExhausted(limit)) => ClassifiedFailure {
+                error: InferenceError::UsageLimited(limit),
+                ..failure
+            },
+            _ => failure,
+        }
+    }
+
     pub fn on_pre_stream_failure(
         &mut self,
         failure: &ClassifiedFailure,
@@ -290,6 +335,13 @@ impl CompletionRetryState {
                 },
             },
             FailureClass::Transport => {
+                if let Some(ProviderLimit::UsageExhausted(limit)) =
+                    provider_limit_verdict(failure, now, self.policy.max_rate_limit_wait)
+                {
+                    return PreStreamDirective::Fail {
+                        reason: limit.to_string(),
+                    };
+                }
                 match ladder_delay(&self.policy.transport_backoff, self.transport_used) {
                     None => PreStreamDirective::Fail {
                         reason: format!(
@@ -304,7 +356,7 @@ impl CompletionRetryState {
                             } => base_delay.max(*retry_after),
                             _ => base_delay,
                         };
-                        let delay = jitter(base_delay, &mut rand::rng());
+                        let delay = self.held_wait(base_delay);
                         if exceeds_deadline(now, delay, deadline) {
                             return PreStreamDirective::Fail {
                                 reason: deadline_reason(delay, deadline),
@@ -435,7 +487,7 @@ impl CompletionRetryState {
                 ),
             },
             Some(base_delay) => {
-                let delay = jitter(base_delay, &mut rand::rng());
+                let delay = self.held_wait(base_delay);
                 if exceeds_deadline(now, delay, deadline) {
                     return MidStreamDirective::Fail {
                         reason: deadline_reason(delay, deadline),
@@ -449,6 +501,41 @@ impl CompletionRetryState {
                 }
             }
         }
+    }
+
+    /// The jittered transport wait, never beyond the policy's cap.
+    fn held_wait(&self, base_delay: Duration) -> Duration {
+        let cap = self.policy.max_rate_limit_wait;
+        jitter(base_delay.min(cap), &mut rand::rng()).min(cap)
+    }
+}
+
+/// A failed attempt's provider limit under a policy that holds a provider
+/// throttle for at most `max_rate_limit_wait`: a transport throttle whose wait
+/// lies beyond it is the provider's usage limit, resetting when that wait ends
+/// (Lean: `InferenceCall.ProviderLimit.verdict`). The owned loop reads every
+/// attempt failure through it, and the admission permit records it on the
+/// call's terminal row under the same cap, so the recorded verdict is the
+/// loop's.
+pub fn provider_limit_verdict(
+    failure: &ClassifiedFailure,
+    now: DateTime<Utc>,
+    max_rate_limit_wait: Duration,
+) -> Option<ProviderLimit> {
+    match &failure.error {
+        InferenceError::UsageLimited(limit) => Some(ProviderLimit::UsageExhausted(limit.clone())),
+        InferenceError::RateLimited {
+            retry_after: Some(wait),
+        } if failure_class(failure) == FailureClass::Transport && *wait > max_rate_limit_wait => {
+            Some(ProviderLimit::UsageExhausted(UsageLimit::unheld_throttle(
+                &failure.text,
+                now.checked_add_signed(chrono_duration_from_std(*wait)),
+            )))
+        }
+        InferenceError::RateLimited { retry_after } => Some(ProviderLimit::Throttled {
+            retry_after: *retry_after,
+        }),
+        _ => None,
     }
 }
 

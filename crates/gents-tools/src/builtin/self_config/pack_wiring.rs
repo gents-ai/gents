@@ -23,8 +23,7 @@ impl PackInstaller {
     ) -> anyhow::Result<String> {
         let coordinate = node_packs::coordinate_of(package, true)?;
         let home = self
-            .home
-            .as_deref()
+            .home()
             .context("pack wire requires a runtime plugin home")?;
         let record = node_packs::read_home_install(home, &coordinate)?.ok_or_else(|| {
             anyhow::Error::from(command::CommandGuidance {

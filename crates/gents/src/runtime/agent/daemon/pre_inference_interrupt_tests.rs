@@ -91,6 +91,9 @@ struct PreInferenceBlockingTool {
 }
 
 impl gents_loop::tool::ToolDyn for PreInferenceBlockingTool {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         "pre_inference_block".into()
     }

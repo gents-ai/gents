@@ -209,7 +209,9 @@ pub struct ReissueReceipt {
     pub retry_parent_request: String,
     pub retry_root_request: String,
     pub retry_count: i64,
-    pub max_retries: i64,
+    /// The lineage budget the successor's first claim inherits; absent until
+    /// a request of the lineage has been claimed.
+    pub max_retries: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
