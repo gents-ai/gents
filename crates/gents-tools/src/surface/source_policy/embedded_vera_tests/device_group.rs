@@ -26,6 +26,15 @@ async fn the_account_signs_device_admission_and_revocation() -> anyhow::Result<(
         .get_doc_owner(policy, "device_groups", &group)
         .await?;
     assert_eq!(owner.as_ref(), Some(&home.user_did));
+    let receiver = home.as_node();
+    assert_eq!(
+        receiver
+            .assigned_device_group(&home.user_did)
+            .await?
+            .as_ref(),
+        Some(&group)
+    );
+    assert_eq!(receiver.assigned_device_group(&home.node_did).await?, None);
     let device = Identity::Authenticated(device.clone());
     let can_read = || {
         provider.check_doc_access(
@@ -42,6 +51,7 @@ async fn the_account_signs_device_admission_and_revocation() -> anyhow::Result<(
         .await?;
     home.settled(&home.user_did, "device revocation").await?;
     assert!(!can_read().await?);
+    assert_eq!(receiver.assigned_device_group(&home.user_did).await?, None);
     home.shutdown().await?;
     Ok(())
 }
