@@ -754,17 +754,51 @@ impl Tools {
             .collect()
     }
 
+    fn selected_plugins(&self) -> impl Iterator<Item = &PluginToolRef> {
+        self.integrations
+            .iter()
+            .flat_map(|group| group.plugins.iter().flatten())
+    }
+
+    fn selects_script_with_tool_calls(&self) -> bool {
+        self.selected_plugins()
+            .any(|plugin| plugin.tool_name() == "script" && plugin.tool_calls)
+    }
+
+    fn selects_plugin_tool(&self, name: &str) -> bool {
+        self.selected_plugins()
+            .any(|plugin| plugin.tool_name() == name)
+    }
+
+    /// `hidden_tool_names` as a wiring from `before` to this document leaves
+    /// it (Lean `ToolPresentation.listedAfterWiring`).
+    pub fn list_hidden_after_wiring(&mut self, before: &Tools) {
+        use gents_loop::tool_policy::presentation::{default_hidden, listed_after_wiring};
+        let script_before = before.selects_script_with_tool_calls();
+        let script_after = self.selects_script_with_tool_calls();
+        let mut names = self.hidden_tool_names.clone();
+        for plugin in self.selected_plugins() {
+            let name = plugin.tool_name();
+            if default_hidden(name) && !names.iter().any(|listed| listed == name) {
+                names.push(name.to_owned());
+            }
+        }
+        names.retain(|name| {
+            listed_after_wiring(
+                default_hidden(name),
+                self.hidden_tool_names.contains(name),
+                before.selects_plugin_tool(name),
+                script_before,
+                self.selects_plugin_tool(name),
+                script_after,
+            )
+        });
+        self.hidden_tool_names = names;
+    }
+
     fn presentation_violations(&self) -> Vec<String> {
         use gents_loop::tool_policy::presentation::{configuration_valid, is_gateway};
-        let script_selected = self
-            .integrations
-            .as_ref()
-            .and_then(|group| group.plugins.as_ref())
-            .is_some_and(|plugins| {
-                plugins
-                    .iter()
-                    .any(|plugin| plugin.tool_name() == "script" && plugin.tool_calls)
-            });
+        let script_selected = self.selects_script_with_tool_calls();
         let gateways: Vec<&String> = self
             .hidden_tool_names
             .iter()

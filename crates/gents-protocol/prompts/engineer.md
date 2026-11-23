@@ -25,11 +25,13 @@ The runtime's own records are documents too, so what any agent did is data you c
   - built-ins such as session discovery and history;
   - datastore: application reads, scoped document writes and reusable surfaces;
   - remote MCP services and integrations;
-  - plugin tools, such as workflows, from installed packs;
+  - plugin tools from installed packs, such as charts, data tables, a browser and workflows;
   - the mailbox;
   - self-config, which is this config tool.
 
   The node's process ceiling bounds every grant. Prompts and skills grant nothing. What an agent can actually do is what its Tools resolve to, so read that back instead of assuming it.
+
+  Some granted tools are not sent with each request: those its Tools list in `hidden_tool_names`, by default `charts`, `data_tables` and `browser_exec`. Call them inside `script`, whose description names them: read `tools.NAME.description` and `tools.NAME.parameters`, then `await tools.NAME({...})`.
 - **Skills.** Instructions for a kind of work, listed in your skill catalog and loaded with `load_skill`. When asked to build or set something up, load the one the catalog says to start with.
 - **Sessions.** Use sessions to inspect conversations, tool calls and results visible to your identity. Use that evidence to investigate what agents did; use agent messaging to start or continue their work.
 - **Plugins.** WASM plugins are executable components for agent tools and workflow stages. `plugin build` in `config` compiles, tests and installs one from source this node holds as a document, in the command sandbox, with no file; packs distribute plugins and compile theirs through `pack build` and `pack test`.

@@ -51,6 +51,59 @@ while it selects `script` with tool calls. -/
 def configurationValid (hidesOthers scriptSelected hidesGateway : Bool) : Bool :=
   !hidesGateway && (!hidesOthers || scriptSelected)
 
+/-- The tools hidden by default once `script` can reach them.
+
+Decision (owner): `charts`, `data_tables` and `browser_exec` carry the largest
+definitions the Engineer is granted, sent with every request, and few requests
+use them; the model reaches them through `script`, which lists, describes and
+calls them. -/
+def defaultHidden (name : String) : Bool :=
+  ["charts", "data_tables", "browser_exec"].contains name
+
+/-- Whether a wiring that changes a Tools document leaves one tool listed in
+`hidden_tool_names`. `selected` is whether the document selects the tool and
+`script` whether it selects `script` with tool calls, before and after.
+
+A default-hidden tool is listed when the wiring makes it hideable for the first
+time: it is selected while `script` is, or `script` is selected while it is.
+This holds on every path that wires a pack into an agent: the setup that
+creates the Engineer, and a pack wired after the document exists. A tool that
+was already hideable keeps what the document says, so a tool an operator chose
+to show stays shown and a re-wire or an upgrade changes nothing. A wiring that
+leaves `script` unselected clears the list: hiding needs `script`
+(`configurationValid`), and without it every tool is shown
+(`effectiveHidden`). -/
+def listedAfterWiring
+    (defaultHidden listed selectedBefore scriptBefore selectedAfter scriptAfter : Bool) : Bool :=
+  scriptAfter && (listed || (defaultHidden && selectedAfter && !(selectedBefore && scriptBefore)))
+
+theorem defaults_are_not_gateways :
+    (["charts", "data_tables", "browser_exec"].all fun name => defaultHidden name && !isGateway name)
+      = true := by decide
+
+/-- A wiring never leaves a listed tool without `script`. -/
+theorem wiring_listing_needs_script (default listed selectedBefore scriptBefore selectedAfter : Bool) :
+    listedAfterWiring default listed selectedBefore scriptBefore selectedAfter false = false := by
+  simp [listedAfterWiring]
+
+/-- A tool already hideable keeps the operator's choice, whichever it was. -/
+theorem wiring_keeps_the_operator_choice (default listed selectedAfter : Bool) :
+    listedAfterWiring default listed true true selectedAfter true = listed := by
+  cases default <;> cases listed <;> cases selectedAfter <;> rfl
+
+/-- Only a default-hidden tool is ever added to the list. -/
+theorem wiring_adds_only_defaults
+    (listed selectedBefore scriptBefore selectedAfter scriptAfter : Bool) :
+    listedAfterWiring false listed selectedBefore scriptBefore selectedAfter scriptAfter =
+      (scriptAfter && listed) := by
+  simp [listedAfterWiring]
+
+theorem default_hidden_when_script_arrives :
+    listedAfterWiring true false true false true true = true := rfl
+
+theorem default_hidden_when_it_arrives_beside_script :
+    listedAfterWiring true false false true true true = true := rfl
+
 theorem hidden_provider_call_refused :
     admissionDecision true true .provider = .hidden := rfl
 
