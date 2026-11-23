@@ -122,7 +122,6 @@ def openFamilies : List String :=
   , "identity_operations_readiness_recovery_unreached"
   , "identity_operations_registry_writer_unreached"
   , "identity_operations_replica_grant_unreached"
-  , "mailbox_access_claimed_recipient_unreached"
   , "mailbox_handoff_contracts_linked_unreached"
   , "native_completion_trace_unreached"
   , "native_refinement_claim_unreached"
