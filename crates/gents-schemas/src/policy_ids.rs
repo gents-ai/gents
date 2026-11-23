@@ -106,13 +106,14 @@ impl HomePolicyIds {
         if self.transport_v2 {
             // Device admission binds the account-signed Node to its original device.
             rendered = rendered.replace(
-                "resource: \"nodes\") {\n    node_did: String @index(unique: true)",
-                "resource: \"nodes\") {\n    node_did: String @index(unique: true) @immutable",
+                "@policy(id: \"$household\", resource: \"nodes\") {\n    node_did: String @index(unique: true)",
+                "@policy(id: \"$household\", resource: \"nodes\") {\n    node_did: String @index(unique: true) @immutable",
             );
             for resource in ["discovery", "scoped_discovery", "enrollment_records"] {
-                let before = format!("resource: \"{resource}\") @branchable {{");
+                let before =
+                    format!("@policy(id: \"$household\", resource: \"{resource}\") @branchable {{");
                 let after = format!(
-                    "resource: \"{resource}\", parentField: \"publisher_node_id\") @branchable {{\n    publisher_node_id: String! @immutable"
+                    "@policy(id: \"$household\", resource: \"{resource}\", parentField: \"publisher_node_id\") @branchable {{\n    publisher_node_id: String! @immutable"
                 );
                 rendered = rendered.replace(&before, &after);
             }
@@ -173,8 +174,17 @@ mod tests {
         let node = include_str!("../schemas/agent/node.graphql");
         let shared = HomePolicyIds::embedded_vera_transport_v2().render(node);
         let original = HomePolicyIds::embedded_vera().render(node);
+        assert_eq!(
+            HomePolicyIds::embedded_vera_transport_v2().render(&shared),
+            shared
+        );
         assert!(shared.contains("node_did: String @index(unique: true) @immutable"));
         assert!(!original.contains("@immutable"));
+        let foreign = node.replace("$household", "other-policy");
+        assert_eq!(
+            HomePolicyIds::embedded_vera_transport_v2().render(&foreign),
+            foreign
+        );
     }
 
     /// Every SDL file the build script bundles, as written.
