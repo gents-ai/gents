@@ -112,7 +112,7 @@ pub const EMBEDDED_TRIAL_CEILING: usize = 4;
 /// The trials `isolation` may hold at once when `requested` are asked for.
 pub fn trial_ceiling(requested: usize, isolation: Isolation) -> usize {
     match isolation {
-        Isolation::Embedded => requested.clamp(1, EMBEDDED_TRIAL_CEILING),
+        Isolation::Embedded | Isolation::Contained => requested.clamp(1, EMBEDDED_TRIAL_CEILING),
         Isolation::Process => requested.max(1),
     }
 }

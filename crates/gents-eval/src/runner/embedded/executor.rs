@@ -48,6 +48,7 @@ pub struct EmbeddedExecutor {
         Arc<dyn gents_store::identity::NodeIdentity>,
         gents_store::config_client::ClientSigningCapability,
     )>,
+    isolation: Isolation,
 }
 
 struct Provisioned {
@@ -68,7 +69,14 @@ impl EmbeddedExecutor {
             runtime,
             provisioned: Mutex::new(RapidHashMap::new()),
             evaluator: None,
+            isolation: Isolation::Embedded,
         }
+    }
+
+    /// Declare this process contained: see [`Isolation::Contained`].
+    pub fn contained(mut self) -> Self {
+        self.isolation = Isolation::Contained;
+        self
     }
 
     pub fn with_evaluator_identity(
@@ -159,7 +167,7 @@ impl EmbeddedExecutor {
         let mut options = self.runtime_options.clone();
         options.plugin_home = Some(home.path().to_path_buf());
         options.runtime_snapshot_observer = Some(Arc::new(EventSourcesReady(event_sources_ready)));
-        options.tool_ceiling = trial_tool_ceiling(&workspace, spec.host_bash);
+        options.tool_ceiling = trial_tool_ceiling(&workspace, spec.host_bash, self.isolation);
         let runtime = match boot_runtime(&home, home.identity.clone(), options).await {
             Ok((runtime, _agent)) => runtime,
             Err(error) => {
@@ -202,8 +210,10 @@ impl EmbeddedExecutor {
 
 /// The process ceiling of an embedded trial. Bash is capped at
 /// `WorkspaceWrite`, so no grant an agent holds can write outside the trial
-/// root.
-fn trial_tool_ceiling(workspace: &Path, host_bash: bool) -> ToolCeiling {
+/// root. A contained trial's bash runs unsandboxed, as the Linux Engineer's
+/// does: `WorkspaceWrite` has no enforcer on Linux and would refuse every
+/// command, and the container is the boundary instead.
+fn trial_tool_ceiling(workspace: &Path, host_bash: bool, isolation: Isolation) -> ToolCeiling {
     let mut policy = ToolPolicySurface::ceiling_with_host_modes(
         FileToolMode::ReadWrite,
         if host_bash {
@@ -212,7 +222,7 @@ fn trial_tool_ceiling(workspace: &Path, host_bash: bool) -> ToolCeiling {
             BashMode::Off
         },
     );
-    if host_bash {
+    if host_bash && isolation != Isolation::Contained {
         policy.bash.execution_mode = CommandExecutionMode::WorkspaceWrite;
     }
     ToolCeiling::readwrite(workspace).with_policy(policy)
@@ -289,7 +299,7 @@ impl RuntimeSnapshotObserver for EventSourcesReady {
 #[async_trait::async_trait]
 impl TrialExecutor for EmbeddedExecutor {
     fn isolation(&self) -> Isolation {
-        Isolation::Embedded
+        self.isolation
     }
 
     async fn provision(&self, spec: &TrialSpec) -> TrialLocator {

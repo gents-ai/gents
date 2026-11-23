@@ -50,12 +50,15 @@ pub(super) fn assert_failure_class(
 #[test]
 fn a_trial_ceiling_grants_bash_only_when_the_definition_asks_for_it() {
     let workspace = Path::new("/runs/r/trials/t/workspace");
-    let without = trial_tool_ceiling(workspace, false);
-    assert_eq!(
-        (without.file_tools(), without.bash(), without.root()),
-        (FileToolMode::ReadWrite, BashMode::Off, Some(workspace))
-    );
-    let with = trial_tool_ceiling(workspace, true);
+    for isolation in [Isolation::Embedded, Isolation::Contained] {
+        let without = trial_tool_ceiling(workspace, false, isolation);
+        assert_eq!(
+            (without.file_tools(), without.bash(), without.root()),
+            (FileToolMode::ReadWrite, BashMode::Off, Some(workspace)),
+            "{isolation:?}"
+        );
+    }
+    let with = trial_tool_ceiling(workspace, true, Isolation::Embedded);
     assert_eq!(
         (with.file_tools(), with.bash(), with.root()),
         (
@@ -69,6 +72,33 @@ fn a_trial_ceiling_grants_bash_only_when_the_definition_asks_for_it() {
             .bash
             .execution_mode,
         CommandExecutionMode::WorkspaceWrite
+    );
+}
+
+#[tokio::test]
+async fn only_a_contained_trial_runs_the_bash_its_definition_asks_for_unsandboxed() {
+    let workspace = Path::new("/runs/r/trials/t/workspace");
+    let contained = trial_tool_ceiling(workspace, true, Isolation::Contained);
+    assert_eq!(
+        (contained.bash(), contained.root()),
+        (BashMode::Unrestricted, Some(workspace))
+    );
+    assert_eq!(
+        gents_tools::test_support::tool_policy(&contained)
+            .bash
+            .execution_mode,
+        CommandExecutionMode::Unrestricted
+    );
+
+    let executor = EmbeddedExecutor::new(
+        DocumentRuntimeOptions::default(),
+        PathBuf::from("/runs"),
+        crate::test_support::runtime_handle(),
+    );
+    assert_eq!(TrialExecutor::isolation(&executor), Isolation::Embedded);
+    assert_eq!(
+        TrialExecutor::isolation(&executor.contained()),
+        Isolation::Contained
     );
 }
 
