@@ -28,6 +28,7 @@ pub mod client_authentication;
 mod client_pack_evidence;
 pub mod client_request_input;
 pub mod client_signed_agent;
+mod device_group;
 pub mod runtime_access;
 pub mod runtime_endpoints;
 pub use client_pack_evidence::{

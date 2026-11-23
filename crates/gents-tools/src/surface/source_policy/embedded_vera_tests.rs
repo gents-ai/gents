@@ -706,6 +706,7 @@ mod heartbeats;
 mod in_txn;
 mod latency;
 mod learned_audience;
+mod device_group;
 mod managers;
 mod owed;
 mod owner_staged;

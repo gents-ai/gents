@@ -228,6 +228,7 @@ def networkProtocolResource : String → Option String
   | "NodeDirectoryEntry" => some "scoped_discovery"
   | "PeerRegistry" => some "discovery"
   | "Node" => some "nodes"
+  | "AccountDeviceGroup" => some "device_groups"
   | "DefaultAgentSelection" => some "default_agent_selections"
   | "NodeReadiness" => some "operations"
   | "NodeRuntime" => some "operations"
