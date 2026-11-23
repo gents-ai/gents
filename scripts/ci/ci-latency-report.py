@@ -7,7 +7,7 @@ sparkline of total seconds, and writes the table to $GITHUB_STEP_SUMMARY when
 set. Read-only: it never writes the branch; the caller commits the file it
 prints when asked.
 
-Usage: ci-latency-report.py [--since-days N] [--last M]
+Usage: ci-latency-report.py [--since-days N] [--last M] [--out PATH]
 """
 
 import argparse
@@ -71,6 +71,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--since-days", type=int, default=30)
     parser.add_argument("--last", type=int, default=40)
+    parser.add_argument("--out", help="Also write the report to PATH")
     arguments = parser.parse_args()
     recent = samples(arguments.since_days)
     if not recent:
@@ -81,6 +82,12 @@ def main():
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
             summary.write("\n" + report + "\n")
+    if arguments.out:
+        # e.g. --out trend.md, committed to ci-latency-data by the collector,
+        # so the trend has a stable URL with history instead of living only
+        # in each workflow run's summary.
+        with open(arguments.out, "w") as out:
+            out.write(report + "\n")
 
 
 if __name__ == "__main__":

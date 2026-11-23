@@ -106,5 +106,39 @@ jobs:
           export GIT_CONFIG_COUNT=1 \
             GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
             GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${basic}"
+          # The trend lives in two places: this run's summary tab (fresh every
+          # night) and trend.md on the data branch (stable URL, history via
+          # the branch's commit log). The renderer never writes the branch;
+          # this step owns both writes.
           git fetch --depth 1 origin ci-latency-data
-          scripts/ci/ci-latency-report.py --since-days 30
+          scripts/ci/ci-latency-report.py --since-days 30 --out "${RUNNER_TEMP}/trend.md"
+
+          # Commit trend.md on the data branch: worktree + index built from
+          # the fetched ref, without touching this checkout.
+          tree=$(git show -s --format=%T origin/ci-latency-data)
+          blob=$(git hash-object -w "${RUNNER_TEMP}/trend.md")
+          trend_tree=$(git mktree \
+            < <(git ls-tree origin/ci-latency-data | grep -v '\btrend\.md$' \
+                ; printf '100644 blob %s\ttrend.md\n' "${blob}"))
+          commit=$(git -c user.name=ci-latency-bot -c user.email=ci-latency-bot@users.noreply.github.com \
+            commit-tree "${trend_tree}" -p origin/ci-latency-data \
+            -m "[ci-omit] trend ${GITHUB_RUN_ID}")
+          # Same fetch-rebase-retry discipline as the samples: a concurrent
+          # writer moves the branch, we rebuild on top; a lost trend is never
+          # a failed run.
+          for attempt in 1 2 3 4 5; do
+            if git push -q origin "${commit}:refs/heads/ci-latency-data"; then
+              break
+            fi
+            git fetch -q origin ci-latency-data
+            new_tree=$(git show -s --format=%T origin/ci-latency-data)
+            if [ "${new_tree}" = "${tree}" ]; then
+              continue
+            fi
+            trend_tree=$(git mktree \
+              < <(git ls-tree origin/ci-latency-data | grep -v '\btrend\.md$' \
+                  ; printf '100644 blob %s\ttrend.md\n' "${blob}"))
+            commit=$(git -c user.name=ci-latency-bot -c user.email=ci-latency-bot@users.noreply.github.com \
+              commit-tree "${trend_tree}" -p origin/ci-latency-data \
+              -m "[ci-omit] trend ${GITHUB_RUN_ID}")
+          done
