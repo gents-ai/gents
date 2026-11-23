@@ -1,5 +1,6 @@
 use super::*;
 use crate::runtime::agent::reconcile::SlotFailurePolicy as _;
+use crate::runtime::agent::ProcessLifecycleState;
 use crate::runtime::node_readiness_publisher::{FatalNodeReadinessWrite, NodeReadinessWriter};
 use gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
