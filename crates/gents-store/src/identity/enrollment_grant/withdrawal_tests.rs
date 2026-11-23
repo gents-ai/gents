@@ -93,7 +93,8 @@ async fn shutdown_cancels_a_pending_assignment_runtime_callback(
     let ids = crate::subscription_source::collection_ids(&home.node, ["Node"])?;
     let (shutdown, stop) = tokio::sync::watch::channel(false);
     let watcher = tokio::spawn({
-        let runtime = runtime.clone();
+        let (access, scope, runtime, ids) =
+            (access.clone(), scope.clone(), runtime.clone(), ids.clone());
         async move {
             access
                 .watch_assignments(&scope, runtime.as_ref(), ids, stop)
@@ -105,6 +106,16 @@ async fn shutdown_cancels_a_pending_assignment_runtime_callback(
         runtime.active_entered.notified(),
     )
     .await?;
+    // A second watcher can shut down while the first still owns this scope.
+    let (second_shutdown, stop) = tokio::sync::watch::channel(false);
+    let second = access.watch_assignments(&scope, runtime.as_ref(), ids, stop);
+    tokio::pin!(second);
+    assert!(futures::poll!(&mut second).is_pending());
+    second_shutdown.send(true)?;
+    assert!(matches!(
+        futures::poll!(&mut second),
+        std::task::Poll::Ready(Ok(()))
+    ));
     shutdown.send(true)?;
     tokio::time::timeout(crate::test_support::STALL_CEILING, watcher).await???;
     Ok(())

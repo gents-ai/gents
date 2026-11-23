@@ -384,7 +384,9 @@ impl ConfigAccess {
             return Err(ReceiverError::Provider(AssignmentReadError::Unsupported));
         };
         let lock = local.assignment_lock(&key);
-        let _guard = lock.lock().await;
+        let Some(_guard) = interruptible(lock.lock(), &mut shutdown).await else {
+            return Ok(None);
+        };
         let previous = self.load_assignments(scope).await?;
         let query = defra_node::AssignmentQuery {
             policy: scope.policy.clone(),
