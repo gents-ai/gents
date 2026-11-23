@@ -115,7 +115,10 @@ def traceOutcomes (state : State) : List Action → List (Option Bool)
 /-- A step the wire cannot name is replayed as a check nobody may pass, so a
 malformed step is visible as a mismatch rather than skipped. -/
 def PolicyTraceInput.outcomes (i : PolicyTraceInput) : List (Option Bool) :=
-  let state : State := ⟨i.objects.map TraceObject.toModel, i.relations.map TraceRelation.toModel, i.enrolled⟩
+  let state : State :=
+    { objects := i.objects.map TraceObject.toModel
+      relations := i.relations.map TraceRelation.toModel
+      enrolled := i.enrolled }
   traceOutcomes state (i.steps.map fun step => step.toModel.getD (.check "" "" "" ""))
 
 def householdActions : List Action :=

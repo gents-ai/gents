@@ -348,28 +348,27 @@ theorem local_registry_writer_is_bound_to_creator_and_node :
 actor that caused the projection. Registration or peer admission grants neither. -/
 def replicaGrant (state : State) (actor resource id runtime node user : String)
     (authorized registered committed nodeExists publicRegistry : Bool) : State :=
-  let marker : Relation := ⟨resource, id, "local_publication", .actor runtime⟩
+  let marker := (resource, id, runtime)
   let reader : Relation := ⟨resource, id, "reader", .actor runtime⟩
   let publicReader : Relation := ⟨resource, id, "reader", .wildcard⟩
   let parent : Relation := ⟨resource, id, "parent", .object "nodes" node⟩
   let manager : Relation := ⟨resource, id, "reader_manager", .actor user⟩
-  let pending : Relation := ⟨resource, id, "pending_parent", .actor runtime⟩
-  let managesAll := mayManage state actor marker && mayManage state actor reader &&
-    mayManage state actor pending &&
+  let managesAll := (state.objects.any fun o => o.resource == resource && o.id == id && o.owner == actor) &&
+    mayManage state actor reader &&
     (!(publicRegistry && resource == "discovery") || mayManage state actor publicReader) &&
     (if nodeExists then mayManage state actor parent && mayManage state actor manager
      else true)
   if !(authorized && registered && committed && managesAll) ||
-      state.relations.contains marker then state
+      state.published.contains marker then state
   else
-    let marked := apply state (.grant marker)
+    let marked := { state with published := marker :: state.published }
     let reader := apply marked (.grant ⟨resource, id, "reader", .actor runtime⟩)
     let visible := if publicRegistry && resource == "discovery" then
       apply reader (.grant ⟨resource, id, "reader", .wildcard⟩) else reader
     if nodeExists then
       let linked := apply visible (.grant ⟨resource, id, "parent", .object "nodes" node⟩)
       apply linked (.grant ⟨resource, id, "reader_manager", .actor user⟩)
-    else apply visible (.grant ⟨resource, id, "pending_parent", .actor runtime⟩)
+    else { visible with pendingParents := marker :: visible.pendingParents }
 
 /-- The pending marker is consumed with the Node parent and reader manager in
 the same native transaction. Once consumed, reconciliation cannot restore a
@@ -377,16 +376,14 @@ relation that was later revoked. The attachment names the physical Node document
 a replacement Node requires an explicit administrator reattachment. -/
 def replicaLinkPending (state : State) (actor resource id runtime node user : String)
     (authorized nodeExists committed : Bool) : State :=
-  let marker : Relation := ⟨resource, id, "local_publication", .actor runtime⟩
-  let pending : Relation := ⟨resource, id, "pending_parent", .actor runtime⟩
-  if authorized && nodeExists && committed && state.relations.contains marker &&
-      state.relations.contains pending &&
+  let marker := (resource, id, runtime)
+  if authorized && nodeExists && committed && state.published.contains marker &&
+      state.pendingParents.contains marker &&
       mayManage state actor ⟨resource, id, "parent", .object "nodes" node⟩ &&
-      mayManage state actor ⟨resource, id, "reader_manager", .actor user⟩ &&
-      mayManage state actor pending then
+      mayManage state actor ⟨resource, id, "reader_manager", .actor user⟩ then
     let linked := apply state (.grant ⟨resource, id, "parent", .object "nodes" node⟩)
     let managed := apply linked (.grant ⟨resource, id, "reader_manager", .actor user⟩)
-    apply managed (.revoke pending)
+    { managed with pendingParents := managed.pendingParents.erase marker }
   else state
 
 def privateReplicaFixture : State :=
@@ -421,8 +418,7 @@ theorem reader_manager_cannot_publish_foreign_replica :
       ⟨"enrollment_records", "remote", "reader_manager", .actor "runtime"⟩)
     let result := replicaGrant delegated "runtime" "enrollment_records" "remote" "runtime"
       "local-node" "user" true true true true false
-    result.relations.contains
-      ⟨"enrollment_records", "remote", "local_publication", .actor "runtime"⟩ = false := by
+    result.published.contains ("enrollment_records", "remote", "runtime") = false := by
   native_decide
 
 theorem foreign_owner_can_publish_to_the_receiving_runtime :
@@ -521,8 +517,8 @@ theorem enrollment_grant_does_not_authorize_application_documents :
 
 def localRegistryWriterFixture : State :=
   { objects := [⟨"nodes", "local-node", "user"⟩, ⟨"discovery", "self", "runtime"⟩],
-    relations := [⟨"discovery", "self", "local_publication", .actor "runtime"⟩,
-      ⟨"discovery", "self", "parent", .object "nodes" "local-node"⟩,
+    published := [("discovery", "self", "runtime")],
+    relations := [⟨"discovery", "self", "parent", .object "nodes" "local-node"⟩,
       ⟨"discovery", "self", "writer", .actor "user"⟩], enrolled := [] }
 
 def localRegistryWriterRevoked : State :=

@@ -29,8 +29,6 @@ impl RuntimeDocumentProjector {
                 for (relation, target_kind) in [
                     ("reader", Entity),
                     ("reader_manager", Entity),
-                    ("local_publication", Entity),
-                    ("pending_parent", Entity),
                     ("parent", EntitySet),
                 ] {
                     projection_rules.push(acp::projection::Rule {

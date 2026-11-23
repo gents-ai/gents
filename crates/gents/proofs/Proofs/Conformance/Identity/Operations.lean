@@ -635,8 +635,7 @@ structure ReplicaPending where
   deriving ToJson
 
 def replicaPendingRelation (i : ReplicaInput) : ReplicaPending :=
-  { pending := (replicaState i.name).relations.contains
-      ⟨"enrollment_records", "remote", "pending_parent", .actor "runtime"⟩ }
+  { pending := (replicaState i.name).pendingParents.contains ("enrollment_records", "remote", "runtime") }
 
 /-- The installed runtime projector writes a transport document before the
 local Node exists, links it once the Node is written, and keeps a revoked

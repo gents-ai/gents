@@ -248,6 +248,8 @@ structure State where
   objects : List Object
   relations : List Relation
   enrolled : List DID
+  published : List (String × String × DID) := []
+  pendingParents : List (String × String × DID) := []
   deriving Repr
 
 /-- Managed Agent creation stages the child, Node parent, executor and Node
