@@ -114,6 +114,8 @@ pub async fn runtime_authentication(access: &ConfigAccess) -> Result<ClientAuthe
                 .delegation
                 .ok_or(ConfigClientError::RuntimeAuthenticationUnavailable)?;
             Ok(ClientAuthentication::Vera {
+                shared_household: crate::local::document_acp::node_policy_ids(&node)
+                    == gents_protocol::schemas::HomePolicyIds::embedded_vera_transport_v2(),
                 worker: audience.worker,
                 deployment: audience.deployment,
             })

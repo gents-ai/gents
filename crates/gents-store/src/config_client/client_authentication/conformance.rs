@@ -58,7 +58,10 @@ async fn client_held_delegations_match_the_native_verifier() -> anyhow::Result<(
             .await?,
     );
     let authentication = runtime_authentication(&ConfigAccess::local(node.clone())).await?;
-    let ClientAuthentication::Vera { worker, deployment } = authentication else {
+    let ClientAuthentication::Vera {
+        worker, deployment, ..
+    } = authentication
+    else {
         anyhow::bail!("the Vera runtime must advertise its delegation audience");
     };
     let node_did = node

@@ -52,7 +52,11 @@ fn deployment(node_did: &str, account: Option<&identity::Did>) -> EmbeddedVeraDe
             .map_or(0, |elapsed| elapsed.as_secs()),
         policies: gents_protocol::schemas::BuiltInPolicy::ALL
             .iter()
-            .map(crate::schema::catalog::vera_seed::seed)
+            .map(if account.is_some() {
+                crate::schema::catalog::vera_seed::seed_transport_v2
+            } else {
+                crate::schema::catalog::vera_seed::seed
+            })
             .collect(),
     }
 }

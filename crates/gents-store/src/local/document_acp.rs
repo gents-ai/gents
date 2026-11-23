@@ -351,9 +351,18 @@ pub fn home_policy_ids(provider: DocumentAcp) -> &'static gents_protocol::schema
     }
 }
 
-/// [`home_policy_ids`] of the home `node` serves.
+pub(crate) struct BoundPolicyIds(pub(super) &'static gents_protocol::schemas::HomePolicyIds);
+
+impl BoundPolicyIds {
+    pub(crate) fn ids(&self) -> &'static gents_protocol::schemas::HomePolicyIds {
+        self.0
+    }
+}
+
+/// The policy IDs selected when the home was opened.
 pub fn node_policy_ids(node: &defra_node::Node) -> &'static gents_protocol::schemas::HomePolicyIds {
-    home_policy_ids(provider_of(node))
+    crate::node_extension::attached::<BoundPolicyIds>(node)
+        .map_or_else(|| home_policy_ids(provider_of(node)), |bound| bound.ids())
 }
 
 /// Where `node` decides document access.
@@ -425,6 +434,25 @@ fn recorded_deployment(data: &Path) -> Result<Option<Deployment>> {
 
 pub(super) fn recorded_connection(data: &Path) -> Result<Option<VeraConnection>> {
     Ok(recorded_deployment(data)?.map(|deployment| deployment.connection))
+}
+
+pub fn recorded_policy_ids(data: &Path) -> Result<&'static gents_protocol::schemas::HomePolicyIds> {
+    Ok(policy_ids_for_connection(
+        recorded_connection(data)?.as_ref(),
+    ))
+}
+
+pub(super) fn policy_ids_for_connection(
+    connection: Option<&VeraConnection>,
+) -> &'static gents_protocol::schemas::HomePolicyIds {
+    use gents_protocol::schemas::HomePolicyIds;
+    match connection {
+        None => HomePolicyIds::node_store(),
+        Some(VeraConnection::Solo) => HomePolicyIds::embedded_vera(),
+        Some(VeraConnection::Host { .. } | VeraConnection::Follower { .. }) => {
+            HomePolicyIds::embedded_vera_transport_v2()
+        }
+    }
 }
 
 /// The provider the store at `data` was created with.

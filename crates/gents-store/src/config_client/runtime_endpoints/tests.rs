@@ -173,6 +173,7 @@ async fn contradictory(home: &KeyIdentity, nonce: &HomeNonce) -> serde_json::Val
         nonce: nonce.as_str().to_owned(),
         node_did: home.did().to_owned(),
         client_authentication: gents_protocol::client_authentication::ClientAuthentication::Vera {
+            shared_household: false,
             worker: "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".into(),
             deployment: 2,
         },

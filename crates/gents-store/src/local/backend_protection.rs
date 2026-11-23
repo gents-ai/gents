@@ -154,12 +154,17 @@ pub async fn build_configured(
     builder: defra_node::NodeBuilder,
     data: &Path,
     document_acp: DocumentAcp,
-) -> Result<defra_node::Node> {
-    let node = start(builder).await?;
+) -> Result<Arc<defra_node::Node>> {
+    let ids = document_acp::recorded_policy_ids(data)?;
+    let node = Arc::new(start(builder).await?);
     if let Err(refused) = document_acp::check_started(&node, data, document_acp) {
         let _ = node.shutdown().await;
         return Err(refused.into());
     }
+    crate::node_extension::attach_all(
+        &node,
+        &crate::node_extension::Extensions::of(Arc::new(document_acp::BoundPolicyIds(ids))),
+    )?;
     Ok(node)
 }
 
@@ -278,6 +283,13 @@ impl<'a> FreshBackendStore<'a> {
         )?;
         let node = Arc::new(start(builder).await?);
         let result: Result<_> = async {
+            let ids = document_acp::policy_ids_for_connection(
+                (document_acp == DocumentAcp::Vera).then_some(connection),
+            );
+            crate::node_extension::attach_all(
+                &node,
+                &crate::node_extension::Extensions::of(Arc::new(document_acp::BoundPolicyIds(ids))),
+            )?;
             let deployment = document_acp::created(&node, document_acp, connection)?;
             grant_node_runtime(&node, nac_owner, &did).await?;
             if let document_acp::VeraConnection::Follower { anchor, .. } = connection {
@@ -383,11 +395,7 @@ impl<'a> ProtectedBackendStore<'a> {
             }
             _ => account,
         };
-        let ids = document_acp::home_policy_ids(if connection.is_some() {
-            DocumentAcp::Vera
-        } else {
-            DocumentAcp::Local
-        });
+        let ids = document_acp::policy_ids_for_connection(connection.as_ref());
         let stamped = super::store_compat::stamped(&self.data, ids);
         if !stamped {
             checked_copy(
@@ -405,7 +413,7 @@ impl<'a> ProtectedBackendStore<'a> {
         .with_node_acp_enabled();
         let builder =
             document_acp::configure_preflight(builder, &self.data, key, document_acp, node)?;
-        let node = Arc::new(build_configured(builder, &self.data, document_acp).await?);
+        let node = build_configured(builder, &self.data, document_acp).await?;
         let checked = async {
             validate_binding(&node).await?;
             match account {
@@ -502,7 +510,7 @@ impl PreflightProtectedBackendStore<'_> {
             self.transport_replica
                 .as_ref()
                 .map(|replica| replica.reader_manager()),
-            document_acp::home_policy_ids(self.document_acp),
+            document_acp::recorded_policy_ids(&self.store.data)?,
         )
         .map_err(|error| BackendProtectionError::Schema(error.into()))?;
         let builder =
@@ -518,7 +526,7 @@ impl PreflightProtectedBackendStore<'_> {
             Some(replica) => builder.with_replica_registration(replica.registration()),
             None => builder,
         };
-        let node = Arc::new(build_configured(builder, &self.store.data, self.document_acp).await?);
+        let node = build_configured(builder, &self.store.data, self.document_acp).await?;
         if let Err(error) = validate_binding(&node).await {
             let _ = node.shutdown().await;
             return Err(error);

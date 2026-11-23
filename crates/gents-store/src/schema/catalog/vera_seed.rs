@@ -42,7 +42,7 @@ pub fn seed_transport_v2(policy: &BuiltInPolicy) -> EmbeddedVeraPolicy {
 mod tests {
     use gents_protocol::schemas::BuiltInPolicy;
 
-    use crate::local::document_acp::{DocumentAcp, home_policy_ids};
+    use crate::local::document_acp::{home_policy_ids, DocumentAcp};
 
     /// The IDs a Vera home names its built-in policies by are the IDs vera.rs
     /// derives for the policies its deployment is seeded with.

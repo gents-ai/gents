@@ -16,7 +16,7 @@ pub mod vera_seed;
 pub use compatibility::{check_lineages, validate_existing_schema};
 pub use error::SchemaError;
 pub use indexes::ORDINARY_INDEXES;
-pub use install::{RuntimeSchemaError, ensure, ensure_runtime, ensure_runtime_owned};
+pub use install::{ensure, ensure_runtime, ensure_runtime_owned, RuntimeSchemaError};
 
 #[derive(Debug, Clone, Copy)]
 pub struct BaselineCollection<'a> {

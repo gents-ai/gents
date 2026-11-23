@@ -448,7 +448,7 @@ pub(crate) async fn init_home_with_core_packs(
         .with_document_projector(gents_store::local::document_projector(
             initialized_identity.identity.clone(),
             std::sync::Arc::new(ceiling),
-            gents_store::local::document_acp::home_policy_ids(document_acp),
+            gents_store::local::document_acp::recorded_policy_ids(&data_dir)?,
         )?)
         .with_node_identity_did(initialized_identity.node_identity_did.clone())
         .with_node_acp_enabled();
@@ -469,15 +469,13 @@ pub(crate) async fn init_home_with_core_packs(
         gents::defra_node::HttpConfig::with_listener(listener)?
             .with_extra_routes(owner_staged.router()),
     );
-    let node_arc = std::sync::Arc::new(
-        gents_store::local::backend_protection::build_configured(
-            node_builder,
-            &data_dir,
-            document_acp,
-        )
-        .await
-        .context("building embedded DefraDB node for init")?,
-    );
+    let node_arc = gents_store::local::backend_protection::build_configured(
+        node_builder,
+        &data_dir,
+        document_acp,
+    )
+    .await
+    .context("building embedded DefraDB node for init")?;
     stage("embedded_node_built");
     let held_store_access = ConfigAccess::claimed_local_as(
         node_arc,
@@ -497,6 +495,7 @@ pub(crate) async fn init_home_with_core_packs(
             client_identity.did(),
         )
         .with_client_signing_capability(client_signing)?
+        .with_local_home_schema(&init_node)?
         .with_client_signed_agent_creates()
         .with_reported_delegation_audience(
             gents_store::local::document_acp::status_reports(

@@ -135,14 +135,12 @@ pub async fn refuse_other_version_schema(
         Some(key) => key.encrypt(builder),
         None => builder,
     };
-    let ids = crate::local::document_acp::home_policy_ids(
-        crate::local::document_acp::recorded(data_path).map_err(|source| {
-            StorageBackendError::InspectionProvider {
-                path: data_path.to_path_buf(),
-                source: Box::new(source),
-            }
-        })?,
-    );
+    let ids = crate::local::document_acp::recorded_policy_ids(data_path).map_err(|source| {
+        StorageBackendError::InspectionProvider {
+            path: data_path.to_path_buf(),
+            source: Box::new(source),
+        }
+    })?;
     let node = builder.build().await.map_err(opened)?;
     let validated = crate::schema::catalog::validate_existing_schema(&node, ids).await;
     node.shutdown().await.map_err(opened)?;

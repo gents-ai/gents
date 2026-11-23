@@ -123,9 +123,19 @@ impl HomeStatement {
         let version = self.version.to_string();
         let (authentication, worker, deployment) = match &self.client_authentication {
             ClientAuthentication::Local => ("local", "", String::new()),
-            ClientAuthentication::Vera { worker, deployment } => {
-                ("vera", worker.as_str(), deployment.to_string())
-            }
+            ClientAuthentication::Vera {
+                worker,
+                deployment,
+                shared_household,
+            } => (
+                if *shared_household {
+                    "vera-shared"
+                } else {
+                    "vera"
+                },
+                worker.as_str(),
+                deployment.to_string(),
+            ),
             ClientAuthentication::Unavailable => ("unavailable", "", String::new()),
         };
         let (reading, audience_worker, audience_deployment, genesis) =
@@ -267,4 +277,30 @@ pub enum HomeStatusRefusal {
     /// (`Identity.HeldAudience.reconcile`).
     #[error("the home's signed status contradicts itself; update Gents on the home")]
     Contradictory,
+}
+
+#[cfg(test)]
+mod household_tests {
+    use super::*;
+
+    #[test]
+    fn shared_household_selection_is_signed() {
+        let nonce = HomeNonce::from_bytes([7; 32]);
+        let mut status = serde_json::json!({
+            "node_did": "did:key:device",
+            "client_authentication": {"kind": "vera", "worker": "worker", "deployment": 9},
+        });
+        let original = HomeStatement::of_status(&status, &nonce);
+        status["client_authentication"]["shared_household"] = false.into();
+        assert_eq!(HomeStatement::of_status(&status, &nonce), original);
+        assert!(serde_json::to_value(&original.client_authentication)
+            .unwrap()
+            .get("shared_household")
+            .is_none());
+        status["client_authentication"]["shared_household"] = true.into();
+        assert_ne!(
+            HomeStatement::of_status(&status, &nonce).signing_payload(),
+            original.signing_payload()
+        );
+    }
 }
