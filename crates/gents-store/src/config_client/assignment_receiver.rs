@@ -10,7 +10,7 @@
 //! collection IDs that carry its bodies and an [`AssignmentRuntime`] that
 //! can enumerate and stop work already running after a process restart.
 //! If the issuer replaces B with C before C arrives locally, the receiver
-//! stops B, persists the new set, and waits for C's verified body before
+//! records the new read floor, stops B, persists the applied set, and waits for C's verified body before
 //! starting it. Recovery reads use the stored position as their lower bound.
 //! [`ConfigAccess::load_assignments`] is for inspecting the last accepted
 //! view. Call [`ConfigAccess::refresh_assignments`] for a one-shot reconciliation.
@@ -214,6 +214,9 @@ async fn persist(
     let previous = load(txn, key).await?;
     if let Some(previous) = &previous {
         check(&previous.state, next)?;
+        if previous.state == *next {
+            return Ok(previous.state.clone());
+        }
     }
     let update = json!({
         "term": next.position.term.to_string(),
@@ -438,7 +441,20 @@ impl ConfigAccess {
         let Some(_guard) = interruptible(lock.lock(), &mut shutdown).await else {
             return Ok(None);
         };
-        let previous = self.load_assignments(scope).await?;
+        // Earlier homes have only the applied row. It is their initial read floor.
+        let floor_key = format!("floor:{key}");
+        let previous = self
+            .transact_readonly("assignments.floor", |txn| {
+                let floor_key = &floor_key;
+                let key = &key;
+                Box::pin(async move {
+                    match load(txn, floor_key).await? {
+                        Some(floor) => Ok::<_, ReceiverError>(Some(floor.state)),
+                        None => Ok(load(txn, key).await?.map(|row| row.state)),
+                    }
+                })
+            })
+            .await?;
         let query = defra_node::AssignmentQuery {
             policy: scope.policy.clone(),
             resource: scope.resource.clone(),
@@ -461,6 +477,11 @@ impl ConfigAccess {
         if let Some(previous) = &previous {
             check(previous, &next)?;
         }
+        // Recovery must reject an older proof even if the process dies inside stop().
+        self.transact_write("assignments.accept", |txn| {
+            Box::pin(persist(txn, &floor_key, &subject, scope, &next))
+        })
+        .await?;
         let Some(active) = interruptible(runtime.active(), &mut shutdown).await else {
             return Ok(None);
         };
