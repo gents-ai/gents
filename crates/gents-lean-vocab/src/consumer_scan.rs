@@ -276,7 +276,7 @@ mod tests {
     /// Each name is an emitted family that no native test replays. The list
     /// only shrinks: a family leaves it when its consumer is written or Lean
     /// stops emitting it, and a new family arrives with its consumer.
-    const OPEN: &[&str] = &["contracts_runtime_reconcile_unreached"];
+    const OPEN: &[&str] = &[];
 
     struct Scan {
         families: BTreeSet<String>,

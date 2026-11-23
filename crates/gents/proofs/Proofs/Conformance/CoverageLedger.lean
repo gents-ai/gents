@@ -77,9 +77,7 @@ def boundaries : List Boundary :=
 /-- Each name is an emitted family that no native test consumes. The consumer
 scan refuses a family missing from this list and a name here that a test
 consumes, so the list only shrinks: a new family arrives with its consumer. -/
-def openFamilies : List String :=
-  [ "contracts_runtime_reconcile_unreached"
-  ]
+def openFamilies : List String := []
 
 /-- A surface a feature reaches, and the consumed family whose replaying test
 evidences it. -/

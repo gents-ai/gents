@@ -223,6 +223,15 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
             grant_operator_user(&node, runtime.as_ref(), identity).await;
         }
         let binding = gents_store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
+        let agent_identity =
+            gents_store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
+        let agent_access = ConfigAccess::local_managed_agent(
+            node.clone(),
+            binding.agent_did.parse().unwrap(),
+            agent_identity.as_ref(),
+        )
+        .unwrap();
+        let agent_signs = input.author == "agent";
         let admin = ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
         let subject = ::identity::Did::new(binding.agent_did.as_str()).unwrap();
         for permission in [
@@ -255,18 +264,25 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
             agent_doc,
             session_doc: String::new(),
         };
-        let signer_did: ::identity::Did = world.signer().did().parse().unwrap();
+        let signer: String = if agent_signs {
+            binding.agent_did.clone()
+        } else {
+            world.signer().did().to_owned()
+        };
+        let signer_did: ::identity::Did = signer.parse().unwrap();
         let invoke_holder = if input.agent_invoke {
             "session_writer"
         } else {
             "reader"
         };
-        owner_access
-            .add_actor_relationship("Agent", &world.agent_doc, invoke_holder, &signer_did)
-            .await
-            .unwrap();
+        if !agent_signs {
+            owner_access
+                .add_actor_relationship("Agent", &world.agent_doc, invoke_holder, &signer_did)
+                .await
+                .unwrap();
+        }
         for identity in [&world.user, &world.collaborator] {
-            if identity.did() != world.signer().did() {
+            if agent_signs || identity.did() != world.signer().did() {
                 owner_access
                     .add_actor_relationship(
                         "Agent",
@@ -293,7 +309,7 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
                 "interactive"
             },
             "2026-11-04T00:00:00Z",
-            AgentRequestAdmissionRecord::client(world.signer().did()),
+            AgentRequestAdmissionRecord::client(signer.as_str()),
         );
         if input.steer {
             create.input.queue = Some(gents_protocol::request_input::RequestQueue {
@@ -374,7 +390,12 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
         } else {
             world.agent_doc.clone()
         });
-        crate::request::admission::sign_agent_request_create(world.signer(), &mut create)
+        let signing_identity: &dyn NodeIdentity = if agent_signs {
+            agent_identity.as_ref()
+        } else {
+            world.signer()
+        };
+        crate::request::admission::sign_agent_request_create(signing_identity, &mut create)
             .await
             .unwrap();
         let signed_session = create.session_doc_id.clone().unwrap();
@@ -384,7 +405,19 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
         } else {
             world.signer()
         };
-        let request_doc = if request_creator.did() != world.signer().did() {
+        let request_doc = if agent_signs {
+            submit_client_request(&agent_access, &create).await.unwrap();
+            agent_access
+                .execute(&format!(
+                    r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+                    gents_store::graphql::escape_graphql_string(&create.request_id)
+                ))
+                .await
+                .unwrap()["data"]["AgentRequest"][0]["_docID"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        } else if request_creator.did() != world.signer().did() {
             let input = gents_store::config_client::client_request_input(&create).unwrap();
             world
                 .raw_request(
@@ -422,14 +455,6 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
                 .await
                 .unwrap()
         };
-        let agent_identity =
-            gents_store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
-        let agent_access = ConfigAccess::local_managed_agent(
-            node.clone(),
-            binding.agent_did.parse().unwrap(),
-            agent_identity.as_ref(),
-        )
-        .unwrap();
         let retained = world.request_row(&agent_access, &request_doc).await;
         let (_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
         let verifier = AgentRequestAdmissionVerifier::new(node.clone(), runtime.clone(), authority);
@@ -441,7 +466,11 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
         if !input.signature_valid {
             admission.alter_signed_content_for_test();
         }
-        let creator_access = world.access(request_creator);
+        let creator_access = if agent_signs {
+            agent_access.clone()
+        } else {
+            world.access(request_creator)
+        };
         let (claimed, claimed_reader) = if input.claimed_document == "replayed" {
             let mut replay = gents_store::config_client::client_request_input(&create).unwrap();
             replay["relationships_pending"] = true.into();
