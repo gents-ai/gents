@@ -593,6 +593,25 @@ pub struct NewAgentSession<'a> {
     pub created_at: &'a str,
 }
 
+impl NewAgentSession<'_> {
+    /// The fields a created session's signed first block holds.
+    pub(crate) fn create_input(&self, relationships_pending: bool) -> serde_json::Value {
+        let started_by = self
+            .provenance
+            .as_ref()
+            .and_then(|provenance| provenance.started_by.as_ref());
+        serde_json::json!({
+            "session_id": self.session_id, "node_did": self.node_did,
+            "requester_did": self.requester_did, "agent_did": self.agent_did,
+            "created_at": self.created_at, "title": self.title,
+            "relationships_pending": relationships_pending,
+            "started_by_node_did": started_by.map(|source| &source.node_did),
+            "started_by_session_id": started_by.map(|source| &source.session_id),
+            "provenance": self.provenance
+        })
+    }
+}
+
 pub async fn ensure_session_in_txn(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     session: NewAgentSession<'_>,
@@ -662,14 +681,14 @@ async fn ensure_session_with_pending_in_txn(
     session: NewAgentSession<'_>,
     relationships_pending: bool,
 ) -> Result<bool> {
+    let mut session = session;
     let NewAgentSession {
         session_id,
         node_did,
         agent_did,
         requester_did,
-        title,
-        mut provenance,
         created_at: now,
+        ..
     } = session;
     anyhow::ensure!(
         !session_id.trim().is_empty(),
@@ -742,7 +761,7 @@ async fn ensure_session_with_pending_in_txn(
         return Ok(false);
     }
 
-    if let Some(origin) = provenance.as_mut() {
+    if let Some(origin) = session.provenance.as_mut() {
         origin.started_by = crate::session::origin::verified_starter_in_txn(
             txn,
             origin,
@@ -757,16 +776,10 @@ async fn ensure_session_with_pending_in_txn(
 
     let created = txn.execute_client_signed_create(
         "mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }",
-        &serde_json::json!({"input": {
-            "session_id": session_id, "node_did": node_did,
-            "requester_did": requester_did, "agent_did": agent_did,
-            "created_at": now, "title": title, "relationships_pending": relationships_pending,
-            "started_by_node_did": provenance.as_ref().and_then(|p| p.started_by.as_ref()).map(|s| &s.node_did),
-            "started_by_session_id": provenance.as_ref().and_then(|p| p.started_by.as_ref()).map(|s| &s.session_id),
-            "provenance": provenance
-        }}),
+        &serde_json::json!({"input": session.create_input(relationships_pending)}),
         gents_protocol::schemas::AGENT_SESSION,
     ).await?;
+    let mut provenance = session.provenance;
     let created = defra_node::QueryResponse::success(
         created
             .get("data")

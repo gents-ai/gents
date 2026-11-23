@@ -936,7 +936,8 @@ fn modeled_client_goal_actor_binding_requires_the_transaction_signer() {
 #[tokio::test]
 async fn client_goal_control_cannot_publish_user_graph_as_the_agent() {
     use gents_session::request::lifecycle::{
-        build_signed_client_request, ExecutionOrigin, RequestIdentity, RequestSigner, RequestSpec,
+        build_signed_reserved_client_request, ExecutionOrigin, RequestIdentity, RequestSigner,
+        RequestSpec,
     };
     let fence = gents_lean_vocab::families::household_client_goal_actor_fence::cases();
     let handoff = gents_lean_vocab::families::household_client_goal_graph_handoff::cases();
@@ -999,7 +1000,8 @@ async fn client_goal_control_cannot_publish_user_graph_as_the_agent() {
             AgentRequestAdmissionRecord::client(user.did()),
         );
         spec.retry_key = Some("goal-control-actor-fence".into());
-        let request = build_signed_client_request(&client, spec, RequestSigner::Identity(&user))
+        let request =
+            build_signed_reserved_client_request(&client, spec, RequestSigner::Identity(&user))
             .await
             .unwrap();
         let old = if replacement {
