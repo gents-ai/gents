@@ -47,7 +47,9 @@ structure Publication where
   links : Links := {}
 
 def intent (b : Binding) : Intent :=
-  ⟨b.requestDoc, b.sessionDoc, b.agentDoc, b.parentAgent, b.targetAgent⟩
+  { document := b.requestDoc, session := b.sessionDoc, agentDocument := b.agentDoc,
+    author := b.parentAgent, selectedAgent := b.targetAgent, requester := b.parentAgent,
+    content := "signed" }
 
 def signedBinding (b : Binding) : Bool :=
   b.signer == b.parentAgent && signedTargetsMatch b.signedSession b.signedAgent (intent b)
@@ -132,10 +134,10 @@ def publish (s : Publication) (actor : String) (exactBinding : Bool) (g : GrantA
 
 /-- Native claim reads both pending markers in the same transaction that
 checks the immediate author's session update and target Agent invoke. The
-`NativeCommit.committed` premise includes native serialization of those marker
-reads: a conflicting change cannot count as a committed claim. Markers gate
+`committed` premise includes native serialization of those marker reads: a
+conflicting change cannot count as a committed claim. Markers gate
 readiness; they do not prove that a relation remains after revocation. -/
-def claim (s : Publication) (commit : NativeCommit) : Decision :=
+def claim (s : Publication) (committed : Bool) : Decision :=
   if !s.observed || s.sessionPending || s.requestPending then .unavailable else
   let b := s.binding
   let readable := allowed 5 s.household b.targetAgent "delivered_requests" b.requestDoc "read"
@@ -153,14 +155,20 @@ def claim (s : Publication) (commit : NativeCommit) : Decision :=
       sourceBindingCurrent := false, triggerConfigDocumentBindingCurrent := false,
       sourceDocumentBindingCurrent := false, targetPolicyAllows := false,
       nativeCreateAuthorized := true, hopWithinBound := true }
-    if !readable then .unavailable else if !commit.committed then .conflict else
+    if !readable then .unavailable else if !committed then .conflict else
       if Enrollment.projectAgentRequestAdmission sameActor then .claimed else .denied
   else
     let observation : Observation :=
-      ⟨true, readable, true, false, b.requestDoc, b.sessionDoc, b.agentDoc,
-        some b.parentAgent, some b.parentAgent, b.targetAgent,
-        signedBinding b, sessionPermission, agentInvoke, true, true⟩
-    decideClaim (intent b) observation commit
+      { request := if readable then .ready else .absent, session := .ready,
+        live := { document := b.requestDoc, author := some b.parentAgent,
+                  content := if signedBinding b then "signed" else "unsigned" },
+        owner := some b.parentAgent,
+        namedSession := some { document := b.sessionDoc, agent := b.targetAgent,
+                               requester := b.parentAgent },
+        agent := some { document := b.agentDoc, agent := b.targetAgent, enabled := true },
+        sessionUpdate := sessionPermission, agentInvoke := agentInvoke,
+        requesterNodePermission := true }
+    commitDecision committed (decideClaim (intent b) observation)
 
 /-- A write that lands between one claim attempt's reads and its commit. -/
 inductive ClaimRace where
@@ -188,12 +196,8 @@ def ClaimRace.apply (s : Publication) : ClaimRace → Publication
   | .rewriteMarkers => s
   | .resetRequestMarker => { s with requestPending := true }
 
-/-- The native facts an attempt no race reaches commits with: it reads the
-authorizations it checks, so its commit observes the same ones. -/
-def cleanCommit (s : Publication) : NativeCommit :=
-  let b := s.binding
-  ⟨allowed 5 s.household b.parentAgent "sessions" b.sessionDoc "update",
-    allowed 5 s.household b.parentAgent "agents" b.agentDoc "invoke", true, true⟩
+/-- An attempt no race reaches commits the decision it read. -/
+def cleanCommit (_s : Publication) : Bool := true
 
 /-- The claim transaction runs in the transaction owner's conflict-retry mode
 (`TransactionReplay.Mode.conflictRetry`). Each race lands on one attempt
@@ -258,7 +262,7 @@ theorem unobserved_cannot_publish (s : Publication) (actor : String) (g : GrantA
     (h : s.observed = false) : publish s actor true g = s := by
   simp [publish, h]
 
-theorem pending_request_cannot_claim (s : Publication) (c : NativeCommit)
+theorem pending_request_cannot_claim (s : Publication) (c : Bool)
     (h : s.requestPending = true) : claim s c = .unavailable := by
   simp [claim, h]
 

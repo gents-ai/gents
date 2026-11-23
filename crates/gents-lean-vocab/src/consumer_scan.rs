@@ -277,13 +277,7 @@ mod tests {
     /// only shrinks: a family leaves it when its consumer is written or Lean
     /// stops emitting it, and a new family arrives with its consumer.
     const OPEN: &[&str] = &[
-        "apply_reconcile_contract_cases_publish_cases",
-        "contracts_pack_installation_hosted_plugin_unreached",
         "contracts_runtime_reconcile_unreached",
-        "contracts_self_config_job_guard_unreached",
-        "cross_actor_authorization_unreached",
-        "enrollment_auto_renewal_offer_unreached",
-        "event_delivery_group_capture_unreached",
     ];
 
     struct Scan {

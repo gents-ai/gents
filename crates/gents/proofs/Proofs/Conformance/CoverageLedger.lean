@@ -78,13 +78,7 @@ def boundaries : List Boundary :=
 scan refuses a family missing from this list and a name here that a test
 consumes, so the list only shrinks: a new family arrives with its consumer. -/
 def openFamilies : List String :=
-  [ "apply_reconcile_contract_cases_publish_cases"
-  , "contracts_pack_installation_hosted_plugin_unreached"
-  , "contracts_runtime_reconcile_unreached"
-  , "contracts_self_config_job_guard_unreached"
-  , "cross_actor_authorization_unreached"
-  , "enrollment_auto_renewal_offer_unreached"
-  , "event_delivery_group_capture_unreached"
+  [ "contracts_runtime_reconcile_unreached"
   ]
 
 /-- A surface a feature reaches, and the consumed family whose replaying test

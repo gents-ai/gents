@@ -933,11 +933,16 @@ async fn cas_node() -> Result<(ConfigAccess, &'static str)> {
     Ok((runtime_access(&node)?, CAS_OWNER_DID))
 }
 
-/// The Lean publish-if scenarios name their owner `did:owner`, which is not a DID.
-/// Map it to the fixture node so the Gents owner validates real identities.
+const OTHER_OWNER_DID: &str = "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR";
+
+/// The Lean scenarios name their owners `did:owner` and `did:other`, which are
+/// not DIDs. Map them to fixture DIDs so the Gents owner validates real identities.
 fn modeled_owner(lean_owner: &str) -> &'static str {
-    assert_eq!(lean_owner, "did:owner", "unmodeled Lean owner");
-    CAS_OWNER_DID
+    match lean_owner {
+        "did:owner" => CAS_OWNER_DID,
+        "did:other" => OTHER_OWNER_DID,
+        other => panic!("unmodeled Lean owner {other}"),
+    }
 }
 
 async fn live_digest(access: &ConfigAccess, owner: &str, id: &str) -> Result<Option<String>> {
@@ -1052,8 +1057,8 @@ async fn absent_expectations_are_checked_in_both_directions() -> Result<()> {
 }
 
 #[tokio::test]
-async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
-    use gents_lean_vocab::families::apply_reconcile_contract_cases_publish_if_cases as family;
+async fn guarded_application_matches_lean_apply_if_cases() -> Result<()> {
+    use gents_lean_vocab::families::apply_reconcile_contract_cases_apply_if_cases as family;
 
     type DocRef = family::DocRef<String>;
 
@@ -1157,11 +1162,168 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
         let after = observe(&access, &input.observe).await?;
         let replay_applied = publish(&access, &plan).await;
         let after_replay = observe(&access, &input.observe).await?;
-        case.check(family::PublishIfOutput {
+        case.check(family::ApplyIfOutput {
             applied,
             after,
             replay_applied,
             after_replay,
+        });
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn merged_publication_matches_lean_apply_cases() -> Result<()> {
+    use gents_lean_vocab::families::apply_reconcile_contract_cases_apply_cases as family;
+
+    type DocRef = family::DocRef<String>;
+
+    fn collection(doc: &DocRef) -> Collection {
+        match doc.collection.as_str() {
+            "agent" => Collection::Agent,
+            "agent_context" => Collection::AgentContext,
+            "tools" => Collection::Tools,
+            "agent_target" => Collection::AgentTarget,
+            "inference_backend" => Collection::InferenceBackend,
+            "inference_profile" => Collection::InferenceProfile,
+            other => panic!("unmodeled Lean collection {other}"),
+        }
+    }
+
+    /// Agent documents are keyed by their DID; the Lean scenarios name one Agent.
+    fn id(doc: &DocRef) -> String {
+        match (doc.collection.as_str(), doc.id.as_str()) {
+            ("agent", "agent") => CODING_AGENT_DID.to_owned(),
+            ("agent", other) => panic!("unmodeled Lean Agent {other}"),
+            _ => doc.id.clone(),
+        }
+    }
+
+    fn production(row: &family::Row<String>) -> DesiredStateApplyDocument {
+        let owner = modeled_owner(&row.doc.node_did);
+        for reference in &row.refs {
+            assert_eq!(
+                reference.node_did, row.doc.node_did,
+                "references name their own node"
+            );
+        }
+        let targets = |kind: &str| -> Vec<String> {
+            row.refs
+                .iter()
+                .filter(|reference| reference.collection == kind)
+                .map(id)
+                .collect()
+        };
+        let target = |kind: &str| targets(kind).into_iter().next();
+        let own = id(&row.doc);
+        let value = match collection(&row.doc) {
+            Collection::InferenceBackend => backend(owner, &own),
+            Collection::InferenceProfile => json!({
+                "node_did": owner, "profile_id": own, "model_name": "model",
+                "backend_id": target("inference_backend").expect("profile backend"),
+            }),
+            Collection::Agent => json!({
+                "node_did": owner, "agent_did": own, "creation_nonce": "nonce",
+                "inference_profile_id": target("inference_profile").expect("agent profile"),
+                "context_id": target("agent_context"),
+            }),
+            Collection::AgentContext => json!({
+                "node_did": owner, "context_id": own, "tools_id": target("tools"),
+            }),
+            Collection::Tools => {
+                let agents = targets("agent_target");
+                json!({
+                    "node_did": owner, "tools_id": own,
+                    "agents": (!agents.is_empty()).then(|| json!({"target_ids": agents})),
+                })
+            }
+            Collection::AgentTarget => json!({
+                "node_did": owner, "target_id": own, "target_node_did": owner, "name": "worker",
+                "agent_did": target("agent").expect("target agent"),
+            }),
+            other => panic!("unmodeled collection {other:?}"),
+        };
+        config(collection(&row.doc), value)
+    }
+
+    async fn publish(access: &ConfigAccess, plan: &DesiredStateApplyPlan) -> bool {
+        let outcome = access
+            .transact_write("test.apply.lean", |txn| {
+                Box::pin(async move {
+                    apply_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles)
+                        .await
+                })
+            })
+            .await;
+        if let Err(error) = &outcome {
+            let message = format!("{error:#}");
+            assert!(
+                message.contains("references missing") || message.contains("is unavailable"),
+                "refused for a reason other than a missing reference: {message}"
+            );
+        }
+        outcome.is_ok()
+    }
+
+    async fn observe(
+        access: &ConfigAccess,
+        docs: &[DocRef],
+    ) -> Result<Vec<family::Presence<String>>> {
+        let mut observed = Vec::new();
+        for doc in docs {
+            let (kind, owner, key) = (collection(doc), modeled_owner(&doc.node_did), id(doc));
+            let present = access
+                .transact_write("test.apply.read", |txn| {
+                    let key = key.clone();
+                    Box::pin(async move {
+                        anyhow::Ok(
+                            read_desired_state_document_in_txn(txn, kind, owner, &key)
+                                .await?
+                                .is_some(),
+                        )
+                    })
+                })
+                .await?;
+            observed.push(family::Presence {
+                doc: doc.clone(),
+                present,
+            });
+        }
+        Ok(observed)
+    }
+
+    let cases = family::cases::<String>();
+    assert!(!cases.is_empty());
+    for case in cases {
+        let input = &case.input;
+        let (access, _) = cas_node().await?;
+        if !input.stored.is_empty() {
+            apply(&access, input.stored.iter().map(production).collect()).await?;
+        }
+        let writes: Vec<_> = input.writes.iter().map(production).collect();
+        crate::test_support::desired_state_fixtures::ensure_owner_nodes(&access, &writes).await?;
+        let removals = input
+            .removals
+            .iter()
+            .map(|doc| {
+                (
+                    collection(doc),
+                    modeled_owner(&doc.node_did).to_owned(),
+                    id(doc),
+                )
+            })
+            .collect();
+        let plan = DesiredStateApplyPlan::new(writes)?.with_removals(removals)?;
+
+        let accepted = publish(&access, &plan).await;
+        let after = observe(&access, &input.observe).await?;
+        let retry_accepted = publish(&access, &plan).await;
+        let after_retry = observe(&access, &input.observe).await?;
+        case.check(family::ApplyOutput {
+            accepted,
+            after,
+            retry_accepted,
+            after_retry,
         });
     }
     Ok(())

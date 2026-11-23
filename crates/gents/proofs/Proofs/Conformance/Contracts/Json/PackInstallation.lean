@@ -119,25 +119,14 @@ structure HostedPluginInput where
   native : Bool
   deriving Lean.ToJson
 
-def hostedPluginInputs : List HostedPluginInput :=
-  [false, true].flatMap fun reviewed => [false, true].flatMap fun plan =>
-    [false, true].map fun native => { reviewed, plan, native }
-
-/-- The hosted plugin-root scenario applies a reviewed archive's graph with
-the client's plan in a native-authorized transaction: it builds only the case
-where all three hold. -/
+/-- The hosted route refuses a plugin root on each missing check where it
+makes it: the approval scope not naming the staged archive's digests, the
+client not finishing its plan inside the native transaction, and the session's
+User without update on the Node. -/
 @[conformance_family]
 def hostedPlugin : Conformance.Family HostedPluginInput Bool where
-  inputs := hostedPluginInputs.filter fun i => i.reviewed && i.plan && i.native
-  model := fun i => Configuration.hostedPluginInstallAllowed i.reviewed i.plan i.native
-
-/-- model-production-gap: production has no single decision over the reviewed
-digest, the client plan and native authorization; each denial is distributed
-across the hosted install route, and no production scenario yet installs a
-plugin root with one of them missing. -/
-@[conformance_family]
-def hostedPluginUnreached : Conformance.Family HostedPluginInput Bool where
-  inputs := hostedPluginInputs.filter fun i => !(i.reviewed && i.plan && i.native)
+  inputs := [false, true].flatMap fun reviewed => [false, true].flatMap fun plan =>
+    [false, true].map fun native => { reviewed, plan, native }
   model := fun i => Configuration.hostedPluginInstallAllowed i.reviewed i.plan i.native
 
 deriving instance Lean.ToJson for Configuration.PackAttemptEvidence

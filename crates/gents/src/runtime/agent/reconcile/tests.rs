@@ -1728,6 +1728,100 @@ async fn generation_supervisor_steps_match_lean_runtime_reconcile_cases() {
     }
 }
 
+/// Proposes a snapshot whose runnable Agent has no tool surface, then a
+/// complete one marked by its prompt. The supervisor handles proposals in
+/// order, so the generation the complete one activates shows whether the
+/// incomplete one became a generation before it.
+#[tokio::test]
+async fn generation_supervisor_refuses_a_snapshot_missing_a_dependency() {
+    for case in gents_lean_vocab::families::contracts_runtime_reconcile_resolve::cases() {
+        let db = test_node().await;
+        let node = db.node.clone();
+        let node_did = node
+            .node_identity_did()
+            .expect("fixture node has an identity");
+        gents_documents::test_support::ensure_test_node(&node, node_did).await;
+        let runtime_status = runtime_status_handle(&node, node_did);
+        let lineage = AgentLineage::provision("general");
+        let agent_did = lineage.binding.agent_did.clone();
+        let mut incomplete_agent = lineage.revision("general");
+        Arc::make_mut(&mut incomplete_agent.agent).system_prompt = "incomplete".to_string();
+        let mut complete_agent = lineage.revision("general");
+        Arc::make_mut(&mut complete_agent.agent).system_prompt = "complete".to_string();
+        let initial =
+            snapshot_for_agents(&node, &agent_did, vec![lineage.revision("general")]).await;
+        let mut incomplete = snapshot_for_agents(&node, &agent_did, vec![incomplete_agent]).await;
+        incomplete.tool_surfaces.remove(&agent_did);
+        let complete = snapshot_for_agents(&node, &agent_did, vec![complete_agent]).await;
+        let runner =
+            move |_agent: AgentWithTools,
+                  _tool_surface: Arc<ToolSurface>,
+                  request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+                  _capacity: Arc<crate::runtime::agent::worker_capacity::WorkerCapacity>,
+                  _generation: u64,
+                  mut shutdown: watch::Receiver<bool>| async move {
+                loop {
+                    tokio::select! {
+                        _ = shutdown.changed() => return Ok(()),
+                        message = async {
+                            let mut receiver = request_rx.lock().await;
+                            receiver.recv().await
+                        } => {
+                            if message.is_none() {
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+            };
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let supervisor = GenerationSupervisor::bootstrap(
+            initial,
+            gents_inference::admission::AdmissionRegistry::new(node.clone()),
+            crate::runtime::agent::retry::RetryPolicy {
+                max_retries: 3,
+                base_delay_ms: 5,
+                max_delay_ms: 25,
+            },
+            runner,
+            runtime_status,
+            shutdown_rx.clone(),
+            None,
+        )
+        .await
+        .unwrap();
+        let pre = supervisor.current_snapshot().generation;
+        assert_eq!(pre, case.input.pre_active_generation);
+        let (active_tx, mut active_rx) = watch::channel(supervisor.current_snapshot());
+        let (proposal_tx, proposal_rx) = mpsc::channel(4);
+        let task = tokio::spawn(supervisor.run(active_tx, proposal_rx, shutdown_rx));
+        proposal_tx.send(incomplete).await.unwrap();
+        proposal_tx.send(complete).await.unwrap();
+        let completed = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                active_rx.changed().await.unwrap();
+                let active = active_rx.borrow_and_update().clone();
+                if active.agents[&agent_did].system_prompt == "complete" {
+                    return active.generation;
+                }
+            }
+        })
+        .await
+        .expect("the complete proposal becomes a generation");
+        let _ = shutdown_tx.send(true);
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("supervisor should stop on shutdown")
+            .unwrap()
+            .unwrap();
+        case.check(
+            gents_lean_vocab::families::contracts_runtime_reconcile_resolve::ReconcileResolveOutput {
+                legal: completed != next_generation(pre),
+            },
+        );
+    }
+}
+
 struct FailGenerationSourceWriter {
     fatal_attempted: Arc<Notify>,
     fatal_release: Arc<Semaphore>,
