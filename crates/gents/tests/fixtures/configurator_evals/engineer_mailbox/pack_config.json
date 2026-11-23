@@ -3,7 +3,7 @@
   "eval_definitions": [
     {
       "definition_id": "engineer-mailbox",
-      "comparability_version": 1,
+      "comparability_version": 2,
       "title": "Mailbox: notices that reach the operator",
       "subject": {
         "kind": "agent",
@@ -22,8 +22,16 @@
       "cases": [
         "./cases/door_interlock_reminder.json",
         "./cases/clinic_seating_shortage.json",
+        "./cases/dock_slot_question.json",
+        "./cases/invoice_chat_only.json",
+        "./cases/freezer_breach_sustained.json",
+        "./cases/blocked_order_escalation.json",
+        "./cases/kiln_flag_and_question.json",
         "./cases/cooler_boundary_silent.json",
-        "./cases/binder_next_shift.json"
+        "./cases/boiler_new_breach.json",
+        "./cases/tank_two_low_readings.json",
+        "./cases/binder_next_shift.json",
+        "./cases/ferry_crew_swap_question.json"
       ]
     }
   ]

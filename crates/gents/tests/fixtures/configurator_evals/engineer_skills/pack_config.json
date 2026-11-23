@@ -1,0 +1,37 @@
+{
+  "node": {},
+  "eval_definitions": [
+    {
+      "definition_id": "engineer-skills",
+      "comparability_version": 1,
+      "title": "Skills: load the instructions a task needs",
+      "subject": {
+        "kind": "agent",
+        "inference_slots": [
+          "engineer"
+        ],
+        "core_packs": [
+          "gents/pack_builder",
+          "gents/web",
+          "gents/dynamic_workflows",
+          "gents/charts",
+          "gents/data_tables",
+          "gents/script"
+        ]
+      },
+      "cases": [
+        "./cases/plan_before_build.json",
+        "./cases/courier_window_tickets.json",
+        "./cases/archive_retention_records.json",
+        "./cases/trigger_never_fires.json",
+        "./cases/courier_ticket_collection.json",
+        "./cases/plugin_tool_missing.json",
+        "./cases/shift_minutes_no_skill.json",
+        "./cases/ferry_reimbursement_claims.json",
+        "./cases/urgent_count_once.json",
+        "./cases/lab_holding_periods.json",
+        "./cases/courier_eta_no_skill.json"
+      ]
+    }
+  ]
+}

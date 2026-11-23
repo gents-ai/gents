@@ -1,0 +1,68 @@
+{
+  "case_id": "shift-minutes-no-skill",
+  "split": "train",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "answer",
+      "prompt": "Quick one: a shift runs from 06:45 to 15:10 with a 35-minute unpaid break. How many paid minutes is that? Reply with just the number.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "skills_loaded",
+          "collection": "AgentOutputSegment",
+          "filter": {
+            "session_id": {
+              "_eq": "$session"
+            },
+            "payload": {
+              "_like": "Skill: %"
+            }
+          },
+          "fields": [
+            "ordinal"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "write",
+              "bash",
+              "write_file",
+              "edit_file",
+              "load_skill"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "skills_loaded",
+            "min": 0,
+            "max": 0
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\\b470\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

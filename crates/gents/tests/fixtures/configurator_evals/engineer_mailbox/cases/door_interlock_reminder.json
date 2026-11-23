@@ -143,8 +143,8 @@
       ]
     },
     {
-      "stage_id": "replay",
-      "prompt": "That dock reminder just came through again. Can you make sure I only have one?",
+      "stage_id": "second",
+      "prompt": "Add another reminder for me: “Forklift 3 inspection”, with the note “Forklift 3 is due for inspection at 14:00.” Keep the dock interlock reminder as it is.",
       "capture": [
         {
           "kind": "documents",
@@ -199,6 +199,9 @@
         {
           "check": "tool_calls_expected",
           "params": {
+            "required": [
+              "file_mailbox_item"
+            ],
             "forbidden": [
               "write",
               "bash",
@@ -216,13 +219,13 @@
             "present": [
               {
                 "capture": "visible",
-                "min": 1,
-                "max": 1
+                "min": 2,
+                "max": 2
               },
               {
                 "capture": "notice",
-                "min": 1,
-                "max": 1
+                "min": 2,
+                "max": 2
               }
             ],
             "rows": [
@@ -253,22 +256,38 @@
                     "equals": "agent"
                   }
                 ]
+              },
+              {
+                "capture": "notice",
+                "key": "title",
+                "id": "Forklift 3 inspection",
+                "expect": [
+                  {
+                    "field": "summary",
+                    "fallback_field": "payload",
+                    "equals": "Forklift 3 is due for inspection at 14:00."
+                  },
+                  {
+                    "field": "kind",
+                    "equals": "flag"
+                  },
+                  {
+                    "field": "action",
+                    "equals": "ack"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "open"
+                  },
+                  {
+                    "field": "source_kind",
+                    "equals": "agent"
+                  }
+                ]
               }
             ]
           },
           "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "final_message_matches",
-          "params": {
-            "any": [
-              {
-                "matches": "(?i)\\b(one|1|single|only)\\b|no duplicate|already"
-              }
-            ]
-          },
-          "tier": "development",
           "weight": 1
         }
       ]

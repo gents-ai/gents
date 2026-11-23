@@ -1,0 +1,181 @@
+{
+  "case_id": "points-partial-blocked",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "members/m-1.json",
+        "contents": "{\n  \"member\": \"m-1\",\n  \"tier\": \"gold\",\n  \"spend\": 40\n}\n"
+      },
+      {
+        "path": "members/m-2.json",
+        "contents": "{\n  \"member\": \"m-2\",\n  \"tier\": \"silver\",\n  \"spend\": 25\n}\n"
+      },
+      {
+        "path": "members/m-3.json",
+        "contents": "{\n  \"member\": \"m-3\",\n  \"tier\": \"platinum\",\n  \"spend\": 60\n}\n"
+      },
+      {
+        "path": "tiers/multipliers.json",
+        "contents": "{\n  \"gold\": 3,\n  \"silver\": 2\n}\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "goal",
+      "settle": true,
+      "prompt": "Set a goal for this session with a token budget of 1200000: write points.json mapping each member id in members/ to their spend times their tier's multiplier from tiers/multipliers.json. The platinum multiplier hasn't been announced yet and only I can get it, so leave any member you can't score out of points.json and don't guess a multiplier. Do what you can now; for the rest, tell me once through my inbox and mark the goal blocked.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "goal",
+          "collection": "Goal",
+          "filter": {
+            "session_id": {
+              "_eq": "$session"
+            }
+          },
+          "fields": [
+            "goal_id",
+            "objective",
+            "status",
+            "token_budget",
+            "completion_evidence",
+            "consecutive_blocked_audits",
+            "last_blocked_reason"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "visible",
+          "collection": "MailboxItem",
+          "filter": {},
+          "fields": [
+            "item_key",
+            "title",
+            "kind"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "notice",
+          "collection": "MailboxItem",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "target_node_did": {
+              "_eq": "$trial"
+            },
+            "target_agent_did": {
+              "_eq": "gents:agent-slot:engineer"
+            },
+            "requester_did": {
+              "_eq": "$evaluator"
+            },
+            "session_id": {
+              "_eq": "$session"
+            }
+          },
+          "fields": [
+            "item_key",
+            "node_did",
+            "requester_did",
+            "kind",
+            "action",
+            "status",
+            "title",
+            "summary",
+            "payload",
+            "source_kind",
+            "session_id",
+            "request_id",
+            "target_node_did",
+            "target_agent_did"
+          ]
+        },
+        {
+          "kind": "file",
+          "name": "points",
+          "glob": "points.json"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "create_goal",
+              "file_mailbox_item"
+            ],
+            "forbidden": [
+              "bash"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "goal",
+            "expect": [
+              {
+                "field": "token_budget",
+                "equals": 1200000
+              },
+              {
+                "field": "status",
+                "equals": "blocked"
+              }
+            ],
+            "min_rows": 1,
+            "max_rows": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "visible",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "notice",
+                "min": 1,
+                "max": 1
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "points",
+            "expect": [
+              {
+                "path": "points.json",
+                "pointer": "",
+                "equals": {
+                  "m-1": 120,
+                  "m-2": 50
+                }
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

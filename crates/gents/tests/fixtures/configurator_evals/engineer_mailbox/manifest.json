@@ -2,7 +2,7 @@
   "manifest_version": 1,
   "name": "engineer_mailbox",
   "version": "0.1.0",
-  "description": "Native eval definition engineer-mailbox: the Engineer files operator notices through its mailbox surface, without duplicates, and stays silent when nothing qualifies.",
+  "description": "Native eval definition engineer-mailbox: the Engineer files operator notices and questions through its mailbox surface, gated on records and files, without duplicates across turns, and stays silent when nothing qualifies or the operator asked for a reply.",
   "authors": [
     "gents-ai contributors"
   ],
@@ -14,8 +14,16 @@
     "README.md",
     "cases/door_interlock_reminder.json",
     "cases/clinic_seating_shortage.json",
+    "cases/dock_slot_question.json",
+    "cases/invoice_chat_only.json",
+    "cases/freezer_breach_sustained.json",
+    "cases/blocked_order_escalation.json",
+    "cases/kiln_flag_and_question.json",
     "cases/cooler_boundary_silent.json",
+    "cases/boiler_new_breach.json",
+    "cases/tank_two_low_readings.json",
     "cases/binder_next_shift.json",
+    "cases/ferry_crew_swap_question.json",
     "pack_config.json",
     "suite.json"
   ],
