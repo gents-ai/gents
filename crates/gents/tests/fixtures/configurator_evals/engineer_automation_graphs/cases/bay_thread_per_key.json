@@ -1,0 +1,361 @@
+{
+  "case_id": "bay-thread-per-key",
+  "split": "held_out",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type BaySlip { code: String bay: String crate_count: Int }"
+    ],
+    "documents": [
+      {
+        "collection": "AgentSession",
+        "document": {
+          "session_id": "bay-north",
+          "node_did": "$trial",
+          "agent_did": "gents:agent-slot:engineer",
+          "created_at": "2026-01-01T00:00:00Z",
+          "requester_did": "$evaluator"
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "configure",
+      "prompt": "Give every bay one running conversation for its slips. The conversation for a bay is named bay- followed by the bay, so slips for bay north go to bay-north, which already exists. A bay without a conversation yet gets one when its first slip arrives, and its later slips continue there. For each new BaySlip, ask the agent in that bay's conversation to reply exactly ACK followed by the slip's code. Set this up now; slips come later.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "triggers",
+          "collection": "Trigger",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "trigger_id",
+            "task_id",
+            "source",
+            "concurrency",
+            "session_id_template",
+            "create_session",
+            "enabled",
+            "last_status",
+            "last_error"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "sources",
+          "collection": "EventSource",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "event_source_id",
+            "source_collection",
+            "event_kind",
+            "filter",
+            "correlation_field",
+            "group"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "tasks",
+          "collection": "Task",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "task_id",
+            "prompt_template",
+            "emit_outcome",
+            "enabled"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash",
+              "write_file",
+              "edit_file"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "triggers",
+                "min": 1
+              },
+              {
+                "capture": "tasks",
+                "min": 1
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "north",
+      "seed": {
+        "collection": "BaySlip",
+        "document": {
+          "code": "C-1",
+          "bay": "north",
+          "crate_count": 4
+        }
+      },
+      "deadline_secs": 300,
+      "checks": [],
+      "capture": []
+    },
+    {
+      "stage_id": "west_first",
+      "seed": {
+        "collection": "BaySlip",
+        "document": {
+          "code": "C-2",
+          "bay": "west",
+          "crate_count": 2
+        }
+      },
+      "deadline_secs": 300,
+      "checks": [],
+      "capture": []
+    },
+    {
+      "stage_id": "west_second",
+      "seed": {
+        "collection": "BaySlip",
+        "document": {
+          "code": "C-3",
+          "bay": "west",
+          "crate_count": 9
+        }
+      },
+      "deadline_secs": 300,
+      "settle": true,
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "c1",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "c2",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "c3",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "west",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "c1",
+                "key": "lifecycle_state",
+                "id": "completed",
+                "expect": [
+                  {
+                    "field": "content",
+                    "matches": "(?s)\\].*ACK"
+                  },
+                  {
+                    "field": "content",
+                    "matches": "(?s)\\].*C-1"
+                  },
+                  {
+                    "field": "session_id",
+                    "equals": "bay-north"
+                  }
+                ]
+              },
+              {
+                "capture": "c2",
+                "key": "lifecycle_state",
+                "id": "completed",
+                "expect": [
+                  {
+                    "field": "content",
+                    "matches": "(?s)\\].*ACK"
+                  },
+                  {
+                    "field": "content",
+                    "matches": "(?s)\\].*C-2"
+                  },
+                  {
+                    "field": "session_id",
+                    "equals": "bay-west"
+                  }
+                ]
+              },
+              {
+                "capture": "c3",
+                "key": "lifecycle_state",
+                "id": "completed",
+                "expect": [
+                  {
+                    "field": "content",
+                    "matches": "(?s)\\].*ACK"
+                  },
+                  {
+                    "field": "content",
+                    "matches": "(?s)\\].*C-3"
+                  },
+                  {
+                    "field": "session_id",
+                    "equals": "bay-west"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "c1",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "caused_by_trigger_id": {
+              "_ne": null
+            },
+            "content": {
+              "_like": "%C-1%"
+            }
+          },
+          "fields": [
+            "request_id",
+            "session_id",
+            "lifecycle_state",
+            "content",
+            "terminal_output",
+            "caused_by_trigger_id",
+            "caused_by_trigger_kind",
+            "caused_by_source_doc_id",
+            "caused_by_correlation",
+            "execution_origin"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "c2",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "caused_by_trigger_id": {
+              "_ne": null
+            },
+            "content": {
+              "_like": "%C-2%"
+            }
+          },
+          "fields": [
+            "request_id",
+            "session_id",
+            "lifecycle_state",
+            "content",
+            "terminal_output",
+            "caused_by_trigger_id",
+            "caused_by_trigger_kind",
+            "caused_by_source_doc_id",
+            "caused_by_correlation",
+            "execution_origin"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "c3",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "caused_by_trigger_id": {
+              "_ne": null
+            },
+            "content": {
+              "_like": "%C-3%"
+            }
+          },
+          "fields": [
+            "request_id",
+            "session_id",
+            "lifecycle_state",
+            "content",
+            "terminal_output",
+            "caused_by_trigger_id",
+            "caused_by_trigger_kind",
+            "caused_by_source_doc_id",
+            "caused_by_correlation",
+            "execution_origin"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "west",
+          "collection": "AgentSession",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "session_id": {
+              "_eq": "bay-west"
+            }
+          },
+          "fields": [
+            "session_id"
+          ]
+        }
+      ]
+    }
+  ]
+}
