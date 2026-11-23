@@ -693,3 +693,89 @@ async fn the_write_gate_lets_a_second_writer_commit_while_the_first_is_open() {
     );
     node.shutdown().await.unwrap();
 }
+
+/// The id a create of `input` takes in `node`: DefraDB derives it from the
+/// genesis block, so a discarded create names it without storing it.
+async fn id_of_create(node: &Arc<EmbeddedNode>, input: &str) -> String {
+    let txn = ConfigApplyTxn::begin_local(node, None).await.unwrap();
+    let created = txn
+        .execute(&format!(
+            "mutation {{ create_IsolationProbe(input: {input}) {{ _docID }} }}"
+        ))
+        .await
+        .unwrap();
+    txn.discard().await.unwrap();
+    crate::graphql::created_doc_id(&created, "IsolationProbe").unwrap()
+}
+
+/// T1 reads by id a document that does not exist yet and writes document B;
+/// T2 creates the document with that id and commits first.
+async fn absent_point_read_then_create(owner: Owner) -> (Observed, String, String) {
+    const INPUT: &str = r#"{key: "absent", n: 1, m: 1}"#;
+    let (node, access, _root) = match owner {
+        Owner::Embedded => {
+            let (node, access) = node().await;
+            (node, access, None)
+        }
+        Owner::ClientSigned => {
+            let (node, access, root) = client_signed_node().await;
+            (node, access, Some(root))
+        }
+    };
+    let absent = id_of_create(&node, INPUT).await;
+    assert!(stored(&node, &format!("{{ IsolationProbe(docID: \"{absent}\") {{ n }} }}"), "IsolationProbe").await.is_empty());
+    let b = create(&node, "IsolationProbe", r#"{key: "b", n: 1, m: 1}"#).await;
+    let read = format!("{{ IsolationProbe(docID: \"{absent}\") {{ n }} }}");
+    let decide = decider(move |txn, _| {
+        let read = read.clone();
+        let b = b.clone();
+        Box::pin(async move {
+            let found = txn.execute(&read).await?;
+            let n = rows(&found, "IsolationProbe").len();
+            txn.execute(&format!(
+                "mutation {{ update_IsolationProbe(docID: \"{b}\", input: {{n: {n}}}) {{ _docID }} }}"
+            ))
+            .await?;
+            Ok(())
+        })
+    });
+    let created = std::sync::Mutex::new(None);
+    let observed = race(&access, owner, &decide, async {
+        *created.lock().unwrap() = Some(create(&node, "IsolationProbe", INPUT).await);
+    })
+    .await;
+    node.shutdown().await.unwrap();
+    (observed, absent, created.into_inner().unwrap().unwrap())
+}
+
+#[tokio::test]
+async fn a_point_read_of_an_absent_id_conflicts_with_a_concurrent_create_of_it() {
+    let (observed, absent, created) = absent_point_read_then_create(Owner::Embedded).await;
+    assert_eq!(created, absent, "the create takes the id T1 read");
+    assert_eq!(observed.attempts, 2, "{observed:?}");
+}
+
+#[tokio::test]
+async fn a_client_signed_point_read_of_an_absent_id_conflicts_with_a_concurrent_create_of_it() {
+    let (observed, absent, created) = absent_point_read_then_create(Owner::ClientSigned).await;
+    assert_eq!(created, absent, "the create takes the id T1 read");
+    assert_eq!(observed.attempts, 2, "{observed:?}");
+}
+
+/// A transaction that only reads commits whatever committed beside it: T1
+/// reads A by id, T2 updates A and commits, T1 commits.
+#[tokio::test]
+async fn a_read_only_transaction_commits_over_a_concurrent_write_of_what_it_read() {
+    let (node, _access) = node().await;
+    let a = create(&node, "IsolationProbe", r#"{key: "a", n: 1, m: 1}"#).await;
+    let reader = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
+    let read = format!("{{ IsolationProbe(docID: \"{a}\") {{ n }} }}");
+    assert_eq!(rows(&reader.execute(&read).await.unwrap(), "IsolationProbe")[0]["n"], 1);
+    write(
+        &node,
+        format!("mutation {{ update_IsolationProbe(docID: \"{a}\", input: {{n: 5}}) {{ _docID }} }}"),
+    )
+    .await;
+    reader.commit().await.unwrap();
+    node.shutdown().await.unwrap();
+}
