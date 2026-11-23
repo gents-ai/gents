@@ -1,0 +1,77 @@
+{
+  "case_id": "product-rename-prose",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "docs/guide.md",
+        "contents": "# Tidewell guide\n\nTidewell keeps berth schedules in sync across every quay.\n\n## Install\n\n```sh\n# Tidewell ships as one package\npip install tidewell\ntidewell --version\n```\n\nAfter installing, run Tidewell once so it writes `Tidewell.toml` next to your schedules.\n"
+      },
+      {
+        "path": "docs/faq.md",
+        "contents": "# FAQ\n\n**Is Tidewell free?** Yes. Tidewell's source is public.\n\nSet `TIDEWELL_HOME` to move its data:\n\n```sh\nexport TIDEWELL_HOME=~/tidewell\n```\n\nRun `tidewell sync` whenever Tidewell reports drift.\n"
+      },
+      {
+        "path": "docs/CHANGELOG.md",
+        "contents": "# Changelog\n\n## 1.2.0\n\n- Tidewell 1.2 adds quay groups.\n\n## 1.1.0\n\n- First Tidewell release.\n"
+      },
+      {
+        "path": "docs/setup.md",
+        "contents": "# Setup\n\nNo product names here: point the scheduler at your quay feed and start it.\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "rename",
+      "prompt": "Our product Tidewell is now called Tidemark. Rename it in the prose of the docs under docs/. Don't touch code, meaning fenced code blocks and `inline code`, because the CLI, package and config file keep the old name for now. docs/CHANGELOG.md is history, so leave it as it is.",
+      "capture": [
+        {
+          "kind": "file",
+          "name": "docs",
+          "glob": "docs/*"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "bash"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "docs",
+            "expect": [
+              {
+                "path": "docs/guide.md",
+                "equals": "# Tidemark guide\n\nTidemark keeps berth schedules in sync across every quay.\n\n## Install\n\n```sh\n# Tidewell ships as one package\npip install tidewell\ntidewell --version\n```\n\nAfter installing, run Tidemark once so it writes `Tidewell.toml` next to your schedules.\n"
+              },
+              {
+                "path": "docs/faq.md",
+                "equals": "# FAQ\n\n**Is Tidemark free?** Yes. Tidemark's source is public.\n\nSet `TIDEWELL_HOME` to move its data:\n\n```sh\nexport TIDEWELL_HOME=~/tidewell\n```\n\nRun `tidewell sync` whenever Tidemark reports drift.\n"
+              },
+              {
+                "path": "docs/CHANGELOG.md",
+                "sha256": "2b65a9c0089bbca7d1566c67db52733904fa476b0bdff78fbe706a43e6da7287"
+              },
+              {
+                "path": "docs/setup.md",
+                "sha256": "b5b7d6c9ae1b39a7dd0b7421a0a2298860e4ed48299a935c9ee8125b50664796"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}
