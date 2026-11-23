@@ -207,15 +207,24 @@ where
     let session_id = target::nonblank(session_id).unwrap_or_else(fresh_id);
     let supplied_request_id = target::nonblank(request_id);
     let request_id = supplied_request_id.clone().unwrap_or_else(fresh_id);
-    let requester = crate::session::client_requester_scope(access, &node_did, &session_id, &actor)
-        .await
-        .map_err(RequestOperationError::passthrough)?;
-    if supplied_request_id.is_some() {
-        if let Some(receipt) =
+    /* who is asking, and whether this request is already held, do not
+    depend on the message body, so they are read while it is prepared */
+    let lookups = async {
+        let requester =
+            crate::session::client_requester_scope(access, &node_did, &session_id, &actor)
+                .await
+                .map_err(RequestOperationError::passthrough)?;
+        let held = if supplied_request_id.is_some() {
             recover_scoped_send(access, &node_did, &session_id, &requester, &request_id).await?
-        {
-            return Ok(receipt);
-        }
+        } else {
+            None
+        };
+        Ok::<_, RequestOperationError>((requester, held))
+    };
+    let (lookups, body) = futures::join!(lookups, prepare(node_did.clone(), session_id.clone()));
+    let (requester, held) = lookups?;
+    if let Some(receipt) = held {
+        return Ok(receipt);
     }
     let MessageSendBody {
         agent_did,
@@ -224,7 +233,7 @@ where
         delivery,
         valid_until,
         mailbox_item_id,
-    } = prepare(node_did.clone(), session_id.clone()).await?;
+    } = body?;
     if !request_input.has_authored_input(&content) {
         return Err(RequestOperationError::ContentRequired);
     }
@@ -233,17 +242,19 @@ where
             Some(request_input),
             content.trim(),
         );
-    let request_input = queue_user_message_input(
-        access,
-        &node_did,
-        &session_id,
-        request_input,
-        delivery.resolve(),
-    )
-    .await
-    .map_err(target::user_message_error)?;
-    let agent_did =
-        target::resolve_agent(access, &node_did, &session_id, agent_did.as_deref()).await?;
+    /* queuing the input and resolving the agent are independent reads */
+    let (request_input, agent_did) = futures::join!(
+        queue_user_message_input(
+            access,
+            &node_did,
+            &session_id,
+            request_input,
+            delivery.resolve(),
+        ),
+        target::resolve_agent(access, &node_did, &session_id, agent_did.as_deref()),
+    );
+    let request_input = request_input.map_err(target::user_message_error)?;
+    let agent_did = agent_did?;
     let mailbox_item_id = target::nonblank(mailbox_item_id);
     if let Some(item_id) = mailbox_item_id.as_deref() {
         target::validate_mailbox_cause(
