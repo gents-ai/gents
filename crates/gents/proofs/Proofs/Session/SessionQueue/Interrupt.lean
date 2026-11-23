@@ -114,10 +114,11 @@ private theorem drainWakeKeys_terminalizes_wake
         · exact drainWakeKeys_terminal_monotonic observed _ rest h_terminal
 
 /-- External obligations: the native adapter must retain the exact authenticated
-session scope across capture and commit; the pinned Regolith store does not
-detect empty-scan phantoms (DefraDB's HTTP transaction begin exposes only the
-read-only option); the local write gate orders local completion publication, but
-an overlapping HTTP latch may miss a completion inserted after its pending scan. -/
+session scope across capture and commit. The pending scan is a filtered read
+the store does not validate and the embedded write gate orders no writers
+(`TransactionFence.a_filtered_read_does_not_fence_an_arrival`), so only the
+wakes the latch observed are drained: a completion inserted after its pending
+scan stays pending. -/
 def latchInterruptObserved (request : RequestContext)
     (observed : List RequestId) (queue : SessionQueueState) :
     RequestContext × SessionQueueState :=

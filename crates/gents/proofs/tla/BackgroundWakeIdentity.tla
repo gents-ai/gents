@@ -28,9 +28,11 @@
 (* fix observes at the claim instant (`append_tool_output_at`). `Tick` is   *)
 (* the host's scheduling: nothing bounds how much wall time setup takes.   *)
 (*                                                                          *)
-(* `ReadConflicts` is DefraDB's premise that a commit aborts when a row it  *)
-(* read or a range it queried changed after its snapshot; with it FALSE    *)
-(* two transactions that both saw no wake both create one.                 *)
+(* `ReadConflicts` selects whether a commit aborts when the pending wakes  *)
+(* its scan returned changed after its snapshot. The pinned DefraDB does   *)
+(* not validate a filtered read (Lean `TransactionFence`), so production   *)
+(* is FALSE; TRUE is a store that would. Without the gate and with it      *)
+(* FALSE, two transactions that both saw no wake both create one.          *)
 (***************************************************************************)
 EXTENDS Integers, FiniteSets
 
