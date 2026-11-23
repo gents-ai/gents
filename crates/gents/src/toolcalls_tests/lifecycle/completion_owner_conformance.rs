@@ -349,11 +349,15 @@ struct FailedWakeFixture {
     deadline: Option<u64>,
     source: QueueSource,
     latest: bool,
+    /// The parent's background call completes and its notifier publishes a
+    /// wake for the same queue while the redrive transaction is open.
+    notifier_races: bool,
 }
 
 struct RedriveObservation {
     redriven: bool,
     successor: Option<Value>,
+    pending_wakes: usize,
 }
 
 async fn drive_redrive(
@@ -361,13 +365,13 @@ async fn drive_redrive(
     goal: Option<GoalStatus>,
     wake: FailedWakeFixture,
 ) -> RedriveObservation {
-    let admission = admitted_parent(goal, "redrive").await;
-    let node = &admission.node;
+    let mut admission = admitted_parent(goal, "redrive").await;
+    let node = &admission.node.clone();
     let access = admission.tool.access().unwrap();
-    let did = admission.node_did.as_str();
+    let did = &admission.node_did.clone();
     let agent_did = escape_graphql_string(admission.tool.actor().as_str());
-    let session = admission.tool.session_id.as_str();
-    let parent_doc = admission.tool.request_doc_id().unwrap();
+    let session = &admission.tool.session_id.clone();
+    let parent_doc = &admission.tool.request_doc_id().unwrap().to_owned();
     let parent_row = rows(
         &access,
         &format!(
@@ -458,6 +462,47 @@ async fn drive_redrive(
         create_failed_wake(&admission, &newer).await;
     }
 
+    if wake.notifier_races {
+        assert!(admission
+            .tool
+            .complete_owned("durable native output", None)
+            .await
+            .unwrap());
+        let identities = recovery_identities(&admission);
+        let (redrive, paused) =
+            gents_store::config_client::ConfigApplyTxn::with_concurrent_write_before_commit(
+                gents_session::request::lifecycle::RequestLifecycle::redrive_failed_background_wakeups_with_identities(
+                    node, did, &identities,
+                ),
+                async {
+                    ToolCallLifecycle::reconcile_background_completion_side_effects(
+                        node, did, &identities,
+                    )
+                    .await
+                    .expect("the notifier publishes its wake");
+                },
+            )
+            .await;
+        assert!(paused, "{name}: the notifier commits inside the redrive");
+        let redrive = redrive.unwrap();
+        let pending_wakes = rows(
+            &access,
+            &format!(
+                r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }}, lifecycle_state: {{ _eq: "pending" }}, execution_origin: {{ _eq: "scheduled" }} }}) {{ _docID }} }}"#,
+                escape_graphql_string(session)
+            ),
+            "AgentRequest",
+        )
+        .await
+        .len();
+        node.shutdown().await.expect("shut down test node");
+        std::fs::remove_dir_all(&admission.path).unwrap();
+        return RedriveObservation {
+            redriven: redrive.redriven > 0,
+            successor: None,
+            pending_wakes,
+        };
+    }
     let first = gents_session::request::lifecycle::RequestLifecycle::redrive_failed_background_wakeups_with_identities(
         node,
         did,
@@ -501,7 +546,7 @@ async fn drive_redrive(
     assert_eq!(source["request_hop"].as_u64(), Some(source_depth));
     assert_eq!(source["deadline"].as_str(), source_deadline.as_deref());
     assert_eq!(source["caused_by_parent_request_id"], parent);
-    assert_eq!(source["caused_by_parent_request_doc_id"], parent_doc);
+    assert_eq!(source["caused_by_parent_request_doc_id"], parent_doc.as_str());
     assert_eq!(source["retry_count"].as_u64(), Some(source_retry_count));
     let successor = requests
         .iter()
@@ -545,6 +590,7 @@ async fn drive_redrive(
     RedriveObservation {
         redriven,
         successor,
+        pending_wakes: 0,
     }
 }
 
@@ -574,6 +620,7 @@ async fn generated_r6_completion_owner_cases_use_accepted_native_output() {
                 deadline: input.wake_deadline,
                 source: QueueSource::BackgroundCompletion,
                 latest: true,
+                notifier_races: false,
             },
         )
         .await;
@@ -622,6 +669,7 @@ async fn generated_r6_failed_wakes_redrive_through_the_recovery_owner() {
                 deadline: input.pre_execution_deadline,
                 source,
                 latest: input.is_latest,
+                notifier_races: false,
             },
         )
         .await;
@@ -1251,4 +1299,31 @@ async fn an_over_bound_wake_that_never_ran_is_not_redriven() {
         .await
         .expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
+}
+
+/// A failed wake's redrive and the notifier of a background completion of the
+/// same session race for the same wake queue: the notifier's wake commits
+/// while the redrive is open. One wake is pending afterwards.
+#[tokio::test]
+async fn a_redrive_and_a_notifier_publish_one_wake_for_one_queue() {
+    let observed = drive_redrive(
+        "redrive-notifier-race",
+        None,
+        FailedWakeFixture {
+            request_id: 701,
+            retry_count: 0,
+            max_retries: 3,
+            depth: 0,
+            deadline: None,
+            source: QueueSource::BackgroundCompletion,
+            latest: true,
+            notifier_races: true,
+        },
+    )
+    .await;
+    assert_eq!(
+        observed.pending_wakes, 1,
+        "redriven={} pending wakes={}",
+        observed.redriven, observed.pending_wakes
+    );
 }

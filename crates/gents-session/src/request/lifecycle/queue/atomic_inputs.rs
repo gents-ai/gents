@@ -629,6 +629,7 @@ async fn background_completion_transaction_attempt(
             )
             .await?;
             let doc_id = super::super::runtime_publication::publish(txn, &create).await?;
+            touch_wake_session_in_txn(txn, parent, &now).await?;
             if let Some(lower) = &lower {
                 let lower_doc_id = lower
                     .doc_id
@@ -686,6 +687,26 @@ async fn background_completion_transaction_attempt(
         message_sequence,
         created_request,
     })
+}
+
+/// A new wake writes its session document, which a failed wake's redrive
+/// also writes, so of a notifier and a redrive publishing a wake for one
+/// queue at once the second to commit aborts and runs again over the first
+/// (`TransactionFence.commonWrite`, `BackgroundWakeIdentity.tla`).
+async fn touch_wake_session_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    parent: &AgentRequest,
+    now: &str,
+) -> Result<()> {
+    let session = gents_store::config_client::agent_session::load_agent_session_row_in_txn(
+        txn,
+        &parent.node_did,
+        &parent.session_id,
+        parent.requester_did.as_deref(),
+    )
+    .await?
+    .context("background wake session is missing")?;
+    crate::session::touch_session_in_txn(txn, &session, now).await
 }
 
 async fn publish_native_tool_notification(
