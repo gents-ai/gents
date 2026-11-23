@@ -34,10 +34,12 @@ pub(crate) fn document_projector_with_installed_plugins(
     node: std::sync::Arc<dyn crate::identity::NodeIdentity>,
     policy: std::sync::Arc<dyn ToolSourcePolicy>,
     plugins: Vec<ProjectedPlugin>,
+    transport_manager: Option<acp::Subject>,
     ids: &'static gents_protocol::schemas::HomePolicyIds,
 ) -> std::result::Result<std::sync::Arc<dyn db::DocumentMutationProjector>, identity::Error> {
     Ok(std::sync::Arc::new(
         runtime_document_projection::RuntimeDocumentProjector::new(node, policy, ids)?
-            .with_startup_plugins(plugins),
+            .with_startup_plugins(plugins)
+            .with_transport_manager(transport_manager),
     ))
 }

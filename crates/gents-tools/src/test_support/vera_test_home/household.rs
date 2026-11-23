@@ -324,6 +324,19 @@ impl Household {
         }
     }
 
+    pub async fn reopen_for_replication(mut self) -> anyhow::Result<Self> {
+        self.node.shutdown().await?;
+        drop(self.node);
+        (self.node, self.url) = super::serve_with(
+            &self.home,
+            self.provider,
+            Some(gents_store::config_client::OwnerStagedRoute::new()),
+            Some(&self.user_did),
+        )
+        .await?;
+        Ok(self)
+    }
+
     pub async fn shutdown(self) -> anyhow::Result<()> {
         self.node.shutdown().await?;
         Ok(())

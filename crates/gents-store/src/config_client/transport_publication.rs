@@ -128,6 +128,7 @@ pub async fn project_transport_document(
     ids: &HomePolicyIds,
     collection_name: &str,
     doc_id: &str,
+    group_manager: Option<&Subject>,
 ) -> Result<bool> {
     let view = context.view;
     let provider = context.document_acp;
@@ -157,6 +158,22 @@ pub async fn project_transport_document(
         ));
     }
     let id = DocID::from_string(doc_id).map_err(failure)?;
+    let key = publication_key(collection_name, &id, runtime);
+    let state = read_state(&system, &key).await?;
+    if state == Some(PublicationState::Linked) {
+        return Ok(false);
+    }
+    // Defra registers incoming genesis and stages its grants before replaying
+    // the row. Only a local create starts a Gents publication.
+    if group_manager.is_some()
+        && state.is_none()
+        && (view.projection_actor().is_none()
+            || !context
+                .registration_pending(ids.id(BuiltInPolicy::Household), resource, doc_id)
+                .await?)
+    {
+        return Ok(false);
+    }
     let Some(document) = collection
         .get_by_doc_id(view, &system, &id)
         .await
@@ -179,11 +196,6 @@ pub async fn project_transport_document(
         doc: doc_id,
     };
     let actor = Subject::entity(runtime.clone());
-    let key = publication_key(collection_name, &id, runtime);
-    let state = read_state(&system, &key).await?;
-    if state == Some(PublicationState::Linked) {
-        return Ok(false);
-    }
     if state.is_none() {
         // Import an existing publication once. Replaying its grants here could
         // restore a reader or parent the owner has since revoked.
@@ -206,6 +218,11 @@ pub async fn project_transport_document(
                     .await?
             {
                 return Ok(false);
+            }
+            if let Some(manager) = group_manager {
+                grant
+                    .change("reader_manager", manager.clone(), false)
+                    .await?;
             }
             grant.change("reader", actor, false).await?;
             if collection_name == PEER_REGISTRY_NAME {
@@ -241,9 +258,11 @@ pub async fn project_transport_document(
                 .await?;
         }
     }
-    grant
-        .change("reader_manager", Subject::entity(owner), false)
-        .await?;
+    if group_manager.is_none() {
+        grant
+            .change("reader_manager", Subject::entity(owner), false)
+            .await?;
+    }
     system.set(&key, b"linked").await?;
     Ok(true)
 }
@@ -253,6 +272,7 @@ pub async fn project_transport_document(
 pub async fn reconcile_transport_documents(
     context: &DocumentMutationContext<'_>,
     ids: &HomePolicyIds,
+    group_manager: Option<&Subject>,
 ) -> Result<Vec<(String, String)>> {
     let view = context.view;
     let system = view.sibling(Namespace::Systemstore);
@@ -274,7 +294,7 @@ pub async fn reconcile_transport_documents(
                 .id()
                 .ok_or_else(|| failure("transport row has no document ID"))?
                 .to_string();
-            if project_transport_document(context, ids, name, &doc).await? {
+            if project_transport_document(context, ids, name, &doc, group_manager).await? {
                 changed.push(((*name).to_owned(), doc));
             }
         }
