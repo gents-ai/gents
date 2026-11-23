@@ -33,7 +33,10 @@ def step (s : Publication) : Action → Publication
   | .commit starter receipt native => DelegatedPublication.commit s starter receipt native
   | .observe exact owner => DelegatedPublication.observe s exact owner
   | .publish actor exact grants => DelegatedPublication.publish s actor exact grants
-  | .revokeSessionParent => DelegatedPublication.revokeSessionParent s s.binding.parentAgent
+  | .revokeSessionParent =>
+      let relation : Relation := ⟨"sessions", s.binding.sessionDoc, "parent", .object "agents" s.binding.agentDoc⟩
+      let household := Identity.Household.apply s.household (.revokeAs s.binding.parentAgent relation)
+      { s with household := household }
 
 structure Case where
   name : String
@@ -112,9 +115,13 @@ theorem denied_invoke_cannot_commit :
     s.committed = false ∧ s.toolRunning = false ∧ claim s deniedCommit = .unavailable := by
   native_decide
 
-theorem revoked_after_publication_keeps_the_session_parent :
+/-- The parent Agent owns the session it published, so document ACP lets it
+delete the session's `parent` relation: the User loses the session through its
+Agent, and a later recovery does not restore the cleared relation. The child's
+request keeps its own relations, so the claim still succeeds. -/
+theorem revoked_after_publication_detaches_the_session :
     let s := [good, observed, grant, .revokeSessionParent, grant].foldl step (initial true)
-    allowed 5 s.household "user" "sessions" "child-session" "read" = true ∧
+    allowed 5 s.household "user" "sessions" "child-session" "read" = false ∧
       claim s grantedCommit = .claimed := by
   native_decide
 

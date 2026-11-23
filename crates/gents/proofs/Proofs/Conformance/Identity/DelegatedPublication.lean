@@ -148,8 +148,8 @@ structure CreatorRecoveryOutput where
 acknowledgement, then drives the creator's recovery watcher or a node-owner
 completion attempt as the case's actions say. A recovery for a mismatched
 binding runs after the configuring User replaces the child Agent document;
-the parent Agent's attempt to detach the published session from its Agent runs
-after the recovery. Production publication always re-verifies the retained receipt and native
+the parent Agent detaches the published session from its Agent after the
+recovery. Production publication always re-verifies the retained receipt and native
 owner first, so a publication attempt the caller never observed has no
 production call beyond leaving the dropped acknowledgement unrecovered. -/
 def creatorRecoveryNames : List String :=

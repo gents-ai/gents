@@ -130,20 +130,6 @@ def publish (s : Publication) (actor : String) (exactBinding : Bool) (g : GrantA
       sessionPending := s.sessionPending && !(links.sessionParent && links.sessionWorker && g.markSession)
       requestPending := s.requestPending && !(links.requestParent && links.requestSession && links.requestWorker && g.markRequest) }
 
-/-- A published session's parent relation binds it to its Agent. Decision:
-its creator Agent may not detach it; native relationship management refuses
-the parent Agent's delete of that relation, so the attempt leaves the
-publication unchanged. Any other actor is decided by document ACP. -/
-def revokeSessionParent (s : Publication) (actor : String) : Publication :=
-  if actor == s.binding.parentAgent then s else
-    let relation : Relation :=
-      ⟨"sessions", s.binding.sessionDoc, "parent", .object "agents" s.binding.agentDoc⟩
-    { s with household := Identity.Household.apply s.household (.revokeAs actor relation) }
-
-theorem parent_cannot_detach_its_session (s : Publication) :
-    revokeSessionParent s s.binding.parentAgent = s := by
-  simp [revokeSessionParent]
-
 /-- Native claim reads both pending markers in the same transaction that
 checks the immediate author's session update and target Agent invoke. The
 `NativeCommit.committed` premise includes native serialization of those marker
