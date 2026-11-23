@@ -407,9 +407,12 @@ pub async fn revert(access: &ConfigAccess, owner: &str, job_id: &str, digest: &s
 mod tests {
     use super::*;
     use crate::optimization::driver::job_dir;
-    use crate::optimization::driver::matrix::fixtures::{BASELINE_PROMPT, CANDIDATE_PROMPT};
+    use crate::optimization::driver::matrix::fixtures::{
+        definition, BASELINE_PROMPT, CANDIDATE_PROMPT, DEFINITION, VALIDATION_CASES,
+    };
     use crate::optimization::driver::matrix::{
-        accepting_harness, accepting_task_harness, rejecting_harness, Harness, CANDIDATE_TEMPLATE,
+        accepting_harness, accepting_job, accepting_task_harness, rejecting_harness, Harness,
+        CANDIDATE_TEMPLATE,
     };
     use crate::optimization::job::load_job;
     use crate::optimization::subject::tests::FIXTURE_TEMPLATE;
@@ -872,7 +875,6 @@ mod tests {
         for case in gents_lean_vocab::families::optimization_promotion_held_transition::cases() {
             let (harness, request) =
                 accepting_harness(&format!("native-promotion-{}", case.input.name)).await;
-            let digest = checkpoint_digest(&harness, &request.job_id).await;
             let keys = tempfile::tempdir()?;
             let outsider = gents_store::identity::KeyIdentity::load_or_create(
                 keys.path().join("outsider.key"),
@@ -888,35 +890,42 @@ mod tests {
                     .with_client_signed_agent_creates(),
             );
             let anonymous = ConfigAccess::graphql(endpoint);
+            let mut job_id = request.job_id.clone();
             let caller = match case.input.actor.as_deref() {
                 None => &anonymous,
+                Some("reader") if !case.input.target_allowed => {
+                    admit_operator(&harness, &outsider).await?;
+                    job_id = accepting_job(&harness, &foreign, &format!("{job_id}-operator"))
+                        .await
+                        .job_id;
+                    &foreign
+                }
                 Some("reader") => {
-                    admit_reader(&harness, &request.job_id, &digest, &foreign, &outsider).await?;
+                    let digest = checkpoint_digest(&harness, &job_id).await;
+                    admit_reader(&harness, &job_id, &digest, &foreign, &outsider).await?;
                     &foreign
                 }
                 Some(_) => harness.access(),
             };
+            let digest = checkpoint_digest(&harness, &job_id).await;
 
             let target_digest = if case.input.action == "reverted" {
                 let promotion =
-                    promote(harness.access(), harness.owner(), &request.job_id, &digest).await?;
-                let promoted = load_job(harness.access(), harness.owner(), &request.job_id)
+                    promote(harness.access(), harness.owner(), &job_id, &digest).await?;
+                let promoted = load_job(harness.access(), harness.owner(), &job_id)
                     .await?
                     .unwrap();
-                assert!(revert(
-                    &foreign,
-                    harness.owner(),
-                    &request.job_id,
-                    &promotion.target_digest
-                )
-                .await
-                .is_err());
+                assert!(
+                    revert(&foreign, harness.owner(), &job_id, &promotion.target_digest)
+                        .await
+                        .is_err()
+                );
                 assert_eq!(
                     live_prompt(&harness).await.as_deref(),
                     Some(CANDIDATE_PROMPT)
                 );
                 assert_eq!(
-                    load_job(harness.access(), harness.owner(), &request.job_id)
+                    load_job(harness.access(), harness.owner(), &job_id)
                         .await?
                         .unwrap()
                         .journal,
@@ -928,18 +937,62 @@ mod tests {
             };
 
             let before_prompt = live_prompt(&harness).await.expect("target prompt");
-            let before_job = load_job(harness.access(), harness.owner(), &request.job_id)
+            let mut before_job = load_job(harness.access(), harness.owner(), &job_id)
                 .await?
                 .unwrap();
             let (outcome, written) = match &target_digest {
-                None => (
-                    promote(caller, harness.owner(), &request.job_id, &digest)
-                        .await
-                        .map(|_| ()),
-                    CANDIDATE_PROMPT.to_owned(),
-                ),
+                None => {
+                    let promotion = promote(caller, harness.owner(), &job_id, &digest);
+                    let outcome = if !case.input.expected_length {
+                        let gate = std::sync::Arc::new((
+                            tokio::sync::Notify::new(),
+                            tokio::sync::Notify::new(),
+                        ));
+                        let promotion =
+                            BETWEEN_CHECK_AND_WRITE.scope(std::sync::Arc::clone(&gate), promotion);
+                        let competing = async {
+                            gate.0.notified().await;
+                            let mut current = before_job.clone();
+                            append(
+                                harness.access(),
+                                &mut current,
+                                JournalEntry::Finalized {
+                                    state: JobState::ReadyToPromote,
+                                },
+                            )
+                            .await
+                            .expect("the competing journal append commits");
+                            gate.1.notify_one();
+                            current
+                        };
+                        let (outcome, current) = tokio::join!(promotion, competing);
+                        before_job = current;
+                        outcome
+                    } else if !case.input.commit {
+                        let redefine = harness.install(vec![(
+                            Collection::EvalDefinition,
+                            definition(
+                                harness.owner(),
+                                DEFINITION,
+                                "captured_rows_count",
+                                &VALIDATION_CASES,
+                                2,
+                            ),
+                        )]);
+                        let (outcome, paused) =
+                            gents_store::config_client::ConfigApplyTxn::with_concurrent_write_before_commit(
+                                promotion, redefine,
+                            )
+                            .await;
+                        assert!(paused, "the promotion paused after its target write");
+                        outcome
+                    } else {
+                        promotion.await
+                    };
+                    (outcome.map(|_| ()), CANDIDATE_PROMPT.to_owned())
+                }
                 Some(target_digest) => (
-                    revert(caller, harness.owner(), &request.job_id, target_digest).await,
+                    revert(caller, harness.owner(), &job_id, target_digest).await,
                     BASELINE_PROMPT.to_owned(),
                 ),
             };
@@ -962,7 +1015,7 @@ mod tests {
                 panic!("{}: the target holds {after_prompt:?}", case.input.name)
             };
             assert_eq!(outcome.is_ok(), target == "after", "{}", case.input.name);
-            let after_job = load_job(harness.access(), harness.owner(), &request.job_id)
+            let after_job = load_job(harness.access(), harness.owner(), &job_id)
                 .await?
                 .unwrap();
             assert_eq!(
@@ -1033,29 +1086,11 @@ mod tests {
             promote_refused(&hidden).map(|error| error.reason),
             promote_refused(&missing).map(|error| error.reason)
         );
-        let owner = harness.owner().to_owned();
-        let node_doc = harness
-            .access()
-            .transact_readonly("test.promotion.node", |txn| {
-                let owner = &owner;
-                Box::pin(async move {
-                    let (doc_id, _) = gents_documents::read_desired_state_record_in_txn(
-                        txn,
-                        Collection::Node,
-                        owner,
-                        owner,
-                    )
-                    .await?
-                    .expect("user-owned Node");
-                    Ok::<_, anyhow::Error>(doc_id)
-                })
-            })
-            .await?;
         harness
             .access()
             .add_actor_relationship(
                 "Node",
-                &node_doc,
+                &node_document(harness).await?,
                 "administrator",
                 &identity::Did::new(outsider.did())?,
             )
@@ -1089,6 +1124,51 @@ mod tests {
             Some(before_prompt.as_str())
         );
         Ok(())
+    }
+
+    async fn admit_operator(
+        harness: &Harness,
+        outsider: &gents_store::identity::KeyIdentity,
+    ) -> anyhow::Result<()> {
+        use gents_store::identity::NodeIdentity;
+
+        harness
+            .grant_node_permissions(
+                outsider.did(),
+                gents_store::identity::GrantSet::OperatorUser.permissions(),
+            )
+            .await?;
+        harness
+            .access()
+            .add_actor_relationship(
+                "Node",
+                &node_document(harness).await?,
+                "runtime_reader",
+                &identity::Did::new(outsider.did())?,
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn node_document(harness: &Harness) -> anyhow::Result<String> {
+        let owner = harness.owner().to_owned();
+        harness
+            .access()
+            .transact_readonly("test.promotion.node", |txn| {
+                let owner = &owner;
+                Box::pin(async move {
+                    let (doc_id, _) = gents_documents::read_desired_state_record_in_txn(
+                        txn,
+                        Collection::Node,
+                        owner,
+                        owner,
+                    )
+                    .await?
+                    .expect("user-owned Node");
+                    Ok::<_, anyhow::Error>(doc_id)
+                })
+            })
+            .await
     }
 
     #[tokio::test]
