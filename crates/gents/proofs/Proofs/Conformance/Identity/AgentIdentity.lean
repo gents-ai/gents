@@ -80,28 +80,14 @@ def permissionDecide : Family PermissionInput DecisionOutput where
     { actorAllowed := c.allowed c.actor, peerAllowed := c.allowed c.peer,
       decisionsEqual := c.allowed c.actor == c.allowed c.peer }
 
-structure SelectionOutput where
-  actorDid : Option String
-  peerDid : Option String
-  actorAllowed : Bool
-  peerAllowed : Bool
-  sameNode : Bool
-  decisionsEqual : Bool
-  deriving ToJson
-
-/-- model-production-gap: production has no node-scoped Agent selector over a registry
-of Agent rows to replay; foreign-node, unknown and duplicate DIDs are rejected only by
-the model's `findAgent?` before `/identity/decide`, which receives an already selected
-DID. -/
-@[conformance_family]
-def permissionSelectionUnreached : Family PermissionInput SelectionOutput where
-  inputs := (identityPermissionCases.filter (!resolvedSelection ·)).map PermissionInput.ofCase
-  model := fun i =>
-    let c := i.toCase
-    { actorDid := c.actor.map (·.did), peerDid := c.peer.map (·.did),
-      actorAllowed := c.allowed c.actor, peerAllowed := c.allowed c.peer,
-      sameNode := c.actor.any fun a => c.peer.any (fun b => a.node == b.node),
-      decisionsEqual := c.allowed c.actor == c.allowed c.peer }
+/-- The node-scoped selector `findAgent?` is the caller's: `/identity/decide`
+receives an already selected DID. A foreign-node, unknown or duplicate DID
+selects no Agent, and an unselected Agent is denied. -/
+theorem unselected_agent_is_denied :
+    (identityPermissionCases.filter (!resolvedSelection ·)).all (fun c =>
+      (c.actor.isSome || !c.allowed c.actor) && (c.peer.isSome || !c.allowed c.peer)) ∧
+    (identityPermissionCases.filter (!resolvedSelection ·)).length = 3 := by
+  native_decide
 
 structure CollectionInput where
   collection : String

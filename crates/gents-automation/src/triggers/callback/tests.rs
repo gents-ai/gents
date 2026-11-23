@@ -2715,7 +2715,7 @@ async fn callback_module_plan_commits_only_with_modeled_native_authority() {
             prepared.provenance = Some("changed".into());
         }
         let candidate_plan = case.input.prepared.then_some("[]");
-        let claim = super::claim::claim_invocation(
+        let claiming = super::claim::claim_invocation(
             &backlog.node,
             &access,
             &backlog.owner,
@@ -2730,8 +2730,39 @@ async fn callback_module_plan_commits_only_with_modeled_native_authority() {
                 &prepared,
             )),
             candidate_plan,
-        )
-        .await;
+        );
+        let claim = if case.input.committed {
+            claiming.await
+        } else {
+            let mut competing = pending.clone();
+            let deny = async {
+                super::run::deny(
+                    &backlog.node,
+                    &access,
+                    &mut competing,
+                    "a competing planner denied it",
+                )
+                .await
+                .expect("the competing denial commits while the claim waits");
+            };
+            let (claim, paused) =
+                gents_store::config_client::ConfigApplyTxn::with_concurrent_write_before_commit(
+                    claiming, deny,
+                )
+                .await;
+            assert!(paused, "the claim paused after staging its plan");
+            let stored = super::documents::load_invocation(
+                &backlog.node,
+                &pending.invocation_id,
+                &pending.owner_node_did,
+                &pending.agent_did,
+            )
+            .await
+            .unwrap()
+            .expect("the invocation row survives");
+            assert_eq!(stored.action_plan, None, "{name}: no plan persisted");
+            claim
+        };
         if !case.input.visible {
             backlog
                 .access

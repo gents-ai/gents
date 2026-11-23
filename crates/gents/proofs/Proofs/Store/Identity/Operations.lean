@@ -689,42 +689,21 @@ theorem other_receiver_reads_only_a_delivered_grant (senderGranted delivered : B
     receiverReads false senderGranted delivered = receiverHasGrant senderGranted delivered := by
   simp [receiverReads, Household.readObserved]
 
-/-- The marker is publication progress for one exact pairing document and
-one exact Agent, not an authorization decision. The native relation is the
-read authority. A new entitlement generation must be explicitly authorized
-by the configuration owner and committed with the relation. Disabling the
-entitlement removes the relation; a revoked relation is not silently restored
-by observing the same generation again. -/
-structure PairingReaderPublication where
-  lastGrantedGeneration : Option Nat
-  readerGranted : Bool
-  deriving Repr, DecidableEq
+/-- A pairing reader is an explicit owner-staged grant or revocation of one
+native relation for one exact pairing document and one exact Agent
+(`ConfigAccess::set_pairing_reader`). The native relation is the read
+authority; nothing restores a revoked reader except another explicit grant,
+and an aborted change leaves the relation as it was. -/
+def setPairingReader (granted grant committed : Bool) : Bool :=
+  if committed then grant else granted
 
-def reconcilePairingReader (state : PairingReaderPublication)
-    (entitled ownerAuthorized committed : Bool) (generation : Nat) : PairingReaderPublication :=
-  if !committed then state
-  else if !entitled then { state with readerGranted := false }
-  else if ownerAuthorized && state.lastGrantedGeneration != some generation then
-    ⟨some generation, true⟩
-  else state
+theorem pairing_revocation_removes_the_reader (granted : Bool) :
+    setPairingReader granted false true = false := by
+  simp [setPairingReader]
 
-theorem pairing_reader_denial_never_grants (state : PairingReaderPublication)
-    (generation : Nat) :
-    (reconcilePairingReader state false true true generation).readerGranted = false := by
-  simp [reconcilePairingReader]
-
-theorem pairing_reader_revocation_is_not_refreshed (generation : Nat) :
-    reconcilePairingReader ⟨some generation, false⟩ true true true generation =
-      ⟨some generation, false⟩ := by simp [reconcilePairingReader]
-
-theorem pairing_reader_new_generation_requires_owner_authorization (generation : Nat) :
-    reconcilePairingReader ⟨none, false⟩ true false true generation = ⟨none, false⟩ := by
-  simp [reconcilePairingReader]
-
-theorem failed_pairing_reader_commit_is_unchanged (state : PairingReaderPublication)
-    (entitled ownerAuthorized : Bool) (generation : Nat) :
-    reconcilePairingReader state entitled ownerAuthorized false generation = state := by
-  simp [reconcilePairingReader]
+theorem failed_pairing_reader_commit_is_unchanged (granted grant : Bool) :
+    setPairingReader granted grant false = granted := by
+  simp [setPairingReader]
 
 /-- A document owner can attach a Node parent without proving that it is the
 Node named by the document. Native ownership and a parent tuple alone therefore
@@ -777,11 +756,14 @@ def readinessRecoveryEligible (pending : Bool) (runtime embeddedRuntime : DID) (
   pending && !runtime.isEmpty && runtime == embeddedRuntime && parentRegistered && nativeOwner == some runtime &&
     recordedParent.isSome && recordedParent == currentParent
 
+/-- Every repair attempt issues the parent grant again and marks the row only
+after that grant succeeds; a grant that fails on a retry stops the attempt
+before the mark, even when an earlier attempt's grant succeeded. -/
 def repairReadiness (state : ParentPublication) (runtime embeddedRuntime : DID) (parentRegistered : Bool)
     (nativeOwner recordedParent currentParent : Option String)
     (grantSucceeded markSucceeded : Bool) : ParentPublication :=
   if readinessRecoveryEligible (!state.parentLinked) runtime embeddedRuntime parentRegistered nativeOwner recordedParent currentParent then
-    repairParent state grantSucceeded markSucceeded
+    if grantSucceeded then repairParent state true markSucceeded else state
   else state
 
 theorem readiness_unknown_owner_cannot_repair (state : ParentPublication) (runtime embeddedRuntime : DID)
@@ -810,6 +792,16 @@ theorem readiness_unregistered_parent_cannot_repair (state : ParentPublication) 
       grantSucceeded markSucceeded = state := by
   simp [repairReadiness, readinessRecoveryEligible]
 
+/-- A native owner is a DID the store authenticated, so no readiness row is
+natively owned by an empty runtime DID; repair refuses one regardless. -/
+theorem readiness_empty_runtime_cannot_repair (state : ParentPublication) (embeddedRuntime : DID)
+    (parentRegistered : Bool) (nativeOwner recordedParent currentParent : Option String)
+    (grantSucceeded markSucceeded : Bool) :
+    repairReadiness state "" embeddedRuntime parentRegistered nativeOwner recordedParent currentParent
+      grantSucceeded markSucceeded = state := by
+  have empty : ("" : String).isEmpty = true := rfl
+  simp [repairReadiness, readinessRecoveryEligible, empty]
+
 theorem failed_readiness_grant_cannot_mark_complete :
     (repairReadiness beginParentPublication "runtime" "runtime" true (some "runtime")
       (some "node") (some "node") false true).parentLinked = false := by decide
@@ -818,8 +810,15 @@ theorem readiness_grant_survives_failed_marker :
     let first := repairReadiness beginParentPublication "runtime" "runtime" true (some "runtime")
       (some "node") (some "node") true false
     let second := repairReadiness first "runtime" "runtime" true (some "runtime")
-      (some "node") (some "node") false true
+      (some "node") (some "node") true true
     first.parentGranted = true ∧ first.parentLinked = false ∧ second.parentLinked = true := by decide
+
+theorem failed_retry_grant_cannot_mark_complete :
+    let first := repairReadiness beginParentPublication "runtime" "runtime" true (some "runtime")
+      (some "node") (some "node") true false
+    let second := repairReadiness first "runtime" "runtime" true (some "runtime")
+      (some "node") (some "node") false true
+    second.parentGranted = true ∧ second.parentLinked = false := by decide
 
 /-- A stale worker may have observed an incomplete marker before another
 worker completed publication and an owner revoked the grant. A detached ACP1
@@ -863,6 +862,18 @@ theorem readiness_marker_does_not_prove_current_relation :
 theorem readiness_unregistered_owner_is_unusable (o : ReadinessObservation)
     (missing : o.readinessOwner = none) : readinessObservationUsable o = false := by
   simp [readinessObservationUsable, missing]
+
+/-- External premise: `node_did` carries a unique index on both `Node` and
+`NodeReadiness`, and a readiness row's `node_doc_id` is immutable, so one store
+holds no second Node or readiness row for a runtime and no readiness row whose
+recorded parent was cleared; such an observation is unusable regardless. -/
+theorem readiness_duplicate_or_unparented_is_unusable (o : ReadinessObservation)
+    (excluded : o.nodeCount = 2 ∨ o.readinessCount = 2 ∨ (o.recordedParent = none ∧ o.nodeId.isSome)) :
+    readinessObservationUsable o = false := by
+  rcases excluded with h | h | ⟨h, hs⟩
+  · simp [readinessObservationUsable, h]
+  · simp [readinessObservationUsable, h]
+  · cases hn : o.nodeId <;> simp_all [readinessObservationUsable]
 
 theorem readiness_pending_is_unusable (o : ReadinessObservation)
     (pending : o.parentLinked = false) : readinessObservationUsable o = false := by

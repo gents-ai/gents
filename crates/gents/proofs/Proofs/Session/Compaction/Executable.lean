@@ -234,10 +234,9 @@ private instance (msgs : List MessageRow) : Decidable (StrictlyIncreasingMessage
       exact instDecidableAnd
 
 inductive Reducer where
-  | identity | strip | summarize | providerView
+  | strip | summarize | providerView
 
 def Reducer.name : Reducer → String
-  | .identity => "identity"
   | .strip => "strip"
   | .summarize => "summarize"
   | .providerView => "provider_view"
@@ -430,7 +429,6 @@ def reducerCase (name group : String) (reducer : Reducer)
         publishedObservation
     else none⟩
   let reduce := fun (input : PromptView) => match reducer with
-    | .identity => identityReducer input
     | .strip => { input with messages := strip sizes input.messages }
     | .summarize => summarize (fun _ => splitIndex) ⟨1⟩ input
     | .providerView => { input with messages := providerViewTurn sizes input.messages }
@@ -439,7 +437,7 @@ def reducerCase (name group : String) (reducer : Reducer)
   let reported := match reducer with
     | .strip => stripFigures sizes source
     | .providerView => providerViewFigures sizes source
-    | .identity | .summarize => ⟨0, 0, 0⟩
+    | .summarize => ⟨0, 0, 0⟩
   { name, group, reducer := reducer.name, legal := true
   , inputRows := source
   , inputSizes := table
@@ -451,7 +449,6 @@ def reducerCase (name group : String) (reducer : Reducer)
       (Transcript.StrictlyIncreasingMessages source →
        Transcript.StrictlyIncreasingMessages reduced.messages)
   , gateOpen := match reducer with
-      | .identity => some (@decide _ (IsValidReducer.decGate (r := identityReducer) view))
       | .summarize => some (@decide _ (IsValidReducer.decGate
           (r := summarize (fun _ => splitIndex) ⟨1⟩) view))
       | .strip | .providerView => none
@@ -484,10 +481,7 @@ def spoofedTurnSizes : List (Transcript.ToolResultKey × StubSizes) :=
   [(⟨0, 1, 37⟩, spoofedStubOutput), (⟨0, 2, 37⟩, largeOutput)]
 
 def compactionReducerCases : List CompactionReducerCase :=
-  [ reducerCase "identity_reducer_is_no_op" "witness" .identity 0 0
-  , reducerCase "identity_preserves_pair_atomicity" "witness" .identity 2 0
-  , reducerCase "identity_preserves_message_order" "witness" .identity 3 0
-  , reducerCase "strip_preserves_pair_atomicity" "witness" .strip 2 0
+  [ reducerCase "strip_preserves_pair_atomicity" "witness" .strip 2 0
   , reducerCase "strip_preserves_message_order" "witness" .strip 3 0
   , reducerCase "strip_is_strictly_idempotent" "witness" .strip 2 0
   , reducerCase "reduction_blocked_when_header_loading" "publication" .summarize 2 2 false
@@ -526,7 +520,7 @@ def compactionReducerCases : List CompactionReducerCase :=
       (some [⟨0, 0, 0, .assistant, .assistantToolCalls {fixtureCallSymbol}⟩,
              ⟨1, 0, 1, .user, .ordinary⟩]) ]
 
-theorem compactionReducerCases_count : compactionReducerCases.length = 27 := by decide
+theorem compactionReducerCases_count : compactionReducerCases.length = 24 := by decide
 
 theorem stable_published_prefix_gate_opens :
     (reducerCase "allowed" "publication" .summarize 4 2).safeToReduce = true := by

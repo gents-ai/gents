@@ -344,7 +344,7 @@ mod tests {
             })
             .await;
         account_reads.push(("visible-empty", empty.is_ok(), empty.ok()));
-        let unavailable = agent
+        let revoked = agent
             .transact_readonly("test.reset_account.revoked", |txn| {
                 Box::pin(async move {
                     super::runtime_oauth_account_served_before(
@@ -360,7 +360,7 @@ mod tests {
                 })
             })
             .await?;
-        assert!(!unavailable);
+        account_reads.push(("use-revoked", revoked, None));
         for case in gents_lean_vocab::families::household_runtime_default_account_read::cases() {
             let (_, allowed, selected) = account_reads
                 .iter()

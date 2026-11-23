@@ -166,6 +166,8 @@ impl ConfigAccess {
         delete: bool,
     ) -> Result<(), ConfigClientError> {
         crate::graphql::validate_collection_identifier(collection)?;
+        #[cfg(any(test, feature = "test-fixtures"))]
+        super::txn::before_relationship_change_for_test(None, collection, relation, delete)?;
         let grants_member_admin = !delete
             && collection == "Node"
             && relation == crate::identity::NODE_ADMINISTRATOR_RELATION

@@ -64,13 +64,20 @@ theorem failed_cas_excludes_child_commit :
 theorem child_commit_excludes_failure_cas :
     (run [.begin, .loseAck, .childCas, .otherFailureCas, .exactReceipt true]).knowledge = .confirmed := by decide
 
+/-- A foreign receipt, an invalid abort proof and a valid abort proof for a
+committed child each leave the caller unconfirmed. -/
+theorem unproven_finality_stays_unconfirmed :
+    [ run [.begin, .childCas, .loseAck, .exactReceipt false]
+    , run [.begin, .loseAck, .otherFailureCas, .abortEvidence false]
+    , run [.begin, .childCas, .loseAck, .abortEvidence true] ].map (·.knowledge) =
+      [.unconfirmed, .unconfirmed, .unconfirmed] := by decide
+
+/-- A served session-message commit can hold its native commit, race a
+competing failure against it, or lose its post-commit acknowledgement; these
+traces are the ones those three situations perform. -/
 def cases : List (String × List Action) :=
-  [ ("pending-is-unconfirmed", [.begin, .loseAck, .pendingRead, .begin])
-  , ("child-wins-after-pending-read", [.begin, .loseAck, .pendingRead, .childCas, .otherFailureCas, .exactReceipt true])
+  [ ("child-wins-after-pending-read", [.begin, .loseAck, .pendingRead, .childCas, .otherFailureCas, .exactReceipt true])
   , ("failure-wins-before-child", [.begin, .loseAck, .otherFailureCas, .childCas, .abortEvidence true])
-  , ("child-committed-ack-lost", [.begin, .childCas, .loseAck, .exactReceipt true])
-  , ("foreign-receipt", [.begin, .childCas, .loseAck, .exactReceipt false])
-  , ("no-proof-of-abort", [.begin, .loseAck, .otherFailureCas, .abortEvidence false])
-  , ("failure-proof-cannot-undo-child", [.begin, .childCas, .loseAck, .abortEvidence true]) ]
+  , ("child-committed-ack-lost", [.begin, .childCas, .loseAck, .exactReceipt true]) ]
 
 end Identity.DelegatedFinality

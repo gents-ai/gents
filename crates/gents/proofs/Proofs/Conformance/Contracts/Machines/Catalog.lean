@@ -1,7 +1,6 @@
 import Proofs.Conformance.Contracts.Machines.Request
 import Proofs.Conformance.Contracts.Machines.Process
 import Proofs.Conformance.Contracts.Machines.Persistence
-import Proofs.Conformance.Contracts.Machines.StorageObservation
 import Proofs.Conformance.Contracts.Machines.RuntimeReconcile
 import Proofs.Conformance.Contracts.Machines.SessionRecovery
 import Proofs.Conformance.Contracts.Machines.InferenceCall
@@ -21,7 +20,6 @@ attribute [conformance_vocabulary] ReconcilePhase.toDefraDB
 attribute [conformance_vocabulary] InferenceCallTerminalReason.toDefraDB
 attribute [conformance_vocabulary] ToolExecution.ToolCallState.toDefraDB
 attribute [conformance_vocabulary] ToolExecution.CancelCause.toDefraDB
-attribute [conformance_vocabulary] ManagedExecState.toDefraDB
 attribute [conformance_vocabulary] ManagedExec.StopOutcome.toContract
 attribute [conformance_vocabulary] ManagedExec.CancelReply.toContract
 attribute [conformance_vocabulary] ToolExecution.FailureClass.toDefraDB
@@ -40,10 +38,6 @@ namespace Conformance.Contracts
 def stateMachines : List StateMachineContract :=
   [ requestMachine
   , processMachine
-  , persistenceMachine "Persistence.failClosed" .failClosed
-  , persistenceMachine "Persistence.failOpen" .failOpen
-  , storageObservationMachine "StorageObservation.failClosed" .failClosed
-  , storageObservationMachine "StorageObservation.failOpen" .failOpen
   , runtimeReconcileMachine
   , sessionRecoveryMachine
   , inferenceCallMachine

@@ -146,31 +146,43 @@ theorem task_request_commits_exact_parents (state : Household.State)
       ⟨"delivered_requests", request, "session", .object "sessions" session⟩ ::
       state.relations := by simp [commitTaskRequest]
 
-/-- A completed fire is an admitted arrival only when the checkpoint actor can
-read its request. The node DID is not a substitute for the selected Agent's
-authority; the other prefix and cursor conditions remain native prerequisites. -/
-def checkpointTaskArrival (state : Household.State) (actor request : String)
+/-- A completed fire is an admitted arrival only when the checkpoint actor is
+the consumer's currently selected Agent and can read its request
+(`event_consumer::checkpoint_prefix` refuses any other actor). The node DID, the
+owning User and a formerly selected Agent are not substitutes for the selected
+Agent's authority; the other prefix and cursor conditions remain native
+prerequisites. -/
+def checkpointTaskArrival (state : Household.State) (actor selected request : String)
     (receipt prefixComplete cursorWritable : Bool) (cursor through : Nat) : Nat :=
-  if receipt && prefixComplete && cursorWritable &&
+  if actor == selected && receipt && prefixComplete && cursorWritable &&
       Household.allowed 5 state actor "delivered_requests" request "read"
     then max cursor through else cursor
 
-theorem invisible_task_cannot_advance (state : Household.State) (actor request : String)
+theorem unselected_actor_cannot_advance (state : Household.State)
+    (actor selected request : String) (receipt prefixComplete cursorWritable : Bool)
+    (cursor through : Nat) (different : actor ≠ selected) :
+    checkpointTaskArrival state actor selected request receipt prefixComplete cursorWritable
+      cursor through = cursor := by
+  simp [checkpointTaskArrival, different]
+
+theorem invisible_task_cannot_advance (state : Household.State) (actor selected request : String)
     (receipt prefixComplete cursorWritable : Bool) (cursor through : Nat)
     (hidden : Household.allowed 5 state actor "delivered_requests" request "read" = false) :
-    checkpointTaskArrival state actor request receipt prefixComplete cursorWritable cursor through = cursor := by
+    checkpointTaskArrival state actor selected request receipt prefixComplete cursorWritable
+      cursor through = cursor := by
   simp [checkpointTaskArrival, hidden]
 
 theorem visible_task_advances_complete_prefix (state : Household.State) (actor request : String)
     (cursor through : Nat)
     (visible : Household.allowed 5 state actor "delivered_requests" request "read" = true) :
-    checkpointTaskArrival state actor request true true true cursor through = max cursor through := by
+    checkpointTaskArrival state actor actor request true true true cursor through =
+      max cursor through := by
   simp [checkpointTaskArrival, visible]
 
 theorem checkpoint_task_duplicate_is_idempotent (state : Household.State) (actor request : String)
     (cursor : Nat)
     (visible : Household.allowed 5 state actor "delivered_requests" request "read" = true) :
-    checkpointTaskArrival state actor request true true true cursor cursor = cursor := by
+    checkpointTaskArrival state actor actor request true true true cursor cursor = cursor := by
   simp [checkpointTaskArrival, visible]
 
 /-- Trigger combines configuration and runtime observations in one document.

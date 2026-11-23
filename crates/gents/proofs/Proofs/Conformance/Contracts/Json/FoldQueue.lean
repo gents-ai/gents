@@ -395,16 +395,6 @@ def publicationUnsafeBoundary : Family PublicationInput UnsafeBoundaryObservatio
   model := fun i =>
     { accepted := ((publicationRun i.steps).bind List.getLast?).map (·.accepted) |>.getD true }
 
-/-- model-production-gap: the served writer fixture has no unsafe provider-stream
-boundary and the owned loop has no durable queue, so the per-step queue and
-authored-key observations of the unsafe boundary scripts are not replayed;
-publication_unsafe_boundary replays their refused intake through the loop. -/
-@[conformance_family]
-def publicationUnsafeBoundaryUnreached :
-    Family PublicationInput (Option (List PublicationObservation)) where
-  inputs := unsafePublicationCases.map PublicationInput.ofCase
-  model := (publicationRun ·.steps)
-
 example : unsafePublicationCases.map (·.1) =
     ["streaming_boundary_does_not_take_input", "natural_completion_during_stream_refuses"] := by
   native_decide
@@ -565,7 +555,7 @@ def managementExpiredIntake : Family ManagementInput (Option QueueImageWire) whe
     ManagementInput.ofCase
   model := managementAfter
 
-/-- model-production-gap: the signed replacement owner generates replacement
+/-- The signed replacement owner generates replacement
 request IDs and slots itself, and intake at an unsafe stream boundary, from a
 stale head observation, behind an unadmitted, queued, foreign or agent-authored
 row has no served fixture; steering publication and the owned loop replay the
@@ -836,7 +826,7 @@ def inputEditIdenticalRepublish : Family InputEditCaseWire (Option EndpointObser
   inputs := inputEditCasesNamed ["exact_replay_after_expiry"]
   model := endpointObservation
 
-/-- model-production-gap: `process_command` leaves a command unanswered when
+/-- `process_command` leaves a command unanswered when
 another physical command shares its ID, but no production path stores two.
 Locally the unique `command_id` index (agent_session_input_edit.graphql:5)
 refuses the second create. A twin could only arrive by replication, where

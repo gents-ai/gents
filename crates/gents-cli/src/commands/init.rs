@@ -2866,26 +2866,40 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn fresh_init_grants_native_operations_once_without_regranting_revocation() {
+        use std::os::unix::fs::PermissionsExt;
         for case in gents_lean_vocab::families::node_provisioning_bootstrap_grant::cases() {
             let temp = tempfile::tempdir().unwrap();
             let home = temp.path().join("home");
+            let data = default_data_dir(&home);
+            let marker = home.join(BOOTSTRAP_CONSUMED_FILE_NAME);
+            fs::create_dir_all(&home).unwrap();
             if !case.input.fresh_evidence {
-                fs::create_dir_all(&home).unwrap();
-                fs::write(home.join(BOOTSTRAP_CONSUMED_FILE_NAME), b"").unwrap();
+                fs::write(&marker, b"").unwrap();
             }
-            let granted = match initialize_disposable_home(&home, false).await {
+            if !case.input.store_empty_observed {
+                fs::create_dir_all(&data).unwrap();
+                fs::write(data.join("stray"), b"not fresh").unwrap();
+            }
+            let holder = if case.input.exclusive {
+                None
+            } else {
+                Some(lock_init_store(&home, &data, false).await.unwrap())
+            };
+            if !case.input.reservation_durable {
+                fs::set_permissions(&home, fs::Permissions::from_mode(0o300)).unwrap();
+            }
+            let initialized = initialize_disposable_home(&home, false).await;
+            fs::set_permissions(&home, fs::Permissions::from_mode(0o700)).unwrap();
+            drop(holder);
+            let granted = match initialized {
                 Ok(initial) => fresh_init_grants_and_keeps_revocation(&home, &initial).await,
                 Err(error) => {
                     assert!(
-                        format!("{error:#}").contains("bootstrap was already attempted"),
+                        !data.join("MANIFEST").exists(),
                         "{}: {error:#}",
-                        case.input.name
-                    );
-                    assert!(
-                        !default_data_dir(&home).join("MANIFEST").exists(),
-                        "{}",
                         case.input.name
                     );
                     false

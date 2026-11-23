@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
 use serde::Deserialize;
@@ -43,8 +43,6 @@ where
     deserializer.deserialize_map(Pairs(std::marker::PhantomData))
 }
 
-pub type LeanFeatureMatrix = BTreeMap<String, BTreeMap<String, LeanFeatureMatrixCell>>;
-
 #[derive(Debug, Clone, Copy)]
 pub struct LeanVocabulary<'a> {
     pub lean_file: &'a str,
@@ -74,6 +72,7 @@ pub mod canonical_wire;
 pub mod claude_replay;
 pub mod consumer_scan;
 pub mod family;
+pub mod module_tree;
 mod plugin_job_wire;
 mod request_input_wire;
 mod session_turn_wire;
@@ -121,10 +120,10 @@ pub fn lean_contract_snapshot() -> &'static LeanContractSnapshot {
 ///
 /// The load builds and runs the Lean model with `lake`, synchronously, for as
 /// long as the machine takes, minutes when Lean recompiles. Run on a
-/// `#[tokio::test]` runtime's only thread, it starved the execution lease
-/// renewal of a test that had claimed a request, and the fence rejected its
-/// next producer action (`LeaseRenewalStarvation.tla`, `SyncInsideLease`;
-/// #3704, #3891, #3892). Off the runtime it is the model's `OffRuntime`
+/// `#[tokio::test]` runtime's only thread, it starves the execution lease
+/// renewal of a test that has claimed a request, and the fence rejects its
+/// next producer action (`LeaseRenewalStarvation.tla`, `SyncInsideLease`).
+/// Off the runtime it is the model's `OffRuntime`
 /// configuration. The load stays lazy so only tests that read the model run
 /// `lake` and depend on the proofs.
 pub async fn snapshot() -> &'static LeanContractSnapshot {

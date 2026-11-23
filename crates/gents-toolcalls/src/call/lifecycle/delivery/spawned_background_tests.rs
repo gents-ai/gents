@@ -65,16 +65,8 @@ fn generated_terminal_diagnostic_cases_bind_native_presentation() {
         },
     };
     gents_lean_vocab::families::terminal_diagnostic_contracts_presentation_plan::replay(|i| {
-        let (Ok(raw), Ok(cause)) = (
-            String::from_utf8(modeled_bytes(&i.raw)),
-            String::from_utf8(modeled_bytes(&i.cause)),
-        ) else {
-            return PlanOutput {
-                kind: "invalid_utf8".into(),
-                presentation: None,
-                rendered: None,
-            };
-        };
+        let raw = String::from_utf8(modeled_bytes(&i.raw)).expect("modeled raw output is UTF-8");
+        let cause = String::from_utf8(modeled_bytes(&i.cause)).expect("modeled cause is UTF-8");
         let budget = usize::try_from(i.tail_budget).expect("modeled tail budget");
         match terminal_diagnostic_presentation(&raw, &cause, budget) {
             Ok(actual) => PlanOutput {

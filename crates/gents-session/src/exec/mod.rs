@@ -14,42 +14,5 @@ pub use process::{
     SpawnManagedProcessRequest,
 };
 
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ManagedExecState {
-    PendingSpawn,
-    Running,
-    Exited,
-    KillSignaled,
-    Killed,
-    SpawnFailed,
-    ReapFailed,
-}
-
-#[cfg(test)]
-impl ManagedExecState {
-    pub(crate) const ALL: [Self; 7] = [
-        Self::PendingSpawn,
-        Self::Running,
-        Self::Exited,
-        Self::KillSignaled,
-        Self::Killed,
-        Self::SpawnFailed,
-        Self::ReapFailed,
-    ];
-
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::PendingSpawn => "pendingSpawn",
-            Self::Running => "running",
-            Self::Exited => "exited",
-            Self::KillSignaled => "killSignaled",
-            Self::Killed => "killed",
-            Self::SpawnFailed => "spawnFailed",
-            Self::ReapFailed => "reapFailed",
-        }
-    }
-}
-
 #[cfg(windows)]
 pub use process::FailedJobOwner;

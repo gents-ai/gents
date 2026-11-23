@@ -201,15 +201,6 @@ def callAdmissions : Family CallAccessInput AdmissionOutput where
   model := fun i =>
     { admitted := pluginCallAdmitted i.declared i.granted i.writeFields i.setsWriteField }
 
-/-- model-production-gap: a declaration that names write fields under read
-access fails validation, so no plugin with it is installed and bind admission
-is never reached for it; the model still decides its admission. -/
-@[conformance_family]
-def callAdmissionsUnreached : Family CallAccessInput AdmissionOutput where
-  inputs := callAccessInputs.filter fun i => !pluginBindingValid i.declared i.writeFields
-  model := fun i =>
-    { admitted := pluginCallAdmitted i.declared i.granted i.writeFields i.setsWriteField }
-
 deriving instance ToJson for PluginInvocation.Record
 
 structure InvocationInput where

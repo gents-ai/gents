@@ -106,7 +106,7 @@ def managedExecLivenessTool : Family ManagedExecLivenessInput ManagedExecLivenes
   model := fun i => { toolState := i.post.tool.state.toDefraDB }
 
 deriving instance Lean.ToJson for ToolExecution.SchemaStatus, ToolExecution.ToolOperation,
-  ToolExecution.IdempotencyEvidence, ToolExecution.RetryDisposition
+  ToolExecution.RetryDisposition
 
 structure ToolPreflightInput where
   name : String
@@ -144,46 +144,23 @@ def toolPreflightDiscover : Family ToolPreflightInput String where
 structure ToolRetryInput where
   name : String
   operation : ToolExecution.ToolOperation
-  idempotency : ToolExecution.IdempotencyEvidence
-  failureClass : String
   deriving Lean.ToJson
 
-def ToolRetryInput.ofCase (c : ToolExecution.RetryCase) : ToolRetryInput :=
-  { name := c.name, operation := c.operation, idempotency := c.idempotency
-    failureClass := c.failure.toDefraDB }
+def toolRetryInputs (operation : ToolExecution.ToolOperation) : List ToolRetryInput :=
+  (ToolExecution.retryCases.filter (·.operation == operation)).map fun c =>
+    { name := c.name, operation := c.operation }
 
-def toolRetryDisposition (i : ToolRetryInput) : ToolExecution.RetryDisposition :=
-  match ToolExecution.FailureClass.all.find? (·.toDefraDB == i.failureClass) with
-  | some failure => ToolExecution.retryDisposition i.operation i.idempotency failure
-  | none => .doNotRetry
-
-def toolRetryReached (c : ToolExecution.RetryCase) (operation : ToolExecution.ToolOperation) :
-    Bool :=
-  c.operation == operation && c.idempotency == .unknown && c.failure == .transport
-
-/-- The MCP pool's `list_tools` path: a transport failure without idempotency
-evidence. -/
+/-- The MCP pool's `list_tools` path. -/
 @[conformance_family]
 def toolRetryListTools : Family ToolRetryInput ToolExecution.RetryDisposition where
-  inputs := (ToolExecution.retryCases.filter (toolRetryReached · .mcpListTools)).map .ofCase
-  model := toolRetryDisposition
+  inputs := toolRetryInputs .mcpListTools
+  model := fun i => ToolExecution.retryDisposition i.operation
 
-/-- The MCP pool's `call_tool` path: a transport failure after dispatch without
-idempotency metadata. -/
+/-- The MCP pool's `call_tool` path. -/
 @[conformance_family]
 def toolRetryCall : Family ToolRetryInput ToolExecution.RetryDisposition where
-  inputs := (ToolExecution.retryCases.filter (toolRetryReached · .mcpCall)).map .ofCase
-  model := toolRetryDisposition
-
-/-- model-production-gap: production has no retry classifier; the MCP pool
-retries a `list_tools` transport failure and never retries `call_tool`, and no
-production path carries idempotency evidence or the other operations and
-failure classes. -/
-@[conformance_family]
-def toolRetryUnreached : Family ToolRetryInput ToolExecution.RetryDisposition where
-  inputs := (ToolExecution.retryCases.filter fun c =>
-    !toolRetryReached c .mcpListTools && !toolRetryReached c .mcpCall).map .ofCase
-  model := toolRetryDisposition
+  inputs := toolRetryInputs .mcpCall
+  model := fun i => ToolExecution.retryDisposition i.operation
 
 structure McpHealthInput where
   name : String
