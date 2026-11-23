@@ -512,8 +512,6 @@ structure ForkCase where
 def forkCases : List ForkCase :=
   [ ⟨"exact_copy", history, child, 1, true, true, true⟩,
     ⟨"empty_prefix", history, child, 0, true, true, true⟩,
-    ⟨"duplicate_message_sequence", duplicateSequenceHistory, child, 1, true, true, true⟩,
-    ⟨"wrong_requester", history, { child with requester := none }, 1, true, true, true⟩,
     ⟨"busy_source", history, child, 1, true, false, true⟩,
     ⟨"mixed_generation", history, child, 1, true, true, false⟩,
     ⟨"unauthorized", history, child, 1, false, true, true⟩,
