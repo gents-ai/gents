@@ -134,12 +134,11 @@ example : backgroundWakeRowsCases.all (fun c =>
     publicationOf (WakeRowsInput.toCase (WakeRowsInput.ofCase c)) == publicationOf c) = true := by
   native_decide
 
-/-- model-production-gap: background publication still redrives a failed wake
-through its pre-migration owner; no production path publishes the successor
-from exact physical-parent and cross-requester authoritative rows, so these
-row verdicts are checked in the model alone. -/
+/-- Each case is one failed background wake the recovery owner redrives in one
+transaction over the session's authoritative rows. The successor's ids and
+creation time name the ones publication assigns. -/
 @[conformance_family]
-def backgroundWakeRowsUnreached : Conformance.Family WakeRowsInput (Option WakePublication) where
+def backgroundWakeRows : Conformance.Family WakeRowsInput (Option WakePublication) where
   inputs := backgroundWakeRowsCases.map WakeRowsInput.ofCase
   model := fun i => publicationOf (WakeRowsInput.toCase i)
 

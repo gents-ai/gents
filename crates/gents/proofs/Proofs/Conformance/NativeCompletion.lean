@@ -16,9 +16,9 @@ def cases : List Case :=
       [.nativeStarted, .callerTimedOut, .rollbackReturned, .gateReleaseRequested]⟩
   , ⟨"cancel_keeps_native_live_and_blocks_retry", true, false,
       [.nativeStarted, .callerCancelled, .retryRequested]⟩
-  , ⟨"drain_then_rollback_then_release", true, false,
+  , ⟨"drain_then_deferred_rollback_then_drop_releases", true, false,
       [.nativeStarted, .callerTimedOut, .nativeReturned, .rollbackReturned,
-        .gateReleaseRequested]⟩
+        .gateReleaseRequested, .registryAbandoned, .gateReleaseRequested]⟩
   , ⟨"auto_commit_gate_waits_for_native_return", false, false,
       [.nativeStarted, .callerTimedOut, .gateReleaseRequested, .nativeReturned,
         .gateReleaseRequested]⟩
@@ -146,13 +146,13 @@ structure TraceView where
   retryStarted : Bool
   deriving ToJson
 
-/-- model-production-gap: these transactional traces drive an explicit
-rollback or a retry on a timed-out or cancelled transaction while native work
-is outstanding; no served scenario blocks a transaction statement, observes
-the rollback owner's return and then retries, so only the auto-commit,
-registry-abandonment and renewal traces reach production. -/
+/-- The embedded transactions whose caller times out or is cancelled while a
+native statement is outstanding: after each event the driver reads the
+caller's result, the native tracker, whether the transaction's native owner is
+gone, whether an explicit rollback returned, the gate and whether the tracker
+admits a new operation. -/
 @[conformance_family]
-def traceUnreached : Family TraceInput (List TraceView) where
+def transactionTrace : Family TraceInput (List TraceView) where
   inputs := (cases.filter fun c => c.transactional && !c.periodicRenewal &&
     c.name != "registry_abandonment_retains_gate_until_all_native_returns").map TraceInput.ofCase
   model := fun i => (stateAfterEvents i.toCase).map fun s =>
