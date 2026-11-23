@@ -303,10 +303,11 @@ async fn interruptible<T>(
             return None;
         }
         tokio::select! {
-            result = &mut future => return Some(result),
+            biased;
             changed = shutdown.changed() => {
                 if stop_for_shutdown(*shutdown.borrow(), changed.is_err()) { return None; }
             }
+            result = &mut future => return Some(result),
         }
     }
 }
@@ -503,6 +504,15 @@ impl ConfigAccess {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_closed_shutdown_channel_prevents_a_ready_callback() {
+        let (sender, mut receiver) = tokio::sync::watch::channel(false);
+        drop(sender);
+        let mut shutdown = Some(&mut receiver);
+        let callback = async { panic!("callback ran after shutdown closed") };
+        assert_eq!(interruptible::<()>(callback, &mut shutdown).await, None);
+    }
 
     #[tokio::test]
     async fn false_shutdown_update_preserves_the_pending_callback() {
