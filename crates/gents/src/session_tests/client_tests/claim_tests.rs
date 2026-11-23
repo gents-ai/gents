@@ -828,6 +828,38 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
             "process_stop",
         )
     };
+    /// What the claim's checks before its native owner check observe of a
+    /// stored intent, read as `access`: the one row it reads, the Agent that row
+    /// names, and the native owners the claim transaction reports for it.
+    async fn observed_intent(access: &ConfigAccess, doc: &str) -> (String, Vec<Option<String>>) {
+        let rows = access
+            .execute(&format!(
+                r#"{{ AgentToolControl(filter: {{ _docID: {{ _eq: "{doc}" }} }}) {{ agent_did state }} }}"#
+            ))
+            .await
+            .unwrap();
+        let rows = rows["data"]["AgentToolControl"].as_array().unwrap().clone();
+        let [row] = rows.as_slice() else {
+            panic!("the claimant reads exactly one intent row: {rows:?}");
+        };
+        assert_eq!(row["state"], "pending");
+        let owners = access
+            .transact_readonly("test.control.intent_owner", |txn| {
+                Box::pin(async move {
+                    txn.document_owners("AgentToolControl", &[doc.to_owned()])
+                        .await
+                })
+            })
+            .await
+            .unwrap();
+        (
+            row["agent_did"].as_str().unwrap().to_owned(),
+            owners
+                .into_iter()
+                .map(|observed| observed.owner.map(|did| did.as_str().to_owned()))
+                .collect(),
+        )
+    }
     let second_agent: identity::Did = second_binding.agent_did.parse().unwrap();
     let second_identity =
         gents_store::identity::resolve_agent_identity(runtime.as_ref(), &second_binding).unwrap();
@@ -839,6 +871,8 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     .unwrap();
     let other_claimant =
         persist_intent(&user_access, &held_intent().await.unwrap(), &second_agent).await;
+    let (named, _) = observed_intent(&second_access, &other_claimant).await;
+    assert_ne!(named, second_agent.as_str(), "the row names another Agent");
     claims.push((
         ("other", Some("client"), "call", "doc", true, true, true, 0),
         claim(&node, &second_access, &second_agent, &other_claimant)
@@ -865,6 +899,12 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
         })
         .await
         .expect("an intent row with no native owner");
+    let (named, owners) = observed_intent(&agent_access, &unowned).await;
+    assert_eq!(named, agent.as_str());
+    assert!(
+        owners.iter().all(Option::is_none),
+        "the claim observes no native owner: {owners:?}"
+    );
     claims.push((
         ("agent", None, "call", "doc", true, true, true, 0),
         claim(&node, &agent_access, &agent, &unowned)
@@ -874,6 +914,9 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     ));
     let foreign_owned =
         persist_intent(&foreign_access, &held_intent().await.unwrap(), &agent).await;
+    let (named, owners) = observed_intent(&agent_access, &foreign_owned).await;
+    assert_eq!(named, agent.as_str());
+    assert_eq!(owners, [Some(foreign.did().to_owned())]);
     claims.push((
         ("agent", Some("other"), "call", "doc", true, true, true, 0),
         claim(&node, &agent_access, &agent, &foreign_owned)
@@ -884,6 +927,9 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     let mut other_call = held_intent().await.unwrap();
     other_call.tool_call_id = "other-call".into();
     let other_call = persist_intent(&user_access, &resigned(&user, other_call).await, &agent).await;
+    let (named, owners) = observed_intent(&agent_access, &other_call).await;
+    assert_eq!(named, agent.as_str());
+    assert_eq!(owners, [Some(user.did().to_owned())]);
     claims.push((
         ("agent", Some("client"), "other", "doc", true, true, true, 0),
         claim(&node, &agent_access, &agent, &other_call)
@@ -894,6 +940,9 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     let mut other_doc = held_intent().await.unwrap();
     other_doc.tool_call_doc_id = session_doc.clone();
     let other_doc = persist_intent(&user_access, &resigned(&user, other_doc).await, &agent).await;
+    let (named, owners) = observed_intent(&agent_access, &other_doc).await;
+    assert_eq!(named, agent.as_str());
+    assert_eq!(owners, [Some(user.did().to_owned())]);
     claims.push((
         (
             "agent",
