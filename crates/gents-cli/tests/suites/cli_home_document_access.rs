@@ -204,9 +204,9 @@ async fn publish_test_peer(
     let response: Value = access.transact_write("test.shared_peer_publication", |txn| {
         let variables = variables.clone();
         Box::pin(async move {
-            txn.execute_client_signed_create(
+            txn.execute_with_variables(
                 "mutation($input: PeerRegistryMutationInputArg!) { create_PeerRegistry(input: $input) { _docID } }",
-                &variables, gents_protocol::schemas::PEER_REGISTRY,
+                &variables,
             ).await
         })
     }).await.map_err(anyhow::Error::from)?;
@@ -319,9 +319,7 @@ async fn paired_home_reopens_against_the_original_vera_deployment() -> Result<()
         follower_key.client_signing_capability()?,
     );
     let access = gents_store::config_client::ConfigAccess::Graphql(
-        endpoints
-            .endpoint(follower_did, &graphql)?
-            .with_client_signed_agent_creates(),
+        endpoints.endpoint(follower_did, &graphql)?,
     );
     anyhow::ensure!(access.transport_publisher_node().await?.as_deref() == Some(publisher_node));
     let peer_id = Uuid::new_v4().to_string();
@@ -349,9 +347,7 @@ async fn paired_home_reopens_against_the_original_vera_deployment() -> Result<()
         "after both devices restarted",
     )?;
     let resumed = gents_store::config_client::ConfigAccess::Graphql(
-        endpoints
-            .endpoint(follower_did, &graphql)?
-            .with_client_signed_agent_creates(),
+        endpoints.endpoint(follower_did, &graphql)?,
     );
     let selection = format!(
         r#"{{ PeerRegistry(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID publisher_node_id }} }}"#,
