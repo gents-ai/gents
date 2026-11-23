@@ -33,6 +33,7 @@ fn vera_refuses_another_identity() -> defra_node::Error {
 fn deployment(consensus_key: &str) -> Deployment {
     Deployment {
         consensus_key: consensus_key.into(),
+        connection: Default::default(),
     }
 }
 
@@ -74,5 +75,22 @@ fn reopening_matches_the_lean_model() {
             kind => panic!("{input:?}: {kind:?}"),
         });
         family::Reopened { reopening, refusal }
+    });
+}
+
+#[test]
+fn initial_operator_policy_matches_the_home() {
+    let account =
+        identity::Did::new("did:key:z6MkeXBLjYiSvqnhFb6D7sHm8yKm4jV45wwBFRaatf1cfZ76").unwrap();
+    let device = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+    gents_lean_vocab::families::document_acp_choice_initial_operator_threshold::replay(|input| {
+        let deployment = super::deployment(device, input.shared.then_some(&account));
+        let expected = if input.shared {
+            vec![account.as_str(), device]
+        } else {
+            vec![device]
+        };
+        assert_eq!(deployment.operator_keys, expected);
+        deployment.threshold.into()
     });
 }

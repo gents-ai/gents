@@ -189,3 +189,76 @@ async fn a_new_vera_home_serves_with_its_client_owned_device_group() -> Result<(
     anyhow::ensure!(readiness["status"] == "serving", "{readiness}");
     stop(serve).await
 }
+
+/// The follower reopens with its own node key and the host's provisioned trust.
+#[cfg(feature = "vera")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn paired_home_reopens_against_the_original_vera_deployment() -> Result<()> {
+    let host = tempfile::tempdir()?;
+    let follower = tempfile::tempdir()?;
+    let model = MockChatEndpoint::start("paired-home", REPLY)?;
+    let port = allocate_port()?.to_string();
+    let init_args = [
+        "--model-name",
+        "paired-home",
+        "--inference-url",
+        model.endpoint(),
+        "--document-acp",
+        "vera",
+        "--vera-rpc-port",
+        &port,
+    ];
+    let mut host_args = init_args.to_vec();
+    host_args.push("--create-transport-group");
+    let provisioned = run_init_json(host.path(), &host_args)?;
+    let home = provisioned["home"].as_str().context("host home path")?;
+    let data = gents_store::local::home::default_data_dir(Path::new(home));
+    let genesis: Value =
+        serde_json::from_slice(&fs::read(data.join("vera/node/solo-genesis.json"))?)?;
+    let account = provisioned["transport_group"]["account"]
+        .as_str()
+        .context("transport group owner")?;
+    let device = node_did_from_init(&provisioned)?;
+    let mut operators = [account, device.as_str()];
+    operators.sort_unstable();
+    anyhow::ensure!(
+        genesis["operators"] == serde_json::json!({"threshold": 2, "keys": operators}),
+        "shared genesis must require the account and the device"
+    );
+    let anchor = host.path().join("follower-anchor.json");
+    fs::write(
+        &anchor,
+        serde_json::to_vec(
+            provisioned
+                .get("vera_anchor")
+                .context("host must export its verified deployment identity")?,
+        )?,
+    )?;
+    let (active, _) = served(host.path()).await?;
+    let mut paired = init_args.to_vec();
+    paired.extend([
+        "--vera-anchor",
+        anchor.to_str().context("temporary file path")?,
+    ]);
+    let initialized = run_init_json(follower.path(), &paired)?;
+    anyhow::ensure!(
+        node_did_from_init(&initialized)? != node_did_from_init(&provisioned)?,
+        "the follower must retain its own signing identity"
+    );
+    fs::remove_file(&anchor)?;
+    let (serving, graphql) = served(follower.path()).await?;
+    prompted(follower.path(), "record a session on the paired device")?;
+    let first = sessions(follower.path(), Some(&graphql))?;
+    anyhow::ensure!(!first.is_empty(), "the paired device has no sessions");
+    stop(serving).await?;
+    stop(active).await?;
+    let (active, _) = served(host.path()).await?;
+    let (serving, graphql) = served(follower.path()).await?;
+    kept(
+        &first,
+        &sessions(follower.path(), Some(&graphql))?,
+        "after both devices restarted",
+    )?;
+    stop(serving).await?;
+    stop(active).await
+}

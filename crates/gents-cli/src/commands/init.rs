@@ -252,6 +252,12 @@ pub(crate) async fn init_home_with_core_packs(
     let document_acp =
         admit_document_acp(&home_dir, args.document_acp, args.identity_backend, true)?;
 
+    if args.vera_rpc_port.is_some() {
+        anyhow::ensure!(
+            fresh_store && !document_acp.is_local() && !args.identity_only,
+            "--vera-rpc-port requires initializing a fresh Vera home"
+        );
+    }
     if args.create_transport_group {
         anyhow::ensure!(
             fresh_store,
@@ -352,6 +358,24 @@ pub(crate) async fn init_home_with_core_packs(
     } else {
         gents_service::home_state::client_identity_in(&home_dir, &client_identity.paths).await?
     };
+    use gents_store::local::document_acp::VeraConnection;
+    let connection = if let Some(port) = args.vera_rpc_port {
+        if let Some(path) = &args.vera_anchor {
+            let bytes = tokio::fs::read(path)
+                .await
+                .with_context(|| format!("reading the Vera anchor at {}", path.display()))?;
+            let anchor = serde_json::from_slice(&bytes)
+                .with_context(|| format!("invalid Vera anchor at {}", path.display()))?;
+            VeraConnection::Follower { port, anchor }
+        } else {
+            VeraConnection::Host {
+                port,
+                account: identity::Did::new(client_identity.did())?,
+            }
+        }
+    } else {
+        VeraConnection::Solo
+    };
     let initialized_identity = load_or_create_home_identity(HomeIdentityOptions {
         home: &home_dir,
         node_name: &args.node_name,
@@ -401,11 +425,12 @@ pub(crate) async fn init_home_with_core_packs(
     .await?;
     if let Some(fresh_backend) = fresh_backend {
         fresh_backend
-            .initialize(
+            .initialize_with_connection(
                 &store_key,
                 &initialized_identity.identity,
                 &identity::Did::new(client_identity.did())?,
                 document_acp,
+                &connection,
             )
             .await?;
     }
@@ -612,6 +637,12 @@ pub(crate) async fn init_home_with_core_packs(
             ),
             "init": summary,
         });
+        #[cfg(feature = "vera")]
+        if matches!(connection, VeraConnection::Host { .. }) {
+            let anchor = gents_store::local::document_acp::VeraDeploymentAnchor::from_host(&init_node)
+                .context("hosted Vera deployment has no verified genesis")?;
+            output["vera_anchor"] = serde_json::to_value(anchor)?;
+        }
         if let Some(group) = transport_group {
             output["transport_group"] = group;
         }
@@ -3397,6 +3428,8 @@ mod tests {
             secure_enclave_label: None,
             store_key_custody: Some(gents_host::args::StoreKeyCustodyArg::File),
             document_acp: None,
+            vera_rpc_port: None,
+            vera_anchor: None,
             create_transport_group: false,
             inference_endpoint: None,
             backend_id: None,

@@ -64,11 +64,22 @@ Registry, endpoint, directory and enrollment operations check membership again
 when they run. Revoking the runtime's membership stops subsequent publication.
 A Vera home started without the account option leaves peer publication idle.
 
-Each Vera home hosts its own deployment. The runtime derives the deployment ID
-from its Node DID, uses that DID as its sole operator, and talks to Vera in
-process. The transport group controls which devices may publish. Enrolling a
-second home in the group leaves each home's deployment and worker intact.
-[Embedded deployment configuration](crates/gents-store/src/local/document_acp/embedded_vera.rs)
+By default a Vera home runs in process with its Node as the sole operator.
+To share a deployment, initialize the host with `--document-acp vera
+--vera-rpc-port 9841`. Its account and Node are the initial operators, and
+administrative changes require both signatures. Save the `vera_anchor` object
+from the initialization result and give it to the second device over an
+authenticated channel. It identifies the deployment, its consensus key and
+its genesis.
+
+Start the host before initializing the follower. On the second device, make
+a private route from a local loopback port to the host's loopback port.
+Initialize a fresh follower with `--document-acp vera --vera-rpc-port 9841
+--vera-anchor host-anchor.json`, using the local end of that route as the
+port. The follower keeps its own signing identity, worker journal and
+encrypted keyring. On restart it reads the saved deployment identity from
+its home and verifies the host again. The route must still be available.
+Transport publication also requires membership in the account's device group.
 
 ## Read the documents assigned to a node
 

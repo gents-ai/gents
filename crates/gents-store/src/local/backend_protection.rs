@@ -72,6 +72,8 @@ pub enum BackendProtectionError {
     NodeAcpRead(#[source] db::nac::Error),
     #[error("node access control must be owned by the home's User, not its Node")]
     NodeOwnedNodeAcp,
+    #[error("the shared Vera operator must be the home’s account")]
+    WrongVeraAccount,
     #[error("the store could not be checked on a copy; the original was not opened")]
     CopyCheck(#[source] Box<super::store_compat::StoreCompatibilityError>),
     #[error("backend protection storage operation failed")]
@@ -230,9 +232,31 @@ impl<'a> FreshBackendStore<'a> {
         nac_owner: &identity::Did,
         document_acp: DocumentAcp,
     ) -> Result<()> {
+        self.initialize_with_connection(
+            key,
+            node,
+            nac_owner,
+            document_acp,
+            &document_acp::VeraConnection::Solo,
+        )
+        .await
+    }
+
+    pub async fn initialize_with_connection(
+        self,
+        key: &StoreKey,
+        node: &Arc<dyn NodeIdentity>,
+        nac_owner: &identity::Did,
+        document_acp: DocumentAcp,
+        connection: &document_acp::VeraConnection,
+    ) -> Result<()> {
         let did = node_did(node)?;
         if nac_owner.as_str() == did {
             return Err(BackendProtectionError::NodeOwnedNodeAcp);
+        }
+        if matches!(connection, document_acp::VeraConnection::Host { account, .. } if account != nac_owner)
+        {
+            return Err(BackendProtectionError::WrongVeraAccount);
         }
         let builder = super::store_key::persistent_builder(
             &self.data,
@@ -242,7 +266,14 @@ impl<'a> FreshBackendStore<'a> {
         .map_err(|error| BackendProtectionError::Schema(error.into()))?
         .with_node_identity_did(did.clone())
         .with_node_acp_owner(nac_owner.as_str());
-        let builder = document_acp::configure_fresh(builder, &self.data, key, document_acp, node)?;
+        let builder = document_acp::configure_fresh(
+            builder,
+            &self.data,
+            key,
+            document_acp,
+            node,
+            connection,
+        )?;
         let node = start(builder).await?;
         let result: Result<_> = async {
             grant_node_runtime(&node, nac_owner, &did).await?;
@@ -250,7 +281,7 @@ impl<'a> FreshBackendStore<'a> {
                 .await
                 .map_err(BackendProtectionError::Schema)?;
             validate_binding(&node).await?;
-            Ok(document_acp::created(&node, document_acp)?)
+            Ok(document_acp::created(&node, document_acp, connection)?)
         }
         .await;
         let shutdown = node.shutdown().await;
@@ -352,7 +383,8 @@ impl<'a> ProtectedBackendStore<'a> {
         .map_err(|error| BackendProtectionError::Schema(error.into()))?
         .with_node_identity_did(did.clone())
         .with_node_acp_enabled();
-        let builder = document_acp::configure(builder, &self.data, key, document_acp, node)?;
+        let builder =
+            document_acp::configure_preflight(builder, &self.data, key, document_acp, node)?;
         let node = Arc::new(build_configured(builder, &self.data, document_acp).await?);
         let checked = async {
             validate_binding(&node).await?;

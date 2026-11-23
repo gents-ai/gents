@@ -37,11 +37,16 @@ fn chain_id(node_did: &str) -> u64 {
     (u64::from_be_bytes(bytes) & ((1 << 53) - 1)).max(1)
 }
 
-fn deployment(node_did: &str) -> EmbeddedVeraDeployment {
+fn deployment(node_did: &str, account: Option<&identity::Did>) -> EmbeddedVeraDeployment {
+    let mut operator_keys = vec![node_did.to_owned()];
+    if let Some(account) = account {
+        operator_keys.push(account.to_string());
+        operator_keys.sort_unstable();
+    }
     EmbeddedVeraDeployment {
         chain_id: chain_id(node_did),
-        threshold: 1,
-        operator_keys: vec![node_did.to_owned()],
+        threshold: if account.is_some() { 2 } else { 1 },
+        operator_keys,
         created: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_secs()),
@@ -139,11 +144,6 @@ pub(super) fn deployment_differs(error: &defra_node::Error) -> Option<&'static s
     }
 }
 
-pub(super) fn consensus_key(node: &defra_node::Node) -> Option<String> {
-    node.embedded_vera_trust()
-        .map(|deployment| deployment.consensus_key.clone())
-}
-
 pub(super) fn provider_time(node: &defra_node::Node) -> Option<u64> {
     use acp::RemotePolicies as _;
     node.vera_acp()?.light_client_status().ok()?.chain_time
@@ -163,23 +163,70 @@ pub(super) fn delegation_audience(
     })
 }
 
+impl super::VeraDeploymentAnchor {
+    /// Read the hosted provider's locally verified genesis. A remote provider
+    /// cannot export an anchor through this entry point.
+    pub fn from_host(node: &defra_node::Node) -> Option<Self> {
+        use acp::RemotePolicies as _;
+        let hosted = node.embedded_vera_trust()?;
+        let audience = node.vera_acp()?.light_client_status().ok()?.delegation?;
+        (audience.deployment == hosted.chain_id).then_some(Self {
+            deployment: hosted.chain_id,
+            consensus_key: hosted.consensus_key.clone(),
+            genesis_id: audience.genesis_id?,
+        })
+    }
+
+    /// Configure the paired device's own signer, worker journal and encrypted
+    /// keyring. The local port terminates a private route to the active device.
+    pub fn configure_follower(
+        &self,
+        builder: defra_node::NodeBuilder,
+        local_port: std::num::NonZeroU16,
+        data: &Path,
+        key: &StoreKey,
+        node: &Arc<dyn NodeIdentity>,
+    ) -> Result<defra_node::NodeBuilder, super::DocumentAcpError> {
+        if !super::signs_for_vera(node.as_ref()) {
+            return Err(super::DocumentAcpError::NodeKeyCannotSign {
+                node: node.did().to_owned(),
+            });
+        }
+        let root = super::vera_dir(data);
+        Ok(builder.with_vera_rs(defra_node::VeraRsConfig {
+            rpc_address: format!("http://{}:{local_port}", Ipv4Addr::LOCALHOST),
+            consensus_key: self.consensus_key.clone(),
+            deployment_id: self.deployment,
+            genesis_id: Some(self.genesis_id),
+            actor: defra_node::VeraRsActor::Signer(Arc::new(NodeSigner {
+                node: Arc::clone(node),
+            })),
+            worker_dir: root.join(WORKER_DIR_NAME),
+            keyring: Arc::new(WorkerKeyring::new(root.join(KEYS_DIR_NAME), key)),
+            tuning: vera::AcpTuning::default(),
+        }))
+    }
+}
+
 pub(super) fn configure(
     builder: defra_node::NodeBuilder,
     node_dir: &Path,
     root: &Path,
+    port: Option<std::num::NonZeroU16>,
+    account: Option<&identity::Did>,
     key: &StoreKey,
     node: &Arc<dyn NodeIdentity>,
 ) -> defra_node::NodeBuilder {
     builder.with_embedded_vera(EmbeddedVeraConfig {
         data_dir: node_dir.to_path_buf(),
-        deployment: deployment(node.did()),
+        deployment: deployment(node.did(), account),
         listen: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
         start_deadline: START_DEADLINE,
         stop_deadline: STOP_DEADLINE,
         actor: EmbeddedVeraActor::Signer(Arc::new(NodeSigner {
             node: Arc::clone(node),
         })),
-        rpc_listen: None,
+        rpc_listen: port.map(|port| SocketAddr::from((Ipv4Addr::LOCALHOST, port.get()))),
         worker_dir: root.join(WORKER_DIR_NAME),
         keyring: Arc::new(WorkerKeyring::new(root.join(KEYS_DIR_NAME), key)),
         tuning: vera::AcpTuning::default(),
