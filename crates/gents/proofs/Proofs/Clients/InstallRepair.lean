@@ -927,3 +927,29 @@ theorem exposed_changed_build_is_not_restored : canRestore ⟨true, false⟩ = f
 theorem unexposed_changed_build_may_be_restored : canRestore ⟨false, false⟩ = true := by decide
 
 end InstallRepair
+
+namespace InstallRepair
+
+/-- What this home's recorded endpoint answers when `start` asks its `/status`: nothing, a node
+that is not this home's, or this home's node, still starting or ready. -/
+inductive RecordedNode where
+  | silent | other | starting | ready
+  deriving Repr, DecidableEq, Lean.ToJson
+
+inductive StartAction where
+  | useNode | awaitNode | reachService
+  deriving Repr, DecidableEq, Lean.ToJson
+
+/-- A node of this home that answers but has not marked itself ready is present, not absent: a
+server writes `runtime.json` and only then marks `/status` ready, and a hand-started server owns
+its port and store while it starts. `start` waits for it and leaves the service manager alone;
+only an endpoint that does not answer as this home's node sends it to the service manager. -/
+def startAction : RecordedNode → StartAction
+  | .ready => .useNode
+  | .starting => .awaitNode
+  | .silent | .other => .reachService
+
+theorem a_starting_node_never_reaches_the_service :
+    startAction .starting ≠ .reachService := by decide
+
+end InstallRepair

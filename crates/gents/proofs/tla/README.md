@@ -732,6 +732,15 @@ See `../README.md` for how this fits the broader formal-verification model.
   (the failure checked the completion's delivery as its own replay and
   errored) and `NoCompare` (a terminal write that does not compare from
   running replaces the completion).
+- `RecordedNodeStart` — `gents -p` against a home whose hand-started
+  server was killed and restarted on the same port. The server binds and
+  answers `/status` as starting, writes `runtime.json`, marks itself ready,
+  then prints its `serving` line; the killed server's `runtime.json` and
+  readiness row name the same URL. Lean `InstallRepair.startAction`: a node
+  of this home that answers starting is awaited, never taken for absent.
+  Green waits for the serving line. RED: `StaleFile` (the test that waited on
+  the killed server's file and row, with the CLI reaching the service
+  manager) and `StartingIsAbsent` (the CLI before the fix).
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## Checking
