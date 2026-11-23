@@ -6,7 +6,7 @@
   tla_check.py check-headers         validate every spec and config header
   tla_check.py install               install the pinned JDK and tla2tools.jar
 
-Header grammar (README.md). A config `MC*.cfg` (or `Sanity.cfg`) starts with
+Header grammar (AGENTS.md). A config `MC*.cfg` (or `Sanity.cfg`) starts with
 exactly one of
 
   \\* expect: holds

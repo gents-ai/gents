@@ -19,7 +19,7 @@ Who reads and writes it:
 
 - the `board` UX plugin in `../board_pack`, through `ctx.data`: its manifest
   names this surface and these four tools, and the desktop refuses anything
-  else (see `gents-ux-plugins/DATA_CONTRACT.md`);
+  else;
 - any agent on the node whose `Tools.datastore` selects the `board` surface,
   through the same declarations.
 

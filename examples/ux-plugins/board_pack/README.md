@@ -1,19 +1,15 @@
 # board_pack
 
-The shape of hermes-agent's kanban plugin on Gents, on documents. One UX
-plugin (`ux/board/plugin.js`): a Board row in the main nav, the Board page
-it opens, and a `::board{id="…"}` card the agent can drop into chat.
+A board on documents. One UX plugin (`ux/board/plugin.js`): a Board row in the
+main nav, the Board page it opens, and a `::board{id="…"}` card the agent can
+drop into chat.
 
-Where the Hermes plugin calls `ctx.rest('/board')` into a FastAPI router
-(`plugins/kanban/dashboard/plugin_api.py`), this one calls `ctx.data`: the
-`board` surface that `../board_docs` installs on the node is its data half,
-and the manifest's `ux[].data` names the surface and the four tools the
-page may call. The page observes documents and writes documents; it runs no
-processing of its own, and an agent whose `Tools.datastore` selects the
-same surface reads and writes the same board through the same four tools.
-
-The data contract is written up in `gents-ux-plugins/DATA_CONTRACT.md`;
-how this page uses it in `gents-ux-plugins/BOARD_DATA_CONTRACT.md`.
+The page calls `ctx.data`: the `board` surface that `../board_docs` installs on
+the node is its data half, and the manifest's `ux[].data` names the surface and
+the four tools the page may call. The page observes documents and writes
+documents; it runs no processing of its own, and an agent whose
+`Tools.datastore` selects the same surface reads and writes the same board
+through the same four tools.
 
 ## Try it
 
