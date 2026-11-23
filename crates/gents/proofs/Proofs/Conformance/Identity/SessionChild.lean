@@ -53,14 +53,7 @@ separates them is a binding case only. -/
 @[conformance_family]
 def childScopeRepair : Family ChildScopeInput RepairOutput where
   inputs := (childScopeCases.filter fun c =>
-    c.authenticated == some c.binding.actor && c.name != "failed_grant").map .ofCase
-  model := repaired
-
-/-- The parent grant is a native relationship change, and the store's fault
-seams fail only document mutations, so no fixture fails that grant alone. -/
-@[conformance_family]
-def childScopeRepairUnreached : Family ChildScopeInput RepairOutput where
-  inputs := (childScopeCases.filter (·.name == "failed_grant")).map .ofCase
+    c.authenticated == some c.binding.actor).map .ofCase
   model := repaired
 
 structure ClientRequestInput where
@@ -95,20 +88,13 @@ example : (clientRequestCases.find? (·.name == "wrong_signer")).map
     some true := by decide
 
 /-- The retry fixture holds one committed, signed client retry per case in one
-session: another actor recovers one, its signer recovers one, its signer
-recovers one whose admission signature does not verify, and its signer
+session: its signer recovers one while the working Agent grant staged with the
+marker clear fails, another actor recovers one, its signer recovers one, its
+signer recovers one whose admission signature does not verify, and its signer
 recovers one it completed and whose working Agent grant it then revoked. -/
 @[conformance_family]
 def clientRequestRecovery : Family ClientRequestInput ClientRequestOutput where
-  inputs := (clientRequestCases.filter (·.name != "grant_failed")).map .ofCase
-  model := recoveredClientRequest
-
-/-- Recovery stages the working Agent grant in the transaction that clears the
-marker, and the store's fault seams count only document mutations, so no
-fixture fails that grant while its marker write succeeds. -/
-@[conformance_family]
-def clientRequestRecoveryUnreached : Family ClientRequestInput ClientRequestOutput where
-  inputs := (clientRequestCases.filter (·.name == "grant_failed")).map .ofCase
+  inputs := clientRequestCases.map .ofCase
   model := recoveredClientRequest
 
 deriving instance ToJson for Identity.SessionChild.ClientRequestPublication

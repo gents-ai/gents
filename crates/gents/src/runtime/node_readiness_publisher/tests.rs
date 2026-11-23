@@ -416,7 +416,26 @@ impl RecoveryFixture {
     }
 }
 
-async fn recovery_fixture(name: &str, pending: bool) -> RecoveryFixture {
+/// The modeled repair attempt: whether an earlier attempt granted the parent
+/// without marking the row, and whether this attempt's grant and mark succeed.
+#[derive(Clone, Copy)]
+struct Attempt {
+    granted_before: bool,
+    grant_succeeded: bool,
+    mark_succeeded: bool,
+}
+
+impl Attempt {
+    const CLEAN: Self = Self {
+        granted_before: false,
+        grant_succeeded: true,
+        mark_succeeded: true,
+    };
+}
+
+const MARK_PARENT_LINKED: &str = "readiness.mark_parent_linked";
+
+async fn recovery_fixture(name: &str, pending: bool, attempt: Attempt) -> RecoveryFixture {
     use gents_protocol::node_readiness::NODE_READINESS_FORMAT_VERSION;
     use gents_store::config_client::ConfigAccess;
     use gents_store::identity::NodeIdentity;
@@ -578,7 +597,42 @@ async fn recovery_fixture(name: &str, pending: bool) -> RecoveryFixture {
     } else {
         runtime.did()
     };
-    let result = upsert_node_readiness(&node, selected, &snapshot, "2026-01-01T00:00:01Z").await;
+    if attempt.granted_before {
+        let (prepared, fired) =
+            gents_store::config_client::ConfigApplyTxn::with_auto_commit_failure(
+                MARK_PARENT_LINKED,
+                upsert_node_readiness(&node, selected, &snapshot, "2026-01-01T00:00:00Z"),
+            )
+            .await;
+        assert!(
+            fired && prepared.is_err(),
+            "{name}: an earlier attempt grants without marking"
+        );
+    }
+    let upsert = upsert_node_readiness(&node, selected, &snapshot, "2026-01-01T00:00:01Z");
+    let result = if !attempt.grant_succeeded {
+        let (result, trace) =
+            gents_store::config_client::ConfigApplyTxn::with_relationship_change_failure(
+                Some(gents_store::config_client::RelationshipMatch::first(
+                    "NodeReadiness",
+                    "parent",
+                )),
+                upsert,
+            )
+            .await;
+        assert!(!trace.is_empty(), "{name}: the parent grant is attempted");
+        result
+    } else if !attempt.mark_succeeded {
+        let (result, fired) = gents_store::config_client::ConfigApplyTxn::with_auto_commit_failure(
+            MARK_PARENT_LINKED,
+            upsert,
+        )
+        .await;
+        assert!(fired, "{name}: the parent mark is attempted");
+        result
+    } else {
+        upsert.await
+    };
     let observation_access = if name == "owner-mismatch" {
         &user_access
     } else {
@@ -663,8 +717,14 @@ async fn assert_success_stays_private(fixture: &RecoveryFixture) {
 #[tokio::test]
 async fn readiness_parent_recovery_matches_native_owner_and_model() {
     for case in gents_lean_vocab::families::identity_operations_readiness_recovery::cases() {
-        let fixture = recovery_fixture(&case.input.name, case.input.pending).await;
-        assert_eq!(fixture.published, fixture.parent_linked, "{:?}", case.input);
+        let input = &case.input;
+        let attempt = Attempt {
+            granted_before: input.granted_before,
+            grant_succeeded: input.grant_succeeded,
+            mark_succeeded: input.mark_succeeded,
+        };
+        let fixture = recovery_fixture(&input.name, input.pending, attempt).await;
+        assert_eq!(fixture.published, fixture.parent_linked, "{input:?}");
         if case.input.name == "success" {
             assert_success_stays_private(&fixture).await;
         }
@@ -683,7 +743,7 @@ async fn readiness_recovery_refuses_rows_the_runtime_does_not_own() {
     for case in
         gents_lean_vocab::families::identity_operations_readiness_recovery_foreign_owner::cases()
     {
-        let fixture = recovery_fixture(&case.input.name, case.input.pending).await;
+        let fixture = recovery_fixture(&case.input.name, case.input.pending, Attempt::CLEAN).await;
         assert_eq!(fixture.published, fixture.parent_linked, "{:?}", case.input);
         case.check(gents_lean_vocab::families::identity_operations_readiness_recovery_foreign_owner::ParentLinked {
             parent_linked: fixture.parent_linked,
@@ -709,7 +769,7 @@ async fn published_readiness_observation_matches_model() {
             "no-node" => ("node-unknown", true, true),
             other => panic!("the recovery scenario has no fixture for {other}"),
         };
-        let fixture = recovery_fixture(fixture_name, pending).await;
+        let fixture = recovery_fixture(fixture_name, pending, Attempt::CLEAN).await;
         if mark {
             let mark = format!(
                 r#"mutation {{ update_NodeReadiness(docID: "{}", input: {{parent_linked: true}}) {{_docID}} }}"#,
