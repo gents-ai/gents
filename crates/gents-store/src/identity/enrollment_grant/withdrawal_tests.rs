@@ -143,6 +143,18 @@ async fn shutdown_cancels_pending_assignment_reads_and_runtime_callbacks(
 
 #[tokio::test]
 async fn an_access_change_wakes_the_assignment_receiver() -> anyhow::Result<()> {
+    exercise_assignment_withdrawal(None).await
+}
+
+#[tokio::test]
+async fn the_first_observed_height_reconciles_a_withdrawal() -> anyhow::Result<()> {
+    exercise_assignment_withdrawal(Some(events::ChannelBus::new())).await
+}
+
+async fn exercise_assignment_withdrawal(
+    observer: Option<events::ChannelBus>,
+) -> anyhow::Result<()> {
+    use events::Bus as _;
     let home = home(Provider::Vera).await?;
     let access = home.runtime()?;
     access
@@ -166,10 +178,27 @@ async fn an_access_change_wakes_the_assignment_receiver() -> anyhow::Result<()> 
     let (shutdown, stop) = tokio::sync::watch::channel(false);
     let watcher = tokio::spawn({
         let (access, runtime, scope) = (access.clone(), runtime.clone(), scope.clone());
+        let subscriptions = observer.as_ref().map(|bus| {
+            (
+                crate::subscription_source::ChangeSubscription::from(
+                    bus.subscribe_collection_changes(ids.clone()),
+                ),
+                bus.subscribe(&[events::EventName::AcpHeightAdvanced]),
+            )
+        });
         async move {
-            access
-                .watch_assignments(&scope, runtime.as_ref(), ids, stop)
-                .await
+            match subscriptions {
+                Some((changes, heights)) => {
+                    access
+                        .watch_assignment_events(&scope, runtime.as_ref(), changes, heights, stop)
+                        .await
+                }
+                None => {
+                    access
+                        .watch_assignments(&scope, runtime.as_ref(), ids, stop)
+                        .await
+                }
+            }
         }
     });
     async fn wait_active(runtime: &AssignmentTestRuntime, id: &str, active: bool) {
@@ -192,6 +221,14 @@ async fn an_access_change_wakes_the_assignment_receiver() -> anyhow::Result<()> 
             &home.runtime.did().parse()?,
         )
         .await?;
+    if let Some(observer) = observer.as_ref() {
+        observer.publish(events::Message::acp_height_advanced(
+            events::AcpHeightAdvancedData {
+                height: 2,
+                module_state_root: "first observed root".into(),
+            },
+        ));
+    }
     wait_active(&runtime, &home.node_doc, false).await;
     shutdown.send(true)?;
     watcher.await??;

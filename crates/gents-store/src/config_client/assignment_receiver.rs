@@ -317,7 +317,7 @@ impl ConfigAccess {
         scope: &AssignmentScope,
         runtime: &R,
         collection_ids: Vec<String>,
-        mut shutdown: tokio::sync::watch::Receiver<bool>,
+        shutdown: tokio::sync::watch::Receiver<bool>,
     ) -> Result<(), ReceiverError>
     where
         R: AssignmentRuntime,
@@ -325,15 +325,31 @@ impl ConfigAccess {
         let ConfigAccess::Local(local) = self else {
             return Err(ReceiverError::Provider(AssignmentReadError::Unsupported));
         };
-        let mut changes = crate::subscription_source::subscribe(local.node(), collection_ids);
-        let mut heights = local
+        let changes = crate::subscription_source::subscribe(local.node(), collection_ids);
+        let heights = local
             .node()
             .subscribe(&[events::EventName::AcpHeightAdvanced]);
+        self.watch_assignment_events(scope, runtime, changes, heights, shutdown)
+            .await
+    }
+
+    pub(crate) async fn watch_assignment_events(
+        &self,
+        scope: &AssignmentScope,
+        runtime: &impl AssignmentRuntime,
+        mut changes: crate::subscription_source::ChangeSubscription,
+        mut heights: events::Subscription,
+        mut shutdown: tokio::sync::watch::Receiver<bool>,
+    ) -> Result<(), ReceiverError> {
+        // The observer announces its first root with a height event only.
+        let mut awaiting_first_height = true;
         loop {
             if *shutdown.borrow() {
                 return Ok(());
             }
-            while heights.try_recv().is_ok() {}
+            while heights.try_recv().is_ok() {
+                awaiting_first_height = false;
+            }
             let retry = match self
                 .refresh_from(scope, runtime, Some(&mut shutdown), |query| {
                     self.certified_assignments(query)
@@ -352,7 +368,8 @@ impl ConfigAccess {
                 event = changes.recv() => {
                     if event.is_none() { return Err(ReceiverError::SubscriptionEnded); }
                 }
-                event = heights.recv(), if retry => {
+                event = heights.recv(), if awaiting_first_height || retry => {
+                    awaiting_first_height = false;
                     if event.is_none() { return Err(ReceiverError::SubscriptionEnded); }
                 }
                 _ = tokio::time::sleep(RETRY_INTERVAL), if retry => {}
