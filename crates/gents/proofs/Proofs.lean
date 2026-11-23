@@ -39,6 +39,7 @@ import Proofs.Observe.FileInventory
 import Proofs.Observe.RetrySummary
 import Proofs.Session.SessionQueue.Properties
 import Proofs.Session.SessionQueue.Interrupt
+import Proofs.Session.SessionQueue.NaturalFinish
 import Proofs.Session.SessionQueue.InterruptCases
 import Proofs.Automation.Session.Control
 import Proofs.Session.SessionQueue.Fold
