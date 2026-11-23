@@ -8,6 +8,8 @@ mod error;
 mod indexes;
 mod install;
 mod node_policies;
+mod shared_transport;
+pub(crate) use shared_transport::{ensure_admission_schema, SharedTransportHome};
 #[cfg(test)]
 mod tests;
 #[cfg(any(test, feature = "vera"))]

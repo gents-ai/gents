@@ -295,6 +295,11 @@ impl<'a> FreshBackendStore<'a> {
             if let document_acp::VeraConnection::Follower { anchor, .. } = connection {
                 require_device_group(&node, &did, &anchor.account).await?;
             }
+            if !matches!(connection, document_acp::VeraConnection::Solo) {
+                crate::schema::catalog::ensure_admission_schema(&node)
+                    .await
+                    .map_err(|error| BackendProtectionError::Schema(error.into()))?;
+            }
             crate::schema::ensure_runtime_schemas(&node)
                 .await
                 .map_err(BackendProtectionError::Schema)?;
