@@ -164,6 +164,9 @@ example : (advance absentScopeSession [absentScopeRequest, foreignRequester]
 open SessionFork
 open CanonicalOutput
 
+/-- A stored source header carries no native request id: `AgentMessage` has no
+column for it and `PERSIST_NATIVE_REQUEST_ID` keeps every writer from storing
+it in `publication`. -/
 def sourceMessage (id sequence : Nat) : MessageEnvelope :=
   { header :=
       { id
@@ -177,7 +180,7 @@ def sourceMessage (id sequence : Nat) : MessageEnvelope :=
   , key := "origin-" ++ toString id
   , sequence
   , nativeId := some "native-provider-id"
-  , nativeRequestId := some "native-request-id"
+  , nativeRequestId := none
   , blocks := [.text ⟨⟨100 + id, 0⟩, .full⟩]
   , createdAt := 5 }
 def history : History :=
@@ -193,7 +196,8 @@ def userTurnHistory : History :=
     closures := [⟨101, scope.session, 101⟩] }
 def child : Scope := { scope with session := 20 }
 def remap (id : Nat) := id + 1000
-def childKey (key : String) := "child:" ++ key
+def childKeyPrefix := "child:"
+def childKey (key : String) := childKeyPrefix ++ key
 def sourceAuthorization : SessionFork.SourceAuthorization :=
   ⟨scope, history.messages.map (·.header.id), history.compactions.map (·.id),
     history.closures.map (·.id)⟩

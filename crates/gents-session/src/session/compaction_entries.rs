@@ -600,7 +600,7 @@ pub(super) async fn save_compaction_entry_with_access(
         .await
 }
 
-fn encode_file_path_delta(paths: &[String]) -> Result<String> {
+pub(super) fn encode_file_path_delta(paths: &[String]) -> Result<String> {
     Ok(serde_json::to_string(&FilePathDelta { version: 1, paths })?)
 }
 

@@ -524,13 +524,15 @@ structure ForkInput where
   child : AgentSession.Scope
   exclusiveSequenceCut : Nat
   documentIdOffset : Nat
+  childKeyPrefix : String
   authorized : Bool
   idle : Bool
   deriving ToJson
 
 def ForkCase.input (c : ForkCase) : ForkInput :=
   { name := c.name, source := HistoryWire.ofModel c.source, parent := scope, child := c.target
-    exclusiveSequenceCut := c.cut, documentIdOffset := 1000, authorized := c.authorized
+    exclusiveSequenceCut := c.cut, documentIdOffset := 1000, childKeyPrefix
+    authorized := c.authorized
     idle := c.idle }
 
 def ForkCase.published (c : ForkCase) : Option SessionFork.History :=
@@ -554,29 +556,15 @@ def ForkCase.readers (c : ForkCase) : List ForkReader :=
 
 def forkCaseOf (i : ForkInput) : Option ForkCase := forkCases.find? (·.name == i.name)
 
-structure ForkReaders where
-  readers : List ForkReader
-  deriving ToJson
-
-/-- A reader granted only a published fork's own session reads its whole
-retained transcript. The served scenario publishes a signed user history and
-forks it exactly, so it replays the exact copy. -/
-@[conformance_family]
-def forkReaders : Family ForkInput ForkReaders where
-  inputs := (forkCases.filter fun c => c.name ∈ ["exact_copy"]).map ForkCase.input
-  model := fun i => { readers := ((forkCaseOf i).map ForkCase.readers).getD [] }
-
 structure ForkPublication where
   published : Option HistoryWire
   readers : List ForkReader
   deriving ToJson
 
-/-- Production publishes a fork through its served
-transaction and assigns DefraDB document identifiers, so no production function
-returns the copied history for comparison with `SessionFork.publish`, and no
-scenario builds these source histories. -/
+/-- The history a served fork publishes from each source, and which direct
+session grant reads the published child's whole transcript. -/
 @[conformance_family]
-def forkPublicationUnreached : Family ForkInput ForkPublication where
+def forkPublication : Family ForkInput ForkPublication where
   inputs := forkCases.map ForkCase.input
   model := fun i =>
     { published := ((forkCaseOf i).bind ForkCase.published).map HistoryWire.ofModel

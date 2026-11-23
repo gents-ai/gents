@@ -17,6 +17,8 @@ pub use archive::set_session_archived_on;
 mod compaction_entries;
 mod control;
 pub mod fork;
+#[cfg(test)]
+mod fork_publication_tests;
 mod history;
 #[cfg(test)]
 mod model_test_support;
