@@ -294,7 +294,6 @@ mod tests {
         "eval_records_published_unreached",
         "event_delivery_group_capture_unreached",
         "event_delivery_group_clock_unreached",
-        "fold_queue_contracts_management_unreached",
         "goal_claimed_publication_contracts_identity_staged_unreached",
         "household_tool_grant_rebinding_unreached",
         "household_unattended_receipt_unreached",

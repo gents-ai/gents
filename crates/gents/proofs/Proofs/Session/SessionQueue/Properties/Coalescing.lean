@@ -168,6 +168,33 @@ theorem uniqueCoalescedQueueKeys_sublist
         h_unique.1 source key h_source h_policy h_key other (h_rest.subset h_mem),
         ih h_unique.2⟩
 
+def CoalesceDistinct (a b : QueueEntry) : Prop :=
+  ∀ source key, a.source = source → a.policy = .coalesce → a.queueKey = some key →
+    ¬ CoalescedKeyMatch b source key
+
+theorem coalesceDistinct_symm {a b : QueueEntry} (h : CoalesceDistinct a b) :
+    CoalesceDistinct b a := by
+  intro source key hs hp hk hm
+  exact h source key hm.1 hm.2.1 hm.2.2 ⟨hs, hp, hk⟩
+
+theorem uniqueCoalescedQueueKeys_iff_pairwise (entries : List QueueEntry) :
+    UniqueCoalescedQueueKeys entries ↔ entries.Pairwise CoalesceDistinct := by
+  induction entries with
+  | nil => simp [UniqueCoalescedQueueKeys]
+  | cons entry rest ih =>
+      rw [List.pairwise_cons, ← ih]
+      simp only [UniqueCoalescedQueueKeys]
+      constructor
+      · rintro ⟨h, hr⟩
+        exact ⟨fun other ho source key hs hp hk => h source key hs hp hk other ho, hr⟩
+      · rintro ⟨h, hr⟩
+        exact ⟨fun source key hs hp hk other ho => h other ho source key hs hp hk, hr⟩
+
+theorem uniqueCoalescedQueueKeys_perm {xs ys : List QueueEntry} (h_perm : xs.Perm ys)
+    (h : UniqueCoalescedQueueKeys xs) : UniqueCoalescedQueueKeys ys := by
+  rw [uniqueCoalescedQueueKeys_iff_pairwise] at h ⊢
+  exact h.perm h_perm (fun hab => coalesceDistinct_symm hab)
+
 theorem transition_preserves_uniqueCoalescedQueueKeys
     {pre post : SessionQueueState}
     (h_trans : Transition pre post)
@@ -198,8 +225,10 @@ theorem transition_preserves_uniqueCoalescedQueueKeys
       rw [h_post, SessionQueueState.consumeFolded]
       exact uniqueCoalescedQueueKeys_tail h_unique
   | finish_active _ h_post =>
-      rw [h_post, SessionQueueState.finishActive]
-      simpa using h_unique
+      rw [h_post]
+      show UniqueCoalescedQueueKeys ([] ++ pre.queued)
+      rw [List.nil_append]
+      exact uniqueCoalescedQueueKeys_perm (queued_perm pre).symm h_unique
   | drain_automated _ h_post =>
       rw [h_post, SessionQueueState.drainAutomatedWakeups]
       exact uniqueCoalescedQueueKeys_sublist

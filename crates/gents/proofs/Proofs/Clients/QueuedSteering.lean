@@ -12,6 +12,7 @@ namespace QueuedSteering
 
 open CanonicalOutput
 open CanonicalOutput.Execution
+open SessionQueue (BoundaryInputKind boundaryCandidate)
 
 inductive AgentDelivery where
   | queue | steer | interrupt
@@ -69,19 +70,6 @@ def agentSteerTargetCases : List (Nat × Nat) := [(1, 1), (1, 2)]
 theorem agent_steer_does_not_enter_a_later_turn (planned active : Nat)
     (h : planned ≠ active) : agentSteerTargets planned active = false := by
   simp [agentSteerTargets, h]
-
-/-- A direct steer may pass ordinary queued turns without moving or consuming them.
-Earlier steering inputs retain their own order and block later steers when incompatible. -/
-inductive BoundaryInputKind where
-  | queued | userSteer | agentSteer | blocked
-  deriving DecidableEq, Repr
-
-def boundaryCandidate : List (Nat × BoundaryInputKind) → Option Nat
-  | [] => none
-  | (_, .queued) :: rest => boundaryCandidate rest
-  | (id, .agentSteer) :: _ => some id
-  | (id, .userSteer) :: _ => some id
-  | (_, .blocked) :: _ => none
 
 /-- Earlier compatible steers are consumed in arrival order. An ordinary
 queued turn may be passed by a direct steer without changing its position. -/

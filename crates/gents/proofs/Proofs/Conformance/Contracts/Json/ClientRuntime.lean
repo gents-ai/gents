@@ -51,7 +51,7 @@ def interruptDelivery : Family InterruptDeliveryInput InterruptDeliveryOutput wh
         (QueuedSteering.interruptDeliveryGoal true ⟨.active, 0, false, false⟩).status == .paused }
 
 deriving instance Lean.ToJson for QueuedSteering.AgentSteerDisposition,
-  QueuedSteering.BoundaryInputKind
+  SessionQueue.BoundaryInputKind
 
 structure AgentSteerDispositionInput where
   active : Bool
@@ -65,7 +65,7 @@ def agentSteerDisposition :
     { active, compatible }
   model := fun i => QueuedSteering.agentSteerDisposition i.active i.compatible
 
-private def boundaryKindJson : QueuedSteering.BoundaryInputKind → String
+private def boundaryKindJson : SessionQueue.BoundaryInputKind → String
   | .queued => jsonString "queued"
   | .userSteer => jsonString "user_steer"
   | .agentSteer => jsonString "agent_steer"
@@ -84,7 +84,7 @@ def agentSteerTarget : Family AgentSteerTargetInput Bool where
 
 structure AgentSteerEntry where
   id : Nat
-  kind : QueuedSteering.BoundaryInputKind
+  kind : SessionQueue.BoundaryInputKind
   compatible : Bool
   deriving Lean.ToJson
 
@@ -104,22 +104,22 @@ namespace SteeringBoundary
 
 open Lean
 
-deriving instance ToJson for QueuedSteering.BoundaryInputKind
+deriving instance ToJson for SessionQueue.BoundaryInputKind
 
 structure Entry where
   id : Nat
-  kind : QueuedSteering.BoundaryInputKind
+  kind : SessionQueue.BoundaryInputKind
   deriving ToJson
 
 structure Input where
   inputs : List Entry
   deriving ToJson
 
-def ofCase (inputs : List (Nat × QueuedSteering.BoundaryInputKind)) : Input :=
+def ofCase (inputs : List (Nat × SessionQueue.BoundaryInputKind)) : Input :=
   { inputs := inputs.map fun (id, kind) => { id, kind } }
 
 def candidate (i : Input) : Option Nat :=
-  QueuedSteering.boundaryCandidate (i.inputs.map fun e => (e.id, e.kind))
+  SessionQueue.boundaryCandidate (i.inputs.map fun e => (e.id, e.kind))
 
 structure Publication where
   steered : List Nat
@@ -130,7 +130,7 @@ structure Publication where
 /-- A served fixture enqueues signed user turns behind an active head; an
 agent steer needs a parent tool call and a blocked input a background
 completion, which that fixture does not build. -/
-def publicationCases : List (List (Nat × QueuedSteering.BoundaryInputKind)) :=
+def publicationCases : List (List (Nat × SessionQueue.BoundaryInputKind)) :=
   QueuedSteering.boundaryCases.filter (· == [(1, .queued), (2, .userSteer), (3, .queued)])
 
 end SteeringBoundary
