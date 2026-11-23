@@ -64,10 +64,16 @@ pub(super) async fn device_membership(args: DeviceGroupMemberArgs, admit: bool) 
         let node = owner
             .set_shared_device_membership(&args.group, &args.device, admit)
             .await?;
-        return print_json(&serde_json::json!({
+        let mut result = serde_json::json!({
             "group": args.group, "device": args.device.as_str(), "member": admit,
             "publisher_node_id": node,
-        }));
+        });
+        if admit {
+            result["node_registration"] = owner
+                .device_registration_evidence(&args.device, &node)
+                .await?;
+        }
+        return print_json(&result);
     }
     if admit {
         owner

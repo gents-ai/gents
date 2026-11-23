@@ -52,7 +52,7 @@ pub enum VeraConnection {
     Follower {
         port: std::num::NonZeroU16,
         anchor: VeraDeploymentAnchor,
-        publisher_node: Option<String>,
+        device_registration: Option<serde_json::Value>,
     },
 }
 

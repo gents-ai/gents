@@ -150,9 +150,9 @@ pub(crate) struct InitArgs {
         value_name = "FILE"
     )]
     pub(crate) vera_anchor: Option<std::path::PathBuf>,
-    /// Publisher Node document ID returned by the host when admitting this device.
+    /// JSON output from the host's admit-device command for this device.
     #[arg(long, requires = "vera_anchor")]
-    pub(crate) vera_publisher_node: Option<String>,
+    pub(crate) vera_device_admission: Option<std::path::PathBuf>,
     /// Create a device group owned by the signing client and admit this new Vera runtime.
     #[arg(long, conflicts_with = "identity_only")]
     pub(crate) create_transport_group: bool,

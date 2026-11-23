@@ -76,7 +76,7 @@ pub enum BackendProtectionError {
     WrongTransportAccount,
     #[error("the shared Vera operator must be the home’s account")]
     WrongVeraAccount,
-    #[error("admitted device requires the publisher Node returned by admit-device")]
+    #[error("admitted device requires the signed registration returned by admit-device")]
     MissingPublisherNode,
     #[error("the store could not be checked on a copy; the original was not opened")]
     CopyCheck(#[source] Box<super::store_compat::StoreCompatibilityError>),
@@ -160,33 +160,57 @@ pub async fn build_configured(
     let record = document_acp::recorded_deployment(data)?;
     let ids =
         document_acp::policy_ids_for_connection(record.as_ref().map(|record| &record.connection));
-    let mut extensions =
-        crate::node_extension::Extensions::of(Arc::new(document_acp::BoundPolicyIds(ids)));
-    if let Some(record) = record {
-        use document_acp::VeraConnection;
-        match (record.connection, record.transport) {
-            (VeraConnection::Solo, None) => {}
-            (VeraConnection::Host { account, .. }, Some(scope))
-                if scope.account == account && scope.host_node == scope.device_node =>
-            {
-                extensions.attach(Arc::new(scope))?;
-            }
-            (VeraConnection::Follower { anchor, .. }, Some(scope))
-                if scope.account == anchor.account
+    let node = Arc::new(start(builder).await?);
+    let configure = || -> Result<()> {
+        document_acp::check_started(&node, data, document_acp)?;
+        let mut extensions =
+            crate::node_extension::Extensions::of(Arc::new(document_acp::BoundPolicyIds(ids)));
+        if let Some(record) = record {
+            use document_acp::VeraConnection;
+            match (record.connection, record.transport) {
+                (VeraConnection::Solo, None) => {}
+                (VeraConnection::Host { account, .. }, Some(scope))
+                    if scope.account == account && scope.host_node == scope.device_node =>
+                {
+                    extensions.attach(Arc::new(scope))?;
+                }
+                (
+                    VeraConnection::Follower {
+                        anchor,
+                        device_registration: Some(evidence),
+                        ..
+                    },
+                    Some(scope),
+                ) if scope.account == anchor.account
                     && scope.host_node == anchor.host_node
                     && scope.group == anchor.group =>
-            {
-                extensions.attach(Arc::new(scope))?;
+                {
+                    let device = identity::Did::new(
+                        node.node_identity_did()
+                            .ok_or(BackendProtectionError::WrongNode)?,
+                    )
+                    .map_err(|_| BackendProtectionError::WrongNode)?;
+                    let registered = crate::config_client::verified_publisher_node(
+                        evidence,
+                        &device,
+                        &anchor.account,
+                    )
+                    .map_err(|error| BackendProtectionError::Schema(error.into()))?;
+                    if registered != scope.device_node {
+                        return Err(BackendProtectionError::InvalidProvenance);
+                    }
+                    extensions.attach(Arc::new(scope))?;
+                }
+                _ => return Err(BackendProtectionError::InvalidProvenance),
             }
-            _ => return Err(BackendProtectionError::InvalidProvenance),
         }
-    }
-    let node = Arc::new(start(builder).await?);
-    if let Err(refused) = document_acp::check_started(&node, data, document_acp) {
+        crate::node_extension::attach_all(&node, &extensions)?;
+        Ok(())
+    };
+    if let Err(error) = configure() {
         let _ = node.shutdown().await;
-        return Err(refused.into());
+        return Err(error);
     }
-    crate::node_extension::attach_all(&node, &extensions)?;
     Ok(node)
 }
 
@@ -355,7 +379,7 @@ impl<'a> FreshBackendStore<'a> {
                     (
                         document_acp::VeraConnection::Follower {
                             anchor,
-                            publisher_node,
+                            device_registration,
                             ..
                         },
                         None,
@@ -363,10 +387,15 @@ impl<'a> FreshBackendStore<'a> {
                         account: anchor.account.clone(),
                         group: anchor.group.clone(),
                         host_node: anchor.host_node.clone(),
-                        device_node: publisher_node
-                            .clone()
-                            .filter(|id| !id.is_empty())
-                            .ok_or(BackendProtectionError::MissingPublisherNode)?,
+                        device_node: crate::config_client::verified_publisher_node(
+                            device_registration
+                                .clone()
+                                .ok_or(BackendProtectionError::MissingPublisherNode)?,
+                            &identity::Did::new(&did)
+                                .map_err(|_| BackendProtectionError::WrongNode)?,
+                            &anchor.account,
+                        )
+                        .map_err(|error| BackendProtectionError::Schema(error.into()))?,
                     },
                     _ => return Err(BackendProtectionError::InvalidProvenance),
                 };

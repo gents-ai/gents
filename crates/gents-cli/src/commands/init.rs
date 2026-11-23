@@ -366,7 +366,13 @@ pub(crate) async fn init_home_with_core_packs(
                 .with_context(|| format!("reading the Vera anchor at {}", path.display()))?;
             let anchor = serde_json::from_slice(&bytes)
                 .with_context(|| format!("invalid Vera anchor at {}", path.display()))?;
-            VeraConnection::Follower { port, anchor, publisher_node: args.vera_publisher_node.clone() }
+            let device_registration = if let Some(path) = &args.vera_device_admission {
+                #[derive(serde::Deserialize)]
+                struct Admission { node_registration: Value }
+                let bytes = tokio::fs::read(path).await.with_context(|| format!("reading device admission at {}", path.display()))?;
+                Some(serde_json::from_slice::<Admission>(&bytes)?.node_registration)
+            } else { None };
+            VeraConnection::Follower { port, anchor, device_registration }
         } else {
             VeraConnection::Host {
                 port,
@@ -3435,7 +3441,7 @@ mod tests {
             document_acp: None,
             vera_rpc_port: None,
             vera_anchor: None,
-            vera_publisher_node: None,
+            vera_device_admission: None,
             create_transport_group: false,
             inference_endpoint: None,
             backend_id: None,

@@ -274,9 +274,11 @@ async fn paired_home_reopens_against_the_original_vera_deployment() -> Result<()
         .as_str()
         .filter(|id| !id.is_empty())
         .context("registered publisher Node")?;
+    let admission = host.path().join("paired-admission.json");
+    fs::write(&admission, serde_json::to_vec(&admitted)?)?;
     paired.extend([
-        "--vera-publisher-node",
-        publisher_node,
+        "--vera-device-admission",
+        admission.to_str().context("device admission path")?,
         "--key-path",
         key_path.to_str().context("follower key path")?,
     ]);
@@ -286,6 +288,7 @@ async fn paired_home_reopens_against_the_original_vera_deployment() -> Result<()
         "the follower must retain its own signing identity"
     );
     fs::remove_file(&anchor)?;
+    fs::remove_file(&admission)?;
     let (serving, graphql) = served(follower.path()).await?;
     prompted(follower.path(), "record a session on the paired device")?;
     let first = sessions(follower.path(), Some(&graphql))?;

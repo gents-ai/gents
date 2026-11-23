@@ -13,6 +13,39 @@ pub enum DeviceGroupReadError {
     Ambiguous,
 }
 
+fn publisher_input(device: &Did) -> serde_json::Value {
+    serde_json::json!({"node_did": device.as_str(), "enabled": true})
+}
+
+fn publisher_schema() -> Result<schema::CollectionVersion, ConfigClientError> {
+    use gents_protocol::schemas::{HomePolicyIds, NODE, NODE_NAME};
+    super::client_signed_agent::signing_schema(
+        NODE,
+        NODE_NAME,
+        HomePolicyIds::embedded_vera_transport_v2(),
+    )
+}
+
+/// Verify the original Node registration independently of the live publisher
+/// permission, which an account can delegate to several devices.
+pub(crate) fn verified_publisher_node(
+    evidence: serde_json::Value,
+    device: &Did,
+    account: &Did,
+) -> Result<String, ConfigClientError> {
+    let graph = db::block::builder::VerifiedClientCreate::verify(
+        &storage::Crdts::default(),
+        &publisher_schema()?,
+        &publisher_input(device),
+        serde_json::from_value(evidence)?,
+    )
+    .map_err(ConfigClientError::ClientAgentGraph)?;
+    if graph.signer_did() != account.as_str() {
+        return Err(ConfigClientError::SharedDeviceAdmission);
+    }
+    Ok(graph.doc_id().to_owned())
+}
+
 impl ConfigAccess {
     /// Discover the device's group from a certified membership grant by the
     /// configured account. An empty assignment set means the device is unadmitted.
@@ -42,6 +75,34 @@ impl ConfigAccess {
             return Err(DeviceGroupReadError::Ambiguous);
         }
         Ok(group)
+    }
+
+    pub async fn device_registration_evidence(
+        &self,
+        device: &Did,
+        node: &str,
+    ) -> Result<serde_json::Value, ConfigClientError> {
+        let Self::Graphql(endpoint) = self else {
+            return Err(ConfigClientError::ClientAgentTransportRequired);
+        };
+        let signer = endpoint.held_client_signing_capability()?.clone();
+        let input = publisher_input(device);
+        let expected = node.to_owned();
+        tokio::task::spawn_blocking(move || {
+            let graph = db::block::builder::ClientCreateSignatures::from_input(
+                &storage::Crdts::default(),
+                &publisher_schema()?,
+                &input,
+                &signer.config,
+            )
+            .map_err(ConfigClientError::ClientAgentGraph)?;
+            if graph.doc_id() != expected {
+                return Err(ConfigClientError::SharedDeviceAdmission);
+            }
+            Ok(serde_json::to_value(graph.evidence())?)
+        })
+        .await
+        .map_err(ConfigClientError::ClientAgentGraphJoin)?
     }
 
     /// Update the publisher grant on this device's Node together with its group
@@ -85,7 +146,7 @@ impl ConfigAccess {
                     [] if admit => {
                         let created = txn.execute_client_signed_create(
                             "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
-                            &serde_json::json!({"input":{"node_did":device.as_str(), "enabled":true}}), NODE,
+                            &serde_json::json!({"input":publisher_input(device)}), NODE,
                         ).await?;
                         crate::graphql::created_doc_id(&created, NODE_NAME)?
                     }
