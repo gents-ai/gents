@@ -281,7 +281,7 @@ async fn user_title_update_is_signed_on_authenticated_http() -> anyhow::Result<(
     )
     .await;
     let node_did = db.node_identity.did();
-    crate::request::lifecycle::build_signed_client_request(
+    crate::request::lifecycle::build_signed_reserved_client_request(
         &access,
         crate::request::lifecycle::RequestSpec::new(
             gents_protocol::request_admission::RequestPurpose::Normal,
@@ -352,7 +352,7 @@ async fn user_rename_rebuilds_after_confirmed_http_commit_conflict() -> anyhow::
     .await;
     let node_did = db.node_identity.did();
     let session_id = "http-title-conflict-session";
-    crate::request::lifecycle::build_signed_client_request(
+    crate::request::lifecycle::build_signed_reserved_client_request(
         &access,
         crate::request::lifecycle::RequestSpec::new(
             gents_protocol::request_admission::RequestPurpose::Normal,
@@ -514,7 +514,7 @@ async fn title_observation_uses_selected_agent_session_access() {
         agent: &AgentIdentityBinding,
         session: &str,
     ) {
-        crate::request::lifecycle::build_signed_client_request(
+        crate::request::lifecycle::build_signed_reserved_client_request(
             access,
             crate::request::lifecycle::RequestSpec::new(
                 gents_protocol::request_admission::RequestPurpose::Normal,

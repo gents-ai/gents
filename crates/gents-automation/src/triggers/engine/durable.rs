@@ -15,9 +15,8 @@ use gents_session::request::lifecycle::materialize::{
     refuse_retired_reserved_cause, sign_request, RequestSigner,
 };
 use gents_session::request::lifecycle::{
-    admit_client_request_in_txn,
-    stage_revoke_execution_preserving_output, stage_supersede_parked_execution,
-    RequestTerminalOutcome, TerminalizeResult,
+    admit_client_request_in_txn, stage_revoke_execution_preserving_output,
+    stage_supersede_parked_execution, RequestTerminalOutcome, TerminalizeResult,
 };
 use gents_store::config_client::ConfigApplyTxn;
 use gents_store::graphql::escape_graphql_string;

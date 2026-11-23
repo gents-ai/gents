@@ -289,7 +289,9 @@ receipt and the signed request commit together. A Client signs its request
 against the session's document id before that transaction; for a new session it
 takes the id DefraDB derives from the session's first block, which the Client
 prepares and signs from the request's own fields, so the id exists before
-anything is stored (`AdmissionInput.reserved = false`). A creation receipt names
+anything is stored (`AdmissionInput.reserved = false`). Only a holder of the
+signing key can derive that id, so a submission signed inside the runtime (an
+Agent acting as its own client) reserves its new session first. A creation receipt names
 its opening request and is written in the same transaction as the session and
 that request.
 

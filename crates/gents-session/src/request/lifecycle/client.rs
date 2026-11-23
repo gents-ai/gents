@@ -588,7 +588,9 @@ async fn build_signed_client_request_with(
         publication_admission_allowed(&create, &actor),
         "request publication admission is not allowed"
     );
-    let (session, agent) = if reserve {
+    // Only a held client key derives a new session's document id before it is
+    // stored; an access signing in the runtime reserves the session first.
+    let (session, agent) = if reserve || access.client_held_signer_did().is_none() {
         reserve_client_targets(access, &create).await?
     } else {
         prepare_client_targets(access, &create).await?
@@ -1597,12 +1599,12 @@ mod tests {
 
     use crate::test_support::assert_block_signer;
 
+    #[path = "admission_tests.rs"]
+    mod admission_tests;
     #[path = "claim_tests.rs"]
     mod claim_tests;
     #[path = "mailbox_claim_tests.rs"]
     mod mailbox_claim_tests;
-    #[path = "admission_tests.rs"]
-    mod admission_tests;
 
     #[tokio::test]
     async fn client_signature_binds_modeled_physical_targets() {

@@ -111,13 +111,11 @@ impl Served {
             .await
             .unwrap();
         let target = |relation: &str| {
-            rows.iter()
-                .find(|row| row.relation == relation)
-                .map(|row| {
-                    docs.iter()
-                        .find(|(doc, _)| row.subject.contains(doc))
-                        .map_or(0, |(_, number)| *number)
-                })
+            rows.iter().find(|row| row.relation == relation).map(|row| {
+                docs.iter()
+                    .find(|(doc, _)| row.subject.contains(doc))
+                    .map_or(0, |(_, number)| *number)
+            })
         };
         let worker = rows
             .iter()
@@ -184,13 +182,7 @@ impl Served {
                 Some(doc) => self.owner("AgentSession", doc).await,
                 None => None,
             },
-            session_doc: session_doc_id.map(|doc| {
-                if doc == targets.0 {
-                    session_doc
-                } else {
-                    0
-                }
-            }),
+            session_doc: session_doc_id.map(|doc| if doc == targets.0 { session_doc } else { 0 }),
             session_parent,
             session_worker,
             receipt: session.is_some_and(|row| !row["provenance"]["creation_receipt"].is_null()),
@@ -252,7 +244,9 @@ async fn client_admission_matches_the_lean_model() {
                     .await
                     .unwrap();
             } else {
-                let targets = prepare_client_targets(&served.access, &setup).await.unwrap();
+                let targets = prepare_client_targets(&served.access, &setup)
+                    .await
+                    .unwrap();
                 served.sign(&mut setup, targets).await;
                 submit_client_request(&served.access, &setup).await.unwrap();
             }
@@ -262,9 +256,13 @@ async fn client_admission_matches_the_lean_model() {
         let reserved = case.input.reserved;
         let creates_session = before["session"].is_null() && !reserved;
         let targets = if reserved {
-            reserve_client_targets(&served.access, &create).await.unwrap()
+            reserve_client_targets(&served.access, &create)
+                .await
+                .unwrap()
         } else if creates_session {
-            prepare_client_targets(&served.access, &create).await.unwrap()
+            prepare_client_targets(&served.access, &create)
+                .await
+                .unwrap()
         } else {
             served.existing_targets(session_id).await
         };

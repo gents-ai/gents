@@ -1002,8 +1002,8 @@ async fn client_goal_control_cannot_publish_user_graph_as_the_agent() {
         spec.retry_key = Some("goal-control-actor-fence".into());
         let request =
             build_signed_reserved_client_request(&client, spec, RequestSigner::Identity(&user))
-            .await
-            .unwrap();
+                .await
+                .unwrap();
         let old = if replacement {
             let goal = crate::goal::seed_goal_from_access(
                 &agent_access,

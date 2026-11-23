@@ -1142,7 +1142,7 @@ async fn reserve_goal_session(
     let access = db.client_access(user);
     let create = AgentRequestCreate::base(
         RequestPurpose::Normal,
-        &format!("goal-session-reservation-{session}"),
+        format!("goal-session-reservation-{session}"),
         RequestScope::new(db.node_identity.did(), user.did(), agent.did(), session),
         "reserve session",
         "interactive",
