@@ -72,7 +72,9 @@ from the initialization result and give it to the second device over an
 authenticated channel. It identifies the account, deployment, consensus key and genesis.
 
 Start the host before initializing the follower. Use the host account to add
-the follower device’s DID to the group’s `member` relation. The anchor identifies
+the follower device’s DID to the group’s `member` relation with
+`gents runtime p2p enrollment admit-device <group-id> <device-did>`.
+Use `remove-device` with the same arguments to withdraw it. The anchor identifies
 the deployment, while that signed grant admits the device. On the second device, make
 a private route from a local loopback port to the host's loopback port.
 Initialize a fresh follower with `--document-acp vera --vera-rpc-port 9841

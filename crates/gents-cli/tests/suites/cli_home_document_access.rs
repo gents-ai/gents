@@ -236,7 +236,7 @@ async fn paired_home_reopens_against_the_original_vera_deployment() -> Result<()
                 .context("host must export its verified deployment identity")?,
         )?,
     )?;
-    let (active, host_graphql) = served(host.path()).await?;
+    let (active, _) = served(host.path()).await?;
     let mut paired = init_args.to_vec();
     paired.extend([
         "--vera-anchor",
@@ -254,22 +254,22 @@ async fn paired_home_reopens_against_the_original_vera_deployment() -> Result<()
     use gents_store::identity::{KeyIdentity, NodeIdentity};
     let key_path = follower.path().join("follower.key");
     let follower_key = KeyIdentity::load_or_create(&key_path, None)?;
-    let follower_did = follower_key.did().parse()?;
+    let follower_did = follower_key.did();
     let group = provisioned["transport_group"]["group"]
         .as_str()
         .context("transport group document")?;
-    let owner = gents_store::config_client::ConfigAccess::Graphql(
-        crate::support::graphql::served_endpoint(&host_graphql),
-    );
-    anyhow::ensure!(owner.actor_did().as_deref() == Some(account));
-    owner
-        .add_actor_relationship(
-            gents_protocol::schemas::ACCOUNT_DEVICE_GROUP_NAME,
+    let admitted = run_cli_json(
+        host.path(),
+        &[
+            "runtime",
+            "p2p",
+            "enrollment",
+            "admit-device",
             group,
-            "member",
-            &follower_did,
-        )
-        .await?;
+            follower_did,
+        ],
+    )?;
+    anyhow::ensure!(admitted["member"] == true && admitted["device"] == follower_did);
     paired.extend([
         "--key-path",
         key_path.to_str().context("follower key path")?,
@@ -286,7 +286,7 @@ async fn paired_home_reopens_against_the_original_vera_deployment() -> Result<()
     anyhow::ensure!(!first.is_empty(), "the paired device has no sessions");
     stop(serving).await?;
     stop(active).await?;
-    let (active, host_graphql) = served(host.path()).await?;
+    let (active, _) = served(host.path()).await?;
     let (serving, graphql) = served(follower.path()).await?;
     kept(
         &first,
@@ -294,17 +294,18 @@ async fn paired_home_reopens_against_the_original_vera_deployment() -> Result<()
         "after both devices restarted",
     )?;
     stop(serving).await?;
-    let owner = gents_store::config_client::ConfigAccess::Graphql(
-        crate::support::graphql::served_endpoint(&host_graphql),
-    );
-    owner
-        .delete_actor_relationship(
-            gents_protocol::schemas::ACCOUNT_DEVICE_GROUP_NAME,
+    let removed = run_cli_json(
+        host.path(),
+        &[
+            "runtime",
+            "p2p",
+            "enrollment",
+            "remove-device",
             group,
-            "member",
-            &follower_did,
-        )
-        .await?;
+            follower_did,
+        ],
+    )?;
+    anyhow::ensure!(removed["member"] == false);
     let denied = run_cli_failure_stderr(follower.path(), &["runtime", "server"])?;
     anyhow::ensure!(
         denied.contains("no certified group assignment"),

@@ -81,6 +81,10 @@ pub(crate) enum P2pNetworkCommand {
 
 #[derive(Subcommand)]
 pub(crate) enum P2pEnrollmentCommand {
+    /// Grant a device membership in the account's Vera transport group.
+    AdmitDevice(DeviceGroupMemberArgs),
+    /// Withdraw a device's membership in the account's Vera transport group.
+    RemoveDevice(DeviceGroupMemberArgs),
     #[command(about = "List fresh pending authenticated enrollment requests")]
     Pending(P2pAccessArgs),
     #[command(about = "Grant a pending client Node administration explicitly")]
@@ -91,6 +95,16 @@ pub(crate) enum P2pEnrollmentCommand {
     Deny(P2pEnrollmentDecisionArgs),
     #[command(about = "Revoke the current authorization for a request")]
     Revoke(P2pEnrollmentDecisionArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct DeviceGroupMemberArgs {
+    /// Document ID returned in transport_group.group when the host was initialized.
+    pub(crate) group: String,
+    /// Signing DID of the device being admitted or removed.
+    pub(crate) device: identity::Did,
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
 }
 
 #[derive(Debug, clap::Args)]

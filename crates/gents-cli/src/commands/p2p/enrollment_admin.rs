@@ -6,7 +6,9 @@ use gents_service::enrollment_admin::{
 };
 use gents_service::home_state::{resolve_graphql_endpoint, resolve_home_dir};
 
-use crate::cli::args::{P2pAccessArgs, P2pEnrollmentDecisionArgs, P2pEnrollmentGrantArgs};
+use crate::cli::args::{
+    DeviceGroupMemberArgs, P2pAccessArgs, P2pEnrollmentDecisionArgs, P2pEnrollmentGrantArgs,
+};
 use crate::print_json;
 
 pub(super) async fn decide_enrollment(
@@ -48,4 +50,36 @@ pub(super) async fn grant_pending_client(args: P2pEnrollmentGrantArgs) -> Result
         .await?
         .context("expected one verified pending enrollment")?;
     print_json(&result)
+}
+
+pub(super) async fn device_membership(args: DeviceGroupMemberArgs, admit: bool) -> Result<()> {
+    use gents_protocol::schemas::ACCOUNT_DEVICE_GROUP_NAME;
+    use gents_store::config_client::ConfigAccess;
+
+    let endpoint = resolve_graphql_endpoint(None, args.home.as_deref()).await?;
+    let owner = ConfigAccess::Graphql(endpoint);
+    if admit {
+        owner
+            .add_actor_relationship(
+                ACCOUNT_DEVICE_GROUP_NAME,
+                &args.group,
+                "member",
+                &args.device,
+            )
+            .await?;
+    } else {
+        owner
+            .delete_actor_relationship(
+                ACCOUNT_DEVICE_GROUP_NAME,
+                &args.group,
+                "member",
+                &args.device,
+            )
+            .await?;
+    }
+    print_json(&serde_json::json!({
+        "group": args.group,
+        "device": args.device.as_str(),
+        "member": admit,
+    }))
 }
