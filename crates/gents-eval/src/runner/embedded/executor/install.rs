@@ -313,9 +313,8 @@ fn trial_wires_through_its_own_store(
     _: gents_store::config_client::GraphqlEndpoint,
     _: String,
     _: std::path::PathBuf,
-    _: gents_pack::pack::plugin_wire::WireRequest,
-    _: Option<gents_pack::pack::plugin_wire::ClientPlan>,
-) -> futures::future::BoxFuture<'static, Result<Value>> {
+    _: Vec<gents_pack::pack::plugin_wire::ClientWire>,
+) -> futures::future::BoxFuture<'static, Result<Vec<Value>>> {
     Box::pin(async {
         anyhow::bail!("an eval trial wires its core packs through its own store, never a runtime")
     })
