@@ -2404,7 +2404,13 @@ export function createDesktopUiHarness(
         agent: request.agent,
         preview: request.preview,
         authority: null,
-        report: { changed: [], job: null, warnings: [], next_call: null },
+        report: {
+          changed: [],
+          job: null,
+          warnings: [],
+          policy_warnings: [],
+          next_call: null,
+        },
       };
     },
     async listPackWireSources() {

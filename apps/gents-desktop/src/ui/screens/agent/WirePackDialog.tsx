@@ -18,7 +18,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@gents/ui/components/select";
-import type { AgentView, PackWireResult } from "@source-inc/gents-desktop-client";
+import type {
+  AgentView,
+  PackWireEntry,
+  WirePolicyWarning,
+} from "@source-inc/gents-desktop-client";
 import { useApp } from "@/app/AppContext";
 import { useCopied } from "@/lib/clipboard";
 
@@ -63,7 +67,7 @@ export function WirePackDialog({
 }: WirePackDialogProps) {
   const { actions } = useApp();
   const [agentDid, setAgentDid] = useState(agent ?? agents[0]?.agentDid ?? "");
-  const [preview, setPreview] = useState<PackWireResult | null>(null);
+  const [preview, setPreview] = useState<PackWireEntry | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refused, setRefused] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -99,7 +103,8 @@ export function WirePackDialog({
     }
   }
 
-  const job = preview?.report.job;
+  const planned = preview && !preview.skipped ? preview : null;
+  const job = planned?.report.job;
   return (
     <Dialog open onOpenChange={(open) => !open && onClose(false)}>
       <DialogContent className="sm:max-w-lg">
@@ -130,7 +135,16 @@ export function WirePackDialog({
               </SelectContent>
             </Select>
           </Field>
-          {preview && (
+          {preview?.skipped && (
+            <div role="status" className="grid gap-1 text-sm">
+              <p>
+                {preview.plugin} can’t be enabled for this agent yet: its pack creates
+                the agent “{preview.slot}” when it is installed.
+              </p>
+              <p>Install the pack first, then enable {preview.plugin} here.</p>
+            </div>
+          )}
+          {planned && (
             <ul className="grid gap-1 text-sm">
               {job ? (
                 <>
@@ -146,10 +160,18 @@ export function WirePackDialog({
                   </li>
                 </>
               ) : (
-                preview.report.next_call && <li>{preview.report.next_call}</li>
+                planned.report.next_call && <li>{planned.report.next_call}</li>
               )}
-              {preview.authority && <li>Authority: {preview.authority}</li>}
-              {preview.report.warnings.map((warning) => (
+              {planned.authority && <li>Authority: {planned.authority}</li>}
+              {planned.report.policy_warnings.map((warning) => (
+                <li
+                  key={`${warning.plugin}:${warning.code}`}
+                  data-testid="wire-policy-warning"
+                >
+                  {keptPolicy(warning)}
+                </li>
+              ))}
+              {planned.report.warnings.map((warning) => (
                 <li key={warning}>{warning}</li>
               ))}
             </ul>
@@ -171,7 +193,7 @@ export function WirePackDialog({
           </Button>
           <Button
             variant="brand"
-            disabled={busy || !preview || refused}
+            disabled={busy || !planned || refused}
             onClick={() => void confirm()}
           >
             Enable
@@ -181,6 +203,23 @@ export function WirePackDialog({
     </Dialog>
   );
 }
+
+const policyText = (policy: WirePolicyWarning["kept"]) =>
+  `${policy.dynamic}${
+    policy.dynamic_targets.length ? ` for ${policy.dynamic_targets.join(", ")}` : ""
+  }`;
+
+/* what wiring kept of the agent's own dynamic-script setting, in words a
+   person acts on: wiring never changes it */
+export const keptPolicy = (warning: WirePolicyWarning) => {
+  const change = `To change it, edit the job settings of ${warning.plugin} in the agent’s tools (${warning.tools_id}).`;
+  if (warning.code === "dynamic_run_repinned")
+    return `Dynamic scripts of the new version of ${warning.plugin} run, as you set for the version before (${policyText(warning.kept)}). ${change}`;
+  const asked = warning.requested
+    ? ` The pack asks for ${policyText(warning.requested)}.`
+    : "";
+  return `Your dynamic-script setting is kept: ${policyText(warning.kept)}.${asked} ${change}`;
+};
 
 /* why Enable can't work on a running node yet, with the command to run once
    it's stopped */

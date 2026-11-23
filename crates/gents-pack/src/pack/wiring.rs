@@ -3,6 +3,8 @@
 //! `pack wire` both read their inputs and apply them through this owner, each
 //! inside its own actor's transaction.
 
+use std::collections::BTreeMap;
+
 use anyhow::{Context, Result};
 use serde_json::Value;
 
@@ -14,7 +16,8 @@ use super::{
 };
 use gents_documents::{
     apply_desired_state_plan, load_agent_context_and_tools_in_txn,
-    read_desired_state_records_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan, Tools,
+    read_desired_state_records_in_txn, validate_desired_state_plan, AgentContext,
+    DesiredStateApplyDocument, DesiredStateApplyPlan, Tools,
 };
 use gents_store::collection::Collection;
 use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
@@ -66,12 +69,6 @@ pub struct PluginWiring {
     /// (pack coordinate, the AgentTarget ids it ships, its provenance).
     pub targets_from: Vec<(String, Vec<String>, InstalledVia)>,
     pub remove: bool,
-    /// Computes the same report and writes nothing.
-    pub preview: bool,
-    /// The job settings owner's consent step, set when the node owner
-    /// approved dynamic scripts for this plugin: its job block goes from
-    /// `check` to `run` (Lean `consentedDynamic`).
-    pub dynamic_consent: Option<fn(&mut Tools, &str, &mut WireReport)>,
     /// Set when the node owner approved this plugin calling the agent's own
     /// tools: its selection is written with `tool_calls: true`.
     pub tool_calls_consent: bool,
@@ -89,6 +86,20 @@ pub enum ReviewedJob {
     /// the pack the caller approved yields (`Configuration.wireReviewedJob`);
     /// `None` when the approval could not derive it.
     Approved(Option<Option<gents_protocol::job::PluginJobSettings>>),
+    /// The job the archive a preview installs yields, which its install
+    /// writes to the node before the wire reads it.
+    Archive(Option<gents_protocol::job::PluginJobSettings>),
+}
+
+/// What [`apply_batch`] does with the documents its plans leave.
+#[derive(Debug, Clone, Copy)]
+pub enum BatchWrite<'a> {
+    Apply,
+    /// Validates the write and makes none, beside the documents of a pack
+    /// the preview installs first.
+    Preview {
+        installing: Option<&'a gents_documents::PackConfig>,
+    },
 }
 
 impl PluginWiring {
@@ -155,8 +166,6 @@ impl PluginWiring {
             skill_ids,
             targets_from: targets,
             remove: false,
-            preview: false,
-            dynamic_consent: None,
             tool_calls_consent: false,
             next_step: String::new(),
             reviewed: ReviewedJob::Read,
@@ -177,34 +186,27 @@ impl PluginWiring {
         format!("{}/{}", self.plugin.namespace, self.plugin.name)
     }
 
-    /// Applies the wiring inside `txn` and reports what changed.
-    pub async fn apply(
+    /// This wiring over `tools` and `context`, without writing.
+    async fn wired(
         &self,
         txn: &ConfigApplyTxn<'_>,
-        profile_policy: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
-    ) -> Result<WireReport> {
-        let agent_did = &self.agent;
-        let missing = |link: &str| format!("{link}. Next: {}", self.next_step);
-        let (context, tools) = load_agent_context_and_tools_in_txn(txn, &self.owner, agent_did)
-            .await
-            .with_context(|| missing(&format!("cannot read the Tools of {agent_did}")))?;
-        let context =
-            context.with_context(|| missing(&format!("{agent_did} has no Context document")))?;
-        let tools =
-            tools.with_context(|| missing(&format!("{agent_did} has no Tools document")))?;
+        tools: &Tools,
+        context: &AgentContext,
+    ) -> Result<(Tools, AgentContext, WireReport)> {
         let (mut tools, context, mut report) = if self.remove {
             unwire_plugin(
-                &tools,
-                &context,
+                tools,
+                context,
                 &self.plugin,
                 &self.skill_ids,
                 &self.targets_from,
             )?
         } else {
-            let job = self.reviewed_job(txn).await?;
             let job = match &self.reviewed {
-                ReviewedJob::Read => job,
+                ReviewedJob::Read => self.reviewed_job(txn).await?,
+                ReviewedJob::Archive(job) => job.clone(),
                 ReviewedJob::Approved(approved) => {
+                    let job = self.reviewed_job(txn).await?;
                     crate::pack::wire_subject::wire_reviewed_job(
                         approved.as_ref().map(Option::as_ref),
                         job.as_ref(),
@@ -218,39 +220,24 @@ impl PluginWiring {
                 }
             };
             wire_plugin(
-                &tools,
-                &context,
+                tools,
+                context,
                 &self.plugin,
                 job.as_ref(),
                 &self.skill_ids,
                 &self.targets_from,
             )?
         };
-        if let Some(consent) = self.dynamic_consent.filter(|_| !self.remove) {
-            consent(&mut tools, &self.coordinate(), &mut report);
-        }
         if self.tool_calls_consent && !self.remove {
             consent_tool_calls(&mut tools, &self.coordinate(), &mut report);
         }
         tools.validate()?;
-        if !self.preview {
-            let document = |collection, value: Value| DesiredStateApplyDocument {
-                collection,
-                add: value.clone(),
-                update: value,
-            };
-            let plan = DesiredStateApplyPlan::new(vec![
-                document(Collection::Tools, serde_json::to_value(&tools)?),
-                document(Collection::AgentContext, serde_json::to_value(&context)?),
-            ])?;
-            apply_desired_state_plan(txn, &plan, profile_policy).await?;
-        }
-        Ok(report)
+        Ok((tools, context, report))
     }
 
     /// The `job` block of the first entry for this plugin in its pack's own
     /// Tools documents that carries one: what the pack's author reviewed.
-    async fn reviewed_job(
+    pub(crate) async fn reviewed_job(
         &self,
         txn: &ConfigApplyTxn<'_>,
     ) -> Result<Option<gents_protocol::job::PluginJobSettings>> {
@@ -277,4 +264,82 @@ impl PluginWiring {
         }
         Ok(None)
     }
+}
+
+/// Applies `plans` in order, each over the Tools and Context the ones before
+/// it left, and writes every document they change once, in `txn`, as `write`
+/// says. One report per plan.
+pub async fn apply_batch(
+    txn: &ConfigApplyTxn<'_>,
+    plans: &[&PluginWiring],
+    write: BatchWrite<'_>,
+    profile_policy: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
+) -> Result<Vec<WireReport>> {
+    let mut tools_by_id = BTreeMap::<String, Tools>::new();
+    let mut contexts_by_id = BTreeMap::<String, AgentContext>::new();
+    let mut reports = Vec::with_capacity(plans.len());
+    for plan in plans {
+        let agent_did = &plan.agent;
+        let missing = |link: &str| format!("{link}. Next: {}", plan.next_step);
+        let (context, tools) = load_agent_context_and_tools_in_txn(txn, &plan.owner, agent_did)
+            .await
+            .with_context(|| missing(&format!("cannot read the Tools of {agent_did}")))?;
+        let context =
+            context.with_context(|| missing(&format!("{agent_did} has no Context document")))?;
+        let tools =
+            tools.with_context(|| missing(&format!("{agent_did} has no Tools document")))?;
+        let context = contexts_by_id
+            .get(&context.context_id)
+            .cloned()
+            .unwrap_or(context);
+        let tools = tools_by_id.get(&tools.tools_id).cloned().unwrap_or(tools);
+        let (tools, context, report) = plan.wired(txn, &tools, &context).await?;
+        tools_by_id.insert(tools.tools_id.clone(), tools);
+        contexts_by_id.insert(context.context_id.clone(), context);
+        reports.push(report);
+    }
+    if plans.is_empty() {
+        return Ok(reports);
+    }
+    let document = |collection, value: Value| DesiredStateApplyDocument {
+        collection,
+        add: value.clone(),
+        update: value,
+    };
+    let mut documents = match write {
+        BatchWrite::Preview {
+            installing: Some(config),
+        } => {
+            let mut config = config.clone();
+            config
+                .tools
+                .retain(|tools| !tools_by_id.contains_key(&tools.tools_id));
+            config
+                .contexts
+                .retain(|context| !contexts_by_id.contains_key(&context.context_id));
+            DesiredStateApplyPlan::from_pack_config(&config)?
+                .documents()
+                .to_vec()
+        }
+        _ => Vec::with_capacity(tools_by_id.len() + contexts_by_id.len()),
+    };
+    for tools in tools_by_id.values() {
+        documents.push(document(Collection::Tools, serde_json::to_value(tools)?));
+    }
+    for context in contexts_by_id.values() {
+        documents.push(document(
+            Collection::AgentContext,
+            serde_json::to_value(context)?,
+        ));
+    }
+    let desired = DesiredStateApplyPlan::new(documents)?;
+    match write {
+        BatchWrite::Apply => {
+            apply_desired_state_plan(txn, &desired, profile_policy).await?;
+        }
+        BatchWrite::Preview { .. } => {
+            validate_desired_state_plan(txn, &desired, profile_policy).await?;
+        }
+    }
+    Ok(reports)
 }

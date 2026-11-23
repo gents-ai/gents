@@ -14,9 +14,9 @@ service. Artifacts remain under `<gents-home>/plugin-services/run-*/worker/`.
 
 This mode still requires `uv`, Python 3.13 (uv may install it), and Chrome/Chromium.
 It bundles source and a dependency lock, not those runtime binaries. Port 18765
-must be free; multiple independent runtimes need separate network environments
-until the transport supports configurable endpoints. The explicit external-worker
-setup below remains available when `connection` is supplied.
+must be free; the transport uses that fixed endpoint, so independent runtimes
+need separate network environments. The explicit external-worker setup below
+is used when `connection` is supplied.
 
 Ask the model to connect to your running browser. `op=discover` checks local
 browser setup without making a debugging connection. `op=connect` with its
@@ -37,7 +37,7 @@ Test native ownership with `worker/tests/live_model.py --managed` and the other
 live-model arguments below. This skips external setup and exercises runtime startup.
 
 
-Hermes-style browser execution for Gents: one `gents/browser_exec` plugin runs
+Browser execution for Gents: one `gents/browser_exec` plugin runs
 Python with Browser Use's browser-harness helpers against a persistent Chromium
 session. Gents keeps inference, conversations, and task completion. No additional
 model API key is required. This is a capability pack, not a separate browser agent.
@@ -47,9 +47,8 @@ model API key is required. This is a capability pack, not a separate browser age
 Prerequisites: a current Gents runtime with plugin HTTP rounds and directory
 bindings, `uv`, and macOS or Linux. Managed mode needs Chrome/Chromium. Existing
 local or remote CDP endpoints can be attached explicitly. The Python worker runs
-as its OS user with that user's filesystem and network access, like Hermes's
-terminal-capable browser mode. Use an isolated OS environment when that authority
-is inappropriate. WASM limits bound the adapter, not the external Python worker.
+as its OS user with that user's filesystem and network access. Use an isolated
+OS environment when that authority is inappropriate. WASM limits bound the adapter, not the external Python worker.
 
 From this pack's directory, choose a private, persistent state directory outside
 the checkout. Models can execute this setup after the operator has authorized
@@ -133,9 +132,9 @@ An attached browser gets a dedicated task tab; the worker never kills it or the
 borrowed browser. Attached tabs may remain after cleanup and can be closed
 explicitly by the task. If an attached driver restarts, it acquires a new task tab
 before running model code, avoiding the user's active tab. A timeout can leave completed external actions behind;
-inspect state before retrying. Gents cancellation stops the plugin polling; the
-worker's independent execution deadline still bounds a submitted job. Immediate
-propagation of cancellation to the worker is not yet wired.
+inspect state before retrying. Gents cancellation stops the plugin polling but
+does not reach the worker; the worker's own execution deadline bounds a
+submitted job.
 
 Stop with `uv run --locked --project worker python worker/browser_worker.py stop
 --state ~/.local/share/gents-browser` (one line). SIGTERM also closes its managed
@@ -176,7 +175,7 @@ submission. It does not rely solely on the model claiming success.
 
 ```sh
 uv run --locked --project worker python worker/tests/live_model.py --managed \
-  --gents /path/to/current/gents --endpoint http://workstation-1:8000/v1
+  --gents /path/to/current/gents --endpoint <openai-compatible-base-url>
 ```
 
 The first advertised model is used unless `--model` is given. Port 18765 must be
@@ -193,18 +192,9 @@ requires saved source links and short quotes observed in browser output, and
 retains traces for factual review. This checks execution and evidence collection;
 it does not treat the model's synthesis as independently verified truth.
 
-The running-browser flow was validated on 2026-10-16 with fresh installed packs
-and real `GLM-5.3-Flash-NVFP4` inference on workstation-1 and workstation-2.
-Both verified authenticated reading, live editing, preserved tab IDs/URLs and
-browser survival after disconnect, plus native process-group cleanup. An
-operator-approved connection to an ordinary running Chrome also listed its live
-tabs successfully. These are functional integration tests, not a reliability
-benchmark. The automated fixtures never use personal browser accounts.
-
 Browser Use browser-harness is pinned to 0.1.13 with a dependency lock; upgrades
-must rerun the live suite. This integration follows
-[Hermes browser execution](https://github.com/NousResearch/hermes-agent/blob/main/tools/browser_use_cli.py)
-and reuses [Browser Use's MIT-licensed harness](https://github.com/browser-use/browser-harness).
+must rerun the live suite. The pack reuses
+[Browser Use's MIT-licensed harness](https://github.com/browser-use/browser-harness).
 Chrome's running-browser connection uses its documented
 [approval flow](https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session).
 
@@ -212,17 +202,16 @@ Chrome's running-browser connection uses its documented
 
 The pack ships its own [native eval suite](evals/README.md) under `evals/`, with
 six acceptance cases, a browser-only subject agent, and independent fixture-state
-oracles. Both nested packs can be checked with `gents config pack check`. Native trial
-provisioning and publishing oracle observations still need a runner bridge; these
-native definitions have not yet been executed. The live model runner above remains
-the working end-to-end integration test.
+oracles. Both nested packs can be checked with `gents config pack check`. The
+embedded eval runner provides no browser trial provisioning or oracle bridge for
+them, so the live model runner above is the end-to-end integration test.
 
 ## Running-browser integration test
 
 ```sh
-uv run --locked --project packs/gents/web/worker python \
-  packs/gents/web/worker/tests/live_model.py --managed --connected \
-  --gents /path/to/gents --endpoint http://workstation-1:8000/v1
+uv run --locked --project worker python worker/tests/live_model.py \
+  --managed --connected --gents /path/to/gents \
+  --endpoint <openai-compatible-base-url>
 ```
 
 This creates a fresh Gents home and a separately owned Chromium profile, logs into

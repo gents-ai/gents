@@ -867,6 +867,74 @@ fn pack_wire_preview_writes_nothing() -> Result<()> {
     Ok(())
 }
 
+/// The live-node finding behind `PluginWiring.wire_keeps_existing_policy`:
+/// wiring again put an operator's `run` back to the pack's mode.
+#[test]
+fn pack_wire_keeps_the_operators_run_and_warns() -> Result<()> {
+    let fixture = wire_fixture(true)?;
+    fixture.wire(&[])?;
+    let mut tools = fixture.agent_tools()?;
+    tools
+        .as_object_mut()
+        .context("Tools is an object")?
+        .remove("_docID");
+    let tools_id = tools["tools_id"].as_str().context("tools_id")?.to_owned();
+    let entry = tools["integrations"]["plugins"]
+        .as_array_mut()
+        .context("plugins")?
+        .iter_mut()
+        .find(|entry| entry["plugin"] == "fixture/job_fixture")
+        .context("plugin not wired")?;
+    entry["job"]["policy"]["dynamic"] = "run".into();
+    entry["job"]["policy"]["dynamic_targets"] = serde_json::json!(["wf-fixture"]);
+    let file = fixture.tempdir.path().join("operator-tools.json");
+    write_json_file(&file, &tools)?;
+    run_cli_json(
+        fixture.tempdir.path(),
+        &[
+            "config",
+            "tools",
+            "set",
+            "--file",
+            dir_arg(&file),
+            "--home",
+            dir_arg(&fixture.home),
+        ],
+    )?;
+    let operator =
+        wired_plugin(&fixture.agent_tools()?).context("plugin not wired")?["job"]["policy"].clone();
+    let previewed = fixture.wire(&["--preview"])?;
+    let first = fixture.wire(&[])?;
+    let second = fixture.wire(&[])?;
+    let kept =
+        wired_plugin(&fixture.agent_tools()?).context("plugin not wired")?["job"]["policy"].clone();
+    anyhow::ensure!(
+        kept == operator && kept["dynamic"] == "run",
+        "wiring changed the operator's policy {operator} to {kept}"
+    );
+    anyhow::ensure!(
+        previewed["report"] == first["report"] && first["report"] == second["report"],
+        "preview, apply and a repeated wire differ: {previewed} {first} {second}"
+    );
+    let warnings = first["report"]["policy_warnings"]
+        .as_array()
+        .context("no policy_warnings")?;
+    let warning = warnings
+        .iter()
+        .find(|warning| warning["code"] == "dynamic_mode_kept")
+        .with_context(|| format!("the kept run is not reported: {first}"))?;
+    anyhow::ensure!(
+        warning["requested"]["dynamic"] == "off"
+            && warning["kept"] == kept
+            && warning["tools_id"] == tools_id.as_str()
+            && warning["remedy"].as_str().is_some_and(
+                |remedy| remedy.contains(&format!("gents config tools show {tools_id}"))
+            ),
+        "the warning does not name what was asked and how to change it: {warning}"
+    );
+    Ok(())
+}
+
 #[test]
 fn pack_wire_remove_reverses_only_unreferenced() -> Result<()> {
     let fixture = wire_fixture(true)?;
@@ -1422,6 +1490,92 @@ fn pack_install_wire_wires_the_agent() -> Result<()> {
     anyhow::ensure!(
         wired_plugin(&fixture.agent_tools()?).is_some(),
         "the agent's Tools does not list the plugin"
+    );
+    Ok(())
+}
+
+/// The job fixture pack, not installed, with its reviewed job block over the
+/// target it ships, and with `authored` an agent its install creates.
+fn uninstalled_reviewed_job_pack(authored: bool) -> Result<WireFixture> {
+    let fixture = uninstalled_job_pack()?;
+    let pack = fixture.job_pack();
+    let mut config = serde_json::json!({
+        "node": {},
+        "agent_targets": [wire_target("wf-fixture")],
+        "tools": [{
+            "tools_id": "job-fixture-caller",
+            "display_name": "Job fixture caller",
+            "agents": {"target_ids": ["wf-fixture"]},
+            "integrations": {"plugins": [{"plugin": "fixture/job_fixture",
+                "job": {"agent_targets": ["wf-fixture"], "policy": {"dynamic": "check"}}}]},
+        }],
+    });
+    if authored {
+        config["agents"] = serde_json::json!([{"agent_slot": "fixture-worker",
+            "context_id": "fixture-worker-context", "display_name": "Fixture worker",
+            "description": "Does one task.",
+            "inference_profile_id": "gents:inference-slot:worker"}]);
+        config["contexts"] = serde_json::json!([{"context_id": "fixture-worker-context",
+            "system_prompt": "Work."}]);
+        let manifest_path = pack.join("manifest.json");
+        let mut manifest = read_json_file(&manifest_path)?;
+        manifest["inference_slots"] = serde_json::json!([{"name": "worker",
+            "description": "The worker.", "agents": ["fixture-worker"]}]);
+        write_json_file(&manifest_path, &manifest)?;
+    }
+    edit_pack_config(&pack, |existing| *existing = config)?;
+    build_pack(fixture.tempdir.path(), &pack)?;
+    Ok(fixture)
+}
+
+/// `install --preview --wire` plans the wiring the install writes and writes
+/// nothing; a pack that authors an agent its install creates plans a skip,
+/// with what to do instead, for each slot, agent and plugin.
+#[test]
+fn pack_install_preview_wire_plans_the_wiring_and_writes_nothing() -> Result<()> {
+    let fixture = uninstalled_reviewed_job_pack(false)?;
+    let before = fixture.agent_tools()?;
+    let previewed = fixture.install_job_pack(&["--preview", "--wire", &fixture.agent])?;
+    let planned = &previewed["wired"][0];
+    anyhow::ensure!(
+        planned["preview"] == true
+            && planned["plugin"] == "fixture/job_fixture"
+            && planned["report"]["job"]["agent_targets"] == serde_json::json!(["wf-fixture"]),
+        "the preview does not plan the reviewed block: {previewed}"
+    );
+    anyhow::ensure!(
+        fixture.agent_tools()? == before
+            && gents_pack::pack::read_home_install(&fixture.home, "fixture/job_plugin_fixture")?
+                .is_none(),
+        "a preview wrote to the node"
+    );
+    let installed = fixture.install_job_pack(&["--wire", &fixture.agent])?;
+    anyhow::ensure!(
+        installed["wired"][0]["report"]["job"] == planned["report"]["job"],
+        "the install wired another block than its preview planned: {previewed} {installed}"
+    );
+
+    let authored = uninstalled_reviewed_job_pack(true)?;
+    let before = authored.agent_tools()?;
+    let previewed = authored.install_job_pack(&["--preview", "--wire", &authored.agent])?;
+    let skipped = previewed["wired"]
+        .as_array()
+        .context("the preview lists no wiring")?;
+    anyhow::ensure!(
+        skipped.len() == 1
+            && skipped[0]["skipped"] == true
+            && skipped[0]["slot"] == "fixture-worker"
+            && skipped[0]["agent"] == authored.agent.as_str()
+            && skipped[0]["plugin"] == "fixture/job_fixture"
+            && skipped[0]["reason"] == "agent_identity_pending"
+            && skipped[0]["next"]
+                .as_str()
+                .is_some_and(|next| next.contains("install")),
+        "an authored agent slot is not a skip naming what to do: {previewed}"
+    );
+    anyhow::ensure!(
+        authored.agent_tools()? == before,
+        "a skipped preview wrote to the node"
     );
     Ok(())
 }

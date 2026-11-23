@@ -225,6 +225,28 @@ pub(super) fn bind_authored_agents(value: &mut Value, bindings: &PackAgentBindin
     rewrite_references(value, bindings)
 }
 
+/// The agent slots `manifest` authors that `owner`'s node has bound to no
+/// agent yet: an install provisions their identities, which nothing that
+/// only reads may do.
+pub(super) async fn pending_agent_slots(
+    access: &ConfigAccess,
+    manifest: &PackManifest,
+    owner: &str,
+    read_asset: &(dyn Fn(&str) -> Result<Vec<u8>> + Sync),
+) -> Result<Vec<String>> {
+    let value = match manifest.config.as_deref() {
+        Some(path) => serde_json::from_slice(&read_asset(path)?)?,
+        None => serde_json::json!({"node": {}}),
+    };
+    let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
+    let (_, recorded) =
+        super::installation::read_agent_bindings(access, owner, &coordinate).await?;
+    Ok(authored_slots(&value)?
+        .into_iter()
+        .filter(|slot| !recorded.contains_key(slot))
+        .collect())
+}
+
 pub async fn load_pack_install_config(
     access: &ConfigAccess,
     manifest: &PackManifest,

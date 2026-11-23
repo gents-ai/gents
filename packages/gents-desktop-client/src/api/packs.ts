@@ -7,7 +7,7 @@ import type {
   PackWireRequest,
   WorkflowPromoteRequest,
   WorkflowPromoted,
-  PackWireResult,
+  PackWireEntry,
   PackWireSources,
 } from "../types/packs.js";
 import type { createDesktopInvoker } from "./invoke.js";
@@ -40,7 +40,7 @@ export function createPackCommands(
       }).then(() => undefined),
     wirePack: (request: PackWireRequest) =>
       invokeDesktop("desktop_pack_wire", { request }).then(
-        (report) => report as PackWireResult,
+        (report) => report as PackWireEntry,
       ),
     listPackWireSources: () =>
       invokeDesktop("desktop_pack_wire_sources").then(

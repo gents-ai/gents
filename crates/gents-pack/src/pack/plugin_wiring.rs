@@ -10,8 +10,87 @@ pub struct WireReport {
     /// The plugin's job block after the change; `None` means non-job verbs only.
     pub job: Option<gents_protocol::job::PluginJobSettings>,
     pub warnings: Vec<String>,
+    /// What the incoming block asked of the dynamic policy that the
+    /// operator's kept policy does not give, and how to change it.
+    pub policy_warnings: Vec<PolicyWarning>,
     /// Set only when no job block was written (R14).
     pub next_call: Option<String>,
+}
+
+/// Lean `PluginWiring.Warning`: the warnings about the operator's dynamic
+/// policy a wiring keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyWarningCode {
+    DynamicModeKept,
+    DynamicTargetsKept,
+    DynamicRunRepinned,
+}
+
+/// Who reads a policy warning's remedy, which names that reader's own calls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemedySurface {
+    Cli,
+    ConfigTool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PolicyWarning {
+    pub code: PolicyWarningCode,
+    pub plugin: String,
+    /// The Tools document whose job block holds the kept policy.
+    pub tools_id: String,
+    /// What the incoming block asked for; `None` when a re-pin had none.
+    pub requested: Option<gents_protocol::job::JobPolicy>,
+    pub kept: gents_protocol::job::JobPolicy,
+    pub previous_digest: Option<String>,
+    pub installed_digest: String,
+    pub remedy: String,
+}
+
+impl PolicyWarning {
+    fn remedy_for(&self, surface: RemedySurface) -> String {
+        let (plugin, tools_id) = (&self.plugin, &self.tools_id);
+        let kept = match self.code {
+            PolicyWarningCode::DynamicRunRepinned => format!(
+                "{plugin} now runs {} under the job.policy.dynamic run decided for {}.",
+                self.installed_digest,
+                self.previous_digest
+                    .as_deref()
+                    .unwrap_or("another artifact")
+            ),
+            PolicyWarningCode::DynamicModeKept | PolicyWarningCode::DynamicTargetsKept => {
+                format!("Wiring kept the job.policy of {plugin} and changed nothing in it.")
+            }
+        };
+        let change = match surface {
+            RemedySurface::Cli => format!(
+                "To change it: gents config tools show {tools_id} > tools.json, edit that plugin's job.policy, then gents config tools set --file tools.json, with the --home or --graphql of this call."
+            ),
+            RemedySurface::ConfigTool => format!(
+                "To change it: config {{\"argv\":[\"tools\",\"get\"],\"target_id\":\"{tools_id}\"}}, then [\"tools\",\"edit\"] on the same target_id with set.integrations sent back and that plugin's job.policy changed."
+            ),
+        };
+        format!("{kept} {change}")
+    }
+
+    /// This warning with the remedy `surface`'s reader acts on.
+    pub fn rendered_for(mut self, surface: RemedySurface) -> Self {
+        self.remedy = self.remedy_for(surface);
+        self
+    }
+}
+
+impl WireReport {
+    /// This report with each policy warning's remedy for `surface`.
+    pub fn rendered_for(mut self, surface: RemedySurface) -> Self {
+        self.policy_warnings = self
+            .policy_warnings
+            .into_iter()
+            .map(|warning| warning.rendered_for(surface))
+            .collect();
+        self
+    }
 }
 
 fn union_into(list: &mut Vec<String>, items: &[String]) {
@@ -22,20 +101,13 @@ fn union_into(list: &mut Vec<String>, items: &[String]) {
     }
 }
 
-/// Merges `new` into `existing` without widening anything `existing` grants
+/// Lean `PluginWiring.merge`: merges `new` into `existing` without widening
+/// anything `existing` grants and keeping its dynamic mode and targets
 /// (targets and trusted packs are the additions).
 fn merge_job_blocks(
     existing: &gents_protocol::job::PluginJobSettings,
     new: &gents_protocol::job::PluginJobSettings,
 ) -> gents_protocol::job::PluginJobSettings {
-    use gents_protocol::job::DynamicMode;
-    fn rank(mode: DynamicMode) -> u8 {
-        match mode {
-            DynamicMode::Off => 0,
-            DynamicMode::Check => 1,
-            DynamicMode::Run => 2,
-        }
-    }
     let mut merged = existing.clone();
     union_into(&mut merged.agent_targets, &new.agent_targets);
     union_into(&mut merged.policy.trusted_packs, &new.policy.trusted_packs);
@@ -46,14 +118,28 @@ fn merge_job_blocks(
         .min(new.max_messages_per_slot);
     merged.result_bytes = existing.result_bytes.min(new.result_bytes);
     merged.max_wall_secs = existing.max_wall_secs.min(new.max_wall_secs);
-    if rank(new.policy.dynamic) < rank(existing.policy.dynamic) {
-        merged.policy.dynamic = new.policy.dynamic;
+    merged
+}
+
+/// Lean `PluginWiring.policyWarnings`.
+fn policy_warning_codes(
+    existing: &gents_protocol::job::JobPolicy,
+    incoming: &gents_protocol::job::JobPolicy,
+) -> Vec<PolicyWarningCode> {
+    use gents_protocol::job::DynamicMode;
+    let mut codes = Vec::new();
+    if existing.dynamic != incoming.dynamic {
+        codes.push(PolicyWarningCode::DynamicModeKept);
     }
-    merged
-        .policy
-        .dynamic_targets
-        .retain(|id| new.policy.dynamic_targets.contains(id));
-    merged
+    if incoming.dynamic != DynamicMode::Off
+        && incoming
+            .dynamic_targets
+            .iter()
+            .any(|target| !existing.dynamic_targets.contains(target))
+    {
+        codes.push(PolicyWarningCode::DynamicTargetsKept);
+    }
+    codes
 }
 
 /// Wires an installed plugin into an agent's Tools and Context: the plugin
@@ -74,16 +160,22 @@ pub fn wire_plugin(
     use gents_protocol::job::{JobPolicy, PluginJobSettings};
 
     let coordinate = format!("{}/{}", plugin.namespace, plugin.name);
+    let tools_id = tools.tools_id.clone();
     let mut tools = tools.clone();
     let mut context = context.clone();
     let mut changed = Vec::new();
     let mut warnings = Vec::new();
+    let mut policy_codes = Vec::new();
 
     let plugins = tools
         .integrations
         .get_or_insert_with(Default::default)
         .plugins
         .get_or_insert_with(Default::default);
+    let prior_digest = plugins
+        .iter()
+        .find(|entry| entry.plugin == coordinate)
+        .and_then(|entry| entry.digest.clone());
     let index = match plugins.iter().position(|entry| entry.plugin == coordinate) {
         Some(index) => {
             plugins[index].digest = Some(plugin.digest.clone());
@@ -106,6 +198,13 @@ pub fn wire_plugin(
     let agents = tools.agents.get_or_insert_with(Default::default);
     let targets_before = agents.target_ids.clone();
     let mut job = plugins[index].job.clone();
+    let repinned_under_run = prior_digest
+        .as_ref()
+        .is_some_and(|prior| *prior != plugin.digest)
+        && job
+            .as_ref()
+            .is_some_and(|job| job.policy.dynamic == gents_protocol::job::DynamicMode::Run);
+    let mut requested = None;
     if plugin.declaration.job.0 {
         let incoming = reviewed_job.cloned().or_else(|| {
             (!targets_from.is_empty()).then(|| PluginJobSettings {
@@ -122,6 +221,10 @@ pub fn wire_plugin(
             })
         });
         if let Some(incoming) = incoming {
+            if let Some(existing) = &job {
+                policy_codes = policy_warning_codes(&existing.policy, &incoming.policy);
+            }
+            requested = Some(incoming.policy.clone());
             let merged = job.is_some();
             let mut block = match &job {
                 Some(existing) => merge_job_blocks(existing, &incoming),
@@ -194,6 +297,30 @@ pub fn wire_plugin(
         context.skill_ids.extend(skills);
     }
 
+    if repinned_under_run {
+        policy_codes.push(PolicyWarningCode::DynamicRunRepinned);
+    }
+    let policy_warnings = job
+        .as_ref()
+        .map(|kept| {
+            policy_codes
+                .into_iter()
+                .map(|code| {
+                    PolicyWarning {
+                        code,
+                        plugin: coordinate.clone(),
+                        tools_id: tools_id.clone(),
+                        requested: requested.clone(),
+                        kept: kept.policy.clone(),
+                        previous_digest: prior_digest.clone(),
+                        installed_digest: plugin.digest.clone(),
+                        remedy: String::new(),
+                    }
+                    .rendered_for(RemedySurface::Cli)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let next_call = (plugin.declaration.job.0 && job.is_none()).then(|| {
         format!("gents config pack wire {coordinate} --agent <agent> --targets-from <pack>")
     });
@@ -204,6 +331,7 @@ pub fn wire_plugin(
             changed,
             job,
             warnings,
+            policy_warnings,
             next_call,
         },
     ))
@@ -228,31 +356,61 @@ pub fn consent_tool_calls(tools: &mut Tools, coordinate: &str, report: &mut Wire
     ));
 }
 
-/// Applies the node owner's consent to dynamic scripts to `coordinate`'s job
-/// block (Lean `consentedDynamic`): `check` becomes `run`, and the report
-/// records the grant in place of the `check` warning.
-pub fn consent_dynamic_run(tools: &mut Tools, coordinate: &str, report: &mut WireReport) {
-    let Some(job) = tools
+/// Lean `PluginWiring.dynamicEnabled`: the block's dynamic scripts run.
+pub fn dynamic_enabled(job: &gents_protocol::job::PluginJobSettings) -> bool {
+    job.policy.dynamic == gents_protocol::job::DynamicMode::Run
+}
+
+/// What the operator's enable changed on one plugin's block.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DynamicEnableReceipt {
+    pub plugin: String,
+    pub before: gents_protocol::job::JobPolicy,
+    pub after: gents_protocol::job::JobPolicy,
+}
+
+/// The Tools select the plugin without a job block, so there is no dynamic
+/// policy to enable.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{plugin} has no job block on these Tools, so there is no dynamic policy to enable. Next: gents config pack wire {plugin} --agent <agent> --targets-from <pack>")]
+pub struct NoJobBlock {
+    pub plugin: String,
+}
+
+/// Lean `PluginWiring.operatorEnable`: the operator's explicit enable of
+/// `coordinate`'s dynamic scripts, the one way a block reaches `run`.
+pub fn operator_enable_dynamic(
+    tools: &Tools,
+    coordinate: &str,
+    targets: &[String],
+) -> Result<(Tools, DynamicEnableReceipt), NoJobBlock> {
+    let mut tools = tools.clone();
+    let job = tools
         .integrations
         .iter_mut()
         .flat_map(|integrations| integrations.plugins.iter_mut().flatten())
         .find(|plugin| plugin.plugin == coordinate)
         .and_then(|plugin| plugin.job.as_mut())
-    else {
-        return;
-    };
-    let consented = gents_protocol::job_settings::consented_dynamic(true, job.policy.dynamic);
-    if consented == job.policy.dynamic {
-        return;
-    }
-    job.policy.dynamic = consented;
-    report.job = Some(job.clone());
-    report
-        .warnings
-        .retain(|warning| !warning.starts_with("dynamic_check: "));
-    report.changed.push(format!(
-        "set job.policy.dynamic run for {coordinate}: the node owner approved its dynamic scripts"
-    ));
+        .ok_or_else(|| NoJobBlock {
+            plugin: coordinate.to_owned(),
+        })?;
+    let before = job.policy.clone();
+    job.policy.dynamic = gents_protocol::job::DynamicMode::Run;
+    job.policy.dynamic_targets = targets.to_vec();
+    union_into(&mut job.agent_targets, targets);
+    let after = job.policy.clone();
+    union_into(
+        &mut tools.agents.get_or_insert_with(Default::default).target_ids,
+        targets,
+    );
+    Ok((
+        tools,
+        DynamicEnableReceipt {
+            plugin: coordinate.to_owned(),
+            before,
+            after,
+        },
+    ))
 }
 
 /// Inverse of [`wire_plugin`]. With no `targets_from`, drops the plugin entry
@@ -291,6 +449,7 @@ pub fn unwire_plugin(
                 changed,
                 job: None,
                 warnings,
+                policy_warnings: Vec::new(),
                 next_call,
             },
         ));
@@ -410,6 +569,7 @@ pub fn unwire_plugin(
             changed,
             job,
             warnings,
+            policy_warnings: Vec::new(),
             next_call,
         },
     ))

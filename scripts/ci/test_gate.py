@@ -111,7 +111,7 @@ class Selection(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue(select(path)["ios_check"])
         for path in ("crates/gents-media-host/src/lib.rs", "packages/gents-desktop-ui/src/index.ts",
-                     "crates/gents/proofs/Proofs/Request/CausalHop.lean", "docs/upgrade-from-rc1.md"):
+                     "crates/gents/proofs/Proofs/Request/CausalHop.lean", "README.md"):
             with self.subTest(path=path):
                 self.assertFalse(select(path)["ios_check"])
 
@@ -145,7 +145,7 @@ class Selection(unittest.TestCase):
         self.assertEqual(set(groups(proofs)), {group.name for group in gate.GROUPS} | {gate.MACOS_ONLY})
 
     def test_prose_selects_nothing(self):
-        selection = select("docs/upgrade-from-rc1.md", "CHANGELOG.md", "AGENTS.md")
+        selection = select("README.md", "CHANGELOG.md", "AGENTS.md")
         self.assertEqual(selection["jobs"], [])
         self.assertEqual(selection["matrix"], [])
 
@@ -1068,7 +1068,7 @@ class Verdict(unittest.TestCase):
 
     def test_every_event_passes_when_its_jobs_pass(self):
         plans = {
-            "docs only": select("docs/upgrade-from-rc1.md", "AGENTS.md"),
+            "docs only": select("README.md", "AGENTS.md"),
             "workflow only": select(".github/workflows/core-packs.yml"),
             "one crate": select("crates/gents-cli/src/lib.rs"),
             "draft": select("crates/gents-store/src/graphql.rs", tier="draft"),
@@ -1097,7 +1097,7 @@ class Verdict(unittest.TestCase):
         self.assertEqual(gate.verdict(self.needs(selection, shard="failure")), ["shard: failure"])
 
     def test_a_job_the_plan_left_out_may_be_skipped_but_not_fail(self):
-        selection = select("docs/upgrade-from-rc1.md")
+        selection = select("README.md")
         self.assertEqual(gate.verdict(self.needs(selection, lint="skipped")), [])
         self.assertEqual(gate.verdict(self.needs(selection, desktop_ui="failure")), ["desktop-ui: failure"])
 
@@ -1109,7 +1109,7 @@ class Verdict(unittest.TestCase):
                              [f"repository-guard: {result}"])
 
     def test_jobs_every_event_runs_must_succeed(self):
-        selection = select("docs/upgrade-from-rc1.md")
+        selection = select("README.md")
         for name in gate.ALWAYS[1:]:
             problems = gate.verdict(self.needs(selection, **{name.replace("-", "_"): "skipped"}))
             self.assertEqual(problems, [f"{name}: runs on every event but was skipped"])
@@ -1120,10 +1120,10 @@ class Verdict(unittest.TestCase):
         problems = gate.verdict(needs, fork=True)
         self.assertEqual(len(problems), 3)
         self.assertTrue(all("comes from a fork" in problem for problem in problems))
-        self.assertEqual(gate.verdict(self.needs(select("docs/upgrade-from-rc1.md")), fork=True), [])
+        self.assertEqual(gate.verdict(self.needs(select("README.md")), fork=True), [])
 
     def test_no_plan_fails(self):
-        needs = self.needs(select("docs/upgrade-from-rc1.md"), plan="failure")
+        needs = self.needs(select("README.md"), plan="failure")
         needs["plan"]["outputs"] = {}
         self.assertEqual(gate.verdict(needs), ["plan: failure"])
 

@@ -30,7 +30,13 @@ const wired = (request: { plugin: string; agent: string; preview: boolean }) => 
   agent: request.agent,
   preview: request.preview,
   authority: "calls the model and reads files",
-  report: { changed: ["Tools"], job, warnings: [], next_call: null },
+  report: {
+    changed: ["Tools"],
+    job,
+    warnings: [],
+    policy_warnings: [],
+    next_call: null,
+  },
 });
 
 function show(
@@ -147,6 +153,7 @@ describe("PacksPanel Enable for agent", () => {
         changed: [],
         job: null,
         warnings: [],
+        policy_warnings: [],
         next_call:
           "gents config pack wire fixture/job_fixture --agent default --targets-from <pack>",
       },

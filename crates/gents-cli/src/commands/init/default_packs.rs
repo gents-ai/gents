@@ -311,6 +311,9 @@ pub(crate) enum PackState {
     Missing,
     /// Not installed, and this build carries no archive of it.
     Unavailable,
+    /// Installed, and a record of a plugin it ships cannot be read, so what
+    /// it leaves on the Engineer is unknown; `reason` says why.
+    Unknown,
 }
 
 /// The Engineer of `home`'s node: its default agent, when that agent is the
@@ -342,7 +345,9 @@ async fn engineer_of(
 
 /// What the installed `record` leaves on the Engineer's Tools and Context, as
 /// a Lean `Wiring`: wired when every plugin it ships is selected and every
-/// skill attached, with the consents those selections carry.
+/// skill attached, with the consents those selections carry. Its dynamic
+/// consent holds when every job plugin of `job_plugins` is selected with a
+/// block that is `PluginWiring.dynamicEnabled`, the meaning the enable uses.
 ///
 /// Its root readers are not observed and read `false`: a reader is a DefraDB
 /// relationship on the WorkspaceRoot document, listed only per document to an
@@ -355,6 +360,7 @@ async fn observed_wiring(
     record: &gents_pack::pack::HomePackInstall,
     context: &gents_documents::AgentContext,
     tools: &gents_documents::Tools,
+    job_plugins: &[String],
 ) -> Result<Wiring> {
     let (namespace, _) = gents_pack::pack::registry::split_pack_coordinate(&record.coordinate);
     let selected: Vec<_> = tools
@@ -388,12 +394,16 @@ async fn observed_wiring(
     Ok(Wiring {
         wired,
         tool_calls: !selections.is_empty() && selections.iter().all(|plugin| plugin.tool_calls),
-        consent_dynamic: selections.iter().any(|plugin| {
-            plugin
-                .job
-                .as_ref()
-                .is_some_and(|job| job.policy.dynamic == gents_protocol::job::DynamicMode::Run)
-        }),
+        consent_dynamic: !job_plugins.is_empty()
+            && job_plugins.iter().all(|coordinate| {
+                selected.iter().any(|plugin| {
+                    plugin.plugin == *coordinate
+                        && plugin
+                            .job
+                            .as_ref()
+                            .is_some_and(gents_pack::pack::dynamic_enabled)
+                })
+            }),
         root_readers: false,
         agents_active,
     })
@@ -407,8 +417,25 @@ fn on_the_engineer(wiring: Wiring) -> Wiring {
     }
 }
 
-/// An installed core pack's record and what it leaves on the Engineer.
-type Installed = (gents_pack::pack::HomePackInstall, Wiring);
+/// An installed core pack's record and what it leaves on the Engineer, or
+/// why a plugin record it ships cannot be read.
+type Installed = (
+    gents_pack::pack::HomePackInstall,
+    std::result::Result<Wiring, String>,
+);
+
+/// The job plugins the installed `record` ships, from their plugin records.
+fn job_plugins(home: &Path, record: &gents_pack::pack::HomePackInstall) -> Result<Vec<String>> {
+    let (namespace, _) = gents_pack::pack::registry::split_pack_coordinate(&record.coordinate);
+    let mut jobs = Vec::new();
+    for shipped in &record.plugins {
+        let plugin = gents_pack::plugin::store::read_record(home, namespace, &shipped.name)?;
+        if plugin.declaration.job.0 {
+            jobs.push(format!("{namespace}/{}", shipped.name));
+        }
+    }
+    Ok(jobs)
+}
 
 /// Each core pack as `home`'s Engineer has it: its install record and what
 /// it leaves on the Engineer, or `None` when it is not installed. Read
@@ -434,8 +461,13 @@ async fn engineer_packs(home: &Path) -> Result<Option<Vec<(CorePack, Option<Inst
         for pack in CorePack::ALL {
             let installed = match gents_pack::pack::read_home_install(home, pack.coordinate())? {
                 Some(record) => {
-                    let wiring =
-                        observed_wiring(&access, &owner, &record, &context, &tools).await?;
+                    let wiring = match job_plugins(home, &record) {
+                        Ok(jobs) => Ok(observed_wiring(
+                            &access, &owner, &record, &context, &tools, &jobs,
+                        )
+                        .await?),
+                        Err(error) => Err(format!("{error:#}")),
+                    };
                     Some((record, wiring))
                 }
                 None => None,
@@ -477,8 +509,11 @@ pub(crate) async fn status(home: &Path, archives: Archives<'_>) -> Result<Vec<Pa
         .into_iter()
         .map(|(pack, installed)| {
             let (state, version, reason) = match installed {
-                Some((record, observed)) => {
-                    let reason = interface_refusal(home, pack, &record);
+                Some((record, Ok(observed))) => {
+                    let reason = interface_refusal(home, pack, &record).or_else(|| {
+                        (!observed.agents_active && core_packs::enabled_wiring(pack).agents_active)
+                            .then(|| "an agent it ships is disabled".to_owned())
+                    });
                     (
                         if on_the_engineer(observed)
                             == on_the_engineer(core_packs::enabled_wiring(pack))
@@ -490,6 +525,9 @@ pub(crate) async fn status(home: &Path, archives: Archives<'_>) -> Result<Vec<Pa
                         Some(record.version),
                         reason,
                     )
+                }
+                Some((record, Err(reason))) => {
+                    (PackState::Unknown, Some(record.version), Some(reason))
                 }
                 None => match release_archive(archives, pack).map(|bytes| {
                     gents_pack::pack::archive::peek_header(
@@ -701,7 +739,7 @@ async fn apply(
             }
         }
         let wired = if wiring.wired && !source.manifest().metadata.plugins.is_empty() {
-            gents_pack::pack::plugin_wire::wire_pack_plugins_consenting(
+            gents_pack::pack::plugin_wire::wire_pack_batch(
                 &access,
                 &owner,
                 home,
@@ -710,15 +748,35 @@ async fn apply(
                     approval: None,
                 },
                 &[engineer.to_owned()],
-                gents_pack::pack::plugin_wire::WireConsent {
-                    dynamic: wiring.consent_dynamic,
-                    tool_calls: wiring.tool_calls,
+                gents_pack::pack::plugin_wire::WireBatchOptions {
+                    tool_calls_consent: wiring.tool_calls,
+                    preview: false,
                 },
                 gents_host::http::pack_wire_client::SIGNERS,
             )
             .await
             .with_context(|| {
                 format!("{coordinate} is installed, but it was not wired into the Engineer")
+            })?
+        } else {
+            Vec::new()
+        };
+        let dynamic_enabled = if wiring.consent_dynamic {
+            gents_pack::pack::plugin_wire::enable_pack_dynamic(
+                &access,
+                &owner,
+                home,
+                engineer,
+                coordinate,
+                source.digest(),
+                gents_service::home_state::load_held_user_identity,
+            )
+            .await
+            .with_context(|| {
+                format!(
+                    "{coordinate} is installed and wired, but its dynamic scripts were not enabled; enabling it again is safe: {}",
+                    enable_command(home, pack)
+                )
             })?
         } else {
             Vec::new()
@@ -743,11 +801,11 @@ async fn apply(
         let agents = set_pack_agents_active(&access, &owner, coordinate, wiring.agents_active)
             .await
             .with_context(|| format!("{coordinate} is installed, but its agents were not left as enabling says"))?;
-        Ok::<_, anyhow::Error>((wired, skills, readers, agents))
+        Ok::<_, anyhow::Error>((wired, dynamic_enabled, skills, readers, agents))
     }
     .await;
     release(access).await;
-    let (wired, skills, host_tool_roots, agents) = applied?;
+    let (wired, dynamic_enabled, skills, host_tool_roots, agents) = applied?;
     Ok(json!({
         "pack": coordinate,
         "version": source.manifest().version,
@@ -755,6 +813,7 @@ async fn apply(
         "wiring": wiring,
         "granted_permissions": requested,
         "wired": wired,
+        "dynamic_enabled": dynamic_enabled,
         "skills": skills,
         "host_tool_roots": host_tool_roots,
         "agents": agents,
@@ -1145,6 +1204,7 @@ mod tests {
             .map(|(pack, installed)| {
                 let (_, wiring) =
                     installed.unwrap_or_else(|| panic!("{} is not installed", pack.coordinate()));
+                let wiring = wiring.expect("every plugin record of an installed pack reads");
                 let report = reports
                     .as_array()
                     .into_iter()
@@ -1336,6 +1396,86 @@ mod tests {
         let listed = status(home.path(), &archives).await.unwrap();
         assert!(
             listed.iter().all(|pack| pack.state == PackState::Installed),
+            "{listed:?}"
+        );
+        let workflows = enabled["enabled"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|report| report["pack"] == CorePack::DynamicWorkflows.coordinate())
+            .unwrap();
+        let receipts = workflows["dynamic_enabled"].as_array().unwrap();
+        assert!(
+            !receipts.is_empty()
+                && receipts.iter().all(|receipt| {
+                    receipt["before"]["dynamic"] == "check" && receipt["after"]["dynamic"] == "run"
+                }),
+            "the enable receipt shows each block before and after: {workflows}"
+        );
+    }
+
+    /// Status reads a disabled agent as not enabled, saying so, and a plugin
+    /// record it cannot read as unknown, without failing.
+    #[tokio::test]
+    async fn status_names_a_disabled_agent_and_an_unreadable_record() {
+        let archives = fixture_archives().await;
+        let archives = borrowed(&archives);
+        let home = tempfile::tempdir().unwrap();
+        crate::commands::init::init_home_with_core_packs(
+            init_args(home.path(), &[]),
+            &archives,
+            InitEntryPoint::Cli,
+        )
+        .await
+        .unwrap();
+        enable(home.path(), &archives, &[CorePack::DynamicWorkflows], None)
+            .await
+            .unwrap();
+        let state_of = |listed: &[PackStatus], pack: CorePack| {
+            listed
+                .iter()
+                .find(|status| status.pack == pack.coordinate())
+                .cloned()
+                .unwrap()
+        };
+        let (access, owner) = command::resolve_scope_owner(&scope(home.path()))
+            .await
+            .unwrap();
+        set_pack_agents_active(
+            &access,
+            &owner,
+            CorePack::DynamicWorkflows.coordinate(),
+            false,
+        )
+        .await
+        .unwrap();
+        release(access).await;
+        let workflows = state_of(
+            &status(home.path(), &archives).await.unwrap(),
+            CorePack::DynamicWorkflows,
+        );
+        assert_eq!(workflows.state, PackState::NotEnabled, "{workflows:?}");
+        assert_eq!(
+            workflows.reason.as_deref(),
+            Some("an agent it ships is disabled")
+        );
+
+        let record = home
+            .path()
+            .join(gents_store::local::home::PLUGINS_DIR_NAME)
+            .join("installed/gents/workflow.json");
+        std::fs::write(&record, b"not a record").unwrap();
+        status(home.path(), &archives)
+            .await
+            .expect_err("a plugin store that does not open fails status");
+        std::fs::remove_file(&record).unwrap();
+        let listed = status(home.path(), &archives).await.unwrap();
+        let workflows = state_of(&listed, CorePack::DynamicWorkflows);
+        assert_eq!(workflows.state, PackState::Unknown, "{workflows:?}");
+        assert!(workflows.reason.is_some(), "{workflows:?}");
+        assert_eq!(
+            state_of(&listed, CorePack::Web).state,
+            PackState::Installed,
             "{listed:?}"
         );
     }

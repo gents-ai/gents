@@ -282,7 +282,8 @@ pub struct DefaultPackView {
     pub without: String,
     pub state: DefaultPackState,
     pub version: Option<String>,
-    /// Why an unavailable pack cannot be installed.
+    /// Why an unavailable pack cannot be installed, why an installed one is
+    /// not on, or why its state is unknown.
     pub reason: Option<String>,
 }
 
@@ -293,6 +294,9 @@ pub enum DefaultPackState {
     NotEnabled,
     Missing,
     Unavailable,
+    /// Installed, and what it leaves on the Engineer could not be read;
+    /// `reason` says why.
+    Unknown,
 }
 
 /// What enabling left: every core pack's state after it, and the packs it

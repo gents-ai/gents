@@ -28,6 +28,8 @@ mod owner_errors;
 mod rapidhash;
 #[path = "write_owner_structure/rig.rs"]
 mod rig;
+#[path = "write_owner_structure/session_custody.rs"]
+mod session_custody;
 #[path = "write_owner_structure/statics.rs"]
 mod statics;
 #[path = "write_owner_structure/support.rs"]

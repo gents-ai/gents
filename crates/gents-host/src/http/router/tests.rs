@@ -506,7 +506,6 @@ async fn a_runtime_answering_with_what_the_client_did_not_approve_gets_nothing_s
         targets_from: vec!["acme/demo".into()],
         remove: false,
         preview: false,
-        dynamic_consent: false,
         tool_calls_consent: false,
     };
     let wire = |request: WireRequest| {
@@ -519,8 +518,10 @@ async fn a_runtime_answering_with_what_the_client_did_not_approve_gets_nothing_s
                 endpoint,
                 owner.to_owned(),
                 root.to_owned(),
-                request,
-                Some(plan),
+                vec![gents_pack::pack::plugin_wire::ClientWire {
+                    request,
+                    plan: Some(plan),
+                }],
             )
             .await
         }
@@ -726,7 +727,6 @@ async fn a_client_wires_a_plugin_through_the_runtime_signing_each_write_itself()
             targets_from: Vec::new(),
             remove: false,
             preview: false,
-            dynamic_consent: false,
             tool_calls_consent: false,
         };
         let client_home = tempfile::tempdir().unwrap();
@@ -734,8 +734,10 @@ async fn a_client_wires_a_plugin_through_the_runtime_signing_each_write_itself()
             crate::test_support::user_endpoint(&graphql, &home.user),
             owner.clone(),
             client_home.path().to_owned(),
-            request.clone(),
-            None,
+            vec![gents_pack::pack::plugin_wire::ClientWire {
+                request: request.clone(),
+                plan: None,
+            }],
         )
         .await
         .expect_err("a client whose own home holds no record has nothing to plan from");
@@ -832,11 +834,16 @@ async fn a_client_wires_a_plugin_through_the_runtime_signing_each_write_itself()
             endpoint.clone(),
             owner.clone(),
             client_home.path().to_owned(),
-            request.clone(),
-            Some(plan),
+            vec![gents_pack::pack::plugin_wire::ClientWire {
+                request: request.clone(),
+                plan: Some(plan),
+            }],
         )
         .await
         .unwrap();
+        let [report] = report.as_slice() else {
+            panic!("{document_acp:?}: one wire reports once: {report:?}");
+        };
         assert_eq!(report["preview"], false, "{document_acp:?}: {report}");
         let rows = home
             .access
@@ -861,15 +868,17 @@ async fn a_client_wires_a_plugin_through_the_runtime_signing_each_write_itself()
             endpoint.clone(),
             owner.clone(),
             client_home.path().to_owned(),
-            request.clone(),
-            Some(gents_pack::pack::plugin_wire::ClientPlan {
-                record: gents_pack::pack::wire_subject::WireSubject {
-                    digest: format!("sha256:{}", "d".repeat(64)),
-                    ..sent.clone()
-                }
-                .installed(),
-                approvals: None,
-            }),
+            vec![gents_pack::pack::plugin_wire::ClientWire {
+                request: request.clone(),
+                plan: Some(gents_pack::pack::plugin_wire::ClientPlan {
+                    record: gents_pack::pack::wire_subject::WireSubject {
+                        digest: format!("sha256:{}", "d".repeat(64)),
+                        ..sent.clone()
+                    }
+                    .installed(),
+                    approvals: None,
+                }),
+            }],
         )
         .await;
         assert!(

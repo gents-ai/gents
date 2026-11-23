@@ -93,6 +93,7 @@ const bytes = readFileSync(artifact);
 const digest = createHash("sha256").update(bytes).digest("hex");
 mkdirSync(join(home, "plugins/store"), { recursive: true });
 mkdirSync(join(home, "plugins/installed/gents"), { recursive: true });
+writeFileSync(join(home, "plugins/.store.lock"), "");
 writeFileSync(join(home, `plugins/store/${digest}.afb`), bytes);
 writeFileSync(
   join(home, "plugins/installed/gents/release-echo.json"),

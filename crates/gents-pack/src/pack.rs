@@ -46,6 +46,7 @@ pub mod rooted_paths;
 pub mod schema_apply;
 pub mod store;
 mod ux;
+pub mod wire_preview;
 pub mod wire_subject;
 pub mod wiring;
 pub use gents_documents::{is_valid_ux_data_tool_name, UxDataSurface, MAX_UX_DATA_SURFACE_ID_LEN};
@@ -106,7 +107,8 @@ pub use plugin::{
     PluginService, MAX_TOOL_INSTRUCTIONS_BYTES, PLUGIN_ARTIFACT_PREFIX, SUPPORTED_PLUGIN_LANGUAGES,
 };
 pub use plugin_wiring::{
-    consent_dynamic_run, consent_tool_calls, unwire_plugin, wire_plugin, WireReport,
+    consent_tool_calls, dynamic_enabled, operator_enable_dynamic, unwire_plugin, wire_plugin,
+    DynamicEnableReceipt, NoJobBlock, PolicyWarning, PolicyWarningCode, RemedySurface, WireReport,
 };
 pub(crate) use provenance::pack_artifact_document_digest;
 pub use provenance::{
