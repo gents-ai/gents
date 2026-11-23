@@ -46,8 +46,10 @@ def Boundary.toJson (boundary : Boundary) : String :=
 def boundaries : List Boundary :=
   [ { name := "boundary.backend-health.admission-freshness"
     , reason := "A successful models-endpoint probe shows only that the provider's endpoint answered; whether its other operations work, whether it stays reachable and whether every replica is fresh are the provider's." }
-  , { name := "boundary.command-policy.host-execution-assumptions"
-    , reason := "External binaries do what their declared effects say, and the host kernel enforces the sandbox the command policy selects; `workspace_write_bash_contains_writes_to_tool_root` evidences the macOS Seatbelt refusing a write outside the tool root." }
+  , { name := "boundary.command-policy.declared-effects"
+    , reason := "Read-only commands run under no kernel sandbox on any host (`CommandPolicy.read_only_runs_without_a_kernel_sandbox`), so that an allowlisted binary given arguments the read-only validators accept only reads is that binary's behaviour; workspace and artifact commands never consult it (`CommandPolicy.bounded_modes_ignore_declared_effects`), and unrestricted commands run with the authority the user granted." }
+  , { name := "boundary.command-policy.kernel-sandbox"
+    , reason := "The host kernel enforces the sandbox the command policy selects for workspace and artifact commands, which is macOS Seatbelt; another host has no sandbox backend, so it refuses those commands and a write workspace binding. `workspace_write_bash_contains_writes_to_tool_root` and `artifact_managed_command_enforces_source_inode_and_network_boundaries` evidence writes outside the writable root refused, `command_isolation_seatbelt_matches_lean` protected credentials and refused network, and `workspace_write_bash_cannot_signal_a_process_outside_its_sandbox` refused signals to processes the command did not start." }
   , { name := "boundary.count-carrier.non-null-id"
     , reason := "DefraDB refuses a non-null ID field declaration, so no count carrier of that schema is ever stored; `defradb_refuses_a_non_null_id_count_carrier` evidences the refusal." }
   , { name := "boundary.event-delivery.fair-substrate"
@@ -57,7 +59,7 @@ def boundaries : List Boundary :=
   , { name := "boundary.p2p-backpressure.obligation-model"
     , reason := "P2PBackpressure models one bounded wave; the database's multi-wave queue, durable retry ladder, store-before-acknowledge and restart behaviour are defradb.rs's and are modelled there." }
   , { name := "boundary.plugin-data.transaction"
-    , reason := "DefraDB transactions are serializable and enforce unique indexes, so of two transactions that read a unique key as absent and insert it, one commits and the other is refused; `defradb_refuses_a_concurrent_duplicate_after_read_then_insert` evidences it." }
+    , reason := "DefraDB enforces a unique index at commit: of two concurrent transactions that insert the same unique key, one commits and the other is refused; `defradb_unique_index_refuses_a_concurrent_duplicate_insert` evidences it." }
   , { name := "boundary.plugin-job.guest-determinism"
     , reason := "The WASM guest supplies its step function, output schema and resume bookkeeping; core takes the guest's behaviour as given and does not establish its determinism." }
   , { name := "boundary.plugin-job.single-step-driver"
@@ -67,11 +69,11 @@ def boundaries : List Boundary :=
   , { name := "boundary.rendered-capture.key-encoding-injectivity"
     , reason := "The durable capture key is the SHA-256 digest of a canonical JSON array of the identity tuple, so distinct tuples have distinct keys while SHA-256 is collision-free." }
   , { name := "boundary.storage.observation-daemon-visible"
-    , reason := "A mutation's success or failure is the acknowledgement DefraDB returns, and models take it as given rather than modelling DefraDB's commit algorithm; `defradb_refuses_a_concurrent_duplicate_after_read_then_insert` evidences an acknowledged commit read back and a refused one leaving nothing." }
+    , reason := "Models take a mutation's outcome from DefraDB's answer rather than modelling its commit algorithm: an acknowledged commit reads back, and a typed refusal (a conflict, a unique-index violation, a validation error) leaves nothing, which `defradb_unique_index_refuses_a_concurrent_duplicate_insert` evidences; an I/O or transport failure leaves the commit indeterminate, and Gents treats it as unknown and never repeats it (`TransactionReplay.clientMayRepeat`, `Configuration.clientSignedWriteMayRetry`)." }
   , { name := "boundary.tool-policy.path-namespace"
     , reason := "Between the path guard's inspection and the file operation another process can change the file namespace; handle identity across that window is the operating system's." }
   , { name := "boundary.trigger.dispatch-source-delivery"
-    , reason := "DefraDB change notifications and subscription events can be delayed, dropped or redelivered, and host schedule ticks can be late or missed; delivery recovers by the periodic rescans the host runs, and native delivery families observe emitted requests and local suppression, not the transport queue." }
+    , reason := "DefraDB change notifications and subscription events can be delayed, dropped or redelivered, and host schedule ticks can be late or missed. `generated_event_source_convergence_reaches_fixed_point` evidences a dropped notification delivered once by the next rescan and a redelivered or late one delivering nothing, and `schedule_cursor_advances_as_the_cadence_model` a late tick catching up or skipping missed occurrences as the cadence decides." }
   ]
 
 /-- Each name is an emitted family that no native test consumes. The consumer

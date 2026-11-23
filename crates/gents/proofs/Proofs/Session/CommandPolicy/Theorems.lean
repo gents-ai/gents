@@ -113,6 +113,51 @@ theorem unrestricted_is_explicitly_unsandboxed
       .selected .unsandboxedUnrestricted := by
   rfl
 
+/-- A write-capable bounded command never consults the read-only allowlist: what
+a binary declares about its effects cannot widen a workspace or artifact
+command, whose bound is the kernel sandbox. -/
+theorem bounded_modes_ignore_declared_effects
+    (policy : Policy) (request : CommandRequest) (allowlist : List String)
+    (bounded : policy.mode = .workspaceWrite ∨ policy.mode = .artifactWrite) :
+    validatePolicy { policy with readOnlyAllowlist := allowlist } request =
+      validatePolicy policy request := by
+  rcases policy with ⟨mode, allowed, forbidden, network, readOnly⟩
+  simp only at bounded
+  rcases bounded with rfl | rfl <;>
+    cases network <;>
+    simp [validatePolicy, validateAfterPrefixes, validateNetworkMode] <;>
+    split <;> simp_all
+
+theorem bounded_modes_select_only_the_kernel_sandbox
+    (support : RuntimeSupport) (mode : ExecutionMode) (sandbox : SandboxKind)
+    (bounded : mode = .workspaceWrite ∨ mode = .artifactWrite)
+    (selected : selectSandbox support mode = .selected sandbox) :
+    sandbox = .macosSeatbelt := by
+  rcases support with ⟨enforced⟩
+  rcases bounded with rfl | rfl <;> cases enforced <;> simp_all [selectSandbox]
+
+/-- Read-only commands run under no kernel sandbox on any host: the allowlist
+and the argument validators are their only bound, so a listed binary that has
+an effect beyond reading under accepted arguments is not contained. -/
+theorem read_only_runs_without_a_kernel_sandbox (support : RuntimeSupport) :
+    selectSandbox support .readOnly = .selected .policyReadOnly := rfl
+
+/-- `sed`'s validator refuses only in-place editing: a script's `w` command
+writes the named file and is accepted. -/
+theorem read_only_sed_accepts_a_write_command :
+    validateReadOnlyArgs { command := "sed", lookupCommand := "sed",
+      args := ["-n", "w copy.txt", "input.txt"] } = .allow := by decide
+
+/-- `curl`'s validator accepts a cookie jar, which curl writes to the named file. -/
+theorem read_only_curl_accepts_a_cookie_jar :
+    validateReadOnlyArgs { command := "curl", lookupCommand := "curl",
+      args := ["-c", "jar.txt", "https://example.com"] } = .allow := by decide
+
+/-- `git grep -O<pager>` opens matches with the named program, which git runs. -/
+theorem read_only_git_grep_accepts_a_pager_program :
+    validateReadOnlyArgs { command := "git", lookupCommand := "git",
+      args := ["grep", "-Otouch", "pattern"] } = .allow := by decide
+
 theorem filtered_env_excludes_KEY
     (inputHas : EnvKey → Bool) :
     filteredEnv inputHas .key = none := by

@@ -1798,6 +1798,60 @@ async fn workspace_write_bash_contains_writes_to_tool_root() {
     assert!(!outside.exists(), "sandbox should deny writes outside root");
 }
 
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn workspace_write_bash_cannot_signal_a_process_outside_its_sandbox() {
+    if !std::path::Path::new("/usr/bin/sandbox-exec").exists() {
+        return;
+    }
+    let mut outside = std::process::Command::new("/bin/sleep")
+        .arg("600")
+        .spawn()
+        .unwrap();
+    let root = temp_root("gents-bash-seatbelt-signal");
+    let tool = UnrestrictedBashTool::new(
+        ToolContext::new(root.clone(), false).unwrap(),
+        Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
+    );
+    let shell = format!(
+        "sleep 600 & own=$!; kill -TERM $own && printf own-signalled > own.txt; kill -TERM {}",
+        outside.id()
+    );
+    let boxed: Box<dyn gents_loop::tool::ToolDyn> = Box::new(tool);
+    let outcome = crate::runtime_context::call_tool_managed(
+        boxed.as_ref(),
+        serde_json::json!({
+            "command": shell,
+            "timeout_secs": DEFAULT_COMMAND_TIMEOUT_SECS,
+        })
+        .to_string(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
+    )
+    .await;
+    let still_running = outside.try_wait().unwrap().is_none();
+    let _ = outside.kill();
+    let _ = outside.wait();
+    let gents_loop::tool_call_lifecycle::ToolOutcome::Failed {
+        class: gents_loop::tool_call_lifecycle::FailureClass::ToolReturnedError,
+        text: output,
+        ..
+    } = outcome
+    else {
+        panic!("a refused signal must fail the command, got {outcome:?}");
+    };
+    let meta = compact_exec_meta(&output);
+    assert_eq!(meta["sandbox"], "macos_seatbelt");
+    assert_ne!(meta["exit_code"].as_i64(), Some(0));
+    assert!(
+        root.join("own.txt").exists(),
+        "the sandbox must let a command signal a process it started"
+    );
+    assert!(
+        still_running,
+        "the sandbox must refuse a signal to a process it did not start"
+    );
+}
+
 fn edit_args(path: &str, old: &str, new: &str) -> EditFileArgs {
     EditFileArgs {
         path: path.to_string(),
