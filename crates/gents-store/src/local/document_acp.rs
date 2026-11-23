@@ -262,6 +262,18 @@ pub async fn node_publication(node: &defra_node::Node) -> Result<Publication> {
     Ok(publication_with_admission(provider_of(node), admitted))
 }
 
+/// The registered parent used when this device originates a transport record.
+pub fn transport_publisher_node(node: &defra_node::Node) -> Result<Option<String>> {
+    if node_policy_ids(node) != gents_protocol::schemas::HomePolicyIds::embedded_vera_transport_v2()
+    {
+        return Ok(None);
+    }
+    let scope =
+        crate::node_extension::attached::<crate::schema::catalog::SharedTransportHome>(node)
+            .ok_or(DocumentAcpError::TransportGrantsAwaitProvider)?;
+    Ok(Some(scope.device_node.clone()))
+}
+
 pub async fn ensure_node_publication(node: &defra_node::Node) -> Result<()> {
     match node_publication(node).await? {
         Publication::Proceeds => Ok(()),
@@ -545,7 +557,8 @@ fn ensure_present(data: &Path) -> Result<()> {
 
 fn ensure_recorded(data: &Path, started: Option<&Deployment>) -> Result<()> {
     if let (Some(started), Some(record)) = (started, recorded_deployment(data)?) {
-        if record.consensus_key == started.consensus_key && record.connection == started.connection {
+        if record.consensus_key == started.consensus_key && record.connection == started.connection
+        {
             return Ok(());
         }
     }

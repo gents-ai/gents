@@ -97,16 +97,20 @@ async fn load_or_create(
                 .context("signing enrollment Network")?;
             let mutation = {
                 use gents_protocol::document_query::{fields::network as fields, Create, Input};
-                Create::new(
-                    Input::new()
-                        .set(fields::NETWORK_ID, &record.network_id)
-                        .set(fields::ADMIN_DID, &record.admin_did)
-                        .set(fields::DISPLAY_NAME, &record.display_name)
-                        .set(fields::DEFAULT_TEMPLATE, &record.default_template)
-                        .set(fields::CREATED_AT, &record.created_at)
-                        .set(fields::ADMIN_SIG, bs58::encode(&record.sig).into_string()),
-                )
-                .render()
+                let mut input = Input::new()
+                    .set(fields::NETWORK_ID, &record.network_id)
+                    .set(fields::ADMIN_DID, &record.admin_did)
+                    .set(fields::DISPLAY_NAME, &record.display_name)
+                    .set(fields::DEFAULT_TEMPLATE, &record.default_template)
+                    .set(fields::CREATED_AT, &record.created_at)
+                    .set(fields::ADMIN_SIG, bs58::encode(&record.sig).into_string());
+                if let Some(parent) =
+                    gents_store::local::document_acp::transport_publisher_node(node)?
+                {
+                    use gents_protocol::document_query::{kind, Field};
+                    input = input.set(Field::<_, kind::Str>::new("publisher_node_id"), parent);
+                }
+                Create::new(input).render()
             };
             anyhow::ensure!(
                 node.node_identity_did() == Some(identity.did()),

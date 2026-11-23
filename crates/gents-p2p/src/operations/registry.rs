@@ -15,7 +15,7 @@ use serde_json::Value;
 
 use super::{optional_string, string_list};
 use crate::p2p_reconcile::registry::{
-    registry_upsert_mutation, RegistryEntry, UpsertKind, DEFAULT_NETWORK_ID,
+    registry_upsert_mutation_for_publisher, RegistryEntry, UpsertKind, DEFAULT_NETWORK_ID,
 };
 use crate::p2p_reconcile::templates::resolve_template;
 use crate::p2p_reconcile::{heartbeat_is_fresh, REGISTRY_STALE_AFTER};
@@ -158,10 +158,37 @@ pub async fn register_self(
             .clone()
             .unwrap_or_else(|| DEFAULT_NETWORK_ID.to_owned()),
     };
-    let mutation = registry_upsert_mutation(
+    let publisher = if let Some(node) = access.local_node() {
+        gents_store::local::document_acp::transport_publisher_node(node).map_err(passthrough)?
+    } else if access.home_policy_ids().await.map_err(passthrough)?
+        == gents_protocol::schemas::HomePolicyIds::embedded_vera_transport_v2()
+    {
+        use gents_protocol::document_query::fields::node;
+        let selection = Query::select(Selection::doc_id())
+            .filter(Filter::eq(node::NODE_DID, &entry.node_did))
+            .limit(2)
+            .render();
+        let response = access.read(&selection).await.map_err(passthrough)?;
+        let rows = graphql_rows_from_response(&response, "Node");
+        let [row] = rows.as_slice() else {
+            return Err(passthrough(anyhow::anyhow!(
+                "expected one registered publisher Node"
+            )));
+        };
+        Some(
+            row["_docID"]
+                .as_str()
+                .ok_or_else(|| passthrough(anyhow::anyhow!("publisher Node has no document ID")))?
+                .to_owned(),
+        )
+    } else {
+        None
+    };
+    let mutation = registry_upsert_mutation_for_publisher(
         &entry,
         &now.to_rfc3339_opts(SecondsFormat::Secs, true),
         UpsertKind::Full,
+        publisher.as_deref(),
     );
     access
         .write("p2p.registry.register", &mutation)
