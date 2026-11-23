@@ -212,6 +212,15 @@ structure Totals where
   parentInclusiveAudit : Nat × Nat
   deriving DecidableEq, Repr
 
+/-- A receipt naming the parent's physical request must also name its logical
+request, node and session. A mismatched receipt fails the catalog rather than
+being left out: the parent's usage cannot be established while a receipt
+claiming it is unverifiable. -/
+def auxiliaryParentMismatch (parent : ParentScope) (binding : AuxiliaryBinding) : Bool :=
+  decide (binding.parentPhysical = parent.physical) &&
+    !decide (binding.parentLogical = parent.logical ∧ binding.node = parent.node ∧
+      binding.session = parent.session)
+
 def validateAndProject (records : List (Nat × UsageRow))
     (purpose : CanonicalOutput.DocId → Option RequestPurpose)
     (auxiliaryBinding : CanonicalOutput.DocId → Option AuxiliaryBinding)
@@ -230,6 +239,10 @@ def validateAndProject (records : List (Nat × UsageRow))
             purpose row.physicalRequest != some binding.purpose
         | none => false) then
     throw .invalidAuxiliaryBinding
+  if records.any (fun (_, row) =>
+      (purpose row.physicalRequest).any RequestPurpose.isAuxiliary &&
+        (auxiliaryBinding row.physicalRequest).any (auxiliaryParentMismatch parent)) then
+    throw .invalidAuxiliaryBinding
   match unique with
   | [] => pure ⟨(0, 0), (0, 0)⟩
   | first :: rest =>
@@ -243,10 +256,14 @@ inductive BudgetError where
   | unreportedUsage
   deriving DecidableEq, Repr
 
+/-- Goal usage reads only normal and access-review requests. A title is
+audit-only (`a_title_cannot_enter_a_goal_budget`), so a title-audit row neither
+charges a goal nor fails its observation. -/
 def projectGoal (records : List (Nat × UsageRow))
     (purpose : CanonicalOutput.DocId → Option RequestPurpose)
     (auxiliaryBinding : CanonicalOutput.DocId → Option AuxiliaryBinding)
     (parent : ParentScope) : Except CatalogError Nat := do
+  let records := records.filter fun (_, row) => purpose row.physicalRequest != some .titleAudit
   let _ ← validateAndProject records purpose auxiliaryBinding parent
   let unique ← validateCatalog records
   match unique with

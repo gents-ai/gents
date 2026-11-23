@@ -312,10 +312,6 @@ mod tests {
         "session_child_child_scope_repair_unreached",
         "session_child_client_request_recovery_unreached",
         "session_documents_retry_unreached",
-        "title_admission_join_unreached",
-        "title_usage_budget_unreached",
-        "title_usage_catalog_unreached",
-        "title_usage_goal_unreached",
         "watcher_actors_scanned_unreached",
     ];
 

@@ -75,10 +75,6 @@ private def titleUsageCases : List Case := [
     purposes := [normalPurpose, ⟨11, .accessReview⟩, ⟨12, .titleAudit⟩],
     bindings := [bindingFact { binding with purpose := .accessReview },
       ⟨12, { binding with physicalRequest := 12, logicalRequest := 22 }⟩] },
-  { name := "duplicate_review_call_has_one_goal_charge", parent := parent,
-    rows := [mkRow 7 11 21 (some usage), mkRow 7 11 21 (some usage)],
-    purposes := [⟨11, .accessReview⟩],
-    bindings := [bindingFact { binding with purpose := .accessReview }] },
   { name := "empty_budget_has_no_spend", parent := parent,
     rows := [], purposes := [normalPurpose], bindings := [] },
   { name := "access_review_missing_usage_blocks_budget_restart", parent := parent,
@@ -99,14 +95,6 @@ private def titleUsageCases : List Case := [
   { name := "access_review_usage_is_parent_inclusive_audit_only", parent := parent,
     rows := [mkRow 7 11 21 (some usage)], purposes := [⟨11, .accessReview⟩],
     bindings := [bindingFact { binding with purpose := .accessReview }] },
-  { name := "access_review_cannot_replay_title_binding", parent := parent,
-    rows := [mkRow 7 11 21 (some usage)], purposes := [⟨11, .accessReview⟩],
-    bindings := [bindingFact binding] },
-  { name := "title_cannot_replay_access_review_binding", parent := parent,
-    rows := [mkRow 7 11 21 (some usage)], purposes := [titlePurpose],
-    bindings := [bindingFact { binding with purpose := .accessReview }] },
-  { name := "access_review_missing_binding_fails_closed", parent := parent,
-    rows := [mkRow 7 11 21 (some usage)], purposes := [⟨11, .accessReview⟩], bindings := [] },
   { name := "normal_public_usage", parent := parent,
     rows := [mkRow 1 10 20 (some usage)], purposes := [normalPurpose], bindings := [] },
   { name := "title_audit_only", parent := parent,
@@ -117,18 +105,6 @@ private def titleUsageCases : List Case := [
   { name := "title_late_usage_after_parent_terminal", parent := parent,
     rows := [mkRow 7 11 21 none], purposes := [titlePurpose], bindings := [bindingFact binding],
     action := some ⟨7, usage⟩ },
-  { name := "exact_duplicate_call_counts_once", parent := parent,
-    rows := [mkRow 7 11 21 (some usage), mkRow 7 11 21 (some usage)],
-    purposes := [titlePurpose], bindings := [bindingFact binding] },
-  { name := "conflicting_call_id_fails_closed", parent := parent,
-    rows := [mkRow 7 11 21 (some usage), mkRow 7 11 21 (some otherUsage)],
-    purposes := [titlePurpose], bindings := [bindingFact binding] },
-  { name := "mismatched_call_id_fails_closed", parent := parent,
-    rows := [(8, (mkRow 7 11 21 (some usage)).2)],
-    purposes := [titlePurpose], bindings := [bindingFact binding] },
-  { name := "same_logical_wrong_physical", parent := parent,
-    rows := [mkRow 7 12 21 (some usage)],
-    purposes := [⟨12, .titleAudit⟩], bindings := [⟨12, binding⟩] },
   { name := "same_physical_wrong_logical", parent := parent,
     rows := [mkRow 7 11 22 (some usage)],
     purposes := [titlePurpose], bindings := [bindingFact binding] },
@@ -146,12 +122,48 @@ private def titleUsageCases : List Case := [
     purposes := [titlePurpose], bindings := [bindingFact { binding with session := 45 }] },
   { name := "unauthenticated_title_binding", parent := parent,
     rows := [mkRow 7 11 21 (some usage)],
-    purposes := [titlePurpose], bindings := [bindingFact { binding with authenticated := false }] },
+    purposes := [titlePurpose], bindings := [bindingFact { binding with authenticated := false }] }
+]
+
+/-- Cases production cannot build. The auxiliary request row is its own
+binding, so its signed purpose, physical and logical identity never differ from
+the binding's, and the catalog selects an auxiliary only through its parent
+link, so every auxiliary it reads has a purpose and a binding. The catalog is
+keyed by `call_id`, a unique index of `InferenceCall`, so a key never differs
+from its call and no two rows share one. The model fails each of them closed. -/
+private def unbuildableCases : List Case := [
+  { name := "duplicate_review_call_has_one_goal_charge", parent := parent,
+    rows := [mkRow 7 11 21 (some usage), mkRow 7 11 21 (some usage)],
+    purposes := [⟨11, .accessReview⟩],
+    bindings := [bindingFact { binding with purpose := .accessReview }] },
+  { name := "access_review_cannot_replay_title_binding", parent := parent,
+    rows := [mkRow 7 11 21 (some usage)], purposes := [⟨11, .accessReview⟩],
+    bindings := [bindingFact binding] },
+  { name := "title_cannot_replay_access_review_binding", parent := parent,
+    rows := [mkRow 7 11 21 (some usage)], purposes := [titlePurpose],
+    bindings := [bindingFact { binding with purpose := .accessReview }] },
+  { name := "access_review_missing_binding_fails_closed", parent := parent,
+    rows := [mkRow 7 11 21 (some usage)], purposes := [⟨11, .accessReview⟩], bindings := [] },
+  { name := "exact_duplicate_call_counts_once", parent := parent,
+    rows := [mkRow 7 11 21 (some usage), mkRow 7 11 21 (some usage)],
+    purposes := [titlePurpose], bindings := [bindingFact binding] },
+  { name := "conflicting_call_id_fails_closed", parent := parent,
+    rows := [mkRow 7 11 21 (some usage), mkRow 7 11 21 (some otherUsage)],
+    purposes := [titlePurpose], bindings := [bindingFact binding] },
+  { name := "mismatched_call_id_fails_closed", parent := parent,
+    rows := [(8, (mkRow 7 11 21 (some usage)).2)],
+    purposes := [titlePurpose], bindings := [bindingFact binding] },
+  { name := "same_logical_wrong_physical", parent := parent,
+    rows := [mkRow 7 12 21 (some usage)],
+    purposes := [⟨12, .titleAudit⟩], bindings := [⟨12, binding⟩] },
   { name := "missing_signed_purpose", parent := parent,
     rows := [mkRow 7 11 21 (some usage)], purposes := [], bindings := [bindingFact binding] },
   { name := "missing_authenticated_title_binding", parent := parent,
     rows := [mkRow 7 11 21 (some usage)], purposes := [titlePurpose], bindings := [] }
 ]
+
+private def caseNamed (name : String) : Option Case :=
+  (titleUsageCases ++ unbuildableCases).find? (fun c => c.name == name)
 
 private def purposeLookup (facts : List SignedPurpose)
     (physical : CanonicalOutput.DocId) : Option RequestPurpose :=
@@ -179,17 +191,15 @@ private def evaluateGoal (c : Case) (rows : RawRows) : Except BudgetError Nat :=
   (projectGoal rows (purposeLookup c.purposes) (bindingLookup c.bindings) c.parent).mapError .catalog
 
 theorem goal_budget_counts_review_and_excludes_title :
-    (titleUsageCases.find? (fun c => c.name ==
-      "normal_review_and_title_have_separate_goal_charges")).map
+    (caseNamed "normal_review_and_title_have_separate_goal_charges").map
         (fun c => evaluateGoal c c.rows) = some (.ok 16) ∧
-    (titleUsageCases.find? (fun c => c.name ==
-      "duplicate_review_call_has_one_goal_charge")).map
+    (caseNamed "duplicate_review_call_has_one_goal_charge").map
         (fun c => evaluateGoal c c.rows) = some (.ok 8) := by
   native_decide
 
 private def evaluateNamedBudget (name : String) :
     Option (Except BudgetError Nat × Except BudgetError Nat) :=
-  (titleUsageCases.find? (fun c => c.name == name)).map fun c =>
+  (caseNamed name).map fun c =>
     (evaluateBudget c c.rows, evaluateBudget c (applyAction c.rows c.action))
 
 theorem review_usage_cannot_become_a_fresh_allowance :
@@ -208,7 +218,7 @@ theorem late_report_restores_the_observed_allowance :
 
 private def evaluateNamed (name : String) :
     Option (Except CatalogError Totals × Except CatalogError Totals) :=
-  (titleUsageCases.find? (fun c => c.name == name)).map fun c =>
+  (caseNamed name).map fun c =>
     (evaluate c c.rows, evaluate c (applyAction c.rows c.action))
 
 theorem title_is_audit_only_witness :
@@ -424,81 +434,42 @@ private def goalModel (i : UsageInput) : GoalOutput :=
   { goalBefore := budgetResult (evaluateGoal c c.rows)
     goalAfter := budgetResult (evaluateGoal c (applyAction c.rows c.action)) }
 
-/-- Signed purposes and auxiliary bindings reach the native catalog
-projections already admitted: `verify_historical_auxiliary_receipt` admits them
-from signed `AgentRequest` rows on a served node. These cases carry only
-bindings that admission accepts, so the projections see exactly what the model
-validates. -/
-private def admittedBindingCases : List String :=
-  [ "empty_budget_has_no_spend", "normal_public_usage", "title_audit_only"
-  , "normal_plus_title_parent_inclusive", "access_review_usage_is_parent_inclusive_audit_only"
-  , "normal_review_and_title_have_separate_goal_charges"
-  , "duplicate_review_call_has_one_goal_charge"
-  , "access_review_late_usage_restores_budget_observation"
-  , "failed_access_review_usage_still_reduces_budget"
-  , "normal_missing_usage_blocks_budget_restart"
-  , "access_review_missing_usage_blocks_budget_restart"
-  , "access_review_zero_usage_blocks_budget_restart"
-  , "title_late_usage_after_parent_terminal", "exact_duplicate_call_counts_once"
-  , "conflicting_call_id_fails_closed" ]
-
-private def reached : List UsageInput :=
-  (titleUsageCases.filter fun c => c.name ∈ admittedBindingCases).map inputOf
-
-private def unreached : List UsageInput :=
-  (titleUsageCases.filter fun c => c.name ∉ admittedBindingCases).map inputOf
-
-/-- The goal usage query selects only normal and access-review requests, so
-title-audit rows never reach the goal projection: a catalog whose only
-conflict is between title-audit rows is not a goal input. -/
-private def titleRowConflictCases : List String := ["conflicting_call_id_fails_closed"]
-
-private def goalReached : List UsageInput :=
-  (titleUsageCases.filter fun c =>
-    c.name ∈ admittedBindingCases ∧ c.name ∉ titleRowConflictCases).map inputOf
-
-private def goalUnreachedCases : List UsageInput :=
-  (titleUsageCases.filter fun c =>
-    c.name ∉ admittedBindingCases ∨ c.name ∈ titleRowConflictCases).map inputOf
-
+/-- Each case is materialized as signed `AgentRequest` rows and
+`InferenceCall` rows on a served node and observed through the parent catalog,
+budget recovery and session goal reads. -/
 @[conformance_family]
 def catalog : Family UsageInput CatalogOutput where
-  inputs := reached
+  inputs := titleUsageCases.map inputOf
   model := catalogModel
 
 @[conformance_family]
 def budget : Family UsageInput BudgetOutput where
-  inputs := reached
+  inputs := titleUsageCases.map inputOf
   model := budgetModel
 
 @[conformance_family]
 def goal : Family UsageInput GoalOutput where
-  inputs := goalReached
+  inputs := titleUsageCases.map inputOf
   model := goalModel
 
-/-- model-production-gap: purpose and binding admission (missing or
-unauthenticated bindings, a binding replayed across purposes or parents, a
-mismatched call key) happens in `verify_historical_auxiliary_receipt` over
-signed rows on a served node; the pure catalog projections never see these
-inputs. -/
-@[conformance_family]
-def catalogUnreached : Family UsageInput CatalogOutput where
-  inputs := unreached
-  model := catalogModel
+theorem receipts_replayed_across_purposes_or_missing_fail_closed :
+    evaluateNamed "access_review_cannot_replay_title_binding" =
+      some (.error .invalidAuxiliaryBinding, .error .invalidAuxiliaryBinding) ∧
+    evaluateNamed "title_cannot_replay_access_review_binding" =
+      some (.error .invalidAuxiliaryBinding, .error .invalidAuxiliaryBinding) ∧
+    evaluateNamed "access_review_missing_binding_fails_closed" =
+      some (.error .missingAuxiliaryBinding, .error .missingAuxiliaryBinding) ∧
+    evaluateNamed "mismatched_call_id_fails_closed" =
+      some (.error .mismatchedCallId, .error .mismatchedCallId) := by
+  native_decide
 
-/-- model-production-gap: as `catalogUnreached`, for budget recovery. -/
-@[conformance_family]
-def budgetUnreached : Family UsageInput BudgetOutput where
-  inputs := unreached
-  model := budgetModel
-
-/-- model-production-gap: as `catalogUnreached`, for the goal charge; and the
-goal query never loads title-audit rows, while `projectGoal` validates the whole
-catalog, so a conflict confined to title-audit rows fails the model's goal
-charge but cannot reach production's. -/
-@[conformance_family]
-def goalUnreached : Family UsageInput GoalOutput where
-  inputs := goalUnreachedCases
-  model := goalModel
+theorem receipt_naming_the_parent_with_another_scope_fails_closed :
+    evaluateNamed "wrong_parent_logical" =
+      some (.error .invalidAuxiliaryBinding, .error .invalidAuxiliaryBinding) ∧
+    evaluateNamed "wrong_parent_agent" =
+      some (.error .invalidAuxiliaryBinding, .error .invalidAuxiliaryBinding) ∧
+    evaluateNamed "wrong_parent_session" =
+      some (.error .invalidAuxiliaryBinding, .error .invalidAuxiliaryBinding) := by
+  native_decide
 
 end Conformance.TitleUsage
