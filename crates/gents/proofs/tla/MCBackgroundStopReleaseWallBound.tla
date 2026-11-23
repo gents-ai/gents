@@ -1,0 +1,4 @@
+---- MODULE MCBackgroundStopReleaseWallBound ----
+EXTENDS BackgroundStopRelease
+
+====

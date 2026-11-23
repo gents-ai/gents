@@ -136,17 +136,20 @@ async function runPhase(phase) {
   const env = {
     ...process.env,
     TMPDIR: `${runTmp}/`,
-    GENTS_NATIVE_E2E: "1",
-    GENTS_E2E_NODE_HOME: nodeHome,
-    GENTS_E2E_LOCAL_TOOL_ROOT: toolRoot,
-    GENTS_E2E_AGENT_LABEL: "Native Acceptance Engineer",
-    GENTS_E2E_SERVER_ADDRESS: providerGate.endpoint,
-    GENTS_E2E_LOCAL_MODEL:
-      process.env.GENTS_TAURI_LIVE_MODEL_NAME ?? "GLM-5.3-Flash-NVFP4",
-    GENTS_E2E_LOCAL_PHASE: phase,
-    GENTS_E2E_WEBVIEW_STORE_ID: webviewStoreId,
-    GENTS_E2E_PROMPT: prompt,
-    GENTS_E2E_EXPECTED_RESPONSE: marker,
+  };
+  const launch = {
+    serverAddress: providerGate.endpoint,
+    agentLabel: "Native Acceptance Engineer",
+    prompt,
+    expectedResponse: marker,
+    webviewStoreId,
+    local: {
+      model: process.env.GENTS_TAURI_LIVE_MODEL_NAME ?? "GLM-5.3-Flash-NVFP4",
+      phase,
+      toolRoot,
+      nodeHome,
+      fileStoreKeys,
+    },
   };
   log = createWriteStream(join(artifactRoot, `${phase}.log`));
   app = spawn(
@@ -157,6 +160,8 @@ async function runPhase(phase) {
       "--console-log",
       "--gents-bin",
       join(binaries, "gents"),
+      "--native-e2e",
+      JSON.stringify(launch),
     ],
     {
       cwd: repoRoot,

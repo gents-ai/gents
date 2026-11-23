@@ -568,3 +568,36 @@ fn install_repair_recovery_matches_lean() {
         case.check(crate::service_update::can_restore_repair(&input));
     }
 }
+
+/// Each case's `/status` answer, classified as `start` classifies it, then decided.
+#[test]
+fn install_repair_start_actions_match_lean() {
+    use super::{classify_recorded, start_action, RecordedNode, StartAction};
+    const NODE: &str = "did:key:recorded";
+    for case in families::install_repair_start_actions::cases::<String, String>() {
+        let status = |node_did: &str, lifecycle: &str| json!({ "node_did": node_did, gents_protocol::serve_lifecycle::STATUS_LIFECYCLE_FIELD: lifecycle });
+        let payload = match case.input.as_str() {
+            "silent" => None,
+            "other" => Some(status("did:key:another", "ready")),
+            "starting" => Some(status(NODE, "starting")),
+            "ready" => Some(status(NODE, "ready")),
+            other => panic!("unknown recorded node {other}"),
+        };
+        let node = classify_recorded(NODE, payload.as_ref());
+        let expected_node = match case.input.as_str() {
+            "silent" => RecordedNode::Silent,
+            "other" => RecordedNode::Other,
+            "starting" => RecordedNode::Starting,
+            _ => RecordedNode::Ready,
+        };
+        assert_eq!(node, expected_node, "{}", case.input);
+        case.check(
+            match start_action(node) {
+                StartAction::UseNode => "use_node",
+                StartAction::AwaitNode => "await_node",
+                StartAction::ReachService => "reach_service",
+            }
+            .to_owned(),
+        );
+    }
+}

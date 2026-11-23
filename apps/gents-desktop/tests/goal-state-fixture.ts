@@ -16,6 +16,8 @@ export function goalControl(
     objective: "Ship the release",
     status,
     tokenBudget: null,
+    blockedAuditThreshold: "3",
+    maxInfrastructureRetries: "2",
     tokensUsed: "0",
     activeTimeSeconds: "0",
     continuationSequence: "0",

@@ -1,0 +1,4 @@
+---- MODULE MCStopCompletionRaceNoAdopt ----
+EXTENDS StopCompletionRace
+
+====

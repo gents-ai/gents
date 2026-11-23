@@ -13,7 +13,9 @@ use super::client::LspClient;
 use super::LspToolConfig;
 use gents_documents::CatalogServer;
 
+/// Language servers one session's Agent keeps running; the least recently used idle server is evicted beyond it. A host process and memory bound, not agent behaviour.
 const MAX_PER_SESSION: usize = 4;
+/// Language servers this process keeps running across sessions, with the same eviction. A host resource bound.
 const MAX_GLOBAL: usize = 16;
 const SWEEP_INTERVAL: Duration = Duration::from_secs(60);
 pub(crate) const INIT_BACKOFF: Duration = Duration::from_secs(180);

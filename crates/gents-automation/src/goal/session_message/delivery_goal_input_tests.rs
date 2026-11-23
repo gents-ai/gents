@@ -137,6 +137,8 @@ async fn deliver(
         goal_id: captured.as_ref().map(|r| r.goal_id.clone()),
         goal_objective: captured.as_ref().map(|_| "Prepared Task work".into()),
         goal_token_budget: None,
+        goal_blocked_audit_threshold: None,
+        goal_max_infrastructure_retries: None,
         goal_assignment_applied: false,
         emit_outcome: false,
         queued_serial: false,

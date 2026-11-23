@@ -307,7 +307,11 @@ async fn agent_new_goal_publishes_for_target_with_the_caller_as_native_owner() {
         MessageContent {
             rendered: RenderedBody {
                 content: "start nested work".into(),
-                goal: Some(("finish nested work".into(), Some(500))),
+                goal: Some((
+                    "finish nested work".into(),
+                    Some(500),
+                    gents_protocol::goal::GoalLimits::default(),
+                )),
             },
             title: None,
         },

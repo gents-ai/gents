@@ -13,6 +13,8 @@ function backend(overrides: Partial<InferenceBackendView>): InferenceBackendView
     authKind: null,
     connectTimeoutSecs: null,
     discoveryTimeoutSecs: null,
+    requestTimeoutSecs: null,
+    clientVersion: null,
     apiKeyConfigured: false,
     apiKeyEnvVar: null,
     maxConcurrent: null,
@@ -42,8 +44,8 @@ describe("backendIsConfigured", () => {
   });
 
   it("never counts a disabled backend", () => {
-    expect(backendIsConfigured(backend({ authKind: "node_oauth_pool", enabled: false }))).toBe(
-      false,
-    );
+    expect(
+      backendIsConfigured(backend({ authKind: "node_oauth_pool", enabled: false })),
+    ).toBe(false);
   });
 });

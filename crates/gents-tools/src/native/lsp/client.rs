@@ -19,6 +19,7 @@ const MAX_CONTENT_LENGTH: usize = 8 * 1024 * 1024;
 /// unbounded set of callers.
 const MAX_PENDING: usize = 32;
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Bounds language-server requests sent without an explicit timeout (diagnostic pulls, format-on-write, code-action resolve, shutdown) so a stalled server cannot hold its caller; actions are bounded by `LspTools.timeout_secs`.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_HEADER_BYTES: usize = 8 * 1024;
 

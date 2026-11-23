@@ -6,6 +6,15 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Task `goal_blocked_audit_threshold` (positive, default 3) and
+  `goal_max_infrastructure_retries` (non-negative, default 2) set the limits of
+  the Goals a Task creates. Every Goal a Task creates pins them, including Task
+  messages to an Agent. A Task that sets either without a goal objective is
+  rejected. Goals a person starts or the model creates keep the defaults. Goal
+  snapshots and the desktop's Goal view report both, and the desktop Tasks
+  panel edits them. A Goal's creation claim records both beside its token
+  budget, so a replayed creation that asks for other limits conflicts, as one
+  with another budget does.
 - Breaking: the successor budget of a request lineage (operator reissues and
   background wake redrives) is InferenceExecution `max_request_retries`
   (non-negative, default 3, zero allows none) instead of a value clients sign.

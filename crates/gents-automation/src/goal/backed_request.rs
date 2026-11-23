@@ -1,5 +1,6 @@
 use super::*;
 use crate::operations::goal::GoalStart;
+use gents_protocol::goal::GoalLimits;
 use gents_protocol::request_admission::SIGNED_REQUEST_FIELDS;
 
 pub(super) mod fingerprint;
@@ -251,6 +252,7 @@ pub(crate) async fn submit_goal_backed_request(
                     session_id,
                     objective,
                     token_budget,
+                    limits: GoalLimits::default(),
                 };
                 if let Err(refusal) = admit_start_in_txn(txn, actor, start, None, None).await? {
                     return Ok(Err(refusal));
@@ -287,6 +289,7 @@ pub(crate) async fn submit_goal_backed_request(
                 session_id,
                 objective,
                 token_budget,
+                GoalLimits::default(),
                 request,
             )
             .await;
@@ -303,6 +306,7 @@ pub(crate) async fn stage_goal_backed_request_in_txn(
     session_id: &str,
     objective: &str,
     token_budget: Option<i64>,
+    limits: GoalLimits,
     request: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<gents_protocol::request_lifecycle::EnqueuedAgentRequest> {
     stage_goal_backed_request_with_identity_in_txn(
@@ -312,6 +316,7 @@ pub(crate) async fn stage_goal_backed_request_in_txn(
             session_id,
             objective,
             token_budget,
+            limits,
         },
         request,
         None,
@@ -378,6 +383,7 @@ pub async fn submit_goal_backed_request_with_identity(
         session_id,
         objective,
         token_budget,
+        limits,
     } = start;
     let access = gents_store::config_client::ConfigAccess::local_with_optional_agent_signer(
         node.clone(),
@@ -472,6 +478,7 @@ pub async fn submit_goal_backed_request_with_identity(
                 session_id,
                 objective,
                 token_budget,
+                limits,
                 recovery_request,
             )
             .await?
@@ -489,6 +496,7 @@ pub async fn submit_goal_backed_request_with_identity(
         session_id,
         objective,
         token_budget,
+        limits,
         recovery_request,
     )
     .await?

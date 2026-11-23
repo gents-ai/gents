@@ -120,6 +120,8 @@ pub struct BackgroundExecutionRegistry {
     service_admission: gents_store::service::RuntimeServiceAdmission,
     #[cfg(test)]
     stop_release_observer: Option<Arc<tokio::sync::Notify>>,
+    #[cfg(any(test, feature = "test-fixtures"))]
+    release_wait: Option<std::time::Duration>,
 }
 
 pub(crate) const LIVE_STOP_RELEASE_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
@@ -131,6 +133,23 @@ pub struct BackgroundShutdownReport {
 }
 
 impl BackgroundExecutionRegistry {
+    /// Bounds a stop's wait for its worker's release by `wait` instead of
+    /// `LIVE_STOP_RELEASE_WAIT`: a fixture whose property is not that bound
+    /// puts it at its hang ceiling, out of reach of a loaded host.
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn with_release_wait(mut self, wait: std::time::Duration) -> Self {
+        self.release_wait = Some(wait);
+        self
+    }
+
+    fn release_wait(&self) -> std::time::Duration {
+        #[cfg(any(test, feature = "test-fixtures"))]
+        if let Some(wait) = self.release_wait {
+            return wait;
+        }
+        LIVE_STOP_RELEASE_WAIT
+    }
+
     #[cfg(test)]
     pub(crate) fn with_stop_release_observer(mut self, observer: Arc<tokio::sync::Notify>) -> Self {
         self.stop_release_observer = Some(observer);
@@ -649,12 +668,10 @@ impl BackgroundExecutionRegistry {
         if let Some(execution) = execution {
             let completion_rx = execution.worker_release_tx.subscribe();
             execution.cancellation_token.cancel();
-            let released = tokio::time::timeout(
-                LIVE_STOP_RELEASE_WAIT,
-                Self::await_completion(completion_rx),
-            )
-            .await
-            .is_ok();
+            let released =
+                tokio::time::timeout(self.release_wait(), Self::await_completion(completion_rx))
+                    .await
+                    .is_ok();
             #[cfg(test)]
             if let Some(observer) = &self.stop_release_observer {
                 observer.notify_one();

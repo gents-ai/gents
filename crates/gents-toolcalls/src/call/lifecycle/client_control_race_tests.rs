@@ -174,6 +174,60 @@ async fn client_cancel_races_completion_without_replacing_terminal_state() {
     let _ = std::fs::remove_dir_all(admission.path);
 }
 
+/// The stop loads the row running; the owner's completion then commits and
+/// releases its execution before the stop looks for it.
+#[tokio::test]
+async fn an_unowned_stop_names_a_completion_that_won() {
+    use gents_lean_vocab::families::process_control_terminal_unowned_stop as family;
+    for case in family::cases::<gents_session::exec::CancelProcessReply, String>() {
+        let completion_first = case.input.completion_first;
+        let (admission, request_owner) =
+            published_admission_with_owner(PublishedAdmissionOptions {
+                name: format!("operator-unowned-stop-{completion_first}"),
+                real_identity: true,
+                await_mode: AwaitMode::Background,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let requester_did = request_owner.request().requester_did.clone();
+        let node = admission.node.clone();
+        let mut tool = admission.tool;
+        let request = OperatorProcessControlRequest {
+            node_did: admission.node_did.clone(),
+            session_id: tool.session_id().to_owned(),
+            tool_call_id: tool.tool_call_id().to_owned(),
+            tool_call_doc_id: tool.doc_id().unwrap().to_owned(),
+        };
+        let loaded = load_as_agent(&request_owner, &request, requester_did.as_deref()).await;
+        if completion_first {
+            tool.complete("finished").await.unwrap();
+        }
+        let outcome = crate::call::control::cancel_loaded_background_tool_call(
+            node.clone(),
+            &BackgroundExecutionRegistry::default(),
+            &gents_session::session::message::NoSessionMessageGoals,
+            loaded,
+            "explicit_cancel",
+        )
+        .await
+        .unwrap();
+        let (cancel_reply, already_terminal_state) = match outcome {
+            ProcessControlOutcome::AlreadyTerminal { state } => (None, Some(state)),
+            other => (Some(cancel_reply_of(&other)), None),
+        };
+        let row = load_as_agent(&request_owner, &request, requester_did.as_deref()).await;
+        case.check(family::UnownedStopOutput {
+            cancel_reply,
+            already_terminal_state,
+            terminal_state: row.state().as_str().to_owned(),
+        });
+        drop(request_owner);
+        node.shutdown().await.expect("shut down test node");
+        let _ = std::fs::remove_dir_all(admission.path);
+    }
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn process_control_terminal_order_matches_lean_model() {
@@ -338,6 +392,99 @@ async fn client_unverified_stop_preserves_running_tool() {
                 durable_state: row.state().as_str().to_owned(),
             },
         );
+        drop(reservation);
+        drop(request_owner);
+        node.shutdown().await.expect("shut down test node");
+        let _ = std::fs::remove_dir_all(admission.path);
+    }
+}
+
+/// The worker commits what the case names after the stop signalled it and
+/// before its release wait ends, and never releases.
+#[tokio::test]
+async fn a_stop_whose_release_wait_ends_replies_from_the_row() {
+    use gents_lean_vocab::families::process_control_terminal_release_wait_ended as family;
+    for case in family::cases::<gents_session::exec::CancelProcessReply, String>() {
+        let (admission, request_owner) =
+            published_admission_with_owner(PublishedAdmissionOptions {
+                name: format!("operator-release-wait-{}", case.input.reread),
+                real_identity: true,
+                await_mode: AwaitMode::Background,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let requester_did = request_owner.request().requester_did.clone();
+        let agent_access = request_owner.access().unwrap();
+        let node = admission.node.clone();
+        let mut tool = admission.tool;
+        let request = OperatorProcessControlRequest {
+            node_did: admission.node_did.clone(),
+            session_id: tool.session_id().to_owned(),
+            tool_call_id: tool.tool_call_id().to_owned(),
+            tool_call_doc_id: tool.doc_id().unwrap().to_owned(),
+        };
+        let release_observed = std::sync::Arc::new(tokio::sync::Notify::new());
+        let registry = BackgroundExecutionRegistry::default()
+            .with_stop_release_observer(release_observed.clone());
+        let token = CancellationToken::new();
+        let reservation = registry
+            .reserve(
+                request.tool_call_id.clone(),
+                request.tool_call_doc_id.clone(),
+                token.clone(),
+            )
+            .unwrap();
+        let mut control = tokio::spawn({
+            let node_for_control = node.clone();
+            let agent = request_owner.actor_did().unwrap();
+            let registry = registry.clone();
+            let request = request.clone();
+            let requester_did = requester_did.clone();
+            async move {
+                stop_as(
+                    &node_for_control,
+                    &agent_access,
+                    &agent,
+                    &registry,
+                    &request,
+                    requester_did.as_deref(),
+                )
+                .await
+            }
+        });
+        tokio::select! {
+            result = &mut control => panic!("control ended before signalling the live execution: {result:?}"),
+            _ = token.cancelled() => {}
+        }
+        match case.input.reread.as_str() {
+            "cancelled" => {
+                tool.cancel_during_run_owned(
+                    gents_protocol::tool_call::CancelCause::UserCancelled,
+                    "explicit_cancel",
+                )
+                .await
+                .unwrap();
+            }
+            "completed" => tool.complete("finished").await.unwrap(),
+            _ => {}
+        }
+        tokio::time::pause();
+        tokio::time::advance(crate::call::hook::background_executions::LIVE_STOP_RELEASE_WAIT)
+            .await;
+        release_observed.notified().await;
+        tokio::time::resume();
+        let outcome = control.await.unwrap().unwrap();
+        let (cancel_reply, already_terminal_state) = match outcome {
+            ProcessControlOutcome::AlreadyTerminal { state } => (None, Some(state)),
+            other => (Some(cancel_reply_of(&other)), None),
+        };
+        let row = load_as_agent(&request_owner, &request, requester_did.as_deref()).await;
+        case.check(family::ReleaseWaitOutput {
+            cancel_reply,
+            already_terminal_state,
+            durable_state: row.state().as_str().to_owned(),
+        });
         drop(reservation);
         drop(request_owner);
         node.shutdown().await.expect("shut down test node");

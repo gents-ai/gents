@@ -1,0 +1,4 @@
+---- MODULE MCDiagnosedReadinessDecoded ----
+EXTENDS DiagnosedReadiness
+
+====

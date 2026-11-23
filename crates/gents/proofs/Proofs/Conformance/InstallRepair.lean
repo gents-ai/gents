@@ -173,3 +173,13 @@ def recovery : Conformance.Family RecoveryObservation Bool where
   model := canRestore
 
 end Conformance.InstallRepair
+
+namespace Conformance.InstallRepair
+open _root_.InstallRepair
+
+@[conformance_family]
+def startActions : Conformance.Family RecordedNode StartAction where
+  inputs := [.silent, .other, .starting, .ready]
+  model := startAction
+
+end Conformance.InstallRepair

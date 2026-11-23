@@ -107,6 +107,8 @@ fn modeled_event_source_generations_match_resolved_projection() {
                 prompt_template: String::new(),
                 goal_objective_template: None,
                 goal_token_budget: None,
+                goal_blocked_audit_threshold: None,
+                goal_max_infrastructure_retries: None,
                 output_schema_ref: None,
                 hooks: Default::default(),
                 command: None,

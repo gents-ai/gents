@@ -1,0 +1,4 @@
+---- MODULE MCDiagnosedReadiness ----
+EXTENDS DiagnosedReadiness
+
+====

@@ -28,6 +28,18 @@ export const BASH_OUTPUT_LIMIT = {
   fallback: "16000",
 } as const;
 
+export const INSTRUCTION_LIMIT = {
+  label: "Workspace instruction byte limit",
+  max: 262_144,
+  fallback: "32768",
+} as const;
+
+export const BACKGROUND_TOOL_CALL_LIMIT = {
+  label: "Background calls per request",
+  max: 8,
+  fallback: "8",
+} as const;
+
 type RemoteService = NonNullable<NonNullable<Tools["remote"]>["services"]>[number];
 
 const REMOTE_TIMEOUTS = {
@@ -259,6 +271,30 @@ export function ToolGroupControls({
       }
     />
   );
+  const instructionLimit = (
+    <WholeNumberRow
+      id="tools-host-max-instruction-chars"
+      label={INSTRUCTION_LIMIT.label}
+      value={groups.host?.max_instruction_chars}
+      placeholder={INSTRUCTION_LIMIT.fallback}
+      max={INSTRUCTION_LIMIT.max}
+      onInvalid={onInvalid}
+      onChange={(max_instruction_chars) => update("host", { max_instruction_chars })}
+    />
+  );
+  const backgroundCallLimit = (
+    <WholeNumberRow
+      id="tools-host-max-background-tool-calls"
+      label={BACKGROUND_TOOL_CALL_LIMIT.label}
+      value={groups.host?.max_background_tool_calls}
+      placeholder={BACKGROUND_TOOL_CALL_LIMIT.fallback}
+      max={BACKGROUND_TOOL_CALL_LIMIT.max}
+      onInvalid={onInvalid}
+      onChange={(max_background_tool_calls) =>
+        update("host", { max_background_tool_calls })
+      }
+    />
+  );
   return (
     <>
       <Group title="Host execution policy">
@@ -290,6 +326,7 @@ export function ToolGroupControls({
         {fileLimit("max_list_entries")}
         {fileLimit("max_matches")}
         {bashOutputLimit}
+        {instructionLimit}
         <Note>
           A shared tool-result limit can further shorten the combined output sent to the
           model.
@@ -310,6 +347,7 @@ export function ToolGroupControls({
             update("host", { bash: { ...groups.host?.bash, max_timeout_secs } }),
           "Bash timeout, else host maximum",
         )}
+        {backgroundCallLimit}
         {seconds(
           "tools-bash-background-timeout",
           "Background lifetime seconds",

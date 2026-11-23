@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 
 type PopoverController = {
   activate: () => void;
@@ -31,12 +38,25 @@ export function useExclusivePopover(onClose?: () => void) {
   const [open, setOpen] = useState(false);
   const requestedOpenRef = useRef(false);
   const popupElement = useRef<HTMLDivElement | null>(null);
+  /* An open committed and its popup not yet unmounted: the popup mounts and
+     exits whether or not it has attached when a peer asks for the lease. */
+  const committedRef = useRef(false);
   const onCloseRef = useRef(onClose);
+  const mounting = useCallback(
+    () => popupElement.current !== null || committedRef.current,
+    [],
+  );
+
+  useLayoutEffect(() => {
+    if (open) committedRef.current = true;
+  }, [open]);
 
   const popupRef = useCallback(
     (element: HTMLDivElement | null) => {
       popupElement.current = element;
-      if (!element && !requestedOpenRef.current) release(id);
+      if (element) return;
+      committedRef.current = false;
+      if (!requestedOpenRef.current) release(id);
     },
     [id],
   );
@@ -52,9 +72,9 @@ export function useExclusivePopover(onClose?: () => void) {
         setOpen(true);
       },
       closeForPeer: () => {
-        if (!requestedOpenRef.current) return popupElement.current !== null;
+        if (!requestedOpenRef.current) return mounting();
         requestedOpenRef.current = false;
-        const awaitsUnmount = popupElement.current !== null;
+        const awaitsUnmount = mounting();
         setOpen(false);
         onCloseRef.current?.();
         return awaitsUnmount;
@@ -66,7 +86,7 @@ export function useExclusivePopover(onClose?: () => void) {
       if (pendingPopoverId === id) pendingPopoverId = null;
       if (activePopoverId === id) release(id);
     };
-  }, [id]);
+  }, [id, mounting]);
 
   const onOpenChange = useCallback(
     (next: boolean) => {
@@ -78,7 +98,7 @@ export function useExclusivePopover(onClose?: () => void) {
         if (pendingPopoverId === id) pendingPopoverId = null;
         setOpen(false);
         if (wasRequestedOpen) onCloseRef.current?.();
-        if (activePopoverId === id && popupElement.current === null) release(id);
+        if (activePopoverId === id && !mounting()) release(id);
         return;
       }
       requestedOpenRef.current = true;
@@ -97,12 +117,15 @@ export function useExclusivePopover(onClose?: () => void) {
       const active = controllers.get(closingId);
       if (!active || !active.closeForPeer()) release(closingId);
     },
-    [id],
+    [id, mounting],
   );
 
   const onOpenChangeComplete = useCallback(
     (next: boolean) => {
-      if (!next && !requestedOpenRef.current && !popupElement.current) release(id);
+      if (!next && !requestedOpenRef.current && !popupElement.current) {
+        committedRef.current = false;
+        release(id);
+      }
     },
     [id],
   );

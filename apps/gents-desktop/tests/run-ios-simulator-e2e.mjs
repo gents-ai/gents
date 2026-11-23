@@ -607,24 +607,23 @@ try {
       const defaultExpected = `ISOLATED_IPHONE_SIMULATOR_E2E_RUN_${index}`;
       const launchEnvironment = {
         ...process.env,
-        SIMCTL_CHILD_GENTS_NATIVE_E2E: "1",
-        SIMCTL_CHILD_GENTS_E2E_AGENT_LABEL: reconnectFixture
-          ? "iOS Reconnect Fixture"
-          : process.env.GENTS_E2E_AGENT_LABEL?.trim() || "Enrolled Agent",
-        SIMCTL_CHILD_GENTS_E2E_SERVER_ADDRESS: serverAddress,
-        SIMCTL_CHILD_GENTS_E2E_PROMPT:
-          process.env.GENTS_E2E_PROMPT?.trim() || defaultPrompt,
-        SIMCTL_CHILD_GENTS_E2E_EXPECTED_RESPONSE:
-          process.env.GENTS_E2E_EXPECTED_RESPONSE?.trim() || defaultExpected,
-        SIMCTL_CHILD_GENTS_E2E_EXPECT_EMPTY_SESSIONS:
-          index === 1 && !keepData ? "1" : "0",
-        SIMCTL_CHILD_GENTS_E2E_CORRELATION_ID:
-          reconnectFixture?.correlationId ??
-          `ios-${gitRevision().slice(0, 12)}-${index}`,
-        SIMCTL_CHILD_GENTS_E2E_RECONNECT_REAL_INFERENCE: realInference ? "1" : "0",
-        SIMCTL_CHILD_GENTS_MOBILE_PERFORMANCE: measurePerformance ? "1" : "0",
         SIMCTL_CHILD_RUST_BACKTRACE: "full",
         SIMCTL_CHILD_RUST_LOG: process.env.RUST_LOG?.trim() || "info",
+      };
+      const nativeE2eLaunch = {
+        agentLabel: reconnectFixture
+          ? "iOS Reconnect Fixture"
+          : process.env.GENTS_E2E_AGENT_LABEL?.trim() || "Enrolled Agent",
+        serverAddress,
+        prompt: process.env.GENTS_E2E_PROMPT?.trim() || defaultPrompt,
+        expectedResponse:
+          process.env.GENTS_E2E_EXPECTED_RESPONSE?.trim() || defaultExpected,
+        expectEmptySessionSlice: index === 1 && !keepData,
+        correlationId:
+          reconnectFixture?.correlationId ??
+          `ios-${gitRevision().slice(0, 12)}-${index}`,
+        reconnectRealInference: realInference,
+        measurePerformance,
       };
 
       process.stdout.write(`\nRunning isolated prompt round-trip ${index}/${runs}…\n`);
@@ -642,6 +641,8 @@ try {
               `--stderr=${join(artifactRoot, `app-${index}.stderr.log`)}`,
               device.udid,
               APP_BUNDLE_ID,
+              "--native-e2e",
+              JSON.stringify(nativeE2eLaunch),
             ],
             { env: launchEnvironment },
           );

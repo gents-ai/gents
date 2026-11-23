@@ -35,6 +35,29 @@ impl Task {
             "task {} goal_token_budget must be positive",
             self.task_id
         );
+        ensure!(
+            self.goal_blocked_audit_threshold.is_none() || self.goal_objective_template.is_some(),
+            "task {} goal_blocked_audit_threshold requires goal_objective_template",
+            self.task_id
+        );
+        ensure!(
+            self.goal_blocked_audit_threshold
+                .is_none_or(|value| value > 0),
+            "task {} goal_blocked_audit_threshold must be positive",
+            self.task_id
+        );
+        ensure!(
+            self.goal_max_infrastructure_retries.is_none()
+                || self.goal_objective_template.is_some(),
+            "task {} goal_max_infrastructure_retries requires goal_objective_template",
+            self.task_id
+        );
+        ensure!(
+            self.goal_max_infrastructure_retries
+                .is_none_or(|value| value >= 0),
+            "task {} goal_max_infrastructure_retries must not be negative",
+            self.task_id
+        );
         let mut hook_ids = std::collections::BTreeSet::new();
         for hook in &self.hooks {
             ensure!(

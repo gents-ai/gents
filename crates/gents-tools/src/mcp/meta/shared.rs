@@ -49,8 +49,14 @@ impl MetaToolContext {
             current == *service,
             "MCP service route changed before discovery"
         );
-        let connect = timeout(selection.connect_timeout_secs, 15)?;
-        let discovery = timeout(selection.discovery_timeout_secs, 30)?;
+        let connect = timeout(
+            selection.connect_timeout_secs,
+            crate::mcp::pool::MCP_CONNECT_TIMEOUT_SECS,
+        )?;
+        let discovery = timeout(
+            selection.discovery_timeout_secs,
+            crate::mcp::pool::MCP_LIST_TOOLS_TIMEOUT_SECS,
+        )?;
         tokio::time::timeout(
             discovery,
             self.mcp_pool.list_tools_with_limits(

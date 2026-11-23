@@ -697,6 +697,58 @@ See `../README.md` for how this fits the broader formal-verification model.
   `StopsOnlyForAGoneStore` holds; `IgnoresCapture` treats a store not yet
   captured as a captured one, so a store still being created stops the
   runtime, and violates it.
+- `ShellSendLandings` — what the CLI shell's source tells after a tab's
+  first send. The send spawns the work reread for the new session; the
+  send's commits wake the chat reread; the two reads race and the source
+  loop tells each landing whole. `LandingsWhole` and `ObserverAgrees` hold
+  when the test accepts either landing first. RED: `WorkFirst` (the
+  observer that read the next three updates as the work reread) and
+  `TaskTells` (reads that tell their own updates interleave the landings).
+- `DiagnosedReadiness` — a test waiting for a Tools edit to demote an Agent
+  before `gents runtime diagnose` reports it. The reconciler commits the
+  readiness row with the new generation's entries, then the router commits
+  its acknowledgement; until then Lean `ClientAgentReadiness.project` reads
+  the row as `router_generation_stale`. Green waits for the owner's
+  projection of the row diagnose reads. RED: `Decoded` (the observer that
+  waited for any decoded row listing the Agent) and `NoRouterAck`.
+- `BackgroundStopRelease` — `cancel_process` stopping a running background
+  invocation while its worker settles it. The canceller signals the live
+  execution and waits, bounded by the wall clock, for the worker's release;
+  the worker commits its terminal before it releases. Lean
+  `Background.ProcessControl.signalledReply` decides the reply from the row
+  re-read after a wait that ended unreleased. `NoFalseAlreadyTerminal` and
+  `CancelledMeansCancelled` hold under either bound; with the bound at the
+  hang ceiling the test's `cancelled` holds too (`ObserverAgrees`). RED:
+  `TerminalReread` (the reply before the fix named the stop's own late
+  cancellation `already_terminal`) and `WallBound` (a reachable bound, a
+  `WallClockBound` `WallDeadline` instance, makes a slow worker's stop
+  honestly `unverified`).
+- `StopCompletionRace` — a client stop racing a background invocation's
+  completion. The stop loads the row running; the completion commits the row
+  and its delivery, then releases its execution; the stop, finding no live
+  execution, fails the row as lost. Lean `firstTerminalIntent`: the first
+  terminal wins. Green adopts a terminal another writer committed first and
+  names it (`Background.ProcessControl.unownedStopReply`). RED: `NoAdopt`
+  (the failure checked the completion's delivery as its own replay and
+  errored) and `NoCompare` (a terminal write that does not compare from
+  running replaces the completion).
+- `RecordedNodeStart` — `gents -p` against a home whose hand-started
+  server was killed and restarted on the same port. The server binds and
+  answers `/status` as starting, writes `runtime.json`, marks itself ready,
+  then prints its `serving` line; the killed server's `runtime.json` and
+  readiness row name the same URL. Lean `InstallRepair.startAction`: a node
+  of this home that answers starting is awaited, never taken for absent.
+  Green waits for the serving line. RED: `StaleFile` (the test that waited on
+  the killed server's file and row, with the CLI reaching the service
+  manager) and `StartingIsAbsent` (the CLI before the fix).
+- `ExclusivePopoverLease` — the desktop shell's one-popup lease
+  (`useExclusivePopover`) for two Base UI owners. A request takes the free
+  lease or queues and asks the holder to close; the holder keeps the lease
+  from its committed open until its popup unmounts, so `AtMostOneMounted`
+  (Bombadil's `desktop_shell_does_not_stack_dialogs`) and `RequestServed`
+  hold whether or not the popup's attach lags its commit (Base UI's premise
+  is a synchronous attach). RED: `MountLag` (a lease held only while the
+  popup is attached) and `ReleaseOnClose`.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## Checking
