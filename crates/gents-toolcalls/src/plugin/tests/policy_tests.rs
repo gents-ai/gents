@@ -676,3 +676,110 @@ async fn the_catalog_refusal_names_what_the_policy_tool_answers() {
         "{held}"
     );
 }
+
+#[tokio::test]
+async fn an_agent_never_removes_a_relation_of_a_session_it_published() {
+    let fixture = PolicyFixture::new("policy-session-custody").await;
+    fixture.grant_engineer_sets(&[]).await;
+    let agent_access = ConfigAccess::local_managed_agent(
+        fixture.db.node.clone(),
+        ::identity::Did::new(fixture.agent_did.clone()).unwrap(),
+        fixture.agent.as_ref(),
+    )
+    .unwrap();
+    let agent_doc = fixture.agent_doc_id(&fixture.agent_did).await;
+    let user = ::identity::Did::new(fixture.user_access.actor_did().unwrap()).unwrap();
+    let session = agent_access
+        .transact_write("test.policy.publish_session", |txn| {
+            let node_did = fixture.db.node_identity.did();
+            let agent_did = fixture.agent_did.as_str();
+            let agent_doc = agent_doc.as_str();
+            let user = &user;
+            Box::pin(async move {
+                let created = txn
+                    .execute_with_variables(
+                        "mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }",
+                        &json!({"input": {"node_did": node_did, "session_id": "custody",
+                            "requester_did": user.as_str(), "agent_did": agent_did}}),
+                    )
+                    .await?;
+                let doc = gents_store::graphql::created_doc_id(&created, "AgentSession")?;
+                txn.add_resource_relationship("AgentSession", &doc, "parent", "agents", agent_doc)
+                    .await?;
+                txn.add_actor_relationship("AgentSession", &doc, "reader", user)
+                    .await?;
+                Ok::<_, anyhow::Error>(doc)
+            })
+        })
+        .await
+        .unwrap();
+    let tools = fixture.tools(&["policy"], false);
+    let tool = config(&tools);
+
+    for relation in ["reader", "parent"] {
+        let failure = run(
+            tool,
+            json!({"argv": [
+                "policy", "revoke", "--subject", user.as_str(),
+                "--collection", "AgentSession", "--doc", session.as_str(),
+                "--relation", relation,
+            ]}),
+        )
+        .await
+        .expect_err("an Agent's removal of a session relation is refused");
+        let message = failure["error"].as_str().expect("error message");
+        assert!(
+            message.contains(&format!(
+                "policy revoke refused for relation {relation} on AgentSession document {session}"
+            )),
+            "{failure}"
+        );
+        assert_eq!(
+            failure["recovery"]["next_call"],
+            json!({"argv": [
+                "policy", "check", "--subject", user.as_str(),
+                "--collection", "AgentSession", "--doc", session.as_str(),
+                "--relation", relation,
+            ]}),
+            "{failure}"
+        );
+    }
+
+    let relationships = agent_access
+        .list_document_relationships("AgentSession", &session)
+        .await
+        .unwrap();
+    assert!(
+        relationships
+            .iter()
+            .any(|row| row.relation == "reader" && row.subject == user.as_str()),
+        "{relationships:?}"
+    );
+    let kept = run(
+        tool,
+        json!({"argv": [
+            "policy", "check", "--subject", user.as_str(),
+            "--collection", "AgentSession", "--doc", session.as_str(),
+            "--relation", "reader",
+        ]}),
+    )
+    .await
+    .unwrap();
+    assert!(
+        kept["answer"].as_str().unwrap().starts_with("yes:"),
+        "{kept}"
+    );
+    let visible = fixture
+        .user_access
+        .execute(&format!(
+            r#"{{ AgentSession(filter: {{_docID: {{_eq: "{}"}}}}) {{ _docID }} }}"#,
+            gents_store::graphql::escape_graphql_string(&session),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        visible["data"]["AgentSession"].as_array().map(Vec::len),
+        Some(1),
+        "{visible}"
+    );
+}

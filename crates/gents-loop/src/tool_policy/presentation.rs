@@ -49,7 +49,32 @@ pub fn configuration_valid(hides_others: bool, script_selected: bool, hides_gate
     !hides_gateway && (!hides_others || script_selected)
 }
 
-const SCRIPT_HINT: &str = "Some granted tools are offered only here: `Object.keys(tools)` lists them; read `tools.NAME.description` and `tools.NAME.parameters` before calling one.";
+/// What `script` adds to its description while `hidden` are offered only
+/// through it: their names, then how to describe and call one.
+pub fn script_hint(hidden: &[String]) -> String {
+    format!(
+        "Offered only here, not as direct tools: {}. Read `tools.NAME.description` and `tools.NAME.parameters` before the first call, then `await tools.NAME({{...}})`.",
+        hidden.join(", ")
+    )
+}
+
+/// Lean `ToolPresentation.defaultHidden`.
+pub fn default_hidden(name: &str) -> bool {
+    matches!(name, "charts" | "data_tables" | "browser_exec")
+}
+
+/// Lean `ToolPresentation.listedAfterWiring`.
+pub fn listed_after_wiring(
+    default_hidden: bool,
+    listed: bool,
+    selected_before: bool,
+    script_before: bool,
+    selected_after: bool,
+    script_after: bool,
+) -> bool {
+    script_after
+        && (listed || (default_hidden && selected_after && !(selected_before && script_before)))
+}
 
 /// The names among `names` the model is not shown: those listed, while
 /// `script` is among `names`.
@@ -81,8 +106,8 @@ pub fn present_tools(tools: Vec<Box<dyn ToolDyn>>, listed: &[String]) -> Vec<Box
         .map(|tool| {
             let name = tool.name();
             let hide = hidden.contains(&name);
-            let hint = !hidden.is_empty() && name == "script";
-            if hide || hint {
+            let hint = (!hidden.is_empty() && name == "script").then(|| script_hint(&hidden));
+            if hide || hint.is_some() {
                 Box::new(PresentedTool {
                     tool,
                     hidden: hide,
@@ -98,14 +123,14 @@ pub fn present_tools(tools: Vec<Box<dyn ToolDyn>>, listed: &[String]) -> Vec<Box
 struct PresentedTool {
     tool: Box<dyn ToolDyn>,
     hidden: bool,
-    hint: bool,
+    hint: Option<String>,
 }
 
 impl PresentedTool {
     fn hinted(&self, mut definition: ToolDefinition) -> ToolDefinition {
-        if self.hint {
+        if let Some(hint) = &self.hint {
             definition.description.push('\n');
-            definition.description.push_str(SCRIPT_HINT);
+            definition.description.push_str(hint);
         }
         definition
     }

@@ -31,11 +31,18 @@ namespace ToolPresentation
 deriving instance Lean.ToJson for Origin, AdmissionDecision
 
 attribute [conformance_function] admissionDecision effectiveHidden configurationValid
+  listedAfterWiring
 
 @[conformance_family]
 def gateways : Conformance.Family String Bool where
   inputs := ["script", "config", "load_skill", "spawn_process", "schema", "workflow", "query",
     "Script", "spawn_process_extra", ""]
   model := isGateway
+
+@[conformance_family]
+def defaults : Conformance.Family String Bool where
+  inputs := ["charts", "data_tables", "browser_exec", "script", "web_search", "web_fetch",
+    "query", "Charts", "gents/charts", "chart", ""]
+  model := defaultHidden
 
 end ToolPresentation
