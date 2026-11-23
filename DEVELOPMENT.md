@@ -79,6 +79,13 @@ result (`transport_group.group`).
 gents runtime p2p enrollment admit-device "$GROUP_ID" "$FOLLOWER_DID" > device-admission.json
 ```
 
+The admission receipt includes `publisher_node_id`, the registered Node document ID
+to use when creating transport records. A direct Defra write must supply this ID.
+To create a record on behalf of another Node, the account that owns that Node
+must grant the signing device DID the `transport_publisher` relation on it.
+Group membership alone grants no such authority. The parent ID is immutable
+and stays with the record when another device receives a replica.
+
 Transfer both JSON files to the follower over an authenticated channel.
 The signing key stays on the follower. Set up a private tunnel from its
 loopback port to the host's Vera loopback port, then initialize a fresh
