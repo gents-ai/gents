@@ -284,7 +284,6 @@ mod tests {
         "contracts_pack_installation_hosted_plugin_unreached",
         "contracts_queued_steering_guard_unreached",
         "contracts_runtime_reconcile_unreached",
-        "contracts_self_config_job_guard_unreached",
         "contracts_session_advance_unreached",
         "contracts_session_refresh_unreached",
         "contracts_title_admission_fresh_verifier_unreached",

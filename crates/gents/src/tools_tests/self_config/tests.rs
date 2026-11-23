@@ -957,6 +957,66 @@ async fn a_profile_edit_is_fenced_alike_through_its_agent_and_by_its_exact_id() 
     assert_eq!(replayed, 6);
 }
 
+/// The operator saves the case's stored job block and then its candidate
+/// through the person-facing Tools operation on a served runtime.
+#[tokio::test]
+async fn operator_job_policy_saves_follow_the_model() {
+    use gents_protocol::operations::document::WriteMode;
+    use gents_protocol::operations::tools::ToolsSaveInput;
+    for case in gents_lean_vocab::families::contracts_self_config_job_guard_operator::cases() {
+        assert_eq!(case.input.writer, "operator", "{}", case.input.name);
+        let home = crate::client_test_support::ServedRuntimeHome::start().await;
+        let node_did = home.node_did().to_owned();
+        home.apply_as_user(
+            "test.job_policy.operator_target",
+            vec![(
+                gents_store::collection::Collection::AgentTarget,
+                json!({"target_id": "target", "node_did": node_did, "name": "target",
+                    "target_node_did": "did:key:peer", "agent_did": "did:key:peer-agent"}),
+            )],
+        )
+        .await;
+        let access = home.user_access();
+        let installed = |_: &str| Ok(());
+        let save = |mode, integrations: Value| ToolsSaveInput {
+            tools_id: "operator-tools".into(),
+            mode,
+            patch: vec![
+                ("agents".into(), Some(json!({"target_ids": ["target"]}))),
+                ("integrations".into(), Some(integrations)),
+            ],
+            allow_drop: Default::default(),
+            shared_acknowledged: false,
+        };
+        let candidate =
+            serde_json::to_value(&case.input.candidate_integrations).expect("integrations encode");
+        let mode = match &case.input.stored_integrations {
+            Some(stored) => {
+                let stored = serde_json::to_value(stored).expect("integrations encode");
+                crate::operations::tools::save(
+                    &access,
+                    &node_did,
+                    &save(WriteMode::Create, stored),
+                    Some(&installed),
+                )
+                .await
+                .unwrap_or_else(|error| panic!("{}: stored Tools: {error}", case.input.name));
+                WriteMode::Update
+            }
+            None => WriteMode::Create,
+        };
+        let result = crate::operations::tools::save(
+            &access,
+            &node_did,
+            &save(mode, candidate),
+            Some(&installed),
+        )
+        .await;
+        case.check(result.is_ok());
+        home.shutdown().await;
+    }
+}
+
 #[tokio::test]
 async fn modeled_job_policy_updates_follow_native_tools_authorization() {
     for case in gents_lean_vocab::families::contracts_self_config_job_guard_native::cases() {
