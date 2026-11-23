@@ -286,6 +286,8 @@ async fn event_configuration_publication_rebinding_and_revocation_use_native_gra
         goal_id: None,
         goal_objective: None,
         goal_token_budget: None,
+        goal_blocked_audit_threshold: None,
+        goal_max_infrastructure_retries: None,
         goal_assignment_applied: false,
         emit_outcome: false,
         queued_serial: false,

@@ -93,6 +93,8 @@ fn configuration_fingerprint_reflects_schedule_set() {
         prompt_template: "do the thing".to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
+        goal_blocked_audit_threshold: None,
+        goal_max_infrastructure_retries: None,
         output_schema_ref: None,
         hooks: Vec::new(),
         command: None,

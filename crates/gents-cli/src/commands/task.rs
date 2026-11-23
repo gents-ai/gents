@@ -76,6 +76,8 @@ impl TaskInventory {
             "command": task.get("command").cloned().unwrap_or(Value::Null),
             "goal_objective_template": task.get("goal_objective_template").cloned().unwrap_or(Value::Null),
             "goal_token_budget": task.get("goal_token_budget").cloned().unwrap_or(Value::Null),
+            "goal_blocked_audit_threshold": task.get("goal_blocked_audit_threshold").cloned().unwrap_or(Value::Null),
+            "goal_max_infrastructure_retries": task.get("goal_max_infrastructure_retries").cloned().unwrap_or(Value::Null),
             "enabled": bool_field(task, "enabled").unwrap_or(false),
             "runnable": runnable,
             "unavailable_reason": unavailable_reason,

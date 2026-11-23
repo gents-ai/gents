@@ -63,11 +63,11 @@ def cases : List Case :=
   , { name := "unbudgeted", budget := none }
   , { name := "maximum_budget", budget := some GoalAutomation.maxTokenBudget }
   , { name := "rollback", commit := false }
-  , { name := "matching_creation_claim", facts := { facts with existingClaim := some ⟨"1", "10", "ship", some 1000⟩ } }
+  , { name := "matching_creation_claim", facts := { facts with existingClaim := some ⟨"1", "10", "ship", some 1000, none, none⟩ } }
   , { name := "missing_first_goal_reference", facts := {facts with firstGoalId := none} }
   , { name := "different_first_goal_reference", facts := {facts with firstGoalId := some "other-assignment"} }
   , { name := "first_request_cannot_claim_existing_root", facts := {facts with firstRoot := some "existing-root"} }
-  , { name := "conflicting_creation_claim", facts := { facts with existingClaim := some ⟨"1", "10", "earlier", some 1000⟩ } }
+  , { name := "conflicting_creation_claim", facts := { facts with existingClaim := some ⟨"1", "10", "earlier", some 1000, none, none⟩ } }
   ]
 
 def replacementFacts : Facts := {boundFacts with firstGoalId := some "new-assignment"}
@@ -126,7 +126,7 @@ def replacementCases : List ReplacementCase :=
   , { name := "replace_old_root_reference", facts := {replacementFacts with firstRoot := some "old-first-request"} }
   , { name := "replace_retains_history", retained := true }
   , { name := "replace_conflicting_claim", facts := { replacementFacts with
-      existingClaim := some ⟨"1", "10", "earlier", some 1000⟩ } }
+      existingClaim := some ⟨"1", "10", "earlier", some 1000, none, none⟩ } }
   ]
 
 structure ClaimWire where
@@ -140,7 +140,7 @@ def ClaimWire.ofModel (c : GoalAutomation.Fingerprint) : ClaimWire :=
   ⟨c.owner, c.session, c.objective, c.tokenBudget⟩
 
 def ClaimWire.toModel (c : ClaimWire) : GoalAutomation.Fingerprint :=
-  ⟨c.owner, c.session, c.objective, c.tokenBudget⟩
+  { owner := c.owner, session := c.session, objective := c.objective, tokenBudget := c.tokenBudget }
 
 structure StartInput where
   name : String

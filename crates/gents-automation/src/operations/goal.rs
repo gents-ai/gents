@@ -240,13 +240,14 @@ pub async fn observe_revision(
 }
 
 /// The Goal a start opens: the owner and session it belongs to, its
-/// objective and its token budget.
+/// objective, its token budget and the limits it pins.
 #[derive(Clone, Copy)]
 pub struct GoalStart<'a> {
     pub node_did: &'a str,
     pub session_id: &'a str,
     pub objective: &'a str,
     pub token_budget: Option<i64>,
+    pub limits: gents_protocol::goal::GoalLimits,
 }
 
 /// Decides whether `actor` may start a Goal on the session now. `claim_key`
@@ -264,6 +265,7 @@ pub async fn admit_start_in_txn(
         session_id,
         objective,
         token_budget,
+        ..
     } = goal;
     if let Err(refusal) = validate_objective_and_budget(Some(objective), token_budget) {
         return Ok(Err(refusal));
@@ -287,6 +289,7 @@ pub async fn admit_start_in_txn(
                 session: session_id.to_owned(),
                 objective: objective.trim().to_owned(),
                 token_budget: token_budget.map(i128::from),
+                limits: gents_protocol::goal::GoalLimits::default(),
             };
             let recorded =
                 match load_goal_creation_claim_for_key_in_txn(txn, node_did, session_id, claim_key)
@@ -298,6 +301,7 @@ pub async fn admit_start_in_txn(
                         session: session_id.to_owned(),
                         objective: goal.objective.trim().to_owned(),
                         token_budget: goal.token_budget.map(i128::from),
+                        limits: goal.pinned_limits(),
                     }),
                 };
             let claim = match recorded {
@@ -547,7 +551,9 @@ fn plan_set(
     };
     let post = match action {
         None => pre,
-        Some(action) => pre.step(action).ok_or(illegal)?,
+        Some(action) => pre
+            .step_with_blocked_audit_threshold(action, goal.blocked_audit_threshold())
+            .ok_or(illegal)?,
     };
     Ok(GoalSetPlan {
         goal: goal.clone(),

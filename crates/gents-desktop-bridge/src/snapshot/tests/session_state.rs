@@ -429,6 +429,8 @@ fn session_snapshot_never_projects_goal_rows() {
         wrapup_requested: Some(false),
         wrapup_completed: Some(false),
         infrastructure_retry_count: Some(0),
+        blocked_audit_threshold: None,
+        max_infrastructure_retries: None,
         last_failure: None,
         completion_evidence: None,
         created_at: None,

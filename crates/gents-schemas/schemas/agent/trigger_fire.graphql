@@ -10,6 +10,8 @@ type TriggerFire @policy(id: "$household", resource: "children") @index(fields: 
     goal_id: String @index @immutable
     goal_objective: String @immutable
     goal_token_budget: Int @immutable
+    goal_blocked_audit_threshold: Int @immutable
+    goal_max_infrastructure_retries: Int @immutable
     goal_assignment_applied: Boolean
     emit_outcome: Boolean @index @immutable
     queued_serial: Boolean @immutable

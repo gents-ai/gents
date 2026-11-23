@@ -57,6 +57,8 @@ impl View for GoalRows {
                 .field(f::WRAPUP_REQUESTED)
                 .field(f::WRAPUP_COMPLETED)
                 .field(f::INFRASTRUCTURE_RETRY_COUNT)
+                .field(f::BLOCKED_AUDIT_THRESHOLD)
+                .field(f::MAX_INFRASTRUCTURE_RETRIES)
                 .field(f::LAST_FAILURE)
                 .field(f::COMPLETION_EVIDENCE)
                 .field(f::AUTO_RESUME_AT_RESET)

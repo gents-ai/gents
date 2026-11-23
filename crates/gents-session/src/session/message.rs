@@ -152,5 +152,6 @@ impl Delivery {
 
 pub struct RenderedBody {
     pub content: String,
-    pub goal: Option<(String, Option<i64>)>,
+    /// The rendered objective, token budget and limits of a Task's Goal.
+    pub goal: Option<(String, Option<i64>, gents_protocol::goal::GoalLimits)>,
 }

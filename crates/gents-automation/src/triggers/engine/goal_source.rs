@@ -18,7 +18,7 @@ use crate::goal::{
     update_goal_fields_if_status_from_access, GoalAction, GoalClaimedDecision,
     GoalContinuationAction, GoalContinuationFacts, GoalContinuationPhase, GoalDecision,
     GoalDocument, GoalFailureCause, GoalGatedDecision, GoalRequestTerminal, ObservedGoalAgent,
-    GOAL_READINESS_WAIT_PREFIX, MAX_INFRASTRUCTURE_RETRIES,
+    GOAL_READINESS_WAIT_PREFIX,
 };
 use crate::goal::{
     publish_claimed_continuation_with_identity, resume_at_reset, GoalReconcileSettled,
@@ -426,9 +426,9 @@ impl GoalSource {
                 .last_failure
                 .as_deref()
                 .filter(|reason| *reason == terminal_name || *reason == "goal_control_unavailable");
-            let retry_prefix = failure_name
-                .filter(|_| retries > 0)
-                .map(|failure_name| retry_prompt_prefix(failure_name, retries));
+            let retry_prefix = failure_name.filter(|_| retries > 0).map(|failure_name| {
+                retry_prompt_prefix(failure_name, retries, goal.max_infrastructure_retries())
+            });
             let wrapup = status == GoalStatus::BudgetLimited
                 && goal.wrapup_requested.unwrap_or(false)
                 && !goal.wrapup_completed.unwrap_or(false);
@@ -503,6 +503,7 @@ impl GoalSource {
                 infrastructure_retries: goal.infrastructure_retry_count.unwrap_or_default(),
                 wrapup_requested: goal.wrapup_requested.unwrap_or(false),
                 wrapup_completed: goal.wrapup_completed.unwrap_or(false),
+                max_infrastructure_retries: goal.max_infrastructure_retries(),
             };
         let persisted_budget_reached = goal
             .token_budget
@@ -573,14 +574,21 @@ impl GoalSource {
                 let retries = next_retries;
                 goal.infrastructure_retry_count = Some(retries);
                 goal.last_failure = Some(failure_name.to_owned());
-                Some(retry_prompt_prefix(failure_name, retries))
+                Some(retry_prompt_prefix(
+                    failure_name,
+                    retries,
+                    goal.max_infrastructure_retries(),
+                ))
             }
             GoalDecision::AbandonWrapup => {
                 self.abandon_wrapup(
                     actor,
                     &goal,
                     status,
-                    &format!("wrap-up {terminal_name} after {MAX_INFRASTRUCTURE_RETRIES} retries"),
+                    &format!(
+                        "wrap-up {terminal_name} after {} retries",
+                        goal.max_infrastructure_retries()
+                    ),
                 )
                 .await?;
                 return Ok(None);
@@ -688,6 +696,8 @@ impl GoalSource {
             prompt_template: prompt,
             goal_objective_template: None,
             goal_token_budget: None,
+            goal_blocked_audit_threshold: None,
+            goal_max_infrastructure_retries: None,
             output_schema_ref: None,
             hooks: Vec::new(),
             command: None,
@@ -1027,8 +1037,12 @@ pub struct GoalRetryPresentation {
     pub max: i64,
 }
 
-fn retry_prompt_prefix(cause: &str, attempt: i64) -> String {
-    format!("The previous request ended in infrastructure state {cause}. Retry the goal from durable session state; this is recovery attempt {attempt} of {MAX_INFRASTRUCTURE_RETRIES}.")
+fn retry_prompt_lead(cause: &str) -> String {
+    format!("The previous request ended in infrastructure state {cause}. Retry the goal from durable session state; this is recovery attempt ")
+}
+
+fn retry_prompt_prefix(cause: &str, attempt: i64, max: i64) -> String {
+    format!("{}{attempt} of {max}.", retry_prompt_lead(cause))
 }
 
 pub fn goal_retry_presentation(request: &AgentRequestRow) -> Option<GoalRetryPresentation> {
@@ -1045,14 +1059,22 @@ pub fn goal_retry_presentation(request: &AgentRequestRow) -> Option<GoalRetryPre
         .map(|state| state.as_str())
         .chain(std::iter::once("goal_control_unavailable"));
     for cause in causes {
-        for attempt in 1..=MAX_INFRASTRUCTURE_RETRIES {
-            if content.starts_with(&format!("{}\n\n", retry_prompt_prefix(cause, attempt))) {
-                return Some(GoalRetryPresentation {
-                    cause: cause.to_owned(),
-                    attempt,
-                    max: MAX_INFRASTRUCTURE_RETRIES,
-                });
-            }
+        let Some(counts) = content
+            .strip_prefix(&retry_prompt_lead(cause))
+            .and_then(|rest| rest.split_once(".\n\n"))
+            .and_then(|(counts, _)| counts.split_once(" of "))
+        else {
+            continue;
+        };
+        let (Ok(attempt), Ok(max)) = (counts.0.parse::<i64>(), counts.1.parse::<i64>()) else {
+            continue;
+        };
+        if (1..=max).contains(&attempt) {
+            return Some(GoalRetryPresentation {
+                cause: cause.to_owned(),
+                attempt,
+                max,
+            });
         }
     }
     None
@@ -1157,8 +1179,12 @@ mod tests {
 
     #[test]
     fn retry_presentation_roundtrips_the_goal_prompt_format() {
-        for cause in ["failed", "goal_control_unavailable"] {
-            for attempt in 1..=MAX_INFRASTRUCTURE_RETRIES {
+        let limits = [crate::goal::MAX_INFRASTRUCTURE_RETRIES, 4];
+        for (cause, max) in ["failed", "goal_control_unavailable"]
+            .into_iter()
+            .flat_map(|cause| limits.map(|max| (cause, max)))
+        {
+            for attempt in 1..=max {
                 let mut request = AgentRequestRow {
                     input: Some(RequestInput {
                         goal_continuation: Some(GoalContinuationInput {
@@ -1169,7 +1195,7 @@ mod tests {
                     }),
                     content: Some(continuation_prompt(
                         &goal(),
-                        Some(&retry_prompt_prefix(cause, attempt)),
+                        Some(&retry_prompt_prefix(cause, attempt, max)),
                         false,
                     )),
                     ..Default::default()
@@ -1177,7 +1203,7 @@ mod tests {
                 let presentation = goal_retry_presentation(&request).expect("owned retry prompt");
                 assert_eq!(presentation.cause, cause);
                 assert_eq!(presentation.attempt, attempt);
-                assert_eq!(presentation.max, MAX_INFRASTRUCTURE_RETRIES);
+                assert_eq!(presentation.max, max);
                 request.input = None;
                 assert_eq!(goal_retry_presentation(&request), None);
             }

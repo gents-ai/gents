@@ -153,6 +153,8 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
             goal_id: None,
             goal_objective: None,
             goal_token_budget: None,
+            goal_blocked_audit_threshold: None,
+            goal_max_infrastructure_retries: None,
             goal_assignment_applied: false,
             emit_outcome: false,
             queued_serial: false,
@@ -566,6 +568,8 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
         prompt_template: "implement release".to_string(),
         goal_objective_template: Some("ship release".to_string()),
         goal_token_budget: Some(4_096),
+        goal_blocked_audit_threshold: None,
+        goal_max_infrastructure_retries: None,
         output_schema_ref: None,
         hooks: Vec::new(),
         command: None,
@@ -840,6 +844,8 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
                     .as_i64()
                     .expect("the materialized budget fits the Task document")
             }),
+            goal_blocked_audit_threshold: modeled.goal_blocked_audit_threshold,
+            goal_max_infrastructure_retries: modeled.goal_max_infrastructure_retries,
             output_schema_ref: None,
             hooks: Vec::new(),
             command: None,
@@ -869,7 +875,7 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
         let rows = access.execute(&format!(r#"{{
             AgentSession(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ _docID agent_did }}
             AgentRequest(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ _docID lifecycle_state }}
-            Goal(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ _docID session_doc_id creator_did parent_linked assignment_root_request_doc_id }}
+            Goal(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ _docID session_doc_id creator_did parent_linked assignment_root_request_doc_id blocked_audit_threshold max_infrastructure_retries }}
             GoalCreationClaim(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ _docID session_doc_id creator_did parent_linked }}
         }}"#)).await.unwrap();
         let sessions = rows["data"]["AgentSession"].as_array().unwrap();
@@ -908,6 +914,16 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
         assert_eq!(
             goals[0]["assignment_root_request_doc_id"],
             requests[0]["_docID"]
+        );
+        assert_eq!(
+            goals[0]["blocked_audit_threshold"].as_i64(),
+            modeled.goal_blocked_audit_threshold,
+            "the Goal pins its Task's blocked-audit threshold"
+        );
+        assert_eq!(
+            goals[0]["max_infrastructure_retries"].as_i64(),
+            modeled.goal_max_infrastructure_retries,
+            "the Goal pins its Task's infrastructure retry limit"
         );
     }
 }
@@ -989,6 +1005,8 @@ async fn goal_task_replay_traces_match_the_lean_admission_model() {
                 goal_id: Some(initial.clone()),
                 goal_objective: Some("Finish the task".into()),
                 goal_token_budget: None,
+                goal_blocked_audit_threshold: None,
+                goal_max_infrastructure_retries: None,
                 goal_assignment_applied: false,
                 emit_outcome: false,
                 queued_serial: false,
@@ -1153,6 +1171,8 @@ fn recovery_task(agent_did: &str) -> ResolvedTask {
         prompt_template: "shared prompt".to_string(),
         goal_objective_template: Some("shared objective".to_string()),
         goal_token_budget: None,
+        goal_blocked_audit_threshold: None,
+        goal_max_infrastructure_retries: None,
         output_schema_ref: None,
         hooks: Vec::new(),
         command: None,
@@ -1824,6 +1844,8 @@ fn workspace_writer_task(agent_did: &str) -> ResolvedTask {
         prompt_template: "patch".to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
+        goal_blocked_audit_threshold: None,
+        goal_max_infrastructure_retries: None,
         output_schema_ref: None,
         hooks: Vec::new(),
         command: None,
@@ -2219,6 +2241,8 @@ async fn replayed_dispatch_matches_the_lean_replay_model() {
             goal_id: None,
             goal_objective: None,
             goal_token_budget: None,
+            goal_blocked_audit_threshold: None,
+            goal_max_infrastructure_retries: None,
             goal_assignment_applied: false,
             emit_outcome: false,
             queued_serial: false,

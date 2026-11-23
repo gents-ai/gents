@@ -12,25 +12,14 @@ use gents_store::graphql::validate_collection_identifier;
 pub(super) fn validate_task_goal_declarations(manifest: &ScenarioManifest) -> Result<()> {
     let config = scenario_config(manifest)?;
     for task in &config.tasks {
-        let Some(objective) = task.goal_objective_template.as_deref() else {
-            if task.goal_token_budget.is_some() {
-                bail!(
-                    "Task {} sets goal_token_budget without goal_objective_template",
-                    task.task_id
-                );
-            }
+        gents_documents::task_goal_declaration::validate_task_goal_declaration(
+            task.goal_objective_template.as_deref(),
+            task.goal_token_budget,
+            task.goal_limits(),
+        )
+        .with_context(|| format!("Task {}", task.task_id))?;
+        if task.goal_objective_template.is_none() {
             continue;
-        };
-        if objective.trim().is_empty() {
-            bail!(
-                "Task {} goal_objective_template must be non-empty",
-                task.task_id
-            );
-        }
-        if let Some(budget) = task.goal_token_budget {
-            if budget <= 0 {
-                bail!("Task {} goal_token_budget must be positive", task.task_id);
-            }
         }
 
         let agent = manifest

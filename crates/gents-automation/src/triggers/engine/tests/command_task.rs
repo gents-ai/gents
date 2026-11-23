@@ -95,6 +95,8 @@ fn command_task(argv: &[&str], timeout_secs: Option<i64>) -> ResolvedTask {
         prompt_template: String::new(),
         goal_objective_template: None,
         goal_token_budget: None,
+        goal_blocked_audit_threshold: None,
+        goal_max_infrastructure_retries: None,
         output_schema_ref: None,
         hooks: Vec::new(),
         command: Some(TaskCommand {

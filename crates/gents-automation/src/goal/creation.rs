@@ -156,7 +156,7 @@ fn goal_creation_claim_query(creation_key: String, session_doc_id: &str) -> Stri
     let session_doc_id = escape_graphql_string(session_doc_id);
     format!(
         r#"{{ GoalCreationClaim(filter: {{ session_doc_id: {{ _eq: "{session_doc_id}" }}, creation_key: {{ _eq: "{key}" }} }}, limit: 2) {{
-            node_did session_id objective token_budget
+            node_did session_id objective token_budget blocked_audit_threshold max_infrastructure_retries
         }} }}"#
     )
 }
@@ -170,6 +170,8 @@ fn goal_creation_claim_fingerprint(
         session_id: String,
         objective: String,
         token_budget: Option<i64>,
+        blocked_audit_threshold: Option<i64>,
+        max_infrastructure_retries: Option<i64>,
     }
     let claims: Vec<ClaimRow> = rows(response, "GoalCreationClaim")?;
     anyhow::ensure!(
@@ -184,6 +186,10 @@ fn goal_creation_claim_fingerprint(
             session: claim.session_id,
             objective: claim.objective,
             token_budget: claim.token_budget.map(i128::from),
+            limits: gents_protocol::goal::GoalLimits {
+                blocked_audit_threshold: claim.blocked_audit_threshold,
+                max_infrastructure_retries: claim.max_infrastructure_retries,
+            },
         }))
 }
 
@@ -316,6 +322,7 @@ async fn stage_goal_and_claim_typed(
                 session_id,
                 objective,
                 token_budget,
+                limits,
             },
         initial_state,
         now,
@@ -330,6 +337,7 @@ async fn stage_goal_and_claim_typed(
         objective: objective.to_string(),
         objective_nonempty: !objective.is_empty(),
         token_budget: token_budget.map(i128::from),
+        limits,
         goal_tools: true,
         goal_create: true,
     };
@@ -371,7 +379,9 @@ async fn stage_goal_and_claim_typed(
                         .field(goal_creation_claim::NODE_DID)
                         .field(goal_creation_claim::SESSION_ID)
                         .field(goal_creation_claim::OBJECTIVE)
-                        .field(goal_creation_claim::TOKEN_BUDGET),
+                        .field(goal_creation_claim::TOKEN_BUDGET)
+                        .field(goal_creation_claim::BLOCKED_AUDIT_THRESHOLD)
+                        .field(goal_creation_claim::MAX_INFRASTRUCTURE_RETRIES),
                 )
                 .filter(Filter::eq(
                     goal_creation_claim::SESSION_DOC_ID,
@@ -419,6 +429,14 @@ async fn stage_goal_and_claim_typed(
                 .get("token_budget")
                 .and_then(serde_json::Value::as_i64)
                 .map(i128::from),
+            limits: gents_protocol::goal::GoalLimits {
+                blocked_audit_threshold: claim
+                    .get("blocked_audit_threshold")
+                    .and_then(serde_json::Value::as_i64),
+                max_infrastructure_retries: claim
+                    .get("max_infrastructure_retries")
+                    .and_then(serde_json::Value::as_i64),
+            },
         };
         if claim.get("goal_id").and_then(serde_json::Value::as_str) != Some(goal_id.as_str())
             || decide_model_goal_create(&create_request, Some(&claim_fingerprint))
@@ -442,6 +460,8 @@ async fn stage_goal_and_claim_typed(
                 "requester_did": session.session.requester_did,
                 "objective": objective,
                 "token_budget": token_budget,
+                "blocked_audit_threshold": limits.blocked_audit_threshold,
+                "max_infrastructure_retries": limits.max_infrastructure_retries,
                 "created_at": now,
             }),
             &session.doc_id,
@@ -452,7 +472,9 @@ async fn stage_goal_and_claim_typed(
 
     if let Some(goal) = goals.first().cloned() {
         if !goals.iter().all(|candidate| {
-            candidate.objective.trim() == objective && candidate.token_budget == token_budget
+            candidate.objective.trim() == objective
+                && candidate.token_budget == token_budget
+                && candidate.pinned_limits() == limits
         }) {
             return Err(CreateGoalForSessionError::Conflict);
         }
@@ -490,6 +512,8 @@ async fn stage_goal_and_claim_typed(
             "wrapup_requested": initial_state.wrapup_requested,
             "wrapup_completed": initial_state.wrapup_completed,
             "infrastructure_retry_count": 0,
+            "blocked_audit_threshold": limits.blocked_audit_threshold,
+            "max_infrastructure_retries": limits.max_infrastructure_retries,
             "created_at": now,
             "updated_at": now,
         }),
@@ -520,6 +544,8 @@ async fn stage_goal_and_claim_typed(
             wrapup_requested: Some(initial_state.wrapup_requested),
             wrapup_completed: Some(initial_state.wrapup_completed),
             infrastructure_retry_count: Some(0),
+            blocked_audit_threshold: limits.blocked_audit_threshold,
+            max_infrastructure_retries: limits.max_infrastructure_retries,
             last_failure: None,
             completion_evidence: None,
             auto_resume_at_reset: None,
@@ -557,6 +583,8 @@ pub async fn create_goal_for_session_from_access(
     .await
 }
 
+/// The goal-tool creation. The model's Goal has no Task, so it keeps the
+/// default `GoalLimits`.
 pub async fn create_goal_for_request_from_access(
     node: &std::sync::Arc<EmbeddedNode>,
     access: Option<&gents_store::config_client::ConfigAccess>,
@@ -608,6 +636,7 @@ async fn create_goal_for_session_inner(
         objective: objective.to_string(),
         objective_nonempty: !objective.is_empty(),
         token_budget: token_budget.map(i128::from),
+        limits: gents_protocol::goal::GoalLimits::default(),
         goal_tools: true,
         goal_create: true,
     };
@@ -625,6 +654,7 @@ async fn create_goal_for_session_inner(
         session_id,
         objective: requested_fingerprint.objective.as_str(),
         token_budget,
+        limits: gents_protocol::goal::GoalLimits::default(),
     };
 
     if access.actor_did().as_deref() != Some(actor_did) {
@@ -733,6 +763,7 @@ async fn create_goal_for_session_inner(
             if let Some(existing) = existing {
                 if existing.objective.trim() == start.objective
                     && existing.token_budget == token_budget
+                    && existing.pinned_limits() == requested_fingerprint.limits
                     && claim == Some(requested_fingerprint.clone())
                 {
                     finish_goal_relationships(access, node_did, session_id)
