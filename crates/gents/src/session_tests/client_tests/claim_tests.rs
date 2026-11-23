@@ -1029,8 +1029,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     assert_eq!(grant_cases.len(), publications.len());
     for (case, (grant, published)) in grant_cases.iter().zip(publications) {
         assert_eq!(
-            case.input.authority,
-            grant,
+            case.input.authority, grant,
             "the served scenario publishes {:?}",
             case.input
         );

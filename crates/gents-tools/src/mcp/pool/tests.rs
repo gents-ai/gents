@@ -8,18 +8,16 @@ use tokio::net::{TcpListener, TcpStream};
 
 #[tokio::test]
 async fn list_tools_transport_failure_retries_generated_safe_read_case() {
-    for case in gents_lean_vocab::families::contracts_tool_retry_list_tools::cases::<
-        String,
-        String,
-        String,
-    >() {
+    for case in
+        gents_lean_vocab::families::contracts_tool_retry_list_tools::cases::<String, String>()
+    {
         list_tools_after_transport_failure(case).await;
     }
 }
 
 async fn list_tools_after_transport_failure(
     case: gents_lean_vocab::family::Case<
-        gents_lean_vocab::families::contracts_tool_retry_list_tools::ToolRetryInput<String, String>,
+        gents_lean_vocab::families::contracts_tool_retry_list_tools::ToolRetryInput<String>,
         String,
     >,
 ) {
@@ -74,16 +72,14 @@ async fn list_tools_after_transport_failure(
 
 #[tokio::test]
 async fn call_tool_transport_failure_obeys_generated_no_retry_cases_without_idempotency_metadata() {
-    for case in
-        gents_lean_vocab::families::contracts_tool_retry_call::cases::<String, String, String>()
-    {
+    for case in gents_lean_vocab::families::contracts_tool_retry_call::cases::<String, String>() {
         call_tool_after_transport_failure(case).await;
     }
 }
 
 async fn call_tool_after_transport_failure(
     case: gents_lean_vocab::family::Case<
-        gents_lean_vocab::families::contracts_tool_retry_call::ToolRetryInput<String, String>,
+        gents_lean_vocab::families::contracts_tool_retry_call::ToolRetryInput<String>,
         String,
     >,
 ) {
@@ -137,14 +133,7 @@ async fn call_tool_after_transport_failure(
         "{}: a failed call_tool must not evict and reconnect",
         case.input.name
     );
-    case.check(
-        if calls > 1 {
-            "retried"
-        } else {
-            "do_not_retry"
-        }
-        .to_string(),
-    );
+    case.check(if calls > 1 { "retried" } else { "do_not_retry" }.to_string());
 }
 
 #[tokio::test]

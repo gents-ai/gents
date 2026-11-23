@@ -769,10 +769,7 @@ async fn managed_exec_liveness_follows_the_lean_composed_model() {
             ManagedExecOutcome::TimedOut { kill, .. }
             | ManagedExecOutcome::Cancelled { kill, .. } => {
                 let signaled = kill.term_signal_sent || kill.kill_signal_sent;
-                (
-                    if signaled { "killSignaled" } else { "exited" },
-                    signaled,
-                )
+                (if signaled { "killSignaled" } else { "exited" }, signaled)
             }
             ManagedExecOutcome::Exited { .. } => ("exited", false),
             ManagedExecOutcome::SpawnFailed { .. } => ("spawnFailed", false),
