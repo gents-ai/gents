@@ -1,4 +1,5 @@
 import Proofs.Automation.Goals
+import Proofs.Automation.Triggers.Queue
 import Proofs.Session.SessionQueue.Interrupt
 import Proofs.Session.Request.Executable
 import Proofs.Clients.ClientShell.Projection
@@ -926,9 +927,6 @@ def interruptedPublishObservation : GuardObservation :=
   { name := "interrupted_queued_steering_cannot_publish",
     prefixAdmitted := interrupted?.isSome, admitted := admitted.isSome }
 
-def guardObservations : List GuardObservation :=
-  [wrongHeadObservation, incoherentOwnerObservation, interruptedPublishObservation]
-
 def traceObservations : List TraceObservation :=
   match interruptedBeforeClaimObservation, admissionRejectedObservation,
       claimedFailureObservation, beforePublicationObservation, publicationHandoffObservation,
@@ -977,8 +975,34 @@ theorem capture_conflict_blocks_send :
 theorem exact_replay_does_not_duplicate_authored_owner :
     (publicationReplayObservation.map (·.canonicalAuthoredCount)) = some 1 := by native_decide
 theorem wrong_head_is_rejected : wrongHeadObservation.admitted = false := by native_decide
+
+private def headObservation (queued : SessionQueue.QueueEntry) :
+    Triggers.Durable.ClaimObservation :=
+  { document := toString queued.requestId, owner := "node", session := "session"
+    arrival := some queued.createdAt }
+
+/-- The native claim admits a request only when `claim_queue_allows` does, and
+that owner decides the queue head with `Triggers.Durable.observedClaimAllowed`
+over the session's nonterminal requests in arrival order
+(`trigger_delivery_observed_claim` replays it). Observed that way, the earlier
+pending request of the wrong-head scenario refuses the steering request exactly
+as `claimAndBegin?` does. -/
+theorem wrong_head_refusal_is_the_observed_claim_refusal :
+    Triggers.Durable.observedClaimAllowed (headObservation entry)
+      [headObservation entry, headObservation wrongHead] = wrongHeadObservation.admitted := by
+  native_decide
+
+/-- `begin_owned_execution` takes the request and its generation from its own
+claim, and `authorize_begin` rechecks that generation against the stored
+request row, so no caller supplies an owner for another request; the model
+refuses one. -/
 theorem incoherent_owner_is_rejected :
     incoherentOwnerObservation.admitted = false := by native_decide
+
+/-- `claim_pending_durable_with_inputs` moves a request whose interrupt was
+latched before its claim from pending to interrupted and returns without a
+claim, so publication at execution start is never reached for it; the model
+refuses the publication. -/
 theorem interrupted_publish_is_rejected : interruptedPublishObservation.admitted = false := by native_decide
 theorem wrong_head_prefix_is_reachable : wrongHeadObservation.prefixAdmitted = true := by native_decide
 theorem incoherent_owner_prefix_is_reachable :

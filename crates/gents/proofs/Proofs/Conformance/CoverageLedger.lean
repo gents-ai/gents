@@ -97,7 +97,6 @@ def openFamilies : List String :=
   , "contracts_fork_publication_unreached"
   , "contracts_pack_installation_finality_unreached"
   , "contracts_pack_installation_hosted_plugin_unreached"
-  , "contracts_queued_steering_guard_unreached"
   , "contracts_runtime_reconcile_unreached"
   , "contracts_self_config_job_guard_unreached"
   , "contracts_title_admission_fresh_verifier_unreached"

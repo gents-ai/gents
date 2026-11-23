@@ -196,44 +196,6 @@ def pendingUserTurn : Family PendingUserTurn.Input PendingUserTurn.Output where
       retiredByAuthor := c.retiredByAuthor, unrelatedUserTurns := c.unrelatedUserTurns }
   model := fun i => { pendingTurn := projectPendingUserTurn i.hasDurableUserOwner i.retiredByAuthor }
 
-inductive QueuedSteeringGuard where
-  | wrongHead
-  | incoherentOwner
-  | interruptedPublish
-  deriving Lean.ToJson
-
-structure QueuedSteeringGuardInput where
-  name : String
-  guard : QueuedSteeringGuard
-  deriving Lean.ToJson
-
-structure QueuedSteeringGuardOutput where
-  prefixAdmitted : Bool
-  admitted : Bool
-  deriving Lean.ToJson
-
-private def guardObservation : QueuedSteeringGuard → QueuedSteering.GuardObservation
-  | .wrongHead => QueuedSteering.wrongHeadObservation
-  | .incoherentOwner => QueuedSteering.incoherentOwnerObservation
-  | .interruptedPublish => QueuedSteering.interruptedPublishObservation
-
-example : (QueuedSteering.guardObservations.length == 3 &&
-    QueuedSteering.guardObservations.all fun observation =>
-      observation.prefixAdmitted && !observation.admitted) = true := by native_decide
-
-/-- The native queue claim and owned-execution
-publication owners reject a different queue head, an incoherent supplied owner
-and publication after an interrupt only on persisted rows; no production
-scenario builds those rows, so each guard is checked in the model alone. -/
-@[conformance_family]
-def queuedSteeringGuardUnreached :
-    Conformance.Family QueuedSteeringGuardInput QueuedSteeringGuardOutput where
-  inputs := [.wrongHead, .incoherentOwner, .interruptedPublish].map fun guard =>
-    { name := (guardObservation guard).name, guard }
-  model := fun i =>
-    let observation := guardObservation i.guard
-    { prefixAdmitted := observation.prefixAdmitted, admitted := observation.admitted }
-
 private def tagged (kind fields : String) : String :=
   "{\"kind\":" ++ jsonString kind ++ fields ++ "}"
 
