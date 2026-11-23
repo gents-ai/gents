@@ -263,10 +263,9 @@ pub fn build_plugin(
 
     let stamp = Path::new("target").join("gents-build.stamp");
     let source_digest = format!("{} {}", compiler.builder_id(), tree_digest(&staged)?);
-    if let (Ok(recorded), Ok(artifact)) = (
-        staged.read_to_string(&stamp),
-        dir.read(&plugin.artifact),
-    ) {
+    if let (Ok(recorded), Ok(artifact)) =
+        (staged.read_to_string(&stamp), dir.read(&plugin.artifact))
+    {
         if recorded == format!("{source_digest} {}", sha256_hex(&artifact)) {
             return Ok(());
         }

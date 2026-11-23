@@ -172,7 +172,10 @@ mod tests {
     use super::*;
 
     fn resolve(path: &Path) -> Result<Located> {
-        Ok(Located::at(path, gents_fs_runner::beneath::Intent::Existing)?)
+        Ok(Located::at(
+            path,
+            gents_fs_runner::beneath::Intent::Existing,
+        )?)
     }
 
     #[test]

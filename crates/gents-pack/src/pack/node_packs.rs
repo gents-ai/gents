@@ -286,16 +286,15 @@ impl<'a> NodePacks<'a> {
             .home()
             .context("local packs require a runtime plugin home")?;
         if admitted.is_dir() {
-            let manifest = authoring::read_manifest(&admitted.subroot().map_err(anyhow::Error::from)?)?;
+            let manifest =
+                authoring::read_manifest(&admitted.subroot().map_err(anyhow::Error::from)?)?;
             let sources = authoring::plugins_with_source(&manifest);
             if !sources.is_empty() {
                 let name = authoring::built_pack_name(&manifest);
                 let beside = admitted.parent_root();
                 return Err(LocalPackError::PluginSource {
                     sources: sources.into_iter().map(Into::into).collect(),
-                    built: beside
-                        .is_file(&name)
-                        .then(|| beside.path().join(&name)),
+                    built: beside.is_file(&name).then(|| beside.path().join(&name)),
                 });
             }
         } else if !(admitted.kind().map_err(anyhow::Error::from)? == Kind::File
@@ -311,7 +310,10 @@ impl<'a> NodePacks<'a> {
             .into());
         }
         let source = PackSource::of_local_name(&local::LocalName::Path(requested));
-        Ok(Distribution::stored(local::open_located(admitted, home)?, source))
+        Ok(Distribution::stored(
+            local::open_located(admitted, home)?,
+            source,
+        ))
     }
 
     /// The installation record of `manifest`'s pack, when it is installed.

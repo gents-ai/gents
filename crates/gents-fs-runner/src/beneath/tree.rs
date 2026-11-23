@@ -102,16 +102,16 @@ impl Entry<'_> {
                 let mut bytes = Vec::new();
                 open_regular(self.dir, self.name, OFlags::RDONLY)
                     .and_then(|mut file| file.read_to_end(&mut bytes))
-                    .map_err(|source| match source.raw_os_error().map(Errno::from_raw_os_error) {
-                        Some(Errno::LOOP) => BeneathError::Changed { path: shown },
-                        _ => BeneathError::io(&self.root.path().join(self.relative), source),
+                    .map_err(|source| {
+                        match source.raw_os_error().map(Errno::from_raw_os_error) {
+                            Some(Errno::LOOP) => BeneathError::Changed { path: shown },
+                            _ => BeneathError::io(&self.root.path().join(self.relative), source),
+                        }
                     })?;
                 Ok(bytes)
             }
             ChildKind::Link => self.root.read(self.relative),
-            ChildKind::Directory | ChildKind::Other => {
-                Err(BeneathError::NotAFile { path: shown })
-            }
+            ChildKind::Directory | ChildKind::Other => Err(BeneathError::NotAFile { path: shown }),
         }
     }
 }
@@ -132,9 +132,7 @@ impl Located {
     pub fn at(path: &Path, intent: Intent) -> Result<Located, BeneathError> {
         let absolute = match std::fs::canonicalize(path) {
             Ok(canonical) => canonical,
-            Err(_) => {
-                std::path::absolute(path).map_err(|source| BeneathError::io(path, source))?
-            }
+            Err(_) => std::path::absolute(path).map_err(|source| BeneathError::io(path, source))?,
         };
         let (Some(parent), Some(name)) = (absolute.parent(), absolute.file_name()) else {
             return RootDir::open(&absolute)?.locate_relative(Path::new(""), intent);
@@ -238,7 +236,10 @@ impl Located {
 
     /// The held directory the target's name was resolved in, as a root.
     pub fn parent_root(&self) -> RootDir {
-        let parent = self.root.path().join(self.names.iter().collect::<PathBuf>());
+        let parent = self
+            .root
+            .path()
+            .join(self.names.iter().collect::<PathBuf>());
         self.root.below(Arc::clone(&self.parent), parent)
     }
 }
@@ -481,8 +482,9 @@ impl RootDir {
                         OFlags::WRONLY | OFlags::CREATE | OFlags::TRUNC,
                     )
                     .map_err(|source| BeneathError::io(&destination.path.join(&below), source))?;
-                    file.write_all(&bytes)
-                        .map_err(|source| BeneathError::io(&destination.path.join(&below), source))?;
+                    file.write_all(&bytes).map_err(|source| {
+                        BeneathError::io(&destination.path.join(&below), source)
+                    })?;
                 }
                 ChildKind::Other => {
                     return Err(BeneathError::NotAFile {
@@ -528,12 +530,12 @@ fn make_dir(dir: &OwnedFd, name: &OsStr, shown: &Path) -> Result<OwnedFd, Beneat
         Ok(()) | Err(Errno::EXIST) => {}
         Err(errno) => return Err(BeneathError::io(shown, errno)),
     }
-    rustix::fs::openat(dir, name, dir_flags() | OFlags::NOFOLLOW, Mode::empty()).map_err(
-        |errno| match errno {
+    rustix::fs::openat(dir, name, dir_flags() | OFlags::NOFOLLOW, Mode::empty()).map_err(|errno| {
+        match errno {
             Errno::NOTDIR | Errno::LOOP => BeneathError::NotADirectory {
                 path: shown.to_owned(),
             },
             errno => BeneathError::io(shown, errno),
-        },
-    )
+        }
+    })
 }

@@ -92,24 +92,20 @@ impl ConfigCommandTool {
                     .context("the ux preview draft read did not finish")??
             }
             (None, None) => {
-                preview::resolve_target(
-                    home,
-                    plugin,
-                    |namespace, name| async move {
-                        let coordinate = format!("{namespace}/{name}");
-                        let record = self.plugins.resolve(&coordinate, None)?;
-                        let outcome = self
-                            .plugins
-                            .call_outcome(&record, producer_input(), &self.envelope)
-                            .await?;
-                        anyhow::ensure!(
-                            matches!(outcome.verdict, PluginVerdict::Success),
-                            "the ux producer {coordinate} did not succeed: {}",
-                            outcome.diagnostics
-                        );
-                        Ok(outcome.output)
-                    },
-                )
+                preview::resolve_target(home, plugin, |namespace, name| async move {
+                    let coordinate = format!("{namespace}/{name}");
+                    let record = self.plugins.resolve(&coordinate, None)?;
+                    let outcome = self
+                        .plugins
+                        .call_outcome(&record, producer_input(), &self.envelope)
+                        .await?;
+                    anyhow::ensure!(
+                        matches!(outcome.verdict, PluginVerdict::Success),
+                        "the ux producer {coordinate} did not succeed: {}",
+                        outcome.diagnostics
+                    );
+                    Ok(outcome.output)
+                })
                 .await?
             }
         };

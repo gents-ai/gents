@@ -5,8 +5,8 @@ use gents_fs_runner::beneath::{Intent, Located};
 use gents_pack::pack::authoring::{
     built_pack_name, check_dir, export::collection_sdl, export_pack, pack_built, pack_name,
     plugins_with_source, read_manifest, scaffold, selectable_kind, source as source_pack,
-    verify_located_pack, CheckReport, ExportSelection, Kind, PackAddition, PackEdit,
-    ScaffoldInput, Template, SELECTABLE_KINDS,
+    verify_located_pack, CheckReport, ExportSelection, Kind, PackAddition, PackEdit, ScaffoldInput,
+    Template, SELECTABLE_KINDS,
 };
 use gents_session::session::output_render::ordered;
 

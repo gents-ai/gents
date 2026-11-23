@@ -2,11 +2,10 @@ use std::io::{self, BufRead, Read, Write};
 #[cfg(test)]
 use std::path::Path;
 
-
 use anyhow::{ensure, Context, Result};
-use gents_fs_runner::beneath::{OpenRoot, RootDir};
 use flate2::bufread::GzDecoder;
 use flate2::{Compression, GzBuilder};
+use gents_fs_runner::beneath::{OpenRoot, RootDir};
 use serde::{Deserialize, Serialize};
 
 use crate::pack::core_packs::{
@@ -329,9 +328,13 @@ pub fn write_built_pack(
     out: impl Write,
     release: &Release,
 ) -> Result<PackHeader> {
-    write_pack_validated(&dir.open_root()?, out, Bounds::default(), Some(release), |manifest| {
-        validate_manifest(&manifest.name, manifest)
-    })
+    write_pack_validated(
+        &dir.open_root()?,
+        out,
+        Bounds::default(),
+        Some(release),
+        |manifest| validate_manifest(&manifest.name, manifest),
+    )
 }
 
 /// [`pack_dir`] for a pack built for a Gents release this runtime does not
@@ -339,13 +342,19 @@ pub fn write_built_pack(
 #[cfg(any(test, feature = "test-fixtures"))]
 pub fn pack_dir_for_any_interface(dir: impl OpenRoot) -> Result<(Vec<u8>, PackHeader)> {
     let mut bytes = Vec::new();
-    let header = write_pack_validated(&dir.open_root()?, &mut bytes, Bounds::default(), None, |manifest| {
-        let current = PackManifest {
-            gents_version: None,
-            ..manifest.clone()
-        };
-        validate_manifest(&current.name, &current)
-    })?;
+    let header = write_pack_validated(
+        &dir.open_root()?,
+        &mut bytes,
+        Bounds::default(),
+        None,
+        |manifest| {
+            let current = PackManifest {
+                gents_version: None,
+                ..manifest.clone()
+            };
+            validate_manifest(&current.name, &current)
+        },
+    )?;
     Ok((bytes, header))
 }
 

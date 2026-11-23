@@ -30,7 +30,10 @@ pub async fn check_dir(dir: impl OpenRoot) -> CheckReport {
         unverified: Vec::new(),
         unbuilt: Vec::new(),
     };
-    let dir = match dir.open_root() {
+    let dir = match dir
+        .open_root()
+        .context("opening the pack directory that holds manifest.json")
+    {
         Ok(dir) => dir,
         Err(error) => {
             report.problems.push(format!("{error:#}"));

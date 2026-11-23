@@ -8,8 +8,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use gents_fs_runner::beneath::RootDir;
 use anyhow::{Context, Result};
+use gents_fs_runner::beneath::RootDir;
 use serde_json::{json, Value};
 
 use super::edit::{PackAddition, PackEdit};

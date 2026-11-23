@@ -490,7 +490,11 @@ fn a_crafted_member_is_refused_before_extraction() {
     let entries = entries_of(&bytes);
     let crafted = |kind: tar::EntryType, name: &[u8], link: Option<&str>| {
         let mut header = tar::Header::new_ustar();
-        header.set_size(if kind == tar::EntryType::Regular { 4 } else { 0 });
+        header.set_size(if kind == tar::EntryType::Regular {
+            4
+        } else {
+            0
+        });
         header.set_mode(0o644);
         header.set_mtime(0);
         header.set_entry_type(kind);
@@ -512,7 +516,9 @@ fn a_crafted_member_is_refused_before_extraction() {
         } else {
             b""
         };
-        builder.append(&header, body).expect("append crafted member");
+        builder
+            .append(&header, body)
+            .expect("append crafted member");
         for (path, data) in &entries[1..] {
             append_entry(&mut builder, path, data.len() as u64, data.as_slice()).expect("append");
         }
@@ -525,21 +531,46 @@ fn a_crafted_member_is_refused_before_extraction() {
     let escape = outside.path().join("escape.md");
     let escape = escape.to_str().unwrap();
     let cases = [
-        ("absolute path", crafted(tar::EntryType::Regular, escape.as_bytes(), None)),
-        ("parent component", crafted(tar::EntryType::Regular, b"../escape.md", None)),
-        ("inner parent component", crafted(tar::EntryType::Regular, b"docs/../../escape.md", None)),
-        ("symbolic link", crafted(tar::EntryType::Symlink, b"a_link.md", Some(escape))),
-        ("hard link", crafted(tar::EntryType::Link, b"a_link.md", Some("../../escape.md"))),
-        ("character device", crafted(tar::EntryType::Char, b"a_device.md", None)),
-        ("block device", crafted(tar::EntryType::Block, b"a_device.md", None)),
+        (
+            "absolute path",
+            crafted(tar::EntryType::Regular, escape.as_bytes(), None),
+        ),
+        (
+            "parent component",
+            crafted(tar::EntryType::Regular, b"../escape.md", None),
+        ),
+        (
+            "inner parent component",
+            crafted(tar::EntryType::Regular, b"docs/../../escape.md", None),
+        ),
+        (
+            "symbolic link",
+            crafted(tar::EntryType::Symlink, b"a_link.md", Some(escape)),
+        ),
+        (
+            "hard link",
+            crafted(tar::EntryType::Link, b"a_link.md", Some("../../escape.md")),
+        ),
+        (
+            "character device",
+            crafted(tar::EntryType::Char, b"a_device.md", None),
+        ),
+        (
+            "block device",
+            crafted(tar::EntryType::Block, b"a_device.md", None),
+        ),
         ("fifo", crafted(tar::EntryType::Fifo, b"a_fifo.md", None)),
-        ("directory", crafted(tar::EntryType::Directory, b"a_dir", None)),
+        (
+            "directory",
+            crafted(tar::EntryType::Directory, b"a_dir", None),
+        ),
     ];
     for (case, bytes) in cases {
         let error = PackArchive::from_bytes(&bytes).expect_err(case);
         let message = format!("{error:#}");
         assert!(
-            message.contains("is not a regular file") || message.contains("is not a path a pack may carry"),
+            message.contains("is not a regular file")
+                || message.contains("is not a path a pack may carry"),
             "{case}: {message}"
         );
         let home = tempfile::tempdir().unwrap();
@@ -563,7 +594,9 @@ fn a_crafted_member_is_refused_before_extraction() {
             "{case}: nothing but the store directory exists: {stored:?}"
         );
         assert!(
-            stored.iter().all(|name| !name.contains(".staging-") && !name.contains("unpacked")),
+            stored
+                .iter()
+                .all(|name| !name.contains(".staging-") && !name.contains("unpacked")),
             "{case}: no staged or unpacked member is left: {stored:?}"
         );
     }

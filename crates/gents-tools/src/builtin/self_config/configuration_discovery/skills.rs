@@ -1,6 +1,6 @@
 use super::*;
-use serde_json::Value;
 use gents_fs_runner::beneath::{BeneathError, ChildKind};
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 impl Scanner {

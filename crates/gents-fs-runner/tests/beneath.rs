@@ -414,7 +414,11 @@ fn tree_fixture() -> Fixture {
 
 /// A root whose walk, just before it looks `name` up in `dir`, moves that
 /// entry aside and links its name to the directory outside the root.
-fn swapping_child(fixture: &Fixture, dir: PathBuf, name: &'static str) -> (RootDir, Arc<Mutex<bool>>) {
+fn swapping_child(
+    fixture: &Fixture,
+    dir: PathBuf,
+    name: &'static str,
+) -> (RootDir, Arc<Mutex<bool>>) {
     let outside = fixture.outside.clone();
     let fired = Arc::new(Mutex::new(false));
     let seen = Arc::clone(&fired);
@@ -427,7 +431,9 @@ fn swapping_child(fixture: &Fixture, dir: PathBuf, name: &'static str) -> (RootD
             symlink(&outside, &entry).unwrap();
         }
     });
-    let root = RootDir::open(fixture.root()).unwrap().with_lookup_hook(hook);
+    let root = RootDir::open(fixture.root())
+        .unwrap()
+        .with_lookup_hook(hook);
     (root, fired)
 }
 
@@ -455,7 +461,11 @@ fn a_tree_removal_never_removes_outside_the_root_when_a_directory_is_swapped() {
 fn a_tree_removal_unlinks_links_in_the_tree_without_following_them() {
     let fixture = tree_fixture();
     symlink(&fixture.outside, fixture.root().join("tree/out")).unwrap();
-    symlink(fixture.outside.join("f"), fixture.root().join("tree/sub/file_out")).unwrap();
+    symlink(
+        fixture.outside.join("f"),
+        fixture.root().join("tree/sub/file_out"),
+    )
+    .unwrap();
     let root = RootDir::open(fixture.root()).unwrap();
 
     root.remove("tree").unwrap();
@@ -489,20 +499,34 @@ fn a_tree_copy_follows_links_inside_the_source_and_refuses_links_out_of_it() {
     symlink("y", fixture.root().join("tree/alias")).unwrap();
     let root = RootDir::open(fixture.root()).unwrap();
     let destination = root.create_dir_all("copy").unwrap();
-    root.subdir("tree").unwrap().copy_into(&destination).unwrap();
-    assert_eq!(std::fs::read(fixture.root().join("copy/sub/x")).unwrap(), b"x");
-    assert_eq!(std::fs::read(fixture.root().join("copy/alias")).unwrap(), b"y");
-    assert!(!std::fs::symlink_metadata(fixture.root().join("copy/alias"))
+    root.subdir("tree")
         .unwrap()
-        .file_type()
-        .is_symlink());
+        .copy_into(&destination)
+        .unwrap();
+    assert_eq!(
+        std::fs::read(fixture.root().join("copy/sub/x")).unwrap(),
+        b"x"
+    );
+    assert_eq!(
+        std::fs::read(fixture.root().join("copy/alias")).unwrap(),
+        b"y"
+    );
+    assert!(
+        !std::fs::symlink_metadata(fixture.root().join("copy/alias"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
 
     symlink(fixture.outside.join("f"), fixture.root().join("tree/leak")).unwrap();
     let refused = root
         .subdir("tree")
         .unwrap()
         .copy_into(&root.create_dir_all("again").unwrap());
-    assert!(matches!(refused, Err(BeneathError::Outside { .. })), "{refused:?}");
+    assert!(
+        matches!(refused, Err(BeneathError::Outside { .. })),
+        "{refused:?}"
+    );
     fixture.outside_untouched();
 }
 
@@ -528,7 +552,11 @@ fn a_staged_replace_lands_in_the_directory_it_resolved_when_that_directory_is_sw
         .unwrap()
         .map(|entry| entry.unwrap().file_name())
         .collect();
-    assert_eq!(left.len(), 2, "the staged sibling is renamed, not left: {left:?}");
+    assert_eq!(
+        left.len(),
+        2,
+        "the staged sibling is renamed, not left: {left:?}"
+    );
     fixture.outside_untouched();
 }
 
