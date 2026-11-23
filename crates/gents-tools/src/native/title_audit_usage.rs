@@ -846,23 +846,22 @@ mod tests {
 
     #[tokio::test]
     async fn generated_title_usage_cases_bind_the_signed_catalog() {
-        use gents_lean_vocab::families::{
-            title_usage_budget, title_usage_catalog, title_usage_goal,
-        };
         let catalog = |name: &str, result: UsageResult<ParentAuditUsage>| match result {
-            Ok(totals) => title_usage_catalog::TotalsResult {
+            Ok(totals) => gents_lean_vocab::families::title_usage_catalog::TotalsResult {
                 kind: "ok".to_owned(),
-                normal_public: Some(title_usage_catalog::TokenPair {
+                normal_public: Some(gents_lean_vocab::families::title_usage_catalog::TokenPair {
                     prompt_tokens: totals.normal_public.prompt_tokens,
                     completion_tokens: totals.normal_public.completion_tokens,
                 }),
-                parent_inclusive_audit: Some(title_usage_catalog::TokenPair {
-                    prompt_tokens: totals.parent_inclusive_audit.prompt_tokens,
-                    completion_tokens: totals.parent_inclusive_audit.completion_tokens,
-                }),
+                parent_inclusive_audit: Some(
+                    gents_lean_vocab::families::title_usage_catalog::TokenPair {
+                        prompt_tokens: totals.parent_inclusive_audit.prompt_tokens,
+                        completion_tokens: totals.parent_inclusive_audit.completion_tokens,
+                    },
+                ),
                 error: None,
             },
-            Err(error) => title_usage_catalog::TotalsResult {
+            Err(error) => gents_lean_vocab::families::title_usage_catalog::TotalsResult {
                 kind: "error".to_owned(),
                 normal_public: None,
                 parent_inclusive_audit: None,
@@ -870,20 +869,22 @@ mod tests {
             },
         };
         let used = |name: &str, result: UsageResult<u64>| match result {
-            Ok(used) => title_usage_budget::BudgetResult {
+            Ok(used) => gents_lean_vocab::families::title_usage_budget::BudgetResult {
                 kind: "ok".to_owned(),
                 used: Some(used),
                 error: None,
             },
-            Err(error) => title_usage_budget::BudgetResult {
+            Err(error) => gents_lean_vocab::families::title_usage_budget::BudgetResult {
                 kind: "error".to_owned(),
                 used: None,
                 error: Some(refusal(name, &error)),
             },
         };
-        let catalog_cases = title_usage_catalog::cases::<String, String>();
-        let budget_cases = title_usage_budget::cases::<String, String>();
-        let goal_cases = title_usage_goal::cases::<String, String>();
+        let catalog_cases =
+            gents_lean_vocab::families::title_usage_catalog::cases::<String, String>();
+        let budget_cases =
+            gents_lean_vocab::families::title_usage_budget::cases::<String, String>();
+        let goal_cases = gents_lean_vocab::families::title_usage_goal::cases::<String, String>();
         for case in &catalog_cases {
             let input = &case.input;
             let budget_case = budget_cases
@@ -907,15 +908,19 @@ mod tests {
                 used(&input.name, world.goal().await),
             );
             world.shutdown().await;
-            case.check(title_usage_catalog::CatalogOutput {
-                expected_before: before.0,
-                expected_after: after.0,
-            });
-            budget_case.check(title_usage_budget::BudgetOutput {
-                budget_before: before.1,
-                budget_after: after.1,
-            });
-            goal_case.check(title_usage_goal::GoalOutput {
+            case.check(
+                gents_lean_vocab::families::title_usage_catalog::CatalogOutput {
+                    expected_before: before.0,
+                    expected_after: after.0,
+                },
+            );
+            budget_case.check(
+                gents_lean_vocab::families::title_usage_budget::BudgetOutput {
+                    budget_before: before.1,
+                    budget_after: after.1,
+                },
+            );
+            goal_case.check(gents_lean_vocab::families::title_usage_goal::GoalOutput {
                 goal_before: gents_lean_vocab::family::recode(&before.2),
                 goal_after: gents_lean_vocab::family::recode(&after.2),
             });

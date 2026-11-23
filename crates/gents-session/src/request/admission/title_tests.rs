@@ -493,14 +493,14 @@ async fn generated_title_admission_cases_bind_the_fresh_verifier() {
 #[tokio::test]
 async fn generated_title_join_cases_bind_admission_and_claim() {
     use gents_lean_vocab::families::title_admission_join::JoinObservation;
-    let admissions = gents_lean_vocab::families::contracts_title_admission_fresh_verifier::cases();
     for case in gents_lean_vocab::families::title_admission_join::cases::<String>() {
         let join = &case.input;
-        let admission = &admissions
-            .iter()
-            .find(|admission| admission.input.name == join.admission_case)
-            .expect("a join case names an admission case")
-            .input;
+        let admission: LeanTitleRequestAdmissionCase = gents_lean_vocab::family::recode(
+            join.admission
+                .as_ref()
+                .expect("a join case names an admission case"),
+        );
+        let admission = &admission;
         let signed_purpose = match join.row_signed_for.as_str() {
             "title" => "title-audit",
             "access_review" => "access-review",

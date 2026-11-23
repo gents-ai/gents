@@ -1,5 +1,6 @@
 import Proofs.Runtime.AuxiliaryAdmission
 import Proofs.Conformance.ContractCases.Enrollment
+import Proofs.Conformance.Contracts.Json.Enrollment
 import Proofs.Session.Compaction.State
 import Lean
 import Proofs.Conformance.Family
@@ -151,13 +152,12 @@ inductive SignedFor where
   | nothing
   deriving ToJson, DecidableEq
 
-/-- The scenario knobs of one join case: which signed request the runtime
-observes, which request the row's signed fields were produced for, and the
-row and world facts. `admissionCase` names the admission case the request was
-signed as. -/
+/-- The scenario knobs of one join case: the admission case the request was
+signed as, which request the row's signed fields were produced for, and the
+row and world facts. -/
 structure JoinInput where
   name : String
-  admissionCase : String
+  admission : Option Conformance.Contracts.TitleAdmissionInput
   observationAvailable : Bool
   accessReview : Bool
   rowSignedFor : SignedFor
@@ -195,7 +195,10 @@ private def signedFor (row : _root_.AuxiliaryAdmission.RequestRowEvidence) : Sig
   else .nothing
 
 private def JoinInput.ofCase (c : Case) : JoinInput :=
-  { name := c.name, admissionCase := c.admissionCase, observationAvailable := c.available
+  { name := c.name
+    admission := (Conformance.ContractCases.titleRequestAdmissionCases.find?
+      (·.name == c.admissionCase)).map Conformance.Contracts.titleAdmissionInput
+    observationAvailable := c.available
     accessReview := c.request.purpose == .accessReview, rowSignedFor := signedFor c.row
     rowLogicalRequest := c.row.logicalRequest
     branchFieldsExact := c.row.branchFieldsExact
@@ -206,7 +209,7 @@ private def JoinInput.toCase (i : JoinInput) : Case :=
   { name := i.name, available := i.observationAvailable
     request := if i.accessReview then reviewRequest else baseRequest
     admission := if i.accessReview then reviewAdmission else baseAdmission
-    admissionCase := i.admissionCase
+    admissionCase := (i.admission.map (·.name)).getD ""
     row :=
       { baseRow with
         logicalRequest := i.rowLogicalRequest
