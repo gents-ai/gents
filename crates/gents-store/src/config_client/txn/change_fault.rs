@@ -21,6 +21,7 @@ pub struct RelationshipMatch {
 }
 
 impl RelationshipMatch {
+    #[cfg(any(test, feature = "test-fixtures"))]
     #[must_use]
     pub fn first(collection: &'static str, relation: &'static str) -> Self {
         Self {
