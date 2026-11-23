@@ -10,7 +10,6 @@ use tokio_util::sync::CancellationToken;
 
 use super::ClientHost;
 
-/// A client host started with `serve_until_idle` exits after this long without attachments.
 const IDLE_SHUTDOWN: Duration = Duration::from_secs(180);
 
 #[cfg(unix)]
