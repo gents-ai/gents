@@ -71,7 +71,7 @@ fn provenance_status_label(status: ProvenanceStatus) -> &'static str {
     }
 }
 
-pub(super) fn rendered_request_tiebreak(event: &TimelineRenderedRequestEvent) -> String {
+pub fn rendered_request_tiebreak(event: &TimelineRenderedRequestEvent) -> String {
     let scope = event
         .capture_scope
         .as_deref()

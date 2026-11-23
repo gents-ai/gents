@@ -88,8 +88,15 @@ pub fn case_catalog_conformance(case: &EvalCase, registry: &CheckRegistry) -> BT
             let schema = registered.describe().params_schema;
             match jsonschema::validator_for(&schema) {
                 Ok(validator) => {
-                    for error in validator.iter_errors(&check.params) {
-                        messages.insert(format!("{at} check {} params: {error}", check.check));
+                    let mut problems: Vec<String> = validator
+                        .iter_errors(&check.params)
+                        .map(|error| error.to_string())
+                        .collect();
+                    if problems.is_empty() {
+                        problems = registered.conformance(&check.params, stage);
+                    }
+                    for problem in problems {
+                        messages.insert(format!("{at} check {} params: {problem}", check.check));
                     }
                 }
                 Err(error) => {
@@ -342,6 +349,27 @@ mod tests {
         assert!(
             message.contains("case train-a stage answer check captured_rows_count"),
             "{message}"
+        );
+    }
+
+    #[test]
+    fn schema_valid_params_are_held_to_their_check_against_the_stage() {
+        let files_check = |path: &str| {
+            let mut draft = good();
+            let stage = first_stage(&mut draft);
+            stage["capture"] = json!([{"kind": "file", "name": "files", "glob": "out/*.md"}]);
+            stage["checks"][0] = json!({
+                "check": "captured_files_match",
+                "params": {"name": "files", "expect": [{"path": path, "exists": false}]},
+                "tier": "acceptance",
+            });
+            draft
+        };
+        assert_eq!(check(&files_check("out/draft.md"), &FLOOR_ONE), Ok(()));
+        let message = only_message(&files_check("notes/draft.md"), &FLOOR_ONE);
+        assert_eq!(
+            message,
+            "case train-a stage answer check captured_files_match params: expect[0] \"notes/draft.md\" is outside capture files's glob \"out/*.md\", so the capture never holds it"
         );
     }
 

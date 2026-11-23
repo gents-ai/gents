@@ -57,6 +57,17 @@ pub struct EvalSubject {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
     pub host_bash: bool,
+    /// Core packs (`gents/script`, ...) each trial installs on the subject
+    /// before its first stage, left as `gents init` leaves them on the
+    /// Engineer, from the archives the running build carries.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(transform = crate::accepts_null)]
+    pub core_packs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
@@ -337,6 +348,13 @@ impl EvalDefinition {
             "eval definition {id} requires at least one case"
         );
         validate_fixture_files(self.fixtures.as_ref(), &format!("eval definition {id}"))?;
+        let mut core_packs = BTreeSet::new();
+        for pack in &self.subject.core_packs {
+            ensure!(
+                !pack.trim().is_empty() && core_packs.insert(pack),
+                "eval definition {id} subject core_packs must name distinct packs; {pack:?} is empty or repeated"
+            );
+        }
         let mut case_ids = BTreeSet::new();
         for case in &self.cases {
             let case_id = &case.case_id;

@@ -1,0 +1,120 @@
+{
+  "node": {},
+  "agents": [
+    {
+      "agent_slot": "engineer",
+      "display_name": "The Engineer",
+      "description": "Builds what you need on this node: apps, automations and teams of agents.",
+      "context_id": "engineer-context",
+      "inference_profile_id": "gents:inference-slot:engineer",
+      "enabled": true,
+      "tags": [
+        "gents:engineer"
+      ]
+    }
+  ],
+  "contexts": [
+    {
+      "context_id": "engineer-context",
+      "display_name": "The Engineer",
+      "system_prompt": "./agents/engineer/system_prompt.md",
+      "tools_id": "engineer-tools"
+    }
+  ],
+  "tools": [
+    {
+      "tools_id": "engineer-tools",
+      "display_name": "The Engineer (full eval subject)",
+      "host": {
+        "files": {
+          "mode": "ReadWrite"
+        },
+        "bash": {
+          "mode": "Off"
+        }
+      },
+      "agents": {
+        "enabled": true,
+        "target_ids": [
+          "engineer"
+        ]
+      },
+      "built_ins": {
+        "enable_goal_tools": true,
+        "enable_goal_creation": false,
+        "enable_session_history_tool": true,
+        "enable_schema_tool": true,
+        "enable_p2p_tool": true,
+        "enable_p2p_mutations": true,
+        "enable_context_budget": true
+      },
+      "datastore": {
+        "enable_defra_query": true,
+        "datastore_tool_surface_ids": [
+          "engineer-mailbox"
+        ]
+      },
+      "self_config": {
+        "enable_self_config": true,
+        "self_config_categories": [
+          "node",
+          "agent",
+          "tools",
+          "profile",
+          "backend",
+          "mcp_service",
+          "automation",
+          "policy"
+        ],
+        "self_config_no_lockout": true,
+        "self_config_preview": true,
+        "enable_pack_install": true,
+        "enable_pack_authority": true
+      }
+    }
+  ],
+  "datastore_tool_surfaces": [
+    {
+      "surface_id": "engineer-mailbox",
+      "display_name": "Engineer escalations",
+      "enabled": true,
+      "entries": [
+        {
+          "notification": {
+            "identity": {
+              "mode": "event"
+            },
+            "kind": "flag",
+            "action": "ack"
+          },
+          "tool_name": "file_mailbox_item",
+          "collection": "MailboxItem",
+          "description": "Publish notification content using the configured identity and handling policy; runtime stamps ownership and provenance.",
+          "fields": [
+            {
+              "name": "title",
+              "required": true
+            },
+            {
+              "name": "summary",
+              "required": false
+            },
+            {
+              "name": "payload",
+              "required": false
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "agent_targets": [
+    {
+      "target_id": "engineer",
+      "name": "engineer",
+      "agent_did": "gents:agent-slot:engineer",
+      "target_node_did": "${GENTS_PACK_NODE_DID}",
+      "description": "Start another session of this Engineer."
+    }
+  ]
+}

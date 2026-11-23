@@ -1,0 +1,107 @@
+{
+  "case_id": "pump-error-tally",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "logs/pump-1.log",
+        "contents": "2026-11-20T06:01:12Z INFO  pump=1 flow=310\n2026-11-20T06:03:40Z ERROR pump=1 code=E41 suction pressure low\n2026-11-20T06:04:02Z WARN  pump=1 code=E41 retrying\n2026-11-20T06:09:55Z ERROR pump=1 code=E41 suction pressure low\n2026-11-20T06:15:20Z INFO  pump=1 flow=305\n"
+      },
+      {
+        "path": "logs/pump-2.log",
+        "contents": "2026-11-20T06:00:05Z INFO  pump=2 flow=290\n2026-11-20T06:02:31Z ERROR pump=2 code=E17 seal temperature high\n2026-11-20T06:07:44Z INFO  pump=2 cleared ERROR E17 after cooldown\n2026-11-20T06:12:09Z ERROR pump=2 code=E08 encoder lost\n2026-11-20T06:13:10Z ERROR pump=2 code=E17 seal temperature high\n"
+      },
+      {
+        "path": "logs/pump-3.log",
+        "contents": "2026-11-20T06:00:40Z INFO  pump=3 flow=300\n2026-11-20T06:05:18Z ERROR pump=3 code=E41 suction pressure low\n2026-11-20T06:06:00Z WARN  pump=3 code=E08 encoder jitter\n"
+      },
+      {
+        "path": "logs/east/pump-4.log",
+        "contents": "2026-11-20T06:00:12Z INFO  pump=4 flow=280\n2026-11-20T06:08:31Z ERROR pump=4 code=E17 seal temperature high\n2026-11-20T06:10:02Z WARN  pump=4 code=E41 suction pressure falling\n2026-11-20T06:14:47Z ERROR pump=4 code=E17 seal temperature high\n"
+      },
+      {
+        "path": "logs/archive/pump-1-2025.log",
+        "contents": "2025-03-01T02:00:00Z ERROR pump=1 code=E99 controller offline\n2025-03-02T02:00:00Z ERROR pump=1 code=E99 controller offline\n2025-03-03T02:00:00Z ERROR pump=1 code=E99 controller offline\n2025-03-04T02:00:00Z ERROR pump=1 code=E99 controller offline\n2025-03-05T02:00:00Z ERROR pump=1 code=E99 controller offline\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "tally",
+      "prompt": "Tally the ERROR-level entries in every current pump log under logs/, including subfolders, by their code= value (logs/archive/ is last year's and doesn't count). Save reports/pump_errors.json as a JSON object from code to count, and tell me which code shows up most. Leave the logs as they are.",
+      "capture": [
+        {
+          "kind": "file",
+          "name": "workspace",
+          "glob": "**/*"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "bash",
+              "bash_unrestricted"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "workspace",
+            "expect": [
+              {
+                "path": "reports/pump_errors.json",
+                "pointer": "",
+                "equals": {
+                  "E41": 3,
+                  "E17": 4,
+                  "E08": 1
+                }
+              },
+              {
+                "path": "logs/pump-1.log",
+                "sha256": "de9bcaa671e78bc4b67e048bafd3d1ac15eeb4b9e8e1bdb93ebfaaaa653b444a"
+              },
+              {
+                "path": "logs/pump-2.log",
+                "sha256": "a7bcb01e905dfc14fa9546388dd80126fa10336fd9b2483e9abf6819c20e2b22"
+              },
+              {
+                "path": "logs/pump-3.log",
+                "sha256": "a525d9ab780bb03af0f8be3d2ec34868bc01d7fa6743c1fec61af5ef91a10dcd"
+              },
+              {
+                "path": "logs/east/pump-4.log",
+                "sha256": "13c3c9add9eea152c8abb360b7902e64103b8c5a55a3b4610bf267c640db263b"
+              },
+              {
+                "path": "logs/archive/pump-1-2025.log",
+                "sha256": "b0c6a40bbfe9ff787035ef88e6fc443e710e846a2cea9dd6100e16fb926a894a"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\\bE17\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

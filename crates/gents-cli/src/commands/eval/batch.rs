@@ -40,6 +40,14 @@ fn parse_plan(bytes: &[u8]) -> Result<Vec<EvalRunArgs>> {
         .into_iter()
         .enumerate()
         .map(|(index, entry)| {
+            anyhow::ensure!(
+                !entry
+                    .args
+                    .iter()
+                    .any(|arg| arg.split('=').next() == Some("--allow-host-bash")),
+                "batch run {} must use the batch's --allow-host-bash",
+                index + 1
+            );
             let mut args = RunParser::try_parse_from(
                 std::iter::once("eval batch run".to_owned()).chain(entry.args),
             )
@@ -218,6 +226,8 @@ mod tests {
             json!({"runs":[{"args":["d","--cell","a=/p","--run-id","x","--home","/other"]}]}),
             json!({"runs":[{"args":["d","--cell","a=/p","--run-id","x","--graphql","http://other"]}]}),
             json!({"runs":[{"args":["d","--cell","a=/p","--run-id","x","--json"]}]}),
+            json!({"runs":[{"args":["d","--cell","a=/p","--run-id","x","--allow-host-bash"]}]}),
+            json!({"runs":[{"args":["d","--cell","a=/p","--run-id","x","--allow-host-bash=true"]}]}),
             json!({"runs":[{"args":["d","--cell","a=/p","--run-id","x","--unknown"]}]}),
         ] {
             assert!(
@@ -242,6 +252,7 @@ mod tests {
             plan,
             concurrency: 2,
             json: true,
+            host_bash: Default::default(),
             scope: Default::default(),
         }
     }

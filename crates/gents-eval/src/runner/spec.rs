@@ -2,11 +2,13 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
+use crate::checks::captured_files_match::{self, CapturedFilesMatch};
+use crate::checks::Check;
 use crate::runner::{
     review, Capture, FixtureDocument, FixtureFile, FrozenCell, FrozenRun, PlannedTrial, ScriptKey,
     StageProgress, StageSpec, TrialFixtures, TrialSpec,
 };
-use gents_documents::{EvalCase, EvalFixtures};
+use gents_documents::{EvalCase, EvalFixtures, EvalStage};
 
 pub(super) fn trial_spec(
     frozen: &FrozenRun,
@@ -30,6 +32,7 @@ pub(super) fn trial_spec(
             case.fixtures.as_ref(),
         )?,
         host_bash: frozen.definition.subject.host_bash,
+        core_packs: frozen.definition.subject.core_packs.clone(),
         stages: stage_specs(case, &frozen.captures),
         trial_dir: frozen.run_dir.join("trials").join(&planned.trial_id),
         script_key: wants_script_key.then(|| ScriptKey {
@@ -60,13 +63,35 @@ pub(super) fn stage_specs(case: &EvalCase, fallback: &[Capture]) -> Vec<StageSpe
             settle: stage.settle,
             continuation: stage.continuation.clone(),
             review_previous: stage.review_previous,
-            captures: if stage.capture.is_empty() {
-                fallback.to_vec()
-            } else {
-                stage.capture.iter().map(Capture::from).collect()
-            },
+            captures: stage_captures(stage, fallback),
         })
         .collect()
+}
+
+fn stage_captures(stage: &EvalStage, fallback: &[Capture]) -> Vec<Capture> {
+    let mut captures: Vec<Capture> = if stage.capture.is_empty() {
+        fallback.to_vec()
+    } else {
+        stage.capture.iter().map(Capture::from).collect()
+    };
+    let reads = stage
+        .checks
+        .iter()
+        .filter(|check| check.check == CapturedFilesMatch.name())
+        .filter_map(|check| captured_files_match::text_paths(&check.params));
+    for (read, paths) in reads {
+        for capture in &mut captures {
+            if let Capture::File {
+                name, text_paths, ..
+            } = capture
+            {
+                if *name == read {
+                    text_paths.extend(paths.iter().cloned());
+                }
+            }
+        }
+    }
+    captures
 }
 
 pub(super) fn fixtures(

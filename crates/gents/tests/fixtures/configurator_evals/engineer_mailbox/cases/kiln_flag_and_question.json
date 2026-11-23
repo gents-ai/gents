@@ -1,0 +1,170 @@
+{
+  "case_id": "kiln-flag-and-question",
+  "split": "train",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "both",
+      "prompt": "Two things from the kiln room need me. Kiln K3 failed its door seal check, so flag it in my inbox with the title \"K3 door seal\" and the note \"K3 failed the door seal check and is out of service.\" Separately, ask me in my inbox, titled \"Glaze supplier\", whether to reorder glaze from Marlow Ceramics or Tidewell Supply, with exactly those two choices. That one is my decision, but it can wait: let me skip it if I don't care either way.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "visible",
+          "collection": "MailboxItem",
+          "filter": {},
+          "fields": [
+            "item_key",
+            "title",
+            "kind"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "notice",
+          "collection": "MailboxItem",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "target_node_did": {
+              "_eq": "$trial"
+            },
+            "target_agent_did": {
+              "_eq": "gents:agent-slot:engineer"
+            },
+            "requester_did": {
+              "_eq": "$evaluator"
+            },
+            "session_id": {
+              "_eq": "$session"
+            }
+          },
+          "fields": [
+            "item_key",
+            "node_did",
+            "requester_did",
+            "kind",
+            "action",
+            "status",
+            "title",
+            "summary",
+            "payload",
+            "source_kind",
+            "session_id",
+            "request_id",
+            "target_node_did",
+            "target_agent_did"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "file_mailbox_item"
+            ],
+            "forbidden": [
+              "write",
+              "bash",
+              "bash_unrestricted",
+              "write_file",
+              "edit_file"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "visible",
+                "min": 2,
+                "max": 2
+              },
+              {
+                "capture": "notice",
+                "min": 2,
+                "max": 2
+              }
+            ],
+            "rows": [
+              {
+                "capture": "notice",
+                "key": "title",
+                "id": "K3 door seal",
+                "expect": [
+                  {
+                    "field": "summary",
+                    "fallback_field": "payload",
+                    "equals": "K3 failed the door seal check and is out of service."
+                  },
+                  {
+                    "field": "kind",
+                    "equals": "flag"
+                  },
+                  {
+                    "field": "action",
+                    "equals": "ack"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "open"
+                  },
+                  {
+                    "field": "source_kind",
+                    "equals": "agent"
+                  }
+                ]
+              },
+              {
+                "capture": "notice",
+                "key": "title",
+                "id": "Glaze supplier",
+                "expect": [
+                  {
+                    "field": "payload",
+                    "contains": "\"label\":\"Marlow Ceramics\""
+                  },
+                  {
+                    "field": "payload",
+                    "contains": "\"label\":\"Tidewell Supply\""
+                  },
+                  {
+                    "field": "payload",
+                    "contains": "\"optional\":true"
+                  },
+                  {
+                    "field": "payload",
+                    "matches": "\"options\":\\[\\{[^\\[\\]]*\\},\\s*\\{[^\\[\\]]*\\}\\]"
+                  },
+                  {
+                    "field": "kind",
+                    "equals": "ask"
+                  },
+                  {
+                    "field": "action",
+                    "equals": "start_request"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "open"
+                  },
+                  {
+                    "field": "source_kind",
+                    "equals": "agent"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

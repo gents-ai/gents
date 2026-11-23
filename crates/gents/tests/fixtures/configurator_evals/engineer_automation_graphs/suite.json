@@ -1,0 +1,14 @@
+{
+  "id": "engineer-automation-graphs",
+  "title": "Engineer automation graphs",
+  "coverage": [
+    "event filters with negatives and missing fields",
+    "payload templates",
+    "grouped fan-in",
+    "outcome chains",
+    "routing into existing sessions",
+    "in-place repair",
+    "manual tasks"
+  ],
+  "subject": "engineer_full"
+}

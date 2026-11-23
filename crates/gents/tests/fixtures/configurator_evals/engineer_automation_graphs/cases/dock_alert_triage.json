@@ -1,0 +1,465 @@
+{
+  "case_id": "dock-alert-triage",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type DockAlert { code: String severity: String dock: String }"
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "configure",
+      "prompt": "Triage new DockAlert records with requests to yourself. An alert whose severity is info gets a request asking for a reply of exactly LOG, a space, and the alert's code. An alert whose severity is set to anything else is an escalation: ask for a reply of exactly ESCALATE, a space, and the code. Some alerts arrive with no severity at all; they are unclassified, not escalations, and get a request asking for a reply of exactly UNSET, a space, and the code. Each alert gets exactly one of the three, chosen by the automation before the request starts, so a request never asks its handler to look the alert up or classify it. Set it up now; alerts arrive later.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "triggers",
+          "collection": "Trigger",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "trigger_id",
+            "task_id",
+            "source",
+            "concurrency",
+            "session_id_template",
+            "create_session",
+            "enabled",
+            "last_status",
+            "last_error"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "sources",
+          "collection": "EventSource",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "event_source_id",
+            "source_collection",
+            "event_kind",
+            "filter",
+            "correlation_field",
+            "group"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "tasks",
+          "collection": "Task",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "task_id",
+            "prompt_template",
+            "emit_outcome",
+            "enabled"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash",
+              "bash_unrestricted",
+              "write_file",
+              "edit_file"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "triggers",
+                "min": 1
+              },
+              {
+                "capture": "tasks",
+                "min": 1
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "info",
+      "seed": {
+        "collection": "DockAlert",
+        "document": {
+          "code": "DA1",
+          "severity": "info",
+          "dock": "north"
+        }
+      },
+      "deadline_secs": 300,
+      "checks": [],
+      "capture": []
+    },
+    {
+      "stage_id": "unclassified",
+      "seed": {
+        "collection": "DockAlert",
+        "document": {
+          "code": "DA2",
+          "dock": "north"
+        }
+      },
+      "deadline_secs": 300,
+      "checks": [],
+      "capture": []
+    },
+    {
+      "stage_id": "critical",
+      "seed": {
+        "collection": "DockAlert",
+        "document": {
+          "code": "DA3",
+          "severity": "critical",
+          "dock": "south"
+        }
+      },
+      "deadline_secs": 300,
+      "checks": [],
+      "capture": []
+    },
+    {
+      "stage_id": "warn",
+      "seed": {
+        "collection": "DockAlert",
+        "document": {
+          "code": "DA4",
+          "severity": "warn",
+          "dock": "east"
+        }
+      },
+      "deadline_secs": 300,
+      "settle": true,
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "fires",
+                "min": 4,
+                "max": 4
+              },
+              {
+                "capture": "da1",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "da2",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "da3",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "da4",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "da1",
+                "key": "lifecycle_state",
+                "id": "completed",
+                "expect": [
+                  {
+                    "field": "content",
+                    "matches": "(?s)\\].*LOG"
+                  },
+                  {
+                    "field": "content",
+                    "matches": "(?s)\\].*DA1"
+                  }
+                ]
+              },
+              {
+                "capture": "da2",
+                "key": "lifecycle_state",
+                "id": "completed",
+                "expect": [
+                  {
+                    "field": "content",
+                    "matches": "(?s)\\].*UNSET"
+                  },
+                  {
+                    "field": "content",
+                    "matches": "(?s)\\].*DA2"
+                  }
+                ]
+              },
+              {
+                "capture": "da3",
+                "key": "lifecycle_state",
+                "id": "completed",
+                "expect": [
+                  {
+                    "field": "content",
+                    "matches": "(?s)\\].*ESCALATE"
+                  },
+                  {
+                    "field": "content",
+                    "matches": "(?s)\\].*DA3"
+                  }
+                ]
+              },
+              {
+                "capture": "da4",
+                "key": "lifecycle_state",
+                "id": "completed",
+                "expect": [
+                  {
+                    "field": "content",
+                    "matches": "(?s)\\].*ESCALATE"
+                  },
+                  {
+                    "field": "content",
+                    "matches": "(?s)\\].*DA4"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "fires",
+          "collection": "TriggerFire",
+          "filter": {
+            "owner_did": {
+              "_eq": "$trial"
+            },
+            "source_collection": {
+              "_eq": "DockAlert"
+            }
+          },
+          "fields": [
+            "fire_key",
+            "trigger_id",
+            "task_id",
+            "request_id",
+            "session_id",
+            "source_collection",
+            "source_doc_id",
+            "source_handoff_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "da1",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "caused_by_trigger_id": {
+              "_ne": null
+            },
+            "_and": [
+              {
+                "content": {
+                  "_like": "%DA1%"
+                }
+              },
+              {
+                "content": {
+                  "_nlike": "%ESCALATE%"
+                }
+              },
+              {
+                "content": {
+                  "_nlike": "%UNSET%"
+                }
+              }
+            ]
+          },
+          "fields": [
+            "request_id",
+            "session_id",
+            "lifecycle_state",
+            "content",
+            "terminal_output",
+            "caused_by_trigger_id",
+            "caused_by_trigger_kind",
+            "caused_by_source_doc_id",
+            "caused_by_correlation",
+            "execution_origin"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "da2",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "caused_by_trigger_id": {
+              "_ne": null
+            },
+            "_and": [
+              {
+                "content": {
+                  "_like": "%DA2%"
+                }
+              },
+              {
+                "content": {
+                  "_nlike": "%ESCALATE%"
+                }
+              },
+              {
+                "content": {
+                  "_nlike": "%LOG%"
+                }
+              }
+            ]
+          },
+          "fields": [
+            "request_id",
+            "session_id",
+            "lifecycle_state",
+            "content",
+            "terminal_output",
+            "caused_by_trigger_id",
+            "caused_by_trigger_kind",
+            "caused_by_source_doc_id",
+            "caused_by_correlation",
+            "execution_origin"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "da3",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "caused_by_trigger_id": {
+              "_ne": null
+            },
+            "_and": [
+              {
+                "content": {
+                  "_like": "%DA3%"
+                }
+              },
+              {
+                "content": {
+                  "_nlike": "%LOG%"
+                }
+              },
+              {
+                "content": {
+                  "_nlike": "%UNSET%"
+                }
+              }
+            ]
+          },
+          "fields": [
+            "request_id",
+            "session_id",
+            "lifecycle_state",
+            "content",
+            "terminal_output",
+            "caused_by_trigger_id",
+            "caused_by_trigger_kind",
+            "caused_by_source_doc_id",
+            "caused_by_correlation",
+            "execution_origin"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "da4",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "caused_by_trigger_id": {
+              "_ne": null
+            },
+            "_and": [
+              {
+                "content": {
+                  "_like": "%DA4%"
+                }
+              },
+              {
+                "content": {
+                  "_nlike": "%LOG%"
+                }
+              },
+              {
+                "content": {
+                  "_nlike": "%UNSET%"
+                }
+              }
+            ]
+          },
+          "fields": [
+            "request_id",
+            "session_id",
+            "lifecycle_state",
+            "content",
+            "terminal_output",
+            "caused_by_trigger_id",
+            "caused_by_trigger_kind",
+            "caused_by_source_doc_id",
+            "caused_by_correlation",
+            "execution_origin"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,1190 @@
+{
+  "case_id": "board-category-migration",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type DispatchThread { ticket: String @index(unique: true) desk: String reviewed_category: String }",
+      "type DispatchChange { event: String @index(unique: true) thread: String ordinal: Int phase: String }",
+      "type DispatchCategoryMap { ticket: String @index(unique: true) category: String }"
+    ],
+    "documents": [
+      {
+        "collection": "DispatchThread",
+        "document": {
+          "ticket": "B-14",
+          "desk": "receiving"
+        }
+      },
+      {
+        "collection": "DispatchThread",
+        "document": {
+          "ticket": "B-18",
+          "desk": "receiving",
+          "reviewed_category": "mechanical"
+        }
+      },
+      {
+        "collection": "DispatchThread",
+        "document": {
+          "ticket": "B-22",
+          "desk": "receiving"
+        }
+      },
+      {
+        "collection": "DispatchThread",
+        "document": {
+          "ticket": "B-31",
+          "desk": "dispatch"
+        }
+      },
+      {
+        "collection": "DispatchThread",
+        "document": {
+          "ticket": "B-37",
+          "desk": "receiving"
+        }
+      },
+      {
+        "collection": "DispatchChange",
+        "document": {
+          "event": "e1",
+          "thread": "B-14",
+          "ordinal": 1,
+          "phase": "open"
+        }
+      },
+      {
+        "collection": "DispatchChange",
+        "document": {
+          "event": "e2",
+          "thread": "B-14",
+          "ordinal": 2,
+          "phase": "closed"
+        }
+      },
+      {
+        "collection": "DispatchChange",
+        "document": {
+          "event": "e3",
+          "thread": "B-18",
+          "ordinal": 1,
+          "phase": "closed"
+        }
+      },
+      {
+        "collection": "DispatchChange",
+        "document": {
+          "event": "e4",
+          "thread": "B-18",
+          "ordinal": 2,
+          "phase": "open"
+        }
+      },
+      {
+        "collection": "DispatchChange",
+        "document": {
+          "event": "e5",
+          "thread": "B-22",
+          "ordinal": 1,
+          "phase": "open"
+        }
+      },
+      {
+        "collection": "DispatchChange",
+        "document": {
+          "event": "e6",
+          "thread": "B-31",
+          "ordinal": 1,
+          "phase": "open"
+        }
+      },
+      {
+        "collection": "DispatchChange",
+        "document": {
+          "event": "e7",
+          "thread": "B-37",
+          "ordinal": 1,
+          "phase": "open"
+        }
+      },
+      {
+        "collection": "DispatchChange",
+        "document": {
+          "event": "e8",
+          "thread": "B-37",
+          "ordinal": 2,
+          "phase": "closed"
+        }
+      },
+      {
+        "collection": "DispatchCategoryMap",
+        "document": {
+          "ticket": "B-14",
+          "category": "intake"
+        }
+      },
+      {
+        "collection": "DispatchCategoryMap",
+        "document": {
+          "ticket": "B-18",
+          "category": "intake"
+        }
+      },
+      {
+        "collection": "DispatchCategoryMap",
+        "document": {
+          "ticket": "B-22",
+          "category": "labeling"
+        }
+      },
+      {
+        "collection": "DispatchCategoryMap",
+        "document": {
+          "ticket": "B-31",
+          "category": "dispatch"
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "access",
+      "prompt": "I keep application records in DispatchThread, DispatchChange and DispatchCategoryMap. Enable your general read access only to those collections, and general create/update/delete access only to DispatchThread if your native tools support it. Keep shell execution off and leave all other collection permissions alone. Inspect the available fields before working with records. Set up only the access now; do not change any records or collection definitions until I send the change request.",
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "schema",
+            "sdl": "type DispatchThread { ticket: String @index(unique: true) desk: String reviewed_category: String }\ntype DispatchChange { event: String @index(unique: true) thread: String ordinal: Int phase: String }\ntype DispatchCategoryMap { ticket: String @index(unique: true) category: String }",
+            "exact_nullability": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "agents": {
+              "agents": "agents",
+              "contexts": "contexts",
+              "tools": "tools",
+              "expect": [
+                {
+                  "agent_did": "gents:agent-slot:engineer",
+                  "tools": [
+                    {
+                      "field": "host.bash.mode",
+                      "matches": "^(null|Off)$"
+                    },
+                    {
+                      "field": "datastore.write_collections",
+                      "equals": [
+                        "DispatchThread"
+                      ]
+                    },
+                    {
+                      "field": "datastore.defra_query_collections",
+                      "contains": "\"DispatchThread\""
+                    },
+                    {
+                      "field": "datastore.defra_query_collections",
+                      "contains": "\"DispatchChange\""
+                    },
+                    {
+                      "field": "datastore.defra_query_collections",
+                      "contains": "\"DispatchCategoryMap\""
+                    }
+                  ]
+                }
+              ]
+            },
+            "present": [
+              {
+                "capture": "DispatchThread",
+                "min": 5,
+                "max": 5
+              },
+              {
+                "capture": "DispatchChange",
+                "min": 8,
+                "max": 8
+              },
+              {
+                "capture": "DispatchCategoryMap",
+                "min": 4,
+                "max": 4
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name",
+            "context_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "contexts",
+          "collection": "AgentContext",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "context_id",
+            "tools_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "tools",
+          "collection": "Tools",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "tools_id",
+            "host",
+            "datastore"
+          ]
+        },
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "DispatchThread",
+            "DispatchChange",
+            "DispatchCategoryMap"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "DispatchThread",
+          "collection": "DispatchThread",
+          "filter": {},
+          "fields": [
+            "ticket",
+            "desk",
+            "reviewed_category"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "DispatchChange",
+          "collection": "DispatchChange",
+          "filter": {},
+          "fields": [
+            "event",
+            "thread",
+            "ordinal",
+            "phase"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "DispatchCategoryMap",
+          "collection": "DispatchCategoryMap",
+          "filter": {},
+          "fields": [
+            "ticket",
+            "category"
+          ]
+        }
+      ]
+    },
+    {
+      "stage_id": "migrate",
+      "prompt": "Add an optional category to the board. Fill in existing tickets from the supplied mapping. Keep any category we've already reviewed, even when the map gives a different one. Leave unknown categories blank. Keep the old board working and preserve ticket IDs and history. Reply with one JSON object whose \"unresolved\" array lists the ticket values.",
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "bash"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "schema",
+            "sdl": "type DispatchThread { ticket: String @index(unique: true) desk: String reviewed_category: String category: String }\ntype DispatchChange { event: String @index(unique: true) thread: String ordinal: Int phase: String }\ntype DispatchCategoryMap { ticket: String @index(unique: true) category: String }",
+            "exact_nullability": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "DispatchThread",
+                "min": 5,
+                "max": 5
+              },
+              {
+                "capture": "DispatchChange",
+                "min": 8,
+                "max": 8
+              },
+              {
+                "capture": "DispatchCategoryMap",
+                "min": 4,
+                "max": 4
+              }
+            ],
+            "rows": [
+              {
+                "capture": "DispatchThread",
+                "key": "ticket",
+                "id": "B-14",
+                "expect": [
+                  {
+                    "field": "desk",
+                    "equals": "receiving"
+                  },
+                  {
+                    "field": "reviewed_category",
+                    "equals": null
+                  },
+                  {
+                    "field": "category",
+                    "equals": "intake"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchThread",
+                "key": "ticket",
+                "id": "B-18",
+                "expect": [
+                  {
+                    "field": "desk",
+                    "equals": "receiving"
+                  },
+                  {
+                    "field": "reviewed_category",
+                    "equals": "mechanical"
+                  },
+                  {
+                    "field": "category",
+                    "equals": "mechanical"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchThread",
+                "key": "ticket",
+                "id": "B-22",
+                "expect": [
+                  {
+                    "field": "desk",
+                    "equals": "receiving"
+                  },
+                  {
+                    "field": "reviewed_category",
+                    "equals": null
+                  },
+                  {
+                    "field": "category",
+                    "equals": "labeling"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchThread",
+                "key": "ticket",
+                "id": "B-31",
+                "expect": [
+                  {
+                    "field": "desk",
+                    "equals": "dispatch"
+                  },
+                  {
+                    "field": "reviewed_category",
+                    "equals": null
+                  },
+                  {
+                    "field": "category",
+                    "equals": "dispatch"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchThread",
+                "key": "ticket",
+                "id": "B-37",
+                "expect": [
+                  {
+                    "field": "desk",
+                    "equals": "receiving"
+                  },
+                  {
+                    "field": "reviewed_category",
+                    "equals": null
+                  },
+                  {
+                    "field": "category",
+                    "equals": null
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchChange",
+                "key": "event",
+                "id": "e1",
+                "expect": [
+                  {
+                    "field": "thread",
+                    "equals": "B-14"
+                  },
+                  {
+                    "field": "ordinal",
+                    "equals": 1
+                  },
+                  {
+                    "field": "phase",
+                    "equals": "open"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchChange",
+                "key": "event",
+                "id": "e2",
+                "expect": [
+                  {
+                    "field": "thread",
+                    "equals": "B-14"
+                  },
+                  {
+                    "field": "ordinal",
+                    "equals": 2
+                  },
+                  {
+                    "field": "phase",
+                    "equals": "closed"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchChange",
+                "key": "event",
+                "id": "e3",
+                "expect": [
+                  {
+                    "field": "thread",
+                    "equals": "B-18"
+                  },
+                  {
+                    "field": "ordinal",
+                    "equals": 1
+                  },
+                  {
+                    "field": "phase",
+                    "equals": "closed"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchChange",
+                "key": "event",
+                "id": "e4",
+                "expect": [
+                  {
+                    "field": "thread",
+                    "equals": "B-18"
+                  },
+                  {
+                    "field": "ordinal",
+                    "equals": 2
+                  },
+                  {
+                    "field": "phase",
+                    "equals": "open"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchChange",
+                "key": "event",
+                "id": "e5",
+                "expect": [
+                  {
+                    "field": "thread",
+                    "equals": "B-22"
+                  },
+                  {
+                    "field": "ordinal",
+                    "equals": 1
+                  },
+                  {
+                    "field": "phase",
+                    "equals": "open"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchChange",
+                "key": "event",
+                "id": "e6",
+                "expect": [
+                  {
+                    "field": "thread",
+                    "equals": "B-31"
+                  },
+                  {
+                    "field": "ordinal",
+                    "equals": 1
+                  },
+                  {
+                    "field": "phase",
+                    "equals": "open"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchChange",
+                "key": "event",
+                "id": "e7",
+                "expect": [
+                  {
+                    "field": "thread",
+                    "equals": "B-37"
+                  },
+                  {
+                    "field": "ordinal",
+                    "equals": 1
+                  },
+                  {
+                    "field": "phase",
+                    "equals": "open"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchChange",
+                "key": "event",
+                "id": "e8",
+                "expect": [
+                  {
+                    "field": "thread",
+                    "equals": "B-37"
+                  },
+                  {
+                    "field": "ordinal",
+                    "equals": 2
+                  },
+                  {
+                    "field": "phase",
+                    "equals": "closed"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchCategoryMap",
+                "key": "ticket",
+                "id": "B-14",
+                "expect": [
+                  {
+                    "field": "category",
+                    "equals": "intake"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchCategoryMap",
+                "key": "ticket",
+                "id": "B-18",
+                "expect": [
+                  {
+                    "field": "category",
+                    "equals": "intake"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchCategoryMap",
+                "key": "ticket",
+                "id": "B-22",
+                "expect": [
+                  {
+                    "field": "category",
+                    "equals": "labeling"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchCategoryMap",
+                "key": "ticket",
+                "id": "B-31",
+                "expect": [
+                  {
+                    "field": "category",
+                    "equals": "dispatch"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\"unresolved\"\\s*:\\s*\\[\\s*(?:\"B-37\")\\s*\\]"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "DispatchThread",
+            "DispatchChange",
+            "DispatchCategoryMap"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "DispatchThread",
+          "collection": "DispatchThread",
+          "filter": {},
+          "fields": [
+            "ticket",
+            "desk",
+            "reviewed_category",
+            "category"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "DispatchChange",
+          "collection": "DispatchChange",
+          "filter": {},
+          "fields": [
+            "event",
+            "thread",
+            "ordinal",
+            "phase"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "DispatchCategoryMap",
+          "collection": "DispatchCategoryMap",
+          "filter": {},
+          "fields": [
+            "ticket",
+            "category"
+          ]
+        }
+      ]
+    },
+    {
+      "stage_id": "verify_legacy",
+      "prompt": "Check that the old board still reads ticket IDs and desks. Read those two fields in ticket order and send me the IDs as a JSON array.",
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "query"
+            ],
+            "forbidden": [
+              "bash",
+              "write",
+              "schema"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "collection",
+                "equals": "DispatchThread"
+              },
+              {
+                "field": "results",
+                "contains": "B-14"
+              },
+              {
+                "field": "results",
+                "contains": "B-37"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\\[\\s*\"B-14\"\\s*,\\s*\"B-18\"\\s*,\\s*\"B-22\"\\s*,\\s*\"B-31\"\\s*,\\s*\"B-37\"\\s*\\]"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "replay",
+      "prompt": "Please run that backfill again. Check the ticket IDs and categories on the board in ticket order. Reply in JSON with the number you changed under \"updated\" and any ticket IDs still missing categories under \"unresolved\".",
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "query"
+            ],
+            "forbidden": [
+              "bash"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "schema",
+            "sdl": "type DispatchThread { ticket: String @index(unique: true) desk: String reviewed_category: String category: String }\ntype DispatchChange { event: String @index(unique: true) thread: String ordinal: Int phase: String }\ntype DispatchCategoryMap { ticket: String @index(unique: true) category: String }",
+            "exact_nullability": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "DispatchThread",
+                "min": 5,
+                "max": 5
+              },
+              {
+                "capture": "DispatchChange",
+                "min": 8,
+                "max": 8
+              },
+              {
+                "capture": "DispatchCategoryMap",
+                "min": 4,
+                "max": 4
+              }
+            ],
+            "rows": [
+              {
+                "capture": "DispatchThread",
+                "key": "ticket",
+                "id": "B-14",
+                "expect": [
+                  {
+                    "field": "desk",
+                    "equals": "receiving"
+                  },
+                  {
+                    "field": "reviewed_category",
+                    "equals": null
+                  },
+                  {
+                    "field": "category",
+                    "equals": "intake"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchThread",
+                "key": "ticket",
+                "id": "B-18",
+                "expect": [
+                  {
+                    "field": "desk",
+                    "equals": "receiving"
+                  },
+                  {
+                    "field": "reviewed_category",
+                    "equals": "mechanical"
+                  },
+                  {
+                    "field": "category",
+                    "equals": "mechanical"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchThread",
+                "key": "ticket",
+                "id": "B-22",
+                "expect": [
+                  {
+                    "field": "desk",
+                    "equals": "receiving"
+                  },
+                  {
+                    "field": "reviewed_category",
+                    "equals": null
+                  },
+                  {
+                    "field": "category",
+                    "equals": "labeling"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchThread",
+                "key": "ticket",
+                "id": "B-31",
+                "expect": [
+                  {
+                    "field": "desk",
+                    "equals": "dispatch"
+                  },
+                  {
+                    "field": "reviewed_category",
+                    "equals": null
+                  },
+                  {
+                    "field": "category",
+                    "equals": "dispatch"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchThread",
+                "key": "ticket",
+                "id": "B-37",
+                "expect": [
+                  {
+                    "field": "desk",
+                    "equals": "receiving"
+                  },
+                  {
+                    "field": "reviewed_category",
+                    "equals": null
+                  },
+                  {
+                    "field": "category",
+                    "equals": null
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchChange",
+                "key": "event",
+                "id": "e1",
+                "expect": [
+                  {
+                    "field": "thread",
+                    "equals": "B-14"
+                  },
+                  {
+                    "field": "ordinal",
+                    "equals": 1
+                  },
+                  {
+                    "field": "phase",
+                    "equals": "open"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchChange",
+                "key": "event",
+                "id": "e2",
+                "expect": [
+                  {
+                    "field": "thread",
+                    "equals": "B-14"
+                  },
+                  {
+                    "field": "ordinal",
+                    "equals": 2
+                  },
+                  {
+                    "field": "phase",
+                    "equals": "closed"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchChange",
+                "key": "event",
+                "id": "e3",
+                "expect": [
+                  {
+                    "field": "thread",
+                    "equals": "B-18"
+                  },
+                  {
+                    "field": "ordinal",
+                    "equals": 1
+                  },
+                  {
+                    "field": "phase",
+                    "equals": "closed"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchChange",
+                "key": "event",
+                "id": "e4",
+                "expect": [
+                  {
+                    "field": "thread",
+                    "equals": "B-18"
+                  },
+                  {
+                    "field": "ordinal",
+                    "equals": 2
+                  },
+                  {
+                    "field": "phase",
+                    "equals": "open"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchChange",
+                "key": "event",
+                "id": "e5",
+                "expect": [
+                  {
+                    "field": "thread",
+                    "equals": "B-22"
+                  },
+                  {
+                    "field": "ordinal",
+                    "equals": 1
+                  },
+                  {
+                    "field": "phase",
+                    "equals": "open"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchChange",
+                "key": "event",
+                "id": "e6",
+                "expect": [
+                  {
+                    "field": "thread",
+                    "equals": "B-31"
+                  },
+                  {
+                    "field": "ordinal",
+                    "equals": 1
+                  },
+                  {
+                    "field": "phase",
+                    "equals": "open"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchChange",
+                "key": "event",
+                "id": "e7",
+                "expect": [
+                  {
+                    "field": "thread",
+                    "equals": "B-37"
+                  },
+                  {
+                    "field": "ordinal",
+                    "equals": 1
+                  },
+                  {
+                    "field": "phase",
+                    "equals": "open"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchChange",
+                "key": "event",
+                "id": "e8",
+                "expect": [
+                  {
+                    "field": "thread",
+                    "equals": "B-37"
+                  },
+                  {
+                    "field": "ordinal",
+                    "equals": 2
+                  },
+                  {
+                    "field": "phase",
+                    "equals": "closed"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchCategoryMap",
+                "key": "ticket",
+                "id": "B-14",
+                "expect": [
+                  {
+                    "field": "category",
+                    "equals": "intake"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchCategoryMap",
+                "key": "ticket",
+                "id": "B-18",
+                "expect": [
+                  {
+                    "field": "category",
+                    "equals": "intake"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchCategoryMap",
+                "key": "ticket",
+                "id": "B-22",
+                "expect": [
+                  {
+                    "field": "category",
+                    "equals": "labeling"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchCategoryMap",
+                "key": "ticket",
+                "id": "B-31",
+                "expect": [
+                  {
+                    "field": "category",
+                    "equals": "dispatch"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\"updated\"\\s*:\\s*0\\b"
+              },
+              {
+                "matches": "\"unresolved\"\\s*:\\s*\\[\\s*(?:\"B-37\")\\s*\\]"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "DispatchThread",
+            "DispatchChange",
+            "DispatchCategoryMap"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "DispatchThread",
+          "collection": "DispatchThread",
+          "filter": {},
+          "fields": [
+            "ticket",
+            "desk",
+            "reviewed_category",
+            "category"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "DispatchChange",
+          "collection": "DispatchChange",
+          "filter": {},
+          "fields": [
+            "event",
+            "thread",
+            "ordinal",
+            "phase"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "DispatchCategoryMap",
+          "collection": "DispatchCategoryMap",
+          "filter": {},
+          "fields": [
+            "ticket",
+            "category"
+          ]
+        }
+      ]
+    }
+  ]
+}

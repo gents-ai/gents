@@ -1,0 +1,210 @@
+{
+  "case_id": "retry-callers-audit",
+  "split": "validation",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "Cargo.toml",
+        "contents": "[workspace]\nmembers = [\"crates/*\"]\nresolver = \"2\"\n"
+      },
+      {
+        "path": "crates/ledger-core/Cargo.toml",
+        "contents": "[package]\nname = \"tally_core\"\nversion = \"0.3.1\"\nedition = \"2021\"\n"
+      },
+      {
+        "path": "crates/ledger-core/src/lib.rs",
+        "contents": "pub mod retry;\npub mod totals;\n"
+      },
+      {
+        "path": "crates/ledger-core/src/retry.rs",
+        "contents": "use std::time::Duration;\n\npub fn retry_forever<T, E>(mut op: impl FnMut() -> Result<T, E>) -> T {\n    loop {\n        if let Ok(value) = op() {\n            return value;\n        }\n        std::thread::sleep(Duration::from_millis(50));\n    }\n}\n\npub fn retry_bounded<T, E>(attempts: u32, mut op: impl FnMut() -> Result<T, E>) -> Result<T, E> {\n    let mut last = op();\n    for _ in 1..attempts {\n        if last.is_ok() {\n            break;\n        }\n        last = op();\n    }\n    last\n}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn returns_first_success() {\n        assert_eq!(super::retry_forever(|| Ok::<_, ()>(3)), 3);\n    }\n}\n"
+      },
+      {
+        "path": "crates/ledger-core/src/totals.rs",
+        "contents": "pub fn total(values: &[i64]) -> i64 {\n    values.iter().sum()\n}\n"
+      },
+      {
+        "path": "crates/ferry-api/Cargo.toml",
+        "contents": "[package]\nname = \"ferry_api\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\ntally_core = { path = \"../ledger-core\" }\n"
+      },
+      {
+        "path": "crates/ferry-api/src/lib.rs",
+        "contents": "pub mod client;\n"
+      },
+      {
+        "path": "crates/ferry-api/src/client.rs",
+        "contents": "use tally_core::retry;\n\npub struct Client;\n\nimpl Client {\n    pub fn fetch_manifest(&self) -> String {\n        retry::retry_forever(|| self.try_fetch())\n    }\n\n    fn try_fetch(&self) -> Result<String, ()> {\n        Ok(String::from(\"manifest\"))\n    }\n}\n"
+      },
+      {
+        "path": "crates/dock-sync/Cargo.toml",
+        "contents": "[package]\nname = \"dock_sync\"\nversion = \"0.2.0\"\nedition = \"2021\"\n\n[dependencies]\ntally_core = { path = \"../ledger-core\" }\n"
+      },
+      {
+        "path": "crates/dock-sync/src/lib.rs",
+        "contents": "// retry_forever is banned on sync paths: a dead peer would hang the dock.\nuse tally_core::retry::retry_bounded;\n\npub fn push(batch: &[u8]) -> Result<usize, ()> {\n    retry_bounded(3, || send(batch))\n}\n\nfn send(batch: &[u8]) -> Result<usize, ()> {\n    Ok(batch.len())\n}\n"
+      },
+      {
+        "path": "crates/berth-plan/Cargo.toml",
+        "contents": "[package]\nname = \"berth_planner\"\nversion = \"0.5.2\"\nedition = \"2021\"\n\n[dependencies]\ntally_core = { path = \"../ledger-core\" }\n"
+      },
+      {
+        "path": "crates/berth-plan/src/lib.rs",
+        "contents": "use tally_core::retry::retry_forever as forever;\n\npub fn reserve(slot: u32) -> u32 {\n    forever(|| try_reserve(slot))\n}\n\nfn try_reserve(slot: u32) -> Result<u32, ()> {\n    Ok(slot)\n}\n"
+      },
+      {
+        "path": "crates/ops-notes/Cargo.toml",
+        "contents": "[package]\nname = \"ops_journal\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"
+      },
+      {
+        "path": "crates/ops-notes/src/lib.rs",
+        "contents": "pub fn reminder() -> &'static str {\n    \"never call retry_forever() from a request handler\"\n}\n"
+      },
+      {
+        "path": "crates/prelude/Cargo.toml",
+        "contents": "[package]\nname = \"harbor_prelude\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\ntally_core = { path = \"../ledger-core\" }\n"
+      },
+      {
+        "path": "crates/prelude/src/lib.rs",
+        "contents": "pub use tally_core::retry::retry_forever as keep_trying;\npub use tally_core::totals::total;\n"
+      },
+      {
+        "path": "crates/pilot-tools/Cargo.toml",
+        "contents": "[package]\nname = \"pilot_tools\"\nversion = \"0.4.0\"\nedition = \"2021\"\n\n[dependencies]\nharbor_prelude = { path = \"../prelude\" }\n"
+      },
+      {
+        "path": "crates/pilot-tools/src/lib.rs",
+        "contents": "use harbor_prelude::keep_trying;\n\npub fn tide_window() -> u8 {\n    keep_trying(read_gauge)\n}\n\nfn read_gauge() -> Result<u8, ()> {\n    Ok(4)\n}\n"
+      },
+      {
+        "path": "crates/tools-cli/Cargo.toml",
+        "contents": "[package]\nname = \"harbor_cli\"\nversion = \"1.4.0\"\nedition = \"2021\"\n\n[dependencies]\ntally_core = { path = \"../ledger-core\" }\n"
+      },
+      {
+        "path": "crates/tools-cli/src/main.rs",
+        "contents": "use tally_core::retry::retry_forever;\n\nfn connect() -> Result<u16, ()> {\n    Ok(7)\n}\n\nfn main() {\n    let port = retry_forever(connect);\n    println!(\"connected on {port}\");\n}\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "audit",
+      "prompt": "In this Rust workspace, which packages call tally_core's retry_forever, under any name it is imported or re-exported as? Don't count the package that defines it, and a mention or re-export that isn't a call doesn't count. Write their Cargo package names (the name in each Cargo.toml, not the directory) to audit/retry_callers.txt, one per line, sorted. Don't change any source.",
+      "capture": [
+        {
+          "kind": "file",
+          "name": "workspace",
+          "glob": "**/*"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "bash",
+              "bash_unrestricted"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "workspace",
+            "expect": [
+              {
+                "path": "audit/retry_callers.txt",
+                "matches": "^berth_planner\\nferry_api\\nharbor_cli\\npilot_tools\\n?$"
+              },
+              {
+                "path": "Cargo.toml",
+                "sha256": "ebda83dc3ec8c97ce407a3b26c6fba3d5cd45cea1403b35c15fe4f61b44afb38"
+              },
+              {
+                "path": "crates/ledger-core/Cargo.toml",
+                "sha256": "b0af9499a2eda046339857d14bb656ab18efc26d06c0f1b21ce73adac044f8d7"
+              },
+              {
+                "path": "crates/ledger-core/src/lib.rs",
+                "sha256": "c363aea315cc49cfc08cfac75d88226287c70a6b61b0e83a8afa895ab3055694"
+              },
+              {
+                "path": "crates/ledger-core/src/retry.rs",
+                "sha256": "384ed8b44586b00aecdc55b25032c92e67d3e32d5c61242cdf3062a2f25e4f4b"
+              },
+              {
+                "path": "crates/ledger-core/src/totals.rs",
+                "sha256": "b2e52c3ab26a8a7415349d7c87c54f88aa2e25b60ed61297cdc9f9dc81e0aea4"
+              },
+              {
+                "path": "crates/ferry-api/Cargo.toml",
+                "sha256": "c5378a179d8a555b4e26c05453b85fe665b8e4aba2f0f8dd11c798ca0d2cb248"
+              },
+              {
+                "path": "crates/ferry-api/src/lib.rs",
+                "sha256": "0db2cbad5c8314dec4a34179ded69c40f85afc823171f4179682ac037dc7754c"
+              },
+              {
+                "path": "crates/ferry-api/src/client.rs",
+                "sha256": "f18ad996163d017748cf91690afb934436fa41d5bedbbdc291cb512d5827ec26"
+              },
+              {
+                "path": "crates/dock-sync/Cargo.toml",
+                "sha256": "e23e3d2352092b6080c0a73ce2c56aa5f54370e7a2af874beea535264ec7e644"
+              },
+              {
+                "path": "crates/dock-sync/src/lib.rs",
+                "sha256": "c1814ca5ea74c5f49e5fb8a0e8cebf97b16c8a992b45e53e6c5e30de0cc32215"
+              },
+              {
+                "path": "crates/berth-plan/Cargo.toml",
+                "sha256": "ec41af8e9dc4a75dfef6cd8122f373087d52034130005cee2a65c727562bb66e"
+              },
+              {
+                "path": "crates/berth-plan/src/lib.rs",
+                "sha256": "9d2aa6690bffeac89b4c2cd3509663442b5660f4350af3a85015422921d84733"
+              },
+              {
+                "path": "crates/ops-notes/Cargo.toml",
+                "sha256": "a71dcef482e68f77e47f0eb81407c15a63bbb5c79236db4f1a053792f022584c"
+              },
+              {
+                "path": "crates/ops-notes/src/lib.rs",
+                "sha256": "73dd10c0c60fc5dc93c36eaee875b838b6d94d6055c88fb03fe1a7e2aabb019b"
+              },
+              {
+                "path": "crates/prelude/Cargo.toml",
+                "sha256": "de74656b8990cd65e585a157f8cd1e7d7c54cda69a3c2484d752c56e65677fc9"
+              },
+              {
+                "path": "crates/prelude/src/lib.rs",
+                "sha256": "a0a0f9f87177942ad92e5af9181b7c0352323228d6ecebd9b75adeecb28810c6"
+              },
+              {
+                "path": "crates/pilot-tools/Cargo.toml",
+                "sha256": "0318c705d3e0873f2cc9de021586c769967340ea18f0141094aa6ea8b862de11"
+              },
+              {
+                "path": "crates/pilot-tools/src/lib.rs",
+                "sha256": "155b6b66f4b8993bcdeafa678922e2937910d9fefae7e5c13c9a75831af34c34"
+              },
+              {
+                "path": "crates/tools-cli/Cargo.toml",
+                "sha256": "c66a7f691eb940e6d0ef65ddb4b285c41a5239aeca56adcbef8794459d3b181b"
+              },
+              {
+                "path": "crates/tools-cli/src/main.rs",
+                "sha256": "5b98839a171de5414d84c0c1683b41c8513fb2b043eb94c64f6ef3cbaebeeb64"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

@@ -17,9 +17,18 @@ thinking block. The `x-anthropic-billing-header` attribution block and the
 every request while replaying thinking (`ClaudeAttribution`;
 `diagnostics.previous_message_id` names the previous response), so the native
 flattening drops them with the other non-prefix fields. A replay is accepted iff the prefix before each replayed block
-equals its producing prefix with a leading run of reasoning removed. Responses
-encrypted reasoning has no such binding; the same rule is applied to it
-conservatively, so one owner decides replay for every wire.
+equals its producing prefix with a leading run of reasoning removed.
+
+External premise (OpenAI Responses, verified 2026-11-22 against `gpt-6.2-sol`
+with an API key, `store` unset): the server refuses an input whose
+`function_call` or `message` item carries the id of a response that also
+returned a reasoning item unless that reasoning item is in the input ("was
+provided without its required 'reasoning' item"), with `store: false` as well.
+It accepts the reasoning item after a changed or shortened prefix and drops it
+itself when the prefix no longer produces it. So this frontier does not cut the
+Responses wire (`ClaudeMap.prefixBound`): every request context message a later
+request omits changes the prefix, and cutting there refused every second
+request of a session.
 
 `prefix_is_leading_reasoning_removal` shows that two checks decide that rule
 exactly: equal ordinary sequences, and the current anchored reasoning being a

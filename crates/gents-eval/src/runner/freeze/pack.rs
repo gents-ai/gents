@@ -98,6 +98,7 @@ pub(super) async fn validate_cell(
     request: &RunRequest,
     cell: &CellRequest,
     isolation: Isolation,
+    subject_host_bash: bool,
     run_dir: &Path,
 ) -> Result<(FrozenCell, LoadedPack)> {
     let pack = load_pack(&cell.source, &request.owner)
@@ -118,7 +119,7 @@ pub(super) async fn validate_cell(
     )
     .await?;
 
-    let unrestricted = refuse_host_bash(&pack.config, isolation)?;
+    let unrestricted = refuse_host_bash(&pack.config, isolation, subject_host_bash)?;
 
     Ok((
         FrozenCell {
@@ -142,19 +143,35 @@ pub(super) async fn validate_cell(
 /// Under [`Isolation::Embedded`] the only host bash mode a pack may grant is
 /// [`BashMode::Off`]: an embedded trial shares this host, and `ReadOnly` is an
 /// argv allowlist with this host's network and no confining root, not a
-/// boundary the executor can enforce. Freezing and resuming both go through
-/// here, so a run frozen under a sandboxed executor cannot be resumed into an
-/// embedded one and quietly lose the guarantee it was frozen with.
+/// boundary the executor can enforce. Under [`Isolation::Contained`] a grant
+/// holds only when the definition's subject also opts in (`host_bash`), both
+/// the subject and the launcher having asked for it. Freezing and resuming
+/// both go through here, so a run frozen under one executor cannot be resumed
+/// into a weaker one and quietly lose the guarantee it was frozen with.
 pub(super) fn refuse_host_bash(
     config: &PackConfig,
     isolation: Isolation,
+    subject_host_bash: bool,
 ) -> Result<Option<String>> {
-    if isolation == Isolation::Embedded {
-        if let Some((tools_id, mode)) = host_bash(config) {
-            return Err(refused(format!(
-                "tools {tools_id:?} grants host bash (mode {mode:?}); an embedded trial shares \
-                 this host, so only Off is allowed"
-            )));
+    if let Some((tools_id, mode)) = host_bash(config) {
+        let grant = format!("tools {tools_id:?} grants host bash (mode {mode:?})");
+        match isolation {
+            Isolation::Process => {}
+            Isolation::Contained if subject_host_bash => {}
+            Isolation::Contained => {
+                return Err(refused(format!(
+                    "{grant}, but the eval definition's subject does not opt in to host bash \
+                     (`subject.host_bash`)"
+                )));
+            }
+            Isolation::Embedded => {
+                return Err(refused(format!(
+                    "{grant}; an embedded trial shares this host, so only Off is allowed. Host \
+                     bash is for containerized runs only: launch the run inside a container \
+                     with --allow-host-bash (GENTS_EVAL_ALLOW_HOST_BASH=1), for a definition \
+                     whose subject sets `host_bash`"
+                )));
+            }
         }
     }
     Ok(unrestricted_bash(config))

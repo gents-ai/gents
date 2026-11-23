@@ -1,0 +1,267 @@
+{
+  "case_id": "train-resume-tide-gauge-task",
+  "split": "train",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "setup",
+      "prompt": "Create two manual tasks that you run yourself, with no schedules or triggers. Task tides-shift-7 says \"Summarize the tide gauge readings for the harbor master.\" It is not ready, so create it disabled. Task tides-spare-4 says \"Check the spare gauge battery log.\" and stays enabled. Do not run either.",
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "task_config",
+            "min": 2,
+            "max": 2
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "rows": [
+              {
+                "capture": "task_config",
+                "key": "task_id",
+                "id": "tides-shift-7",
+                "expect": [
+                  {
+                    "field": "enabled",
+                    "equals": false
+                  },
+                  {
+                    "field": "agent_did",
+                    "equals": "gents:agent-slot:engineer"
+                  },
+                  {
+                    "field": "prompt_template",
+                    "matches": "(?i)tide gauge"
+                  }
+                ]
+              },
+              {
+                "capture": "task_config",
+                "key": "task_id",
+                "id": "tides-spare-4",
+                "expect": [
+                  {
+                    "field": "enabled",
+                    "equals": true
+                  },
+                  {
+                    "field": "agent_did",
+                    "equals": "gents:agent-slot:engineer"
+                  },
+                  {
+                    "field": "prompt_template",
+                    "matches": "(?i)battery log"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "task_config",
+          "collection": "Task",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "task_id",
+            "agent_did",
+            "prompt_template",
+            "emit_outcome",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "trigger_config",
+          "collection": "Trigger",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "trigger_id",
+            "task_id",
+            "source",
+            "concurrency",
+            "session_id_template",
+            "enabled"
+          ]
+        }
+      ]
+    },
+    {
+      "stage_id": "change",
+      "prompt": "The tide gauge summary is ready now: reactivate tides-shift-7. Leave tides-spare-4 and both tasks' instructions unchanged, and do not run anything.",
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "runs",
+            "min": 0,
+            "max": 0
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "task_config",
+                "min": 2,
+                "max": 2
+              },
+              {
+                "capture": "trigger_config",
+                "min": 0,
+                "max": 0
+              }
+            ],
+            "rows": [
+              {
+                "capture": "task_config",
+                "key": "task_id",
+                "id": "tides-shift-7",
+                "expect": [
+                  {
+                    "field": "enabled",
+                    "equals": true
+                  },
+                  {
+                    "field": "agent_did",
+                    "equals": "gents:agent-slot:engineer"
+                  },
+                  {
+                    "field": "prompt_template",
+                    "matches": "(?i)tide gauge"
+                  }
+                ]
+              },
+              {
+                "capture": "task_config",
+                "key": "task_id",
+                "id": "tides-spare-4",
+                "expect": [
+                  {
+                    "field": "enabled",
+                    "equals": true
+                  },
+                  {
+                    "field": "agent_did",
+                    "equals": "gents:agent-slot:engineer"
+                  },
+                  {
+                    "field": "prompt_template",
+                    "matches": "(?i)battery log"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "task_config",
+          "collection": "Task",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "task_id",
+            "agent_did",
+            "prompt_template",
+            "emit_outcome",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "trigger_config",
+          "collection": "Trigger",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "trigger_id",
+            "task_id",
+            "source",
+            "concurrency",
+            "session_id_template",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "runs",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "caused_by_trigger_kind": {
+              "_eq": "manual"
+            },
+            "purpose": {
+              "_eq": "normal"
+            }
+          },
+          "fields": [
+            "request_id",
+            "caused_by_trigger_id",
+            "caused_by_trigger_kind",
+            "lifecycle_state"
+          ]
+        }
+      ]
+    }
+  ]
+}

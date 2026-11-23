@@ -49,6 +49,7 @@ impl ModelDiscoveryHttpError {
 fn provider_display_name(kind: BackendProviderKind) -> &'static str {
     match kind {
         BackendProviderKind::OpenAiCompatible => "OpenAI-compatible",
+        BackendProviderKind::Vllm => "vLLM",
         BackendProviderKind::OpenRouter => "OpenRouter",
         BackendProviderKind::ChatGptCodex => "ChatGPT Codex",
         BackendProviderKind::XaiGrokOAuth => "Grok / xAI OAuth",
@@ -163,7 +164,10 @@ impl OpenAiModelRecord {
                 self.context_window
             } else if kind == BackendProviderKind::OpenRouter || xai_api {
                 self.context_length
-            } else if kind == BackendProviderKind::OpenAiCompatible {
+            } else if matches!(
+                kind,
+                BackendProviderKind::OpenAiCompatible | BackendProviderKind::Vllm
+            ) {
                 self.max_model_len
             } else if kind.uses_messages_wire() {
                 self.max_input_tokens

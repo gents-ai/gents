@@ -1,0 +1,145 @@
+{
+  "case_id": "archive-retention-records",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "records/R-7.json",
+        "contents": "{\n  \"record\": \"R-7\",\n  \"class\": \"map\",\n  \"signed\": false\n}\n"
+      },
+      {
+        "path": "records/R-8.json",
+        "contents": "{\n  \"record\": \"R-8\",\n  \"class\": \"calendar\",\n  \"signed\": true\n}\n"
+      },
+      {
+        "path": "records/R-9.json",
+        "contents": "{\n  \"record\": \"R-9\",\n  \"class\": \"ledger\",\n  \"signed\": false\n}\n"
+      },
+      {
+        "path": "records/R-10.json",
+        "contents": "{\n  \"record\": \"R-10\",\n  \"class\": \"map\",\n  \"signed\": true,\n  \"legal_hold\": true\n}\n"
+      },
+      {
+        "path": "records/R-11.json",
+        "contents": "{\n  \"record\": \"R-11\",\n  \"class\": \"map\",\n  \"signed\": true\n}\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "retain",
+      "prompt": "How long does the records office keep each record in records/? Reply with JSON mapping each record id to its retention in months, as a number, or the string the rules give when there is no number.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "loaded",
+          "collection": "AgentOutputSegment",
+          "filter": {
+            "session_id": {
+              "_eq": "$session"
+            },
+            "payload": {
+              "_like": "Skill: Archive retention%"
+            }
+          },
+          "fields": [
+            "ordinal"
+          ]
+        },
+        {
+          "kind": "file",
+          "name": "records",
+          "glob": "records/*.json"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "load_skill"
+            ],
+            "forbidden": [
+              "write",
+              "bash",
+              "bash_unrestricted",
+              "write_file",
+              "edit_file"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "loaded",
+                "min": 1
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\"R-7\"\\s*:\\s*14\\b"
+              },
+              {
+                "matches": "\"R-8\"\\s*:\\s*5\\b"
+              },
+              {
+                "matches": "\"R-9\"\\s*:\\s*84\\b"
+              },
+              {
+                "matches": "\"R-10\"\\s*:\\s*\"hold\""
+              },
+              {
+                "matches": "\"R-11\"\\s*:\\s*36\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "records",
+            "expect": [
+              {
+                "path": "records/R-7.json",
+                "equals": "{\n  \"record\": \"R-7\",\n  \"class\": \"map\",\n  \"signed\": false\n}\n"
+              },
+              {
+                "path": "records/R-8.json",
+                "equals": "{\n  \"record\": \"R-8\",\n  \"class\": \"calendar\",\n  \"signed\": true\n}\n"
+              },
+              {
+                "path": "records/R-9.json",
+                "equals": "{\n  \"record\": \"R-9\",\n  \"class\": \"ledger\",\n  \"signed\": false\n}\n"
+              },
+              {
+                "path": "records/R-10.json",
+                "equals": "{\n  \"record\": \"R-10\",\n  \"class\": \"map\",\n  \"signed\": true,\n  \"legal_hold\": true\n}\n"
+              },
+              {
+                "path": "records/R-11.json",
+                "equals": "{\n  \"record\": \"R-11\",\n  \"class\": \"map\",\n  \"signed\": true\n}\n"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

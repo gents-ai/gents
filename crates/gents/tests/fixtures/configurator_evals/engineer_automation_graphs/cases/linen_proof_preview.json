@@ -1,0 +1,337 @@
+{
+  "case_id": "linen-proof-preview",
+  "split": "train",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "create",
+      "prompt": "Create a manual task named linen-proof for yourself, with no trigger and no schedule. When someone runs it with args color and code, it asks for a reply of exactly PROOF, then the code, then the color, separated by spaces. Don't run it.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "triggers",
+          "collection": "Trigger",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "trigger_id",
+            "task_id",
+            "source",
+            "concurrency",
+            "session_id_template",
+            "create_session",
+            "enabled",
+            "last_status",
+            "last_error"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "sources",
+          "collection": "EventSource",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "event_source_id",
+            "source_collection",
+            "event_kind",
+            "filter",
+            "correlation_field",
+            "group"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "tasks",
+          "collection": "Task",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "task_id",
+            "prompt_template",
+            "emit_outcome",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "manual_runs",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "caused_by_trigger_kind": {
+              "_eq": "manual"
+            }
+          },
+          "fields": [
+            "request_id",
+            "session_id",
+            "lifecycle_state",
+            "content",
+            "terminal_output",
+            "caused_by_trigger_id",
+            "caused_by_trigger_kind",
+            "caused_by_source_doc_id",
+            "caused_by_correlation",
+            "execution_origin"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash",
+              "bash_unrestricted",
+              "write_file",
+              "edit_file"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "manual_runs",
+                "min": 0,
+                "max": 0
+              },
+              {
+                "capture": "triggers",
+                "min": 0,
+                "max": 0
+              }
+            ],
+            "rows": [
+              {
+                "capture": "tasks",
+                "key": "task_id",
+                "id": "linen-proof",
+                "expect": [
+                  {
+                    "field": "prompt_template",
+                    "matches": "args\\.code[\\s\\S]*args\\.color"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "preview",
+      "prompt": "I'm thinking about adding a bolt arg to linen-proof, so its reply becomes PROOF, the code, the color, then the bolt. Preview that change with config without applying it, and leave the task as it is. Then tell me exactly what reply a run with color gray, code T6 and bolt 14 would ask for once the change is made. Don't run anything.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "triggers",
+          "collection": "Trigger",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "trigger_id",
+            "task_id",
+            "source",
+            "concurrency",
+            "session_id_template",
+            "create_session",
+            "enabled",
+            "last_status",
+            "last_error"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "sources",
+          "collection": "EventSource",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "event_source_id",
+            "source_collection",
+            "event_kind",
+            "filter",
+            "correlation_field",
+            "group"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "tasks",
+          "collection": "Task",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "task_id",
+            "prompt_template",
+            "emit_outcome",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "manual_runs",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "caused_by_trigger_kind": {
+              "_eq": "manual"
+            }
+          },
+          "fields": [
+            "request_id",
+            "session_id",
+            "lifecycle_state",
+            "content",
+            "terminal_output",
+            "caused_by_trigger_id",
+            "caused_by_trigger_kind",
+            "caused_by_source_doc_id",
+            "caused_by_correlation",
+            "execution_origin"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "unchanged",
+          "collection": "Task",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "task_id": {
+              "_eq": "linen-proof"
+            },
+            "prompt_template": {
+              "_nlike": "%bolt%"
+            }
+          },
+          "fields": [
+            "task_id",
+            "prompt_template"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash",
+              "bash_unrestricted",
+              "write_file",
+              "edit_file"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "committed",
+                "equals": false
+              },
+              {
+                "field": "collection",
+                "equals": "Task"
+              },
+              {
+                "field": "target_id",
+                "equals": "linen-proof"
+              },
+              {
+                "field": "changed",
+                "contains": "args.bolt"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "manual_runs",
+                "min": 0,
+                "max": 0
+              },
+              {
+                "capture": "unchanged",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "unchanged",
+                "key": "task_id",
+                "id": "linen-proof",
+                "expect": [
+                  {
+                    "field": "prompt_template",
+                    "matches": "args\\.code[\\s\\S]*args\\.color"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "PROOF T6 gray 14"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

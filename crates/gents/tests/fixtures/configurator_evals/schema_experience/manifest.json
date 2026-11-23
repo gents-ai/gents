@@ -12,17 +12,23 @@
   "kind": "documents",
   "assets": [
     "README.md",
-    "pack_config.json",
+    "cases/admiral_report_search.json",
+    "cases/archive_return_seal.json",
+    "cases/board_category_migration.json",
+    "cases/catalog_neighbors.json",
+    "cases/cooler_target_temperature.json",
+    "cases/crate_audit_discrepancy.json",
+    "cases/customer_timeline.json",
+    "cases/editorial_relationships.json",
+    "cases/extend_customer_records.json",
+    "cases/guest_bookings.json",
     "cases/help_center_search.json",
     "cases/projects_and_tasks.json",
-    "cases/stock_records.json",
-    "cases/customer_timeline.json",
-    "cases/catalog_neighbors.json",
-    "cases/extend_customer_records.json",
-    "cases/editorial_relationships.json",
     "cases/spanish_knowledge_base.json",
-    "cases/guest_bookings.json",
-    "cases/admiral_report_search.json"
+    "cases/stock_records.json",
+    "cases/workshop_shift_priority.json",
+    "pack_config.json",
+    "suite.json"
   ],
   "config": "pack_config.json"
 }

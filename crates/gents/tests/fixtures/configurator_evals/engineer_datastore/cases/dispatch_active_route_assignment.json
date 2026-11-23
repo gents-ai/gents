@@ -1,0 +1,565 @@
+{
+  "case_id": "dispatch-active-route-assignment",
+  "split": "validation",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type DispatchAssignment { order_id: String @index(unique: true) route: String }",
+      "type DispatchOrder { order_id: String @index(unique: true) dock: String }",
+      "type DispatchRoute { route: String @index(unique: true) active: Boolean }",
+      "type DispatchAssignmentImport { order_id: String @index(unique: true) route: String }"
+    ],
+    "documents": [
+      {
+        "collection": "DispatchAssignment",
+        "document": {
+          "order_id": "DO-40",
+          "route": "R-C"
+        }
+      },
+      {
+        "collection": "DispatchOrder",
+        "document": {
+          "order_id": "DO-10",
+          "dock": "north"
+        }
+      },
+      {
+        "collection": "DispatchOrder",
+        "document": {
+          "order_id": "DO-20",
+          "dock": "south"
+        }
+      },
+      {
+        "collection": "DispatchOrder",
+        "document": {
+          "order_id": "DO-30",
+          "dock": "south"
+        }
+      },
+      {
+        "collection": "DispatchOrder",
+        "document": {
+          "order_id": "DO-40",
+          "dock": "north"
+        }
+      },
+      {
+        "collection": "DispatchOrder",
+        "document": {
+          "order_id": "DO-50",
+          "dock": "north"
+        }
+      },
+      {
+        "collection": "DispatchRoute",
+        "document": {
+          "route": "R-A",
+          "active": true
+        }
+      },
+      {
+        "collection": "DispatchRoute",
+        "document": {
+          "route": "R-B",
+          "active": false
+        }
+      },
+      {
+        "collection": "DispatchRoute",
+        "document": {
+          "route": "R-C",
+          "active": true
+        }
+      },
+      {
+        "collection": "DispatchAssignmentImport",
+        "document": {
+          "order_id": "DO-10",
+          "route": "R-A"
+        }
+      },
+      {
+        "collection": "DispatchAssignmentImport",
+        "document": {
+          "order_id": "DO-20",
+          "route": "R-B"
+        }
+      },
+      {
+        "collection": "DispatchAssignmentImport",
+        "document": {
+          "order_id": "DO-30",
+          "route": "R-Z"
+        }
+      },
+      {
+        "collection": "DispatchAssignmentImport",
+        "document": {
+          "order_id": "DO-40",
+          "route": "R-A"
+        }
+      },
+      {
+        "collection": "DispatchAssignmentImport",
+        "document": {
+          "order_id": "DO-50",
+          "route": "R-A"
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "access",
+      "prompt": "I keep application records in DispatchAssignment, DispatchOrder, DispatchRoute and DispatchAssignmentImport. Enable your general read access only to those collections, and general create/update/delete access only to DispatchAssignment if your native tools support it. Keep shell execution off and leave all other collection permissions alone. Inspect the available fields before working with records.",
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "agents": {
+              "agents": "agents",
+              "contexts": "contexts",
+              "tools": "tools",
+              "expect": [
+                {
+                  "agent_did": "gents:agent-slot:engineer",
+                  "tools": [
+                    {
+                      "field": "host.bash.mode",
+                      "matches": "^(null|Off)$"
+                    },
+                    {
+                      "field": "datastore.write_collections",
+                      "equals": [
+                        "DispatchAssignment"
+                      ]
+                    },
+                    {
+                      "field": "datastore.defra_query_collections",
+                      "contains": "\"DispatchAssignment\""
+                    },
+                    {
+                      "field": "datastore.defra_query_collections",
+                      "contains": "\"DispatchOrder\""
+                    },
+                    {
+                      "field": "datastore.defra_query_collections",
+                      "contains": "\"DispatchRoute\""
+                    },
+                    {
+                      "field": "datastore.defra_query_collections",
+                      "contains": "\"DispatchAssignmentImport\""
+                    }
+                  ]
+                }
+              ]
+            },
+            "present": [
+              {
+                "capture": "DispatchAssignment",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "DispatchOrder",
+                "min": 5,
+                "max": 5
+              },
+              {
+                "capture": "DispatchRoute",
+                "min": 3,
+                "max": 3
+              },
+              {
+                "capture": "DispatchAssignmentImport",
+                "min": 5,
+                "max": 5
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name",
+            "context_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "contexts",
+          "collection": "AgentContext",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "context_id",
+            "tools_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "tools",
+          "collection": "Tools",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "tools_id",
+            "host",
+            "datastore"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "DispatchAssignment",
+          "collection": "DispatchAssignment",
+          "filter": {},
+          "fields": [
+            "order_id",
+            "route"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "DispatchOrder",
+          "collection": "DispatchOrder",
+          "filter": {},
+          "fields": [
+            "order_id",
+            "dock"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "DispatchRoute",
+          "collection": "DispatchRoute",
+          "filter": {},
+          "fields": [
+            "route",
+            "active"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "DispatchAssignmentImport",
+          "collection": "DispatchAssignmentImport",
+          "filter": {},
+          "fields": [
+            "order_id",
+            "route"
+          ]
+        }
+      ]
+    },
+    {
+      "stage_id": "apply",
+      "prompt": "Apply the DispatchAssignmentImport to create missing DispatchAssignment records for orders. Use a route ID only when DispatchRoute lists it as active. Keep any assignment already made, even if the import differs. Leave orders with retired or unknown routes unresolved and keep the source collections intact. Reply with one JSON object whose \"unresolved\" array lists those order IDs.",
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "bash",
+              "schema"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "DispatchAssignment",
+                "min": 3,
+                "max": 3
+              },
+              {
+                "capture": "DispatchOrder",
+                "min": 5,
+                "max": 5
+              },
+              {
+                "capture": "DispatchRoute",
+                "min": 3,
+                "max": 3
+              },
+              {
+                "capture": "DispatchAssignmentImport",
+                "min": 5,
+                "max": 5
+              }
+            ],
+            "rows": [
+              {
+                "capture": "DispatchAssignment",
+                "key": "order_id",
+                "id": "DO-40",
+                "expect": [
+                  {
+                    "field": "route",
+                    "equals": "R-C"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchAssignment",
+                "key": "order_id",
+                "id": "DO-10",
+                "expect": [
+                  {
+                    "field": "route",
+                    "equals": "R-A"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchAssignment",
+                "key": "order_id",
+                "id": "DO-50",
+                "expect": [
+                  {
+                    "field": "route",
+                    "equals": "R-A"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchOrder",
+                "key": "order_id",
+                "id": "DO-10",
+                "expect": [
+                  {
+                    "field": "dock",
+                    "equals": "north"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchOrder",
+                "key": "order_id",
+                "id": "DO-20",
+                "expect": [
+                  {
+                    "field": "dock",
+                    "equals": "south"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchOrder",
+                "key": "order_id",
+                "id": "DO-30",
+                "expect": [
+                  {
+                    "field": "dock",
+                    "equals": "south"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchOrder",
+                "key": "order_id",
+                "id": "DO-40",
+                "expect": [
+                  {
+                    "field": "dock",
+                    "equals": "north"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchOrder",
+                "key": "order_id",
+                "id": "DO-50",
+                "expect": [
+                  {
+                    "field": "dock",
+                    "equals": "north"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchRoute",
+                "key": "route",
+                "id": "R-A",
+                "expect": [
+                  {
+                    "field": "active",
+                    "equals": true
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchRoute",
+                "key": "route",
+                "id": "R-B",
+                "expect": [
+                  {
+                    "field": "active",
+                    "equals": false
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchRoute",
+                "key": "route",
+                "id": "R-C",
+                "expect": [
+                  {
+                    "field": "active",
+                    "equals": true
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchAssignmentImport",
+                "key": "order_id",
+                "id": "DO-10",
+                "expect": [
+                  {
+                    "field": "route",
+                    "equals": "R-A"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchAssignmentImport",
+                "key": "order_id",
+                "id": "DO-20",
+                "expect": [
+                  {
+                    "field": "route",
+                    "equals": "R-B"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchAssignmentImport",
+                "key": "order_id",
+                "id": "DO-30",
+                "expect": [
+                  {
+                    "field": "route",
+                    "equals": "R-Z"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchAssignmentImport",
+                "key": "order_id",
+                "id": "DO-40",
+                "expect": [
+                  {
+                    "field": "route",
+                    "equals": "R-A"
+                  }
+                ]
+              },
+              {
+                "capture": "DispatchAssignmentImport",
+                "key": "order_id",
+                "id": "DO-50",
+                "expect": [
+                  {
+                    "field": "route",
+                    "equals": "R-A"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\"unresolved\"\\s*:\\s*\\[\\s*(?:\"DO-20\"\\s*,\\s*\"DO-30\"|\"DO-30\"\\s*,\\s*\"DO-20\")\\s*\\]"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "DispatchAssignment",
+          "collection": "DispatchAssignment",
+          "filter": {},
+          "fields": [
+            "order_id",
+            "route"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "DispatchOrder",
+          "collection": "DispatchOrder",
+          "filter": {},
+          "fields": [
+            "order_id",
+            "dock"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "DispatchRoute",
+          "collection": "DispatchRoute",
+          "filter": {},
+          "fields": [
+            "route",
+            "active"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "DispatchAssignmentImport",
+          "collection": "DispatchAssignmentImport",
+          "filter": {},
+          "fields": [
+            "order_id",
+            "route"
+          ]
+        }
+      ]
+    }
+  ]
+}

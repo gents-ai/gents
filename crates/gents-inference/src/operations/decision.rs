@@ -208,8 +208,10 @@ pub fn backend_update_decision(
 }
 
 fn is_local_server(backend: &InferenceBackend) -> bool {
-    backend.provider_kind == BackendProviderKind::OpenAiCompatible
-        && matches!(backend.auth, BackendAuth::Unauthenticated)
+    matches!(
+        backend.provider_kind,
+        BackendProviderKind::OpenAiCompatible | BackendProviderKind::Vllm
+    ) && matches!(backend.auth, BackendAuth::Unauthenticated)
 }
 
 /// Lean `InferenceOperations.backendCreateDecision`.

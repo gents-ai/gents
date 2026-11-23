@@ -199,6 +199,7 @@ async fn run_split(
         }],
         profiles: vec![(PILOT_CELL.to_owned(), init.profile.clone())],
         split,
+        cases: Vec::new(),
         trials: 1,
         seed_base: 1000,
         concurrency: 1,
@@ -207,6 +208,7 @@ async fn run_split(
         max_infra_retries: 1,
         registry: None,
         json: false,
+        host_bash: Default::default(),
         scope: EvalScopeArgs::default(),
     };
     let (request, _packs) = run_request(ctx, &args).await?;

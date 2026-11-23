@@ -1532,7 +1532,7 @@ async fn an_agent_the_review_did_not_name_is_not_granted_through_another_packs_t
     let source = resolve_pack_source(unloadable.path().to_str().unwrap(), None, home.path())
         .await
         .unwrap();
-    assert!(super::wire::listed_root_agents(&source, "did:key:node").is_err());
+    assert!(gents_pack::pack::listed_root_agents(&source, "did:key:node").is_err());
 }
 
 /// An agent binding is an argument of the install it is given to, and its

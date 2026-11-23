@@ -1,0 +1,12 @@
+{
+  "id": "engineer-context",
+  "title": "Engineer context",
+  "coverage": [
+    "context budget read before bulk work",
+    "trimmed history outputs counted from context_budget",
+    "a stubbed earlier tool result recovered through sessions after its source is gone",
+    "a recovered output paged past its first page",
+    "files longer than the read cap read past the cap"
+  ],
+  "subject": "engineer_full"
+}
