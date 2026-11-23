@@ -17,6 +17,8 @@ pub use archive::set_session_archived_on;
 mod compaction_entries;
 mod control;
 pub mod fork;
+#[cfg(test)]
+mod fork_publication_tests;
 mod history;
 #[cfg(test)]
 mod model_test_support;
@@ -60,9 +62,9 @@ pub use crate::tool_call::query::result::{
 #[cfg(test)]
 pub(crate) use compaction_entries::load_prompt_compaction_state;
 pub use compaction_entries::load_prompt_compaction_state_with_access;
-pub use compaction_entries::StaleCompactionGeneration;
 pub use compaction_entries::{compaction_key, load_compaction_entries};
 pub use compaction_entries::{save_exact_compaction_entry, NewExactSessionCompaction};
+pub use compaction_entries::{CompactionCursorNamesNoMessage, StaleCompactionGeneration};
 #[cfg(test)]
 pub(crate) use control::stage_session_resume_in_txn;
 pub use control::{

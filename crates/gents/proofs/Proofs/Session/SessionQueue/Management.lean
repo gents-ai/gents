@@ -2,34 +2,18 @@ import Proofs.Session.SessionQueue.Properties.Coalescing
 
 namespace SessionQueue
 
-def steersInto (active candidate : QueueEntry) : Prop :=
-  candidate.fresh = true ∧ candidate.delivery = .steer ∧ candidate.policy = .append ∧
-  (candidate.source = .user ∨ candidate.source = .steering) ∧
-  candidate.origin = .interactive ∧ candidate.requester = active.requester ∧
-  candidate.turnContext = active.turnContext ∧
-  candidate.goalAssignment = active.goalAssignment
-
-instance (active candidate : QueueEntry) : Decidable (steersInto active candidate) := by
-  unfold steersInto
-  infer_instance
-
-def steeringRun (active : QueueEntry) (admitted : List RequestId) :
-    List QueueEntry → List QueueEntry
-  | [] => []
-  | entry :: rest =>
-      if steersInto active entry ∧ entry.requestId ∈ admitted then
-        entry :: steeringRun active admitted rest
-      else []
-
 /-- The native execution owner supplies the exact active row and generation;
-this operation grants no lease. -/
+this operation grants no lease. Intake takes the steers the active turn may
+take, passing ordinary queued turns without moving them
+(`steeringRun_head_is_boundaryCandidate`). -/
 def intakeSteering? (target : AgentSession.Scope) (pre : SessionQueueState)
     (active : QueueEntry) (admitted : List RequestId) (safeBoundary : Bool) :
     Option SessionQueueState :=
   if pre.scope = target ∧ pre.active = some active.requestId ∧
       pre.folding = [] ∧ safeBoundary then
-    let selected := steeringRun active admitted pre.pending
-    some { pre with folding := selected, pending := pre.pending.drop selected.length }
+    some { pre with
+      folding := steeringRun active admitted pre.pending
+      pending := steeringRest active admitted pre.pending }
   else none
 
 def replacementDeliveryAllowed (before after : QueueDelivery) : Prop :=
@@ -49,13 +33,13 @@ theorem queued_delivery_can_be_promoted :
 
 /-- The active request and already-consumed input cannot be edited; selection is
 provisional until authored consumption (an edit invalidates it and restores the
-remaining order). The caller is the authenticated acting principal. Queue rows
+remaining created order). The caller is the authenticated acting principal. Queue rows
 retain canonical session requester provenance independently of that caller;
 native ACP decides whether the caller may edit them. -/
 def replacementAllowed (target : AgentSession.Scope) (pre : SessionQueueState)
     (caller : Option Nat) (expected : List RequestId) (offset count : Nat)
     (replacements : List QueueEntry) : Bool :=
-  let pending := pre.folding ++ pre.pending
+  let pending := pre.queued
   let old := (pending.drop offset).take count
   let fresh := replacements.map (·.requestId)
   decide (pre.scope = target) && decide (pending.map (·.requestId) = expected) &&
@@ -78,7 +62,7 @@ def replacementAllowed (target : AgentSession.Scope) (pre : SessionQueueState)
 def replacePendingGroup? (target : AgentSession.Scope) (pre : SessionQueueState)
     (caller : Option Nat) (expected : List RequestId) (offset count : Nat)
     (replacements : List QueueEntry) : Option SessionQueueState :=
-  let pending := pre.folding ++ pre.pending
+  let pending := pre.queued
   let old := (pending.drop offset).take count
   if replacementAllowed target pre caller expected offset count replacements then
     some { pre with
@@ -102,20 +86,34 @@ theorem unsafe_boundary_refuses (target : AgentSession.Scope) (pre : SessionQueu
     intakeSteering? target pre active admitted false = none := by
   simp [intakeSteering?]
 
-theorem queue_delivery_is_barrier (active entry : QueueEntry) (rest : List QueueEntry)
-    (admitted : List RequestId) (h : entry.delivery = .queue) :
+theorem queue_delivery_is_passed (active entry : QueueEntry) (rest : List QueueEntry)
+    (admitted : List RequestId) (h_queue : entry.delivery = .queue)
+    (h_policy : entry.policy = .append) (h_source : entry.appendWellFormed)
+    (h_origin : entry.origin = .interactive) :
+    steeringRun active admitted (entry :: rest) = steeringRun active admitted rest ∧
+      steeringRest active admitted (entry :: rest) = entry :: steeringRest active admitted rest := by
+  have h : boundaryKind active admitted entry = .queued := by
+    simp [boundaryKind, h_queue, h_policy, h_source, h_origin]
+  simp [steeringRun, steeringRest, h]
+
+private theorem steer_barrier (active entry : QueueEntry) (rest : List QueueEntry)
+    (admitted : List RequestId) (h_steer : entry.delivery = .steer)
+    (h_not : ¬ steersInto active entry) :
     steeringRun active admitted (entry :: rest) = [] := by
-  simp [steeringRun, steersInto, h]
+  have h : boundaryKind active admitted entry = .blocked := by
+    simp [boundaryKind, h_steer, h_not]
+  simp [steeringRun, h]
 
 theorem stale_input_is_barrier (active entry : QueueEntry) (rest : List QueueEntry)
-    (admitted : List RequestId) (h : entry.fresh = false) :
-    steeringRun active admitted (entry :: rest) = [] := by
-  simp [steeringRun, steersInto, h]
+    (admitted : List RequestId) (h_steer : entry.delivery = .steer) (h : entry.fresh = false) :
+    steeringRun active admitted (entry :: rest) = [] :=
+  steer_barrier active entry rest admitted h_steer (by simp [steersInto, h])
 
 theorem different_assignment_is_barrier (active entry : QueueEntry) (rest : List QueueEntry)
-    (admitted : List RequestId) (different : entry.goalAssignment ≠ active.goalAssignment) :
-    steeringRun active admitted (entry :: rest) = [] := by
-  simp [steeringRun, steersInto, different]
+    (admitted : List RequestId) (h_steer : entry.delivery = .steer)
+    (different : entry.goalAssignment ≠ active.goalAssignment) :
+    steeringRun active admitted (entry :: rest) = [] :=
+  steer_barrier active entry rest admitted h_steer (by simp [steersInto, different])
 
 theorem replacement_preserves_active_and_invalidates_selection
     {target : AgentSession.Scope} {pre post : SessionQueueState}
@@ -130,30 +128,36 @@ theorem replacement_preserves_active_and_invalidates_selection
     exact ⟨rfl, rfl⟩
   · contradiction
 
-theorem steeringRun_append_drop (active : QueueEntry) (admitted : List RequestId)
-    (entries : List QueueEntry) :
-    steeringRun active admitted entries ++
-      entries.drop (steeringRun active admitted entries).length = entries := by
-  induction entries with
-  | nil => rfl
-  | cons entry rest ih =>
-      by_cases h : steersInto active entry ∧ entry.requestId ∈ admitted
-      · simp only [steeringRun, h, and_self, ↓reduceIte, List.length_cons, List.drop_succ_cons,
-          List.cons_append, ih]
-      · simp [steeringRun, h]
-
+/-- Intake only moves entries between the queue and the selection. -/
 theorem intake_preserves_queue {target : AgentSession.Scope} {pre post : SessionQueueState}
     {active : QueueEntry} {admitted : List RequestId} {safe : Bool}
     (h : intakeSteering? target pre active admitted safe = some post) :
-    post.folding ++ post.pending = pre.folding ++ pre.pending ∧
+    (post.folding ++ post.pending).Perm (pre.folding ++ pre.pending) ∧
       post.active = pre.active ∧ post.terminal = pre.terminal := by
   unfold intakeSteering? at h
   split at h
   · rename_i hc
     cases h
     refine ⟨?_, rfl, rfl⟩
-    rw [hc.2.2.1]
-    exact steeringRun_append_drop active admitted pre.pending
+    rw [hc.2.2.1, List.nil_append]
+    exact steeringRun_append_rest_perm active admitted pre.pending
+  · contradiction
+
+theorem intake_preserves_queueOrdered {target : AgentSession.Scope} {pre post : SessionQueueState}
+    {active : QueueEntry} {admitted : List RequestId} {safe : Bool}
+    (h : intakeSteering? target pre active admitted safe = some post)
+    (h_order : QueueOrdered pre) : QueueOrdered post := by
+  unfold intakeSteering? at h
+  split at h
+  · rename_i hc
+    cases h
+    have h_pend := h_order.2.1
+    exact ⟨createdOrdered_sublist (steeringRun_sublist _ _ _) h_pend,
+      createdOrdered_sublist (steeringRest_sublist _ _ _) h_pend,
+      fun _ => ⟨active, hc.2.1, fun folded hfolded => (steeringRun_steers hfolded).1⟩,
+      fun kept hkept folded hfolded hlt =>
+        steeringRest_before_selected_is_queued active admitted pre.pending h_pend
+          kept hkept folded hfolded hlt⟩
   · contradiction
 
 private theorem orderKeys_of_zip {old fresh : List QueueEntry}
@@ -188,11 +192,11 @@ theorem replacementAllowed_facts {target : AgentSession.Scope} {pre : SessionQue
     {caller : Option Nat} {expected : List RequestId} {offset count : Nat}
     {replacements : List QueueEntry}
     (h : replacementAllowed target pre caller expected offset count replacements = true) :
-    (((pre.folding ++ pre.pending).drop offset).take count).length = count ∧
+    ((pre.queued.drop offset).take count).length = count ∧
       (replacements = [] ∨ replacements.length = count) ∧
       (replacements.map (·.requestId)).Nodup ∧
       (∀ r ∈ replacements, RequestIdFresh pre r ∧ r.policy = .append) ∧
-      (∀ p ∈ (((pre.folding ++ pre.pending).drop offset).take count).zip replacements,
+      (∀ p ∈ ((pre.queued.drop offset).take count).zip replacements,
         p.2.orderKey = p.1.orderKey) := by
   simp only [replacementAllowed, Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true] at h
   obtain ⟨⟨⟨⟨⟨⟨⟨⟨⟨_, _⟩, _⟩, hlen⟩, _⟩, _⟩, hcount⟩, hnodup⟩, hfresh⟩, hzip⟩ := h
@@ -254,11 +258,11 @@ theorem replace_shape {target : AgentSession.Scope} {pre post : SessionQueueStat
     {replacements : List QueueEntry}
     (h : replacePendingGroup? target pre caller expected offset count replacements = some post) :
     replacementAllowed target pre caller expected offset count replacements = true ∧
-      post.folding ++ post.pending = (pre.folding ++ pre.pending).take offset ++
-        (replacements ++ (pre.folding ++ pre.pending).drop (offset + count)) ∧
+      post.folding ++ post.pending = pre.queued.take offset ++
+        (replacements ++ pre.queued.drop (offset + count)) ∧
       post.active = pre.active ∧
       post.terminal = pre.terminal ∪
-        ((((pre.folding ++ pre.pending).drop offset).take count).map (·.requestId)).toFinset := by
+        (((pre.queued.drop offset).take count).map (·.requestId)).toFinset := by
   unfold replacePendingGroup? at h
   simp only at h
   split at h
@@ -279,19 +283,25 @@ theorem replace_preserves_createdOrdered {target : AgentSession.Scope}
     {pre post : SessionQueueState} {caller : Option Nat} {expected : List RequestId}
     {offset count : Nat} {replacements : List QueueEntry}
     (h : replacePendingGroup? target pre caller expected offset count replacements = some post)
-    (h_order : CreatedOrdered (pre.folding ++ pre.pending)) :
-    CreatedOrdered (post.folding ++ post.pending) := by
+    (h_order : QueueOrdered pre) :
+    QueueOrdered post := by
   obtain ⟨h_allowed, h_shape, -, -⟩ := replace_shape h
   obtain ⟨h_len, h_count, -, -, h_zip⟩ := replacementAllowed_facts h_allowed
-  rw [h_shape]
-  set pending := pre.folding ++ pre.pending
-  rcases h_count with rfl | h_count
-  · apply createdOrdered_sublist _ h_order
-    conv => rhs; rw [← take_group_drop pending offset count]
-    exact List.Sublist.append_left (List.sublist_append_right _ _) _
-  · apply createdOrdered_of_orderKeys _ h_order
-    conv => rhs; rw [← take_group_drop pending offset count]
-    simp only [List.map_append, orderKeys_of_zip (h_len.trans h_count.symm) h_zip]
+  have h_empty := (replacement_preserves_active_and_invalidates_selection h).2
+  have h_queued := queueOrdered_queued h_order
+  have h_pending : CreatedOrdered post.pending := by
+    have h_all : post.pending = post.folding ++ post.pending := by rw [h_empty, List.nil_append]
+    rw [h_all, h_shape]
+    set pending := pre.queued
+    rcases h_count with rfl | h_count
+    · apply createdOrdered_sublist _ h_queued
+      conv => rhs; rw [← take_group_drop pending offset count]
+      exact List.Sublist.append_left (List.sublist_append_right _ _) _
+    · apply createdOrdered_of_orderKeys _ h_queued
+      conv => rhs; rw [← take_group_drop pending offset count]
+      simp only [List.map_append, orderKeys_of_zip (h_len.trans h_count.symm) h_zip]
+  refine ⟨by rw [h_empty]; simp [CreatedOrdered], h_pending, fun hne => absurd h_empty hne,
+    fun _ _ folded hfolded => by simp [h_empty] at hfolded⟩
 
 theorem replace_preserves_uniqueCoalescedQueueKeys {target : AgentSession.Scope}
     {pre post : SessionQueueState} {caller : Option Nat} {expected : List RequestId}
@@ -301,10 +311,11 @@ theorem replace_preserves_uniqueCoalescedQueueKeys {target : AgentSession.Scope}
     UniqueCoalescedQueueKeys (post.folding ++ post.pending) := by
   obtain ⟨h_allowed, h_shape, -, -⟩ := replace_shape h
   obtain ⟨-, -, -, h_fresh, -⟩ := replacementAllowed_facts h_allowed
+  have h_queued := uniqueCoalescedQueueKeys_perm (queued_perm pre).symm h_unique
   rw [h_shape]
   apply uniqueCoalesced_insert_append _ (fun r hr => (h_fresh r hr).2)
-  apply uniqueCoalescedQueueKeys_sublist _ h_unique
-  conv => rhs; rw [← take_group_drop (pre.folding ++ pre.pending) offset count]
+  apply uniqueCoalescedQueueKeys_sublist _ h_queued
+  conv => rhs; rw [← take_group_drop pre.queued offset count]
   exact List.Sublist.append_left (List.sublist_append_right _ _) _
 
 inductive ManagedStep : SessionQueueState → SessionQueueState → Prop where
@@ -321,9 +332,9 @@ abbrev ManagedTrace := Relation.ReflTransGen ManagedStep
 
 theorem managed_trace_preserves_queue_invariants {pre post : SessionQueueState}
     (h_trace : ManagedTrace pre post)
-    (h_order : CreatedOrdered (pre.folding ++ pre.pending))
+    (h_order : QueueOrdered pre)
     (h_unique : UniqueCoalescedQueueKeys (pre.folding ++ pre.pending)) :
-    CreatedOrdered (post.folding ++ post.pending) ∧
+    QueueOrdered post ∧
       UniqueCoalescedQueueKeys (post.folding ++ post.pending) ∧
       pre.terminal ⊆ post.terminal := by
   induction h_trace with
@@ -337,7 +348,8 @@ theorem managed_trace_preserves_queue_invariants {pre post : SessionQueueState}
             h_terminal.trans (terminal_history_monotonic h)⟩
       | intake h =>
           obtain ⟨h_queue, -, h_term⟩ := intake_preserves_queue h
-          exact ⟨h_queue ▸ h_order', h_queue ▸ h_unique', h_term ▸ h_terminal⟩
+          exact ⟨intake_preserves_queueOrdered h h_order',
+            uniqueCoalescedQueueKeys_perm h_queue.symm h_unique', h_term ▸ h_terminal⟩
       | replace h =>
           obtain ⟨-, -, -, h_term⟩ := replace_shape h
           exact ⟨replace_preserves_createdOrdered h h_order',

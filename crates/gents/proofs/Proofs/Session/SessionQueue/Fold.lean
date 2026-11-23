@@ -115,7 +115,7 @@ theorem consume_terminalizes_next {pre post : SessionQueueState}
 
 theorem finish_returns_unconsumed {pre post : SessionQueueState}
     (h_step : step? pre .finishActive = some post) :
-    post.pending = pre.folding ++ pre.pending ∧ post.folding = [] ∧ post.active = none := by
+    post.pending = pre.queued ∧ post.folding = [] ∧ post.active = none := by
   simp only [step?] at h_step
   split at h_step
   · cases h_step
@@ -123,13 +123,18 @@ theorem finish_returns_unconsumed {pre post : SessionQueueState}
   · contradiction
 
 theorem early_finish_restores_queue (s : SessionQueueState) (entry : QueueEntry)
-    (rest : List QueueEntry) (admitted : List RequestId) :
+    (rest : List QueueEntry) (admitted : List RequestId) (h_order : CreatedOrdered rest) :
     ((s.claimFolding entry rest admitted).finishActive entry.requestId).pending = rest ∧
       ((s.claimFolding entry rest admitted).finishActive entry.requestId).terminal =
         insert entry.requestId s.terminal := by
   constructor
-  · simp only [SessionQueueState.finishActive]
-    exact claimFolding_pending_suffix s entry rest admitted
+  · have h_split := claimFolding_pending_suffix s entry rest admitted
+    have h_order' := h_order
+    rw [← h_split] at h_order'
+    have h_le := createdOrdered_append_le h_order'
+    show mergeCreated _ _ = rest
+    rw [mergeCreated, List.merge_of_le (fun a b ha hb => by simpa [createdLe] using h_le a ha b hb)]
+    exact h_split
   · rfl
 
 theorem append_after_claim_waits {pre post : SessionQueueState} {entry : QueueEntry}

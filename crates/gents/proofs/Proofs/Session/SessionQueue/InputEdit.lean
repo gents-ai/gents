@@ -410,8 +410,8 @@ theorem managed_step_preserves_recorded {pre post : SessionQueueState} {id : Req
         | finish_active _ hp =>
             subst hp
             simp only [List.mem_append] at hx
-            simp only [SessionQueueState.finishActive, List.mem_append, List.nil_append]
-            right; left; exact hx
+            simp only [SessionQueueState.finishActive]
+            right; left; exact mem_queued.mpr hx
         | @drain_automated source key _ hp =>
             subst hp
             simp only [List.mem_append] at hx
@@ -433,13 +433,13 @@ theorem managed_step_preserves_recorded {pre post : SessionQueueState} {id : Req
               · exact Or.inr (Or.inr (Or.inl (Or.inr h)))
     | intake h =>
         have h_same := (intake_preserves_queue h).1
-        have hx' : x ∈ _ := h_same ▸ hx
+        have hx' := h_same.mem_iff.mpr hx
         simp only [List.mem_append] at hx'
         tauto
     | @replace _ _ _ _ _ offset count _ h =>
         obtain ⟨-, h_shape, -, h_term⟩ := replace_shape h
-        have hx' := hx
-        rw [← take_group_drop (pre.folding ++ pre.pending) offset count] at hx'
+        have hx' := (queued_perm pre).mem_iff.mpr hx
+        rw [← take_group_drop pre.queued offset count] at hx'
         simp only [List.mem_append] at hx'
         rcases hx' with hx' | hx' | hx'
         · have : x ∈ post.folding ++ post.pending := by rw [h_shape]; simp [hx']

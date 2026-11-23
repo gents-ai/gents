@@ -1,6 +1,7 @@
 import Proofs.Session.AgentSession
 import Proofs.Session.CanonicalOutput.Message
 import Proofs.Session.CanonicalOutput.Hydration
+import Proofs.Session.Compaction.Cursor
 import Mathlib.Data.List.Basic
 import Mathlib.Data.List.Dedup
 
@@ -162,7 +163,8 @@ def validChain (session : SessionId) : Nat → Option Nat → List Compaction �
 
 def cursorPrefixesExist (history : History) : Bool :=
   history.compactions.all fun cursor =>
-    history.messages.any (·.sequence == cursor.throughSequence)
+    _root_.Compaction.Cursor.namesStoredMessage (history.messages.map (·.sequence))
+      cursor.throughSequence
 
 def allInSession (history : History) (session : SessionId) : Bool :=
   history.messages.all (·.header.session == session) &&
@@ -296,7 +298,8 @@ theorem published_cursor_names_child_message
       simp_all [structurallyValid]
     · contradiction
   simp only [cursorPrefixesExist, List.all_eq_true] at hvalid
-  simpa only [List.any_eq_true, beq_iff_eq] using hvalid cursor hcursor
+  have hnames := (_root_.Compaction.Cursor.namesStoredMessage_iff _ _).mp (hvalid cursor hcursor)
+  simpa only [List.mem_map] using hnames
 
 theorem publish_postconditions
     (source : History) (parent child : AgentSession.Scope)
