@@ -353,6 +353,31 @@ async fn every_installed_trial_agent_can_read_its_operational_collections() {
     home.node.shutdown().await.unwrap();
 }
 
+#[test]
+fn the_trial_seed_is_sampled_only_on_a_wire_that_takes_one() {
+    for (provider, wire, seeded) in [
+        ("OpenAiCompatible", "chat_completions", true),
+        ("Vllm", "chat_completions", true),
+        ("OpenAiCompatible", "responses", false),
+        ("ChatGptCodex", "responses", false),
+    ] {
+        let mut binding = frozen_binding(json!("frozen-profile"));
+        binding.backend["provider_kind"] = json!(provider);
+        binding.backend["openai_wire_api"] = json!(wire);
+        let plan = inference_plan(&binding, "t1", "did:key:trial").unwrap();
+        let sampling = plan
+            .documents()
+            .iter()
+            .find(|document| document.collection == Collection::InferenceSampling)
+            .unwrap();
+        assert_eq!(
+            sampling.add["seed"],
+            if seeded { json!(7) } else { Value::Null },
+            "{provider} {wire}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn installing_a_pack_binds_its_inference_slot_to_the_frozen_profile() {
     let dir = tempfile::tempdir().unwrap();

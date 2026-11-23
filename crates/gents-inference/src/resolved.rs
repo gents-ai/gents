@@ -252,6 +252,18 @@ pub fn validate_service_tier(
     Ok(())
 }
 
+/// Chat Completions on an OpenAI-compatible server and OpenRouter take a
+/// sampling `seed`; Responses, Messages and the subscription transports do not.
+pub fn supports_sampling_seed(provider: BackendProviderKind, wire: OpenAiWireApi) -> bool {
+    matches!(
+        (provider, wire),
+        (
+            BackendProviderKind::OpenAiCompatible | BackendProviderKind::Vllm,
+            OpenAiWireApi::ChatCompletions
+        ) | (BackendProviderKind::OpenRouter, _)
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MaxTurnsProvenance {
     Default,
@@ -320,13 +332,7 @@ impl SamplingConfig {
         if seed < 0 {
             anyhow::bail!("sampling seed must be non-negative");
         }
-        if !matches!(
-            (provider_kind, openai_wire_api),
-            (
-                BackendProviderKind::OpenAiCompatible,
-                OpenAiWireApi::ChatCompletions
-            ) | (BackendProviderKind::OpenRouter, _)
-        ) {
+        if !supports_sampling_seed(provider_kind, openai_wire_api) {
             anyhow::bail!(
                 "sampling seed is unsupported by provider {} on the {} wire",
                 provider_kind,

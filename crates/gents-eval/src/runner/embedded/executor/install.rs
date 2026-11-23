@@ -425,7 +425,16 @@ fn inference_plan(
         })?,
     };
     own(&mut sampling, "InferenceSampling", node_did)?;
-    object(&mut sampling, "InferenceSampling")?.insert("seed".to_string(), json!(binding.seed));
+    let wire = gents_inference::backends::registry::backend_fields(
+        &serde_json::from_value(backend.clone())
+            .context("the trial's InferenceBackend document is invalid")?,
+    );
+    if gents_inference::resolved::supports_sampling_seed(
+        wire.backend_provider_kind,
+        wire.openai_wire_api,
+    ) {
+        object(&mut sampling, "InferenceSampling")?.insert("seed".to_string(), json!(binding.seed));
+    }
     let sampling_id = sampling
         .get("sampling_id")
         .and_then(Value::as_str)

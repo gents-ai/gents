@@ -46,6 +46,7 @@ impl MockModelEndpoint {
             .route("/key", get(handle_key))
             .route("/v1/chat/completions", post(handle_chat))
             .route("/chat/completions", post(handle_chat))
+            .route("/v1/responses", post(handle_responses))
             .fallback(handle_fallback)
             .with_state(state);
 
@@ -212,6 +213,60 @@ async fn handle_chat(
         }
     });
     json_response(StatusCode::OK, completion.to_string())
+}
+
+async fn handle_responses(
+    State(state): State<MockState>,
+    uri: Uri,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    record(&state, "POST", uri.path(), &headers, body);
+    if !bearer_authorized(&state, &headers) {
+        return unauthorized();
+    }
+    let message = json!({
+        "type": "message", "id": "msg_1", "role": "assistant", "status": "completed",
+        "content": [{"type": "output_text", "text": "mock response", "annotations": []}],
+    });
+    let events = [
+        json!({
+            "type": "response.output_text.delta", "item_id": "msg_1", "output_index": 0,
+            "content_index": 0, "sequence_number": 1, "delta": "mock response",
+        }),
+        json!({
+            "type": "response.output_item.done", "output_index": 0, "sequence_number": 2,
+            "item": message,
+        }),
+        json!({
+            "type": "response.completed", "sequence_number": 3,
+            "response": {
+                "id": "resp_1", "object": "response", "created_at": 1, "status": "completed",
+                "error": null, "incomplete_details": null, "instructions": null,
+                "max_output_tokens": null, "model": state.model_name, "output": [message],
+                "usage": {
+                    "input_tokens": 10, "input_tokens_details": {"cached_tokens": 0},
+                    "output_tokens": 2, "output_tokens_details": {"reasoning_tokens": 0},
+                    "total_tokens": 12,
+                },
+            },
+        }),
+    ];
+    let sse: String = events
+        .iter()
+        .map(|event| {
+            format!(
+                "event: {}\ndata: {event}\n\n",
+                event["type"].as_str().unwrap()
+            )
+        })
+        .collect();
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/event-stream")],
+        sse,
+    )
+        .into_response()
 }
 
 async fn handle_fallback(State(state): State<MockState>, uri: Uri, headers: HeaderMap) -> Response {

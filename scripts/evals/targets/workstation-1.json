@@ -4,7 +4,7 @@
     {
       "backend_id": "workstation-1",
       "name": "workstation-1 vLLM",
-      "provider_kind": "OpenAiCompatible",
+      "provider_kind": "Vllm",
       "openai_wire_api": "chat_completions",
       "endpoint": "http://workstation-1:8000/v1",
       "auth": { "kind": "unauthenticated" },
