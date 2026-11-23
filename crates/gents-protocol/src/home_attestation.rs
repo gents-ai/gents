@@ -167,7 +167,9 @@ impl HomeStatement {
                 genesis.unwrap_or_default(),
                 if provider_time.is_some() { "1" } else { "0" },
                 provider_time.as_deref().unwrap_or_default(),
-            ].into_iter().chain(publisher),
+            ]
+            .into_iter()
+            .chain(publisher),
         )
     }
 
@@ -299,9 +301,12 @@ mod household_tests {
             .get("publisher_node")
             .is_none());
         status["client_authentication"]["publisher_node"] = "device-node".into();
+        let shared = HomeStatement::of_status(&status, &nonce).signing_payload();
+        assert_ne!(shared, original.signing_payload());
+        status["client_authentication"]["publisher_node"] = "another-device-node".into();
         assert_ne!(
             HomeStatement::of_status(&status, &nonce).signing_payload(),
-            original.signing_payload()
+            shared
         );
     }
 }
