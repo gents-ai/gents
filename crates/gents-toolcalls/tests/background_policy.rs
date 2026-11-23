@@ -15,6 +15,9 @@ use gents_toolcalls::test_support::background_hook::{
 struct NamedPendingTool(String);
 
 impl ToolDyn for NamedPendingTool {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         self.0.clone()
     }
@@ -41,6 +44,9 @@ impl ToolDyn for NamedPendingTool {
 struct NoisyTool(String);
 
 impl ToolDyn for NoisyTool {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         self.0.clone()
     }

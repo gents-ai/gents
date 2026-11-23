@@ -1,7 +1,8 @@
 use super::support::*;
 use super::*;
+use crate::goal::blocked_turn::permit_recorded;
 use gents_documents::read_desired_state_record_in_txn;
-use gents_loop::provider_limit::{persisted_failure_reason, ProviderLimitHeaders};
+use gents_loop::provider_limit::ProviderLimitHeaders;
 use gents_store::collection::Collection;
 use gents_store::config_client::ConfigAccess;
 use serde_json::json;
@@ -118,10 +119,11 @@ fn usage_limit() -> String {
         Utc::now(),
     )
     .annotate(body);
-    persisted_failure_reason(
+    permit_recorded(
         &format!("Claude Messages HTTP 429 Too Many Requests body={annotated}"),
         Utc::now(),
     )
+    .0
 }
 
 #[tokio::test]

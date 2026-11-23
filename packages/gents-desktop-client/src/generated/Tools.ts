@@ -16,4 +16,9 @@ export type Tools = { tools_id: string, node_did: string, display_name?: string 
 /**
  * Optional UI/discovery labels. References, never tags, determine execution.
  */
-tags?: Array<string> | null, };
+tags?: Array<string> | null,
+/**
+ * Granted tools whose definitions the model is not sent; `script`
+ * lists, describes and calls them. Hiding grants nothing.
+ */
+hidden_tool_names?: Array<string> | null, };

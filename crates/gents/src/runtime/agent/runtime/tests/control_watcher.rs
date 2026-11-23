@@ -86,7 +86,8 @@ where
     }
 }
 
-const TEST_CONTROL_WATCHER_TIMING: ControlWatcherTiming = ControlWatcherTiming {
+pub(super) const TEST_CONTROL_WATCHER_TIMING: ControlWatcherTiming = ControlWatcherTiming {
+    publication_wait: Duration::from_secs(60),
     debounce: Duration::from_millis(20),
     local_debounce: Duration::from_millis(20),
     settle_retry: Duration::from_millis(10),

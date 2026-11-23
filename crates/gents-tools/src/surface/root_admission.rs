@@ -745,9 +745,9 @@ pub(crate) fn reader_grant_step(
             },
         ),
     };
-    let target_guidance = home.is_none().then_some(
-        "Add --home with this node's home when running against a node other than your default one.",
-    );
+    let target_guidance = home
+        .is_none()
+        .then_some(gents_protocol::node_readiness::TARGET_GUIDANCE);
     serde_json::json!({
         "target_guidance": target_guidance,
         "state": if known_missing { "waiting_for_user" } else { "requires_user_grant" },

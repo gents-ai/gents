@@ -1,0 +1,3 @@
+---- MODULE MCPluginSurfacePublicationNoWait ----
+EXTENDS PluginSurfacePublication
+====

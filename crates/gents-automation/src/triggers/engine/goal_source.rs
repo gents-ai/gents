@@ -914,19 +914,7 @@ impl GoalSource {
             |txn| Box::pin(last_failed_call_in_txn(txn, node_did, request_id)),
         )
         .await?;
-        let reason = call
-            .as_ref()
-            .and_then(|call| call.failure_reason.as_deref())
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        Ok(reason.and_then(|reason| {
-            match gents_loop::provider_limit::classify_provider_limit(reason, Utc::now()) {
-                Some(gents_loop::provider_limit::ProviderLimit::UsageExhausted(limit)) => {
-                    Some(limit.to_string())
-                }
-                _ => None,
-            }
-        }))
+        Ok(call.and_then(|call| call.usage_limit().map(|limit| limit.reason.to_owned())))
     }
 
     async fn stop_for_unavailable_agent(

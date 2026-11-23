@@ -86,6 +86,7 @@ import Proofs.Conformance.InferenceSlotAccounting
 import Proofs.Conformance.FleetSlotAccounting
 import Proofs.Conformance.Identity.AgentBaseline
 import Proofs.Conformance.InferenceDroppedPermit
+import Proofs.Conformance.InferenceProviderLimit
 import Proofs.Conformance.EventSourceCursor
 import Proofs.Conformance.Identity.AgentTargetAccess
 import Proofs.Conformance.Identity.WorkspaceCompletion
@@ -104,6 +105,9 @@ import Proofs.Conformance.Identity.NodeProvisioning
 import Proofs.Conformance.Identity.RuntimeUse
 import Proofs.Conformance.Identity.WorkspaceRootAccess
 import Proofs.Conformance.HomeResolution
+import Proofs.Conformance.PluginStoreHome
+import Proofs.Conformance.PluginPublication
+import Proofs.Conformance.SurfacePublication
 import Proofs.Conformance.GraphqlName
 import Proofs.Conformance.ClaudeRefresh
 import Proofs.Conformance.Identity.BlockScope
@@ -132,6 +136,8 @@ import Proofs.Conformance.Functions.Session
 import Proofs.Conformance.Functions.ToolCalls
 import Proofs.Conformance.Functions.Tools
 import Proofs.Conformance.Functions.Shared
+import Proofs.Conformance.RequestContext
+import Proofs.Conformance.CloneReceipt
 import Proofs.Conformance.Functions.Store
 import Proofs.Conformance.Pack
 import Proofs.Conformance.StorageWriteGate

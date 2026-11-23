@@ -59,7 +59,7 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
             "--display-name",
             "Research Assistant",
             "--system-prompt",
-            "Research the requested topic and write a concise evidence-backed report.",
+            "Use the config tool to configure yourself and write a concise report.",
             "--preset",
             "write",
             "--root",
@@ -82,6 +82,32 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
         "agent create mints the Agent its own DID: {agent_did}"
     );
 
+    let source_show = run_cli_json(
+        &home_dir,
+        &["config", "agent", "show", &agent_did, "--graphql", &graphql],
+    )?;
+    assert_eq!(source_show["resolved"]["preset_name"], "write");
+    let mut source_tools = source_show["resolved"]["tools"].clone();
+    source_tools["self_config"] = serde_json::json!({"enable_self_config": true, "self_config_categories": ["agent", "tools", "profile"], "self_config_preview": true});
+    let tools_file = home_dir.join("source-self-config.json");
+    write_json_file(&tools_file, &source_tools)?;
+    run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "tools",
+            "set",
+            "--graphql",
+            &graphql,
+            "--file",
+            tools_file.to_str().unwrap(),
+        ],
+    )?;
+
+    let override_root = std::path::Path::new(&tool_root).join("b4-clone-subdir");
+    std::fs::create_dir_all(&override_root)?;
+    let node_home =
+        crate::support::graphql::served_home(&graphql).context("missing served home")?;
     let cloned = run_cli_json(
         &home_dir,
         &[
@@ -91,13 +117,75 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
             &agent_did,
             "--graphql",
             &graphql,
+            "--home",
+            node_home.to_str().unwrap(),
             "--display-name",
             "Cloned Assistant",
+            "--root",
+            override_root.to_str().unwrap(),
             "--profile-id",
             &profile_id,
         ],
     )?;
     assert_eq!(cloned.get("committed").and_then(Value::as_bool), Some(true));
+    let omissions = cloned["not_copied"]
+        .as_array()
+        .context("missing omission list")?;
+    assert_eq!(omissions.len(), 1);
+    assert_eq!(cloned["overridden_on_request"].as_array().unwrap().len(), 1);
+    let override_note = cloned["overridden_on_request"][0].as_str().unwrap();
+    assert!(override_note.contains("host.root: overridden on request (source value:"));
+    assert!(!override_note.contains("gents config"));
+    let warning = cloned["prompt_warning"].as_str().unwrap();
+    assert_eq!(warning.lines().count(), 1);
+    assert!(!warning.contains("host root"));
+    assert!(cloned["prompt_warning"]
+        .as_str()
+        .unwrap()
+        .contains("config"));
+    assert_eq!(omissions[0]["capability"], "self_config");
+    assert!(omissions[0]["grant_command"]
+        .as_str()
+        .unwrap()
+        .contains("--home"));
+
+    let grant_command = omissions[0]["grant_command"].as_str().unwrap();
+    assert!(!grant_command.contains("<HOME>"), "{grant_command}");
+    let binary_dir = std::path::Path::new(cli_bin()).parent().unwrap();
+    let path = format!(
+        "{}:{}",
+        binary_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let before = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "agent",
+            "show",
+            cloned["agent_did"].as_str().unwrap(),
+            "--graphql",
+            &graphql,
+        ],
+    )?;
+    assert_eq!(
+        before["resolved"]["tools"]["host"]["root"],
+        override_root.to_str().unwrap()
+    );
+    assert!(warning.contains("not_copied[0].grant_command"));
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(grant_command)
+        .current_dir(&home_dir)
+        .env("PATH", &path)
+        .env("HOME", &home_dir)
+        .output()?;
+    assert!(
+        output.status.success(),
+        "grant failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
     let cloned_id = cloned
         .get("agent_did")
         .and_then(Value::as_str)
@@ -107,6 +195,68 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
         cloned_id.starts_with("did:key:") && cloned_id != agent_did && cloned_id != node_did,
         "agent clone mints the clone its own DID: {cloned_id}"
     );
+
+    let restored = run_cli_json(
+        &home_dir,
+        &["config", "agent", "show", &cloned_id, "--graphql", &graphql],
+    )?;
+    assert_eq!(
+        restored["resolved"]["tools"]["self_config"]["enable_self_config"],
+        true
+    );
+    let mut expected = before["resolved"]["tools"].clone();
+    expected["self_config"] = source_tools["self_config"].clone();
+    assert_eq!(restored["resolved"]["tools"], expected);
+
+    let graphql_clone = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "agent",
+            "clone",
+            &agent_did,
+            "--graphql",
+            &graphql,
+            "--display-name",
+            "GraphQL clone",
+            "--profile-id",
+            &profile_id,
+            "--system-prompt",
+            "Configure yourself and review the configuration.",
+        ],
+    )?;
+    assert!(graphql_clone.get("prompt_warning").is_none());
+    let omissions = graphql_clone["not_copied"].as_array().unwrap();
+    assert_eq!(omissions.len(), 1);
+    let command = omissions[0]["grant_command"].as_str().unwrap();
+    assert!(command.contains("--graphql"));
+    assert!(!command.contains("--home"));
+    assert!(!command.contains("<HOME>"));
+    assert!(omissions[0]["target_guidance"].is_null());
+    let id = graphql_clone["agent_did"].as_str().unwrap();
+    let before = run_cli_json(
+        &home_dir,
+        &["config", "agent", "show", id, "--graphql", &graphql],
+    )?;
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .current_dir(&home_dir)
+        .env("PATH", &path)
+        .env("HOME", &home_dir)
+        .output()?;
+    assert!(
+        output.status.success(),
+        "grant failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let restored = run_cli_json(
+        &home_dir,
+        &["config", "agent", "show", id, "--graphql", &graphql],
+    )?;
+    let mut expected = before["resolved"]["tools"].clone();
+    expected["self_config"] = source_tools["self_config"].clone();
+    assert_eq!(restored["resolved"]["tools"], expected);
 
     let disabled = run_cli_json(
         &home_dir,
@@ -146,7 +296,7 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
             .get("resolved")
             .and_then(|resolved| resolved.get("preset_name"))
             .and_then(Value::as_str),
-        Some("write")
+        Some("custom")
     );
     assert_eq!(
         write_show
@@ -184,6 +334,24 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
         .and_then(Value::as_str)
         .context("create output missing agent_did")?
         .to_string();
+
+    let plain_clone = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "agent",
+            "clone",
+            &readonly_id,
+            "--graphql",
+            &graphql,
+            "--display-name",
+            "Plain clone",
+            "--profile-id",
+            &profile_id,
+        ],
+    )?;
+    assert!(plain_clone.get("not_copied").is_none());
+    assert!(plain_clone.get("prompt_warning").is_none());
 
     let readonly_show = run_cli_json(
         &home_dir,

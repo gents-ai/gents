@@ -7,6 +7,7 @@ mod output_budget;
 mod pack_readers;
 mod policy;
 pub mod presets;
+mod publication;
 mod root_admission;
 mod root_publication;
 pub mod root_selection;
@@ -33,6 +34,9 @@ pub(crate) use policy::ToolNodeOperationSource;
 pub use policy::{
     EndpointScope, RuntimeToolAvailability, ToolPolicyBash, ToolPolicySurface, ToolPolicyVersion,
     TOOL_POLICY_V1,
+};
+pub use publication::{
+    publication_guard_until, PLUGIN_PUBLICATION_WAIT_EVENT_TARGET, PUBLICATION_WAIT,
 };
 
 pub(crate) fn configured_node_operation_sources(
@@ -120,6 +124,7 @@ const DEFAULT_CLI_TIMEOUT_SECS: u64 = 10;
 
 #[derive(Clone)]
 pub struct ToolSurface {
+    hidden_tool_names: Vec<String>,
     host_tools: ToolSet,
     root_execution_guard: Option<RootExecutionGuard>,
     include_meta_tools: bool,
@@ -268,6 +273,11 @@ impl ToolSurface {
         &self.allowed_mcp_service_ids
     }
 
+    /// A surface without plugin tools does not depend on plugin publication.
+    pub fn has_plugin_tools(&self) -> bool {
+        !self.plugin_tools.is_empty()
+    }
+
     pub fn plugin_resolutions(
         &self,
     ) -> &[(
@@ -301,6 +311,22 @@ impl ToolSurface {
                 true
             }
         });
+    }
+
+    /// The names the model is shown: [`Self::tool_names`] without those
+    /// `build_tools` hides.
+    pub fn advertised_tool_names(&self) -> Vec<String> {
+        let names = self.tool_names();
+        let hidden =
+            gents_loop::tool_policy::presentation::hidden_names(&names, &self.hidden_tool_names);
+        names
+            .into_iter()
+            .filter(|name| !hidden.contains(name))
+            .collect()
+    }
+
+    pub fn hidden_tool_names(&self) -> &[String] {
+        &self.hidden_tool_names
     }
 
     pub fn tool_names(&self) -> Vec<String> {
@@ -372,6 +398,17 @@ impl ToolSurface {
     }
 
     pub async fn build_tools(&self, runtime: &ToolRuntimeContext) -> Result<Vec<Box<dyn ToolDyn>>> {
+        self.build_tools_until(runtime, tokio::time::Instant::now() + PUBLICATION_WAIT)
+            .await
+    }
+
+    /// [`Self::build_tools`], waiting for an installer that holds the plugin
+    /// store until `publication_deadline`.
+    pub async fn build_tools_until(
+        &self,
+        runtime: &ToolRuntimeContext,
+        publication_deadline: tokio::time::Instant,
+    ) -> Result<Vec<Box<dyn ToolDyn>>> {
         if let Some(guard) = &self.root_execution_guard {
             let agent = runtime
                 .agent_identity
@@ -383,7 +420,8 @@ impl ToolSurface {
             guard.node_home = runtime.plugin_home().map(std::path::Path::to_path_buf);
             guard.validate(&runtime.node, agent).await?;
         }
-        self.build_admitted_tools(runtime).await
+        self.build_admitted_tools(runtime, publication_deadline)
+            .await
     }
 
     /// [`Self::build_tools`] once the root guard has admitted the root:
@@ -391,6 +429,7 @@ impl ToolSurface {
     async fn build_admitted_tools(
         &self,
         runtime: &ToolRuntimeContext,
+        publication_deadline: tokio::time::Instant,
     ) -> Result<Vec<Box<dyn ToolDyn>>> {
         let writethrough = self.lsp.as_ref().map(|config| {
             crate::native::lsp::LspWritethrough::new(runtime.lsp_pool.clone(), config.clone())
@@ -696,21 +735,24 @@ impl ToolSurface {
             tools.push(Box::new(tool) as Box<dyn ToolDyn>);
         }
         for plugin in &self.plugin_tools {
-            let tool = runtime.plugins.clone().plugin_tool(
-                plugin,
-                self.host_tools
-                    .read_root()
-                    .map(std::path::Path::to_path_buf),
-                self.host_tools
-                    .write_root()
-                    .map(std::path::Path::to_path_buf),
-                runtime.node.clone(),
-                &runtime.node_did,
-                runtime
-                    .agent_identity
-                    .as_ref()
-                    .map(|identity| identity.did()),
-            )?;
+            let tool = publication::wait(publication_deadline, || {
+                runtime.plugins.clone().plugin_tool(
+                    plugin,
+                    self.host_tools
+                        .read_root()
+                        .map(std::path::Path::to_path_buf),
+                    self.host_tools
+                        .write_root()
+                        .map(std::path::Path::to_path_buf),
+                    runtime.node.clone(),
+                    &runtime.node_did,
+                    runtime
+                        .agent_identity
+                        .as_ref()
+                        .map(|identity| identity.did()),
+                )
+            })
+            .await?;
             if !registered_names.insert(tool.name()) {
                 anyhow::bail!(
                     "plugin tool `{}` has the same name as another tool; rename one of them",
@@ -719,7 +761,10 @@ impl ToolSurface {
             }
             tools.push(tool);
         }
-        Ok(tools)
+        Ok(gents_loop::tool_policy::presentation::present_tools(
+            tools,
+            &self.hidden_tool_names,
+        ))
     }
 }
 
@@ -727,6 +772,7 @@ impl std::fmt::Debug for ToolSurface {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ToolSurface")
             .field("host_tools", &self.host_tools)
+            .field("hidden_tool_names", &self.hidden_tool_names)
             .field("include_meta_tools", &self.include_meta_tools)
             .field("include_goal_tools", &self.include_goal_tools)
             .field("include_goal_creation", &self.include_goal_creation)

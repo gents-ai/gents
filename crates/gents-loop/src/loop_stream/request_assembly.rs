@@ -213,6 +213,39 @@ pub fn assemble_new_messages(
     new_messages
 }
 
+/// What reads a request's stored history (Lean
+/// `PromptAssembly.RequestContext.HistoryReader`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HistoryReader {
+    Dispatch,
+    AdmissionEstimate,
+    Summarizer,
+}
+
+/// Lean `PromptAssembly.RequestContext.keepsStoredContext`.
+pub fn keeps_stored_context(reader: HistoryReader) -> bool {
+    match reader {
+        HistoryReader::Dispatch | HistoryReader::AdmissionEstimate | HistoryReader::Summarizer => {
+            false
+        }
+    }
+}
+
+/// `rows` as `reader` reads them: without the stored `<context>` rows unless
+/// it keeps them.
+pub fn stored_history<T, F>(reader: HistoryReader, rows: Vec<T>, message: F) -> Vec<T>
+where
+    F: Fn(&T) -> &Message,
+{
+    if keeps_stored_context(reader) {
+        return rows;
+    }
+    rows.into_iter()
+        .filter(|row| !is_request_context_message(message(row)))
+        .collect()
+}
+
 pub fn is_request_context_message(message: &Message) -> bool {
     let Message::User { content } = message else {
         return false;

@@ -121,6 +121,7 @@ pub struct AdmittedCompletionClient<C> {
     admission: AdmissionRegistry,
     connection: std::sync::Arc<str>,
     profile_id: Option<String>,
+    max_rate_limit_wait: std::time::Duration,
     separate_reasoning: bool,
     agent_signer: Option<gents_store::identity::ManagedAgentSigner>,
 }
@@ -132,14 +133,16 @@ where
     type CompletionModel = AdmittedCompletionModel<C::CompletionModel>;
 }
 
+/// The agent's model admitted through `connection`: calls are attributed to
+/// its profile and signer, and each call's permit records its provider-limit
+/// verdict under the agent's rate-limit wait cap, which the owned loop driving
+/// the model holds.
 pub fn admitted_model<C>(
     client: C,
     admission: AdmissionRegistry,
     connection: String,
-    model_name: &str,
-    profile_id: Option<&str>,
+    agent: &crate::resolved::ResolvedAgent,
     separate_reasoning: bool,
-    agent_signer: Option<gents_store::identity::ManagedAgentSigner>,
 ) -> AdmittedCompletionModel<C::CompletionModel>
 where
     C: ProviderClient,
@@ -148,11 +151,12 @@ where
         inner: client,
         admission,
         connection: connection.into(),
-        profile_id: profile_id.map(str::to_owned),
+        profile_id: agent.profile_id.clone(),
+        max_rate_limit_wait: agent.completion_retry.max_rate_limit_wait(),
         separate_reasoning,
-        agent_signer,
+        agent_signer: agent.agent_identity.managed_agent_signer(),
     }
-    .completion_model(model_name)
+    .completion_model(&agent.model_name)
 }
 
 impl<M> CompletionModel for AdmittedCompletionModel<M>
@@ -169,6 +173,7 @@ where
             M::make(&client.inner, model.clone()),
             client.admission.clone(),
             client.connection.clone(),
+            client.max_rate_limit_wait,
         );
         admitted.model_name = Some(model);
         admitted.profile_id = client.profile_id.clone();

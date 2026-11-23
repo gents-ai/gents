@@ -117,8 +117,49 @@ pub struct AgentReceipt<A> {
     /// Agent's host tools wait on a WorkspaceRoot reader grant.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host_root_access: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub not_copied: Vec<AgentOmittedCapability>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub overridden_on_request: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_warning: Option<String>,
     pub agent: A,
     pub make_default: bool,
+}
+
+/// A Tools group a clone did not copy, with the command that grants it back
+/// to the clone.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AgentOmittedCapability {
+    pub capability: String,
+    pub grant_command: String,
+    pub target_guidance: Option<&'static str>,
+}
+
+impl AgentOmittedCapability {
+    /// `patch` is the Tools save the command sends: the clone's `tools_id`,
+    /// `node_did` and the dropped group, as `gents config tools set` reads
+    /// a file. The command ends at its options, so a client that knows the
+    /// runtime appends `--home` or `--graphql` to it.
+    pub fn new(
+        capability: &str,
+        patch: &serde_json::Value,
+        home: Option<&std::path::Path>,
+    ) -> Self {
+        let payload = patch.to_string().replace('\'', "'\\''");
+        let mut grant_command =
+            format!("printf '%s' '{payload}' | gents config tools set --file /dev/stdin");
+        if let Some(home) = home {
+            grant_command.push_str(&format!(" --home {}", home.display()));
+        }
+        Self {
+            capability: capability.to_owned(),
+            grant_command,
+            target_guidance: home
+                .is_none()
+                .then_some(crate::node_readiness::TARGET_GUIDANCE),
+        }
+    }
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -543,6 +584,9 @@ mod tests {
             operation: AgentOperationKind::Clone,
             agent_did: "did:key:new".to_owned(),
             host_root_access: None,
+            not_copied: Vec::new(),
+            overridden_on_request: Vec::new(),
+            prompt_warning: None,
             agent: serde_json::json!({"agent_did": "did:key:new"}),
             make_default: false,
         };

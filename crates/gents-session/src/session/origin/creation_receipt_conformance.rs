@@ -66,13 +66,6 @@ fn job_creation_binding_matches_executable_model() {
     });
 }
 
-#[test]
-fn deferred_creation_matches_executable_model() {
-    gents_lean_vocab::families::causal_hop_contracts_deferred_creation::replay(|i| {
-        super::deferred_creation_allowed(i.kind, i.receipt, i.opening, i.cause)
-    });
-}
-
 #[tokio::test]
 async fn receipt_verification_matches_executable_creation_model() {
     let directory = tempfile::tempdir().unwrap();

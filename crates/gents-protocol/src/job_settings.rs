@@ -18,6 +18,14 @@ pub fn policy_valid(agent_targets: &[String], policy: &JobPolicy) -> bool {
             .all(|target| agent_targets.contains(target))
 }
 
+/// Lean `jobTargetsConfigured`: a job names only targets the caller's own
+/// Tools document lists.
+pub fn job_targets_configured(caller_targets: &[String], job_targets: &[String]) -> bool {
+    job_targets
+        .iter()
+        .all(|target| caller_targets.contains(target))
+}
+
 /// Lean `consentedDynamic`: the node owner's consent raises a block at `check`
 /// to `run`; `off` stays off and no consent changes nothing.
 pub fn consented_dynamic(consent: bool, mode: DynamicMode) -> DynamicMode {
@@ -108,6 +116,13 @@ mod conformance {
             dynamic_targets: policy.dynamic_targets.clone(),
             trusted_packs: policy.trusted_packs.clone(),
         }
+    }
+
+    #[test]
+    fn configured_job_targets_match_lean() {
+        gents_lean_vocab::families::plugin_job_configured_job_targets::replay(|i| {
+            job_targets_configured(&i.caller_targets, &i.job_targets)
+        });
     }
 
     #[test]

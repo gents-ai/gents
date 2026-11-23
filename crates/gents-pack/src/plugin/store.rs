@@ -7,8 +7,49 @@ use serde::{Deserialize, Serialize};
 
 use gents_documents::plugin_coordinate::checked_component;
 
+mod lease;
+mod read;
+mod write;
+pub use lease::{next_attempt, retry, wait_for_lease, LEASE_WAIT};
+pub use read::{ReadOutcome, StoreAbsent, StoreReadIdentity, StoreReadPin};
+
+/// Who writes the plugin store, and so where it may create it: a runtime
+/// writes only into the home it pinned when it started
+/// ([`StoreReadPin::try_exclusive`]); an offline writer names its home on
+/// each call and may initialize a new one.
+#[derive(Debug, Clone)]
+pub enum StoreWriter {
+    Offline(PathBuf),
+    Runtime(StoreReadPin),
+}
+
+impl StoreWriter {
+    pub fn home(&self) -> &Path {
+        match self {
+            Self::Offline(home) => home,
+            Self::Runtime(pin) => pin.home(),
+        }
+    }
+
+    /// The exclusive writer lease, without blocking.
+    pub fn try_lock(&self) -> Result<StoreGuard> {
+        self.try_lock_typed().map_err(Into::into)
+    }
+
+    fn try_lock_typed(&self) -> std::result::Result<StoreGuard, PublishedPluginReadError> {
+        match self {
+            Self::Offline(home) => write::try_lock_offline(home),
+            Self::Runtime(pin) => pin.try_exclusive(),
+        }
+    }
+}
+
 fn plugins_root(home: &Path) -> PathBuf {
     home.join(gents_store::local::home::PLUGINS_DIR_NAME)
+}
+
+fn lock_path(home: &Path) -> PathBuf {
+    plugins_root(home).join(".store.lock")
 }
 
 fn store_dir(home: &Path) -> PathBuf {
@@ -175,14 +216,21 @@ pub fn owns_plugin_record(
 }
 
 pub fn remove_record_if_owned(
-    home: &Path,
+    writer: &StoreWriter,
     namespace: &str,
     name: &str,
     pack_coordinate: &str,
     digest: &str,
 ) -> Result<bool> {
-    let guard = try_lock_store(home)?;
-    remove_record_if_owned_locked(&guard, home, namespace, name, pack_coordinate, digest)
+    let guard = writer.try_lock()?;
+    remove_record_if_owned_locked(
+        &guard,
+        writer.home(),
+        namespace,
+        name,
+        pack_coordinate,
+        digest,
+    )
 }
 
 pub(crate) fn remove_record_if_owned_locked(
@@ -239,6 +287,7 @@ pub fn grant_on_install(
 
 pub fn store_bytes(home: &Path, digest_hex: &str, bytes: &[u8]) -> Result<()> {
     let path = store_path(home, digest_hex)?;
+    bootstrap_store(home)?;
     let dir = store_dir(home);
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     crate::pack::registry::stage_and_persist(&dir, &path, bytes)
@@ -276,6 +325,7 @@ pub fn read_bytes(home: &Path, digest_hex: &str) -> Result<Vec<u8>> {
 
 pub struct StoreGuard {
     home: PathBuf,
+    pinned: Option<std::sync::Arc<read::PinnedHome>>,
     _lock: gents_store::local::file_lock::FileLock,
 }
 
@@ -284,8 +334,26 @@ impl StoreGuard {
         &self.home
     }
 
-    /// Prevents a held lock for one home from authorizing mutations in another.
+    /// Prevents a held lock for one home from authorizing mutations in
+    /// another: a runtime writer's guard admits only the home it pinned.
     pub fn for_home(&self, home: &Path) -> Result<()> {
+        if let Some(pinned) = &self.pinned {
+            return match pinned.at(home)? {
+                (true, true) => Ok(()),
+                (present, _) => Err(anyhow::Error::from(PublishedPluginReadError::from(
+                    if present {
+                        StoreAbsent::Replaced
+                    } else {
+                        StoreAbsent::Missing
+                    },
+                ))
+                .context(format!(
+                    "the plugin store lock in use belongs to the home pinned at {}, not {}",
+                    self.home.display(),
+                    home.display()
+                ))),
+            };
+        }
         anyhow::ensure!(
             self.home.as_path() == home,
             "the plugin store lock in use belongs to {}, not {}",
@@ -296,44 +364,71 @@ impl StoreGuard {
     }
 }
 
-/// The shared install lock and exclusive release lock prevent deleting bytes
-/// after a concurrent install writes them but before its record is visible.
-pub fn lock_store(home: &Path, exclusive: bool) -> Result<StoreGuard> {
-    let path = plugins_root(home).join(".store.lock");
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating {}", parent.display()))?;
-    }
+/// The blocking writer lease: an installer's exclusive lock, held until the
+/// guard drops.
+pub fn lock_store(home: &Path) -> Result<StoreGuard> {
+    bootstrap_store(home)?;
+    let path = lock_path(home);
     let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    let lock = gents_store::local::file_lock::FileLock::exclusive(file)
+        .with_context(|| format!("locking {}", path.display()))?;
+    Ok(StoreGuard {
+        home: home.to_owned(),
+        pinned: None,
+        _lock: lock,
+    })
+}
+
+/// Creates the store directory and its lock file, and nothing else. Node
+/// start and installers are the only callers: a read never creates the store,
+/// so a reader of a removed home cannot recreate it.
+pub fn bootstrap_store(home: &Path) -> std::result::Result<(), PublishedPluginReadError> {
+    std::fs::create_dir_all(plugins_root(home))
+        .map_err(|error| PublishedPluginReadError::Read(error.into()))?;
+    std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
-        .open(&path)
-        .with_context(|| format!("opening {}", path.display()))?;
-    let lock = if exclusive {
-        gents_store::local::file_lock::FileLock::exclusive(file)
-    } else {
-        gents_store::local::file_lock::FileLock::shared(file)
-    }
-    .with_context(|| format!("locking {}", path.display()))?;
-    Ok(StoreGuard {
-        home: home.to_owned(),
-        _lock: lock,
-    })
+        .open(lock_path(home))
+        .map_err(|error| PublishedPluginReadError::Read(error.into()))?;
+    Ok(())
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum PublishedPluginReadError {
     #[error("plugin store is busy; retry this pack operation")]
     Busy,
+    #[error(fmt = gents_protocol::error_chain::held)]
+    Absent(#[source] StoreAbsent),
     #[error("reading the published plugin store")]
     Read(#[source] anyhow::Error),
+}
+
+impl From<StoreAbsent> for PublishedPluginReadError {
+    fn from(absent: StoreAbsent) -> Self {
+        Self::Absent(absent)
+    }
 }
 
 impl PublishedPluginReadError {
     pub fn is_busy(&self) -> bool {
         matches!(self, Self::Busy)
+    }
+
+    /// What the refused read observed; `None` when it could not observe the
+    /// store at all.
+    pub fn outcome(&self) -> Option<ReadOutcome> {
+        match self {
+            Self::Busy => Some(ReadOutcome::Busy),
+            Self::Absent(StoreAbsent::Missing) => Some(ReadOutcome::Missing),
+            Self::Absent(StoreAbsent::Replaced) => Some(ReadOutcome::Replaced),
+            Self::Read(_) => None,
+        }
     }
 
     pub fn error_chain_is_busy(error: &(dyn std::error::Error + 'static)) -> bool {
@@ -346,51 +441,15 @@ impl PublishedPluginReadError {
 
 /// Async mutation owners use a nonblocking lock attempt to avoid parking a Tokio worker.
 pub fn try_lock_store(home: &Path) -> Result<StoreGuard> {
-    try_lock_store_mode(home, true).map_err(Into::into)
+    write::try_lock_offline(home).map_err(Into::into)
 }
 
+/// A read of the published store. It never creates the store: a home whose
+/// store was never bootstrapped, or was removed, is [`StoreAbsent`].
 pub fn try_lock_store_shared(
     home: &Path,
 ) -> std::result::Result<StoreGuard, PublishedPluginReadError> {
-    try_lock_store_mode(home, false)
-}
-
-fn try_lock_store_mode(
-    home: &Path,
-    exclusive: bool,
-) -> std::result::Result<StoreGuard, PublishedPluginReadError> {
-    let path = plugins_root(home).join(".store.lock");
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating {}", parent.display()))
-            .map_err(PublishedPluginReadError::Read)?;
-    }
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&path)
-        .with_context(|| format!("opening {}", path.display()))
-        .map_err(PublishedPluginReadError::Read)?;
-    let result = if exclusive {
-        gents_store::local::file_lock::FileLock::try_exclusive(file)
-    } else {
-        gents_store::local::file_lock::FileLock::try_shared(file)
-    };
-    let lock = match result {
-        Ok(lock) => lock,
-        Err(std::fs::TryLockError::WouldBlock) => return Err(PublishedPluginReadError::Busy),
-        Err(std::fs::TryLockError::Error(error)) => {
-            return Err(PublishedPluginReadError::Read(
-                anyhow::Error::new(error).context(format!("locking {}", path.display())),
-            ));
-        }
-    };
-    Ok(StoreGuard {
-        home: home.to_owned(),
-        _lock: lock,
-    })
+    StoreReadIdentity::capture(home)?.try_shared()
 }
 
 /// The guard keeps the plugin record and its pack provenance in one published observation.
@@ -404,8 +463,24 @@ pub fn read_published_record(
     Ok((record, guard))
 }
 
-pub fn release_unreferenced_bytes(home: &Path, digests: &BTreeSet<String>) -> Result<Vec<String>> {
-    let _lock = try_lock_store(home)?;
+/// [`read_published_record`] through a runtime's pinned store identity.
+pub fn read_pinned_record(
+    pin: &StoreReadPin,
+    namespace: &str,
+    name: &str,
+) -> std::result::Result<(InstalledPlugin, StoreGuard), PublishedPluginReadError> {
+    let guard = pin.try_shared()?;
+    let record =
+        read_record(guard.home(), namespace, name).map_err(PublishedPluginReadError::Read)?;
+    Ok((record, guard))
+}
+
+pub fn release_unreferenced_bytes(
+    writer: &StoreWriter,
+    digests: &BTreeSet<String>,
+) -> Result<Vec<String>> {
+    let _lock = writer.try_lock()?;
+    let home = writer.home();
     let referenced: BTreeSet<String> = list_records(home)?
         .into_iter()
         .map(|record| record.digest)
@@ -433,6 +508,7 @@ pub fn release_unreferenced_bytes(home: &Path, digests: &BTreeSet<String>) -> Re
 
 pub fn write_record(home: &Path, record: &InstalledPlugin) -> Result<()> {
     let path = record_path(home, &record.namespace, &record.name)?;
+    bootstrap_store(home)?;
     let parent = path
         .parent()
         .context("installed-plugin record has no parent")?;
@@ -691,13 +767,18 @@ mod tests {
             let owns = owns_plugin_record(home.path(), "acme", "echo", claimant, &artifact);
             assert_eq!(std::fs::read(&path).ok(), before, "asking changes nothing");
 
-            let removal =
-                match remove_record_if_owned(home.path(), "acme", "echo", claimant, &artifact) {
-                    Ok(true) => Removal::Removed,
-                    Ok(false) => Removal::Kept,
-                    Err(error) if unreadable(&error) => Removal::Unreadable,
-                    Err(error) => panic!("{error:#}"),
-                };
+            let removal = match remove_record_if_owned(
+                &StoreWriter::Offline(home.path().to_owned()),
+                "acme",
+                "echo",
+                claimant,
+                &artifact,
+            ) {
+                Ok(true) => Removal::Removed,
+                Ok(false) => Removal::Kept,
+                Err(error) if unreadable(&error) => Removal::Unreadable,
+                Err(error) => panic!("{error:#}"),
+            };
             let after = std::fs::read(&path).ok();
             if removal != Removal::Removed {
                 assert_eq!(after, before, "a record that is not removed is untouched");
@@ -732,7 +813,11 @@ mod tests {
                 .unwrap();
             }
             let candidates: BTreeSet<String> = input.candidates.iter().map(digest).collect();
-            let released = release_unreferenced_bytes(home.path(), &candidates).unwrap();
+            let released = release_unreferenced_bytes(
+                &StoreWriter::Offline(home.path().to_owned()),
+                &candidates,
+            )
+            .unwrap();
             let mut remaining: Vec<String> = input
                 .stored
                 .iter()

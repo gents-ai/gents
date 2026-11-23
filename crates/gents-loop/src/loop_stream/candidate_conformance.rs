@@ -123,6 +123,9 @@ fn error(kind: &str) -> CompletionError {
 
 struct Echo;
 impl ToolDyn for Echo {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         "echo".into()
     }
@@ -252,6 +255,7 @@ fn config(
             max_empty_resample: 1,
             allow_repair: input.repair,
             account_hops: 0,
+            max_rate_limit_wait: Duration::MAX,
         },
         provider_idle_timeout: None,
         deadline: (!input.deadline_fits).then(chrono::Utc::now),

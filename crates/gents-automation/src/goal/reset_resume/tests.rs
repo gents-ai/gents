@@ -1,7 +1,6 @@
 use super::contract_tests::{at, connect_accounts_at, usage_limit};
 use super::support::*;
 use super::*;
-use gents_loop::provider_limit::{classify_provider_limit, ProviderLimit};
 use serde_json::json;
 
 const T: i64 = 3600;
@@ -55,17 +54,12 @@ impl Reset {
                 &at(started).to_rfc3339(),
             )
             .await;
-        let Some(ProviderLimit::UsageExhausted(limit)) =
-            classify_provider_limit(&failure, Utc::now())
-        else {
-            panic!("not a usage limit: {failure}");
-        };
         execute(
             &self.f.agent_access(),
             &format!(
                 r#"mutation {{ update_Goal(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ status: "usage_limited", last_failure: "{}" }}) {{ _docID }} }}"#,
                 escape_graphql_string(&self.f.goal.doc_id),
-                escape_graphql_string(&limit.to_string())
+                escape_graphql_string(&failure)
             ),
         )
         .await;

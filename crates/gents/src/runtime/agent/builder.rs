@@ -715,6 +715,7 @@ impl PendingAgent {
             max_invalid_tool_calls: gents_loop::loop_stream::DEFAULT_MAX_INVALID_TOOL_CALLS,
             repeated_tool_failure_limit:
                 gents_loop::loop_stream::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
+            max_request_retries: gents_documents::inference_defaults::DEFAULT_REQUEST_MAX_RETRIES,
             stream_batch_ms: self.stream_batch_ms,
             stream_liveness_timeout: self.stream_liveness_timeout,
             provider_idle_timeout: self.provider_idle_timeout,

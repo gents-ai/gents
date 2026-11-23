@@ -76,7 +76,6 @@ type AgentRequest @policy(id: "$household", resource: "delivered_requests") {
     # Runtime-derived execution deadline; excluded from requester signatures.
     deadline: String
     retry_count: Int @immutable
-    max_retries: Int @immutable
     interrupt_requested_at: String
     valid_until: String @immutable
     # Session-message lineage, filled only on agent_new/agent_message calls or

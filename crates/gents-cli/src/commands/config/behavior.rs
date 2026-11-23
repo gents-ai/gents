@@ -184,7 +184,7 @@ async fn submit_create(
     print_json(&receipt)
 }
 
-/// Address the owner's runnable command without copying its command format.
+/// Address the owner's runnable commands without copying their command format.
 fn target_host_root_receipt(
     receipt: &mut Value,
     home: Option<&std::path::Path>,
@@ -199,6 +199,14 @@ fn target_host_root_receipt(
         receipt["host_root_access"]["target_guidance"] = Value::Null;
         receipt["host_root_access"]["how_to_proceed"] =
             gents_protocol::node_readiness::reader_grant_how_to_proceed(false).into();
+    }
+    if let Some(Value::Array(omitted)) = receipt.get_mut("not_copied") {
+        for entry in omitted {
+            if let Some(Value::String(command)) = entry.get_mut("grant_command") {
+                *command = with_target(command, home, graphql);
+                entry["target_guidance"] = Value::Null;
+            }
+        }
     }
     Ok(())
 }
@@ -691,6 +699,7 @@ mod tests {
         };
         let clone_outcome = create_agent(&access, owner, provision().await?, &clone_doc).await?;
         assert_eq!(clone_outcome["committed"], true);
+        assert!(clone_outcome.get("not_copied").is_none());
         let cloned_id = clone_outcome["agent_did"]
             .as_str()
             .context("cloned agent ID")?;

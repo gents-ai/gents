@@ -14,6 +14,8 @@ use super::{AgentToolSurfaceConfig, RuntimeToolAvailability, ToolPolicySurface, 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ToolSurfaceExplanation {
     pub tool_names: Vec<String>,
+    /// The granted tools the model is not shown; `script` reaches them.
+    pub hidden_tool_names: Vec<String>,
     pub policy: ToolSurfacePolicyTrace,
     pub included: BTreeMap<String, Vec<String>>,
     pub excluded: BTreeMap<String, Vec<String>>,
@@ -94,8 +96,24 @@ impl ToolSurfaceExplanation {
                 "ToolCeiling currently clamps host-native file/bash/CLI tools only; built-in read tools can still be model-callable.",
             );
         }
+        let hidden_tool_names = gents_loop::tool_policy::presentation::hidden_names(
+            &tool_names,
+            surface.hidden_tool_names(),
+        );
+        let inert: Vec<&String> = surface
+            .hidden_tool_names()
+            .iter()
+            .filter(|name| !hidden_tool_names.contains(name))
+            .collect();
+        if !inert.is_empty() {
+            builder.warn(
+                "hidden_tool_names_inactive",
+                format!("hidden_tool_names {inert:?} are shown to the model: each is not on this surface, is a gateway (script, config, load_skill, spawn_process), or script is not on this surface"),
+            );
+        }
         builder.finish(
             tool_names,
+            hidden_tool_names,
             ToolSurfacePolicyTrace {
                 requested: policy_summary(config.agent_policy()),
                 ceiling: policy_summary(config.ceiling_policy()),
@@ -190,10 +208,12 @@ impl ExplanationBuilder {
     fn finish(
         self,
         tool_names: Vec<String>,
+        hidden_tool_names: Vec<String>,
         policy: ToolSurfacePolicyTrace,
     ) -> ToolSurfaceExplanation {
         ToolSurfaceExplanation {
             tool_names,
+            hidden_tool_names,
             policy,
             included: into_vec_map(self.included),
             excluded: into_vec_map(self.excluded),

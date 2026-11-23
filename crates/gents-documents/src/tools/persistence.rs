@@ -81,10 +81,24 @@ mod tests {
         let mut tools: Tools = serde_json::from_value(json!({
             "node_did":"did:key:owner", "tools_id":"same",
             "host":{"files":{"mode":"ReadOnly"}},
-            "built_ins":{"enable_goal_tools":true}, "tags":["old"]
+            "built_ins":{"enable_goal_tools":true}, "tags":["old"],
+            "hidden_tool_names":["read_file"],
+            "integrations":{"plugins":[{"plugin":"gents/script","tool_calls":true}]}
         }))?;
         let first_id =
             write_tools_document(&access, &tools, &crate::test_support::AdmitAllProfiles).await?;
+        let mut unreachable_job = tools.clone();
+        unreachable_job.integrations = Some(serde_json::from_value(json!({"plugins":[
+            {"plugin":"gents/script","tool_calls":true},
+            {"plugin":"ns/runner","job":{"agent_targets":["absent"]}}
+        ]}))?);
+        assert!(write_tools_document(
+            &access,
+            &unreachable_job,
+            &crate::test_support::AdmitAllProfiles
+        )
+        .await
+        .is_err());
         let mut foreign = tools.clone();
         foreign.node_did = "did:key:other".into();
         assert_ne!(
@@ -94,6 +108,8 @@ mod tests {
         tools.host = None;
         tools.built_ins = None;
         tools.tags.clear();
+        tools.hidden_tool_names.clear();
+        tools.integrations = None;
         assert_eq!(
             write_tools_document(&access, &tools, &crate::test_support::AdmitAllProfiles).await?,
             first_id

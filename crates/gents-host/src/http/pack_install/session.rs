@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -8,6 +7,7 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use futures_util::StreamExt;
+use gents_pack::plugin::store::StoreWriter;
 use gents_store::config_client::{
     ConfigAccess, ConfigApplyTxn, PackApprovalError, PackApprovalScope, PackEffectApprover,
     PackEvidence, PackMutation, PackRelationship, PackRelationshipEvidence, PackSchemaEvidence,
@@ -101,10 +101,13 @@ pub async fn install_session(
         Ok(access) => access,
         Err(_) => return refused(StatusCode::UNAUTHORIZED, Class::NotAuthorized),
     };
-    let Some(home) = state.home.as_ref().map(PathBuf::from) else {
+    if state.home.is_none() {
+        return refused(StatusCode::SERVICE_UNAVAILABLE, Class::RuntimeUnavailable);
+    }
+    let Some(runtime) = state.activation_runtime.get() else {
         return refused(StatusCode::SERVICE_UNAVAILABLE, Class::RuntimeUnavailable);
     };
-    let Some(runtime) = state.activation_runtime.get() else {
+    let Some(store) = runtime.plugin_store_writer() else {
         return refused(StatusCode::SERVICE_UNAVAILABLE, Class::RuntimeUnavailable);
     };
     let node = runtime.observation_node().clone();
@@ -149,7 +152,7 @@ pub async fn install_session(
             if let Err(error) = tokio::spawn(run(
                 socket,
                 state,
-                home,
+                store,
                 access,
                 user,
                 runtime_access,
@@ -385,14 +388,14 @@ impl PackEffectApprover for SessionApprover {
 async fn run(
     socket: WebSocket,
     state: RuntimeHttpState,
-    home: PathBuf,
+    store: StoreWriter,
     access: ConfigAccess,
     user: UserSession,
     runtime_access: ConfigAccess,
     actor: identity::Did,
 ) {
     let socket = Arc::new(Mutex::new(socket));
-    let result = run_inner(&socket, &state, home, access, user, runtime_access, actor).await;
+    let result = run_inner(&socket, &state, store, access, user, runtime_access, actor).await;
     if let Err(failure) = result {
         failure.log();
         let _ = send(&mut *socket.lock().await, failure.message()).await;
@@ -402,7 +405,7 @@ async fn run(
 async fn run_inner(
     socket: &Arc<Mutex<WebSocket>>,
     state: &RuntimeHttpState,
-    home: PathBuf,
+    store: StoreWriter,
     access: ConfigAccess,
     user: UserSession,
     runtime_access: ConfigAccess,
@@ -412,6 +415,7 @@ async fn run_inner(
         access: user_access,
         refresher,
     } = user;
+    let home = store.home().to_owned();
     let runtime_did = identity::Did::new(&state.node_did)
         .map_err(SessionFailure::not_installed(Class::NotAuthorized))?;
     runtime_access
@@ -432,7 +436,7 @@ async fn run_inner(
     let request = match first {
         ClientMessage::Start { request } => request,
         ClientMessage::Wire { command } => {
-            return wire::run(socket, state, &home, &user_access, refresher, command).await
+            return wire::run(socket, state, &store, &user_access, refresher, command).await
         }
         _ => {
             return Err(SessionFailure::not_installed(Class::InvalidRequest)(
@@ -480,7 +484,7 @@ async fn run_inner(
             &gents_pack::pack::InstallTarget {
                 access: &access,
                 owner: &state.node_did,
-                plugin_home: Some(&home),
+                plugin_home: Some(&store),
             },
             received.root.archive(),
             &gents_pack::pack::PackGraphInputs {
@@ -542,7 +546,7 @@ async fn run_inner(
         let prepared = Arc::new(prepared);
         let stage = gents_pack::pack::stage_hosted_pack(
             &state.node_did,
-            &home,
+            &store,
             received.root.shared_archive(),
             prepared.clone(),
             received.request.grant_authority,

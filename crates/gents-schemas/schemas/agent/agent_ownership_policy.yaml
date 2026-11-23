@@ -241,6 +241,15 @@ resources:
         expr: working_agent + parent->session_admin + session->delete
       - name: delete
         expr: parent->session_admin + session->delete
+  - name: request_retry_budgets
+    relations:
+      - name: parent
+        types: [delivered_requests]
+    permissions:
+      - name: read
+        expr: parent->read
+      - name: update
+      - name: delete
   - name: goal_controls
     relations:
       - name: parent

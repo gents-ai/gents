@@ -32,10 +32,31 @@ structure History where
   closures : List Closure := []
   deriving DecidableEq, Repr
 
+/-- The runtime's per-request `<context>` row, `authored:<request>:context`.
+A fork copy keeps the key and drops the request (`forkHeader`), so the key
+alone names it. -/
+def runtimeContextKey (key : String) : Bool :=
+  let chars := key.data
+  let prefixChars := "authored:".data
+  let suffixChars := ":context".data
+  prefixChars.isPrefixOf chars && suffixChars.reverse.isPrefixOf chars.reverse &&
+    decide (prefixChars.length + suffixChars.length < chars.length) &&
+    ((chars.drop prefixChars.length).take
+      (chars.length - prefixChars.length - suffixChars.length)).all (· != ':')
+
+/-- Decision (gents#4067 B4): every request stores its runtime `<context>`
+row as a user row. It is not a turn the user wrote, so it never counts as a
+user turn or serves as an edit anchor, and a fork does not copy it
+(`retainedMessages`); counting it would shift every fork boundary once the
+model line made the row universal. -/
 def isUserTurn (message : MessageEnvelope) : Bool :=
-  message.header.role == .user && message.blocks.any fun
+  message.header.role == .user && !runtimeContextKey message.key && message.blocks.any fun
     | .toolResult _ _ _ _ => false
     | _ => true
+
+theorem runtime_context_is_not_a_user_turn (message : MessageEnvelope)
+    (h : runtimeContextKey message.key = true) : isUserTurn message = false := by
+  simp [isUserTurn, h]
 
 /-- Editors name the canonical message key rather than a position in a paged
 transcript. The selected user turn and its suffix are excluded from the child;
@@ -101,8 +122,15 @@ def sourceClosure (source : History) (logical : DocId) : Option Closure :=
 def referencedLogicals (messages : List MessageEnvelope) : List DocId :=
   (messages.flatMap fun message => message.header.refs.map (·.closeId)).dedup
 
+/-- A fork copies the messages before `cut`, less the runtime `<context>`
+rows: a copy carries a sequence key and no request, so it could no longer be
+told apart from a user turn, and each request sends its own context anyway.
+A context row a copied compaction cursor names is kept, so the cursor still
+names a child message. -/
 def retainedMessages (source : History) (cut : Nat) : List MessageEnvelope :=
-  source.messages.filter (fun message => message.sequence < cut)
+  source.messages.filter (fun message => message.sequence < cut &&
+    (!runtimeContextKey message.key ||
+      source.compactions.any (fun c => c.throughSequence < cut && c.throughSequence == message.sequence)))
 
 def copyPrefix (source : History) (child : AgentSession.Scope)
     (childDocumentId : DocId → DocId) (childKey : String → String)
@@ -123,7 +151,7 @@ theorem copied_header_satisfies_reader_provenance (child : AgentSession.Scope)
 theorem copied_prefix_preserves_order (source : History) (child : AgentSession.Scope)
     (ids : DocId → DocId) (keys : String → String) (cut : Nat) :
     ((copyPrefix source child ids keys cut).messages.map (·.sequence)) =
-      (source.messages.filter (fun message => message.sequence < cut)).map (·.sequence) := by
+      (retainedMessages source cut).map (·.sequence) := by
   simp [copyPrefix, retainedMessages, copyMessage, List.map_map]
 
 def validChain (session : SessionId) : Nat → Option Nat → List Compaction → Bool
@@ -247,7 +275,8 @@ theorem copied_message_carries_exact_origin
       copied.nativeRequestId = origin.nativeRequestId := by
   simp only [copyPrefix, retainedMessages, List.mem_map, List.mem_filter] at h
   obtain ⟨origin, ⟨hmem, hcut⟩, rfl⟩ := h
-  exact ⟨origin, hmem, of_decide_eq_true hcut,
+  simp only [Bool.and_eq_true, decide_eq_true_eq] at hcut
+  exact ⟨origin, hmem, hcut.1,
     by simp [copyMessage, forkHeader], rfl, rfl, rfl, rfl⟩
 
 theorem published_cursor_names_child_message

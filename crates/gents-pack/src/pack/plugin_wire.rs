@@ -230,7 +230,13 @@ async fn wire_in_owned(
         _store_guard,
         plugin,
         plan,
-    } = WirePlan::read(access, owner, home, request).await?;
+    } = WirePlan::read(
+        access,
+        owner,
+        &crate::plugin::store::StoreWriter::Offline(home.to_owned()),
+        request,
+    )
+    .await?;
     let report = if request.preview {
         access
             .transact_readonly("cli.pack.wire.preview", |txn| {
@@ -307,8 +313,8 @@ pub fn wire_outcome(
     }))
 }
 
-/// A wire's plan, read as `access`'s actor, with the plugin store of `home`
-/// held until it is applied.
+/// A wire's plan, read as `access`'s actor, holding its writer's plugin
+/// store lock until it is applied.
 pub struct WirePlan {
     _store_guard: Option<crate::plugin::store::StoreGuard>,
     pub plugin: crate::plugin::store::InstalledPlugin,
@@ -319,10 +325,10 @@ impl WirePlan {
     pub async fn read(
         access: &ConfigAccess,
         owner: &str,
-        home: &Path,
+        writer: &crate::plugin::store::StoreWriter,
         request: &WireRequest,
     ) -> Result<Self> {
-        Self::read_holding(access, owner, home, request, true).await
+        Self::read_holding(access, owner, writer.home(), request, Some(writer.clone())).await
     }
 
     /// The plan for `plugin`, a record the client planned from a pack it
@@ -369,7 +375,7 @@ impl WirePlan {
         home: &Path,
         request: &WireRequest,
     ) -> Result<Self> {
-        Self::read_holding(access, owner, home, request, false).await
+        Self::read_holding(access, owner, home, request, None).await
     }
 
     async fn read_holding(
@@ -377,14 +383,19 @@ impl WirePlan {
         owner: &str,
         home: &Path,
         request: &WireRequest,
-        hold: bool,
+        holder: Option<crate::plugin::store::StoreWriter>,
     ) -> Result<Self> {
         let home_for_read = home.to_owned();
         let plugin_name = request.plugin.clone();
+        let guard = match &holder {
+            Some(writer) => Some(
+                writer
+                    .lock_until(tokio::time::Instant::now() + crate::plugin::store::LEASE_WAIT)
+                    .await?,
+            ),
+            None => None,
+        };
         let (store_guard, plugin) = tokio::task::spawn_blocking(move || {
-            let guard = hold
-                .then(|| crate::plugin::store::try_lock_store(&home_for_read))
-                .transpose()?;
             let (namespace, name) = split_pack_coordinate(&plugin_name);
             let plugin = read_record(&home_for_read, namespace, name).with_context(|| {
                 format!("{plugin_name} is not installed. Next: gents config pack install <pack>")

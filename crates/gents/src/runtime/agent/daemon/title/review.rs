@@ -344,7 +344,10 @@ where
             .as_ref(),
         )?;
         config.max_turns = 1;
-        config.retry_policy = gents_loop::completion_retry::CompletionRetryPolicy::no_retry();
+        config.retry_policy = gents_loop::completion_retry::CompletionRetryPolicy {
+            max_rate_limit_wait: config.retry_policy.max_rate_limit_wait,
+            ..gents_loop::completion_retry::CompletionRetryPolicy::no_retry()
+        };
         config.aggregate_token_budget = execution.aggregate_token_budget;
         let mut budget_guard = ReviewBudgetGuard(config.aggregate_token_budget.clone());
         let capture = call.capture.clone();

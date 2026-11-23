@@ -193,14 +193,20 @@ pub struct NodePacks<'a> {
     pub access: &'a ConfigAccess,
     pub node_did: &'a str,
     pub registry_url: &'a str,
-    /// `None` resolves from the registry in memory and installs no plugins.
-    pub home: Option<&'a Path>,
+    /// The writer of the node's plugin home; `None` resolves from the
+    /// registry in memory and installs no plugins.
+    pub store: Option<&'a crate::plugin::store::StoreWriter>,
     /// Whether this actor's installs carry the operator's consent to what a
     /// pack's plugins ask for.
     pub grants_authority: bool,
 }
 
-impl NodePacks<'_> {
+impl<'a> NodePacks<'a> {
+    /// The node's plugin home, when this actor has one.
+    pub fn home(&self) -> Option<&'a Path> {
+        self.store.map(crate::plugin::store::StoreWriter::home)
+    }
+
     /// The pack a coordinate or store digest names: the store first, then the
     /// registry. An update without a version takes the registry's newest.
     pub async fn resolve_named(
@@ -213,7 +219,7 @@ impl NodePacks<'_> {
         match local::classify(coordinate) {
             Some(local::LocalName::Digest(digest)) => {
                 let home = self
-                    .home
+                    .home()
                     .context("local packs require a runtime plugin home")?;
                 if !PackStore::new(home).contains(digest)? {
                     return Err(LocalPackError::NotStored(digest.to_owned()));
@@ -251,11 +257,11 @@ impl NodePacks<'_> {
             _ => coordinate.to_owned(),
         };
         let installed =
-            super::installed_packs(self.home, Some((self.access, self.node_did))).await?;
+            super::installed_packs(self.home(), Some((self.access, self.node_did))).await?;
         let resolved = resolve::resolve_named(
             &spec,
             &resolve::ResolveOptions {
-                home: self.home,
+                home: self.home(),
                 registry_url,
                 installed: &installed,
             },
@@ -276,7 +282,7 @@ impl NodePacks<'_> {
         admitted: &Path,
     ) -> Result<Distribution, LocalPackError> {
         let home = self
-            .home
+            .home()
             .context("local packs require a runtime plugin home")?;
         if admitted.is_dir() {
             let manifest = authoring::read_manifest(admitted)?;
@@ -311,7 +317,7 @@ impl NodePacks<'_> {
         let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
         if manifest.metadata.kind != PackKind::Documents {
             return self
-                .home
+                .home()
                 .map(|home| super::read_home_install(home, &coordinate))
                 .transpose()?
                 .flatten()
@@ -341,7 +347,7 @@ impl NodePacks<'_> {
 
     /// The home record of `coordinate` when it is an assets or plugins pack.
     pub fn home_pack(&self, coordinate: &str) -> Result<Option<HomePackInstall>> {
-        Ok(match self.home {
+        Ok(match self.home() {
             Some(home) => super::read_home_install(home, coordinate)?
                 .filter(|record| record.kind != PackKind::Documents),
             None => None,
@@ -380,7 +386,7 @@ impl NodePacks<'_> {
 
     /// Why `manifest`'s plugins cannot be installed with this actor's consent.
     pub fn install_blockers(&self, manifest: &PackManifest) -> Vec<Value> {
-        plugin_lifecycle::install_blockers(self.home, manifest, self.grants_authority)
+        plugin_lifecycle::install_blockers(self.home(), manifest, self.grants_authority)
     }
 
     /// The documents of `coordinate` edited since it was installed, which an
@@ -498,7 +504,7 @@ impl NodePacks<'_> {
             &crate::pack::InstallTarget {
                 access: self.access,
                 owner: self.node_did,
-                plugin_home: self.home,
+                plugin_home: self.store,
             },
             distribution.archive(),
             &crate::pack::PackGraphInputs {
@@ -562,7 +568,7 @@ impl NodePacks<'_> {
             &crate::pack::InstallTarget {
                 access: self.access,
                 owner: self.node_did,
-                plugin_home: self.home,
+                plugin_home: self.store,
             },
             distribution.archive(),
             &dependencies
@@ -599,7 +605,7 @@ impl NodePacks<'_> {
         node_binding: Option<&ConfigurationNodeBinding>,
     ) -> Result<PluginsPlan> {
         let home = self
-            .home
+            .home()
             .context("plugins and assets packs require a runtime plugin home")?;
         let manifest = distribution.manifest();
         let coordinate = distribution.coordinate();
@@ -683,14 +689,14 @@ impl NodePacks<'_> {
         node_binding: Option<ConfigurationNodeBinding>,
         profile_policy: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
     ) -> Result<plugin_lifecycle::InstalledHomePack, InstallError> {
-        let home = self
-            .home
+        let writer = self
+            .store
             .context("plugins and assets packs require a runtime plugin home")?;
         let notify_access = self.access.clone();
         let notify_node = self.node_did.to_owned();
-        let notify_home = home.to_owned();
+        let notify_home = writer.home().to_owned();
         let (record, plugins) = plugin_lifecycle::install_final(
-            home,
+            writer,
             distribution.archive(),
             self.grants_authority,
             crate::pack::plugin_lifecycle::PluginSlotBindings {
@@ -733,12 +739,12 @@ impl NodePacks<'_> {
             (1..=50).contains(&limit),
             "--limit must be between 1 and 50"
         );
-        let store = self.home.map(PackStore::new);
+        let store = self.home().map(PackStore::new);
         let mut names: BTreeMap<_, _> = match &store {
             Some(store) => store.names()?.into_iter().collect(),
             None => BTreeMap::new(),
         };
-        let installed = super::installed_catalog(self.access, self.node_did, self.home).await?;
+        let installed = super::installed_catalog(self.access, self.node_did, self.home()).await?;
         for coordinate in installed.keys() {
             names.entry(coordinate.clone()).or_default();
         }
@@ -824,14 +830,13 @@ impl NodePacks<'_> {
         actor: Option<::identity::Did>,
         profile_policy: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
     ) -> Result<super::home_removal::HomeRemoval, HomePackRemovalError> {
-        let home = self
-            .home
+        let writer = self
+            .store
             .context("assets and plugins packs live in the node home")?;
-        let lock_home = home.to_owned();
-        let guard =
-            tokio::task::spawn_blocking(move || crate::plugin::store::try_lock_store(&lock_home))
-                .await
-                .context("plugin store lock task did not finish")??;
+        let home = writer.home();
+        let guard = writer
+            .lock_until(tokio::time::Instant::now() + crate::plugin::store::LEASE_WAIT)
+            .await?;
         let (namespace, _) = registry::split_pack_coordinate(coordinate);
         let plugins: BTreeSet<String> = record
             .plugins
@@ -877,9 +882,9 @@ impl NodePacks<'_> {
         )
         .await
         .map_err(anyhow::Error::from)?;
-        let bytes_home = home.to_owned();
+        let bytes_writer = writer.clone();
         let removal = tokio::task::spawn_blocking(move || {
-            super::home_removal::release_removed_plugin_bytes(&bytes_home, &mut removal)
+            super::home_removal::release_removed_plugin_bytes(&bytes_writer, &mut removal)
                 .map(|()| removal)
         })
         .await
@@ -905,9 +910,9 @@ impl NodePacks<'_> {
             profile_policy,
         )
         .await?;
-        let released = match self.home {
-            Some(home) => {
-                super::home_removal::release_documents_pack(home, Some(self.access), &report)
+        let released = match self.store {
+            Some(writer) => {
+                super::home_removal::release_documents_pack(writer, Some(self.access), &report)
                     .await?
             }
             None => Default::default(),

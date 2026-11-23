@@ -1,7 +1,8 @@
 use thiserror::Error;
 
 use crate::provider_limit::{
-    classify_provider_limit, strip_provider_limit_marker, ProviderLimit, ProviderLimitHeaders,
+    classify_attempt_provider_limit, strip_provider_limit_marker, ProviderLimit,
+    ProviderLimitHeaders,
 };
 
 #[derive(Debug, Error)]
@@ -247,6 +248,14 @@ pub struct ClassifiedFailure {
 }
 
 pub fn classify_loop_failure(cause: &LoopFailureCause, message: &str) -> ClassifiedFailure {
+    classify_loop_failure_at(cause, message, chrono::Utc::now())
+}
+
+fn classify_loop_failure_at(
+    cause: &LoopFailureCause,
+    message: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> ClassifiedFailure {
     let text = strip_provider_limit_marker(message).to_string();
     let report = match cause {
         LoopFailureCause::Completion {
@@ -265,7 +274,7 @@ pub fn classify_loop_failure(cause: &LoopFailureCause, message: &str) -> Classif
             limit: overflow.limit,
         }
     } else {
-        classify_cause(cause, &report, &text)
+        classify_cause(cause, &report, &text, now)
     };
     ClassifiedFailure {
         error,
@@ -274,7 +283,28 @@ pub fn classify_loop_failure(cause: &LoopFailureCause, message: &str) -> Classif
     }
 }
 
-fn classify_cause(cause: &LoopFailureCause, report: &ProviderReport, text: &str) -> InferenceError {
+/// A provider call's failure as the owned loop classifies it, from the text
+/// the call's error rendered: the admission permit sees only that text.
+pub fn classify_provider_failure(
+    text: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> ClassifiedFailure {
+    classify_loop_failure_at(
+        &LoopFailureCause::Completion {
+            failure: CompletionFailure::Provider(text.to_owned()),
+            reason: text.to_owned(),
+        },
+        text,
+        now,
+    )
+}
+
+fn classify_cause(
+    cause: &LoopFailureCause,
+    report: &ProviderReport,
+    text: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> InferenceError {
     let LoopFailureCause::Completion { failure, reason } = cause else {
         return InferenceError::PermanentFailure {
             reason: text.to_string(),
@@ -284,7 +314,7 @@ fn classify_cause(cause: &LoopFailureCause, report: &ProviderReport, text: &str)
         failure,
         CompletionFailure::Http { .. } | CompletionFailure::Provider(_)
     ) {
-        match classify_provider_limit(reason, chrono::Utc::now()) {
+        match classify_attempt_provider_limit(reason, now) {
             Some(ProviderLimit::UsageExhausted(limit)) => {
                 return InferenceError::UsageLimited(limit);
             }

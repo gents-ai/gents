@@ -104,6 +104,8 @@ pub struct ResolvedAgent {
     pub max_total_tokens: Option<u64>,
     pub max_invalid_tool_calls: usize,
     pub repeated_tool_failure_limit: usize,
+    /// The successor budget this Agent's requests pin at their first claim.
+    pub max_request_retries: u64,
     pub stream_batch_ms: u64,
     pub stream_liveness_timeout: Duration,
     pub provider_idle_timeout: Duration,
@@ -191,6 +193,14 @@ impl ResolvedInference {
             .unwrap_or_default()
             .repeated_failure_limit()
             .context("repeated_tool_failure_limit must be positive")
+    }
+
+    pub fn max_request_retries(&self) -> Result<u64> {
+        Ok(self
+            .execution
+            .clone()
+            .unwrap_or_default()
+            .request_retry_budget()?)
     }
 
     pub fn sampling_config(&self) -> Result<SamplingConfig> {
@@ -407,6 +417,7 @@ impl std::fmt::Debug for ResolvedAgent {
                 "repeated_tool_failure_limit",
                 &self.repeated_tool_failure_limit,
             )
+            .field("max_request_retries", &self.max_request_retries)
             .field("stream_batch_ms", &self.stream_batch_ms)
             .field("stream_liveness_timeout", &self.stream_liveness_timeout)
             .field("provider_idle_timeout", &self.provider_idle_timeout)
@@ -421,6 +432,15 @@ impl std::fmt::Debug for ResolvedAgent {
 }
 
 impl ResolvedAgent {
+    /// The model of the admitted inference profile; an Agent built without
+    /// configuration documents has only the placeholder model.
+    pub fn profile_model(&self) -> Option<&str> {
+        match self.configuration {
+            ResolvedConfiguration::Documents(_) => Some(&self.model_name),
+            ResolvedConfiguration::Static => None,
+        }
+    }
+
     pub fn effective_inference(
         &self,
     ) -> gents_protocol::node_readiness::EffectiveInferenceSettings {
@@ -968,6 +988,7 @@ mod tests {
             max_invalid_tool_calls: gents_loop::loop_stream::DEFAULT_MAX_INVALID_TOOL_CALLS,
             repeated_tool_failure_limit:
                 gents_loop::loop_stream::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
+            max_request_retries: gents_documents::inference_defaults::DEFAULT_REQUEST_MAX_RETRIES,
             stream_batch_ms: DEFAULT_STREAM_BATCH_MS,
             stream_liveness_timeout: Duration::from_secs(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS),
             provider_idle_timeout: Duration::from_secs(DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS),

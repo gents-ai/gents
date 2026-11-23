@@ -1224,7 +1224,6 @@ pub(crate) mod tests {
                 "failure_reason": "",
                 "created_at": "2026-01-01T00:00:00Z",
                 "retry_count": 0,
-                "max_retries": 3,
                 "request_hop": 1,
                 "retry_key": retry_key,
                 "caused_by_parent_tool_call_doc_id": chain,
@@ -1635,7 +1634,6 @@ pub(crate) mod tests {
         let tools: Tools = serde_json::from_value(json!({
             "tools_id": format!("{}:tools", agent_did()),
             "node_did": node_did(),
-            "integrations": {"plugins": [{"plugin": "acme/engine", "job": settings}]},
         }))
         .unwrap();
         gents_documents::write_tools_document(
@@ -1645,6 +1643,18 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
+        owner
+            .write_with_variables(
+                "test.job_stored_tools",
+                "mutation($node: String, $tools: String, $input: ToolsMutationInputArg!) { update_Tools(filter: {node_did: {_eq: $node}, tools_id: {_eq: $tools}}, input: $input) { _docID } }",
+                &json!({
+                    "node": node_did(),
+                    "tools": format!("{}:tools", agent_did()),
+                    "input": {"integrations": {"plugins": [{"plugin": "acme/engine", "job": settings}]}},
+                }),
+            )
+            .await
+            .unwrap();
         let agent = agent_access(&node);
         let now = chrono::Utc::now().to_rfc3339();
         let session_doc = insert_as(

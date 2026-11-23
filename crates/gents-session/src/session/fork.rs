@@ -535,6 +535,7 @@ pub fn is_user_turn(row: &Value) -> Result<bool> {
 
 fn is_user_message(message: &TranscriptMessage) -> bool {
     message.role == MessageRole::User
+        && !gents_protocol::output::rows::is_runtime_context_key(&message.message_key)
         && message
             .blocks
             .iter()
@@ -960,15 +961,27 @@ async fn fork_in_txn(
                 .map(|sequence| u64::from(*sequence) + 1)
                 .unwrap_or(0)
         });
+    let compactions = rows(&snapshot, "CompactionEntry")?;
+    let copied_cursors = compactions
+        .iter()
+        .map(|row| ordinal(row, "compacted_through_sequence"))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .filter(|through| u64::from(*through) < cut)
+        .collect::<BTreeSet<_>>();
     let retained = headers
         .iter()
-        .filter(|header| u64::from(header.message.sequence) < cut)
+        .filter(|header| {
+            u64::from(header.message.sequence) < cut
+                && (!gents_protocol::output::rows::is_runtime_context_key(
+                    &header.message.message_key,
+                ) || copied_cursors.contains(&header.message.sequence))
+        })
         .collect::<Vec<_>>();
     let retained_sequences = retained
         .iter()
         .map(|header| header.message.sequence)
         .collect::<BTreeSet<_>>();
-    let compactions = rows(&snapshot, "CompactionEntry")?;
     let source_compactions = compactions
         .iter()
         .cloned()
@@ -1171,6 +1184,13 @@ mod tests {
     use gents_protocol::output::{
         OutputOutcome, PayloadPresentation, PayloadRef, PresentedPayload,
     };
+
+    #[test]
+    fn runtime_context_keys_match_lean() {
+        gents_lean_vocab::families::request_context_runtime_context_key::replay(|i| {
+            gents_protocol::output::rows::is_runtime_context_key(&i.key)
+        });
+    }
 
     #[test]
     fn generated_fork_reference_authority_matches_native_decision() {

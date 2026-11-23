@@ -18,6 +18,7 @@ use gents_documents::{BashMode, FileToolMode};
 
 #[derive(Clone)]
 pub struct AgentToolSurfaceConfig {
+    hidden_tool_names: Vec<String>,
     host_tools: ToolSet,
     root_execution_guard: Option<super::RootExecutionGuard>,
     max_instruction_chars: usize,
@@ -69,6 +70,7 @@ impl AgentToolSurfaceConfig {
         agent_policy.p2p_mutate = false;
         agent_policy.self_config_categories = EndpointScope::none();
         Self {
+            hidden_tool_names: Vec::new(),
             host_tools: ToolSet::meta_only(),
             root_execution_guard: None,
             max_instruction_chars: gents_documents::tool_limits::DEFAULT_MAX_INSTRUCTION_CHARS,
@@ -189,6 +191,7 @@ impl AgentToolSurfaceConfig {
             &ToolPolicySurface::runtime_all(),
         );
         let ResolvedToolSelection {
+            hidden_tool_names,
             file_tools: requested_file_tools,
             file_tool_root,
             bash: requested_bash,
@@ -339,6 +342,7 @@ impl AgentToolSurfaceConfig {
         });
 
         Ok(Self {
+            hidden_tool_names,
             host_tools,
             root_execution_guard,
             max_instruction_chars,
@@ -504,7 +508,7 @@ impl AgentToolSurfaceConfig {
         let availability = RuntimeToolAvailability::from_online_mcp_services(available_service_ids);
         let mut surface =
             self.resolve_with_agent_tools_for_runtime_availability(availability, agent_tools);
-        surface.plugin_resolutions = resolve_plugin_identities(plugins, &surface.plugin_tools);
+        surface.plugin_resolutions = resolve_plugin_identities(plugins, &surface.plugin_tools)?;
         for (plugin, record) in &surface.plugin_resolutions {
             let name = plugin.tool_name();
             if record
@@ -553,6 +557,7 @@ impl AgentToolSurfaceConfig {
         );
 
         ToolSurface {
+            hidden_tool_names: self.hidden_tool_names.clone(),
             host_tools: self.host_tools.clone(),
             root_execution_guard: self.root_execution_guard.clone(),
             include_meta_tools,
@@ -695,17 +700,27 @@ impl Default for AgentToolSurfaceConfig {
 fn resolve_plugin_identities(
     plugins: &dyn crate::plugin_host::PluginHost,
     plugin_tools: &[gents_documents::PluginToolRef],
-) -> Vec<(
-    gents_documents::PluginToolRef,
-    Option<gents_pack::plugin::store::InstalledPlugin>,
-)> {
+) -> Result<
+    Vec<(
+        gents_documents::PluginToolRef,
+        Option<gents_pack::plugin::store::InstalledPlugin>,
+    )>,
+> {
     plugin_tools
         .iter()
         .map(|plugin| {
-            let record = plugins
-                .resolve(&plugin.plugin, plugin.digest.as_deref())
-                .ok();
-            (plugin.clone(), record)
+            let record = match plugins.resolve(&plugin.plugin, plugin.digest.as_deref()) {
+                Ok(record) => Some(record),
+                Err(error)
+                    if gents_pack::plugin::store::PublishedPluginReadError::error_chain_is_busy(
+                        error.as_ref(),
+                    ) =>
+                {
+                    return Err(error);
+                }
+                Err(_) => None,
+            };
+            Ok((plugin.clone(), record))
         })
         .collect()
 }
@@ -731,6 +746,7 @@ impl std::fmt::Debug for AgentToolSurfaceConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AgentToolSurfaceConfig")
             .field("host_tools", &self.host_tools)
+            .field("hidden_tool_names", &self.hidden_tool_names)
             .field("max_instruction_chars", &self.max_instruction_chars)
             .field("enable_meta_tools", &self.enable_meta_tools)
             .field("enable_goal_tools", &self.enable_goal_tools)

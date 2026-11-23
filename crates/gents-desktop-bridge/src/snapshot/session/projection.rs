@@ -2005,13 +2005,9 @@ pub(super) fn project_transcript_rows(
             };
             let runtime_context = resolved_origin.is_some_and(|origin| {
                 origin.message.role == gents_protocol::output::MessageRole::User
-                    && origin
-                        .message
-                        .request_doc_id
-                        .as_deref()
-                        .is_some_and(|doc_id| {
-                            origin.message.message_key == format!("authored:{doc_id}:context")
-                        })
+                    && gents_protocol::output::rows::is_runtime_context_key(
+                        &origin.message.message_key,
+                    )
             });
             let presentation = reconstructed.as_ref().map(present_message);
             let input_text = match reconstructed.as_ref() {
