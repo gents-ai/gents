@@ -125,7 +125,7 @@ impl ChildScopeWorld {
         let foreign_binding = gents_store::identity::provision_agent_identity(&root).unwrap();
         let foreign =
             gents_store::identity::resolve_agent_identity(&root, &foreign_binding).unwrap();
-        for (actor, may_relate) in [(agent.did(), input.grant_ok), (foreign.did(), true)] {
+        for actor in [agent.did(), foreign.did()] {
             for permission in [
                 NodePermission::DocumentRead,
                 NodePermission::CollectionGet,
@@ -133,9 +133,6 @@ impl ChildScopeWorld {
                 NodePermission::DacRelationAdd,
                 NodePermission::DacRelationDelete,
             ] {
-                if matches!(permission, NodePermission::DacRelationAdd) && !may_relate {
-                    continue;
-                }
                 root_access
                     .grant_node_permission(&actor.parse().unwrap(), permission)
                     .await

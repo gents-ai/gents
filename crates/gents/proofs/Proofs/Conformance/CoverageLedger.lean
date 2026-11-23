@@ -4118,6 +4118,9 @@ def caseCoverage : List CoverageEntry :=
   , tagged (followUpCoverage "family" "remote_delivery_claim_unreached"
       "model-production-gap: no production path reaches these emitted cases yet (every case: production never creates a request from another runtime, so no claim transaction observes the remote sender's session, invoke or node permission)")
       "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "session_child_child_scope_repair_unreached"
+      "failed_grant: the parent grant is a native relationship change, and the store's fault seams fail only document mutations, so no fixture fails that grant alone.")
+      "identity-permission" [Surface.runtimeInternal]
   , tagged (followUpCoverage "family" "session_child_client_request_recovery_unreached"
       "model-production-gap: no production path reaches these emitted cases yet (grant_failed, wrong_signature, already_completed_revoked: the served retry fixture cannot fail the working Agent grant or marker, sign a mismatched request, or start from a completed publication whose grant was revoked)")
       "identity-permission" [Surface.runtimeInternal]

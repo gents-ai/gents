@@ -52,7 +52,15 @@ transaction, so the binding's actor is the authenticated creator; a case that
 separates them is a binding case only. -/
 @[conformance_family]
 def childScopeRepair : Family ChildScopeInput RepairOutput where
-  inputs := (childScopeCases.filter fun c => c.authenticated == some c.binding.actor).map .ofCase
+  inputs := (childScopeCases.filter fun c =>
+    c.authenticated == some c.binding.actor && c.name != "failed_grant").map .ofCase
+  model := repaired
+
+/-- The parent grant is a native relationship change, and the store's fault
+seams fail only document mutations, so no fixture fails that grant alone. -/
+@[conformance_family]
+def childScopeRepairUnreached : Family ChildScopeInput RepairOutput where
+  inputs := (childScopeCases.filter (·.name == "failed_grant")).map .ofCase
   model := repaired
 
 structure ClientRequestInput where
