@@ -42,9 +42,6 @@
             "node_did": {
               "_eq": "$trial"
             },
-            "session_id": {
-              "_eq": "$session"
-            },
             "tool_name": {
               "_eq": "charts"
             },
@@ -55,25 +52,9 @@
           "fields": [
             "_docID",
             "tool_name",
-            "lifecycle_state"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "segments",
-          "collection": "AgentOutputSegment",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            },
-            "session_id": {
-              "_eq": "$session"
-            }
-          },
-          "fields": [
-            "_docID",
-            "source",
-            "payload"
+            "lifecycle_state",
+            "plugin_parent_tool_call_doc_id",
+            "result"
           ]
         }
       ],
@@ -107,25 +88,22 @@
                 "min": 1
               }
             ],
-            "links": [
+            "rows": [
               {
                 "capture": "charts",
                 "key": "lifecycle_state",
                 "id": "completed",
-                "field": "_docID",
-                "target_capture": "segments",
-                "target_key": "source.tool_call_doc_id",
                 "expect": [
                   {
-                    "field": "payload",
+                    "field": "result",
                     "matches": "\\\\?\"chart\\\\?\"\\s*:\\s*\\\\?\"bar\\\\?\""
                   },
                   {
-                    "field": "payload",
+                    "field": "result",
                     "matches": "\\\\?\"sum\\\\?\"\\s*:\\s*83(\\.0+)?\\b"
                   },
                   {
-                    "field": "payload",
+                    "field": "result",
                     "matches": "\\\\?\"max\\\\?\"\\s*:\\s*34(\\.0+)?\\b"
                   }
                 ]
