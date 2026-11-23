@@ -129,5 +129,11 @@ arrives, the watcher saves C’s certified revision before stopping B. After a
 restart it finishes outstanding stops even while the authority is unreachable,
 and rejects an older view when reads resume. The applied
 inventory advances after the stop succeeds. C can start once its body is verified.
+
+The watcher is a Rust API for workload owners. `gents utils debug fleet slots`
+reports a snapshot and does not start a watcher. The restart test uses a real
+embedded Vera provider and reopens Defra from disk. Its workload adapter tracks
+running IDs and body availability in memory. A fleet integration must supply
+the adapter that verifies its signed documents and controls its running work.
 [Receiver API](crates/gents-store/src/config_client/assignment_receiver.rs) ·
 [Restart and withdrawal tests](crates/gents-store/src/identity/enrollment_grant/withdrawal_tests.rs)
