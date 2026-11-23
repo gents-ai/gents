@@ -15,6 +15,7 @@ use super::http_mock::HttpRequestData;
 struct MockState {
     model_name: String,
     required_bearer: Option<String>,
+    reasoning_tool_turns: bool,
     recorded: Arc<Mutex<Vec<HttpRequestData>>>,
 }
 
@@ -29,14 +30,31 @@ impl MockModelEndpoint {
         Self::start_with_required_bearer(model_name, None)
     }
 
+    /// A `/v1/responses` server that answers like a reasoning model: every
+    /// tool-bearing request gets a reasoning item, then a call to its first
+    /// tool, and once that call's output arrives a reasoning item and a
+    /// message.
+    pub fn start_with_reasoning_tool_turns(model_name: &str) -> anyhow::Result<Self> {
+        Self::start_with(model_name, None, true)
+    }
+
     pub fn start_with_required_bearer(
         model_name: &str,
         required_bearer: Option<&str>,
+    ) -> anyhow::Result<Self> {
+        Self::start_with(model_name, required_bearer, false)
+    }
+
+    fn start_with(
+        model_name: &str,
+        required_bearer: Option<&str>,
+        reasoning_tool_turns: bool,
     ) -> anyhow::Result<Self> {
         let recorded = Arc::new(Mutex::new(Vec::new()));
         let state = MockState {
             model_name: model_name.to_string(),
             required_bearer: required_bearer.map(ToOwned::to_owned),
+            reasoning_tool_turns,
             recorded: recorded.clone(),
         };
         let app = Router::new()
@@ -221,37 +239,81 @@ async fn handle_responses(
     headers: HeaderMap,
     body: String,
 ) -> Response {
+    let request: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
     record(&state, "POST", uri.path(), &headers, body);
     if !bearer_authorized(&state, &headers) {
         return unauthorized();
     }
+    let turn = state
+        .recorded
+        .lock()
+        .expect("mock recorded-requests mutex poisoned")
+        .len();
     let message = json!({
-        "type": "message", "id": "msg_1", "role": "assistant", "status": "completed",
+        "type": "message", "id": format!("msg_{turn}"), "role": "assistant",
+        "status": "completed",
         "content": [{"type": "output_text", "text": "mock response", "annotations": []}],
     });
-    let events = [
-        json!({
-            "type": "response.output_text.delta", "item_id": "msg_1", "output_index": 0,
-            "content_index": 0, "sequence_number": 1, "delta": "mock response",
-        }),
-        json!({
-            "type": "response.output_item.done", "output_index": 0, "sequence_number": 2,
-            "item": message,
-        }),
-        json!({
-            "type": "response.completed", "sequence_number": 3,
-            "response": {
-                "id": "resp_1", "object": "response", "created_at": 1, "status": "completed",
-                "error": null, "incomplete_details": null, "instructions": null,
-                "max_output_tokens": null, "model": state.model_name, "output": [message],
-                "usage": {
-                    "input_tokens": 10, "input_tokens_details": {"cached_tokens": 0},
-                    "output_tokens": 2, "output_tokens_details": {"reasoning_tokens": 0},
-                    "total_tokens": 12,
-                },
+    let tool = request["tools"][0]["name"].as_str();
+    let output = match tool {
+        Some(tool) if state.reasoning_tool_turns => {
+            let reasoning = json!({
+                "type": "reasoning", "id": format!("rs_{turn}"), "summary": [],
+                "encrypted_content": format!("sealed-{turn}"),
+            });
+            let answered = request["input"]
+                .as_array()
+                .and_then(|input| input.last())
+                .is_some_and(|item| item["type"] == "function_call_output");
+            if answered {
+                vec![reasoning, message]
+            } else {
+                vec![
+                    reasoning,
+                    json!({
+                        "type": "function_call", "id": format!("fc_{turn}"),
+                        "call_id": format!("call_{turn}"), "name": tool, "arguments": "{}",
+                        "status": "completed",
+                    }),
+                ]
+            }
+        }
+        _ => vec![message],
+    };
+    let mut events = Vec::new();
+    for (index, item) in output.iter().enumerate() {
+        if item["type"] == "function_call" {
+            events.push(json!({
+                "type": "response.output_item.added", "output_index": index,
+                "sequence_number": events.len(), "item": item,
+            }));
+        }
+        if item["type"] == "message" {
+            events.push(json!({
+                "type": "response.output_text.delta", "item_id": item["id"],
+                "output_index": index, "content_index": 0,
+                "sequence_number": events.len(), "delta": "mock response",
+            }));
+        }
+        events.push(json!({
+            "type": "response.output_item.done", "output_index": index,
+            "sequence_number": events.len(), "item": item,
+        }));
+    }
+    events.push(json!({
+        "type": "response.completed", "sequence_number": events.len(),
+        "response": {
+            "id": format!("resp_{turn}"), "object": "response", "created_at": 1,
+            "status": "completed", "error": null, "incomplete_details": null,
+            "instructions": null, "max_output_tokens": null, "model": state.model_name,
+            "output": output,
+            "usage": {
+                "input_tokens": 10, "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens": 2, "output_tokens_details": {"reasoning_tokens": 0},
+                "total_tokens": 12,
             },
-        }),
-    ];
+        },
+    }));
     let sse: String = events
         .iter()
         .map(|event| {

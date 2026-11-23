@@ -301,6 +301,16 @@ fn wire_reasoning_count(wire: ReplayWire, parts: &[ReasoningContent]) -> usize {
     }
 }
 
+/// External premise: the Responses server refuses a turn's items without
+/// their reasoning item and itself ignores reasoning whose prefix changed, so
+/// only the Messages wire is cut at the capture frontier.
+fn prefix_bound(wire: ReplayWire) -> bool {
+    match wire {
+        ReplayWire::ClaudeMessages => true,
+        ReplayWire::Responses => false,
+    }
+}
+
 fn turn_header_offset(wire: ReplayWire) -> usize {
     match wire {
         ReplayWire::ClaudeMessages => 1,
@@ -511,6 +521,9 @@ pub fn select_replay(
     let selection = Selection::new(rows, issuer, wire, resolve);
     let total = selection.candidates_before(selection.groups.len());
     let base_start = selection.base_start();
+    if !prefix_bound(wire) {
+        return strip_first_reasoning(selection.rows, selection.candidates_before(base_start));
+    }
     let base_kept = &selection.groups[base_start..];
     let counts = base_kept
         .iter()

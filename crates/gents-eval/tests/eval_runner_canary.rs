@@ -795,6 +795,86 @@ async fn a_responses_backend_runs_its_trial_without_a_sampling_seed() {
 }
 
 #[tokio::test]
+async fn a_responses_reasoning_backend_runs_a_second_request_in_the_session() {
+    let backend =
+        support::mock_endpoint::MockModelEndpoint::start_with_reasoning_tool_turns(MODEL).unwrap();
+    let (canary, mut request) = canary_request(backend.endpoint(), "run-responses-replay").await;
+    let mut responses = backend_document(
+        &canary.owner,
+        "canary-backend",
+        backend.endpoint(),
+        json!({"kind": "unauthenticated"}),
+    );
+    responses["openai_wire_api"] = json!("responses");
+    let mut profile = profile_document(&canary.owner, "canary", "canary-backend", MODEL);
+    profile["reasoning_effort"] = json!("high");
+    canary
+        .install(vec![
+            (Collection::InferenceBackend, responses),
+            (Collection::InferenceProfile, profile),
+        ])
+        .await;
+    request.case_ids = Some(vec!["two-stage".into()]);
+
+    let outcome = run(
+        &canary.access,
+        &request,
+        &canary.executor(),
+        &CheckRegistry::builtin(),
+        CancellationToken::new(),
+        &RunOptions::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!((outcome.completed, outcome.not_evidence), (1, 0));
+
+    let inputs = backend
+        .recorded_requests()
+        .into_iter()
+        .filter(|request| request.path == "/v1/responses")
+        .map(|request| serde_json::from_str::<Value>(&request.body).unwrap())
+        .filter(|body| body.get("tools").is_some())
+        .map(|body| body["input"].as_array().unwrap().clone())
+        .collect::<Vec<_>>();
+    assert_eq!(inputs.len(), 4, "two stages of two turns each: {inputs:#?}");
+    let second_request = &inputs[2];
+    let provider_items = second_request
+        .iter()
+        .filter(|item| item["role"] != "system" && item["role"] != "user")
+        .map(|item| {
+            let mut item = item.clone();
+            if item["type"] == "function_call_output" {
+                item["output"].take();
+            }
+            item
+        })
+        .collect::<Vec<_>>();
+    let first_call = inputs[1]
+        .iter()
+        .find(|item| item["type"] == "function_call")
+        .unwrap();
+    assert_eq!(
+        provider_items,
+        vec![
+            json!({"type": "reasoning", "id": "rs_4", "summary": [],
+                "encrypted_content": "sealed-4"}),
+            first_call.clone(),
+            json!({"type": "function_call_output", "call_id": "call_4", "output": null,
+                "status": "completed"}),
+            json!({"type": "reasoning", "id": "rs_5", "summary": [],
+                "encrypted_content": "sealed-5"}),
+            json!({"type": "message", "id": "msg_5", "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "mock response",
+                    "annotations": []}]}),
+        ],
+        "the second request returns every item the first request's responses produced"
+    );
+    assert_eq!(second_request.last().unwrap()["role"], "user");
+    assert_eq!(inputs[3][..second_request.len()], second_request[..]);
+}
+
+#[tokio::test]
 async fn freeze_refuses_unrestricted_bash_and_an_oauth_backend_before_creating_any_home() {
     let (canary, base) = canary_request("http://127.0.0.1:1/v1", "run-refused").await;
     let executor = canary.executor();
