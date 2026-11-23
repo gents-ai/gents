@@ -33,6 +33,7 @@ structure ReconcileInput where
   preDefaultAgent : Nat
   preSessionAgent : Option Nat
   preRunnable : List Nat
+  preStartupDemoted : List Nat
   prePhase : String
   preActiveGeneration : Nat
   preRouterGeneration : Nat
@@ -84,7 +85,8 @@ private def reconcileCase (name : String) : RuntimeReconcileCase :=
 private def reconcileInput (c : RuntimeReconcileCase) : ReconcileInput :=
   { name := c.name, action := c.action, requestedAgent := c.requestedAgent
     preDefaultAgent := c.preDefaultAgent, preSessionAgent := c.preSessionAgent
-    preRunnable := c.preRunnable, prePhase := c.prePhase
+    preRunnable := c.preRunnable, preStartupDemoted := c.preStartupDemoted
+    prePhase := c.prePhase
     preActiveGeneration := c.preActiveGeneration, preRouterGeneration := c.preRouterGeneration
     preReadyGenerationCount := c.preReadyGenerationCount
     preLiveGenerationCount := c.preLiveGenerationCount, preInFlightCount := c.preInFlightCount
@@ -93,13 +95,16 @@ private def reconcileInput (c : RuntimeReconcileCase) : ReconcileInput :=
 private def reconcileInputs (names : List String) : List ReconcileInput :=
   (runtimeReconcileCases.filter fun c => c.name ∈ names).map reconcileInput
 
-/-- Agent resolution reads the session's bound Agent and the requested Agent;
-the private-session fixture binds a session to one of two readable Agents, so
-it builds the explicit selections between two runnable Agents on a ready
-runtime. -/
+/-- The router admits an explicit selection when the session's bound Agent
+reads the session and is the requested one, and the routed generation holds a
+ready dispatcher for it: the private-session fixture binds a session to one of
+two readable Agents and the routed generation dispatches the requested Agent,
+dispatches none for an unknown one, and holds a startup demotion for a demoted
+one. -/
 def selectionNames : List String :=
   ["default-A-explicit-B-binds-B", "existing-A-requested-B-rejected",
-    "existing-A-requested-A-accepted"]
+    "existing-A-requested-A-accepted", "unknown-selection-never-falls-back",
+    "demoted-selection-never-falls-back"]
 
 @[conformance_family]
 def runtimeReconcileSelection : Family ReconcileInput ReconcileSelectionOutput where
@@ -121,16 +126,20 @@ def runtimeReconcileStatus : Family ReconcileInput ReconcileStatusOutput where
 
 /-- The router observes the active snapshot's generation and holds a request
 until that generation is the one it routes with, so it builds the router
-observation and the accept after it. -/
+observation, a request held while the published generation is unobserved, and
+the accept after the observation. A held request leaves the routed generation
+where it was. -/
 def routerNames : List String :=
-  ["router_observe_published_generation", "accept_request_after_router_observe"]
+  ["router_observe_published_generation", "unobserved-generation-rejects-explicit-request",
+    "accept_request_after_router_observe"]
 
 @[conformance_family]
 def runtimeReconcileRouter : Family ReconcileInput ReconcileRouterOutput where
   inputs := reconcileInputs routerNames
   model := fun i =>
     let c := reconcileCase i.name
-    { legal := c.legal, postRouterGeneration := c.postRouterGeneration }
+    { legal := c.legal
+      postRouterGeneration := if c.legal then c.postRouterGeneration else c.preRouterGeneration }
 
 /-- The generation supervisor applies a proposed snapshot or keeps the
 previous generation when the proposal fails to apply. -/
@@ -147,16 +156,29 @@ def runtimeReconcileSupervisor : Family ReconcileInput ReconcileSupervisorOutput
 example : (reconcileCase "publish_changed_snapshot").legal = true ∧
     (reconcileCase "apply_failed_clears_pending").legal = true := by native_decide
 
-/-- model-production-gap: no production scenario drives a request finish
-releasing its generation, a replayed accept, retiring an unobserved
-generation, a resolve over a snapshot with a missing dependency, an unknown or
-demoted explicit selection, or an explicit request before the router observes
-the published generation; the served runtime fixtures cannot seed these
-pre-states. -/
+/-- A resolved snapshot becomes the runtime's generation only when every
+runnable Agent's dependencies are present: the generation supervisor refuses a
+proposal whose runnable Agent has no tool surface and keeps the previous
+generation. -/
+def resolveNames : List String := ["missing_dependency_snapshot_is_not_resolved"]
+
+structure ReconcileResolveOutput where
+  legal : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def runtimeReconcileResolve : Family ReconcileInput ReconcileResolveOutput where
+  inputs := reconcileInputs resolveNames
+  model := fun i => { legal := (reconcileCase i.name).legal }
+
+/-- Request finish, a replayed accept and generation retirement over the
+model's per-generation in-flight set; production tracks in-flight work per
+Agent slot rather than per generation. -/
 @[conformance_family]
 def runtimeReconcileUnreached : Family ReconcileInput ReconcileOutput where
   inputs := (runtimeReconcileCases.filter fun c =>
-    !(selectionNames ++ statusNames ++ routerNames ++ supervisorNames).contains c.name).map
+    !(selectionNames ++ statusNames ++ routerNames ++ supervisorNames ++ resolveNames).contains
+      c.name).map
       reconcileInput
   model := fun i =>
     let c := reconcileCase i.name

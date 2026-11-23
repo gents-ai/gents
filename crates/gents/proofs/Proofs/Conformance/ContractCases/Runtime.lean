@@ -63,6 +63,7 @@ def runtimeCaseFromStep
       , preDefaultAgent := pre.active.defaultAgent
       , preSessionAgent := pre.sessionAgent trackedSessionId
       , preRunnable := pre.effectiveDispatchers.sort (· ≤ ·)
+      , preStartupDemoted := pre.startupDemoted.sort (· ≤ ·)
       , name := name
       , action := actionName
       , legal := true
@@ -93,6 +94,7 @@ def runtimeCaseFromStep
       , preDefaultAgent := pre.active.defaultAgent
       , preSessionAgent := pre.sessionAgent trackedSessionId
       , preRunnable := pre.effectiveDispatchers.sort (· ≤ ·)
+      , preStartupDemoted := pre.startupDemoted.sort (· ≤ ·)
       , name := name
       , action := actionName
       , legal := false
