@@ -1769,5 +1769,42 @@ class ReusePlan(unittest.TestCase):
         self.assertIn("matrix: ${{ fromJSON(needs.plan.outputs.desktop_ui) }}", jobs["desktop-ui"])
 
 
+class LatencyArtifactName(unittest.TestCase):
+    """The ci-latency upload name sanitizes what GitHub bans (W53).
+
+    GitHub artifact names may not contain space, " , : < > | ? * \\ / or
+    leading/trailing whitespace, and may not be empty (256 characters max).
+    """
+
+    def assert_safe(self, name):
+        self.assertTrue(name)
+        self.assertEqual(name, name.strip())
+        self.assertNotIn(name, {" ", '"', ",", ":", "<", ">", "|", "?", "*", "\\", "/"})
+        self.assertNotRegex(name, r'[\s",:<>|?*/\\]')
+        self.assertLessEqual(len(name), 256)
+
+    def test_plan_unit_keys_produce_safe_names(self):
+        # Every unit key the plan can emit, including the colon and slash
+        # forms that motivated the sanitizer.
+        for unit in ("fmt", "lint", "contract", "ts-unit", "test:store", "test:cli@macos",
+                     "build:portable", "build:portable:3", "shard:portable:2",
+                     "ts-browser:1/3", ' lint ', "ts\"fuzz", "ts<unit>", "ts|fuzz?",
+                     "ts*fuzz\\x", "a,b", "a:b:c", "  ", "-"):
+            with self.subTest(unit=unit):
+                self.assert_safe(gate.latency_artifact_name(unit))
+
+    def test_colon_and_slash_become_dashes(self):
+        self.assertEqual(gate.latency_artifact_name("build:portable:3"), "ci-latency-build-portable-3")
+        self.assertEqual(gate.latency_artifact_name("ts-browser:1/3"), "ci-latency-ts-browser-1-3")
+        self.assertEqual(gate.latency_artifact_name("fmt"), "ci-latency-fmt")
+
+    def test_action_delegates_to_gate(self):
+        # The action must not rebuild the name in YAML: it stages with
+        # gate.py's latency-sample command, and the upload consumes its output.
+        action = (gate.ROOT / ".github/actions/gate-record/action.yml").read_text()
+        self.assertIn("python3 scripts/ci/gate.py latency-sample", action)
+        self.assertIn("name: ${{ steps.latency.outputs.name }}", action)
+
+
 if __name__ == "__main__":
     unittest.main()
