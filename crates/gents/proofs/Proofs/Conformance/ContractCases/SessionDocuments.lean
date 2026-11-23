@@ -214,7 +214,13 @@ def nestedAuthorization : SessionFork.SourceAuthorization :=
     copied.closures.map (·.id)⟩
 example : (publish copied child grandchild regrant childKey 1 nestedAuthorization true true).map
     (·.closures) = some [⟨3101, grandchild.session, 101⟩] := by decide
-example : publish history scope { child with requester := none } remap childKey 1 sourceAuthorization true true = none := by decide
+/-- A fork's child takes the fork caller's requester, and the fork refuses a
+caller whose requester is not the source session's (`ForkParams` has no field
+naming a requester for the child), so a child with another requester has no
+production form; the model refuses it. -/
+theorem fork_to_another_requester_is_refused :
+    publish history scope { child with requester := none } remap childKey 1
+      sourceAuthorization true true = none := by decide
 example : publish history scope child remap childKey 1 sourceAuthorization false true = none := by decide
 example : publish history scope child remap childKey 1 sourceAuthorization true false = none := by decide
 example : publish history scope child remap childKey 1 wrongAgentAuthorization true true = none := by decide
@@ -227,7 +233,11 @@ example : publish { history with compactions := [⟨4, scope.session, 1, 99⟩] 
 
 def duplicateSequenceHistory : History :=
   { messages := [sourceMessage 1 0, sourceMessage 2 0], compactions := [] }
-example : publish duplicateSequenceHistory scope child remap childKey 1
+/-- `AgentMessage` has a unique index on `(node_did, session_id, sequence)`,
+so the store holds no source with two messages at one sequence
+(`single_header_transaction_matches_bulk_coordinate_validation` evidences the
+refusal); the model refuses such a source. -/
+theorem fork_of_duplicate_message_sequence_is_refused : publish duplicateSequenceHistory scope child remap childKey 1
     (SessionFork.SourceAuthorization.mk scope
       (duplicateSequenceHistory.messages.map (·.header.id))
       (duplicateSequenceHistory.compactions.map (·.id))
