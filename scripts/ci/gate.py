@@ -294,6 +294,20 @@ def latency_sample_paths(unit):
     return directory, latency_artifact_name(unit)
 
 
+def latency_sample(unit):
+    """Stage a unit's latency sample for the ci-latency collector (W53).
+
+    Writes record.json ({unit, run_id}) — the collector's source of the
+    exact unit key — into the staging directory and prints the sanitized
+    artifact name, NUL-terminated for `read -d ""`.
+    """
+    directory, name = latency_sample_paths(unit)
+    directory.mkdir(parents=True, exist_ok=True)
+    with open(directory / "record.json", "w") as record:
+        json.dump({"unit": unit, "run_id": os.environ.get("GITHUB_RUN_ID", "")}, record)
+    sys.stdout.write(f"{name}\0")
+
+
 def workspace():
     """Member name -> (directory, workspace dependencies of every kind)."""
     return parse_workspace(workspace_metadata())
@@ -2002,8 +2016,7 @@ def main():
     if arguments.command == "latency-sample":
         # One NUL-terminated field: the consumer's `read -d ""` reads a
         # single record, and the staging directory is the action's constant.
-        _, name = latency_sample_paths(arguments.unit)
-        sys.stdout.write(f"{name}\0")
+        latency_sample(arguments.unit)
         return
     if arguments.command == "verdict":
         needs = json.loads(os.environ["NEEDS"])
