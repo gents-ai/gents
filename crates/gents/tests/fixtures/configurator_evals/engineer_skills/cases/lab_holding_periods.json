@@ -1,0 +1,122 @@
+{
+  "case_id": "lab-holding-periods",
+  "split": "held_out",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "lab/BS-77.json",
+        "contents": "{\n  \"id\": \"BS-77\",\n  \"kind\": \"bench sheet\",\n  \"failed_control\": true\n}\n"
+      },
+      {
+        "path": "lab/SL-12.json",
+        "contents": "{\n  \"id\": \"SL-12\",\n  \"kind\": \"specimen log\",\n  \"sent_out_for_testing\": false\n}\n"
+      },
+      {
+        "path": "lab/IP-5.json",
+        "contents": "{\n  \"id\": \"IP-5\",\n  \"kind\": \"instrument printout\"\n}\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "hold",
+      "prompt": "The lab manager wants to know how long we have to hold each item in lab/ before it can be destroyed. Give me JSON mapping each item id to the number of months.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "loaded",
+          "collection": "AgentOutputSegment",
+          "filter": {
+            "session_id": {
+              "_eq": "$session"
+            },
+            "payload": {
+              "_like": "Skill: Specimen log retention%"
+            }
+          },
+          "fields": [
+            "ordinal"
+          ]
+        },
+        {
+          "kind": "file",
+          "name": "lab",
+          "glob": "lab/*.json"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "load_skill"
+            ],
+            "forbidden": [
+              "write",
+              "bash",
+              "write_file",
+              "edit_file"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "loaded",
+                "min": 1
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\"BS-77\"\\s*:\\s*18\\b"
+              },
+              {
+                "matches": "\"SL-12\"\\s*:\\s*30\\b"
+              },
+              {
+                "matches": "\"IP-5\"\\s*:\\s*3\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "lab",
+            "expect": [
+              {
+                "path": "lab/BS-77.json",
+                "equals": "{\n  \"id\": \"BS-77\",\n  \"kind\": \"bench sheet\",\n  \"failed_control\": true\n}\n"
+              },
+              {
+                "path": "lab/SL-12.json",
+                "equals": "{\n  \"id\": \"SL-12\",\n  \"kind\": \"specimen log\",\n  \"sent_out_for_testing\": false\n}\n"
+              },
+              {
+                "path": "lab/IP-5.json",
+                "equals": "{\n  \"id\": \"IP-5\",\n  \"kind\": \"instrument printout\"\n}\n"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

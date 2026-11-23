@@ -1,0 +1,111 @@
+{
+  "case_id": "ferry-reimbursement-claims",
+  "split": "validation",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "claims/C-31.json",
+        "contents": "{\n  \"claim\": \"C-31\",\n  \"category\": \"ferry\",\n  \"paid\": 72,\n  \"rebate\": 9,\n  \"filed_days_after_travel\": 12\n}\n"
+      },
+      {
+        "path": "claims/C-32.json",
+        "contents": "{\n  \"claim\": \"C-32\",\n  \"category\": \"tram\",\n  \"paid\": 25,\n  \"rebate\": 0,\n  \"filed_days_after_travel\": 40\n}\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "settle",
+      "prompt": "What's payable on each staff travel claim in claims/? Reply with JSON mapping each claim id to the payable amount, as a number.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "loaded",
+          "collection": "AgentOutputSegment",
+          "filter": {
+            "session_id": {
+              "_eq": "$session"
+            },
+            "payload": {
+              "_like": "Skill: Ferry settlement%"
+            }
+          },
+          "fields": [
+            "ordinal"
+          ]
+        },
+        {
+          "kind": "file",
+          "name": "claims",
+          "glob": "claims/*.json"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "load_skill"
+            ],
+            "forbidden": [
+              "write",
+              "bash",
+              "write_file",
+              "edit_file"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "loaded",
+                "min": 1
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\"C-31\"\\s*:\\s*51\\b"
+              },
+              {
+                "matches": "\"C-32\"\\s*:\\s*9\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "claims",
+            "expect": [
+              {
+                "path": "claims/C-31.json",
+                "equals": "{\n  \"claim\": \"C-31\",\n  \"category\": \"ferry\",\n  \"paid\": 72,\n  \"rebate\": 9,\n  \"filed_days_after_travel\": 12\n}\n"
+              },
+              {
+                "path": "claims/C-32.json",
+                "equals": "{\n  \"claim\": \"C-32\",\n  \"category\": \"tram\",\n  \"paid\": 25,\n  \"rebate\": 0,\n  \"filed_days_after_travel\": 40\n}\n"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,96 @@
+{
+  "case_id": "trigger-never-fires",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type PickupSlip { slip: String depot: String urgent: Boolean }"
+    ],
+    "documents": [
+      {
+        "collection": "PickupSlip",
+        "document": {
+          "slip": "PS-201",
+          "depot": "North",
+          "urgent": true
+        }
+      },
+      {
+        "collection": "PickupSlip",
+        "document": {
+          "slip": "PS-202",
+          "depot": "Harbor",
+          "urgent": false
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "diagnose",
+      "prompt": "I added two PickupSlip records this morning, but nothing handled them: the automation I expected to run for each new pickup slip never fired. Don't fix or change anything yet. Find the first step in that chain that breaks. Reply with JSON {\"first_break\": STEP}, where STEP is one of \"source document\", \"event source\", \"filter\", \"trigger\", \"fire\", \"request\" or \"tools\".",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "loaded",
+          "collection": "AgentOutputSegment",
+          "filter": {
+            "session_id": {
+              "_eq": "$session"
+            },
+            "payload": {
+              "_like": "Skill: diagnose-node%"
+            }
+          },
+          "fields": [
+            "ordinal"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "load_skill"
+            ],
+            "forbidden": [
+              "write",
+              "bash",
+              "write_file",
+              "edit_file"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "loaded",
+                "min": 1
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\"first_break\"\\s*:\\s*\"event source\""
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}
