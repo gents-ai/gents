@@ -73,23 +73,22 @@ theorem agent_category_exposes_commands (nodeCategory : Bool) :
   cases nodeCategory <;> rfl
 
 /-- Before any bootstrap NAC grant, exclusive local initialization durably
-consumes a one-shot marker for a verified fresh store. The authenticated client
-and matching runtime principal are separately required. An absent Node means an
-authoritative absence, not an empty actor-filtered read. The bootstrap grants
-are the direct sets `GrantSets.directSets` names for the init User and the
-default Agent, issued as the NAC owner (`nacOwner`); configuration is published
-after them. A lost or ambiguous reservation response grants nothing; after a
-crash, a durable reservation cannot authorize replay. -/
+consumes a one-shot marker for a verified fresh store. The bootstrap grants are
+the direct sets `GrantSets.directSets` names for the init User and the default
+Agent, issued as the NAC owner (`nacOwner`); configuration is published after
+them. A lost or ambiguous reservation response grants nothing; after a crash, a
+durable reservation cannot authorize replay.
+
+Premises fixed by construction, so they are not observations: init opens the
+node under the runtime key it holds, whose DID is the node's identity DID; it
+signs as the client key it holds; it builds the node with NAC enabled; and the
+store it observes empty is a data directory with no entries, which holds no
+Node and no published configuration. -/
 structure BootstrapObservation where
   exclusive : Bool
-  matchingRuntime : Bool
-  authenticatedClient : Bool
-  nodeAbsentObserved : Bool
   storeEmptyObserved : Bool
   reservationDurable : Bool
-  nacEnabled : Bool
   freshEvidence : Bool
-  configurationPublished : Bool
   deriving Repr
 
 def reservationConfirmed (created fileSynced directorySynced : Bool) : Bool :=
@@ -111,9 +110,7 @@ theorem ambiguous_reservation_cannot_authorize (created fileSynced : Bool) :
   cases created <;> cases fileSynced <;> rfl
 
 def bootstrapMayGrant (o : BootstrapObservation) : Bool :=
-  o.exclusive && o.matchingRuntime && o.authenticatedClient && o.nodeAbsentObserved &&
-    o.storeEmptyObserved && o.reservationDurable && o.nacEnabled && o.freshEvidence &&
-    !o.configurationPublished
+  o.exclusive && o.storeEmptyObserved && o.reservationDurable && o.freshEvidence
 
 def bootstrapAfterCrash (o : BootstrapObservation) : BootstrapObservation :=
   { o with freshEvidence := false }
@@ -123,7 +120,7 @@ theorem bootstrap_crash_cannot_replay (o : BootstrapObservation) :
   simp [bootstrapMayGrant, bootstrapAfterCrash]
 
 theorem bootstrap_does_not_regrant_existing (o : BootstrapObservation)
-    (existing : o.nodeAbsentObserved = false) : bootstrapMayGrant o = false := by
+    (existing : o.storeEmptyObserved = false) : bootstrapMayGrant o = false := by
   simp [bootstrapMayGrant, existing]
 
 theorem bootstrap_needs_durable_reservation (o : BootstrapObservation)

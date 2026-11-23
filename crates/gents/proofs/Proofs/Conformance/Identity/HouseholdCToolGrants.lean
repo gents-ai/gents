@@ -297,10 +297,11 @@ structure RebindingInput where
   committed : Bool
   deriving ToJson
 
+/-- The Agent's one Context selects `tools-doc`, whose schema source projects
+`patch-collection`; a rebinding moves the Context to `other-tools-doc`, which
+enables the same schema tool. -/
 def rebindingInputs : List RebindingInput :=
-  let initial : Configuration.ToolGrantProjection :=
-    { enabled := [toolSource, otherPurposeSource], grants := [toolSource, otherPurposeSource],
-      direct := [(agentDid, "patch-collection")] }
+  let initial : Configuration.ToolGrantProjection := { enabled := [toolSource], grants := [toolSource] }
   [("rebind", true, true), ("unauthorized-rebind", false, true), ("failed-rebind", true, false)].map
     fun (name, authorized, committed) =>
       { name, old := .ofModel toolSource, next := .ofModel otherToolSource,
@@ -333,11 +334,11 @@ def toolGrantHierarchy : Family HierarchyInput HierarchyOutput where
   inputs := hierarchyInputs
   model := hierarchyOutput
 
-/-- Every rebinding case starts from an Agent holding
-an `other` purpose source for `patch-collection` beside its schema source; no
-production purpose other than schema projects that permission. -/
+/-- The rebinding scenario edits the Context's `tools_id` as the Node's owner,
+as an Agent holding only the Context's `writer` relation, and as the owner in a
+transaction that rolls back. -/
 @[conformance_family]
-def toolGrantRebindingUnreached : Family RebindingInput ProjectionOutput where
+def toolGrantRebinding : Family RebindingInput ProjectionOutput where
   inputs := rebindingInputs
   model := rebindingOutput
 

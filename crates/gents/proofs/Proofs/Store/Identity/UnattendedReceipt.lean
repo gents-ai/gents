@@ -11,7 +11,10 @@ inductive NativeWitness where
   | absent | pending | admitted | unavailable
   deriving BEq, DecidableEq, Repr
 
-/-- Contract for a prospective native, transaction-scoped receipt witness.
+/-- The contract of a native, transaction-scoped receipt witness. Production
+has no such witness and no family replays this owner: unattended delivery reads
+ordinary visibility (`ordinaryVisible`), which cannot tell a hidden receipt from
+an absent one (`hidden_and_absent_are_indistinguishable`).
 The native owner authenticates the selected actor and checks its named invoke
 permission and read authority on the exact physical consumer and source. It
 resolves one complete unique-index key without exposing the hidden document,

@@ -1843,18 +1843,24 @@ async fn source_grants(
     Ok(granted)
 }
 
-async fn unauthorized_tools_edit(
+async fn unauthorized_configuration_edit(
     owner: &gents_store::config_client::ConfigAccess,
     node: &Arc<defra_node::Node>,
     runtime: &gents_store::identity::KeyIdentity,
     binding: &gents_protocol::agent_identity::AgentIdentityBinding,
-    tools_doc: &str,
+    collection: &str,
+    doc: &str,
     input: serde_json::Value,
 ) -> anyhow::Result<bool> {
+    let schema = match collection {
+        "Tools" => gents_protocol::schemas::TOOLS,
+        "AgentContext" => gents_protocol::schemas::AGENT_CONTEXT,
+        other => anyhow::bail!("unmodeled configuration collection {other}"),
+    };
     let agent = identity::Did::new(&binding.agent_did)?;
     let signer = gents_store::identity::resolve_agent_identity(runtime, binding)?;
     owner
-        .add_actor_relationship("Tools", tools_doc, "writer", &agent)
+        .add_actor_relationship(collection, doc, "writer", &agent)
         .await?;
     anyhow::ensure!(!node.nac_manager().is_admin(&agent).await?);
     let writer = gents_store::config_client::ConfigAccess::local_managed_agent(
@@ -1863,20 +1869,16 @@ async fn unauthorized_tools_edit(
         signer.as_ref(),
     )?;
     let mutation = format!(
-        r#"mutation($input: ToolsMutationInputArg!) {{ update_Tools(docID:"{}", input:$input) {{_docID}} }}"#,
-        escape_graphql_string(tools_doc)
+        r#"mutation($input: {collection}MutationInputArg!) {{ update_{collection}(docID:"{}", input:$input) {{_docID}} }}"#,
+        escape_graphql_string(doc)
     );
     let variables = serde_json::json!({ "input": input });
     Ok(writer
         .transact_write("test.tool_grant.unauthorized", |txn| {
             let (mutation, variables) = (&mutation, &variables);
             Box::pin(async move {
-                txn.execute_client_signed_update(
-                    mutation,
-                    variables,
-                    gents_protocol::schemas::TOOLS,
-                )
-                .await
+                txn.execute_client_signed_update(mutation, variables, schema)
+                    .await
             })
         })
         .await
@@ -2050,11 +2052,12 @@ async fn schema_tool_source_changes_follow_the_modeled_projection() -> anyhow::R
             let doc = tools_doc
                 .as_deref()
                 .ok_or_else(|| anyhow::anyhow!("an unauthorized edit needs the Tools document"))?;
-            unauthorized_tools_edit(
+            unauthorized_configuration_edit(
                 &owner,
                 &node,
                 &runtime,
                 &binding,
+                "Tools",
                 doc,
                 serde_json::json!({"built_ins": {"enable_schema_tool": enable}}),
             )
@@ -2112,6 +2115,145 @@ async fn schema_tool_source_changes_follow_the_modeled_projection() -> anyhow::R
                 effective,
             },
         );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn context_rebinding_replaces_its_tool_source_in_one_transaction() -> anyhow::Result<()> {
+    use gents_lean_vocab::families::household_tool_grant_rebinding as family;
+    use gents_store::local::ToolSourcePolicy;
+    for case in family::cases() {
+        let input = &case.input;
+        anyhow::ensure!(
+            input.old.agent == input.next.agent
+                && input.old.purpose == "schema"
+                && input.next.purpose == "schema"
+                && input.old.permission == input.next.permission
+                && input.initial.direct.is_empty()
+                && input.initial.owners.is_empty()
+                && input.initial.admins.is_empty()
+                && input.initial.enabled.len() == 1
+                && serde_json::to_value(&input.initial.enabled)?
+                    == serde_json::to_value(&input.initial.grants)?
+                && input.initial.enabled[0].tools_doc == input.old.tools_doc,
+            "the rebinding scenario cannot build {input:?}"
+        );
+        let (_directory, runtime, node) = projection_node().await?;
+        let owner = gents_store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(runtime.did())?,
+        );
+        let binding = gents_store::identity::provision_agent_identity(&runtime)?;
+        let agent = identity::Did::new(&binding.agent_did)?;
+        let node_value = escape_graphql_string(runtime.did());
+        let mut tools_docs = Vec::new();
+        for tools_id in [&input.old.tools_doc, &input.next.tools_doc] {
+            let doc = gents_store::graphql::created_doc_id(
+                &owner.write("test.tool_rebinding.tools", &format!(
+                    r#"mutation {{ create_Tools(input: {{node_did:"{node_value}",tools_id:"{}",built_ins:{{enable_schema_tool:true}}}}) {{_docID}} }}"#,
+                    escape_graphql_string(tools_id)
+                )).await?,
+                "Tools",
+            )?;
+            tools_docs.push((tools_id.clone(), doc));
+        }
+        let context_doc = gents_store::graphql::created_doc_id(
+            &owner.write("test.tool_rebinding.context", &format!(
+                r#"mutation {{ create_AgentContext(input: {{node_did:"{node_value}",context_id:"context",tools_id:"{}"}}) {{_docID}} }}"#,
+                escape_graphql_string(&input.old.tools_doc)
+            )).await?,
+            "AgentContext",
+        )?;
+        owner.write("test.tool_rebinding.agent", &format!(
+            r#"mutation {{ create_Agent(input: {{node_did:"{node_value}",agent_did:"{}",creation_nonce:"{}",context_id:"context",enabled:true}}) {{_docID}} }}"#,
+            escape_graphql_string(&binding.agent_did),
+            escape_graphql_string(&binding.creation_nonce),
+        )).await?;
+        let change = serde_json::json!({"tools_id": input.next.tools_doc});
+        let update = format!(
+            r#"mutation {{ update_AgentContext(docID:"{}", input:{}) {{_docID}} }}"#,
+            escape_graphql_string(&context_doc),
+            gents_protocol::graphql::graphql_input_literal(&change)?
+        );
+        if !input.authorized {
+            unauthorized_configuration_edit(
+                &owner,
+                &node,
+                &runtime,
+                &binding,
+                "AgentContext",
+                &context_doc,
+                change,
+            )
+            .await?;
+        } else if input.committed {
+            owner.write("test.tool_rebinding.change", &update).await?;
+        } else {
+            rolled_back_write(&owner, &update).await?;
+        }
+        let permission = schema_permission(&input.old.permission)?;
+        let wire = |tools_doc: &str, purpose: &str| family::SourceWire {
+            tools_doc: tools_doc.to_owned(),
+            agent: input.old.agent.clone(),
+            purpose: purpose.to_owned(),
+            permission: permission.as_str().to_owned(),
+        };
+        let selected = owner
+            .execute(&format!(
+                r#"{{ AgentContext(filter: {{_docID: {{_eq: "{}"}}}}) {{ tools_id }} }}"#,
+                escape_graphql_string(&context_doc)
+            ))
+            .await?;
+        let selected = selected["data"]["AgentContext"][0]["tools_id"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        let enabled = enabled_operation_sources(&owner, runtime.did(), &selected)
+            .await?
+            .iter()
+            .filter(|source| source.permission == permission)
+            .map(|source| wire(&selected, source.purpose))
+            .collect::<Vec<_>>();
+        let policy = crate::surface::ToolCeiling::meta_only();
+        let mut grants = Vec::new();
+        for (source, granted) in tool_source_grants(&node, &agent).await? {
+            if granted != permission {
+                continue;
+            }
+            let mut attributed = None;
+            for (tools_id, doc) in &tools_docs {
+                let tools = owner
+                    .execute(&format!(
+                        r#"{{ Tools(filter: {{_docID: {{_eq: "{}"}}}}) {{ node_did tools_id built_ins }} }}"#,
+                        escape_graphql_string(doc)
+                    ))
+                    .await?;
+                for candidate in policy.node_operation_sources(&tools["data"]["Tools"][0], &[])? {
+                    if gents_store::local::tool_permission_projection::tool_source(
+                        runtime.did(),
+                        doc,
+                        &context_doc,
+                        agent.as_str(),
+                        candidate.purpose,
+                    ) == source
+                    {
+                        attributed = Some(wire(tools_id, candidate.purpose));
+                    }
+                }
+            }
+            grants.push(attributed.unwrap_or_else(|| wire("unattributed", "unattributed")));
+        }
+        let effective = node
+            .nac_manager()
+            .check_permission(&agent, permission)
+            .await?;
+        node.shutdown().await?;
+        case.check(family::ProjectionOutput {
+            enabled,
+            grants,
+            effective,
+        });
     }
     Ok(())
 }
@@ -2186,11 +2328,12 @@ async fn schema_tool_group_changes_commit_every_permission_together() -> anyhow:
             r#"mutation {{ update_Tools(filter: {{node_did:{{_eq:"{node_value}"}},tools_id:{{_eq:"tools"}}}},input:{{built_ins:{{enable_schema_tool:{enable}}}}}) {{_docID}} }}"#
         );
         if !input.authorized {
-            unauthorized_tools_edit(
+            unauthorized_configuration_edit(
                 &owner,
                 &node,
                 &runtime,
                 &binding,
+                "Tools",
                 &tools_doc,
                 serde_json::json!({"built_ins": {"enable_schema_tool": enable}}),
             )
@@ -2399,8 +2542,16 @@ async fn shared_tool_hierarchy_changes_follow_the_modeled_edges() -> anyhow::Res
         );
         if !input.authorized {
             if collection == "Tools" {
-                unauthorized_tools_edit(&owner, &node, &runtime, agent_binding, doc, change)
-                    .await?;
+                unauthorized_configuration_edit(
+                    &owner,
+                    &node,
+                    &runtime,
+                    agent_binding,
+                    collection,
+                    doc,
+                    change,
+                )
+                .await?;
             } else {
                 let sibling = &bindings[&input.sibling];
                 let signer = gents_store::identity::resolve_agent_identity(&runtime, sibling)?;
