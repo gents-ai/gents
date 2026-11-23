@@ -243,7 +243,15 @@ pub(super) async fn resolve_behavior_surfaces(
                     agent_config.agent.agent_did.clone(),
                     UnavailableAgent::new(
                         AgentReadinessUnavailableReason::ToolSurfaceUnavailable,
-                        error.to_string(),
+                        format!(
+                            "{}",
+                            gents_protocol::error_chain::ErrorChain(error.as_ref())
+                        ),
+                    )
+                    .with_publication_busy(
+                        gents_pack::plugin::store::PublishedPluginReadError::error_chain_is_busy(
+                            error.as_ref(),
+                        ),
                     ),
                 );
             }

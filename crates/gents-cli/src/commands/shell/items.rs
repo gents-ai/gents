@@ -9,7 +9,6 @@ use gents_observe::client_projection::store::{session_summary_entries, ClientSto
 use gents_protocol::client_protocol::ClientTurnState;
 use gents_protocol::file_changes::{FileImage, ToolFileChanges};
 use gents_protocol::message::{AssistantContent, Message, ToolResultContent, UserContent};
-use gents_protocol::output::rows::authored_message_key;
 use gents_protocol::output::{MessageBlock, MessageRole};
 use gents_protocol::row::{AgentToolCallRow, CompactionEntryRow};
 use gents_protocol::tool_call::ToolCallState;
@@ -261,14 +260,7 @@ pub(super) fn transcript(
         while let Some(entry) = compacted.next_if(|entry| through(entry) < sequence) {
             lines.push(compaction(entry));
         }
-        if row
-            .message
-            .request_doc_id
-            .as_deref()
-            .is_some_and(|request| {
-                row.message.message_key == authored_message_key(request, "context")
-            })
-        {
+        if gents_protocol::output::rows::is_runtime_context_key(&row.message.message_key) {
             continue;
         }
         let CanonicalMessageProjection::Ready(message) =

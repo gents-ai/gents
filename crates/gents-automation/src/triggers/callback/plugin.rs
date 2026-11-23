@@ -147,7 +147,10 @@ pub(super) async fn execute(
     }
     let record = match plugins.resolve(handler.plugin, Some(handler.digest)) {
         Ok(record) => record,
-        Err(error) => return deny(node, access, invocation, &format!("{error:#}")).await,
+        Err(error) => {
+            let reason = gents_protocol::error_chain::ErrorChain(&error).to_string();
+            return deny(node, access, invocation, &reason).await;
+        }
     };
     let input = gents_documents::callback_secret_fields::strip_secret_fields(source.clone());
     let bound = match plugins

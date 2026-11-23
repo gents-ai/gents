@@ -18,6 +18,8 @@ mod inference;
 mod owned_work;
 mod process;
 mod request;
+#[cfg(test)]
+mod request_context_tests;
 mod run;
 #[cfg(test)]
 mod task_hook_tests;

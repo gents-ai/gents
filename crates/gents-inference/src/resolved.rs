@@ -432,6 +432,15 @@ impl std::fmt::Debug for ResolvedAgent {
 }
 
 impl ResolvedAgent {
+    /// The model of the admitted inference profile; an Agent built without
+    /// configuration documents has only the placeholder model.
+    pub fn profile_model(&self) -> Option<&str> {
+        match self.configuration {
+            ResolvedConfiguration::Documents(_) => Some(&self.model_name),
+            ResolvedConfiguration::Static => None,
+        }
+    }
+
     pub fn effective_inference(
         &self,
     ) -> gents_protocol::node_readiness::EffectiveInferenceSettings {

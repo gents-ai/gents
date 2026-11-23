@@ -1361,8 +1361,8 @@ pub(crate) async fn recover_delegated_client_request_relationships_with_access(
         )
         .await
         {
-            Ok(true) => {}
-            Ok(false) => continue,
+            Ok(Ok(_)) => {}
+            Ok(Err(_)) => continue,
             Err(error) => {
                 failure.get_or_insert(error);
                 continue;

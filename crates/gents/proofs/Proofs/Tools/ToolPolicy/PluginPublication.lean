@@ -36,4 +36,32 @@ theorem cancelled_observer_cannot_undo_publication :
 theorem rejected_local_stage_preserves_previous :
     installedNew [.localFailure] = false := rfl
 
+/-- A process holding the store's exclusive publication lock exposes no record
+to a reader. Only that typed contention is retried, and only while the
+construction's original deadline is ahead: a busy observation never extends
+it, and a retry never changes the selected coordinate or digest. -/
+def retry (busy : Bool) (now deadline : Nat) : Bool := busy && decide (now < deadline)
+
+/-- When the next attempt runs: one poll interval later, but never after the
+deadline. -/
+def nextAttempt (now deadline poll : Nat) : Nat := min deadline (now + poll)
+
+theorem a_permanent_failure_never_retries (now deadline : Nat) :
+    retry false now deadline = false := by simp [retry]
+
+theorem an_expired_deadline_never_retries (busy : Bool) (now deadline : Nat)
+    (h : deadline ≤ now) : retry busy now deadline = false := by
+  have expired : ¬ now < deadline := Nat.not_lt.mpr h
+  simp [retry, expired]
+
+theorem busy_before_the_deadline_retries (now deadline : Nat) (h : now < deadline) :
+    retry true now deadline = true := by simp [retry, h]
+
+theorem the_next_attempt_never_passes_the_deadline (now deadline poll : Nat) :
+    nextAttempt now deadline poll ≤ deadline := Nat.min_le_left _ _
+
+theorem a_retry_makes_progress (now deadline poll : Nat) (h : now < deadline) (hp : 0 < poll) :
+    now < nextAttempt now deadline poll :=
+  Nat.lt_min.mpr ⟨h, by omega⟩
+
 end ToolPolicy.PluginPublication

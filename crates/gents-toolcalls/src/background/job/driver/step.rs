@@ -27,7 +27,7 @@ use crate::call::lifecycle::{PluginJobTerminal, ToolCallLifecycle};
 use crate::plugin::data::{DataCaller, StampContext};
 use crate::plugin::job_calls::JobCaller;
 use gents_documents::plugin_coordinate::parse_coordinate;
-use gents_pack::plugin::store::{read_published_record, InstalledPlugin, PublishedPluginReadError};
+use gents_pack::plugin::store::{InstalledPlugin, PublishedPluginReadError};
 use gents_pack::plugin::GuestTrap;
 use gents_protocol::job::keys::job_session_id;
 use gents_protocol::request_lifecycle::SessionMessageCause;
@@ -128,7 +128,7 @@ pub(super) async fn try_step(
         .await?
         .with_context(|| format!("job row {row_doc_id} has no job_pin"))?;
     let (namespace, name) = parse_coordinate(&pin.plugin_ref)?;
-    let installed = match read_published_record(&runtime.home, namespace, name) {
+    let installed = match runtime.plugins.read_published(namespace, name) {
         Ok((record, _guard)) if record.digest == pin.engine_digest => record,
         Ok(_) => return Ok(fail_closed(&access, &mut lifecycle, Refusal::EngineChanged).await?),
         Err(error) if error.is_busy() => return Err(anyhow::Error::from(error).into()),

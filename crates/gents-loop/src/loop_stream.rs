@@ -78,7 +78,10 @@ pub use request_assembly::tagged_history::{
     association_reduction, provider_messages, provider_view_tagged, sanitize_tagged_history,
     select_tagged_assistant_blocks,
 };
-pub use request_assembly::{assemble_new_messages, is_request_context_message};
+pub use request_assembly::{
+    assemble_new_messages, is_request_context_message, keeps_stored_context, stored_history,
+    HistoryReader,
+};
 pub use request_assembly::{assemble_provider_request, replay_compaction_prefix_bound};
 use tool_dispatch::admit_tool;
 pub use tool_dispatch::tool_effect_dispatcher;
@@ -310,10 +313,8 @@ where
         })?;
         let history = entry_projection;
         let authored_prompt = prompt.message.clone();
-        let mut history: Vec<TaggedMessage> = history
-            .into_iter()
-            .filter(|row| !is_request_context_message(&row.message))
-            .collect();
+        let mut history: Vec<TaggedMessage> =
+            stored_history(HistoryReader::Dispatch, history, |row| &row.message);
         let mut new_messages: Vec<TaggedMessage> =
             assemble_new_messages(config.context_message.clone(), prompt);
         if hook.is_none() {

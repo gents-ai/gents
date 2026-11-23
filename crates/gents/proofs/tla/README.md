@@ -664,6 +664,39 @@ See `../README.md` for how this fits the broader formal-verification model.
   excludes, and a parent read through a reused pid misses the job;
   `ShortBound` gives up before the root of a real chain; `Unbounded` walks
   forever through reused pids.
+- `PluginSurfacePublication` — a slot building its tool surface while an
+  installer in another process holds the plugin store's exclusive lock. The
+  construction retries only that contention, and only until its original
+  deadline (Lean `PluginPublication.retry`, `nextAttempt`), so a request queued
+  for the agent is answered and a construction never gives up on contention
+  its deadline still covers. `NoWait` drops the retry and violates
+  `NoPrematureFailure`.
+- `PluginPublicationRevocation` — the control watcher reconciling while an
+  installer holds the plugin store for as long as it likes. A change opens a
+  publication epoch whose deadline later changes never move (Lean
+  `SurfacePublication.epochDeadline`); inside it contention keeps the active
+  generation, at its deadline the latest configuration publishes with only the
+  busy plugin agents demoted (`reconcile`). `RevocationBound`,
+  `RunningWithinPins` and `NoEarlyDemotion` hold; `Unbounded` defers while
+  busy, `EventResetsEpoch` lets each change restart the epoch (both violate
+  `RevocationBound`), `RunsUnpinned` admits a digest outside the active pins,
+  and `DemotesEarly` demotes on contention inside the epoch.
+- `PluginSurfaceRecovery` — an agent a held plugin store parked or left
+  unavailable at startup, recovered without another configuration change:
+  the installer's release emits no database event and the recovered
+  configuration is the active one. The watcher carries the pending recovery
+  through a transient reconcile failure (Lean `retryAfterFailure`) and past
+  fingerprint deduplication (`sendProposal`); `DropsRecovery` does neither and
+  violates `RecoversWithoutNewEvent`.
+- `PluginStoreWatcherStop` — the control watcher, whose stop stops the
+  runtime, against setup or a first install creating the store (directory,
+  then lock file) after the runtime started, an installer holding it, and a
+  person removing or replacing the home. The watcher captures the store at
+  the first read that finds it complete and decides each tick from Lean
+  `PluginStoreHome.acquire` and `SurfacePublication.watchStore`.
+  `StopsOnlyForAGoneStore` holds; `IgnoresCapture` treats a store not yet
+  captured as a captured one, so a store still being created stops the
+  runtime, and violates it.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## Checking

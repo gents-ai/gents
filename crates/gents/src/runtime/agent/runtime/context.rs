@@ -164,7 +164,12 @@ impl RuntimeContext {
         );
         let preamble = prompt_builder.preamble().to_string();
         let tool_runtime = self.tool_runtime.for_agent(&agent_config);
-        let mut loop_tools = tool_surface.build_tools(&tool_runtime).await?;
+        let mut cancel = shutdown.clone();
+        let (mut loop_tools, background_tools) = tokio::select! {
+            biased;
+            _ = cancel.changed() => return Ok(()),
+            built = build_slot_tools(&tool_runtime, &tool_surface) => built?,
+        };
         if tool_surface.includes_skills() && !agent_config.skills.is_empty() {
             let ceiling = gents_documents::skills::skill_tool_ceiling(
                 tool_surface.tool_names(),
@@ -180,10 +185,8 @@ impl RuntimeContext {
             ));
         }
         let loop_tools = std::sync::Arc::new(loop_tools);
-        let background_tool_registry = BackgroundToolRegistry::from_config(
-            tool_surface.build_tools(&tool_runtime).await?,
-            tool_surface.background_tools(),
-        );
+        let background_tool_registry =
+            BackgroundToolRegistry::from_config(background_tools, tool_surface.background_tools());
         tracing::info!(
             agent_did = %agent_config.agent_did,
             did = %agent_config.node_did(),
@@ -326,6 +329,26 @@ impl RuntimeContext {
         }
         daemon.run(request_rx, capacity, shutdown).await
     }
+}
+
+/// A slot's foreground and background tools, built on one side of an
+/// installer's publication: a surface with plugin tools holds the store's
+/// shared lease while it builds, waiting for an installer until the
+/// publication deadline. A plugin-free surface never waits for the store.
+async fn build_slot_tools(
+    runtime: &ToolRuntimeContext,
+    surface: &ToolSurface,
+) -> Result<(Vec<Box<dyn ToolDyn>>, Vec<Box<dyn ToolDyn>>)> {
+    let deadline = tokio::time::Instant::now() + surface::PUBLICATION_WAIT;
+    let _publication = if surface.has_plugin_tools() {
+        surface::publication_guard_until(runtime.plugin_store_pin(), deadline).await?
+    } else {
+        None
+    };
+    Ok((
+        surface.build_tools_until(runtime, deadline).await?,
+        surface.build_tools_until(runtime, deadline).await?,
+    ))
 }
 
 #[cfg(test)]

@@ -508,7 +508,7 @@ impl AgentToolSurfaceConfig {
         let availability = RuntimeToolAvailability::from_online_mcp_services(available_service_ids);
         let mut surface =
             self.resolve_with_agent_tools_for_runtime_availability(availability, agent_tools);
-        surface.plugin_resolutions = resolve_plugin_identities(plugins, &surface.plugin_tools);
+        surface.plugin_resolutions = resolve_plugin_identities(plugins, &surface.plugin_tools)?;
         for (plugin, record) in &surface.plugin_resolutions {
             let name = plugin.tool_name();
             if record
@@ -700,17 +700,27 @@ impl Default for AgentToolSurfaceConfig {
 fn resolve_plugin_identities(
     plugins: &dyn crate::plugin_host::PluginHost,
     plugin_tools: &[gents_documents::PluginToolRef],
-) -> Vec<(
-    gents_documents::PluginToolRef,
-    Option<gents_pack::plugin::store::InstalledPlugin>,
-)> {
+) -> Result<
+    Vec<(
+        gents_documents::PluginToolRef,
+        Option<gents_pack::plugin::store::InstalledPlugin>,
+    )>,
+> {
     plugin_tools
         .iter()
         .map(|plugin| {
-            let record = plugins
-                .resolve(&plugin.plugin, plugin.digest.as_deref())
-                .ok();
-            (plugin.clone(), record)
+            let record = match plugins.resolve(&plugin.plugin, plugin.digest.as_deref()) {
+                Ok(record) => Some(record),
+                Err(error)
+                    if gents_pack::plugin::store::PublishedPluginReadError::error_chain_is_busy(
+                        error.as_ref(),
+                    ) =>
+                {
+                    return Err(error);
+                }
+                Err(_) => None,
+            };
+            Ok((plugin.clone(), record))
         })
         .collect()
 }

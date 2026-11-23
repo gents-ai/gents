@@ -2,7 +2,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use gents_pack::plugin::store::{
-    list_records, projected_plugins, try_lock_store_shared, PublishedPluginReadError, StoreGuard,
+    bootstrap_store, list_records, projected_plugins, try_lock_store_shared,
+    PublishedPluginReadError, StoreGuard,
 };
 use gents_store::identity::NodeIdentity;
 use gents_store::local::backend_protection::{
@@ -27,6 +28,7 @@ pub async fn start_node(
 ) -> Result<(Arc<defra_node::Node>, BackendAdmission)> {
     let plugin_home = plugin_home.to_owned();
     let (plugins, _plugin_guard) = tokio::task::spawn_blocking(move || {
+        bootstrap_store(&plugin_home)?;
         let guard = try_lock_store_shared(&plugin_home)?;
         let plugins = list_records(&plugin_home).map_err(PublishedPluginReadError::Read)?;
         Ok::<_, PublishedPluginReadError>((plugins, guard))

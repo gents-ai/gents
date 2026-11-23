@@ -113,8 +113,8 @@ build:
 build-cli:
 	CARGO_TARGET_DIR="$(CARGO_TARGET_DIR)" $(CARGO) build -p gents-cli $(CARGO_PROFILE_FLAG) $(CARGO_TARGET_FLAG)
 
-build-desktop:
-	$(CARGO) build -p gents-desktop-tauri $(CARGO_PROFILE_FLAG)
+build-desktop: core-packs
+	GENTS_REQUIRE_CORE_PACKS=1 $(CARGO) build -p gents-desktop-tauri $(CARGO_PROFILE_FLAG)
 
 build-desktop-ui:
 	$(NPM) --prefix $(DESKTOP_DIR) run build
@@ -326,20 +326,21 @@ desktop-native-stage-sidecar: release-cli
 desktop-native-preflight: build-cli
 	$(NPM) --prefix $(DESKTOP_DIR) run test:ui:native:preflight
 
-desktop-native-dev: build-cli
-	$(NPM) --prefix $(DESKTOP_DIR) run tauri -- dev
+desktop-native-dev: core-packs
+	GENTS_REQUIRE_CORE_PACKS=1 CARGO_TARGET_DIR="$(CARGO_TARGET_DIR)" $(CARGO) build -p gents-cli $(CARGO_PROFILE_FLAG) $(CARGO_TARGET_FLAG)
+	GENTS_REQUIRE_CORE_PACKS=1 $(NPM) --prefix $(DESKTOP_DIR) run tauri -- dev
 
 desktop-native-build: desktop-native-stage-sidecar
 	$(NPM) --prefix $(DESKTOP_DIR) run tauri -- build --config src-tauri/tauri.bundle.conf.json --config $(DESKTOP_LOCAL_TAURI_CONFIG)
 
 .PHONY: live-eval live-cli live-onboarding live-agent live-triggers live-client live-editor live-desktop-smoke
-live-cli:
+live-cli: core-packs
 	@if [ -z "$$GENTS_LIVE_DESKTOP_BIN" ]; then $(CARGO) build -p gents-desktop --bin gents-desktop $(CARGO_PROFILE_FLAG); elif [ ! -x "$$GENTS_LIVE_DESKTOP_BIN" ]; then echo "GENTS_LIVE_DESKTOP_BIN must name an executable desktop binary" >&2; exit 2; fi
 	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-cli --features live-e2e --test integration $(if $(strip $(LIVE_FILTER)),$(LIVE_FILTER),cli_live_suite::) $(CARGO_PROFILE_FLAG) -- --ignored --skip cli_onboarding_live:: --nocapture --test-threads=1
 
 LIVE_FILTER ?=
 
-live-onboarding:
+live-onboarding: core-packs
 	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-cli --features live-e2e,native-e2e --test integration $(if $(strip $(LIVE_FILTER)),$(LIVE_FILTER),cli_live_suite::cli_onboarding_live::) $(CARGO_PROFILE_FLAG) -- --ignored --nocapture --test-threads=1
 
 live-agent:

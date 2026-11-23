@@ -102,13 +102,18 @@ where
             .map(TaggedMessage::unassociated)
             .chain(built.messages.iter().cloned())
             .collect::<Vec<_>>();
-        let (mut provider_history, prompt) = super::inference::request_entry(
+        let (provider_history, prompt) = super::inference::request_entry(
             provider_history,
             &request.input.authored_message(&request.content)?,
             resume_from_history,
             request_context_message,
             wake_notifications,
         )?;
+        let mut provider_history = gents_loop::loop_stream::stored_history(
+            gents_loop::loop_stream::HistoryReader::AdmissionEstimate,
+            provider_history,
+            |row| &row.message,
+        );
         let mut new_messages = gents_loop::loop_stream::assemble_new_messages(
             if resume_from_history {
                 None

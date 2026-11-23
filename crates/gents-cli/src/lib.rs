@@ -311,7 +311,7 @@ pub use commands::prepare_runtime::prepare_runtime_after_unlock;
 /// Embedded editor launches must never trigger a system authentication dialog.
 /// Explicit credential access remains with the existing browser or store-unlock owner.
 pub fn run_cli_without_keychain_prompts() -> Result<()> {
-    without_keychain_prompts(run_cli)
+    without_keychain_prompts(|| run_cli().result)
 }
 
 /// The platform interaction prohibition is process-wide and retains any inherited
@@ -321,17 +321,38 @@ pub fn without_keychain_prompts<T>(operation: impl FnOnce() -> Result<T>) -> Res
     operation()
 }
 
-pub fn run_cli() -> Result<()> {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
+/// What the CLI did, and the stderr its entry point reports a failure on.
+pub struct CliExit {
+    pub stderr: gents::runtime::native_logging::Stderr,
+    pub result: Result<()>,
+}
+
+pub fn run_cli() -> CliExit {
+    let cli = Cli::parse();
+    let stderr = gents::runtime::native_logging::Stderr::new(system_log(cli.command.as_ref()));
+    stderr.install_panic_hook();
+    let result = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_stack_size(TOKIO_WORKER_STACK_SIZE)
         .build()
-        .context("building tokio runtime")?;
-    runtime.block_on(async_main(runtime.handle().clone()))
+        .context("building tokio runtime")
+        .and_then(|runtime| runtime.block_on(async_main(cli, runtime.handle().clone())));
+    CliExit { stderr, result }
 }
 
-async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
-    let cli = Cli::parse();
+/// Whether `command` runs the foreground runtime under `--system-log`.
+fn system_log(command: Option<&Command>) -> bool {
+    match command {
+        Some(Command::Server(args)) => args.system_log,
+        Some(Command::Runtime {
+            command: RuntimeCommand::Server(args),
+        }) => args.system_log,
+        Some(Command::PrepareRuntime(args)) => args.serve.system_log,
+        _ => false,
+    }
+}
+
+async fn async_main(cli: Cli, runtime: tokio::runtime::Handle) -> Result<()> {
     let command = match cli.command {
         None => {
             return commands::start::run(
@@ -390,15 +411,7 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
     if let Some(home) = read_only_home {
         gents_service::repair::home::refuse_older_home(&resolve_home_dir(home.as_deref())).await?;
     }
-    let system_log = match &command {
-        Command::Server(args) => args.system_log,
-        Command::Runtime {
-            command: RuntimeCommand::Server(args),
-        } => args.system_log,
-        Command::PrepareRuntime(args) => args.serve.system_log,
-        _ => false,
-    };
-    let telemetry = gents_service::telemetry::init(DEFAULT_LOG_FILTER, system_log)?;
+    let telemetry = gents_service::telemetry::init(DEFAULT_LOG_FILTER, system_log(Some(&command)))?;
     let result = match command {
         Command::Init(args) => commands::init::init(args).await,
         Command::Server(args) => {
@@ -896,6 +909,20 @@ mod tests {
     use gents_store::identity::NodeIdentity as _;
     #[cfg(not(feature = "vera"))]
     use std::collections::BTreeMap;
+
+    #[test]
+    fn only_a_runtime_under_the_system_log_stamps_its_stderr() {
+        let flag = gents_service::native_service::SYSTEM_LOG_FLAG;
+        let stamps =
+            |argv: &[&str]| system_log(Cli::try_parse_from(argv).unwrap().command.as_ref());
+        assert!(stamps(&["gents", "server", "--home", "/h", flag]));
+        assert!(stamps(&[
+            "gents", "runtime", "server", "--home", "/h", flag
+        ]));
+        assert!(stamps(&["gents", "prepare-runtime", "--home", "/h", flag]));
+        assert!(!stamps(&["gents", "server", "--home", "/h"]));
+        assert!(!stamps(&["gents", "status", "--home", "/h"]));
+    }
 
     #[tokio::test]
     async fn initialized_offline_node_reuses_the_home_signer() {

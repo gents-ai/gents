@@ -88,7 +88,14 @@ jobs:
           python3 .github/scripts/test-managed-self-update.py --binary target/fast-dev/gents --scenario busy-timeout
           python3 .github/scripts/test-managed-self-update.py --binary target/fast-dev/gents --scenario health-failure
           python3 .github/scripts/test-managed-self-update.py --binary target/fast-dev/gents --scenario config-health-failure
+      # First run installs the Engineer's core packs and refuses a build that
+      # carries none, so the onboarding suite's binary embeds them.
+      - name: Build the core packs first run installs
+        if: runner.os == 'macOS'
+        run: make core-packs PROFILE=fast-dev CORE_PACK_TOOL=target/fast-dev/gents
       - name: Exercise first-run setup against launchd
         if: runner.os == 'macOS'
+        env:
+          GENTS_REQUIRE_CORE_PACKS: '1'
         run: |
           cargo test --locked -p gents-cli --features live-e2e,native-e2e --test integration cli_live_suite::cli_onboarding_live::no_model:: --profile fast-dev -- --ignored --nocapture --test-threads=1

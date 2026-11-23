@@ -14,7 +14,7 @@ use super::input::live_job_settings;
 use super::origin::engine_guard;
 use super::records::read_progress;
 use gents_documents::plugin_coordinate::parse_coordinate;
-use gents_pack::plugin::store::read_published_record;
+
 use gents_session::request::binding::load_agent_request_by_doc_id_with_access;
 use gents_store::config_client::ConfigAccess;
 #[cfg(test)]
@@ -281,7 +281,7 @@ async fn facts_of(
             })?;
         let settings = live_job_settings(runtime, &caller, &pin.plugin_ref).await?;
         let observed = match parse_coordinate(&pin.plugin_ref) {
-            Ok((namespace, name)) => match read_published_record(&runtime.home, namespace, name) {
+            Ok((namespace, name)) => match runtime.plugins.read_published(namespace, name) {
                 Ok(record) => Some(record),
                 Err(error) if error.is_busy() => return Err(error.into()),
                 Err(_) => None,

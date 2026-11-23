@@ -43,7 +43,9 @@ end ManagedExec
 
 namespace DurableLineage
 
-attribute [conformance_function] deferredCreationAllowed
+deriving instance Lean.ToJson for CauseLoad, ResultRead, EffectRead, CreationOutcome
+
+attribute [conformance_function] creationVerdict
 
 end DurableLineage
 
