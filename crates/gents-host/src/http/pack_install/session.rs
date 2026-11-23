@@ -748,7 +748,7 @@ async fn run_inner(
 /// update the Node. It writes nothing.
 async fn preview(
     state: &RuntimeHttpState,
-    home: PathBuf,
+    home: std::path::PathBuf,
     access: ConfigAccess,
     request: InstallRequest,
 ) -> std::result::Result<Value, SessionFailure> {
