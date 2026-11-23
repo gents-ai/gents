@@ -25,6 +25,18 @@ def permission (name : String) (relations : List String)
     (parents : List (String × String)) : PermissionDefinition :=
   ⟨name, relations, parents⟩
 
+/-- A transport row's owner grants its account's device userset authority to
+manage readers. A writer can maintain or retract this row, including when its
+creator writes to a replica owned by the receiving node. -/
+private def transportResource (name : String) : ResourceDefinition :=
+  { name
+    relations := [⟨"parent", ["nodes"], []⟩, ⟨"reader", ["actor"], []⟩,
+      ⟨"reader_manager", ["actor", "device_groups->member"], ["reader"]⟩,
+      ⟨"writer", ["actor"], []⟩, ⟨"local_publication", ["actor"], []⟩,
+      ⟨"pending_parent", ["actor"], []⟩]
+    permissions := [permission "read" ["reader", "writer"] [("parent", "read")],
+      permission "update" ["writer"] [], permission "delete" ["writer"] []] }
+
 /-- Required native policy wiring remains unenforced pending #3485. Users own Node
 configuration and transitively administer Agent configuration through its parent Node.
 Narrower per-Agent reader, session-writer and administrator grants stay independent.
@@ -125,24 +137,13 @@ def policy : List ResourceDefinition :=
         ⟨"reader_manager", ["actor"], ["route_reader", "tool_reader"]⟩]
       permissions := [permission "read" ["route_reader", "tool_reader"] [("parent", "read")],
         permission "update" [] [], permission "delete" [] []] }
-  , { name := "discovery"
-      relations := [⟨"parent", ["nodes"], []⟩, ⟨"reader", ["actor"], []⟩,
-        ⟨"reader_manager", ["actor"], ["reader"]⟩, ⟨"writer", ["actor"], []⟩,
-        ⟨"local_publication", ["actor"], []⟩, ⟨"pending_parent", ["actor"], []⟩]
-      permissions := [permission "read" ["reader", "writer"] [("parent", "read")],
-        permission "update" ["writer"] [], permission "delete" [] []] }
-  , { name := "scoped_discovery"
-      relations := [⟨"parent", ["nodes"], []⟩, ⟨"reader", ["actor"], []⟩,
-        ⟨"reader_manager", ["actor"], ["reader"]⟩,
-        ⟨"local_publication", ["actor"], []⟩, ⟨"pending_parent", ["actor"], []⟩]
-      permissions := [permission "read" ["reader"] [("parent", "read")],
-        permission "update" [] [], permission "delete" [] []] }
-  , { name := "enrollment_records"
-      relations := [⟨"parent", ["nodes"], []⟩, ⟨"reader", ["actor"], []⟩,
-        ⟨"reader_manager", ["actor"], ["reader"]⟩,
-        ⟨"local_publication", ["actor"], []⟩, ⟨"pending_parent", ["actor"], []⟩]
-      permissions := [permission "read" ["reader"] [("parent", "read")],
-        permission "update" [] [], permission "delete" [] []] }
+  , { name := "device_groups"
+      relations := [⟨"member", ["actor"], []⟩]
+      permissions := [permission "read" ["member"] [], permission "update" [] [],
+        permission "delete" [] []] }
+  , transportResource "discovery"
+  , transportResource "scoped_discovery"
+  , transportResource "enrollment_records"
   , { name := "configuration"
       relations := [⟨"parent", ["nodes"], []⟩, ⟨"reader", ["actor"], []⟩,
         ⟨"selected_by", ["agents->executor", "configuration->selected_by"], []⟩,
