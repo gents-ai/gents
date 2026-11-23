@@ -129,7 +129,7 @@ an exception names its file, its exact count and its reason.
 | Maps and sets are `rapidhash`; trait bounds live in `where` clauses. | `hash_maps_use_rapidhash`, `trait_bounds_live_in_where_clauses` |
 | Rig types stay behind `gents_loop::rig_compat` and `provider_input`. | `rig_types_stay_behind_their_owners` |
 | OAuth credentials are picked through the resolver. | `oauth_credential_picks_go_through_the_resolver` |
-| Test fixtures never reach a production build. | `gents_test_fixtures_stay_dev_only` |
+| Test fixtures never reach a production build. | `test_fixtures_stay_dev_only` |
 | Tests never touch the host's service manager: whatever reaches `gents-service` or spawns `gents` enables its `test-home-guard` from dev-dependencies. | `service_isolation_stays_test_only`, `tests_reaching_the_service_manager_are_isolated` |
 | One integration binary per crate (`tests/integration.rs` with `#[path]` modules); separate binaries only for process-wide state, listed with the reason. | `integration_tests_share_one_binary_per_crate` |
 | Log with `tracing`, never `println!`. | review |

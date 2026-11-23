@@ -107,7 +107,7 @@ async fn enrollment_authority_reloads_each_generation_and_cross_actor_claims_sta
     let member_dir = tempfile::tempdir().unwrap();
     let member: Arc<dyn NodeIdentity> =
         Arc::new(KeyIdentity::load_or_create(member_dir.path().join("member.key"), None).unwrap());
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "enrollment-authority-reloads-each-genera",
         gents_automation::lifecycle_hooks::composition(),
     )

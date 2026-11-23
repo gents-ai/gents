@@ -271,7 +271,7 @@ pub(super) async fn create_user_agent_session(
 }
 
 pub(super) struct HeldRuntimeFixture {
-    pub db: crate::support::TestDb,
+    pub db: gents_store::test_support::TestStore,
     pub user: KeyIdentity,
     pub user_access: gents_store::config_client::ConfigAccess,
     pub agent: std::sync::Arc<dyn NodeIdentity>,
@@ -279,7 +279,7 @@ pub(super) struct HeldRuntimeFixture {
 
 impl HeldRuntimeFixture {
     pub fn admission(&self) -> gents_store::local::backend_protection::BackendAdmission {
-        self.db.home.backend_admission()
+        self.db.backend_admission()
     }
 
     pub async fn agent_config_access(&self) -> gents_store::config_client::ConfigAccess {
@@ -339,7 +339,11 @@ pub(super) async fn held_runtime_fixture_with_status(
     probe_status: &str,
 ) -> HeldRuntimeFixture {
     use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-    let (db, user, user_access, binding) = crate::test_support::root::signed_test_node(name).await;
+    let (db, user, user_access, binding) = gents_inference::test_support::signed_test_node_from_db(
+        crate::support::trial_store(name).await,
+        name,
+    )
+    .await;
     let node_did = db.node_identity.did();
     let profile_id = format!("{}:inference", binding.agent_did);
     let docs = [

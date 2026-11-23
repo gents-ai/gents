@@ -55,7 +55,7 @@ pub(super) async fn spawn_live_node(
     let tool_root =
         gents_session::workspace::root_resolution::resolve_configured_tool_root(&tool_root)?;
 
-    let node_did = home.identity.did().to_string();
+    let node_did = home.node_identity.did().to_string();
     let docs = seed_live_agent_documents(
         home,
         config_actor,
@@ -68,7 +68,7 @@ pub(super) async fn spawn_live_node(
     .await?;
     let agent = Gents::from_default_agent_documents(
         home.node.clone(),
-        Arc::clone(&home.identity),
+        Arc::clone(&home.node_identity),
         DocumentRuntimeOptions {
             backend_admission: Some(home.backend_admission()),
             tool_ceiling: ToolCeiling::readwrite(tool_root.clone())
@@ -136,11 +136,7 @@ async fn seed_live_agent_documents(
     )?;
     let access = ConfigAccess::Graphql(
         gents_store::config_client::runtime_endpoints::RuntimeEndpoints::new(capability)
-            .endpoint(
-                node_did,
-                home.graphql_endpoint()
-                    .context("runtime HTTP endpoint missing")?,
-            )?
+            .endpoint(node_did, home.graphql_endpoint())?
             .with_client_signed_agent_creates(),
     );
     let node_input =
@@ -165,13 +161,13 @@ async fn seed_live_agent_documents(
         .await?;
     let binding = gents_store::identity::provision_agent_identity_authorized(
         &home.node,
-        home.identity.as_ref(),
+        home.node_identity.as_ref(),
         &actor_did,
     )
     .await?;
     let target_binding = gents_store::identity::provision_agent_identity_authorized(
         &home.node,
-        home.identity.as_ref(),
+        home.node_identity.as_ref(),
         &actor_did,
     )
     .await?;

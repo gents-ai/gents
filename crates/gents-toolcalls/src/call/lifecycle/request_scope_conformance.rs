@@ -60,7 +60,7 @@ async fn queue_snapshot(
 async fn generated_background_completion_queue_case_uses_accepted_session_messages() {
     for case in gents_lean_vocab::families::contracts_queue_deadline_completion_delivery::cases() {
         let input = &case.input;
-        let db = gents_inference::test_support::test_db(
+        let db = gents_store::test_support::TestStore::start(
             "queue-scope",
             gents_session::test_support::no_lifecycle_plugins(),
         )

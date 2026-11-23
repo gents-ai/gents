@@ -23,7 +23,7 @@ async fn rendered_capture_follows_the_lean_model() {
 
     for case in gents_lean_vocab::families::contracts_rendered_capture::cases() {
         let input = &case.input;
-        let db = gents_inference::test_support::test_db(
+        let db = gents_store::test_support::TestStore::start(
             "capture-case",
             gents_automation::lifecycle_hooks::composition(),
         )

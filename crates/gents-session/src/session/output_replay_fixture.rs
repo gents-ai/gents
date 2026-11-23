@@ -41,7 +41,7 @@ pub const REQUEST_ID: &str = "replay-request";
 
 pub struct ReplayFixture {
     pub node: Arc<EmbeddedNode>,
-    pub _db: gents_inference::test_support::TestDb,
+    pub _db: gents_store::test_support::TestStore,
     pub user: gents_store::identity::KeyIdentity,
     pub user_access: gents_store::config_client::ConfigAccess,
     pub agent: Arc<dyn gents_store::identity::NodeIdentity>,

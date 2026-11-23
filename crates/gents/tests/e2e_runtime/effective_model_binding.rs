@@ -175,9 +175,9 @@ async fn a_claimed_request_records_the_settings_its_dispatch_bound() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn profile_model_line_changes_on_the_next_request_in_the_same_session() {
-    use crate::support::live_inference::rows_when;
     use crate::support::streaming_backend::{MockStreamingBackend, StreamScript};
     use gents_protocol::node_readiness::{decode_node_readiness_snapshot, NodeReadinessRow};
+    use gents_store::test_support::rows_when;
 
     let db = test_db("profile-model-line").await;
     let session = "profile-line-session";

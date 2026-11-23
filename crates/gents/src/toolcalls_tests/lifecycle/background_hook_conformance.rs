@@ -114,8 +114,11 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
         ClaimOutcome, RequestTerminalOutcome, TerminalizeResult,
     };
 
-    let (db, user, client, binding) =
-        crate::test_support::root::signed_test_node("background-hook-scope").await;
+    let (db, user, client, binding) = gents_inference::test_support::signed_test_node_from_db(
+        crate::support::trial_store("background-hook-scope").await,
+        "background-hook-scope",
+    )
+    .await;
     let node = db.node.clone();
     let runtime = db.node_identity.clone();
     let agent = gents_store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();

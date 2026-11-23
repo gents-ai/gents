@@ -11,7 +11,7 @@ mod goal_latency;
 
 #[tokio::test]
 async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifecycle() {
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "goal-hook-create",
         crate::lifecycle_hooks::composition(),
     )
@@ -271,7 +271,7 @@ async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
         for policy in [FailurePolicy::FailOpen, FailurePolicy::FailClosed] {
             let mut completion_mutation = None;
             for inject in [false, true] {
-                let db = gents_inference::test_support::test_db(
+                let db = gents_store::test_support::TestStore::start(
                     "goal-dispatch-replay",
                     crate::lifecycle_hooks::composition(),
                 )

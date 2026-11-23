@@ -12,6 +12,9 @@ use tokio::task::JoinHandle;
 
 use crate::defra_node::{Node as EmbeddedNode, P2PConfig, QueryResponse};
 use crate::{DocumentRuntimeOptions, Gents};
+use gents_store::local::home::{
+    HomeServing, NodeConfigure, NodeProjection, ServedHome, ServedNode,
+};
 use gents_store::{identity::KeyIdentity, identity::NodeIdentity, schema::ensure_runtime_schemas};
 
 /// Startup and shutdown bound for an embedded runtime. A full conformance run
@@ -21,46 +24,31 @@ use gents_store::{identity::KeyIdentity, identity::NodeIdentity, schema::ensure_
 /// mechanism bound, not configuration.
 pub const RUNTIME_READY_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// Node-owned services can hold `EmbeddedNode` handles briefly after shutdown.
-const NODE_RELEASE_TIMEOUT: Duration = Duration::from_secs(10);
-
 /// Builds a home's P2P configuration from its data directory, so a reopen
 /// restores the same persisted key and collections.
 pub type P2PConfigForPath = Arc<dyn Fn(&Path) -> P2PConfig + Send + Sync>;
 
 /// Trial homes are harness scratch. Their file-custodied store key and data
 /// live together; the key binds the fresh-store provenance, not host secrecy.
-///
-/// Dropping a home whose node was not shut down hands the node to a release
-/// thread, which shuts it down once no other holder remains, then releases
-/// the store lock and temporary directory. DefraDB's
-/// HTTP transaction sweep is a pool task that holds its own pool and is
-/// stopped only by `Node::shutdown`, so an HTTP-serving node dropped without
-/// it keeps its worker threads, store and descriptors for the process life.
 pub struct EmbeddedHome {
-    pub node: Arc<EmbeddedNode>,
-    pub identity: Arc<dyn NodeIdentity>,
+    home: ServedHome,
     evaluator: Option<(
         Arc<dyn NodeIdentity>,
         gents_store::config_client::ClientSigningCapability,
     )>,
-    client_endpoint: Option<String>,
-    did: String,
-    path: PathBuf,
-    data_path: PathBuf,
-    store_key: gents_store::local::store_key::StoreKey,
-    store_lock: Option<gents_store::local::home::StoreLock>,
-    backend_admission: gents_store::local::backend_protection::BackendAdmission,
-    p2p: Option<P2PConfigForPath>,
-    tempdir: Option<TempDir>,
 }
 
 impl std::fmt::Debug for EmbeddedHome {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("EmbeddedHome")
-            .field("did", &self.did)
-            .field("path", &self.path)
-            .finish_non_exhaustive()
+        self.home.fmt(f)
+    }
+}
+
+impl std::ops::Deref for EmbeddedHome {
+    type Target = ServedHome;
+
+    fn deref(&self) -> &ServedHome {
+        &self.home
     }
 }
 
@@ -74,7 +62,7 @@ impl EmbeddedHome {
 
     pub async fn in_tempdir(tempdir: TempDir, p2p: Option<P2PConfigForPath>) -> Result<Self> {
         let mut home = Self::open_at(tempdir.path().to_path_buf(), p2p).await?;
-        home.tempdir = Some(tempdir);
+        home.home.hold_tempdir(tempdir);
         Ok(home)
     }
 
@@ -101,24 +89,15 @@ impl EmbeddedHome {
     }
 
     async fn open_at(path: PathBuf, p2p: Option<P2PConfigForPath>) -> Result<Self> {
-        ensure!(
-            !tokio::fs::try_exists(path.join("MANIFEST")).await?,
-            "legacy trial store has no backend protection provenance"
-        );
-        let retained = tokio::fs::try_exists(path.join("data").join("MANIFEST")).await?;
-        let identity_path = path.join("node.key");
-        let identity: Arc<dyn NodeIdentity> = Arc::new(
-            tokio::task::spawn_blocking(move || {
-                if retained {
-                    KeyIdentity::load_existing(identity_path, None)
-                } else {
-                    KeyIdentity::load_or_create(identity_path, None)
-                }
-            })
-            .await?
-            .context("node identity")?,
-        );
-        Self::open_with_identity(path, p2p, identity, true).await
+        let (projection, _plugins) = trial_projection(&path).await?;
+        let home = ServedHome::open_at(path, trial_serving(p2p), projection).await?;
+        ensure_runtime_schemas(&home.node)
+            .await
+            .context("runtime schemas")?;
+        Ok(Self {
+            home,
+            evaluator: None,
+        })
     }
 
     pub async fn open_for_inspection(dir: &Path, expected_did: &str) -> Result<Self> {
@@ -137,121 +116,19 @@ impl EmbeddedHome {
             "retained trial identity {} does not match recorded DID {expected_did}",
             identity.did()
         );
-        Self::open_with_identity(dir.to_path_buf(), None, identity, false).await
-    }
-
-    async fn open_with_identity(
-        path: PathBuf,
-        p2p: Option<P2PConfigForPath>,
-        identity: Arc<dyn NodeIdentity>,
-        initialize_schemas: bool,
-    ) -> Result<Self> {
-        let did = identity.did().to_string();
-        ensure!(
-            !tokio::fs::try_exists(path.join("MANIFEST")).await?,
-            "legacy trial store has no backend protection provenance"
-        );
-        let data_path = path.join("data");
-        if !tokio::fs::try_exists(&data_path).await? {
-            ensure!(initialize_schemas, "retained trial store is unavailable");
-            tokio::fs::create_dir_all(&data_path).await?;
-        }
-        let store_lock = gents_store::local::home::acquire_store(
-            &path,
-            &data_path,
-            gents_store::local::home::STORE_RELEASE_WAIT,
-        )
-        .await?;
-        let fresh = tokio::fs::read_dir(&data_path)
-            .await?
-            .next_entry()
-            .await?
-            .is_none();
-        let fresh_store = if fresh {
-            ensure!(initialize_schemas, "retained trial store is unavailable");
-            Some(
-                gents_store::local::backend_protection::FreshBackendStore::observe(
-                    &data_path,
-                    &store_lock,
-                )
-                .await?,
-            )
-        } else {
-            None
-        };
-        let store_key = trial_store_key(&path, &data_path, fresh).await?;
-        if let Some(fresh_store) = fresh_store {
-            // A trial node's NAC is owned by its home's own owner key, never
-            // its Node (`Identity.NodeProvisioning.nacOwner`); installation
-            // issues the evaluator's direct set as that owner.
-            let owner_path = path.join("owner.key");
-            let owner =
-                tokio::task::spawn_blocking(move || KeyIdentity::load_or_create(owner_path, None))
-                    .await?
-                    .context("trial NAC owner identity")?;
-            fresh_store
-                .initialize(
-                    &store_key,
-                    &identity,
-                    &::identity::Did::new(owner.did())?,
-                    gents_store::local::document_acp::DocumentAcp::Local,
-                )
-                .await?;
-        }
-        let protected = gents_store::local::backend_protection::ProtectedBackendStore::open(
-            &data_path,
-            &store_key,
-            &store_lock,
-        )
-        .await?
-        .preflight(
-            &store_key,
-            &identity,
-            gents_store::local::document_acp::DocumentAcp::Local,
-        )
-        .await?;
-        let served = ServedNode::default();
-        let (http, client_endpoint, owner_staged) = trial_http(served.clone()).await?;
-        let (node, backend_admission) = crate::runtime::node_start::start_node(
-            protected,
-            &store_key,
-            identity.clone(),
-            Some(http),
-            p2p.as_ref().map(|p| p(&path)),
-            gents_tools::surface::ToolCeiling::meta_only(),
-            &path,
-        )
-        .await?;
-        let _ = served.set((Arc::downgrade(&node), identity.clone()));
-        owner_staged.serve(&node, identity.clone());
-        if initialize_schemas {
-            ensure_runtime_schemas(&node)
-                .await
-                .context("runtime schemas")?;
-        }
-        Ok(Self {
-            node,
+        let (projection, _plugins) = trial_projection(dir).await?;
+        let home = ServedHome::open_with_identity(
+            dir.to_path_buf(),
             identity,
+            false,
+            trial_serving(None),
+            projection,
+        )
+        .await?;
+        Ok(Self {
+            home,
             evaluator: None,
-            client_endpoint: Some(client_endpoint),
-            did,
-            path,
-            data_path,
-            store_key,
-            store_lock: Some(store_lock),
-            backend_admission,
-            p2p,
-            tempdir: None,
         })
-    }
-
-    pub fn did(&self) -> &str {
-        &self.did
-    }
-
-    /// Address of this home's running GraphQL endpoint, when one is installed.
-    pub fn graphql_endpoint(&self) -> Option<&str> {
-        self.client_endpoint.as_deref()
     }
 
     pub fn set_evaluator(
@@ -277,227 +154,66 @@ impl EmbeddedHome {
 
     pub fn client_access(&self, did: &str) -> Result<gents_store::config_client::ConfigAccess> {
         self.evaluator(did)?;
-        let endpoint = self
-            .client_endpoint
-            .as_ref()
-            .context("trial client HTTP endpoint is unavailable")?;
         let (_, capability) = self
             .evaluator
             .as_ref()
             .context("evaluation requires the held client signing capability")?;
         Ok(gents_store::config_client::ConfigAccess::Graphql(
             crate::runtime::lifecycle_hooks::compose_endpoint(
-                gents_store::config_client::GraphqlEndpoint::as_principal(endpoint, did)
-                    .with_client_signing_capability(capability.clone())?
-                    .with_client_signed_agent_creates(),
+                gents_store::config_client::GraphqlEndpoint::as_principal(
+                    self.graphql_endpoint(),
+                    did,
+                )
+                .with_client_signing_capability(capability.clone())?
+                .with_client_signed_agent_creates(),
             )?,
         ))
     }
 
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
-    /// The admission is bound to this home's protected native node.
-    pub fn backend_admission(&self) -> gents_store::local::backend_protection::BackendAdmission {
-        self.backend_admission.clone()
-    }
-
     pub async fn reopen(&mut self) -> Result<()> {
-        // Stopping the node closes its subscriptions and other node-owned
-        // services; wait for their handles to be released before claiming an
-        // exclusive durable-store reopen.
-        self.node
-            .shutdown()
+        let (projection, _plugins) = trial_projection(self.home.path()).await?;
+        self.home.reopen(projection).await?;
+        ensure_runtime_schemas(&self.home.node)
             .await
-            .context("shutting down trial node")?;
-        let release_deadline = tokio::time::Instant::now() + NODE_RELEASE_TIMEOUT;
-        while Arc::strong_count(&self.node) != 1 && tokio::time::Instant::now() < release_deadline {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        let strong = Arc::strong_count(&self.node);
-        if strong != 1 {
-            bail!(
-                "simulate_process_crash: stopped EmbeddedNode retained live owners \
-                 (strong_count={strong}); crash boundary would not clear process state"
-            );
-        }
-
-        let stand_in = Arc::new(
-            EmbeddedNode::builder()
-                .build()
-                .await
-                .map_err(|e| anyhow!("simulate_process_crash: stand-in node: {e}"))?,
-        );
-        let old = std::mem::replace(&mut self.node, stand_in);
-
-        match Arc::try_unwrap(old) {
-            Ok(owned) => drop(owned),
-            Err(shared) => {
-                let count = Arc::strong_count(&shared);
-                self.node = shared;
-                bail!(
-                    "simulate_process_crash: cannot exclusively drop EmbeddedNode \
-                     (strong_count={count} after replace); restored handle is shut \
-                     down and unusable — fix outstanding Arc clones before Crash"
-                );
-            }
-        }
-
-        let protected = gents_store::local::backend_protection::ProtectedBackendStore::open(
-            &self.data_path,
-            &self.store_key,
-            self.store_lock
-                .as_ref()
-                .context("trial store lock was released")?,
-        )
-        .await?
-        .preflight(
-            &self.store_key,
-            &self.identity,
-            gents_store::local::document_acp::DocumentAcp::Local,
-        )
-        .await?;
-        let served = ServedNode::default();
-        let (http, client_endpoint, owner_staged) = trial_http(served.clone()).await?;
-        let (node, admission) = crate::runtime::node_start::start_node(
-            protected,
-            &self.store_key,
-            self.identity.clone(),
-            Some(http),
-            self.p2p.as_ref().map(|p| p(&self.path)),
-            gents_tools::surface::ToolCeiling::meta_only(),
-            &self.path,
-        )
-        .await?;
-        let _ = served.set((Arc::downgrade(&node), self.identity.clone()));
-        owner_staged.serve(&node, self.identity.clone());
-        self.node = node;
-        self.backend_admission = admission;
-        self.client_endpoint = Some(client_endpoint);
-
-        ensure_runtime_schemas(&self.node)
-            .await
-            .map_err(|e| anyhow!("simulate_process_crash: ensure schemas: {e}"))?;
+            .context("runtime schemas after reopen")?;
         Ok(())
     }
 }
 
-impl Drop for EmbeddedHome {
-    fn drop(&mut self) {
-        if self.node.is_shutdown() {
-            return;
-        }
-        let node = self.node.clone();
-        let held = (self.store_lock.take(), self.tempdir.take());
-        let release = std::thread::Builder::new()
-            .name("gents-home-release".to_owned())
-            .spawn(move || release_unstopped_node(node, held));
-        if let Err(error) = release {
-            tracing::warn!(
-                %error,
-                did = %self.did,
-                "could not start the trial node release thread; its node stays running"
-            );
-        }
-    }
+/// A trial node projects the plugins installed in its home with the
+/// meta-only tool ceiling; the plugin store stays share-locked until the node
+/// has started.
+async fn trial_projection(
+    home: &Path,
+) -> Result<(NodeProjection, gents_pack::plugin::store::StoreGuard)> {
+    let (plugins, guard) = crate::runtime::node_start::installed_plugins(home).await?;
+    Ok((
+        NodeProjection {
+            tool_policy: Arc::new(gents_tools::surface::ToolCeiling::meta_only()),
+            plugins,
+            composition: gents_automation::lifecycle_hooks::composition(),
+        },
+        guard,
+    ))
 }
 
-/// Runs on its own OS thread, outside any Tokio runtime, so the shutdown
-/// completes even when the dropping runtime is itself shutting down. Callers
-/// may keep using the node after its home is dropped; `Arc` offers no release
-/// notification, so this thread polls for being the last holder.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "waits for and drives Node::shutdown on a dedicated release thread; no runtime worker waits"
-)]
-fn release_unstopped_node<H>(node: Arc<EmbeddedNode>, held: H) {
-    let mut wait = Duration::from_millis(5);
-    while Arc::strong_count(&node) > 1 && !node.is_shutdown() {
-        std::thread::sleep(wait);
-        wait = (wait * 2).min(Duration::from_millis(100));
-    }
-    if let Err(error) = futures::executor::block_on(node.shutdown()) {
-        tracing::warn!(error = %error, "dropped trial node did not shut down cleanly");
-    }
-    drop(node);
-    drop(held);
-}
-
-/// The node a trial endpoint serves, set once the node has started.
-/// The node a trial home's HTTP route serves. The node owns the HTTP server
-/// that holds this cell, so it is held weakly: a strong reference would keep a
-/// dropped home's node (and its threads and descriptors) alive.
-pub type ServedNode =
-    Arc<std::sync::OnceLock<(std::sync::Weak<EmbeddedNode>, Arc<dyn NodeIdentity>)>>;
-
-/// A trial endpoint serves the runtime's client routes: Agent identity
-/// provisioning and owner-staged relationship changes.
-async fn trial_http(
-    served: ServedNode,
-) -> Result<(
-    crate::defra_node::HttpConfig,
-    String,
-    gents_store::config_client::OwnerStagedRoute,
-)> {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr()?);
-    let owner_staged = gents_store::config_client::OwnerStagedRoute::new();
-    let status = served.clone();
-    let metadata = axum::Router::new().route(
-        "/status",
-        axum::routing::get(
-            move |query: axum::extract::Query<rapidhash::RapidHashMap<String, String>>| {
-                let served = status.clone();
-                async move {
-                    use axum::response::IntoResponse;
-                    let Ok(nonce) = query
-                        .get(gents_protocol::home_attestation::HOME_NONCE_QUERY)
-                        .map(|nonce| gents_protocol::home_attestation::HomeNonce::parse(nonce))
-                        .transpose()
-                    else {
-                        return axum::http::StatusCode::BAD_REQUEST.into_response();
-                    };
-                    let Some((node, runtime)) = served
-                        .get()
-                        .and_then(|(node, runtime)| Some((node.upgrade()?, runtime)))
-                    else {
-                        return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
-                    };
-                    let Ok(authentication) =
-                        gents_store::config_client::client_authentication::runtime_authentication(
-                            &gents_store::config_client::ConfigAccess::local(node),
-                        )
-                        .await
-                    else {
-                        return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
-                    };
-                    let mut status = serde_json::json!({
-                        "node_did": runtime.did(),
-                        (gents_protocol::client_authentication::STATUS_FIELD): authentication,
-                    });
-                    if let Some(nonce) = &nonce {
-                        gents_store::identity::home_status::attest(
-                            Some(runtime.as_ref()),
-                            nonce,
-                            &mut status,
-                        )
-                        .await;
-                    }
-                    axum::Json(status).into_response()
-                }
-            },
-        ),
-    );
-    let config = crate::defra_node::HttpConfig::with_listener(listener.into_std()?)?
-        .with_extra_routes(metadata)
-        .with_authenticated_routes(
-            agent_identity_routes(served.clone())
+/// A trial endpoint serves the runtime's client routes beside the home's
+/// own: goal control, inference settings and client access.
+fn trial_serving(p2p: Option<P2PConfigForPath>) -> HomeServing {
+    HomeServing {
+        routes: Some(Arc::new(|served: ServedNode| {
+            goal_control_routes(served.clone())
                 .merge(trial_inference_settings_routes(served.clone()))
                 .merge(client_access::routes(served))
-                .merge(owner_staged.router()),
-        );
-    Ok((config, endpoint, owner_staged))
+        })),
+        configure: p2p.map(|p2p| -> NodeConfigure {
+            Arc::new(
+                move |path: &Path, builder: crate::defra_node::NodeBuilder| {
+                    builder.with_p2p(p2p(path))
+                },
+            )
+        }),
+    }
 }
 
 fn trial_inference_settings_routes(served: ServedNode) -> axum::Router {
@@ -533,195 +249,38 @@ fn trial_inference_settings_routes(served: ServedNode) -> axum::Router {
     )
 }
 
-/// A trial home serves Agent identity provisioning and agent admission facts
-/// as a runtime does, so a client installing or configuring an Agent goes
-/// through the same owners (`provision_agent_identity_authorized`,
-/// `observe_agent_admission`). The admission route observes native ACP for
-/// the authenticated caller only; it decides nothing itself.
+/// The runtime's Agent routes a client reaches: identity provisioning and
+/// admission facts from the home owner, and goal control.
 pub fn agent_identity_routes(served: ServedNode) -> axum::Router {
-    use axum::http::StatusCode;
-    use axum::response::IntoResponse;
-    let failure = |status: StatusCode, message: &str| {
-        (status, axum::Json(serde_json::json!({ "error": message }))).into_response()
-    };
-    let goal = served.clone();
-    let admission = served.clone();
-    axum::Router::new()
-        .route(
-            gents_protocol::goal_control::APPLY_GOAL_CONTROL_PATH,
-            axum::routing::post(
-                move |identity: defra_http::ExtractIdentity,
-                      headers: axum::http::HeaderMap,
-                      axum::Json(request): axum::Json<
-                    gents_protocol::goal_control::ApplyGoalControl,
-                >| {
-                    let served = goal.clone();
-                    async move {
-                        let Some((node, runtime)) = served
-                            .get()
-                            .and_then(|(node, runtime)| Some((node.upgrade()?, runtime)))
-                        else {
-                            return StatusCode::SERVICE_UNAVAILABLE.into_response();
-                        };
-                        gents_automation::goal::client_application::apply_http(
-                            &node, runtime, &identity, &headers, request,
-                        )
-                        .await
-                    }
-                },
-            ),
-        )
-        .route(
-            gents_protocol::agent_identity::AGENT_ADMISSION_PATH,
-            axum::routing::post(
-                move |identity: defra_http::ExtractIdentity,
-                      axum::Json(request): axum::Json<
-                    gents_protocol::agent_identity::AgentAdmissionRequest,
-                >| {
-                    let served = admission.clone();
-                    async move {
-                        let Some(caller) = identity
-                            .did()
-                            .and_then(|did| ::identity::Did::new(did.as_ref()).ok())
-                        else {
-                            return failure(
-                                StatusCode::UNAUTHORIZED,
-                                "Connect this client before configuring agents.",
-                            );
-                        };
-                        let Some((node, runtime)) = served
-                            .get()
-                            .and_then(|(node, runtime)| Some((node.upgrade()?, runtime)))
-                        else {
-                            return failure(
-                                StatusCode::SERVICE_UNAVAILABLE,
-                                "The runtime is still starting.",
-                            );
-                        };
-                        if request.node_did != runtime.did() {
-                            return failure(
-                                StatusCode::BAD_REQUEST,
-                                "The requested node does not serve this endpoint.",
-                            );
-                        }
-                        match gents_store::identity::observe_agent_admission(
-                            &node,
-                            runtime.did(),
-                            &caller,
-                            &request.agent_dids,
-                        )
-                        .await
-                        {
-                            Ok(facts) => axum::Json(facts).into_response(),
-                            Err(error) => {
-                                tracing::warn!(%error, "trial agent admission observation failed");
-                                failure(
-                                    StatusCode::SERVICE_UNAVAILABLE,
-                                    "The runtime cannot observe agent grants.",
-                                )
-                            }
-                        }
-                    }
-                },
-            ),
-        )
-        .route(
-            gents_protocol::agent_identity::AGENT_IDENTITY_PATH,
-            axum::routing::post(
-                move |identity: defra_http::ExtractIdentity,
-                      axum::Json(request): axum::Json<
-                    gents_protocol::agent_identity::ProvisionAgentIdentityRequest,
-                >| {
-                    let served = served.clone();
-                    async move {
-                        let Some(caller) = identity
-                            .did()
-                            .and_then(|did| ::identity::Did::new(did.as_ref()).ok())
-                        else {
-                            return failure(
-                                StatusCode::UNAUTHORIZED,
-                                "Connect this client before creating an agent.",
-                            );
-                        };
-                        let Some((node, runtime)) = served
-                            .get()
-                            .and_then(|(node, runtime)| Some((node.upgrade()?, runtime)))
-                        else {
-                            return failure(
-                                StatusCode::SERVICE_UNAVAILABLE,
-                                "The runtime is still starting.",
-                            );
-                        };
-                        if request.node_did != runtime.did() {
-                            return failure(
-                                StatusCode::BAD_REQUEST,
-                                "The requested node does not serve this endpoint.",
-                            );
-                        }
-                        match gents_store::identity::provision_agent_identity_authorized(
-                            &node,
-                            runtime.as_ref(),
-                            &caller,
-                        )
-                        .await
-                        {
-                            Ok(binding) => axum::Json(binding).into_response(),
-                            Err(gents_store::identity::AgentProvisionError::Unauthorized) => {
-                                failure(
-                                    StatusCode::FORBIDDEN,
-                                    "This client cannot create an agent on this node.",
-                                )
-                            }
-                            Err(error) => {
-                                tracing::warn!(%error, "trial agent identity provisioning failed");
-                                failure(
-                                    StatusCode::SERVICE_UNAVAILABLE,
-                                    "The runtime cannot provision an agent identity.",
-                                )
-                            }
-                        }
-                    }
-                },
-            ),
-        )
+    gents_store::local::home::agent_routes(served.clone()).merge(goal_control_routes(served))
 }
 
-async fn trial_store_key(
-    path: &Path,
-    data: &Path,
-    fresh: bool,
-) -> Result<gents_store::local::store_key::StoreKey> {
-    use gents_store::local::store_key::{StoreEncryption, StoreKeyCustodyChoice};
-    use tokio::io::AsyncWriteExt;
-    let key_file = path.join("store.key");
-    let record_path = path.join("store-custody.json");
-    let record = if fresh {
-        let (key_file, data) = (key_file.clone(), data.to_owned());
-        let record = tokio::task::spawn_blocking(move || {
-            StoreEncryption::prepare(StoreKeyCustodyChoice::File, &key_file, &data)
-        })
-        .await??;
-        let mut file = tokio::fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&record_path)
-            .await?;
-        file.write_all(&serde_json::to_vec(&record)?).await?;
-        file.sync_all().await?;
-        record
-    } else {
-        serde_json::from_slice::<StoreEncryption>(&tokio::fs::read(&record_path).await?)?
-    };
-    let data = data.to_owned();
-    tokio::task::spawn_blocking(move || {
-        if fresh {
-            record.initialize(&key_file, &data)
-        } else {
-            record.load(&key_file, &data)
-        }
-    })
-    .await?
-    .map_err(Into::into)
+fn goal_control_routes(served: ServedNode) -> axum::Router {
+    axum::Router::new().route(
+        gents_protocol::goal_control::APPLY_GOAL_CONTROL_PATH,
+        axum::routing::post(
+            move |identity: defra_http::ExtractIdentity,
+                  headers: axum::http::HeaderMap,
+                  axum::Json(request): axum::Json<
+                gents_protocol::goal_control::ApplyGoalControl,
+            >| {
+                let served = served.clone();
+                async move {
+                    use axum::response::IntoResponse;
+                    let Some((node, runtime)) = served
+                        .get()
+                        .and_then(|(node, runtime)| Some((node.upgrade()?, runtime)))
+                    else {
+                        return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
+                    };
+                    gents_automation::goal::client_application::apply_http(
+                        &node, runtime, &identity, &headers, request,
+                    )
+                    .await
+                }
+            },
+        ),
+    )
 }
 
 pub struct RunningRuntime {
@@ -758,7 +317,7 @@ pub async fn boot_runtime_within(
     mut options: DocumentRuntimeOptions,
     ready_timeout: Duration,
 ) -> Result<(RunningRuntime, Gents)> {
-    options.backend_admission = Some(home.backend_admission.clone());
+    options.backend_admission = Some(home.backend_admission());
     let agent = Gents::from_default_agent_documents(home.node.clone(), identity, options).await?;
     let node_did = agent.node_did().to_string();
     let (shutdown, shutdown_rx) = watch::channel(false);
@@ -952,7 +511,7 @@ mod tests {
         let home = EmbeddedHome::create_temp("eval-home").await.unwrap();
         assert!(home.did().starts_with("did:"));
         assert!(home.path().join("node.key").exists());
-        assert!(home.backend_admission.validate(&home.node).await.is_ok());
+        assert!(home.backend_admission().validate(&home.node).await.is_ok());
         let response = home.node.execute("query { AgentRequest { _docID } }").await;
         assert!(response.errors.is_empty(), "{:?}", response.errors);
     }
@@ -974,9 +533,9 @@ mod tests {
                 .as_deref(),
             Some(evaluator_did.as_str())
         );
-        let previous_admission = home.backend_admission.clone();
+        let previous_admission = home.backend_admission();
         home.reopen().await.unwrap();
-        assert!(home.backend_admission.validate(&home.node).await.is_ok());
+        assert!(home.backend_admission().validate(&home.node).await.is_ok());
         assert!(previous_admission.validate(&home.node).await.is_err());
         assert_eq!(
             home.client_access(&evaluator_did)

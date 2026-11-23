@@ -342,7 +342,8 @@ async fn recollect_preserves_missing_terminal_evidence_as_infrastructure() {
     )
     .unwrap();
     let agent =
-        gents_store::identity::resolve_agent_identity(home.identity.as_ref(), &binding).unwrap();
+        gents_store::identity::resolve_agent_identity(home.node_identity.as_ref(), &binding)
+            .unwrap();
     let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
         home.node.clone(),
         ::identity::Did::new(&agent_did).unwrap(),
@@ -358,7 +359,7 @@ async fn recollect_preserves_missing_terminal_evidence_as_infrastructure() {
     let request = row.try_into().unwrap();
     let mut lifecycle = gents_session::test_support::admitted_client_lifecycle(
         home.node.clone(),
-        home.identity.clone(),
+        home.node_identity.clone(),
         &request,
         agent.as_ref(),
     )

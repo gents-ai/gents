@@ -392,8 +392,11 @@ fn prior_usage_decode_rejects_partial_or_negative_components() {
 #[tokio::test]
 async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
     for case in gents_lean_vocab::families::budget_rehydration_ledger::cases::<String>() {
-        let (db, user, owner, binding) =
-            crate::test_support::root::signed_test_node("completion-budget-rehydration").await;
+        let (db, user, owner, binding) = gents_inference::test_support::signed_test_node_from_db(
+            crate::support::trial_store("completion-budget-rehydration").await,
+            "completion-budget-rehydration",
+        )
+        .await;
         let node = db.node.clone();
         let agent = agent_with_binding(
             db.node_identity.clone(),
@@ -707,8 +710,11 @@ fn calibration_accounting(estimator: &str, estimated: usize, ratio: Option<u64>)
 
 #[tokio::test]
 async fn session_calibration_seeds_from_durable_inference_calls() {
-    let (db, user, owner, binding) =
-        crate::test_support::root::signed_test_node("completion-session-calibration").await;
+    let (db, user, owner, binding) = gents_inference::test_support::signed_test_node_from_db(
+        crate::support::trial_store("completion-session-calibration").await,
+        "completion-session-calibration",
+    )
+    .await;
     let node = db.node.clone();
     let agent = agent_with_binding(
         db.node_identity.clone(),

@@ -26,15 +26,7 @@ pub async fn start_node(
     ceiling: ToolCeiling,
     plugin_home: &Path,
 ) -> Result<(Arc<defra_node::Node>, BackendAdmission)> {
-    let plugin_home = plugin_home.to_owned();
-    let (plugins, _plugin_guard) = tokio::task::spawn_blocking(move || {
-        bootstrap_store(&plugin_home)?;
-        let guard = try_lock_store_shared(&plugin_home)?;
-        let plugins = list_records(&plugin_home).map_err(PublishedPluginReadError::Read)?;
-        Ok::<_, PublishedPluginReadError>((plugins, guard))
-    })
-    .await?
-    .map_err(|error| BackendProtectionError::Schema(error.into()))?;
+    let (plugins, _plugin_guard) = installed_plugins(plugin_home).await?;
     preflight
         .start_node_with_projection(
             key,
@@ -49,10 +41,28 @@ pub async fn start_node(
                 builder
             },
             Arc::new(ceiling),
-            projected_plugins(&plugins),
+            plugins,
             &gents_automation::lifecycle_hooks::composition(),
         )
         .await
+}
+
+/// The plugins installed in `plugin_home`, read under the plugin store's
+/// shared lock, which the returned guard holds until the caller's node has
+/// started.
+pub async fn installed_plugins(
+    plugin_home: &Path,
+) -> Result<(Vec<gents_store::local::ProjectedPlugin>, StoreGuard)> {
+    let plugin_home = plugin_home.to_owned();
+    let (plugins, guard) = tokio::task::spawn_blocking(move || {
+        bootstrap_store(&plugin_home)?;
+        let guard = try_lock_store_shared(&plugin_home)?;
+        let plugins = list_records(&plugin_home).map_err(PublishedPluginReadError::Read)?;
+        Ok::<_, PublishedPluginReadError>((plugins, guard))
+    })
+    .await?
+    .map_err(|error| BackendProtectionError::Schema(error.into()))?;
+    Ok((projected_plugins(&plugins), guard))
 }
 
 /// Starts the node for a caller that already holds the home's exclusive

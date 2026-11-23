@@ -131,8 +131,8 @@ mod tests {
     use crate::call::lifecycle::admission_fixture::write_fixture_job_pin;
     use gents_store::config_client::ConfigAccess;
 
-    async fn open() -> gents_inference::test_support::TestDb {
-        gents_inference::test_support::test_db(
+    async fn open() -> gents_store::test_support::TestStore {
+        gents_store::test_support::TestStore::start(
             "plugin-job-ancestry",
             gents_session::test_support::no_lifecycle_plugins(),
         )
@@ -225,7 +225,7 @@ mod tests {
     }
 
     struct Chain {
-        _db: gents_inference::test_support::TestDb,
+        _db: gents_store::test_support::TestStore,
         node: Arc<EmbeddedNode>,
         child: String,
         grand: String,

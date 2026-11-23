@@ -21,7 +21,7 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
     // own client-signed endpoint; the runtime starts over the home's fresh
     // backend admission.
     let home = crate::test_support::ClientHome::new().await;
-    let owner = home.home.identity.clone();
+    let owner = home.home.node_identity.clone();
     let user = &home.user;
     let foreign =
         gents_store::identity::KeyIdentity::load_or_create(dir.path().join("foreign.key"), None)

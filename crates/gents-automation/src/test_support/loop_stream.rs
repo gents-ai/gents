@@ -17,7 +17,7 @@ use gents_toolcalls::call::hook::{DefraSessionHook, FailurePolicy};
 
 use gents_inference::rendered_request::{AssemblyBuildPath, AssemblyTrace};
 
-use gents_inference::test_support::TestDb;
+use gents_store::test_support::TestStore;
 
 /// The scripted provider as the owned-loop suites drive it: each call
 /// answers with the next of `replies`, then with a bare final response, and
@@ -380,7 +380,7 @@ where
 }
 
 pub async fn owned_test_hook() -> (
-    TestDb,
+    TestStore,
     DefraSessionHook,
     gents_session::request::streaming::DefraStreamWriter,
     gents_session::request::lifecycle::RequestLifecycle,
@@ -391,7 +391,7 @@ pub async fn owned_test_hook() -> (
 pub async fn owned_test_hook_with_policy(
     policy: FailurePolicy,
 ) -> (
-    TestDb,
+    TestStore,
     DefraSessionHook,
     gents_session::request::streaming::DefraStreamWriter,
     gents_session::request::lifecycle::RequestLifecycle,
@@ -404,7 +404,7 @@ pub async fn owned_test_hook_with_policy(
 /// Claims a request whose stored content no longer matches its signature, so
 /// the claimed caller's attribution cannot be verified.
 pub async fn owned_test_hook_with_unattributable_request() -> (
-    TestDb,
+    TestStore,
     DefraSessionHook,
     gents_session::request::streaming::DefraStreamWriter,
     gents_session::request::lifecycle::RequestLifecycle,
@@ -426,9 +426,9 @@ enum RequestSignature {
 }
 
 /// A fixture whose requests are attributed to the node's own identity, which
-/// the returned `TestDb` holds as `node_identity`.
+/// the returned `TestStore` holds as `node_identity`.
 pub async fn owned_test_hook_with_identity() -> (
-    TestDb,
+    TestStore,
     DefraSessionHook,
     gents_session::request::streaming::DefraStreamWriter,
     gents_session::request::lifecycle::RequestLifecycle,
@@ -446,7 +446,7 @@ pub async fn owned_test_hook_with_identity() -> (
 pub async fn owned_test_hook_with_folded_case(
     case: &gents_lean_vocab::families::fold_queue_contracts_turn_input::TurnInputCase,
 ) -> (
-    TestDb,
+    TestStore,
     DefraSessionHook,
     gents_session::request::streaming::DefraStreamWriter,
     gents_session::request::lifecycle::RequestLifecycle,
@@ -505,7 +505,7 @@ async fn owned_test_hook_with_identity_policy(
     >,
     signature: RequestSignature,
 ) -> (
-    TestDb,
+    TestStore,
     DefraSessionHook,
     gents_session::request::streaming::DefraStreamWriter,
     gents_session::request::lifecycle::RequestLifecycle,
@@ -513,9 +513,11 @@ async fn owned_test_hook_with_identity_policy(
 ) {
     // Every fixture runs under the node's held root, so the Agent, its requests
     // and its loop writes are all signed actors.
-    let db =
-        gents_inference::test_support::test_db("owned-loop", crate::lifecycle_hooks::composition())
-            .await;
+    let db = gents_store::test_support::TestStore::start(
+        "owned-loop",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
     let root = db.node_identity.clone();
     let node = db.node.clone();
     let node_did_owned = root.did().to_owned();

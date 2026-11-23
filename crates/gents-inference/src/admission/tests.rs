@@ -19,7 +19,7 @@ use gents_protocol::row::AgentRequest;
 use gents_store::identity::NodeIdentity as _;
 
 pub(super) async fn test_node() -> (
-    crate::test_support::TestDb,
+    gents_store::test_support::TestStore,
     gents_store::identity::ManagedAgentSigner,
 ) {
     let (db, _user, _access, binding) = crate::test_support::signed_test_node(
@@ -35,7 +35,7 @@ pub(super) async fn test_node() -> (
 }
 
 pub(super) async fn grant_test_agent(
-    db: &crate::test_support::TestDb,
+    db: &gents_store::test_support::TestStore,
     signer: &gents_store::identity::ManagedAgentSigner,
 ) {
     use gents_store::config_client::NodePermission;

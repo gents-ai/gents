@@ -44,7 +44,7 @@ impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for PendingRe
 async fn generated_startup_admission_opens_only_after_a_durable_ready() {
     use gents_lean_vocab::families::runtime_startup_admission_become_ready as family;
     for case in family::cases() {
-        let db = gents_inference::test_support::test_db(
+        let db = gents_store::test_support::TestStore::start(
             "startup-ready-family",
             gents_automation::lifecycle_hooks::composition(),
         )
@@ -138,7 +138,7 @@ enum Run {
 #[tokio::test]
 async fn the_durable_process_state_and_the_observer_tell_the_same_story() {
     use gents_protocol::node_readiness::NodeReadinessProcessState as Durable;
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "process-lifecycle-runs",
         gents_automation::lifecycle_hooks::composition(),
     )

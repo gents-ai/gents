@@ -6,7 +6,7 @@ use gents_store::identity::NodeIdentity;
 use std::sync::Arc;
 
 pub struct BudgetHookFixture {
-    pub db: gents_inference::test_support::TestDb,
+    pub db: gents_store::test_support::TestStore,
     pub user: gents_store::identity::KeyIdentity,
     pub owner: gents_store::config_client::ConfigAccess,
     pub agent: Arc<dyn NodeIdentity>,

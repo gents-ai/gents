@@ -1339,7 +1339,7 @@ mod tests {
     async fn reduction_fixture(
         requester: Option<&str>,
     ) -> (
-        gents_inference::test_support::TestDb,
+        gents_store::test_support::TestStore,
         String,
         gents_store::identity::ManagedAgentSigner,
     ) {
@@ -1864,7 +1864,7 @@ mod tests {
     #[tokio::test]
     async fn source_boundary_high_water_matches_the_lean_model() {
         for case in gents_lean_vocab::families::source_boundary_high_water::cases() {
-            let node_db = gents_inference::test_support::test_db(
+            let node_db = gents_store::test_support::TestStore::start(
                 "source-boundary-high-water-matches-the-l",
                 crate::test_support::no_lifecycle_plugins(),
             )

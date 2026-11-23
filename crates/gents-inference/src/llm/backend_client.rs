@@ -528,7 +528,7 @@ mod tests {
     }
 
     pub(super) fn held_test_agent(
-        db: &crate::test_support::TestDb,
+        db: &gents_store::test_support::TestStore,
         binding: &gents_protocol::agent_identity::AgentIdentityBinding,
         kind: BackendProviderKind,
         wire_api: gents_loop::openai_wire::OpenAiWireApi,

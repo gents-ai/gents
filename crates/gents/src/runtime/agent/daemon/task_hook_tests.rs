@@ -46,7 +46,7 @@ struct Harness {
     tool_config: Arc<gents_tools::surface::AgentToolSurfaceConfig>,
     models: std::sync::Mutex<Vec<ScriptedProvider>>,
     marks: tempfile::TempDir,
-    _db: crate::support::TestDb,
+    _db: gents_store::test_support::TestStore,
     _user: gents_store::identity::KeyIdentity,
     user_access: ConfigAccess,
     agent_access: ConfigAccess,
@@ -60,7 +60,11 @@ impl Harness {
     async fn with_deadline(deadline: Duration) -> Self {
         use gents_store::config_client::NodePermission;
         let (db, user, user_access, binding) =
-            crate::test_support::root::signed_test_node("task-hooks").await;
+            gents_inference::test_support::signed_test_node_from_db(
+                crate::support::trial_store("task-hooks").await,
+                "task-hooks",
+            )
+            .await;
         let node = db.node.clone();
         let agent_identity =
             gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)

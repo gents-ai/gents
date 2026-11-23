@@ -47,7 +47,7 @@ async fn call(
 
 #[tokio::test]
 async fn inference_order_and_physical_scope_survive_index_hints() {
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "indexed-context-scopes",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -234,7 +234,7 @@ async fn inference_order_and_physical_scope_survive_index_hints() {
 
 #[tokio::test]
 async fn retained_calls_page_past_foreign_rows_and_nullable_cursor_keys() {
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "paged-context-null-keys",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -266,7 +266,7 @@ async fn retained_calls_page_past_foreign_rows_and_nullable_cursor_keys() {
 
 #[tokio::test]
 async fn retained_call_selection_pages_the_scoped_requests() {
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "paged-context-retained-requests",
         gents_session::test_support::no_lifecycle_plugins(),
     )
