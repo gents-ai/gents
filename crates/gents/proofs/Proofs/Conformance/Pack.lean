@@ -56,19 +56,20 @@ section Wiring
 
 open PluginWiring
 
-inductive WiringAction | wire | unwire
+inductive WiringAction | wire | unwire | enable
   deriving DecidableEq, Repr, ToJson
 
-/-- One wiring or unwiring. The consents are the node owner's, given with a
-wiring and applied to what it wrote. -/
+/-- One wiring, unwiring, or operator enable over `enableTargets`. The tool
+calls consent is the node owner's, given with a wiring and applied to what it
+wrote. -/
 structure WiringStep where
   action : WiringAction
   plugin : Plugin
   reviewed : Option Job
   skills : List String
   sources : List Source
-  consentDynamic : Bool
   consentToolCalls : Bool
+  enableTargets : List String
   deriving ToJson
 
 structure WiringScript where
@@ -84,10 +85,9 @@ def runWiring (surface : Surface) : List WiringStep → List (Option Outcome)
     let outcome := match step.action with
       | .wire =>
         (wire surface step.plugin step.reviewed step.skills step.sources).map fun wired =>
-          let wired :=
-            if step.consentToolCalls then consentToolCalls step.plugin.coordinate wired else wired
-          if step.consentDynamic then consentDynamic step.plugin.coordinate wired else wired
+          if step.consentToolCalls then consentToolCalls step.plugin.coordinate wired else wired
       | .unwire => unwire surface step.plugin step.skills step.sources
+      | .enable => operatorEnable surface step.plugin.coordinate step.enableTargets
     outcome :: runWiring ((outcome.map (·.surface)).getD surface) rest
 
 private def runner (ownerPack : Option String := none) (runsJobs : Bool := true) : Plugin :=
@@ -114,13 +114,17 @@ private def single (operatorInstalled : Bool := true) : Source :=
   { pack := "acme/content", targets := ["wf-a"], operatorInstalled }
 
 private def wireStep (plugin : Plugin) (reviewed : Option Job := none) (skills : List String := [])
-    (sources : List Source := []) (consentDynamic consentToolCalls : Bool := false) : WiringStep :=
-  { action := .wire, plugin, reviewed, skills, sources, consentDynamic, consentToolCalls }
+    (sources : List Source := []) (consentToolCalls : Bool := false) : WiringStep :=
+  { action := .wire, plugin, reviewed, skills, sources, consentToolCalls, enableTargets := [] }
 
 private def unwireStep (plugin : Plugin) (skills : List String := [])
     (sources : List Source := []) : WiringStep :=
   { action := .unwire, plugin, reviewed := none, skills, sources
-    consentDynamic := false, consentToolCalls := false }
+    consentToolCalls := false, enableTargets := [] }
+
+private def enableStep (plugin : Plugin) (targets : List String) : WiringStep :=
+  { action := .enable, plugin, reviewed := none, skills := [], sources := []
+    consentToolCalls := false, enableTargets := targets }
 
 private def wiredWith (job : Option Job) (targets : List String) (enabled : Option Bool := none)
     (toolCalls : Bool := false) : Surface :=
@@ -134,6 +138,25 @@ private def narrow : Job :=
 
 private def skill : List String := ["create-workflow"]
 
+private def modeName : PluginWiring.Dynamic → String
+  | .off => "off"
+  | .check => "check"
+  | .run => "run"
+
+/-- Every pair of the operator's and the incoming dynamic mode, against
+incoming target lists the operator's list covers, misses, or orders otherwise.
+Each wiring is repeated, then the operator's own block is wired back. -/
+private def keptPolicyScripts : List WiringScript :=
+  [PluginWiring.Dynamic.off, .check, .run].flatMap fun existingMode =>
+    [PluginWiring.Dynamic.off, .check, .run].flatMap fun incomingMode =>
+      [[], ["a"], ["a", "c"], ["b", "a"]].map fun incomingTargets =>
+        let existing := block ["a", "b", "c"] existingMode ["b", "a"]
+        let step := wireStep runner (skills := skill)
+          (reviewed := some (block ["a", "b", "c"] incomingMode incomingTargets))
+        ⟨s!"wiring keeps the operator's {modeName existingMode} [b, a] against {modeName incomingMode} {incomingTargets}",
+          wiredWith (some existing) ["a", "b", "c"],
+          [step, step, wireStep runner (reviewed := some existing)]⟩
+
 @[conformance_family]
 def pluginWiring : Family WiringScript (List (Option Outcome)) where
   inputs :=
@@ -141,10 +164,30 @@ def pluginWiring : Family WiringScript (List (Option Outcome)) where
         [wireStep runner]⟩
     , ⟨"packs wired in without a reviewed block get the default block", fresh,
         [wireStep (runner (some "acme/engine")) (sources := [single])]⟩
-    , ⟨"the owner's consent raises check to run", fresh,
-        [wireStep (runner (some "acme/engine")) (sources := [single]) (consentDynamic := true)]⟩
-    , ⟨"consent leaves a block that is off off", fresh,
-        [wireStep runner (reviewed := some (block ["wf-a"] .off)) (consentDynamic := true)]⟩
+    , ⟨"the operator's enable raises check to run over the pack's dynamic targets", fresh,
+        [ wireStep (runner (some "acme/engine")) (sources := [single])
+        , enableStep (runner (some "acme/engine")) ["wf-a"] ]⟩
+    , ⟨"the operator's enable raises off to run and adds its targets", fresh,
+        [ wireStep runner (reviewed := some (block ["wf-a"] .off))
+        , enableStep runner ["wf-a", "wf-b"] ]⟩
+    , ⟨"the operator's enable replaces the dynamic targets it finds",
+        wiredWith (some (block ["a", "b"] .check ["b", "a"])) ["a", "b"],
+        [enableStep runner ["a"]]⟩
+    , ⟨"enabling a plugin the Agent selects without a block refuses", wiredWith none [],
+        [enableStep runner ["wf-a"]]⟩
+    , ⟨"enabling one plugin leaves another's block as it was",
+        { fresh with
+          plugins :=
+            [ { plugin := "acme/runner", digest := "sha256:aa", toolCalls := false
+                job := some (block ["a"] .check ["a"]) }
+            , { plugin := "acme/other", digest := "sha256:bb", toolCalls := false
+                job := some (block ["a"] .off) } ]
+          targets := ["a"] },
+        [enableStep runner ["a"], wireStep other (reviewed := some (block ["a"] .check ["a"]))]⟩
+    , ⟨"a wiring after the operator's enable keeps run", fresh,
+        [ wireStep (runner (some "acme/engine")) (sources := [single])
+        , enableStep (runner (some "acme/engine")) ["wf-a"]
+        , wireStep (runner (some "acme/engine")) (sources := [single]) ]⟩
     , ⟨"the owner's consent lets the plugin call the Agent's tools", fresh,
         [wireStep (runner (runsJobs := false)) (consentToolCalls := true)]⟩
     , ⟨"a reviewed block is written as reviewed", fresh,
@@ -156,6 +199,15 @@ def pluginWiring : Family WiringScript (List (Option Outcome)) where
     , ⟨"a later wiring cannot raise the dynamic mode",
         wiredWith (some (block ["a"] .check)) ["a"],
         [wireStep runner (reviewed := some (block ["a"] .run))]⟩
+    , ⟨"a later wiring keeps the operator's run and its targets",
+        wiredWith (some (block ["a", "b"] .run ["b", "a"])) ["a", "b"],
+        [wireStep (runner (some "acme/engine")) (reviewed := some (block ["a", "b"] .check ["a"]))
+          (sources := [single])]⟩
+    , ⟨"rewiring the artifact already pinned under run does not warn of a new pin",
+        { wiredWith (some (block ["a"] .run ["a"])) ["a"] with
+          plugins := [{ plugin := "acme/runner", digest := "sha256:aa", toolCalls := false
+                        job := some (block ["a"] .run ["a"]) }] },
+        [wireStep runner (reviewed := some (block ["a"] .run ["a"]))]⟩
     , ⟨"wiring leaves an unset Agent switch unset", fresh none,
         [wireStep runner (sources := [single])]⟩
     , ⟨"wiring leaves a disabled Agent switch disabled", fresh (some false),
@@ -241,6 +293,7 @@ def pluginWiring : Family WiringScript (List (Option Outcome)) where
     , ⟨"a target the Agent held before the wiring leaves with the block",
         { fresh with targets := ["reviewer"] },
         [wireStep runner (reviewed := some (block ["reviewer"])), unwireStep runner]⟩ ]
+    ++ keptPolicyScripts
   model := fun script => runWiring script.start script.steps
 
 end Wiring

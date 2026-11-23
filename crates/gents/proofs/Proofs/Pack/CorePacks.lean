@@ -80,9 +80,9 @@ structure Wiring where
   wired : Bool
   /-- Its plugins may call the Engineer's own tools. -/
   toolCalls : Bool
-  /-- The node owner's consent to model-written dynamic scripts, which raises
-  the shipped `check` block to `run` (`PluginJob.consentedDynamic`, applied by
-  `Pack.PluginWiring.consentDynamic`). -/
+  /-- Its job blocks' dynamic scripts run (`Pack.PluginWiring.dynamicEnabled`):
+  the node owner's consent to model-written scripts, given only by the explicit
+  enable (`Pack.PluginWiring.operatorEnable`), never by a wiring. -/
   consentDynamic : Bool
   /-- The agents it ships read the Engineer's tool root. -/
   rootReaders : Bool

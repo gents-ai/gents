@@ -1443,13 +1443,6 @@ def policyCases : List PolicyCase :=
   , ⟨"default_empty_dynamic_targets_valid", [],
       { context.policy with dynamicTargets := [] }⟩ ]
 
-/-- `consentedDynamic` over every mode with consent, and `check` without. -/
-def consentCases : List (String × Bool × DynamicMode) :=
-  [ ("consent_raises_check_to_run", true, .check)
-  , ("consent_keeps_off", true, .off)
-  , ("consent_keeps_run", true, .run)
-  , ("no_consent_keeps_check", false, .check) ]
-
 structure WireCase where
   name : String
   pack : String

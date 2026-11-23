@@ -13,6 +13,7 @@ const LACKING: Record<Exclude<DefaultPackState, "installed">, string> = {
   missing: "isn’t installed on this node yet",
   not_enabled: "is installed on this node but not turned on",
   unavailable: "can’t be installed by this build of Gents",
+  unknown: "is installed on this node, but its state could not be read",
 };
 
 /** A few things to try with the Engineer, each opening to a line about it

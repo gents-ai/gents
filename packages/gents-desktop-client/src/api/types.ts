@@ -127,7 +127,7 @@ import type {
   DynamicWorkflow,
   WorkflowPromoteRequest,
   WorkflowPromoted,
-  PackWireResult,
+  PackWireEntry,
   PackWireSources,
   DefaultPacks,
   DefaultPackApproval,
@@ -502,7 +502,7 @@ export type DesktopApiAdapter = {
       installed: refused by default, or deleted with the rest (`overwrite`). */
   removePack: (pack: string, edited?: PackEditedChoice) => Promise<void>;
   bindPackPlugin: (plugin: string, profile: string | null) => Promise<void>;
-  wirePack: (request: PackWireRequest) => Promise<PackWireResult>;
+  wirePack: (request: PackWireRequest) => Promise<PackWireEntry>;
   listPackWireSources: () => Promise<PackWireSources>;
   /** the packs the Engineer starts with on the local node, and how each stands */
   listDefaultPacks: () => Promise<DefaultPacks>;

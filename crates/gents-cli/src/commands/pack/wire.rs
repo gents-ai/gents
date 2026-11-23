@@ -18,7 +18,6 @@ pub(crate) async fn wire(args: PackWireArgs) -> Result<()> {
         targets_from: args.targets_from,
         remove: args.remove,
         preview: args.preview,
-        dynamic_consent: false,
         tool_calls_consent: false,
     };
     let plan = match &access {
