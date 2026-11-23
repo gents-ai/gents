@@ -15,8 +15,8 @@ inductive Tool where
 /-- The plugin answers a small JSON response and one PNG image; the other tool
 answers text larger than the tool-result text bound. -/
 def toolOutput : Tool → List SourcePart
-  | .pluginImage => [.text true, .image]
-  | .oversizedText => [.text false]
+  | .pluginImage => [.text true .json, .image]
+  | .oversizedText => [.text false .plain]
 
 structure ProjectionInput where
   tool : Tool
