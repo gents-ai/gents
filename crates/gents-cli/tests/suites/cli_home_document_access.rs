@@ -192,6 +192,31 @@ async fn a_new_vera_home_serves_with_its_client_owned_device_group() -> Result<(
 
 /// The follower reopens with its own node key and the host's provisioned trust.
 #[cfg(feature = "vera")]
+async fn publish_test_peer(
+    access: &gents_store::config_client::ConfigAccess,
+    device: &str,
+    publisher: &str,
+) -> Result<String> {
+    let variables = serde_json::json!({"input":{
+        "peer_id": Uuid::new_v4().to_string(), "node_did": device,
+        "publisher_node_id": publisher, "addresses": ["loopback"],
+    }});
+    let response: Value = access.transact_write("test.shared_peer_publication", |txn| {
+        let variables = variables.clone();
+        Box::pin(async move {
+            txn.execute_client_signed_create(
+                "mutation($input: PeerRegistryMutationInputArg!) { create_PeerRegistry(input: $input) { _docID } }",
+                &variables, gents_protocol::schemas::PEER_REGISTRY,
+            ).await
+        })
+    }).await.map_err(anyhow::Error::from)?;
+    Ok(gents_store::graphql::created_doc_id(
+        &response,
+        "PeerRegistry",
+    )?)
+}
+
+#[cfg(feature = "vera")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn paired_home_reopens_against_the_original_vera_deployment() -> Result<()> {
     let host = tempfile::tempdir()?;
@@ -290,6 +315,26 @@ async fn paired_home_reopens_against_the_original_vera_deployment() -> Result<()
     fs::remove_file(&anchor)?;
     fs::remove_file(&admission)?;
     let (serving, graphql) = served(follower.path()).await?;
+    let endpoints = gents_store::config_client::runtime_endpoints::RuntimeEndpoints::new(
+        follower_key.client_signing_capability()?,
+    );
+    let access = gents_store::config_client::ConfigAccess::Graphql(
+        endpoints
+            .endpoint(follower_did, &graphql)?
+            .with_client_signed_agent_creates(),
+    );
+    anyhow::ensure!(access.transport_publisher_node().await?.as_deref() == Some(publisher_node));
+    let peer = publish_test_peer(&access, follower_did, publisher_node).await?;
+    let host_node = provisioned["vera_anchor"]["host_node"]
+        .as_str()
+        .context("host publisher Node")?;
+    anyhow::ensure!(host_node != publisher_node);
+    anyhow::ensure!(
+        publish_test_peer(&access, follower_did, host_node)
+            .await
+            .is_err(),
+        "a device published under another device's Node without delegation"
+    );
     prompted(follower.path(), "record a session on the paired device")?;
     let first = sessions(follower.path(), Some(&graphql))?;
     anyhow::ensure!(!first.is_empty(), "the paired device has no sessions");
@@ -302,6 +347,21 @@ async fn paired_home_reopens_against_the_original_vera_deployment() -> Result<()
         &sessions(follower.path(), Some(&graphql))?,
         "after both devices restarted",
     )?;
+    let resumed = gents_store::config_client::ConfigAccess::Graphql(
+        endpoints
+            .endpoint(follower_did, &graphql)?
+            .with_client_signed_agent_creates(),
+    );
+    let selection = format!(
+        r#"{{ PeerRegistry(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID publisher_node_id }} }}"#,
+        gents_store::graphql::escape_graphql_string(&peer)
+    );
+    let rows = resumed.execute(&selection).await?;
+    let rows = gents_protocol::graphql::graphql_rows_from_response(&rows, "PeerRegistry");
+    anyhow::ensure!(
+        matches!(rows.as_slice(), [row] if row["_docID"] == peer && row["publisher_node_id"] == publisher_node),
+        "the restarted follower lost the certified publisher's record"
+    );
     stop(serving).await?;
     let removed = run_cli_json(
         host.path(),
