@@ -54,7 +54,7 @@ theorem edited_skills_keep_slot_but_directory_change_is_refused :
 
 def cases : List Case :=
   [ intakeCase "steer_contiguous_admitted" [pending 2, pending 3] [2,3]
-  , intakeCase "queue_is_barrier" [pending 2 .queue, pending 3] [2,3]
+  , intakeCase "queue_is_passed" [pending 2 .queue, pending 3] [2,3]
   , intakeCase "unadmitted_is_barrier" [pending 2, pending 3] [3]
   , intakeCase "unsafe_provider_boundary" [pending 2] [2] false
   , intakeCase "stale_active_observation" [pending 2] [2] true (user 9)
@@ -103,10 +103,28 @@ theorem selected_exact_contiguous_prefix :
     ((cases[0]!).after.map fun s => (s.active, s.folding.map (·.requestId), s.pending.map (·.requestId))) =
       some (some 1, [2,3], []) := by native_decide
 
-theorem queue_and_unadmitted_barriers_preserve_pending :
-    ([cases[1]!, cases[2]!, cases[5]!].map fun c =>
+theorem queued_turn_is_passed_in_place :
+    ((cases[1]!).after.map fun s => (s.folding.map (·.requestId), s.pending.map (·.requestId))) =
+      some ([3], [2]) := by native_decide
+
+theorem unadmitted_and_foreign_barriers_preserve_pending :
+    ([cases[2]!, cases[5]!].map fun c =>
       c.after.map fun s => (s.folding.map (·.requestId), s.pending.map (·.requestId))) =
-      [some ([],[2,3]), some ([],[2,3]), some ([],[2,3])] := by native_decide
+      [some ([],[2,3]), some ([],[2,3])] := by native_decide
+
+/-- A steer selected past a queued turn and not published when the turn ends
+returns to its created place: the earlier queued turn runs first. -/
+theorem finished_turn_returns_unpublished_steer_to_its_created_place :
+    ((cases[1]!).after.map fun s => (s.finishActive 1).pending.map (·.requestId)) =
+      some [2, 3] := by native_decide
+
+/-- Editing a steer selected past a queued turn invalidates the selection and
+keeps the queue in created order. -/
+theorem edit_of_passed_selection_keeps_created_order :
+    ((cases[1]!).after.bind fun s =>
+      replacePendingGroup? queue.scope s (some 1) [2, 3] 1 1 [replacement 4 3]).map
+      (fun s => (s.folding.map (·.requestId), s.pending.map (·.requestId))) =
+      some ([], [2, 4]) := by native_decide
 
 theorem replacement_retains_slot_and_fresh_issuance :
     ((cases[8]!).after.map fun s => s.pending.map fun e =>

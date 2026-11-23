@@ -752,12 +752,6 @@ def backgroundWakeRowsCases : List WakeRowsCase :=
   , { name := "newer-interactive-requester-blocks-stale-wake",
       rows := [wakeParent BackgroundCompletion.failedWakeFixture, newerInteractive] }
   , { name := "wrong-physical-parent-denied", parentDoc := 999 }
-  , { name := "successor-physical-id-collision-denied",
-      successor := { wakeSuccessor with observed := ⟨101, 902, .pending⟩ } }
-  , { name := "successor-logical-id-collision-denied",
-      successor := { wakeSuccessor with observed := ⟨102, 901, .pending⟩ } }
-  , { name := "older-successor-cannot-advance-head",
-      successor := { wakeSuccessor with createdAt := 0 } }
   , { name := "published-successor-prevents-second-redrive",
       rows := [wakeParent BackgroundCompletion.failedWakeFixture, wakeSuccessor],
       successor := { wakeSuccessor with createdAt := 4, observed := ⟨104, 904, .pending⟩ } }
@@ -769,7 +763,27 @@ def backgroundWakeRowsCases : List WakeRowsCase :=
 
 theorem background_recovery_rows_pinned :
     backgroundWakeRowsCases.map (fun c => c.result.isSome) =
-      [true, false, false, false, false, false, false, true, false] := by native_decide
+      [true, false, false, false, true, false] := by native_decide
+
+/-- Premise: redrive generates a fresh request id for the successor and
+DefraDB assigns its document id, so the successor never shares either with a
+row already in the session. -/
+theorem successor_id_collision_denied :
+    (WakeRowsCase.result
+        { name := "physical"
+          successor := { wakeSuccessor with observed := ⟨101, 902, .pending⟩ } }).isNone ∧
+    (WakeRowsCase.result
+        { name := "logical"
+          successor := { wakeSuccessor with observed := ⟨102, 901, .pending⟩ } }).isNone := by
+  native_decide
+
+/-- Premise: the successor's creation time is the publication time, so it is
+never older than the failed wake it retries. -/
+theorem older_successor_cannot_advance_head :
+    (WakeRowsCase.result
+        { name := "older"
+          successor := { wakeSuccessor with createdAt := 0 } }).isNone := by
+  native_decide
 
 theorem background_successor_publication_pinned :
     ((WakeRowsCase.result { name := "publication" }).map fun post =>

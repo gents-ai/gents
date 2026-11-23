@@ -203,4 +203,76 @@ mod canonical_tests {
         foreign.node.node_did = "did:key:foreign".into();
         assert!(super::super::prune::prune_safe_deletes(&foreign, &live).is_err());
     }
+
+    #[test]
+    fn prune_matches_lean_prune_cases() {
+        use gents_lean_vocab::families::apply_reconcile_contract_cases_prune_cases as family;
+        const OWNER: &str = "did:key:owner";
+
+        fn collection(doc: &family::DocRef<String>) -> Collection {
+            match doc.collection.as_str() {
+                "agent_context" => Collection::AgentContext,
+                "tools" => Collection::Tools,
+                "default_agent_selection" => Collection::DefaultAgentSelection,
+                other => panic!("unmodeled Lean collection {other}"),
+            }
+        }
+
+        fn id(doc: &family::DocRef<String>) -> String {
+            assert_eq!(doc.node_did, "did:owner", "prune scopes one node");
+            match doc.id.as_str() {
+                "did:owner" => OWNER.to_owned(),
+                other => other.to_owned(),
+            }
+        }
+
+        fn manifest(rows: &[family::Row<String>]) -> DesiredStateManifest {
+            let (mut contexts, mut tools, mut selection) = (Vec::new(), Vec::new(), None);
+            for row in rows {
+                let target = row.refs.first().map(id);
+                match collection(&row.doc) {
+                    Collection::AgentContext => contexts.push(
+                        json!({"node_did": OWNER, "context_id": id(&row.doc), "tools_id": target}),
+                    ),
+                    Collection::Tools => {
+                        tools.push(json!({"node_did": OWNER, "tools_id": id(&row.doc)}))
+                    }
+                    _ => selection = Some(json!({"node_did": OWNER})),
+                }
+            }
+            serde_json::from_value(json!({
+                "node": {"node_did": OWNER},
+                "default_agent_selection": selection,
+                "contexts": contexts,
+                "tools": tools,
+            }))
+            .expect("modeled manifest")
+        }
+
+        family::replay(|input: &family::PruneInput<String>| {
+            let authored: Vec<_> = input
+                .authored
+                .iter()
+                .map(|doc| family::Row {
+                    doc: doc.clone(),
+                    refs: Vec::new(),
+                })
+                .collect();
+            let live = manifest(&input.live);
+            let deletes =
+                super::super::prune::prune_safe_deletes(&manifest(&authored), &live).ok()?;
+            Some(
+                input
+                    .live
+                    .iter()
+                    .map(|row| row.doc.clone())
+                    .filter(|doc| {
+                        deletes.iter().any(|deleted| {
+                            deleted.collection == collection(doc) && deleted.id == id(doc)
+                        })
+                    })
+                    .collect(),
+            )
+        });
+    }
 }

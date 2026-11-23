@@ -324,6 +324,265 @@ impl HostedPackStage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_store::config_client::{
+        ClientSigningCapability, ConfigApplyTxn, PackApprovalError, PackEvidence, PackMutation,
+        PackRelationship, PackRelationshipEvidence,
+    };
+    use gents_store::identity::{KeyIdentity, NodeIdentity};
+    use serde_json::{json, Value};
+
+    /// The held User's approver: it signs each proposed effect with its own
+    /// key and finishes only when it holds a plan for the install.
+    struct HeldUserApprover {
+        actor: ClientSigningCapability,
+        scope: PackApprovalScope,
+        plan: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl PackEffectApprover for HeldUserApprover {
+        async fn approve_graph(
+            &self,
+            txn: &ConfigApplyTxn<'_>,
+            mutation: &PackMutation,
+            history: Option<Value>,
+        ) -> std::result::Result<PackEvidence, PackApprovalError> {
+            let ids = txn
+                .home_policy_ids()
+                .await
+                .map_err(|error| PackApprovalError::Refused(error.to_string()))?;
+            gents_store::config_client::prepare_pack_evidence_from_history(
+                &self.actor,
+                &self.scope,
+                mutation,
+                history,
+                ids,
+            )
+            .await
+            .map_err(|error| PackApprovalError::Refused(error.to_string()))
+        }
+        async fn approve_relationship(
+            &self,
+            _txn: &ConfigApplyTxn<'_>,
+            relationship: &PackRelationship,
+        ) -> std::result::Result<PackRelationshipEvidence, PackApprovalError> {
+            gents_store::config_client::prepare_pack_relationship(
+                &self.actor,
+                &self.scope,
+                relationship,
+            )
+            .await
+            .map_err(|error| PackApprovalError::Refused(error.to_string()))
+        }
+        async fn next_timestamp(
+            &self,
+            _txn: &ConfigApplyTxn<'_>,
+            _kind: &'static str,
+        ) -> std::result::Result<String, PackApprovalError> {
+            Ok(gents_store::config_client::mint_recreate_identity_timestamp())
+        }
+        async fn graph_applied(
+            &self,
+            _result: &Value,
+        ) -> std::result::Result<(), PackApprovalError> {
+            Ok(())
+        }
+        async fn relationship_applied(&self) -> std::result::Result<(), PackApprovalError> {
+            Ok(())
+        }
+        async fn client_finished(
+            &self,
+            _txn: &ConfigApplyTxn<'_>,
+        ) -> std::result::Result<(), PackApprovalError> {
+            if self.plan {
+                Ok(())
+            } else {
+                Err(PackApprovalError::Refused(
+                    "client aborted pack installation".into(),
+                ))
+            }
+        }
+    }
+
+    /// The Node the runtime serves, created and owned by `user`, which the
+    /// runtime may read; `other` holds the operator grants but no relation on
+    /// the Node.
+    async fn hosted_node(
+        runtime: &KeyIdentity,
+        user: &KeyIdentity,
+        other: &KeyIdentity,
+    ) -> anyhow::Result<Arc<defra_node::Node>> {
+        let node = Arc::new(
+            gents_store::test_support::node_builder()
+                .with_node_identity_did(runtime.did())
+                .with_node_acp_owner(runtime.did().to_owned())
+                .build()
+                .await?,
+        );
+        gents_store::schema::ensure_runtime_schemas(&node).await?;
+        let runtime_access = ConfigAccess::local_as(node.clone(), runtime.did().parse()?);
+        for subject in [user, other] {
+            gents_store::identity::GrantSet::OperatorUser
+                .grant(&runtime_access, &identity::Did::new(subject.did())?)
+                .await?;
+        }
+        let user_access = ConfigAccess::local_as(node.clone(), user.did().parse()?);
+        let user_key = user.client_signing_capability()?;
+        let scope = PackApprovalScope {
+            node_did: runtime.did().into(),
+            pack_digests: vec![format!("sha256:{}", "1".repeat(64))],
+            nonce: "node".into(),
+        };
+        let create = PackMutation::Create {
+            collection: "Node".into(),
+            input: json!({"node_did": runtime.did(), "enabled": true}),
+        };
+        let evidence = gents_store::config_client::prepare_pack_evidence(
+            &user_access,
+            &user_key,
+            &scope,
+            &create,
+        )
+        .await?;
+        user_access
+            .transact_verified_pack("test.hosted_plugin.node", |txn| {
+                let evidence = evidence.clone();
+                let create = &create;
+                let scope = &scope;
+                let user_key = &user_key;
+                Box::pin(async move {
+                    let result = txn.apply(scope, create, evidence).await?;
+                    let relationship = PackRelationship {
+                        collection: "Node".into(),
+                        doc_id: gents_store::graphql::created_doc_id(&result, "Node")?,
+                        relation: "runtime_reader".into(),
+                        target: gents_store::config_client::PackRelationshipTarget::Actor {
+                            did: runtime.did().into(),
+                        },
+                        delete: false,
+                    };
+                    let signed = gents_store::config_client::prepare_pack_relationship(
+                        user_key,
+                        scope,
+                        &relationship,
+                    )
+                    .await?;
+                    txn.apply_relationship(scope, &relationship, signed).await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await?;
+        Ok(node)
+    }
+
+    /// The hosted route's three checks over one staged plugin-root archive:
+    /// the host's Node-update authorization of the session's User, the
+    /// approval scope naming the staged archive's digests, and the client
+    /// finishing its plan inside the User's native transaction.
+    #[tokio::test]
+    async fn hosted_plugin_root_install_conforms_to_lean() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let runtime = KeyIdentity::load_or_create(directory.path().join("runtime"), None)?;
+        let user = KeyIdentity::load_or_create(directory.path().join("user"), None)?;
+        let other = KeyIdentity::load_or_create(directory.path().join("other"), None)?;
+        let node = hosted_node(&runtime, &user, &other).await?;
+        let runtime_access = ConfigAccess::local_as(node.clone(), runtime.did().parse()?);
+        let (_fixture, _path, archive) =
+            crate::pack::plugin_lifecycle::tests::fixture("1.0.0", false);
+        let archive = Arc::new(archive);
+        for case in gents_lean_vocab::families::contracts_pack_installation_hosted_plugin::cases() {
+            let actor = if case.input.native { &user } else { &other };
+            let actor_did = identity::Did::new(actor.did())?;
+            let authorized = runtime_access
+                .transact_readonly("test.hosted_plugin.authorize", |txn| {
+                    let runtime = &runtime;
+                    let actor_did = &actor_did;
+                    Box::pin(async move {
+                        gents_store::config_client::require_node_update_in_txn(
+                            txn,
+                            &identity::Did::new(runtime.did())?,
+                            actor_did,
+                        )
+                        .await
+                        .map_err(anyhow::Error::from)
+                    })
+                })
+                .await
+                .is_ok();
+            let home = tempfile::tempdir()?;
+            let writer = crate::plugin::store::StoreWriter::Offline(home.path().to_owned());
+            let prepared = Arc::new(
+                crate::pack::prepare_document_pack_archive(
+                    &crate::pack::InstallTarget {
+                        access: &runtime_access,
+                        owner: runtime.did(),
+                        plugin_home: Some(&writer),
+                    },
+                    &archive,
+                    &crate::pack::PackGraphInputs {
+                        dependencies: &[],
+                        requested: &crate::pack::PackInferenceBindings::new(),
+                        environment: &|_| None,
+                        overrides: &Default::default(),
+                    },
+                    crate::pack::InstalledVia::Operator,
+                )
+                .await?,
+            );
+            let stage = stage_hosted_pack(
+                runtime.did(),
+                &writer,
+                archive.clone(),
+                prepared,
+                false,
+                true,
+            )
+            .await?;
+            let scope = PackApprovalScope {
+                node_did: runtime.did().into(),
+                pack_digests: vec![if case.input.reviewed {
+                    archive.digest().to_owned()
+                } else {
+                    format!("sha256:{}", "0".repeat(64))
+                }],
+                nonce: uuid::Uuid::new_v4().to_string(),
+            };
+            let approver = Arc::new(HeldUserApprover {
+                actor: actor.client_signing_capability()?,
+                scope: scope.clone(),
+                plan: case.input.plan,
+            });
+            let applied = stage
+                .apply(
+                    &ConfigAccess::local_as(node.clone(), actor_did.clone()),
+                    runtime.did(),
+                    HostedPackApproval { scope, approver },
+                    super::super::DriftPolicy::Refuse,
+                    None,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await;
+            assert!(
+                !matches!(applied, Err(HostedPackStageError::Unconfirmed(_))),
+                "the native transaction's outcome is known in every case"
+            );
+            let installed = ConfigAccess::local_as(node.clone(), user.did().parse()?)
+                .transact_readonly("test.hosted_plugin.read", |txn| {
+                    let owner = runtime.did();
+                    Box::pin(async move {
+                        super::super::read_record(txn, owner, "fixture/native_echo_pack").await
+                    })
+                })
+                .await?
+                .plugins
+                .len()
+                == 1;
+            assert_eq!(installed, applied.is_ok());
+            case.check(authorized && applied.is_ok());
+        }
+        node.shutdown().await?;
+        Ok(())
+    }
 
     #[tokio::test]
     async fn hosted_home_publication_conforms_to_lean() {

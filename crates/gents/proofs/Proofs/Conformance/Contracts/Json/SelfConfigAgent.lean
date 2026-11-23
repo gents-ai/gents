@@ -388,10 +388,11 @@ def selfConfigJobGuardNative : Family JobGuardInput Bool where
   inputs := (jobGuardRows.filter fun r => r.name.startsWith "native_agent_update_").map .ofRow
   model := JobGuardInput.accepted
 
-/-- model-production-gap: an operator Tools write bypasses the grant guard, and
-no production scenario drives an operator write of a job block. -/
+/-- An operator's Tools save (`gents::operations::tools::save`, signed by the
+User) does not pass through the Agent's grant guard, so it may widen a job
+ceiling. -/
 @[conformance_family]
-def selfConfigJobGuardUnreached : Family JobGuardInput Bool where
+def selfConfigJobGuardOperator : Family JobGuardInput Bool where
   inputs := (jobGuardRows.filter (·.operator)).map .ofRow
   model := JobGuardInput.accepted
 

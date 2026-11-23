@@ -1,12 +1,13 @@
 import Proofs.Conformance.ContractCases.Runtime
 import Proofs.Conformance.Contracts.Machines.Catalog
 import Proofs.Conformance.Family
+import Proofs.Conformance.Functions.Automation
 
 namespace Conformance.ClientAgentReadiness
 
 open Lean Conformance.ContractCases
 
-deriving instance ToJson for ProcessState, RuntimeState.AgentUnavailableReason
+deriving instance ToJson for RuntimeState.AgentUnavailableReason
 
 structure ReadinessInput where
   name : String

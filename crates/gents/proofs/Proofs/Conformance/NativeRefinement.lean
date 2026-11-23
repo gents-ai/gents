@@ -61,21 +61,28 @@ def servedClaims : List ClaimInput :=
   [ servedClaim true false true, servedClaim true true false, servedClaim false true true
   , servedClaim true true true, servedClaim true false false ]
 
+/-- With every native permission held, each claim breaks exactly one other
+guard of `agentMayClaim`: another claimant, no or another native intent owner,
+another call id or document, or a revision change before the claim commits. -/
+def guardClaims : List ClaimInput :=
+  let held := servedClaim true true true
+  [ { held with claimant := "other" }, { held with owner := none }
+  , { held with owner := some "other" }, { held with requestedId := "other" }
+  , { held with requestedDoc := "other" }, { held with currentRevision := 1 } ]
+
 @[conformance_family]
 def claimScenario : Family ClaimInput Bool where
-  inputs := servedClaims
+  inputs := servedClaims ++ guardClaims
   model := claimAllowed
 
-/-- The claim scenario builds only the agent's own client-owned intent at its
-observed revision; a claim as another agent, for another owner or invocation,
-or after a revision change has no consumer. -/
-@[conformance_family]
-def claimUnreached : Family ClaimInput Bool where
-  inputs := claimInputs.filter fun i => !servedClaims.contains i
-  model := claimAllowed
-
-example : claimAllowed { servedClaim true true true with currentRevision := 1 } = false := by
-  decide
+/-- A claim is allowed exactly when every guard holds, so the cases above
+decide every other combination. -/
+theorem claim_allowed_iff_every_guard :
+    claimInputs.all (fun i => claimAllowed i ==
+      (i.claimant == "agent" && i.owner == some "client" && i.requestedId == "call" &&
+        i.requestedDoc == "doc" && i.read && i.update && i.invoke &&
+        i.currentRevision == 0)) = true := by
+  native_decide
 
 structure ClientProcessReceiptInput where
   intentDoc : String

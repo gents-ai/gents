@@ -533,27 +533,21 @@ names another slot is not something it can be asked to write;
 def signedReplacement (c : SessionQueue.ManagementCases.Case) : Bool :=
   match c.operation with
   | .replace _ _ offset count replacements =>
-      let originals := c.before.folding ++ c.before.pending
+      let originals := c.before.queued
       let selected := (originals.drop offset).take count
       !(replacements.any fun r => originals.any (·.requestId == r.requestId)) &&
         (replacements.zip selected).all fun (r, o) => r.orderKey == o.orderKey
   | .intake .. => false
 
-/-- The served expiry fixture claims the head, then enqueues one expired or
-malformed steering row ahead of a fresh one; the other intake decisions need
-a provider-stream boundary, a stale head observation or an unadmitted row,
-which that fixture does not build. -/
-def servedIntakeNames : List String := ["expired_steering_is_barrier"]
+/-- The native execution owner hands intake the exact active row at a safe
+provider-stream boundary, so an unsafe boundary or a stale active observation
+is not something production can ask of it; `unsafe_boundary_refuses` and
+`intake_and_management_decisions` keep those cases. -/
+def unaskedIntakeNames : List String := ["unsafe_provider_boundary", "stale_active_observation"]
 
 @[conformance_family]
 def managementReplace : Family ManagementInput (Option QueueImageWire) where
   inputs := (SessionQueue.ManagementCases.cases.filter signedReplacement).map ManagementInput.ofCase
-  model := managementAfter
-
-@[conformance_family]
-def managementExpiredIntake : Family ManagementInput (Option QueueImageWire) where
-  inputs := (SessionQueue.ManagementCases.cases.filter (servedIntakeNames.contains ·.name)).map
-    ManagementInput.ofCase
   model := managementAfter
 
 def isIntake (c : SessionQueue.ManagementCases.Case) : Bool :=
@@ -561,10 +555,26 @@ def isIntake (c : SessionQueue.ManagementCases.Case) : Bool :=
   | .intake .. => true
   | .replace .. => false
 
+/-- An intake whose pending run holds a steer an `agent_message` tool call
+issued; production admits such a steer only with the verified call that issued
+it, so it is replayed through the tool-call owner. -/
+def isAgentMessageIntake (c : SessionQueue.ManagementCases.Case) : Bool :=
+  isIntake c && c.before.pending.any (·.source == .steering)
+
+/-- Intake at the active turn's boundary: what it selects and what it leaves
+pending, in created order. -/
 @[conformance_family]
-def managementUnreached : Family ManagementInput (Option QueueImageWire) where
+def managementIntake : Family ManagementInput (Option QueueImageWire) where
   inputs := (SessionQueue.ManagementCases.cases.filter fun c =>
-    isIntake c && !servedIntakeNames.contains c.name).map ManagementInput.ofCase
+    isIntake c && !unaskedIntakeNames.contains c.name &&
+      !isAgentMessageIntake c).map ManagementInput.ofCase
+  model := managementAfter
+
+/-- Intake of an `agent_message` steer at the active turn's boundary. -/
+@[conformance_family]
+def agentMessageIntake : Family ManagementInput (Option QueueImageWire) where
+  inputs := (SessionQueue.ManagementCases.cases.filter isAgentMessageIntake).map
+    ManagementInput.ofCase
   model := managementAfter
 
 def roundTrips (entries : List QueueEntry) : Bool :=

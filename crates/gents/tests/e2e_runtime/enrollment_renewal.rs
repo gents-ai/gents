@@ -322,6 +322,10 @@ async fn opted_in_members_renew_over_authenticated_routes() {
     server_task.await.unwrap().unwrap();
     member_task.await.unwrap().unwrap();
     pairing_task.await.unwrap().unwrap();
+    offered.insert(
+        "wrong_transport",
+        renewal_from_restarted_member(&store, &member, &first).await,
+    );
     for case in gents_lean_vocab::families::enrollment_auto_renewal_offer::cases() {
         let allowed = offered
             .remove(case.input.name.as_str())
@@ -332,6 +336,87 @@ async fn opted_in_members_renew_over_authenticated_routes() {
         offered.is_empty(),
         "unmodeled offer observations: {offered:?}"
     );
+}
+
+/// The member restarts under a new node identity with its P2P key and address,
+/// so its transport peer now authenticates as another DID, and asks to renew
+/// the current generation as the approved DID.
+async fn renewal_from_restarted_member(
+    store: &GraphqlEnrollmentStore,
+    member: &TestDb,
+    first: &gents_protocol::enrollment::EnrollmentRequestRecord,
+) -> bool {
+    let projection = store.load_projection().await.unwrap();
+    let active = projection
+        .active
+        .iter()
+        .find(|entry| entry.request.candidate_did == member.node_identity.did())
+        .expect("the member's current generation");
+    let address = gents_p2p::test_support::transport::wait_for_listen_addr(&member.node).await;
+    let port: u16 = address
+        .split_once(':')
+        .map(|(_, rest)| {
+            rest.chars()
+                .take_while(char::is_ascii_digit)
+                .collect::<String>()
+        })
+        .and_then(|digits| digits.parse().ok())
+        .unwrap_or_else(|| panic!("the member's loopback address {address} names no port"));
+    let key = ["p2p.key", "data/p2p.key"]
+        .iter()
+        .map(|relative| member.data_path().join(relative))
+        .find(|path| path.exists())
+        .expect("the member's P2P key");
+    member.node.shutdown().await.unwrap();
+    let tempdir = tempfile::Builder::new()
+        .prefix("gents-automatic-renewal-restarted-")
+        .tempdir()
+        .unwrap();
+    let restarted = gents::runtime::embedded::EmbeddedHome::in_tempdir(
+        tempdir,
+        Some(std::sync::Arc::new(move |data_path: &std::path::Path| {
+            std::fs::create_dir_all(data_path).unwrap();
+            std::fs::copy(&key, data_path.join("p2p.key")).unwrap();
+            let mut config =
+                gents_p2p::test_support::transport::test_p2p_config(&Default::default(), data_path);
+            config.port = Some(port);
+            config
+        })),
+    )
+    .await
+    .unwrap();
+    assert_ne!(restarted.did(), member.node_identity.did());
+    let (restarted_peer, _) =
+        gents_p2p::test_support::enrollment::wait_for_peer_identity(&restarted.node).await;
+    assert_eq!(restarted_peer, active.request.candidate_peer);
+    let now = chrono::Utc::now();
+    let mut intent = gents_protocol::enrollment::RenewalIntent {
+        network_id: first.network_id.clone(),
+        admin_did: first.admin_did.clone(),
+        server_peer: first.server_peer.clone(),
+        member_did: first.candidate_did.clone(),
+        member_peer: active.request.candidate_peer.clone(),
+        predecessor_sequence: active.revision.sequence,
+        issued_at: now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        expires_at: (now + chrono::Duration::seconds(60))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        nonce: "restarted-member".into(),
+        member_sig: Vec::new(),
+    };
+    intent.member_sig = member
+        .node_identity
+        .sign(&intent.signing_payload())
+        .await
+        .unwrap();
+    let result = store.issue_renewal_offer(&intent).await;
+    if let Err(error) = &result {
+        assert!(
+            format!("{error:#}").contains("renewal transport identity mismatch"),
+            "the restarted member's renewal was refused for another reason: {error:#}"
+        );
+    }
+    restarted.node.shutdown().await.unwrap();
+    result.is_ok()
 }
 
 #[tokio::test]

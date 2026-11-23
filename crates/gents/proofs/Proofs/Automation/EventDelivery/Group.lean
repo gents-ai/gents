@@ -89,6 +89,49 @@ theorem capture_binds_eligible_group_and_input (group : EventGroupState)
       exact ⟨hg.1, hg.2.1, hg.2.2, rfl, rfl, rfl⟩
   · contradiction
 
+/-- The callback scan (`materialize_group`) loads a group by its delivery's own
+key and runs only for callback deliveries, so a candidate whose key names
+another configuration, or a trigger group, is never offered to it; capture
+refuses both. -/
+theorem capture_refuses_another_key_or_a_trigger_group (group : EventGroupState)
+    (candidate : Candidate) (id input agentDid : String) :
+    (candidate.key ≠ group.key → captureCallback group candidate id input agentDid = none) ∧
+      (∀ trigger, group.key.consumer = .trigger trigger →
+        captureCallback group candidate id input agentDid = none) := by
+  constructor
+  · intro different
+    simp [captureCallback, different]
+  · intro trigger isTrigger
+    unfold captureCallback
+    split
+    · rw [isTrigger]
+    · rfl
+
+/-- A per-group trigger fire materializes one request per group key: trigger
+dispatch skips a group whose request is already materialized. A quiesced group
+is never offered to dispatch, and a callback group's capture writes an
+invocation, not a trigger marker. -/
+def markGroup (group : EventGroupState) (state : MarkerState) (candidate : Candidate) :
+    MarkerState :=
+  if group.quiescedAt.isSome then state
+  else match group.key.consumer with
+    | .trigger _ => reconcile state candidate
+    | .callbackBinding _ => state
+
+theorem quiesced_or_callback_group_marks_nothing (group : EventGroupState)
+    (state : MarkerState) (candidate : Candidate) :
+    (group.quiescedAt.isSome = true → markGroup group state candidate = state) ∧
+      (∀ binding, group.key.consumer = .callbackBinding binding →
+        markGroup group state candidate = state) := by
+  constructor
+  · intro quiesced
+    simp [markGroup, quiesced]
+  · intro binding isCallback
+    unfold markGroup
+    split
+    · rfl
+    · rw [isCallback]
+
 theorem captured_input_survives_execution {pre post : CallbackInvocation}
     (h : Relation.ReflTransGen CallbackInvocation.Transition pre post) :
     post.input = pre.input ∧ post.originGroupKey = pre.originGroupKey := by

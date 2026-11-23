@@ -305,7 +305,19 @@ def UniqueCoalescedQueueKeys : List QueueEntry → Prop
           ¬ CoalescedKeyMatch other source key) ∧
         UniqueCoalescedQueueKeys rest
 
+/-- Created order: the order native arrival gives the session's pending rows. -/
+def createdLe (a b : QueueEntry) : Bool := decide (a.orderKey ≤ b.orderKey)
+
+/-- Pending rows are read in created order whatever was selected for the
+active turn, so the selection and the rest of the queue merge back into one
+created-ordered queue. -/
+def mergeCreated (xs ys : List QueueEntry) : List QueueEntry := xs.merge ys createdLe
+
 namespace SessionQueueState
+
+/-- The session's queued rows in created order: the active turn's unpublished
+selection and the rest of the pending queue. -/
+def queued (s : SessionQueueState) : List QueueEntry := mergeCreated s.folding s.pending
 
 def appendPending (s : SessionQueueState) (entry : QueueEntry) : SessionQueueState :=
   { s with pending := s.pending ++ [entry] }
@@ -329,11 +341,14 @@ def consumeFolded (s : SessionQueueState) (entry : QueueEntry) (rest : List Queu
     SessionQueueState :=
   { s with folding := rest, terminal := insert entry.requestId s.terminal }
 
+/-- A selected message the active turn did not publish stays a pending
+request in its created place, so it becomes an ordinary later turn and an
+earlier queued turn still runs first. -/
 def finishActive (s : SessionQueueState) (requestId : RequestId) : SessionQueueState :=
   { s with
     active := none
     terminal := insert requestId s.terminal
-    pending := s.folding ++ s.pending
+    pending := s.queued
     folding := [] }
 
 def drainAutomatedWakeups

@@ -3,15 +3,16 @@ pub mod runtime_publication;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use client::stage_request_relationships_in_txn;
 pub use client::{
-    bind_client_targets_in_txn, complete_client_request_relationships,
+    admit_client_request_in_txn, bind_client_targets_in_txn, complete_client_request_relationships,
     ensure_request_session_in_txn, stage_admitted_request_in_txn, stage_client_request_in_txn,
     stage_runtime_request_in_txn, StageOptions,
 };
 pub use client::{
-    build_signed_client_request, build_signed_client_request_in_txn, client_request_key,
-    held_client_request, reconcile_client_request, reconcile_client_retry, reserve_goal_session,
-    send_client_request, send_client_retry, submit_client_request, ClientRequestScope,
-    ClientSubmissionError, HeldClientRequest,
+    build_signed_client_request, build_signed_client_request_in_txn,
+    build_signed_reserved_client_request, client_request_key, held_client_request,
+    reconcile_client_request, reconcile_client_retry, reserve_goal_session, send_client_request,
+    send_client_retry, submit_client_request, ClientRequestScope, ClientSubmissionError,
+    HeldClientRequest,
 };
 pub(crate) use client::{
     recover_delegated_client_request_relationships_with_access, stage_pending_child_request_in_txn,

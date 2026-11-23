@@ -114,20 +114,40 @@ async fn signed_compaction_fixture(
     (db, user, agent, access, requests)
 }
 
+async fn stored_sequences(
+    access: &gents_store::config_client::ConfigAccess,
+    session: &str,
+) -> Vec<u32> {
+    let response = access
+        .execute(&format!(
+            r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{}" }} }}, order: {{ sequence: ASC }}) {{ sequence }} }}"#,
+            escape_graphql_string(session),
+        ))
+        .await
+        .unwrap();
+    response["data"]["AgentMessage"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| u32::try_from(row["sequence"].as_u64().unwrap()).unwrap())
+        .collect()
+}
+
 #[tokio::test]
 async fn compaction_entries_track_files_cumulatively() {
     use gents_store::identity::NodeIdentity;
     let (db, user, agent, access, requests) =
-        signed_compaction_fixture("compaction-cumulative", "session-1", 3).await;
+        signed_compaction_fixture("compaction-cumulative", "session-1", 5).await;
     let node_did = db.node_identity.did();
+    let sequences = stored_sequences(&access, "session-1").await;
     for (index, summary, read, modified, count, cursor, original, compacted) in [
         (
             0,
             "First summary",
             vec!["/tmp/a.rs".to_string()],
             vec!["/tmp/b.rs".to_string()],
-            5,
-            10,
+            1,
+            sequences[0],
             1000,
             200,
         ),
@@ -136,12 +156,21 @@ async fn compaction_entries_track_files_cumulatively() {
             "Second summary",
             vec!["/tmp/c.rs".to_string(), "/tmp/a.rs".to_string()],
             vec!["/tmp/d.rs".to_string()],
-            7,
-            30,
+            2,
+            sequences[2],
             1200,
             250,
         ),
-        (2, "Third summary", vec![], vec![], 3, 40, 500, 100),
+        (
+            2,
+            "Third summary",
+            vec![],
+            vec![],
+            2,
+            sequences[4],
+            500,
+            100,
+        ),
     ] {
         let generation = load_prompt_compaction_state_with_access(
             &access,
@@ -183,7 +212,7 @@ async fn compaction_entries_track_files_cumulatively() {
     assert_eq!(entries[0].files_read, vec!["/tmp/a.rs"]);
     assert_eq!(entries[1].files_read, vec!["/tmp/a.rs", "/tmp/c.rs"]);
     assert_eq!(entries[1].files_modified, vec!["/tmp/b.rs", "/tmp/d.rs"]);
-    assert_eq!(entries[2].compacted_through_sequence, Some(40));
+    assert_eq!(entries[2].compacted_through_sequence, Some(sequences[4]));
     let stored = access.execute(r#"{ CompactionEntry(filter: { session_id: { _eq: "session-1" } }, order: { sequence: ASC }) { files_read files_modified } }"#).await.unwrap();
     let stored_rows = stored["data"]["CompactionEntry"]
         .as_array()
@@ -223,33 +252,149 @@ async fn compaction_entries_track_files_cumulatively() {
     .await
     .unwrap();
     assert_eq!(prompt_state.summaries.len(), 3);
-    assert_eq!(prompt_state.total_messages_compacted, 15);
-    assert_eq!(prompt_state.compacted_through_sequence, Some(40));
+    assert_eq!(prompt_state.total_messages_compacted, 5);
+    assert_eq!(prompt_state.compacted_through_sequence, Some(sequences[4]));
     let before_cursor = load_prompt_compaction_state_with_access(
         &access,
         "session-1",
         node_did,
         Some(user.did()),
-        Some(20),
+        Some(sequences[1]),
     )
     .await
     .unwrap();
     assert_eq!(before_cursor.summaries, vec!["First summary"]);
-    assert_eq!(before_cursor.total_messages_compacted, 5);
-    assert_eq!(before_cursor.compacted_through_sequence, Some(10));
+    assert_eq!(before_cursor.total_messages_compacted, 1);
+    assert_eq!(before_cursor.compacted_through_sequence, Some(sequences[0]));
     let at_cursor = load_prompt_compaction_state_with_access(
         &access,
         "session-1",
         node_did,
         Some(user.did()),
-        Some(40),
+        Some(sequences[4]),
     )
     .await
     .unwrap();
     assert_eq!(at_cursor.summaries.len(), 3);
-    assert_eq!(at_cursor.total_messages_compacted, 15);
-    assert_eq!(at_cursor.compacted_through_sequence, Some(40));
+    assert_eq!(at_cursor.total_messages_compacted, 5);
+    assert_eq!(at_cursor.compacted_through_sequence, Some(sequences[4]));
 
+    db.node.shutdown().await.expect("shut down test node");
+}
+
+#[tokio::test]
+async fn compaction_save_stores_only_a_cursor_naming_a_stored_message() {
+    use gents_lean_vocab::families::contracts_compaction_cursor_save as family;
+    use gents_store::identity::NodeIdentity;
+    let (db, user, client, binding) = gents_inference::test_support::signed_test_node(
+        "compaction-cursor-save",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node_did = db.node_identity.did();
+    let agent =
+        gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
+    let access = gents_store::config_client::ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let cases = family::cases();
+    assert!(!cases.is_empty());
+    for case in cases {
+        let session = format!("cursor-{}", case.input.name);
+        publish_signed_history(&db, &user, &client, &binding, &session, &["first".into()]).await;
+        let request_id = format!("{session}-request-0");
+        let response = access
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}, limit: 2) {{ _docID }} }}"#,
+                escape_graphql_string(&request_id),
+            ))
+            .await
+            .unwrap();
+        let [row] = response["data"]["AgentRequest"]
+            .as_array()
+            .unwrap()
+            .as_slice()
+        else {
+            panic!("cursor fixture request must be unique");
+        };
+        let request_doc = row["_docID"].as_str().unwrap().to_owned();
+        let stored = case
+            .input
+            .stored
+            .iter()
+            .map(|sequence| u32::try_from(*sequence).unwrap())
+            .collect::<Vec<_>>();
+        for sequence in stored.iter().skip(1) {
+            import_history_observation_as(
+                &access,
+                HistoryObservation {
+                    request_id: &request_doc,
+                    session_id: &session,
+                    node_did,
+                    requester_did: Some(user.did()),
+                    text: "stored",
+                    message_key_suffix: &format!("stored-{sequence}"),
+                    sequence: *sequence,
+                    tool_call: None,
+                },
+            )
+            .await;
+        }
+        assert_eq!(
+            stored_sequences(&access, &session).await,
+            stored,
+            "the session stores exactly the case's messages"
+        );
+        let generation = load_prompt_compaction_state_with_access(
+            &access,
+            &session,
+            node_did,
+            Some(user.did()),
+            None,
+        )
+        .await
+        .unwrap()
+        .generation;
+        let saved = compaction_entries::save_compaction_entry_with_access(
+            &access,
+            compaction_entries::NewExactSessionCompaction {
+                agent_did: agent.did(),
+                session_id: &session,
+                node_did,
+                requester_did: Some(user.did()),
+                request_id: &request_id,
+                request_doc_id: &request_doc,
+                files_read: &[],
+                files_modified: &[],
+                compacted_through_sequence: u32::try_from(case.input.cursor).unwrap(),
+                original_tokens: 100,
+                compacted_tokens: 10,
+                expected_generation: &generation,
+            },
+            "summary",
+            1,
+        )
+        .await;
+        if let Err(error) = &saved {
+            assert!(
+                gents_protocol::error_chain::find_source::<
+                    compaction_entries::CompactionCursorNamesNoMessage,
+                >(error.as_ref())
+                .is_some(),
+                "unexpected refusal: {error:#}"
+            );
+        }
+        let entries = load_compaction_entries(&access, &session, node_did, Some(user.did()))
+            .await
+            .unwrap();
+        assert_eq!(entries.len(), usize::from(saved.is_ok()));
+        case.check(family::CompactionCursorSaveOutput {
+            saved: saved.is_ok(),
+        });
+    }
     db.node.shutdown().await.expect("shut down test node");
 }
 
@@ -259,6 +404,7 @@ async fn concurrent_compactions_from_one_generation_persist_exactly_one_fact() {
     let (db, user, agent, access, requests) =
         signed_compaction_fixture("compaction-race", "session-race", 2).await;
     let node_did = db.node_identity.did();
+    let sequences = stored_sequences(&access, "session-race").await;
     let generation = load_prompt_compaction_state_with_access(
         &access,
         "session-race",
@@ -283,13 +429,13 @@ async fn concurrent_compactions_from_one_generation_persist_exactly_one_fact() {
             request_doc_id: &requests[0].1,
             files_read: &left_files,
             files_modified: &[],
-            compacted_through_sequence: 20,
+            compacted_through_sequence: sequences[0],
             original_tokens: 100,
             compacted_tokens: 20,
             expected_generation: &generation,
         },
         "left summary",
-        2,
+        1,
     );
     let right = compaction_entries::save_compaction_entry_with_access(
         &access,
@@ -302,13 +448,13 @@ async fn concurrent_compactions_from_one_generation_persist_exactly_one_fact() {
             request_doc_id: &requests[1].1,
             files_read: &[],
             files_modified: &right_files,
-            compacted_through_sequence: 30,
+            compacted_through_sequence: sequences[1],
             original_tokens: 200,
             compacted_tokens: 40,
             expected_generation: &generation,
         },
         "right summary",
-        3,
+        2,
     );
     let (left, right) = tokio::join!(left, right);
     assert_ne!(
@@ -329,14 +475,14 @@ async fn concurrent_compactions_from_one_generation_persist_exactly_one_fact() {
     let winner = &entries[0];
     match winner.summary.as_str() {
         "left summary" => {
-            assert_eq!(winner.messages_compacted, 2);
-            assert_eq!(winner.compacted_through_sequence, Some(20));
+            assert_eq!(winner.messages_compacted, 1);
+            assert_eq!(winner.compacted_through_sequence, Some(sequences[0]));
             assert_eq!(winner.files_read, vec!["/tmp/left.rs"]);
             assert!(winner.files_modified.is_empty());
         }
         "right summary" => {
-            assert_eq!(winner.messages_compacted, 3);
-            assert_eq!(winner.compacted_through_sequence, Some(30));
+            assert_eq!(winner.messages_compacted, 2);
+            assert_eq!(winner.compacted_through_sequence, Some(sequences[1]));
             assert!(winner.files_read.is_empty());
             assert_eq!(winner.files_modified, vec!["/tmp/right.rs"]);
         }
@@ -350,6 +496,7 @@ async fn exact_compaction_redelivery_is_idempotent() {
     let (db, user, agent, access, requests) =
         signed_compaction_fixture("compaction-redelivery", "session-redelivery", 2).await;
     let node_did = db.node_identity.did();
+    let sequences = stored_sequences(&access, "session-redelivery").await;
     let generation = load_prompt_compaction_state_with_access(
         &access,
         "session-redelivery",
@@ -374,7 +521,7 @@ async fn exact_compaction_redelivery_is_idempotent() {
                 request_doc_id: &requests[0].1,
                 files_read: &files,
                 files_modified: &[],
-                compacted_through_sequence: 20,
+                compacted_through_sequence: sequences[0],
                 original_tokens: 100,
                 compacted_tokens: 20,
                 expected_generation: &generation,
@@ -407,7 +554,7 @@ async fn exact_compaction_redelivery_is_idempotent() {
             request_doc_id: &requests[1].1,
             files_read: &[],
             files_modified: &[],
-            compacted_through_sequence: 30,
+            compacted_through_sequence: sequences[1],
             original_tokens: 80,
             compacted_tokens: 10,
             expected_generation: &next_generation,
@@ -641,7 +788,7 @@ async fn create_session_with_agent_did_rejects_mismatched_existing_binding() {
     )
     .await;
     assert_ne!(binding.agent_did, other.agent_did);
-    crate::request::lifecycle::build_signed_client_request(
+    crate::request::lifecycle::build_signed_reserved_client_request(
         &access,
         crate::request::lifecycle::RequestSpec::new(
             gents_protocol::request_admission::RequestPurpose::Normal,
@@ -764,7 +911,7 @@ async fn editing_a_canonical_user_message_forks_its_prefix_and_preserves_the_sou
     }
 }
 
-async fn session_doc_id(
+pub(super) async fn session_doc_id(
     client: &gents_store::config_client::ConfigAccess,
     session: &str,
 ) -> String {
@@ -818,173 +965,119 @@ async fn delete_session_rows(
 }
 
 #[tokio::test]
-async fn a_reader_granted_only_the_fork_reads_its_whole_retained_transcript() {
+async fn a_fork_of_a_fork_and_a_fork_without_its_source_read_from_their_own_copies() {
     use gents_store::config_client::NodePermission;
     use gents_store::identity::NodeIdentity;
     const SOURCE: &str = "shared-fork-source";
-    for case in gents_lean_vocab::families::contracts_fork_readers::cases() {
-        let (db, user, client, binding) = fork_reader_node("shared-fork-reader").await;
-        let node_did = db.node_identity.did();
-        let messages = (1..=3)
-            .map(|turn| format!("shared-{turn}"))
-            .collect::<Vec<_>>();
-        publish_signed_history(&db, &user, &client, &binding, SOURCE, &messages).await;
-        let fork_of = |source: &'static str, turn: u32| ForkParams {
-            source_session_id: source,
-            boundary: ForkBoundary::UserTurn(turn),
-            caller_node_did: node_did,
-            caller_requester_did: Some(user.did()),
-            target_agent_did: None,
-        };
-        let receipt = fork_on(&client, fork_of(SOURCE, 2)).await.unwrap();
-        assert_eq!(receipt.copied_messages, 2);
-        let child: &'static str = Box::leak(receipt.session_id.clone().into_boxed_str());
-        let owned = history_on(&client, child, node_did, Some(user.did()), None)
-            .await
-            .unwrap();
-        assert_eq!(
-            owned,
-            messages[..2]
-                .iter()
-                .map(|text| Message::user(text.as_str()))
-                .collect::<Vec<_>>()
-        );
-        let grandchild = fork_on(&client, fork_of(child, 2)).await.unwrap();
-        assert_eq!(grandchild.copied_messages, 2);
-
-        let sharee =
-            tokio::task::spawn_blocking(|| gents_store::test_support::test_identity("fork-sharee"))
-                .await
-                .unwrap();
-        let sharee_did = identity::Did::new(sharee.did()).unwrap();
-        let admin = gents_store::config_client::ConfigAccess::local_as(
-            db.node.clone(),
-            identity::Did::new(node_did).unwrap(),
-        );
-        for permission in [NodePermission::DocumentRead, NodePermission::CollectionGet] {
-            admin
-                .grant_node_permission(&sharee_did, permission)
-                .await
-                .unwrap();
-        }
-        let sharee_access =
-            gents_store::config_client::ConfigAccess::local_as(db.node.clone(), sharee_did.clone());
-        let source_doc = session_doc_id(&client, SOURCE).await;
-        let child_doc = session_doc_id(&client, child).await;
-        let grandchild_doc = session_doc_id(&client, &grandchild.session_id).await;
-        let requester = user.did();
-        let sharee = &sharee_access;
-        let sharee_history = |session: String| async move {
-            history_on(sharee, &session, node_did, Some(requester), None).await
-        };
-        let sharee_reads = |session: String| {
-            let expected = &owned;
-            async move {
-                sharee_history(session)
-                    .await
-                    .is_ok_and(|history| history == *expected)
-            }
-        };
-        let share = |doc: &str, grant: bool| {
-            let doc = doc.to_owned();
-            let client = &client;
-            let sharee_did = &sharee_did;
-            async move {
-                if grant {
-                    client
-                        .add_actor_relationship("AgentSession", &doc, "reader", sharee_did)
-                        .await
-                        .unwrap();
-                } else {
-                    client
-                        .delete_actor_relationship("AgentSession", &doc, "reader", sharee_did)
-                        .await
-                        .unwrap();
-                }
-            }
-        };
-
-        let unrelated_reads = sharee_reads(child.to_owned()).await;
-        share(&source_doc, true).await;
-        assert_eq!(
-            sharee_history(SOURCE.to_owned()).await.unwrap().len(),
-            3,
-            "the source grant is effective"
-        );
-        let source_reads = sharee_reads(child.to_owned()).await;
-        share(&source_doc, false).await;
-        share(&child_doc, true).await;
-        let child_reads = sharee_reads(child.to_owned()).await;
-        assert!(
-            sharee_history(SOURCE.to_owned())
-                .await
-                .map_or(true, |history| history.is_empty()),
-            "the fork grant reveals nothing of the source session"
-        );
-        share(&child_doc, false).await;
-        assert_eq!(sharee_reads(child.to_owned()).await, unrelated_reads);
-        let reader = |grant: &str, reads_transcript: bool| {
-            gents_lean_vocab::families::contracts_fork_readers::ForkReader {
-                grant: grant.to_owned(),
-                reads_transcript,
-            }
-        };
-        case.check(
-            gents_lean_vocab::families::contracts_fork_readers::ForkReaders {
-                readers: vec![
-                    reader("child_session", child_reads),
-                    reader("source_session", source_reads),
-                    reader("unrelated_session", unrelated_reads),
-                ],
-            },
-        );
-        share(&grandchild_doc, true).await;
-        assert!(
-            sharee_reads(grandchild.session_id.clone()).await,
-            "a reader of only a fork of a fork reads its retained transcript"
-        );
-        assert!(!sharee_reads(child.to_owned()).await);
-
-        let agent =
-            gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
-                .unwrap();
-        admin
-            .grant_node_permission(
-                &identity::Did::new(agent.did()).unwrap(),
-                NodePermission::DocumentDelete,
-            )
-            .await
-            .unwrap();
-        let source_owner = gents_store::config_client::ConfigAccess::local_managed_agent(
-            db.node.clone(),
-            identity::Did::new(agent.did()).unwrap(),
-            agent.as_ref(),
-        )
+    let (db, user, client, binding) = fork_reader_node("shared-fork-reader").await;
+    let node_did = db.node_identity.did();
+    let messages = (1..=3)
+        .map(|turn| format!("shared-{turn}"))
+        .collect::<Vec<_>>();
+    publish_signed_history(&db, &user, &client, &binding, SOURCE, &messages).await;
+    let fork_of = |source: &'static str, turn: u32| ForkParams {
+        source_session_id: source,
+        boundary: ForkBoundary::UserTurn(turn),
+        caller_node_did: node_did,
+        caller_requester_did: Some(user.did()),
+        target_agent_did: None,
+    };
+    let receipt = fork_on(&client, fork_of(SOURCE, 2)).await.unwrap();
+    assert_eq!(receipt.copied_messages, 2);
+    let child: &'static str = Box::leak(receipt.session_id.clone().into_boxed_str());
+    let owned = history_on(&client, child, node_did, Some(user.did()), None)
+        .await
         .unwrap();
-        delete_session_rows(&source_owner, "AgentOutputSegment", SOURCE).await;
+    assert_eq!(
+        owned,
+        messages[..2]
+            .iter()
+            .map(|text| Message::user(text.as_str()))
+            .collect::<Vec<_>>()
+    );
+    let grandchild = fork_on(&client, fork_of(child, 2)).await.unwrap();
+    assert_eq!(grandchild.copied_messages, 2);
+
+    let sharee =
+        tokio::task::spawn_blocking(|| gents_store::test_support::test_identity("fork-sharee"))
+            .await
+            .unwrap();
+    let sharee_did = identity::Did::new(sharee.did()).unwrap();
+    let admin = gents_store::config_client::ConfigAccess::local_as(
+        db.node.clone(),
+        identity::Did::new(node_did).unwrap(),
+    );
+    for permission in [NodePermission::DocumentRead, NodePermission::CollectionGet] {
+        admin
+            .grant_node_permission(&sharee_did, permission)
+            .await
+            .unwrap();
+    }
+    let sharee_access =
+        gents_store::config_client::ConfigAccess::local_as(db.node.clone(), sharee_did.clone());
+    let child_doc = session_doc_id(&client, child).await;
+    let grandchild_doc = session_doc_id(&client, &grandchild.session_id).await;
+    let requester = user.did();
+    let sharee = &sharee_access;
+    let sharee_reads = |session: String| {
+        let expected = &owned;
+        async move {
+            history_on(sharee, &session, node_did, Some(requester), None)
+                .await
+                .is_ok_and(|history| history == *expected)
+        }
+    };
+    client
+        .add_actor_relationship("AgentSession", &grandchild_doc, "reader", &sharee_did)
+        .await
+        .unwrap();
+    assert!(
+        sharee_reads(grandchild.session_id.clone()).await,
+        "a reader of only a fork of a fork reads its retained transcript"
+    );
+    assert!(!sharee_reads(child.to_owned()).await);
+
+    let agent =
+        gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
+    admin
+        .grant_node_permission(
+            &identity::Did::new(agent.did()).unwrap(),
+            NodePermission::DocumentDelete,
+        )
+        .await
+        .unwrap();
+    let source_owner = gents_store::config_client::ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    delete_session_rows(&source_owner, "AgentOutputSegment", SOURCE).await;
+    assert_eq!(
+        history_on(&client, child, node_did, Some(user.did()), None)
+            .await
+            .unwrap(),
+        owned,
+        "an owner whose origin headers remain reads the fork from its copies"
+    );
+    delete_session_rows(&source_owner, "AgentMessage", SOURCE).await;
+    client
+        .add_actor_relationship("AgentSession", &child_doc, "reader", &sharee_did)
+        .await
+        .unwrap();
+    for session in [child.to_owned(), grandchild.session_id.clone()] {
         assert_eq!(
-            history_on(&client, child, node_did, Some(user.did()), None)
+            history_on(&client, &session, node_did, Some(user.did()), None)
                 .await
                 .unwrap(),
-            owned,
-            "an owner whose origin headers remain reads the fork from its copies"
+            owned
         );
-        delete_session_rows(&source_owner, "AgentMessage", SOURCE).await;
-        share(&child_doc, true).await;
-        for session in [child.to_owned(), grandchild.session_id.clone()] {
-            assert_eq!(
-                history_on(&client, &session, node_did, Some(user.did()), None)
-                    .await
-                    .unwrap(),
-                owned
-            );
-            assert!(
-                sharee_reads(session).await,
-                "deleting the source keeps the fork readable"
-            );
-        }
-        db.node.shutdown().await.expect("shut down test node");
+        assert!(
+            sharee_reads(session).await,
+            "deleting the source keeps the fork readable"
+        );
     }
+    db.node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -1381,6 +1474,7 @@ async fn compaction_save_fault_leaves_chain_and_generation_intact() {
         &["first".into(), "second".into()],
     )
     .await;
+    let sequences = stored_sequences(&access, SESSION).await;
     let mut docs = Vec::new();
     for index in 0..2 {
         let request = format!("{SESSION}-request-{index}");
@@ -1417,7 +1511,7 @@ async fn compaction_save_fault_leaves_chain_and_generation_intact() {
             request_doc_id: &docs[0],
             files_read: &["/tmp/a.rs".to_string()],
             files_modified: &[],
-            compacted_through_sequence: 10,
+            compacted_through_sequence: sequences[0],
             original_tokens: 100,
             compacted_tokens: 20,
             expected_generation: &state.generation,
@@ -1457,7 +1551,7 @@ async fn compaction_save_fault_leaves_chain_and_generation_intact() {
                     request_doc_id: &docs[1],
                     files_read: &files,
                     files_modified: &[],
-                    compacted_through_sequence: 20,
+                    compacted_through_sequence: sequences[1],
                     original_tokens: 200,
                     compacted_tokens: 30,
                     expected_generation: &before.generation,
@@ -1474,7 +1568,7 @@ async fn compaction_save_fault_leaves_chain_and_generation_intact() {
     let (entries, after) = chain().await;
     assert_eq!(entries.len(), 2);
     assert_ne!(after.generation, before.generation);
-    assert_eq!(after.compacted_through_sequence, Some(20));
+    assert_eq!(after.compacted_through_sequence, Some(sequences[1]));
     node.shutdown().await.expect("shut down test node");
 }
 
@@ -1841,7 +1935,7 @@ async fn reserve_signed_session(
     binding: &gents_protocol::agent_identity::AgentIdentityBinding,
     session_id: &str,
 ) {
-    crate::request::lifecycle::build_signed_client_request(
+    crate::request::lifecycle::build_signed_reserved_client_request(
         client,
         crate::request::lifecycle::RequestSpec::new(
             gents_protocol::request_admission::RequestPurpose::Normal,
