@@ -1,4 +1,6 @@
 import Proofs.Inference.Operations
+import Proofs.Inference.InferenceCall.Persistence
+import Proofs.Inference.ActivityViews
 import Proofs.Conformance.Family
 
 namespace InferenceOperations
@@ -15,3 +17,8 @@ attribute [conformance_function]
   accountOperationAdmitted
 
 end InferenceOperations
+
+attribute [conformance_function]
+  InferenceCall.Persistence.mayStart
+  InferenceCall.Persistence.mayInstallTerminal
+

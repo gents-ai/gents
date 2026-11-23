@@ -19,8 +19,12 @@ structure Row (Usage : Type) where
 
 variable {Usage : Type}
 
+/-- The persisted state from which a call may start running. -/
+def mayStart (current : InferenceCallState) : Bool :=
+  current == .queued
+
 def start (current : Row Usage) : Row Usage :=
-  if current.call.state = .queued then
+  if mayStart current.call.state then
     { current with call := { current.call with state := .running } }
   else current
 
@@ -32,6 +36,11 @@ instance (current target : InferenceCallState) :
     Decidable (terminalWriteAllowed current target) := by
   unfold terminalWriteAllowed
   infer_instance
+
+/-- Whether a terminal write of `target` may replace the persisted `current`
+state: the first-winner guard every terminal write applies. -/
+def mayInstallTerminal (current target : InferenceCallState) : Bool :=
+  decide (terminalWriteAllowed current target)
 
 def terminalize (current : Row Usage) (target : InferenceCallState) (stamp : Nat)
     (limit : Option ProviderLimit.Recorded) : Row Usage :=
@@ -45,7 +54,7 @@ def observeUsage (current : Row Usage) (observed : Usage) : Row Usage :=
 
 theorem start_requires_current_queued (current : Row Usage)
     (h_not_queued : current.call.state ≠ .queued) : start current = current := by
-  simp [start, h_not_queued]
+  simp [start, mayStart, h_not_queued]
 
 theorem terminal_write_requires_current_live (current : Row Usage)
     (h_terminal : isTerminal current.call.state) (target : InferenceCallState) :

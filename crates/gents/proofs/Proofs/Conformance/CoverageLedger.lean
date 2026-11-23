@@ -86,7 +86,6 @@ def openFamilies : List String :=
   , "contracts_queued_steering_guard_unreached"
   , "contracts_runtime_reconcile_unreached"
   , "contracts_self_config_job_guard_unreached"
-  , "contracts_title_admission_fresh_verifier_unreached"
   , "cross_actor_authorization_unreached"
   , "enrollment_auto_renewal_offer_unreached"
   , "event_delivery_group_capture_unreached"

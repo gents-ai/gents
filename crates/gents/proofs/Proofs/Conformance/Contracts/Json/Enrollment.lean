@@ -184,27 +184,9 @@ private def titleAdmissionDisposition (i : TitleAdmissionInput) : String :=
       CausalHop.defaultMaxRequestHop)
   | none => ""
 
-private def titleAdmissionUnbound : List String :=
-  [ "ordinary-signed-control-preserved", "pending-title-observation-unavailable"
-  , "foreign-admission-branch-fields", "forged-physical-parent", "tool-linked-parent"
-  , "signed-purpose-mutation", "missing-parent-evidence", "access-review-observation-unavailable" ]
-
 @[conformance_family]
 def titleAdmissionFreshVerifier : Family TitleAdmissionInput String where
-  inputs := (titleRequestAdmissionCases.filter (!titleAdmissionUnbound.contains ·.name)).map
-    titleAdmissionInput
-  model := titleAdmissionDisposition
-
-/-- model-production-gap: the native fresh-verifier fixture signs a physical
-parent and the title request through native signing and admission records;
-it has no representation for these eight modeled inputs (an ordinary request
-on this path, unavailable observations, foreign branch fields, forged or
-tool-linked parent tuples, a purpose changed after signing, missing parent
-evidence). -/
-@[conformance_family]
-def titleAdmissionFreshVerifierUnreached : Family TitleAdmissionInput String where
-  inputs := (titleRequestAdmissionCases.filter (titleAdmissionUnbound.contains ·.name)).map
-    titleAdmissionInput
+  inputs := titleRequestAdmissionCases.map titleAdmissionInput
   model := titleAdmissionDisposition
 
 structure TitlePurposeWireInput where

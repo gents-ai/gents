@@ -67,6 +67,10 @@ fn native_input(case: &LeanTitleRequestAdmissionCase) -> RequestInput {
     .expect("generated title input has native representation")
 }
 
+/// The enrollment field a runtime-internal admission must not carry; a peer
+/// writing the row directly can set it although the native create refuses it.
+const FOREIGN_BRANCH_FIELD: &str = "foreign-enrollment-request";
+
 /// Creates the signed row as the runtime root and grants its working Agent,
 /// the relationship every request row carries in production.
 async fn insert_request(node: &Arc<EmbeddedNode>, create: &AgentRequestCreate) -> String {
@@ -75,7 +79,24 @@ async fn insert_request(node: &Arc<EmbeddedNode>, create: &AgentRequestCreate) -
         .expect("fixture node identity")
         .parse()
         .expect("fixture node DID");
-    let mutation = create.graphql_mutation().expect("native request mutation");
+    let mutation = match &create.admission.enrollment_request_id {
+        None => create.graphql_mutation().expect("native request mutation"),
+        Some(foreign) => {
+            let mut canonical = create.clone();
+            canonical.admission.enrollment_request_id = None;
+            canonical
+                .graphql_mutation()
+                .expect("native request mutation")
+                .replacen(
+                    "create_AgentRequest(input: { ",
+                    &format!(
+                        "create_AgentRequest(input: {{ enrollment_request_id: \"{}\", ",
+                        gents_store::graphql::escape_graphql_string(foreign)
+                    ),
+                    1,
+                )
+        }
+    };
     gents_store::config_client::ConfigAccess::local_as(node.clone(), root)
         .transact_write("test.title_admission.create_request", |txn| {
             let mutation = &mutation;
@@ -182,7 +203,6 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) -> String {
         "title parent tuple shape"
     );
     assert_eq!(parent_fields[1], parent.request_id);
-    assert_eq!(parent_fields[3], parent.document_id);
     let target = identity.did();
     let mut labels = vec![
         case.session_agent.as_str(),
@@ -217,34 +237,42 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) -> String {
     } else {
         parent.request_id.clone()
     };
-    // Each request is signed by its own Agent: the model's target runtime is
-    // the Agent that executes the request on this node.
-    let parent_agent = modeled_agent(&parent.agent_did);
-    let mut parent_create = AgentRequestCreate::base(
-        RequestPurpose::Normal,
-        parent_request_id,
-        RequestScope::new(
-            target,
-            parent_agent.did(),
-            parent_agent.did(),
-            &parent.session_id,
-        ),
-        &case.request.content,
-        "interactive",
-        &case.request.created_at,
-        AgentRequestAdmissionRecord::local_self(parent_agent.did()),
-    );
-    super::sign_agent_request_create(parent_agent.as_ref(), &mut parent_create)
-        .await
-        .expect("sign physical parent");
-    let parent_doc_id = insert_request(&node, &parent_create).await;
-    update_request_field(
-        &node,
-        &parent_doc_id,
-        "lifecycle_state",
-        &case.parent_observed_state,
-    )
-    .await;
+    let write_parent = |request_id: String| {
+        let node = node.clone();
+        let session = parent.session_id.clone();
+        let agent = parent.agent_did.clone();
+        let content = case.request.content.clone();
+        let created_at = case.request.created_at.clone();
+        let state = case.parent_observed_state.clone();
+        async move {
+            // Each request is signed by its own Agent: the model's target
+            // runtime is the Agent that executes the request on this node.
+            let parent_agent = modeled_agent(&agent);
+            let mut create = AgentRequestCreate::base(
+                RequestPurpose::Normal,
+                request_id,
+                RequestScope::new(target, parent_agent.did(), parent_agent.did(), &session),
+                &content,
+                "interactive",
+                &created_at,
+                AgentRequestAdmissionRecord::local_self(parent_agent.did()),
+            );
+            super::sign_agent_request_create(parent_agent.as_ref(), &mut create)
+                .await
+                .expect("sign physical parent");
+            let written = insert_request(&node, &create).await;
+            update_request_field(&node, &written, "lifecycle_state", &state).await;
+            written
+        }
+    };
+    let parent_doc_id = write_parent(parent_request_id).await;
+    // A parent document label other than the evidenced parent's names another
+    // normal request of the same session, which does not own the source.
+    let linked_doc_id = if parent_fields[3] == parent.document_id {
+        parent_doc_id
+    } else {
+        write_parent(parent_fields[3].clone()).await
+    };
 
     let admission = match (
         case.admission.kind.as_str(),
@@ -282,7 +310,7 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) -> String {
     create.input = native_input(case);
     create.request_hop = u32::try_from(case.request.hop).unwrap();
     create.caused_by_parent_request_id = Some(parent_fields[1].clone());
-    create.caused_by_parent_request_doc_id = Some(parent_doc_id);
+    create.caused_by_parent_request_doc_id = Some(linked_doc_id);
     if parent_fields[4] == "some" {
         assert_eq!(parent_fields.len(), 8);
         assert_eq!(parent_fields[6], "some");
@@ -306,30 +334,46 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) -> String {
     let signed_fields = model_text_fields(&case.admission.model_signed_fields_hex);
     create.purpose = RequestPurpose::try_from(signed_fields[2].as_str())
         .expect("modeled signed purpose has a native representation");
-    if !case.admission.signature_valid {
-        super::sign_agent_request_create(request_agent.as_ref(), &mut create)
-            .await
-            .expect("sign before tampering");
-        create.content.push_str(&case.request.request_id);
+    if !case.branch_fields_exact {
+        create.admission.enrollment_request_id = Some(FOREIGN_BRANCH_FIELD.to_owned());
+    }
+    let signed = super::sign_agent_request_create(request_agent.as_ref(), &mut create).await;
+    if case.branch_fields_exact {
+        signed.expect("sign modeled title request");
     } else {
-        super::sign_agent_request_create(request_agent.as_ref(), &mut create)
-            .await
-            .expect("sign modeled title request");
+        signed.expect_err("the native signer refuses foreign branch fields after signing them");
+    }
+    if !case.admission.signature_valid {
+        create.content.push_str(&case.request.request_id);
     }
 
     create.purpose = actual_purpose;
     let doc_id = insert_request(&node, &create).await;
-    let queued = super::load_request_for_admission_test(node.as_ref(), &doc_id)
+    let row = super::load_signed_request(node.as_ref(), &doc_id)
         .await
         .unwrap_or_else(|error| panic!("{}: load queued request: {error:#}", case.name));
+    // The watcher rejects at ingest a pending row its typed request refuses,
+    // so such a row is denied before admission runs.
+    let Ok(queued) = gents_protocol::row::AgentRequest::try_from(row) else {
+        node.shutdown().await.expect("shut down test node");
+        return "deny".to_owned();
+    };
     if !case.pending_deadline_absent {
         update_request_field(&node, &doc_id, "deadline", &case.request.created_at).await;
     }
     let (_owner, enrollment) = enrollment_authority_channel();
     let verifier = AgentRequestAdmissionVerifier::new(node.clone(), identity, enrollment);
-    let result = verifier
-        .verify_fresh(&queued, &modeled_agent_did(&case.session_agent))
-        .await;
+    let session_agent = modeled_agent_did(&case.session_agent);
+    let verification = verifier.verify_fresh(&queued, &session_agent);
+    let result = if case.observation_available {
+        verification.await
+    } else {
+        gents_store::config_client::ConfigApplyTxn::with_read_storage_failure(
+            "AgentRequest",
+            verification,
+        )
+        .await
+    };
     let actual_disposition = match &result {
         Ok(_) => "admit",
         Err(AgentRequestAdmissionError::Denied(_)) => "deny",
@@ -345,7 +389,7 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) -> String {
 }
 
 #[tokio::test]
-async fn generated_title_admission_cases_bind_representable_fresh_verifier_subset() {
+async fn generated_title_admission_cases_bind_the_fresh_verifier() {
     for case in gents_lean_vocab::families::contracts_title_admission_fresh_verifier::cases() {
         let disposition = verify_generated_case(&case.input).await;
         case.check(disposition);
