@@ -508,18 +508,14 @@ structure ForkCase where
   cut : Nat
   authorized : Bool
   idle : Bool
-  coherent : Bool
 
 def forkCases : List ForkCase :=
-  [ ⟨"exact_copy", history, child, 1, true, true, true⟩,
-    ⟨"empty_prefix", history, child, 0, true, true, true⟩,
-    ⟨"busy_source", history, child, 1, true, false, true⟩,
-    ⟨"mixed_generation", history, child, 1, true, true, false⟩,
-    ⟨"unauthorized", history, child, 1, false, true, true⟩,
-    ⟨"cursor_beyond_source",
-      { history with compactions := [⟨4, scope.session, 1, 99⟩] }, child, 100, true, true, true⟩,
+  [ ⟨"exact_copy", history, child, 1, true, true⟩,
+    ⟨"empty_prefix", userTurnHistory, child, 0, true, true⟩,
+    ⟨"busy_source", history, child, 1, true, false⟩,
+    ⟨"unauthorized", history, child, 1, false, true⟩,
     ⟨"invalid_compaction_sequence",
-      { history with compactions := [⟨4, scope.session, 2, 0⟩] }, child, 1, true, true, true⟩ ]
+      { history with compactions := [⟨4, scope.session, 2, 0⟩] }, child, 1, true, true⟩ ]
 
 structure ForkInput where
   name : String
@@ -530,20 +526,19 @@ structure ForkInput where
   documentIdOffset : Nat
   authorized : Bool
   idle : Bool
-  coherent : Bool
   deriving ToJson
 
 def ForkCase.input (c : ForkCase) : ForkInput :=
   { name := c.name, source := HistoryWire.ofModel c.source, parent := scope, child := c.target
     exclusiveSequenceCut := c.cut, documentIdOffset := 1000, authorized := c.authorized
-    idle := c.idle, coherent := c.coherent }
+    idle := c.idle }
 
 def ForkCase.published (c : ForkCase) : Option SessionFork.History :=
   let authorization : SessionFork.SourceAuthorization :=
     ⟨if c.authorized then scope else { scope with node := scope.node + 1 },
       c.source.messages.map (·.header.id), c.source.compactions.map (·.id),
       c.source.closures.map (·.id)⟩
-  SessionFork.publish c.source scope c.target remap childKey c.cut authorization c.idle c.coherent
+  SessionFork.publish c.source scope c.target remap childKey c.cut authorization c.idle true
 
 structure ForkReader where
   grant : String

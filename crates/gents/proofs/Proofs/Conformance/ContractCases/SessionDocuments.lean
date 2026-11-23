@@ -184,6 +184,13 @@ def history : History :=
   { messages := [sourceMessage 1 0]
     compactions := [⟨4, scope.session, 1, 0⟩]
     closures := [⟨101, scope.session, 101⟩] }
+/-- A source whose first message, at sequence 0, is a user turn, so a fork at
+its first user turn cuts before every message. -/
+def userTurnHistory : History :=
+  { messages := [{ sourceMessage 1 0 with
+      header := { (sourceMessage 1 0).header with role := .user } }]
+    compactions := []
+    closures := [⟨101, scope.session, 101⟩] }
 def child : Scope := { scope with session := 20 }
 def remap (id : Nat) := id + 1000
 def childKey (key : String) := "child:" ++ key
@@ -227,14 +234,24 @@ theorem fork_to_another_requester_is_refused :
     publish history scope { child with requester := none } remap childKey 1
       sourceAuthorization true true = none := by decide
 example : publish history scope child remap childKey 1 sourceAuthorization false true = none := by decide
-example : publish history scope child remap childKey 1 sourceAuthorization true false = none := by decide
+/-- `fork_in_txn` reads the whole source (requests, headers, compactions and
+the segments each header resolves) inside the fork's one signed transaction,
+and `commit_fork` rebuilds that transaction on a confirmed conflict, so a fork
+never observes a source mixing two generations; the model refuses one. -/
+theorem fork_of_incoherent_source_is_refused :
+    publish history scope child remap childKey 1 sourceAuthorization true false = none := by decide
 example : publish history scope child remap childKey 1 wrongAgentAuthorization true true = none := by decide
 example : publish history scope { child with node := 99 } remap childKey 1 sourceAuthorization true true = none := by decide
 example : (copyPrefix history child remap childKey 0) = ⟨[], [], []⟩ := by decide
 example : publish { history with compactions := [⟨4, scope.session, 2, 0⟩] }
     scope child remap childKey 1 sourceAuthorization true true = none := by decide
-example : publish { history with compactions := [⟨4, scope.session, 1, 99⟩] }
-    scope child remap childKey 100 sourceAuthorization true true = none := by decide
+/-- A fork's cut is the sequence of a source user turn or one past the last
+stored message, and the compaction save owner stores only a cursor naming a
+stored message (`Compaction.Cursor.namesStoredMessage`), so no source holds a
+cursor beyond its messages; the model refuses a fork of one. -/
+theorem fork_of_cursor_beyond_source_is_refused :
+    publish { history with compactions := [⟨4, scope.session, 1, 99⟩] }
+      scope child remap childKey 100 sourceAuthorization true true = none := by decide
 
 def duplicateSequenceHistory : History :=
   { messages := [sourceMessage 1 0, sourceMessage 2 0], compactions := [] }
