@@ -508,7 +508,7 @@ pub(crate) use gents_loop::compaction::merge_optional_params;
 
 /// Maps the inference profile's reasoning effort into each provider's wire
 /// contract (`Runtime.CompletionParameters.reasoning`). An absent profile
-/// setting injects no reasoning default, except ChatGPT Codex (#540).
+/// setting injects no reasoning default, except ChatGPT Codex.
 ///
 /// vLLM only emits chain-of-thought in `message.reasoning` when the request
 /// carries `chat_template_kwargs={"enable_thinking": true}`; hosted
@@ -522,7 +522,7 @@ fn reasoning_profile_params(
 ) -> Option<serde_json::Value> {
     let Some(reasoning_effort) = reasoning_effort else {
         // Profile plumbing may override Codex's shipped `medium` default,
-        // never silently drop it (#540).
+        // never silently drop it.
         return matches!(kind, BackendProviderKind::ChatGptCodex).then(|| {
             serde_json::json!({
                 "reasoning": { "effort": ReasoningEffort::Medium.as_str() }
