@@ -664,6 +664,13 @@ See `../README.md` for how this fits the broader formal-verification model.
   excludes, and a parent read through a reused pid misses the job;
   `ShortBound` gives up before the root of a real chain; `Unbounded` walks
   forever through reused pids.
+- `ShellSendLandings` — what the CLI shell's source tells after a tab's
+  first send. The send spawns the work reread for the new session; the
+  send's commits wake the chat reread; the two reads race and the source
+  loop tells each landing whole. `LandingsWhole` and `ObserverAgrees` hold
+  when the test accepts either landing first. RED: `WorkFirst` (the
+  observer that read the next three updates as the work reread) and
+  `TaskTells` (reads that tell their own updates interleave the landings).
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## Checking
