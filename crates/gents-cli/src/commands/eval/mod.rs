@@ -186,6 +186,7 @@ pub(crate) async fn execute(
         EvalCommand::List(args) => inspect::list(ctx, &args, out).await,
         EvalCommand::Show(args) => inspect::show(ctx, &args, out).await,
         EvalCommand::Trial(args) => inspect::trial(ctx, &args, out).await,
+        EvalCommand::Export(args) => export::export(ctx, &args, out).await,
         EvalCommand::Compare(args) => compare::compare(ctx, &args, out).await,
         EvalCommand::Cancel(args) => manage::cancel_run(ctx, &args, out).await,
         EvalCommand::Invalidate(args) => manage::invalidate(ctx, &args, out).await,
@@ -414,6 +415,7 @@ mod batch;
 mod checks;
 mod compare;
 mod containment;
+mod export;
 mod frame;
 pub(crate) use frame::terminal_size;
 pub(crate) mod init;
