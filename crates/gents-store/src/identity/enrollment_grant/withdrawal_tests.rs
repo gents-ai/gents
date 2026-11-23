@@ -129,6 +129,9 @@ async fn shutdown_cancels_pending_assignment_reads_and_runtime_callbacks(
     tokio::time::timeout(crate::test_support::STALL_CEILING, watcher).await???;
 
     let (shutdown, mut stop) = tokio::sync::watch::channel(false);
+    runtime
+        .block_active
+        .store(false, std::sync::atomic::Ordering::SeqCst);
     let (entered, reading) = tokio::sync::oneshot::channel();
     let refresh =
         access.refresh_with_assignment_view(&scope, runtime.as_ref(), Some(&mut stop), async {
@@ -371,7 +374,10 @@ async fn a_vera_home_reads_only_its_own_certified_assignments() -> anyhow::Resul
         .block_after_stop
         .store(true, std::sync::atomic::Ordering::SeqCst);
     {
-        let interrupted = access.refresh_assignments(&scope, &running);
+        // The previous stop failed. Its withdrawal must take effect even if
+        // the authority cannot answer another read.
+        let interrupted =
+            access.refresh_with_assignment_view(&scope, &running, None, std::future::pending());
         tokio::pin!(interrupted);
         tokio::select! {
             result = &mut interrupted => panic!("refresh returned before interruption: {result:?}"),

@@ -315,6 +315,31 @@ async fn interruptible<T>(
     }
 }
 
+async fn stop_invalid_work(
+    runtime: &impl AssignmentRuntime,
+    view: &AssignmentState,
+    shutdown: &mut Option<&mut tokio::sync::watch::Receiver<bool>>,
+) -> Result<bool, ReceiverError> {
+    let Some(active) = interruptible(runtime.active(), shutdown).await else {
+        return Ok(false);
+    };
+    let active = active.map_err(ReceiverError::Runtime)?;
+    for id in &active {
+        if !view.assigned.contains(id)
+            || !match interruptible(runtime.has_verified_body(id), shutdown).await {
+                Some(result) => result.map_err(ReceiverError::Runtime)?,
+                None => return Ok(false),
+            }
+        {
+            let Some(result) = interruptible(runtime.stop(id), shutdown).await else {
+                return Ok(false);
+            };
+            result.map_err(ReceiverError::Runtime)?;
+        }
+    }
+    Ok(true)
+}
+
 impl ConfigAccess {
     pub async fn watch_assignments<R>(
         &self,
@@ -443,18 +468,27 @@ impl ConfigAccess {
         };
         // Earlier homes have only the applied row. It is their initial read floor.
         let floor_key = format!("floor:{key}");
-        let previous = self
+        let (accepted, applied) = self
             .transact_readonly("assignments.floor", |txn| {
                 let floor_key = &floor_key;
                 let key = &key;
                 Box::pin(async move {
-                    match load(txn, floor_key).await? {
-                        Some(floor) => Ok::<_, ReceiverError>(Some(floor.state)),
-                        None => Ok(load(txn, key).await?.map(|row| row.state)),
-                    }
+                    let accepted = load(txn, floor_key).await?.map(|row| row.state);
+                    let applied = load(txn, key).await?.map(|row| row.state);
+                    Ok::<_, ReceiverError>((accepted, applied))
                 })
             })
             .await?;
+        if let Some(pending) = accepted
+            .as_ref()
+            .filter(|view| Some(*view) != applied.as_ref())
+        {
+            // An interrupted stop is still owed while the authority is unreachable.
+            if !stop_invalid_work(runtime, pending, &mut shutdown).await? {
+                return Ok(None);
+            }
+        }
+        let previous = accepted.or(applied);
         let query = defra_node::AssignmentQuery {
             policy: scope.policy.clone(),
             resource: scope.resource.clone(),
@@ -482,22 +516,8 @@ impl ConfigAccess {
             Box::pin(persist(txn, &floor_key, &subject, scope, &next))
         })
         .await?;
-        let Some(active) = interruptible(runtime.active(), &mut shutdown).await else {
+        if !stop_invalid_work(runtime, &next, &mut shutdown).await? {
             return Ok(None);
-        };
-        let active = active.map_err(ReceiverError::Runtime)?;
-        for id in &active {
-            if !next.assigned.contains(id)
-                || !match interruptible(runtime.has_verified_body(id), &mut shutdown).await {
-                    Some(result) => result.map_err(ReceiverError::Runtime)?,
-                    None => return Ok(None),
-                }
-            {
-                let Some(result) = interruptible(runtime.stop(id), &mut shutdown).await else {
-                    return Ok(None);
-                };
-                result.map_err(ReceiverError::Runtime)?;
-            }
         }
         let committed = self
             .transact_write("assignments.persist", |txn| {

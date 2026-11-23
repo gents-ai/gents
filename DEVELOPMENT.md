@@ -96,7 +96,8 @@ A workload owner can use `watch_assignments` to reconcile running work. Its
 `AssignmentRuntime` adapter supplies the collection-specific signature checks
 and start/stop operations. If revision B is withdrawn before the body of C
 arrives, the watcher saves C’s certified revision before stopping B. After a
-restart it rejects an older view even if the stop was interrupted. The applied
+restart it finishes outstanding stops even while the authority is unreachable,
+and rejects an older view when reads resume. The applied
 inventory advances after the stop succeeds. C can start once its body is verified.
 [Receiver API](crates/gents-store/src/config_client/assignment_receiver.rs) ·
 [Restart and withdrawal tests](crates/gents-store/src/identity/enrollment_grant/withdrawal_tests.rs)

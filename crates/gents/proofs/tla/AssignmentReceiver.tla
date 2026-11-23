@@ -22,8 +22,8 @@ Capture(revision) ==
   /\ UNCHANGED <<durable, highest, active, body, stopped>>
 
 StopWithdrawn ==
-  /\ pending # 2
-  /\ active' = active \cap Assigned(pending)
+  /\ (pending # 2 \/ floor > durable)
+  /\ active' = active \cap Assigned(IF pending = 2 THEN floor ELSE pending)
   /\ active' # active
   /\ stopped' = (stopped \/ ("B" \in active /\ "B" \notin active'))
   /\ UNCHANGED <<durable, highest, body, pending, floor>>
