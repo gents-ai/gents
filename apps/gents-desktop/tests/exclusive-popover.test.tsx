@@ -76,6 +76,24 @@ describe("exclusive shell popovers", () => {
     unmount();
   });
 
+  it("keeps the lease of an owner whose open committed before its popup attached", () => {
+    const { result, unmount } = renderHook(() => ({
+      first: useExclusivePopover(),
+      second: useExclusivePopover(),
+    }));
+    act(() => result.current.first.onOpenChange(true));
+    expect(result.current.first.open).toBe(true);
+    act(() => result.current.second.onOpenChange(true));
+    expect(result.current.first.open).toBe(false);
+    expect(result.current.second.open).toBe(false);
+    act(() => result.current.first.popupRef(document.createElement("div")));
+    expect(result.current.second.open).toBe(false);
+    act(() => result.current.first.onOpenChangeComplete(false));
+    act(() => result.current.first.popupRef(null));
+    expect(result.current.second.open).toBe(true);
+    unmount();
+  });
+
   it("hands off immediately when the prior owner never mounted", () => {
     const { result, unmount } = renderHook(() => {
       const first = useExclusivePopover();

@@ -1,4 +1,0 @@
----- MODULE MCExclusivePopoverLeaseCommitted ----
-EXTENDS ExclusivePopoverLease
-
-====

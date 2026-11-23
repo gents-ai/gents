@@ -667,13 +667,11 @@ See `../README.md` for how this fits the broader formal-verification model.
 - `ExclusivePopoverLease` — the desktop shell's one-popup lease
   (`useExclusivePopover`) for two Base UI owners. A request takes the free
   lease or queues and asks the holder to close; the holder keeps the lease
-  until its popup unmounts. Base UI attaches a popup in the commit's
-  synchronous follow-up (its portal node is set in a layout effect), so a
-  committed open is never seen unattached. `AtMostOneMounted` (Bombadil's
-  `desktop_shell_does_not_stack_dialogs`) and `RequestServed` hold for the
-  hook; a lease held from the committed open holds too when the attach lags.
-  RED: `MountLag` (the hook's lease if the attach could lag its commit) and
-  `ReleaseOnClose`.
+  from its committed open until its popup unmounts, so `AtMostOneMounted`
+  (Bombadil's `desktop_shell_does_not_stack_dialogs`) and `RequestServed`
+  hold whether or not the popup's attach lags its commit (Base UI's premise
+  is a synchronous attach). RED: `MountLag` (a lease held only while the
+  popup is attached) and `ReleaseOnClose`.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## Checking
