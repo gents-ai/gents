@@ -2177,11 +2177,6 @@ def caseCoverage : List CoverageEntry :=
       "identity-permission" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "family"
-      "identity_operations_readiness_observation_unreached"
-      "duplicate-node, duplicate-readiness, missing-parent: node_did carries a unique index on Node and NodeReadiness and a readiness row's node_doc_id is immutable, so one store holds no second Node or readiness row for a runtime and no readiness row whose recorded parent was cleared.")
-      "identity-permission" [Surface.runtimeInternal]
-  , tagged (boundaryCoverage
-      "family"
       "identity_operations_pairing_reader_unreached"
       "model-production-gap: production records no owner-authorized reader generation, so no production path observes the last granted generation, an entitlement withdrawn without a revocation, or a new or unauthorized generation.")
       "identity-permission" [Surface.runtimeInternal]

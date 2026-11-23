@@ -884,6 +884,18 @@ theorem readiness_unregistered_owner_is_unusable (o : ReadinessObservation)
     (missing : o.readinessOwner = none) : readinessObservationUsable o = false := by
   simp [readinessObservationUsable, missing]
 
+/-- External premise: `node_did` carries a unique index on both `Node` and
+`NodeReadiness`, and a readiness row's `node_doc_id` is immutable, so one store
+holds no second Node or readiness row for a runtime and no readiness row whose
+recorded parent was cleared; such an observation is unusable regardless. -/
+theorem readiness_duplicate_or_unparented_is_unusable (o : ReadinessObservation)
+    (excluded : o.nodeCount = 2 ∨ o.readinessCount = 2 ∨ (o.recordedParent = none ∧ o.nodeId.isSome)) :
+    readinessObservationUsable o = false := by
+  rcases excluded with h | h | ⟨h, hs⟩
+  · simp [readinessObservationUsable, h]
+  · simp [readinessObservationUsable, h]
+  · cases hn : o.nodeId <;> simp_all [readinessObservationUsable]
+
 theorem readiness_pending_is_unusable (o : ReadinessObservation)
     (pending : o.parentLinked = false) : readinessObservationUsable o = false := by
   simp [readinessObservationUsable, pending]

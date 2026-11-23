@@ -392,25 +392,13 @@ def observationUsable (i : ObservationInput) : Usable :=
       i.readinessCount, i.nodeId, i.nodeOwner, i.readinessOwner, i.recordedParent,
       i.parentLinked, i.parentPresent⟩ }
 
-def schemaExcludedObservations : List String :=
-  ["duplicate-node", "duplicate-readiness", "missing-parent"]
-
 /-- The recovery scenario observes the readiness row each of its fixtures
 leaves behind, as the embedded runtime or as a foreign one, with the one Node it
 registers, with no Node when the fixture records an unknown parent, and with
 the row deleted. -/
 @[conformance_family]
 def readinessObservation : Family ObservationInput Usable where
-  inputs := observationInputs.filter (·.name ∉ schemaExcludedObservations)
-  model := observationUsable
-
-/-- `node_did` carries a unique index on both `Node` and `NodeReadiness`, and a
-readiness row's `node_doc_id` is immutable, so one store holds no second Node or
-readiness row for a runtime and no readiness row whose recorded parent was
-cleared. -/
-@[conformance_family]
-def readinessObservationUnreached : Family ObservationInput Usable where
-  inputs := observationInputs.filter (·.name ∈ schemaExcludedObservations)
+  inputs := observationInputs
   model := observationUsable
 
 structure PartitionInput where

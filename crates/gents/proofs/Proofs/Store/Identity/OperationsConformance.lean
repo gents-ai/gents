@@ -63,13 +63,10 @@ def observationCases : List (String × ReadinessObservation) :=
   [("valid", validObservation),
    ("foreign-runtime", { validObservation with embeddedRuntime := "other" }),
    ("no-node", { validObservation with nodeCount := 0 }),
-   ("duplicate-node", { validObservation with nodeCount := 2 }),
    ("no-readiness", { validObservation with readinessCount := 0 }),
-   ("duplicate-readiness", { validObservation with readinessCount := 2 }),
    ("node-unregistered", { validObservation with nodeOwner := none }),
    ("readiness-unregistered", { validObservation with readinessOwner := none }),
    ("foreign-readiness", { validObservation with readinessOwner := some "other" }),
-   ("missing-parent", { validObservation with recordedParent := none }),
    ("replaced-parent", { validObservation with nodeId := some "replacement" }),
    ("pending", { validObservation with parentLinked := false }),
    ("revoked-after-publication", { validObservation with parentPresent := false })]
