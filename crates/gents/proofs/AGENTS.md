@@ -32,8 +32,12 @@ when they run.
 
 ## One consumer per family
 
-Exactly one Rust test replays each family against the production function,
-with expectations taken only from the model:
+Exactly one test that runs replays each family against the production
+function, with expectations taken only from the model. A consumer counts only
+in a Rust file some target compiles (reached from a target root through `mod`,
+`#[path]` or `include!`) or in a TypeScript test; a file outside every module
+tree is dead source, and the structure test `every_rust_source_is_compiled`
+refuses a new one.
 
 ```rust
 gents_lean_vocab::families::<key>::replay(|input| production(input));
@@ -48,10 +52,10 @@ git grep -nw <key> -- crates apps packages ':!crates/gents-lean-vocab/families.s
 ## The scan
 
 `crates/gents-lean-vocab/src/consumer_scan.rs` finds each family's consumer
-from its key and refuses a family no test replays unless the coverage ledger
-lists it, a ledger entry naming a consumed or unemitted family, a family
-replayed by more than one test, and any new `*_unreached` family. One command
-proves the layer closed (with the Makefile's `RUST_MIN_STACK`; read the test
+from its key in sources that compile and refuses a family no test replays
+unless the coverage ledger lists it, a ledger entry naming a consumed or
+unemitted family, a family replayed by more than one test, and any new
+`*_unreached` family. One command proves the layer closed (with the Makefile's `RUST_MIN_STACK`; read the test
 count, a filter matching nothing passes):
 
 ```bash

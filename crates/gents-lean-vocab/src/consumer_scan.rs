@@ -1,6 +1,7 @@
 //! The conformance rule: every family the Lean snapshot emits is replayed by
 //! exactly one native test. The scan finds that test from the family's
-//! snapshot key, so a consumed family needs no ledger entry. A family no test
+//! snapshot key, in a Rust file some target compiles (`module_tree`) or a
+//! TypeScript file, so a consumed family needs no ledger entry. A family no test
 //! replays is refused unless the coverage ledger
 //! (`Proofs/Conformance/CoverageLedger.lean`) lists it as a boundary or as
 //! open; a ledger entry naming a consumed or unemitted family is refused.
@@ -202,11 +203,15 @@ pub fn consumer_sites(
         .iter()
         .map(|family| (family.clone(), BTreeSet::new()))
         .collect();
+    let compiled = crate::module_tree::module_tree(workspace).compiled;
     let mut files = Vec::new();
     for root in SOURCE_ROOTS {
         source_files(&workspace.join(root), &mut files);
     }
-    for path in files {
+    let runs = |path: &Path| {
+        path.extension().is_none_or(|extension| extension != "rs") || compiled.contains(path)
+    };
+    for path in files.into_iter().filter(|path| runs(path)) {
         let relative = path
             .strip_prefix(workspace)
             .expect("workspace file")

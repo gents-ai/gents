@@ -72,6 +72,7 @@ pub mod canonical_wire;
 pub mod claude_replay;
 pub mod consumer_scan;
 pub mod family;
+pub mod module_tree;
 mod plugin_job_wire;
 mod request_input_wire;
 mod session_turn_wire;
