@@ -1,11 +1,12 @@
 use std::path::Path;
 
 /// The same isolated WebKit store is used by native E2E windows and their reset
-/// helper. A malformed or missing test identifier must never select user data.
-#[cfg(all(feature = "native-e2e", debug_assertions))]
-pub(crate) fn isolated_store_identifier() -> anyhow::Result<Option<[u8; 16]>> {
-    if std::env::var("GENTS_NATIVE_E2E").ok().as_deref() == Some("1") {
-        let value = std::env::var("GENTS_E2E_WEBVIEW_STORE_ID")?;
+/// helper; only a native-e2e build's launch names one. A malformed identifier
+/// must never select user data.
+pub(crate) fn isolated_store_identifier(
+    isolated: Option<&str>,
+) -> anyhow::Result<Option<[u8; 16]>> {
+    if let Some(value) = isolated {
         anyhow::ensure!(
             value.len() == 32 && value.is_ascii(),
             "WebView store ID must contain 32 hex digits"
@@ -20,13 +21,10 @@ pub(crate) fn isolated_store_identifier() -> anyhow::Result<Option<[u8; 16]>> {
     Ok(None)
 }
 
-#[cfg(not(all(feature = "native-e2e", debug_assertions)))]
-pub(crate) fn isolated_store_identifier() -> anyhow::Result<Option<[u8; 16]>> {
-    Ok(None)
-}
-
-pub fn lock_store() -> anyhow::Result<gents_desktop_core::home_reset::BrowserStoreLock> {
-    let isolated = isolated_store_identifier()?.map(|identifier| {
+pub fn lock_store(
+    isolated: Option<&str>,
+) -> anyhow::Result<gents_desktop_core::home_reset::BrowserStoreLock> {
+    let isolated = isolated_store_identifier(isolated)?.map(|identifier| {
         identifier
             .iter()
             .map(|byte| format!("{byte:02x}"))
@@ -35,8 +33,8 @@ pub fn lock_store() -> anyhow::Result<gents_desktop_core::home_reset::BrowserSto
     gents_desktop_core::home_reset::lock_browser_store(isolated.as_deref())
 }
 
-pub fn check_to_receipt(receipt: &Path) -> anyhow::Result<()> {
-    let result = lock_store().map(drop);
+pub fn check_to_receipt(receipt: &Path, isolated: Option<&str>) -> anyhow::Result<()> {
+    let result = lock_store(isolated).map(drop);
     let value = match &result {
         Ok(()) => serde_json::json!({"completed": true}),
         Err(error) => serde_json::json!({"completed": false, "error": format!("{error:#}")}),
@@ -48,9 +46,11 @@ pub fn check_to_receipt(receipt: &Path) -> anyhow::Result<()> {
 /// The default store requires the installed app's bundle identity; E2E can
 /// only select its explicit UUID. This helper promises logical clearing only,
 /// not archival or the absence of WebKit-managed cache directories.
-pub fn clear_to_receipt(receipt: &Path) -> anyhow::Result<()> {
+pub fn clear_to_receipt(receipt: &Path, isolated: Option<&str>) -> anyhow::Result<()> {
     #[cfg(target_os = "macos")]
-    let result = macos::clear_to_receipt(receipt);
+    let result = macos::clear_to_receipt(receipt, isolated);
+    #[cfg(not(target_os = "macos"))]
+    let _ = isolated;
     #[cfg(not(target_os = "macos"))]
     let result: anyhow::Result<()> = Err(anyhow::anyhow!(
         "native browser data reset is supported on macOS"
@@ -96,8 +96,11 @@ mod macos {
 
     /// Foundation's concrete UUID class reports a different byte-initializer
     /// encoding than NSUUID. The string initializer avoids that runtime ABI check.
-    pub(super) fn store(mtm: MainThreadMarker) -> Result<Retained<WKWebsiteDataStore>> {
-        let identifier = super::isolated_store_identifier()?;
+    pub(super) fn store(
+        mtm: MainThreadMarker,
+        isolated: Option<&str>,
+    ) -> Result<Retained<WKWebsiteDataStore>> {
+        let identifier = super::isolated_store_identifier(isolated)?;
         if let Some(identifier) = identifier {
             let hex: String = identifier
                 .iter()
@@ -156,16 +159,16 @@ mod macos {
         wait_for_completion(&done)
     }
 
-    pub(super) fn clear_to_receipt(receipt: &Path) -> Result<()> {
+    pub(super) fn clear_to_receipt(receipt: &Path, isolated: Option<&str>) -> Result<()> {
         anyhow::ensure!(
             !receipt.try_exists()?,
             "browser clear receipt already exists"
         );
-        let _store = super::lock_store()?;
+        let _store = super::lock_store(isolated)?;
         let mtm = MainThreadMarker::new().context("browser reset must run on the main thread")?;
         let app = NSApplication::sharedApplication(mtm);
         app.setActivationPolicy(NSApplicationActivationPolicy::Prohibited);
-        let store = store(mtm)?;
+        let store = store(mtm, isolated)?;
         clear(&store, mtm)?;
         super::write_receipt(receipt, &serde_json::json!({"completed": true}))?;
         Ok(())
@@ -173,7 +176,7 @@ mod macos {
 }
 
 #[cfg(all(target_os = "macos", feature = "native-e2e", debug_assertions))]
-pub fn verify_isolated_clear(receipt: &Path) -> anyhow::Result<()> {
+pub fn verify_isolated_clear(receipt: &Path, isolated: &str) -> anyhow::Result<()> {
     use anyhow::Context;
     use block2::RcBlock;
     use objc2::{runtime::AnyObject, MainThreadMarker};
@@ -185,12 +188,12 @@ pub fn verify_isolated_clear(receipt: &Path) -> anyhow::Result<()> {
     use std::{cell::Cell, ptr::NonNull, rc::Rc};
 
     anyhow::ensure!(
-        isolated_store_identifier()?.is_some(),
+        isolated_store_identifier(Some(isolated))?.is_some(),
         "browser reset fixture requires an isolated UUID"
     );
     let mtm = MainThreadMarker::new().context("browser fixture must run on the main thread")?;
     let _app = NSApplication::sharedApplication(mtm);
-    let store = macos::store(mtm)?;
+    let store = macos::store(mtm, Some(isolated))?;
     let cookies = unsafe { store.httpCookieStore() };
     let properties: objc2::rc::Retained<NSDictionary<_, AnyObject>> = NSDictionary::from_slices(
         unsafe {
@@ -234,7 +237,7 @@ pub fn verify_isolated_clear(receipt: &Path) -> anyhow::Result<()> {
         Ok(count.get())
     };
     anyhow::ensure!(count()? == 1, "fixture cookie was not persisted");
-    clear_to_receipt(receipt)?;
+    clear_to_receipt(receipt, Some(isolated))?;
     anyhow::ensure!(
         count()? == 0,
         "browser clear completed with retained cookies"
