@@ -865,7 +865,7 @@ async fn submit_capacity_request(
     use gents_session::request::lifecycle::{RequestIdentity, RequestSigner, RequestSpec};
     let user_did = fixture.user.did();
     let node_did = fixture.db.node_identity.did();
-    let create = gents_session::request::lifecycle::build_signed_client_request(
+    let create = gents_session::request::lifecycle::build_signed_reserved_client_request(
         &fixture.user_access,
         RequestSpec::new(
             RequestPurpose::Normal,

@@ -748,7 +748,7 @@ async fn session_calibration_seeds_from_durable_inference_calls() {
     let session = "session-calibration";
     let mut sessions = Vec::new();
     for session_id in [session, "other-session"] {
-        let create = gents_session::request::lifecycle::build_signed_client_request(
+        let create = gents_session::request::lifecycle::build_signed_reserved_client_request(
             &owner,
             gents_session::request::lifecycle::RequestSpec::new(
                 gents_protocol::request_admission::RequestPurpose::Normal,
