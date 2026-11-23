@@ -190,15 +190,15 @@ async fn a_new_vera_home_serves_with_its_client_owned_device_group() -> Result<(
     stop(serve).await
 }
 
-/// The follower reopens with its own node key and the host's provisioned trust.
 #[cfg(feature = "vera")]
 async fn publish_test_peer(
     access: &gents_store::config_client::ConfigAccess,
+    peer_id: &str,
     device: &str,
     publisher: &str,
 ) -> Result<String> {
     let variables = serde_json::json!({"input":{
-        "peer_id": Uuid::new_v4().to_string(), "node_did": device,
+        "peer_id": peer_id, "node_did": device,
         "publisher_node_id": publisher, "addresses": ["loopback"],
     }});
     let response: Value = access.transact_write("test.shared_peer_publication", |txn| {
@@ -324,17 +324,18 @@ async fn paired_home_reopens_against_the_original_vera_deployment() -> Result<()
             .with_client_signed_agent_creates(),
     );
     anyhow::ensure!(access.transport_publisher_node().await?.as_deref() == Some(publisher_node));
-    let peer = publish_test_peer(&access, follower_did, publisher_node).await?;
+    let peer_id = Uuid::new_v4().to_string();
     let host_node = provisioned["vera_anchor"]["host_node"]
         .as_str()
         .context("host publisher Node")?;
     anyhow::ensure!(host_node != publisher_node);
     anyhow::ensure!(
-        publish_test_peer(&access, follower_did, host_node)
+        publish_test_peer(&access, &peer_id, follower_did, host_node)
             .await
             .is_err(),
         "a device published under another device's Node without delegation"
     );
+    let peer = publish_test_peer(&access, &peer_id, follower_did, publisher_node).await?;
     prompted(follower.path(), "record a session on the paired device")?;
     let first = sessions(follower.path(), Some(&graphql))?;
     anyhow::ensure!(!first.is_empty(), "the paired device has no sessions");
