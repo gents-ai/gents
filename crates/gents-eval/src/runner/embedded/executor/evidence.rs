@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use anyhow::{Context, Result};
 use serde_json::Value;
 
@@ -6,10 +8,11 @@ use crate::runner::executor::StageEvidence;
 use crate::{Anchor, TrialUsage};
 #[cfg(test)]
 use gents::defra_node::Node as EmbeddedNode;
+use gents_protocol::request_admission::RequestPurpose;
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
-#[cfg(test)]
-use gents_store::graphql::graphql_with_transaction_retry;
+
+const TRIAL_USAGE_QUERY: &str = "{ InferenceCall { request_doc_id call_seq call_state failure_reason prompt_tokens completion_tokens } }";
 
 pub(super) struct SessionRequest {
     pub(super) request_id: String,
@@ -48,27 +51,19 @@ pub(super) async fn session_requests_with_access(
 }
 
 #[cfg(test)]
-pub(super) async fn home_usage(node: &EmbeddedNode) -> TrialUsage {
-    let result = async {
-        let response = graphql_with_transaction_retry(
-            node,
-            "{ InferenceCall { call_seq call_state failure_reason prompt_tokens completion_tokens } }",
-            "eval trial total usage",
-        ).await?;
-        let data = response.data.context("trial usage query omitted data")?;
-        anyhow::ensure!(data.get("InferenceCall").is_some_and(Value::is_array), "trial usage query omitted inference calls");
-        Ok::<_, anyhow::Error>(usage_of(&request_evidence_from_query_data(&data).inference_calls))
-    }.await;
-    result.unwrap_or_else(|error| {
-        tracing::warn!(error = %format!("{error:#}"), "eval trial usage could not be collected");
-        TrialUsage::default()
-    })
+pub(super) async fn home_usage(node: &std::sync::Arc<EmbeddedNode>) -> TrialUsage {
+    home_usage_with_access(&ConfigAccess::local(node.clone()))
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!(error = %format!("{error:#}"), "eval trial usage could not be collected");
+            TrialUsage::default()
+        })
 }
 
-pub(super) async fn home_usage_with_access(access: &ConfigAccess) -> Result<TrialUsage> {
-    let response = access.execute(
-            "{ InferenceCall { call_seq call_state failure_reason prompt_tokens completion_tokens } }",
-        ).await?;
+pub(in crate::runner::embedded) async fn home_usage_with_access(
+    access: &ConfigAccess,
+) -> Result<TrialUsage> {
+    let response = access.execute(TRIAL_USAGE_QUERY).await?;
     let data = response
         .get("data")
         .cloned()
@@ -77,9 +72,40 @@ pub(super) async fn home_usage_with_access(access: &ConfigAccess) -> Result<Tria
         data.get("InferenceCall").is_some_and(Value::is_array),
         "trial usage query omitted inference calls"
     );
+    let data = without_title_audit_calls(access, data).await?;
     Ok(usage_of(
         &request_evidence_from_query_data(&data).inference_calls,
     ))
+}
+
+/// A trial is charged for every inference call in its home except a title
+/// audit's: naming the session is runtime work the subject never asked for,
+/// and shutdown interrupts it before it records usage whenever it outlives
+/// the stages, which would leave the trial with no total at all.
+pub(in crate::runner::embedded) async fn without_title_audit_calls(
+    access: &ConfigAccess,
+    mut data: Value,
+) -> Result<Value> {
+    let query = format!(
+        r#"{{ AgentRequest(filter: {{ purpose: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+        escape_graphql_string(RequestPurpose::TitleAudit.as_str())
+    );
+    let response = access.execute(&query).await?;
+    let audits: BTreeSet<&str> = response
+        .pointer("/data/AgentRequest")
+        .and_then(Value::as_array)
+        .context("title audit query omitted request rows")?
+        .iter()
+        .filter_map(|row| row.get("_docID")?.as_str())
+        .collect();
+    if let Some(calls) = data.get_mut("InferenceCall").and_then(Value::as_array_mut) {
+        calls.retain(|call| {
+            call.get("request_doc_id")
+                .and_then(Value::as_str)
+                .is_none_or(|doc_id| !audits.contains(doc_id))
+        });
+    }
+    Ok(data)
 }
 
 pub(in crate::runner::embedded) fn usage_of<'a>(
