@@ -67,7 +67,7 @@ impl crate::config_client::assignment_receiver::AssignmentRuntime for Assignment
 }
 
 #[tokio::test]
-async fn shutdown_cancels_a_pending_assignment_runtime_callback(
+async fn shutdown_cancels_pending_assignment_reads_and_runtime_callbacks(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let home = home(Provider::Vera).await?;
     let access = home.runtime()?;
@@ -118,6 +118,26 @@ async fn shutdown_cancels_a_pending_assignment_runtime_callback(
     ));
     shutdown.send(true)?;
     tokio::time::timeout(crate::test_support::STALL_CEILING, watcher).await???;
+
+    let (shutdown, mut stop) = tokio::sync::watch::channel(false);
+    let (entered, reading) = tokio::sync::oneshot::channel();
+    let refresh =
+        access.refresh_with_assignment_view(&scope, runtime.as_ref(), Some(&mut stop), async {
+            entered.send(()).unwrap();
+            std::future::pending().await
+        });
+    tokio::pin!(refresh);
+    tokio::select! {
+        _ = &mut refresh => panic!("refresh returned before the provider answered"),
+        result = tokio::time::timeout(crate::test_support::STALL_CEILING, reading) => result??,
+    }
+    shutdown.send(true)?;
+    assert!(
+        tokio::time::timeout(crate::test_support::STALL_CEILING, refresh)
+            .await??
+            .is_none()
+    );
+
     Ok(())
 }
 
@@ -223,7 +243,12 @@ async fn a_vera_home_reads_only_its_own_certified_assignments() -> anyhow::Resul
     };
     assert!(matches!(
         access
-            .refresh_with_assignment_view(&scope, &running, conflicting)
+            .refresh_with_assignment_view(
+                &scope,
+                &running,
+                None,
+                std::future::ready(Ok(conflicting))
+            )
             .await,
         Err(crate::config_client::assignment_receiver::ReceiverError::InvalidState(_))
     ));

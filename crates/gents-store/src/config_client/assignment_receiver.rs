@@ -395,10 +395,10 @@ impl ConfigAccess {
         &self,
         scope: &AssignmentScope,
         runtime: &impl AssignmentRuntime,
-        view: defra_node::CertifiedAssignments,
+        shutdown: Option<&mut tokio::sync::watch::Receiver<bool>>,
+        read: impl Future<Output = Result<defra_node::CertifiedAssignments, AssignmentReadError>>,
     ) -> Result<Option<AssignmentState>, ReceiverError> {
-        self.refresh_from(scope, runtime, None, |_| std::future::ready(Ok(view)))
-            .await
+        self.refresh_from(scope, runtime, shutdown, |_| read).await
     }
 
     async fn refresh_from<F>(
@@ -429,7 +429,10 @@ impl ConfigAccess {
             issuer: scope.issuer.clone(),
             not_before: previous.as_ref().map(|state| state.position.clone()),
         };
-        let certified = read(query).await?;
+        let Some(response) = interruptible(read(query), &mut shutdown).await else {
+            return Ok(None);
+        };
+        let certified = response?;
         let mut assigned = certified.object_ids;
         assigned.sort();
         assigned.dedup();
