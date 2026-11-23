@@ -241,7 +241,7 @@ def trial_row(slot, trials):
                     "failure_kind": s.get("failure_kind")} for s in latest.get("stages", [])],
         "agent_documents": (live.get("documents") or {}).get("Agent"),
         "tool_calls": live.get("tool_calls"),
-        "tokens": trial_tokens(latest),
+        "tokens": trial_tokens(latest, live),
         "failed_tool_calls": live.get("failed_tool_calls"),
         "model_turns": live.get("model_turns"),
         "elapsed_secs": live.get("elapsed_secs"),
@@ -253,8 +253,12 @@ def trial_row(slot, trials):
     }
 
 
-def trial_tokens(latest):
+def trial_tokens(latest, live):
+    """The trial's provider-reported usage, or the counts its live snapshot observed when the provider
+    reported none."""
     usage = (latest or {}).get("usage") or {}
+    if usage.get("input_tokens") is None and usage.get("output_tokens") is None:
+        usage = live or {}
     return {"input": usage.get("input_tokens"), "output": usage.get("output_tokens")}
 
 
@@ -354,7 +358,7 @@ def contained_row(entry, view):
         "suite": entry.get("suite"), "case_id": entry.get("case_id"), "split": entry.get("split"),
         "trial_index": entry.get("trial_index"), "state": entry.get("state"), "attempts": entry.get("attempts"),
         "class": entry.get("class"), "score_bp": entry.get("score_bp"),
-        "tokens": {"input": entry.get("input_tokens"), "output": entry.get("output_tokens")},
+        "tokens": trial_tokens({"usage": entry}, live),
         "tool_calls": live.get("tool_calls"), "model_turns": live.get("model_turns"),
         "failed_verdicts": [f"{v.get('stage_id')}/{v.get('check')}: {v.get('detail') or v.get('reason_code')}"
                             for v in entry.get("verdicts", []) if v.get("kind") != "passed"],
@@ -420,7 +424,7 @@ def run_contained(args, out, work, result, selected, definition=None, split=None
         return None
     summary["rows"] = [contained_row(entry, views.get(entry.get("slot"))) for entry in summary["slots"]]
     result.update(results=summary.get("results"), image=args.image, gents_revision=summary.get("image_commit"),
-                  tokens={"input": summary["totals"].get("input_tokens"), "output": summary["totals"].get("output_tokens")})
+                  tokens={side: sum(row["tokens"][side] or 0 for row in summary["rows"]) for side in ("input", "output")})
     if summary.get("command_execution") != MODES[args.scope]["command_execution"]:
         result.update(outcome="error", reason=f"the run recorded command execution {summary.get('command_execution')!r}")
         return None

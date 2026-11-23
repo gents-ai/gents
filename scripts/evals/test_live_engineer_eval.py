@@ -82,13 +82,14 @@ def summarize(states):
         entry = {"slot": slot, "suite": suite, "case_id": case_id, "split": split, "trial_index": index,
                  "state": state, "attempts": 1}
         if state == "done":
-            entry.update({"class": cls, "score_bp": 10000 if cls == "pass" else 0, "input_tokens": 1000, "output_tokens": 50,
+            usage = {} if env.get("NO_USAGE") else {"input_tokens": 1000, "output_tokens": 50}
+            entry.update({"class": cls, "score_bp": 10000 if cls == "pass" else 0, **usage,
                           "verdicts": [] if cls == "pass" else [{"stage_id": "both", "check": "crew_spec_match", "kind": "failed", "detail": "1 of 2 requirements met"}]})
             export = run_dir / "slots" / slot / "attempts/1/eval"
             report = export / "home/eval/runs/run-1/report.json"
             report.parent.mkdir(parents=True, exist_ok=True)
             report.write_text(json.dumps({"report": {"cells": [{"slots": [{"case_id": case_id, "latest": {"trial_id": "t"}}]}]},
-                                          "trials": {"t": {"live": {"tool_calls": 7, "model_turns": 4}}}}))
+                                          "trials": {"t": {"live": {"tool_calls": 7, "model_turns": 4, "input_tokens": 900, "output_tokens": 40}}}}))
             (run_dir / "slots" / slot / "state.json").write_text(json.dumps({"state": "done", "run_id": "run-1", "export": str(export)}))
         slots.append(entry)
     totals = {"slots": len(slots), "unfinished": sum(s["state"] != "done" for s in slots),
@@ -271,6 +272,13 @@ class LiveEngineerEvalTests(unittest.TestCase):
         self.assertIn("at least 50% of 3 trials", summary)
         self.assertIn("| engineer-mailbox/kiln-flag-and-question | 2 / 3 (3) | 67% (21%-94%) | 1000.0 / 50.0 | 7.0 |", summary)
         self.assertIn("both/crew_spec_match: 1 of 2 requirements met", summary)
+
+    def test_a_trial_without_provider_usage_reports_its_observed_tokens(self):
+        result = self.run_eval("pass", "--trials", "1", NO_USAGE="1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        case = self.result()["cases"]["engineer-mailbox/kiln-flag-and-question"]
+        self.assertEqual((case["input_tokens_per_pass"], case["output_tokens_per_pass"]), (900, 40))
+        self.assertEqual(self.result()["tokens"], {"input": 900, "output": 40})
 
     def test_minority_fails(self):
         result = self.run_eval("pass,fail,fail")
