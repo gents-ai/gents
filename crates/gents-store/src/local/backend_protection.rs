@@ -338,7 +338,7 @@ impl<'a> FreshBackendStore<'a> {
                 let url = format!("http://{}/api/v0/graphql", listener.local_addr()?);
                 let route = crate::config_client::OwnerStagedRoute::new();
                 let http = defra_node::HttpConfig::with_listener(listener)?
-                    .with_extra_routes(route.router());
+                    .with_authenticated_routes(route.router());
                 (
                     builder.with_http(http),
                     Some((url, signer, route, node.clone())),
