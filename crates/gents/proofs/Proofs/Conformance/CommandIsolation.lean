@@ -11,27 +11,43 @@ end CommandPolicy
 namespace Conformance.CommandIsolation
 open Lean CommandPolicy
 
+deriving instance ToJson for WriteScope
+
 structure SeatbeltInput where
   mode : ExecutionMode
   network : NetworkMode
+  reachesNetwork : Bool
   deriving ToJson
 
 structure SeatbeltOutput where
   credentialsProtected : Bool
   network : NetworkMode
+  writes : WriteScope
   deriving ToJson
 
-/-- Seatbelt confines only the bounded modes: read-only commands are validated
-by argv and unrestricted commands run unsandboxed, so only modes whose
-credentials are protected can be launched in a Seatbelt profile. -/
+/-- The sandbox each kernel-contained mode selects for a program Seatbelt can
+run on a host with a backend. -/
+def containedSandbox (mode : ExecutionMode) : SandboxKind :=
+  match selectSandbox { workspaceWriteSandboxEnforced := true } mode "" with
+  | .selected sandbox => sandbox
+  | .denied _ => .policyReadOnly
+
+/-- What the kernel lets a command do under the Seatbelt profile its mode
+selects: whether saved credentials stay unreadable and unwritable, whether it
+can open a connection, and where it can write. A read-only command is a
+network reader or not; a bounded command's network follows its mode alone. -/
 @[conformance_family]
 def seatbelt : Family SeatbeltInput SeatbeltOutput where
   inputs :=
-    (([.readOnly, .workspaceWrite, .artifactWrite, .unrestricted] : List ExecutionMode).flatMap fun mode =>
-      ([.inherit, .disabled, .enabled] : List NetworkMode).map fun network =>
-        ({ mode, network } : SeatbeltInput)).filter fun i => protectsCredentials i.mode
+    (([.inherit, .disabled, .enabled] : List NetworkMode).flatMap fun network =>
+      [ ({ mode := .readOnly, network, reachesNetwork := true } : SeatbeltInput)
+      , { mode := .readOnly, network, reachesNetwork := false }
+      , { mode := .workspaceWrite, network, reachesNetwork := false }
+      , { mode := .artifactWrite, network, reachesNetwork := false } ])
   model := fun i =>
+    let reaches := kernelNetwork i.mode i.network i.reachesNetwork
     { credentialsProtected := protectsCredentials i.mode
-      network := effectiveNetworkMode i.mode i.network }
+      network := if reaches then .enabled else .disabled
+      writes := ((seatbeltProfile (containedSandbox i.mode) reaches).map (·.writes)).getD .nothing }
 
 end Conformance.CommandIsolation
