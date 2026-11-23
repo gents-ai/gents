@@ -21,7 +21,8 @@
     "cases/session_template_routing.json",
     "cases/train_parallel_baseline.json",
     "pack_config.json",
-    "cases/completion_record_write_contract.json"
+    "cases/completion_record_write_contract.json",
+    "suite.json"
   ],
   "config": "pack_config.json"
 }

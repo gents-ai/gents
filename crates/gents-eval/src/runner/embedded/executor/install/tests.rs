@@ -1,6 +1,6 @@
 use super::*;
 use crate::runner::embedded::executor::tests::{
-    frozen_binding, materialized_digest, write_slot_pack,
+    core_pack_archive, frozen_binding, materialized_digest, write_engineer_pack, write_slot_pack,
 };
 use crate::runner::executor::FixtureDocument;
 use gents::DocumentRuntimeOptions;
@@ -37,7 +37,7 @@ async fn trigger_checkpoint_uses_selected_agent_visibility_and_advances_serial_a
         ..TrialSpec::empty_for_tests("checkpoint-agent")
     };
     bind_test_evaluator(&mut spec, &mut home);
-    let agent_did = install(&spec, &home, &dir.path().join("workspace"))
+    let agent_did = install(&spec, &home, &dir.path().join("workspace"), &[])
         .await
         .unwrap();
     let evaluator = home.client_access(&spec.evaluator_did).unwrap();
@@ -304,7 +304,7 @@ async fn every_installed_trial_agent_can_read_its_operational_collections() {
     // The subject pack enables the schema tool, so the trial Engineer's Tools
     // projection stages schema authority. The evaluator owns the throwaway
     // node, and `install` alone must give it the standing to do that.
-    let selected = install(&spec, &home, &dir.path().join("workspace"))
+    let selected = install(&spec, &home, &dir.path().join("workspace"), &[])
         .await
         .unwrap();
     let evaluator = ConfigAccess::local_as(
@@ -369,7 +369,7 @@ async fn installing_a_pack_binds_its_inference_slot_to_the_frozen_profile() {
     };
 
     bind_test_evaluator(&mut spec, &mut home);
-    let agent_did = install(&spec, &home, &workspace).await.unwrap();
+    let agent_did = install(&spec, &home, &workspace, &[]).await.unwrap();
 
     let evaluator = ConfigAccess::local_as(
         home.node.clone(),
@@ -563,7 +563,7 @@ async fn a_trial_subject_supplies_an_omitted_default_agent() {
     };
     let mut home = EmbeddedHome::create_temp("subject-default").await.unwrap();
     bind_test_evaluator(&mut spec, &mut home);
-    let agent_did = install(&spec, &home, &dir.path().join("workspace"))
+    let agent_did = install(&spec, &home, &dir.path().join("workspace"), &[])
         .await
         .unwrap();
 
@@ -610,7 +610,7 @@ async fn authored_seed_schema_signs_without_installing_the_collection() {
     };
     let mut home = EmbeddedHome::create_temp("seed-schema").await.unwrap();
     bind_test_evaluator(&mut spec, &mut home);
-    install(&spec, &home, &dir.path().join("workspace"))
+    install(&spec, &home, &dir.path().join("workspace"), &[])
         .await
         .unwrap();
     let owner = ConfigAccess::local(home.node.clone());
@@ -712,7 +712,7 @@ async fn subject_schemas_are_installed_before_documents_without_fixture_copies()
     let mut home = EmbeddedHome::create_temp("subject-schema").await.unwrap();
     let workspace = dir.path().join("workspace");
     bind_test_evaluator(&mut spec, &mut home);
-    install(&spec, &home, &workspace).await.unwrap();
+    install(&spec, &home, &workspace, &[]).await.unwrap();
     let access = ConfigAccess::local(home.node.clone());
     let response = access
         .execute("query { EvalSubmission { message } }")
@@ -807,7 +807,7 @@ async fn session_fixtures_publish_only_declared_cross_agent_readers() {
     };
     let mut home = EmbeddedHome::create_temp("session-fixtures").await.unwrap();
     bind_test_evaluator(&mut spec, &mut home);
-    let subject = install(&spec, &home, &dir.path().join("workspace"))
+    let subject = install(&spec, &home, &dir.path().join("workspace"), &[])
         .await
         .unwrap();
     let evaluator = ConfigAccess::local_as(
@@ -924,7 +924,7 @@ async fn expired_request_fixtures_are_signed_published_and_expired_without_infer
     };
     let mut home = EmbeddedHome::create_temp("expired-fixtures").await.unwrap();
     bind_test_evaluator(&mut spec, &mut home);
-    let agent = install(&spec, &home, &dir.path().join("workspace"))
+    let agent = install(&spec, &home, &dir.path().join("workspace"), &[])
         .await
         .unwrap();
     let subject = ConfigAccess::local_as(home.node.clone(), ::identity::Did::new(&agent).unwrap());
@@ -1006,7 +1006,7 @@ async fn discover_old_fixture_publishes_full_expired_traffic() {
         .await
         .unwrap();
     bind_test_evaluator(&mut spec, &mut home);
-    let agent = install(&spec, &home, &dir.path().join("workspace"))
+    let agent = install(&spec, &home, &dir.path().join("workspace"), &[])
         .await
         .unwrap();
     let subject = ConfigAccess::local_as(home.node.clone(), ::identity::Did::new(&agent).unwrap());
@@ -1023,4 +1023,53 @@ async fn discover_old_fixture_publishes_full_expired_traffic() {
     assert!(rows["data"]["InferenceCall"].as_array().unwrap().is_empty());
     assert!(rows["data"]["AgentToolCall"].as_array().unwrap().is_empty());
     home.node.shutdown().await.unwrap();
+}
+
+/// A trial leaves its definition's core packs on the subject as `gents init`
+/// leaves them on the Engineer: installed as the Engineer from the release's
+/// archive under its pack authority, which records the operator, with the
+/// pack's skill attached to the subject's Context through the evaluator's own
+/// store, which it holds and signs for as the trial node's init User.
+#[tokio::test]
+async fn core_packs_are_left_on_the_subject_as_init_leaves_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let pack = dir.path().join("pack");
+    write_engineer_pack(&pack);
+    let archive = core_pack_archive(&dir.path().join("packs"), "pack_builder");
+    let archives: Vec<(&str, &[u8])> = vec![("gents/pack_builder", archive.as_slice())];
+    let mut home = EmbeddedHome::create_temp("core-packs").await.unwrap();
+    let mut spec = TrialSpec {
+        pack_digest: materialized_digest(&pack),
+        pack_dir: pack,
+        inference: frozen_binding(json!("frozen-profile")),
+        agent_slot: "subject".into(),
+        core_packs: vec!["gents/pack_builder".into()],
+        ..TrialSpec::empty_for_tests("core-packs")
+    };
+    bind_test_evaluator(&mut spec, &mut home);
+    let agent_did = install(&spec, &home, &dir.path().join("workspace"), &archives)
+        .await
+        .unwrap();
+
+    let record = gents_pack::pack::read_home_install(home.path(), "gents/pack_builder")
+        .unwrap()
+        .expect("the trial home records the core pack");
+    assert_eq!(record.installed_via, Some(InstalledVia::Operator));
+    let evaluator = home.client_access(&spec.evaluator_did).unwrap();
+    let owner = home.did().to_owned();
+    let (context, _) = evaluator
+        .transact_readonly("test.core_packs.context", |txn| {
+            let (owner, agent) = (&owner, &agent_did);
+            Box::pin(async move {
+                gents_documents::load_agent_context_and_tools_in_txn(txn, owner, agent).await
+            })
+        })
+        .await
+        .unwrap();
+    let skills = context.expect("the subject has a Context").skill_ids;
+    assert!(
+        skills.iter().any(|skill| skill == "core-pack_builder"),
+        "{skills:?}"
+    );
+    home.node.shutdown().await.expect("shutdown node");
 }

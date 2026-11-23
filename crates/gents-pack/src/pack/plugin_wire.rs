@@ -35,6 +35,24 @@ pub type LoadHeldUser = fn(
     Result<Arc<dyn gents_store::identity::NodeIdentity>>,
 >;
 
+/// The held User a write through a local transaction signs with: loaded from
+/// the home that transaction opens, or held by a caller that opened the
+/// store itself, as an eval trial's evaluator is.
+#[derive(Clone)]
+pub enum HeldUser {
+    Load(LoadHeldUser),
+    Held(Arc<dyn gents_store::identity::NodeIdentity>),
+}
+
+impl HeldUser {
+    async fn identity(&self, home: &Path) -> Result<Arc<dyn gents_store::identity::NodeIdentity>> {
+        match self {
+            Self::Load(load) => load(home).await,
+            Self::Held(identity) => Ok(identity.clone()),
+        }
+    }
+}
+
 /// Wires new pins through the runtime serving `endpoint`'s node in one
 /// transaction, the client signing each of its writes with the User key it
 /// holds (`Identity.UserDelegation.runtimeSignsWithHeldUserKey`), from the
@@ -122,9 +140,9 @@ impl crate::pack::wiring::Vouch for Approved<'_> {
 
 /// Who signs a wire: the held User of a home a local transaction opens, or
 /// the client itself through the runtime serving the node.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct WireSigners {
-    pub held_user: LoadHeldUser,
+    pub held_user: HeldUser,
     pub client: WireAsClient,
 }
 
@@ -248,7 +266,7 @@ pub async fn wire_in_spawned(
     owner: &str,
     home: &Path,
     request: &WireRequest,
-    held_user: LoadHeldUser,
+    held_user: HeldUser,
 ) -> Result<Value> {
     single(wire_batch_spawned(access, owner, home, vec![request.clone()], held_user).await?)
 }
@@ -258,7 +276,7 @@ async fn wire_batch_spawned(
     owner: &str,
     home: &Path,
     requests: Vec<WireRequest>,
-    held_user: LoadHeldUser,
+    held_user: HeldUser,
 ) -> Result<Vec<Value>> {
     let access = access.clone();
     let owner = owner.to_owned();
@@ -278,7 +296,7 @@ async fn wire_batch_owned(
     owner: &str,
     home: &Path,
     requests: &[WireRequest],
-    held_user: LoadHeldUser,
+    held_user: HeldUser,
 ) -> Result<Vec<Value>> {
     let (preview, remove) = batch_mode(requests.iter())?;
     if let Some(request) = requests.first() {
@@ -304,7 +322,7 @@ async fn wire_batch_owned(
             })
             .await?
     } else if matches!(access, ConfigAccess::Local(_)) {
-        let client = held_user(home).await?;
+        let client = held_user.identity(home).await?;
         anyhow::ensure!(
             access.actor_did().as_deref() == Some(client.did()),
             "pack wire requires the held User identity selected by the local transaction"
@@ -670,7 +688,7 @@ pub async fn attach_pack_skills(
     agent: &str,
     coordinate: &str,
     digest: &str,
-    held_user: LoadHeldUser,
+    held_user: HeldUser,
 ) -> Result<Vec<String>> {
     let skills: Vec<String> = installed_pack_documents(access, owner, coordinate)
         .await?
@@ -710,7 +728,7 @@ pub async fn enable_pack_dynamic(
     agent: &str,
     coordinate: &str,
     digest: &str,
-    held_user: LoadHeldUser,
+    held_user: HeldUser,
 ) -> Result<Vec<crate::pack::DynamicEnableReceipt>> {
     let record = crate::pack::read_home_install(home, coordinate)?
         .with_context(|| format!("{coordinate} is not installed on this home"))?;
@@ -762,14 +780,14 @@ async fn write_as_operator<P>(
     home: &Path,
     digest: &str,
     operation: &'static str,
-    held_user: LoadHeldUser,
+    held_user: HeldUser,
     plan: &P,
 ) -> Result<P::Output>
 where
     P: OperatorWrite,
 {
     if matches!(access, ConfigAccess::Local(_)) {
-        let client = held_user(home).await?;
+        let client = held_user.identity(home).await?;
         anyhow::ensure!(
             access.actor_did().as_deref() == Some(client.did()),
             "{operation} requires the held User identity selected by the local transaction"

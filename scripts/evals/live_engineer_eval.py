@@ -40,6 +40,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import suites
+
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 SUITE = "l2-agent"
 CASE = "scout-grants-two-file-tools"
@@ -107,14 +109,10 @@ def redact_tree(out, base_url):
                 path.write_bytes(redacted)
 
 
-def matrix():
-    return json.loads((ROOT / "scripts/evals/matrix.json").read_text())
-
-
 def one_case_definition(destination):
     """Copies the suite's definition with only CASE, so another case added to the suite does not join the run."""
-    suite = next(s for s in matrix()["suites"] if s["id"] == SUITE)
-    shutil.copytree(ROOT / "crates/gents/tests/fixtures/configurator_evals" / suite["path"], destination)
+    suite = suites.suite(ROOT, SUITE)
+    shutil.copytree(ROOT / suites.FIXTURES / suite["path"], destination)
     config = json.loads((destination / "pack_config.json").read_text())
     definition = config["eval_definitions"][0]
     cases = [path for path in definition["cases"]
@@ -288,9 +286,9 @@ def run_case(args, out, home, work, result):
 
 
 def run_full_ladder(args, out, home, work, result):
-    suites = matrix()
-    by_definition = {s["definition_id"]: s["id"] for s in suites["suites"]}
-    rungs = suites["default"]
+    registry = suites.matrix(ROOT)
+    by_definition = {s["definition_id"]: s["id"] for s in registry["suites"]}
+    rungs = registry["default"]
     homes = [home / f"s{index}" for index in range(1, args.shards + 1)]
     started = time.monotonic()
     processes = []

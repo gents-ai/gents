@@ -1,0 +1,12 @@
+{
+  "id": "sessions",
+  "title": "Engineer sessions",
+  "coverage": [
+    "canonical discovery",
+    "exact ACP-visible count",
+    "wrong ID recovery",
+    "filtered discovery"
+  ],
+  "subject": "sessions/subject",
+  "preset_self_config": true
+}

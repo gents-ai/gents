@@ -30,6 +30,7 @@ pub(super) fn trial_spec(
             case.fixtures.as_ref(),
         )?,
         host_bash: frozen.definition.subject.host_bash,
+        core_packs: frozen.definition.subject.core_packs.clone(),
         stages: stage_specs(case, &frozen.captures),
         trial_dir: frozen.run_dir.join("trials").join(&planned.trial_id),
         script_key: wants_script_key.then(|| ScriptKey {

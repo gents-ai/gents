@@ -307,6 +307,7 @@ jobs:
       - name: Check the eval ladder and live Engineer eval drivers
         run: |
           bash -n scripts/evals/run-ladder.sh
+          python3 scripts/evals/test_suites.py
           python3 scripts/evals/test_ladder_batch.py
           python3 scripts/evals/test_ladder_baseline.py
           python3 scripts/evals/test_live_engineer_eval.py

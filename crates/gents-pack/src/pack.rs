@@ -74,7 +74,7 @@ pub use installation::{
     edited_installed_documents, ensure_plugins_unreferenced, hosted_document_graph,
     install_prepared_document_graph, install_prepared_document_pack, installed_catalog,
     installed_pack_documents, installed_pack_record, installed_packs, installer_tool_root,
-    list_installed_packs, pack_root_record, plugin_data_unique_keys, plugin_pin_conflicts,
+    list_installed_packs, listed_root_agents, pack_root_record, plugin_data_unique_keys, plugin_pin_conflicts,
     prepare_document_pack_archive, prepare_document_pack_archive_with_runtime,
     prepare_document_pack_install, prepare_hosted_document_pack_archive, read_installed_pack,
     record_plugin_retirement_as, record_plugin_store_change, record_plugin_store_change_as,

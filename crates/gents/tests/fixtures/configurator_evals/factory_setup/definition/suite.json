@@ -1,0 +1,13 @@
+{
+  "id": "factory-setup",
+  "title": "Complete research desk configuration",
+  "coverage": [
+    "six distinct roles",
+    "shared inference limits",
+    "caller-supplied data contracts",
+    "handoffs and gather step",
+    "delegation permissions",
+    "setup receipt"
+  ],
+  "subject": "factory_setup/engineer_kspec"
+}

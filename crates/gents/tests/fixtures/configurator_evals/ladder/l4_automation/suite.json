@@ -1,0 +1,12 @@
+{
+  "id": "l4-automation",
+  "title": "Document automation",
+  "coverage": [
+    "parallel and serial",
+    "template defaults",
+    "session routing",
+    "outcome settings"
+  ],
+  "subject": "ladder/engineer_subject",
+  "preset_self_config": true
+}

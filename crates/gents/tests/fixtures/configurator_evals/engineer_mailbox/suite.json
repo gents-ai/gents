@@ -1,0 +1,12 @@
+{
+  "id": "engineer-mailbox",
+  "title": "Engineer mailbox",
+  "coverage": [
+    "exact notice content",
+    "no duplicate on replay",
+    "notice gated on application records",
+    "silence at an inclusive boundary",
+    "notice from workspace notes"
+  ],
+  "subject": "engineer_full"
+}
