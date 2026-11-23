@@ -44,20 +44,6 @@ structure ReconcileInput where
   trackedSessionId : Nat
   deriving Lean.ToJson
 
-structure ReconcileOutput where
-  legal : Bool
-  postPhase : String
-  postActiveGeneration : Nat
-  postRouterGeneration : Nat
-  postReadyGenerationCount : Nat
-  postLiveGenerationCount : Nat
-  postInFlightCount : Nat
-  trackedRequestGeneration : Nat
-  trackedRequestSession : Nat
-  trackedRequestAgent : Nat
-  trackedSessionAgent : Nat
-  deriving Lean.ToJson
-
 structure ReconcileSelectionOutput where
   legal : Bool
   deriving Lean.ToJson
@@ -171,27 +157,58 @@ def runtimeReconcileResolve : Family ReconcileInput ReconcileResolveOutput where
   inputs := reconcileInputs resolveNames
   model := fun i => { legal := (reconcileCase i.name).legal }
 
-/-- Request finish, a replayed accept and generation retirement over the
-model's per-generation in-flight set; production tracks in-flight work per
-Agent slot rather than per generation. -/
+/-- A retired generation ends once no call it dispatched is in flight.
+Production tracks in-flight work per Agent slot: a published generation that
+replaces an Agent's slot retires the old slot, which keeps running the call in
+flight and exits when that call finishes, so a slot's generation is the
+generation of every call it runs. The supervisor fixture retires generation 1
+with no call, with a held call, and after that call finishes, and counts the
+slots still running. -/
+def retireNames : List String :=
+  ["retire_unobserved_generation", "retired_generation_waits_for_its_call_in_flight",
+    "retire_after_its_call_finishes"]
+
+structure ReconcileRetireOutput where
+  legal : Bool
+  postLiveGenerationCount : Nat
+  deriving Lean.ToJson
+
 @[conformance_family]
-def runtimeReconcileUnreached : Family ReconcileInput ReconcileOutput where
-  inputs := (runtimeReconcileCases.filter fun c =>
-    !(selectionNames ++ statusNames ++ routerNames ++ supervisorNames ++ resolveNames).contains
-      c.name).map
-      reconcileInput
+def runtimeReconcileRetire : Family ReconcileInput ReconcileRetireOutput where
+  inputs := reconcileInputs retireNames
   model := fun i =>
     let c := reconcileCase i.name
-    { legal := c.legal, postPhase := c.postPhase
-      postActiveGeneration := c.postActiveGeneration
-      postRouterGeneration := c.postRouterGeneration
-      postReadyGenerationCount := c.postReadyGenerationCount
-      postLiveGenerationCount := c.postLiveGenerationCount
-      postInFlightCount := c.postInFlightCount
-      trackedRequestGeneration := c.trackedRequestGeneration
-      trackedRequestSession := c.trackedRequestSession
-      trackedRequestAgent := c.trackedRequestAgent
-      trackedSessionAgent := c.trackedSessionAgent }
+    { legal := c.legal
+      postLiveGenerationCount :=
+        if c.legal then c.postLiveGenerationCount else c.preLiveGenerationCount }
+
+/-- A finished call leaves the in-flight set, which releases the backend slot
+it held: the supervisor fixture finishes the call held on a retired slot and
+counts the inference calls still holding a backend slot. -/
+def finishNames : List String := ["finish_request_releases_generation"]
+
+structure ReconcileFinishOutput where
+  legal : Bool
+  postInFlightCount : Nat
+  deriving Lean.ToJson
+
+@[conformance_family]
+def runtimeReconcileFinish : Family ReconcileInput ReconcileFinishOutput where
+  inputs := reconcileInputs finishNames
+  model := fun i =>
+    let c := reconcileCase i.name
+    { legal := c.legal, postInFlightCount := c.postInFlightCount }
+
+/-- Every reconcile case belongs to the family of the production owner that
+decides it. -/
+example : runtimeReconcileCases.all (fun c =>
+    (selectionNames ++ statusNames ++ routerNames ++ supervisorNames ++ resolveNames ++
+      retireNames ++ finishNames).contains c.name) = true := by native_decide
+
+/-- Generation 1 retires when idle and after its call finishes, and not while
+the call is in flight. -/
+example : (retireNames.map fun n => (reconcileCase n).legal) = [true, false, true] := by
+  native_decide
 
 structure QueueAdmissionInput where
   name : String
