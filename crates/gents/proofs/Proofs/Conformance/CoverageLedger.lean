@@ -2173,7 +2173,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (boundaryCoverage
       "family"
       "identity_operations_readiness_recovery_unreached"
-      "the parent grant is a native ACP call outside the transaction whose mutations the store's fault seam counts, and no actor can make it fail while the runtime's ownership and parent observations still hold.")
+      "grant-failed, retry-grant-failed: the parent grant is a native relationship change, and the store's fault seams fail only document mutations, so no fixture fails that grant alone.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "family"

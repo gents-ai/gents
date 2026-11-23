@@ -216,6 +216,35 @@ def deferredAfter (i : DeferredInput) : DeferredOperation :=
   attachDeferredOperation ⟨i.beforeParent, i.beforeGranted, i.beforeLinked⟩ i.runtime
     i.embeddedRuntime i.nativeOwner i.node i.nodeRegistered i.committed
 
+structure Linked where
+  linked : Bool
+  deriving ToJson
+
+structure Granted where
+  granted : Bool
+  deriving ToJson
+
+/-- The desired-route materialization scenario writes before the local Node
+document exists. -/
+@[conformance_family]
+def deferredMaterializeLinked : Family DeferredInput Linked where
+  inputs := deferredInputs.filter (·.name = "before-node")
+  model := fun i => { linked := (deferredAfter i).parentLinked }
+
+/-- The applied-pairing scenario records the observation before the Node
+exists and links it once the Node is registered. -/
+@[conformance_family]
+def deferredAppliedLinked : Family DeferredInput Linked where
+  inputs := deferredInputs.filter (·.name ∈ ["before-node", "success"])
+  model := fun i => { linked := (deferredAfter i).parentLinked }
+
+/-- The applied-pairing scenario revokes the published parent and repairs
+again. -/
+@[conformance_family]
+def deferredAppliedGranted : Family DeferredInput Granted where
+  inputs := deferredInputs.filter (·.name = "revoked-after-publication")
+  model := fun i => { granted := (deferredAfter i).parentGranted }
+
 structure Deferred where
   parent : Option String
   granted : Bool
@@ -321,9 +350,8 @@ def readinessRecoveryForeignOwner : Family RecoveryInput ParentLinked where
   inputs := recoveryInputs.filter (·.name ∈ ["owner-unknown", "owner-mismatch"])
   model := fun c => { parentLinked := (recoveryAfter c).parentLinked }
 
-/-- The parent grant is a native ACP call outside the transaction whose
-mutations the store's fault seam counts, and no actor can make it fail while
-the runtime's ownership and parent observations still hold. -/
+/-- The parent grant is a native relationship change, and the store's fault
+seams fail only document mutations, so no fixture fails that grant alone. -/
 @[conformance_family]
 def readinessRecoveryUnreached : Family RecoveryInput RecoveryOutput where
   inputs := recoveryInputs.filter (·.name ∈ ["grant-failed", "retry-grant-failed"])

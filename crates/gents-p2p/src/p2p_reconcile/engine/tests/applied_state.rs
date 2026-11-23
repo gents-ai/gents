@@ -148,6 +148,8 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
         ConfigAccess, GraphqlEndpoint, NodePermission, PairingObservation, PairingReadReason,
     };
     use gents_store::identity::NodeIdentity;
+    let mut linked = std::collections::BTreeMap::new();
+    let mut granted = std::collections::BTreeMap::new();
     let mut read = std::collections::BTreeMap::new();
     let mut managed = std::collections::BTreeMap::new();
     let mut updated = std::collections::BTreeMap::new();
@@ -244,10 +246,11 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
         .as_str()
         .unwrap()
         .to_owned();
-    assert_eq!(
-        own["data"]["PeerPairingApplied"][0]["parent_linked"].as_bool(),
-        Some(false),
-        "an applied pairing persisted before its Node stays unlinked"
+    linked.insert(
+        "before-node",
+        own["data"]["PeerPairingApplied"][0]["parent_linked"]
+            .as_bool()
+            .expect("parent_linked marker"),
     );
     for actor in [&user, &agent, &sibling, &outsider] {
         let response = http(actor)?
@@ -283,10 +286,11 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
         gents_store::graphql::escape_graphql_string(&doc)
     );
     let visible = user_access.execute(&query).await?;
-    assert_eq!(
-        visible["data"]["PeerPairingApplied"][0]["parent_linked"].as_bool(),
-        Some(true),
-        "recovery links the applied pairing once the Node exists"
+    linked.insert(
+        "success",
+        visible["data"]["PeerPairingApplied"][0]["parent_linked"]
+            .as_bool()
+            .expect("parent_linked marker"),
     );
     let agent_did = identity::Did::new(agent.did())?;
     let agent_access = http(&agent)?;
@@ -610,13 +614,13 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
     state = store.load_applied("peer").await?;
     state.state.replicator_addresses = set(&["refresh"]);
     store.persist_applied("peer", &state).await?;
-    assert!(
-        gents_protocol::graphql::graphql_rows_from_response(
+    granted.insert(
+        "revoked-after-publication",
+        !gents_protocol::graphql::graphql_rows_from_response(
             &user_access.execute(&query).await?,
             "PeerPairingApplied",
         )
         .is_empty(),
-        "a refresh does not restore a revoked parent"
     );
     assert!(!visible_to_agent(&agent_access.execute(&query).await?));
     drop(agent_access);
@@ -659,6 +663,32 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
     );
     assert!(!visible_to_agent(&agent_access.execute(&query).await?));
     reopened.shutdown().await?;
+    for case in gents_lean_vocab::families::identity_operations_deferred_applied_linked::cases() {
+        let linked = linked.remove(case.input.name.as_str()).unwrap_or_else(|| {
+            panic!(
+                "the applied-pairing scenario never reached {}",
+                case.input.name
+            )
+        });
+        case.check(
+            gents_lean_vocab::families::identity_operations_deferred_applied_linked::Linked {
+                linked,
+            },
+        );
+    }
+    for case in gents_lean_vocab::families::identity_operations_deferred_applied_granted::cases() {
+        let granted = granted.remove(case.input.name.as_str()).unwrap_or_else(|| {
+            panic!(
+                "the applied-pairing scenario never reached {}",
+                case.input.name
+            )
+        });
+        case.check(
+            gents_lean_vocab::families::identity_operations_deferred_applied_granted::Granted {
+                granted,
+            },
+        );
+    }
     for case in gents_lean_vocab::families::identity_operations_reader_policy_read::cases() {
         let read = read.remove(case.input.name.as_str()).unwrap_or_else(|| {
             panic!(
@@ -727,8 +757,10 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
         );
     }
     assert!(
-        partition.is_empty()
+        linked.is_empty()
+            && partition.is_empty()
             && reader_granted.is_empty()
+            && granted.is_empty()
             && read.is_empty()
             && updated.is_empty()
             && managed.is_empty(),

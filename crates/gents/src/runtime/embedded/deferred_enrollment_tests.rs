@@ -483,7 +483,7 @@ fn observe(
     name: &'static str,
     value: (Option<String>, bool, bool),
 ) {
-    if let Some(previous) = observed.insert(name, value) {
+    if let Some(previous) = observed.insert(name, value.clone()) {
         assert_eq!(
             previous, value,
             "{name}: every observation of one case agrees"

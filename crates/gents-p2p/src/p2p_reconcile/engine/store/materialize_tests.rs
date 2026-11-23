@@ -224,6 +224,7 @@ async fn expired_authority_rolls_back_the_whole_materialization_transaction() {
 async fn client_owned_route_can_name_a_remote_node_without_a_local_node_document() {
     use gents_store::identity::NodeIdentity;
     let mut published = std::collections::BTreeMap::new();
+    let mut linked = std::collections::BTreeMap::new();
     let own_node = fixture().await;
     let own = own_node.node_identity_did().unwrap().to_owned();
     let entry = authorized();
@@ -268,10 +269,11 @@ async fn client_owned_route_can_name_a_remote_node_without_a_local_node_document
     let result = rows(&node).await;
     let row = result.iter().find(|row| row["_docID"] == doc).unwrap();
     assert_eq!(row["node_did"], remote.did());
-    assert_eq!(
-        row["parent_linked"].as_bool(),
-        Some(false),
-        "a route materialized before its Node stays unlinked"
+    linked.insert(
+        "before-node",
+        row["parent_linked"]
+            .as_bool()
+            .expect("parent_linked marker"),
     );
     let owners = runtime_access(&node)
         .transact_readonly("test.desired.owner", |txn| {
@@ -321,6 +323,21 @@ async fn client_owned_route_can_name_a_remote_node_without_a_local_node_document
     assert!(
         published.is_empty(),
         "unmodeled publisher observations: {published:?}"
+    );
+    for case in gents_lean_vocab::families::identity_operations_deferred_materialize_linked::cases()
+    {
+        let linked = linked
+            .remove(case.input.name.as_str())
+            .unwrap_or_else(|| panic!("the publisher scenario never reached {}", case.input.name));
+        case.check(
+            gents_lean_vocab::families::identity_operations_deferred_materialize_linked::Linked {
+                linked,
+            },
+        );
+    }
+    assert!(
+        linked.is_empty(),
+        "unmodeled deferred observations: {linked:?}"
     );
 }
 
