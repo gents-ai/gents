@@ -17,4 +17,5 @@ import Proofs.Session.PromptAssembly.ClaudeBody
 import Proofs.Session.PromptAssembly.ReplayFrontier
 import Proofs.Session.PromptAssembly.ServiceTier
 import Proofs.Session.PromptAssembly.CapturedContext
+import Proofs.Session.PromptAssembly.RequestContext
 import Proofs.Session.PromptAssembly.ToolCallIdentity

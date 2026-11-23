@@ -26,7 +26,7 @@ fn lock_is_free(home: &Path) -> bool {
 fn for_home_accepts_only_the_home_the_guard_was_taken_for() {
     let home = tempfile::tempdir().unwrap();
     let other = tempfile::tempdir().unwrap();
-    let guard = lock_store(home.path(), false).unwrap();
+    let guard = lock_store(home.path()).unwrap();
 
     guard.for_home(home.path()).expect("the guard's own home");
     guard
@@ -47,22 +47,23 @@ fn for_home_accepts_only_the_home_the_guard_was_taken_for() {
 fn a_guard_holds_the_lock_until_dropped_then_releases_it() {
     let home = tempfile::tempdir().unwrap();
 
-    let shared = lock_store(home.path(), false).unwrap();
+    bootstrap_store(home.path()).unwrap();
+    let shared = try_lock_store_shared(home.path()).unwrap();
     assert!(!lock_is_free(home.path()), "shared guard holds the lock");
     drop(shared);
     assert!(lock_is_free(home.path()), "dropping a shared guard unlocks");
 
-    let exclusive = lock_store(home.path(), true).unwrap();
+    let exclusive = lock_store(home.path()).unwrap();
     assert!(!lock_is_free(home.path()), "exclusive guard holds the lock");
     drop(exclusive);
     assert!(lock_is_free(home.path()));
-    lock_store(home.path(), true).unwrap();
+    lock_store(home.path()).unwrap();
 }
 
 #[test]
 fn try_lock_store_reports_contention_without_waiting() {
     let home = tempfile::tempdir().unwrap();
-    let _held = lock_store(home.path(), true).unwrap();
+    let _held = lock_store(home.path()).unwrap();
     let error = match try_lock_store(home.path()) {
         Ok(_) => panic!("the held lock must be reported busy"),
         Err(error) => error,

@@ -194,7 +194,12 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
 }
 
 pub(crate) async fn init_home(args: InitArgs) -> Result<Value> {
-    init_home_with_core_packs(args, gents_core_packs::archives()).await
+    init_home_with_core_packs(
+        args,
+        gents_core_packs::archives(),
+        default_packs::InitEntryPoint::Cli,
+    )
+    .await
 }
 
 /// [`init_home`], installing the Engineer's core packs from `core_packs`.
@@ -204,6 +209,7 @@ pub(crate) async fn init_home(args: InitArgs) -> Result<Value> {
 pub(crate) async fn init_home_with_core_packs(
     mut args: InitArgs,
     core_packs: default_packs::Archives<'_>,
+    entry: default_packs::InitEntryPoint,
 ) -> Result<Value> {
     let registry = args.registry.clone();
     let started = Instant::now();
@@ -297,6 +303,13 @@ pub(crate) async fn init_home_with_core_packs(
         });
         return Ok(output);
     }
+    default_packs::admit_init(
+        core_packs,
+        entry,
+        fresh_store,
+        args.engineer,
+        !args.no_default_packs,
+    )?;
 
     let fresh_backend = if fresh_store {
         Some(
@@ -1728,6 +1741,7 @@ fn tools_for_package(
         integrations: None,
         self_config: None,
         tags: Vec::new(),
+        hidden_tool_names: Vec::new(),
     }
 }
 
@@ -1735,7 +1749,7 @@ fn wide_open_tools_document(node_did: &str) -> Tools {
     Tools {
         tools_id: wide_open_tools_id_for_node(node_did),
         node_did: node_did.to_string(),
-        display_name: Some("Wide-open (permissive preset)".to_string()),
+        display_name: Some("Database queries and context budget".to_string()),
         built_ins: Some(BuiltInTools {
             enable_context_budget: Some(true),
             ..Default::default()
@@ -2062,6 +2076,27 @@ mod inference_seed_tests;
 mod tests {
     use super::*;
     use gents::runtime::embedded::EmbeddedHome;
+
+    #[test]
+    fn the_database_and_context_preset_is_labelled_by_what_it_grants() {
+        assert_eq!(
+            wide_open_tools_document("did:key:example"),
+            Tools {
+                tools_id: "did:key:example:wide-open".to_string(),
+                node_did: "did:key:example".to_string(),
+                display_name: Some("Database queries and context budget".to_string()),
+                built_ins: Some(BuiltInTools {
+                    enable_context_budget: Some(true),
+                    ..Default::default()
+                }),
+                datastore: Some(DatastoreTools {
+                    enable_defra_query: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }
+        );
+    }
 
     #[tokio::test]
     async fn identity_failure_does_not_consume_fresh_bootstrap() {

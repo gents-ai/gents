@@ -248,3 +248,40 @@ pub fn load_pack_system_prompt(root: &std::path::Path) -> anyhow::Result<String>
         .clone()
         .context("lsp-coder Context has no system prompt")
 }
+
+/// One documents-only archive per core pack, each shipping a single skill, as
+/// `(coordinate, .pack bytes)`.
+pub fn skill_only_core_pack_archives() -> Vec<(String, Vec<u8>)> {
+    let packs = tempfile::tempdir().unwrap();
+    crate::pack::core_packs::CorePack::ALL
+        .into_iter()
+        .map(|pack| {
+            let (_, name) = crate::pack::registry::split_pack_coordinate(pack.coordinate());
+            let dir = packs.path().join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            let manifest = serde_json::json!({
+                "manifest_version": 1, "name": name, "namespace": "gents",
+                "version": "1.0.0", "description": "Core pack fixture",
+                "authors": ["tests"], "tags": [], "kind": "documents",
+                "assets": ["README.md", "pack_config.json"], "dependencies": [],
+                "config": "pack_config.json",
+            });
+            let config = serde_json::json!({
+                "node": {"node_did": "${GENTS_PACK_NODE_DID}"},
+                "skills": [{"skill_id": format!("core-{name}"),
+                    "node_did": "${GENTS_PACK_NODE_DID}", "name": name,
+                    "description": "Core pack fixture", "instructions": "Use it."}],
+            });
+            for (file, bytes) in [
+                ("manifest.json", serde_json::to_vec(&manifest).unwrap()),
+                ("pack_config.json", serde_json::to_vec(&config).unwrap()),
+                ("README.md", b"# fixture".to_vec()),
+            ] {
+                std::fs::write(dir.join(file), bytes).unwrap();
+            }
+            let mut bytes = Vec::new();
+            crate::pack::archive::write_pack(&dir, &mut bytes).unwrap();
+            (pack.coordinate().to_owned(), bytes)
+        })
+        .collect()
+}

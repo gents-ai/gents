@@ -7,13 +7,21 @@ pub struct PackInstaller {
     pub core: SelfConfigCore,
     pub node: Arc<EmbeddedNode>,
     pub actor: Option<Arc<dyn NodeIdentity>>,
-    /// `None` resolves from the registry in memory and installs no plugins.
-    pub home: Option<std::path::PathBuf>,
+    /// The writer of the runtime's plugin home; `None` resolves from the
+    /// registry in memory and installs no plugins.
+    pub store: Option<gents_pack::plugin::store::StoreWriter>,
     /// The config tool call these commands serve.
     pub envelope: gents_loop::tool::ToolCallEnvelope,
 }
 
 impl PackInstaller {
+    /// The runtime's plugin home, when it has one.
+    pub fn home(&self) -> Option<&std::path::Path> {
+        self.store
+            .as_ref()
+            .map(gents_pack::plugin::store::StoreWriter::home)
+    }
+
     /// This agent's pack operations on its node, through `access`.
     pub fn packs<'a>(
         &'a self,
@@ -23,7 +31,7 @@ impl PackInstaller {
             access,
             node_did: self.core.node_did(),
             registry_url: self.core.registry_url(),
-            home: self.home.as_deref(),
+            store: self.store.as_ref(),
             grants_authority: self.core.held_grants().pack_authority,
         }
     }
@@ -52,7 +60,7 @@ impl PackInstaller {
                 });
         };
         anyhow::ensure!(
-            self.home.is_some(),
+            self.home().is_some(),
             "local packs require a runtime plugin home"
         );
         // Effective authority, not the process ceiling alone: a narrower

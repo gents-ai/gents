@@ -197,7 +197,9 @@ pub(crate) async fn install_job_fixture(
         &gents_pack::pack::InstallTarget {
             access,
             owner: &did,
-            plugin_home: Some(plugin_home),
+            plugin_home: Some(&gents_pack::plugin::store::StoreWriter::Offline(
+                plugin_home.to_owned(),
+            )),
         },
         archive.manifest(),
         &config,
@@ -216,7 +218,9 @@ pub(crate) async fn install_job_fixture(
         &gents_pack::pack::InstallTarget {
             access,
             owner: &did,
-            plugin_home: Some(plugin_home),
+            plugin_home: Some(&gents_pack::plugin::store::StoreWriter::Offline(
+                plugin_home.to_owned(),
+            )),
         },
         &archive,
         &[],

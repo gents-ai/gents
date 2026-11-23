@@ -91,6 +91,12 @@ impl crate::runtime::agent::reconcile::SlotFailurePolicy for StartupSlotFailureP
         Ok(true)
     }
 
+    fn on_slot_parked(&self, publication_busy: bool) {
+        if publication_busy {
+            self.runtime_status.request_publication_recovery();
+        }
+    }
+
     async fn on_slot_retired(&self, agent_did: &str, generation: u64, recreated: bool) {
         if let Err(error) = self
             .runtime_status

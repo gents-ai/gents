@@ -19,30 +19,30 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 fn main() {
-    let result = gents_server::run_cli();
+    let gents_server::CliExit { stderr, result } = gents_server::run_cli();
     if let Err(error) = &result {
         tracing::error!(error = %format!("{error:#}"), "gents exited with an error");
         if let Some(store) = gents_store::local::storage_backend::incompatible_store(
             error.as_ref(),
             std::path::Path::new(""),
         ) {
-            eprintln!("Error: {error:#}");
+            stderr.write(&format!("Error: {error:#}"));
             std::process::exit(gents_service::native_service::incompatible_store_exit_code(
                 store.kind,
             ));
         }
         if gents_store::local::store_key::store_key_unavailable(error.as_ref()).is_some() {
-            eprintln!("Error: {error:#}");
+            stderr.write(&format!("Error: {error:#}"));
             std::process::exit(gents_service::native_service::STORE_KEY_UNAVAILABLE_EXIT_CODE);
         }
     }
     if let Err(error) = result {
         // The layout and exit status of returning the error from `main`, with
         // a passed-through message printed once.
-        eprintln!(
+        stderr.write(&format!(
             "Error: {}",
             gents_protocol::error_chain::ErrorReport(error.as_ref())
-        );
+        ));
         let backtrace = error.backtrace();
         if backtrace.status() == std::backtrace::BacktraceStatus::Captured {
             eprintln!("\nStack backtrace:\n{backtrace}");

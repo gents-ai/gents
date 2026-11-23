@@ -1,0 +1,3 @@
+---- MODULE MCPluginPublicationRevocationEventResetsEpoch ----
+EXTENDS PluginPublicationRevocation
+====

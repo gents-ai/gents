@@ -496,13 +496,13 @@ pub(super) fn require_installed_dependency_ux(
 }
 
 /// The node a pack installs on: its configuration store `access`, its DID
-/// `owner`, and its local home `plugin_home`, absent when the install has
-/// none to read plugins from (a remote or hosted node).
+/// `owner`, and the writer of its local home `plugin_home`, absent when the
+/// install has none to read plugins from (a remote or hosted node).
 #[derive(Clone, Copy)]
 pub struct InstallTarget<'a> {
     pub access: &'a ConfigAccess,
     pub owner: &'a str,
-    pub plugin_home: Option<&'a Path>,
+    pub plugin_home: Option<&'a crate::plugin::store::StoreWriter>,
 }
 
 /// The pack graph an install prepares beside its root, and the installer's
@@ -1127,6 +1127,7 @@ async fn prepare_document_pack_install_inner(
         owner,
         plugin_home,
     } = *target;
+    let plugin_home = plugin_home.map(crate::plugin::store::StoreWriter::home);
     let PackGraphInputs {
         dependencies,
         requested,
@@ -1559,6 +1560,7 @@ pub async fn install_prepared_document_pack(
         owner,
         plugin_home,
     } = *target;
+    let plugin_home = plugin_home.map(crate::plugin::store::StoreWriter::home);
     crate::pack::command_authority::require_command_task_grant(
         access,
         owner,
@@ -2060,7 +2062,7 @@ pub async fn apply_hosted_document_graph(
 
 pub(super) async fn stage_document_plugins(
     stages: &[DocumentPackStage],
-    home: Option<&Path>,
+    home: Option<&crate::plugin::store::StoreWriter>,
     consent: bool,
     owner: &str,
 ) -> Result<Option<crate::plugin::install::StagedPluginInstall>> {
@@ -2163,7 +2165,7 @@ pub(super) async fn install_document_graph(
     owner: &str,
     stages: Vec<DocumentPackStage>,
     policy: DocumentGraphPolicy,
-    home: Option<&Path>,
+    home: Option<&crate::plugin::store::StoreWriter>,
     consent: bool,
     node_binding: Option<gents_documents::ConfigurationNodeBinding>,
 ) -> Result<
@@ -2175,14 +2177,14 @@ pub(super) async fn install_document_graph(
 > {
     let access = access.clone();
     let owner = owner.to_owned();
-    let home = home.map(Path::to_owned);
+    let home = home.cloned();
     tokio::spawn(async move {
         let documents = stages
             .iter()
             .map(|stage| super::installable_documents(&stage.config))
             .collect::<Result<Vec<_>>>()?;
         let plugin_stage =
-            stage_document_plugins(&stages, home.as_deref(), consent, &owner).await?;
+            stage_document_plugins(&stages, home.as_ref(), consent, &owner).await?;
         #[cfg(test)]
         let pause = {
             let mut slot = INSTALLATION_PAUSE.lock().unwrap();
@@ -2291,7 +2293,7 @@ pub(super) async fn install_document_graph(
                     .await?;
                     tokio::task::spawn_blocking(move || {
                         for (manifest, agent_bindings, digest, config, bindings, recorded) in &reused_plugins {
-                            let home = home.as_deref().context("installed dependency plugins require the local home")?;
+                            let home = home.as_ref().map(crate::plugin::store::StoreWriter::home).context("installed dependency plugins require the local home")?;
                             anyhow::ensure!(installed_dependency_bindings(manifest, agent_bindings, config, Some(home), &node_owner)? == *bindings,
                                 "installed dependency plugin bindings changed during preparation; retry the install");
                             for plugin in &manifest.metadata.plugins {
@@ -2315,7 +2317,7 @@ pub(super) async fn install_document_graph(
                                 )
                             })
                             .collect();
-                        ensure_plugin_references_resolve(&packs, home.as_deref(), &digests)
+                        ensure_plugin_references_resolve(&packs, home.as_ref().map(crate::plugin::store::StoreWriter::home), &digests)
                     })
                     .await
                     .map_err(anyhow::Error::from)??;

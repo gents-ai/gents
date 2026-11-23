@@ -10,7 +10,7 @@ use super::JobRuntime;
 use crate::background::status::ProcessControlScope;
 use crate::call::lifecycle::ToolCallLifecycle;
 use gents_documents::plugin_coordinate::parse_coordinate;
-use gents_pack::plugin::store::{read_published_record, InstalledPlugin};
+use gents_pack::plugin::store::InstalledPlugin;
 use gents_store::config_client::ConfigApplyTxn;
 use gents_tools::surface::EndpointScope;
 
@@ -65,7 +65,7 @@ pub(in crate::background::job) async fn step_context_for(
         .find(|plugin| plugin.plugin == facts.plugin_ref)
         .and_then(|plugin| plugin.job);
     let observed = match parse_coordinate(&facts.plugin_ref) {
-        Ok((namespace, name)) => match read_published_record(&runtime.home, namespace, name) {
+        Ok((namespace, name)) => match runtime.plugins.read_published(namespace, name) {
             Ok(record) => Some(record),
             Err(error) if error.is_busy() => return Err(error.into()),
             Err(_) => None,

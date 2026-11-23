@@ -484,6 +484,12 @@ impl Gents {
         &self.plugins
     }
 
+    /// The writer of this runtime's plugin store, pinned to the home it
+    /// started in.
+    pub fn plugin_store_writer(&self) -> Option<gents_pack::plugin::store::StoreWriter> {
+        gents_tools::plugin_host::PluginHost::store_writer(&*self.plugins)
+    }
+
     pub(crate) fn operator_tool_root(&self) -> Option<&std::path::Path> {
         self.operator_tool_root.as_deref()
     }

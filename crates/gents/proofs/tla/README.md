@@ -517,6 +517,16 @@ See `../README.md` for how this fits the broader formal-verification model.
   bytes, the observed failure; `TimeoutKill` is the tool timeout killing it
   at the gate, which the wait reports as failed; `PollBudget` is the test's poll budget failing
   before the child prints. Green has neither clock.
+- `ScriptEffectBatch` — one composing plugin's batch of tool calls through
+  the loop's effect dispatcher. Groups come from Lean `joinsGroup` (a fresh
+  read joins until the bound); each member reserves and asks its approval in
+  request order, bodies start once their group is approved, and the next
+  group waits until this one settled. Green keeps `NoOverlappingApproval`,
+  `GroupApprovedBeforeExecution` and `WriterBarrier`; `Approval` asks before
+  the previous approval returned, `EarlyBody` starts a body inside a
+  partially approved group, and `Barrier` starts the next group before this
+  one settled. Skips, failures, cancellation and result positions are the
+  dispatcher's tests, not this model's.
 - `ScriptFixtureExec` — a test that executes a script beside sibling tests
   that spawn (`supplied_path_retains_native_script_fallback`). A sibling's
   spawn copies the process's descriptors into its child until that child
@@ -654,6 +664,39 @@ See `../README.md` for how this fits the broader formal-verification model.
   excludes, and a parent read through a reused pid misses the job;
   `ShortBound` gives up before the root of a real chain; `Unbounded` walks
   forever through reused pids.
+- `PluginSurfacePublication` — a slot building its tool surface while an
+  installer in another process holds the plugin store's exclusive lock. The
+  construction retries only that contention, and only until its original
+  deadline (Lean `PluginPublication.retry`, `nextAttempt`), so a request queued
+  for the agent is answered and a construction never gives up on contention
+  its deadline still covers. `NoWait` drops the retry and violates
+  `NoPrematureFailure`.
+- `PluginPublicationRevocation` — the control watcher reconciling while an
+  installer holds the plugin store for as long as it likes. A change opens a
+  publication epoch whose deadline later changes never move (Lean
+  `SurfacePublication.epochDeadline`); inside it contention keeps the active
+  generation, at its deadline the latest configuration publishes with only the
+  busy plugin agents demoted (`reconcile`). `RevocationBound`,
+  `RunningWithinPins` and `NoEarlyDemotion` hold; `Unbounded` defers while
+  busy, `EventResetsEpoch` lets each change restart the epoch (both violate
+  `RevocationBound`), `RunsUnpinned` admits a digest outside the active pins,
+  and `DemotesEarly` demotes on contention inside the epoch.
+- `PluginSurfaceRecovery` — an agent a held plugin store parked or left
+  unavailable at startup, recovered without another configuration change:
+  the installer's release emits no database event and the recovered
+  configuration is the active one. The watcher carries the pending recovery
+  through a transient reconcile failure (Lean `retryAfterFailure`) and past
+  fingerprint deduplication (`sendProposal`); `DropsRecovery` does neither and
+  violates `RecoversWithoutNewEvent`.
+- `PluginStoreWatcherStop` — the control watcher, whose stop stops the
+  runtime, against setup or a first install creating the store (directory,
+  then lock file) after the runtime started, an installer holding it, and a
+  person removing or replacing the home. The watcher captures the store at
+  the first read that finds it complete and decides each tick from Lean
+  `PluginStoreHome.acquire` and `SurfacePublication.watchStore`.
+  `StopsOnlyForAGoneStore` holds; `IgnoresCapture` treats a store not yet
+  captured as a captured one, so a store still being created stops the
+  runtime, and violates it.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## Checking

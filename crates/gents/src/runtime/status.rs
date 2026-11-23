@@ -66,6 +66,7 @@ pub(crate) struct RuntimeStatusHandle {
     state: Arc<Mutex<RuntimeStatusRow>>,
     readiness: NodeReadinessPublisherHandle,
     storage_fault: StorageFaultObservation,
+    publication_recovery: Arc<watch::Sender<u64>>,
 }
 
 #[async_trait::async_trait]
@@ -98,6 +99,7 @@ impl RuntimeStatusHandle {
                 state: Arc::new(Mutex::new(RuntimeStatusRow::new(node_did))),
                 readiness,
                 storage_fault,
+                publication_recovery: Arc::new(watch::channel(0).0),
             },
         )
     }
@@ -122,6 +124,7 @@ impl RuntimeStatusHandle {
                 state: Arc::new(Mutex::new(RuntimeStatusRow::new(node_did))),
                 readiness,
                 storage_fault,
+                publication_recovery: Arc::new(watch::channel(0).0),
             },
         )
     }
@@ -138,6 +141,7 @@ impl RuntimeStatusHandle {
             state: Arc::new(Mutex::new(RuntimeStatusRow::new(node_did))),
             readiness,
             storage_fault: StorageFaultObservation::new(),
+            publication_recovery: Arc::new(watch::channel(0).0),
         }
     }
 
@@ -161,8 +165,21 @@ impl RuntimeStatusHandle {
                 state: Arc::new(Mutex::new(RuntimeStatusRow::new(node_did))),
                 readiness,
                 storage_fault: StorageFaultObservation::new(),
+                publication_recovery: Arc::new(watch::channel(0).0),
             },
         )
+    }
+
+    /// Asks the control watcher to reconcile once the plugin store is
+    /// released, for agents a held store left unavailable or parked. The
+    /// request is sticky: a watcher subscribed later still sees it.
+    pub(crate) fn request_publication_recovery(&self) {
+        self.publication_recovery
+            .send_modify(|requests| *requests = requests.wrapping_add(1));
+    }
+
+    pub(crate) fn publication_recovery(&self) -> watch::Receiver<u64> {
+        self.publication_recovery.subscribe()
     }
 
     pub(crate) fn readiness(&self) -> &NodeReadinessPublisherHandle {

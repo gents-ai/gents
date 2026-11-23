@@ -389,7 +389,7 @@ pub async fn install_documents_pack_resolved_inner(
             &crate::pack::InstallTarget {
                 access,
                 owner,
-                plugin_home: Some(home.as_path()),
+                plugin_home: Some(&crate::plugin::store::StoreWriter::Offline(home.clone())),
             },
             pack.archive(),
             &graph,
@@ -401,7 +401,8 @@ pub async fn install_documents_pack_resolved_inner(
             &crate::pack::InstallTarget {
                 access,
                 owner,
-                plugin_home: (!args.remote).then_some(home.as_path()),
+                plugin_home: (!args.remote)
+                    .then_some(&crate::plugin::store::StoreWriter::Offline(home.clone())),
             },
             pack.archive(),
             &graph,
@@ -623,7 +624,8 @@ pub async fn install_documents_pack_resolved_inner(
         &crate::pack::InstallTarget {
             access: writer,
             owner,
-            plugin_home: (!args.remote).then_some(home.as_path()),
+            plugin_home: (!args.remote)
+                .then_some(&crate::plugin::store::StoreWriter::Offline(home.clone())),
         },
         pack.archive(),
         &prepared,

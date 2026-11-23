@@ -59,6 +59,16 @@ pub struct Tools {
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
     #[schemars(transform = crate::accepts_null)]
     pub tags: Vec<String>,
+    /// Granted tools whose definitions the model is not sent; `script`
+    /// lists, describes and calls them. Hiding grants nothing.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(transform = crate::accepts_null)]
+    pub hidden_tool_names: Vec<String>,
 }
 
 /// Access to the host running the agent, with nested capability settings.
@@ -704,7 +714,86 @@ impl Tools {
 
     /// Validate this document's local settings. Referenced documents and runtime
     /// availability are checked by their scoped resolution owners.
+    /// What a written Tools document must meet: [`Self::stored_violations`]
+    /// and the rules only a create or an edit is held to, so a stored
+    /// document is never refused by them on load.
     pub fn validation_violations(&self) -> Vec<String> {
+        let mut errors = self.stored_violations();
+        errors.extend(self.presentation_violations());
+        errors.extend(self.job_target_violations());
+        errors
+    }
+
+    fn job_target_violations(&self) -> Vec<String> {
+        let caller_targets = self
+            .agents
+            .as_ref()
+            .map(|agents| agents.target_ids.as_slice())
+            .unwrap_or_default();
+        self.integrations
+            .iter()
+            .flat_map(|integrations| integrations.plugins.iter().flatten())
+            .filter_map(|plugin| {
+                let job = plugin.job.as_ref()?;
+                if gents_protocol::job_settings::job_targets_configured(
+                    caller_targets,
+                    &job.agent_targets,
+                ) {
+                    return None;
+                }
+                let missing: Vec<&String> = job
+                    .agent_targets
+                    .iter()
+                    .filter(|target| !caller_targets.contains(target))
+                    .collect();
+                Some(format!(
+                    "integrations.plugins[{}].job.agent_targets names {missing:?}, which agents.target_ids does not list, so the job could never start them; add them to agents.target_ids (agents.enabled can stay off) or remove them from the job",
+                    plugin.plugin
+                ))
+            })
+            .collect()
+    }
+
+    fn presentation_violations(&self) -> Vec<String> {
+        use gents_loop::tool_policy::presentation::{configuration_valid, is_gateway};
+        let script_selected = self
+            .integrations
+            .as_ref()
+            .and_then(|group| group.plugins.as_ref())
+            .is_some_and(|plugins| {
+                plugins
+                    .iter()
+                    .any(|plugin| plugin.tool_name() == "script" && plugin.tool_calls)
+            });
+        let gateways: Vec<&String> = self
+            .hidden_tool_names
+            .iter()
+            .filter(|name| is_gateway(name))
+            .collect();
+        let mut errors = Vec::new();
+        if configuration_valid(
+            self.hidden_tool_names.len() > gateways.len(),
+            script_selected,
+            !gateways.is_empty(),
+        ) {
+            return errors;
+        }
+        if !script_selected && self.hidden_tool_names.len() > gateways.len() {
+            errors.push(
+                "hidden_tool_names needs integrations.plugins to select script with tool_calls: true, the only way to call a hidden tool; select it or clear hidden_tool_names"
+                    .to_owned(),
+            );
+        }
+        if !gateways.is_empty() {
+            errors.push(format!(
+                "hidden_tool_names cannot hide {gateways:?}; script, config, load_skill and spawn_process stay shown"
+            ));
+        }
+        errors
+    }
+
+    /// The shape every Tools document has, written or stored.
+    pub fn stored_violations(&self) -> Vec<String> {
         fn positive(errors: &mut Vec<String>, field: &str, value: Option<i64>) {
             if value.is_some_and(|value| value <= 0) {
                 errors.push(format!("{field} must be positive"));
@@ -764,6 +853,19 @@ impl Tools {
             }
         }
         let mut errors = Vec::new();
+        names(
+            &mut errors,
+            "hidden_tool_names",
+            self.hidden_tool_names.iter().map(String::as_str),
+            true,
+        );
+        for name in &self.hidden_tool_names {
+            if name.trim() != name {
+                errors.push(format!(
+                    "hidden_tool_names takes exact tool names, not {name:?}"
+                ));
+            }
+        }
         if let Some(host) = &self.host {
             at_most(
                 &mut errors,
@@ -1043,7 +1145,15 @@ impl Tools {
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
-        let violations = self.validation_violations();
+        self.refuse(self.validation_violations())
+    }
+
+    /// [`Self::validate`] for a document already stored.
+    pub fn validate_stored(&self) -> anyhow::Result<()> {
+        self.refuse(self.stored_violations())
+    }
+
+    fn refuse(&self, violations: Vec<String>) -> anyhow::Result<()> {
         anyhow::ensure!(
             violations.is_empty(),
             "Tools {}: {}",
