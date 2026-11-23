@@ -1,0 +1,4 @@
+---- MODULE MCFireBudgetAdmissionCountByScan ----
+EXTENDS FireBudgetAdmission
+
+====

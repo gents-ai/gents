@@ -70,7 +70,8 @@ pub(crate) fn budget_stop_reason(trigger_id: &str, budget: u32) -> String {
 impl PreparedFire {
     /// Counts this Trigger's receipts in the budget window inside the admission
     /// transaction and returns the stop when the budget is spent. A replayed
-    /// fire spends nothing. The caller admits nothing on a stop and records it
+    /// fire spends nothing. The count is fenced by the receipt's unique
+    /// `fire_sequence` ([`stage_fire_receipt`]). The caller admits nothing on a stop and records it
     /// through [`crate::documents::stop_trigger_for_budget`].
     pub(crate) async fn stage_budget(
         &self,
@@ -327,13 +328,43 @@ pub(crate) async fn stage_fire_receipt(
     {
         return Ok(false);
     }
+    let mut input = serde_json::to_value(fire)?;
+    input["fire_sequence"] = next_fire_sequence(txn, &fire.identity).await?.into();
     txn.execute_client_signed_create(
         "mutation($input: TriggerFireMutationInputArg!) { create_TriggerFire(input: $input) { _docID } }",
-        &serde_json::json!({"input":fire}),
+        &serde_json::json!({"input": input}),
         gents_protocol::schemas::TRIGGER_FIRE,
     )
     .await?;
     Ok(true)
+}
+
+/// One past the highest `fire_sequence` of the Trigger's receipts this
+/// transaction reads. `(owner_did, trigger_id, fire_sequence)` is a unique
+/// index, so a receipt committed after that read aborts this transaction and
+/// its owner admits again on a fresh read: the budget count in the same
+/// transaction is never stale at commit (Lean
+/// `Triggers.FireBudget.concurrent_admission_preserves_bound`).
+async fn next_fire_sequence(
+    txn: &ConfigApplyTxn<'_>,
+    identity: &FireIdentity,
+) -> Result<i64> {
+    use gents_protocol::document_query::{
+        fields::trigger_fire as fields, Direction, Filter, Query, Selection,
+    };
+    let response = txn
+        .run(
+            &Query::select(Selection::new().field(fields::FIRE_SEQUENCE))
+                .filter(Filter::eq(fields::OWNER_DID, &identity.owner_did))
+                .filter(Filter::eq(fields::TRIGGER_ID, &identity.trigger_id))
+                .order_by(fields::FIRE_SEQUENCE, Direction::Desc)
+                .limit(1)
+                .render(),
+        )
+        .await?;
+    Ok(response["data"]["TriggerFire"][0]["fire_sequence"]
+        .as_i64()
+        .map_or(0, |highest| highest + 1))
 }
 
 pub(crate) async fn stage_session_child_relationships(
