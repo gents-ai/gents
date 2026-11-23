@@ -1,3 +1,20 @@
+//! Consume issuer-scoped assignments from an embedded Vera home.
+//!
+//! For an inventory, call [`ConfigAccess::certified_assignments`] as the
+//! receiving node. Supply its DID as the subject and select the issuer, policy,
+//! resource and relation. The IDs and certified position come from the same
+//! read. A successful empty result proves withdrawal for that scope. A failed
+//! read leaves the last accepted position in effect.
+//!
+//! For a running workload, use [`ConfigAccess::watch_assignments`] with the
+//! collection IDs that carry its bodies and an [`AssignmentRuntime`] that
+//! can enumerate and stop work already running after a process restart.
+//! If the issuer replaces B with C before C arrives locally, the receiver
+//! stops B, persists the new set, and waits for C's verified body before
+//! starting it. Recovery reads use the stored position as their lower bound.
+//! [`ConfigAccess::load_assignments`] is for inspecting the last accepted
+//! view. Call [`ConfigAccess::refresh_assignments`] for a one-shot reconciliation.
+
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::error::Error;
