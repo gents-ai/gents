@@ -1,0 +1,297 @@
+{
+  "case_id": "freezer-breach-sustained",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type FreezerReading { unit: String temp_c: Int seq: Int }"
+    ],
+    "documents": [
+      {
+        "collection": "FreezerReading",
+        "document": {
+          "unit": "F1",
+          "temp_c": -14,
+          "seq": 1
+        }
+      },
+      {
+        "collection": "FreezerReading",
+        "document": {
+          "unit": "F1",
+          "temp_c": -19,
+          "seq": 2
+        }
+      },
+      {
+        "collection": "FreezerReading",
+        "document": {
+          "unit": "F2",
+          "temp_c": -18,
+          "seq": 1
+        }
+      },
+      {
+        "collection": "FreezerReading",
+        "document": {
+          "unit": "F2",
+          "temp_c": -12,
+          "seq": 2
+        }
+      },
+      {
+        "collection": "FreezerReading",
+        "document": {
+          "unit": "F3",
+          "temp_c": -17,
+          "seq": 1
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "flag",
+      "prompt": "Freezers must stay at -15 °C or colder. Look at the latest FreezerReading for each unit (the highest seq for that unit). If any unit is warmer than -15, put one flag in my inbox titled \"Freezer breach\" with a note listing each breaching unit as UNIT (TEMP), like F9 (-11), sorted by unit and separated by commas.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "visible",
+          "collection": "MailboxItem",
+          "filter": {},
+          "fields": [
+            "item_key",
+            "title",
+            "kind"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "notice",
+          "collection": "MailboxItem",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "target_node_did": {
+              "_eq": "$trial"
+            },
+            "target_agent_did": {
+              "_eq": "gents:agent-slot:engineer"
+            },
+            "requester_did": {
+              "_eq": "$evaluator"
+            },
+            "session_id": {
+              "_eq": "$session"
+            }
+          },
+          "fields": [
+            "item_key",
+            "node_did",
+            "requester_did",
+            "kind",
+            "action",
+            "status",
+            "title",
+            "summary",
+            "payload",
+            "source_kind",
+            "session_id",
+            "request_id",
+            "target_node_did",
+            "target_agent_did"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "file_mailbox_item"
+            ],
+            "forbidden": [
+              "write",
+              "bash",
+              "write_file",
+              "edit_file"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "visible",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "notice",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "notice",
+                "key": "title",
+                "id": "Freezer breach",
+                "expect": [
+                  {
+                    "field": "summary",
+                    "fallback_field": "payload",
+                    "equals": "F2 (-12)"
+                  },
+                  {
+                    "field": "kind",
+                    "equals": "flag"
+                  },
+                  {
+                    "field": "action",
+                    "equals": "ack"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "open"
+                  },
+                  {
+                    "field": "source_kind",
+                    "equals": "agent"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "recheck",
+      "prompt": "The F2 sensor just sent a new reading, -13 °C with seq 3; it isn't in FreezerReading yet. Taking it into account, check the latest reading per unit again. If the breaching units are the ones you already flagged, don't add anything. If another unit has started breaching, flag only that unit in a new item titled \"Freezer breach 2\".",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "visible",
+          "collection": "MailboxItem",
+          "filter": {},
+          "fields": [
+            "item_key",
+            "title",
+            "kind"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "notice",
+          "collection": "MailboxItem",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "target_node_did": {
+              "_eq": "$trial"
+            },
+            "target_agent_did": {
+              "_eq": "gents:agent-slot:engineer"
+            },
+            "requester_did": {
+              "_eq": "$evaluator"
+            },
+            "session_id": {
+              "_eq": "$session"
+            }
+          },
+          "fields": [
+            "item_key",
+            "node_did",
+            "requester_did",
+            "kind",
+            "action",
+            "status",
+            "title",
+            "summary",
+            "payload",
+            "source_kind",
+            "session_id",
+            "request_id",
+            "target_node_did",
+            "target_agent_did"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "write",
+              "bash",
+              "write_file",
+              "edit_file"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "visible",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "notice",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "notice",
+                "key": "title",
+                "id": "Freezer breach",
+                "expect": [
+                  {
+                    "field": "summary",
+                    "fallback_field": "payload",
+                    "equals": "F2 (-12)"
+                  },
+                  {
+                    "field": "kind",
+                    "equals": "flag"
+                  },
+                  {
+                    "field": "action",
+                    "equals": "ack"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "open"
+                  },
+                  {
+                    "field": "source_kind",
+                    "equals": "agent"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}
