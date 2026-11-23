@@ -281,7 +281,6 @@ mod tests {
         "contracts_background_wake_rows_unreached",
         "contracts_edit_anchor_fork_unreached",
         "contracts_fork_publication_unreached",
-        "contracts_pack_installation_hosted_plugin_unreached",
         "contracts_queued_steering_guard_unreached",
         "contracts_runtime_reconcile_unreached",
         "contracts_session_advance_unreached",

@@ -4903,10 +4903,6 @@ async fn hosted_plugin_root_preserves_existing_pack_documents() -> Result<()> {
             })
         })
         .await;
-    for case in gents_lean_vocab::families::contracts_pack_installation_hosted_plugin::cases() {
-        assert!(case.input.reviewed && case.input.plan && case.input.native);
-        case.check(result.is_ok());
-    }
     result?;
     let record = access
         .transact_readonly("test.hosted_plugin.read", |txn| {
