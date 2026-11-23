@@ -53,8 +53,7 @@ accepts a single `url` or an array of 1 to 12 URLs, `focus`, `mode` (`scan`, `re
 `max_chars`, `offset`, `section`, `toc`, `deadline_ms`, `must_contain`,
 `selector`, `links`, and `media`. `web_crawl` accepts `url`, `mode` (`full`,
 `map`, or `content`), `focus`, `max_pages`, `map_limit`, `max_depth`,
-`max_total_chars`, `per_page_max`, `same_host` (only `true` is supported),
-`respect_robots`, and `deadline_s`. Deadlines are checked between request
+`max_total_chars`, `per_page_max`, `respect_robots`, and `deadline_s`. Deadlines are checked between request
 rounds, and one in-flight host HTTP request can take up to 10 seconds inside
 the plugin's 120-second wall limit. Crawl follows same-origin links, applies
 `robots.txt` access rules by default, and uses sitemap hints when available.

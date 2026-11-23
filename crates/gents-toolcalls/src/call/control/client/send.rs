@@ -9,6 +9,7 @@ use gents_store::config_client::{ConfigAccess, ConfigClientError, TransactionFai
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
 
+/// How long a client waits to observe the runtime's receipt of a control intent before reporting it unconfirmed; client wait UX, not runtime behaviour.
 const OBSERVATION_DEADLINE: Duration = Duration::from_secs(30);
 
 /// One signed control action.

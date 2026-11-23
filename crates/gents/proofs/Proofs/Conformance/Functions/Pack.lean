@@ -21,7 +21,7 @@ deriving instance Lean.ToJson for CorePack, Origin, Wiring, Release, InterfaceAd
   UpdateDecision, ProfileState, SlotBinding, EnableRoute
 
 attribute [conformance_function] approvalRequired initWiring enabledWiring updateDecision
-  slotBinding enableRoute
+  slotBinding enableRoute refuseInit
 
 structure InterfaceInput where
   runtime : Release

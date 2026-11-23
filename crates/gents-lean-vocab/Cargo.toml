@@ -13,7 +13,9 @@ gents-lean-contract.workspace = true
 gents-protocol.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+syn = { version = "2", features = ["full", "visit", "visit-mut"] }
 tokio = { workspace = true, features = ["rt"] }
+toml.workspace = true
 
 [build-dependencies]
 serde_json.workspace = true
@@ -25,7 +27,6 @@ prettyplease = "0.2"
 proc-macro2 = { version = "1", features = ["span-locations"] }
 quote = "1"
 sha2.workspace = true
-syn = { version = "2", features = ["full", "visit-mut"] }
 
 [[example]]
 name = "decoders_from_snapshot"

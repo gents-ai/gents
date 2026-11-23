@@ -201,6 +201,8 @@ fn project_backend_for_fleet(mut backend: InferenceBackendView) -> InferenceBack
     backend.auth_kind = None;
     backend.connect_timeout_secs = None;
     backend.discovery_timeout_secs = None;
+    backend.request_timeout_secs = None;
+    backend.client_version = None;
     backend.tags.clear();
     backend
 }

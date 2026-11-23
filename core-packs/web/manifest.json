@@ -362,12 +362,6 @@
             "maximum": 40000,
             "default": 8000
           },
-          "same_host": {
-            "description": "Keep traversal on the starting host; false is not supported.",
-            "type": "boolean",
-            "const": true,
-            "default": true
-          },
           "respect_robots": {
             "description": "Honor available robots.txt guidance.",
             "type": "boolean",

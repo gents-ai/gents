@@ -744,17 +744,31 @@ fn threading_counter(
 }
 
 fn text_segments(text: &str, source: &str) -> Vec<String> {
-    let not_replayed = gents_loop::loop_stream::TOOL_RESULT_IMAGE_NOT_REPLAYED;
-    if text == gents_loop::loop_stream::TOOL_RESULT_IMAGE_OMITTED {
-        return vec!["image_omitted_note".into()];
+    if let Ok(serde_json::Value::Object(object)) = serde_json::from_str(text) {
+        if let (1, Some(serde_json::Value::String(held))) = (object.len(), object.get("text")) {
+            let mut segments = vec!["wrapped".to_owned()];
+            segments.extend(text_segments(held, source));
+            return segments;
+        }
     }
-    if text == not_replayed {
-        return vec!["image_not_replayed_note".into()];
-    }
-    if let Some(prefix) = text.strip_suffix(&format!("\n{not_replayed}")) {
-        let mut segments = text_segments(prefix, source);
-        segments.push("image_not_replayed_note".into());
-        return segments;
+    for (note, segment) in [
+        (
+            gents_loop::loop_stream::TOOL_RESULT_IMAGE_OMITTED,
+            "image_omitted_note",
+        ),
+        (
+            gents_loop::loop_stream::TOOL_RESULT_IMAGE_NOT_REPLAYED,
+            "image_not_replayed_note",
+        ),
+    ] {
+        if text == note {
+            return vec![segment.into()];
+        }
+        if let Some(prefix) = text.strip_suffix(&format!("\n{note}")) {
+            let mut segments = text_segments(prefix, source);
+            segments.push(segment.into());
+            return segments;
+        }
     }
     vec![if text == source {
         "text_whole"

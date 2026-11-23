@@ -348,10 +348,21 @@ async fn typed_actions_are_the_closed_schema_and_argv_remains_accepted() {
         json!({"action":"status","details":true})
     );
     let help = call(&tool, json!({"action":"help","topic":"enrollment"})).await;
-    assert!(help["outcome"]["help"]
-        .as_str()
-        .unwrap()
-        .contains("enrollment_offer"));
+    assert!(help["outcome"]["help"].as_str().unwrap().contains(
+        "the approving node runs enrollment_offer and hands offer_token to the joining node, which runs enrollment_request; the approver then finds it with enrollment_pending and approves it"
+    ));
+    let description = Tool::definition(&tool, String::new()).await.description;
+    assert!(
+        description.contains("topic enrollment has the joining steps")
+            && !description.contains("enrollment_pending and enrollment_approve;"),
+        "the joining steps live only in help topic enrollment: {description}"
+    );
+    assert!(
+        gents_protocol::ENGINEER_PROMPT
+            .contains("read `p2p` help topics `enrollment` and `pairings` first")
+            && !gents_protocol::ENGINEER_PROMPT.contains("`enrollment_request` on the joiner"),
+        "the Engineer prompt points at help topic enrollment instead of repeating it"
+    );
 
     for (args, expected) in [
         (json!({"action":"enrollment_offers"}), "unknown action"),

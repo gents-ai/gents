@@ -5,7 +5,7 @@ use serde_json::json;
 use crate::goal::{
     create_goal_for_request_from_access, load_goal_tool_context, load_goal_tool_context_with_usage,
     refresh_goal_usage_observed, CreateGoalForSessionError, GoalUsageObservation,
-    RequestAssignmentObservation, BLOCKED_AUDIT_THRESHOLD,
+    RequestAssignmentObservation,
 };
 use crate::operations::goal::set_as_working_agent;
 use gents_loop::tool_call_lifecycle::FailureClass;
@@ -310,7 +310,7 @@ async fn update_goal(call: &GoalToolCall<'_>) -> anyhow::Result<GoalToolReply> {
                 "accepted": updated.parsed_status() == Some(GoalStatus::Blocked),
                 "status": updated.status,
                 "consecutive_blocked_audits": updated.consecutive_blocked_audits.unwrap_or_default(),
-                "required_blocked_audits": BLOCKED_AUDIT_THRESHOLD,
+                "required_blocked_audits": updated.blocked_audit_threshold(),
             }),
             _ => json!({"accepted": true, "goal": crate::goal::snapshot(&updated, Utc::now())}),
         },

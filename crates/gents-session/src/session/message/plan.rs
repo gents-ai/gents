@@ -22,6 +22,7 @@ pub enum PlannedWrite {
         create: gents_protocol::request_admission::AgentRequestCreate,
         objective: String,
         token_budget: Option<i64>,
+        limits: gents_protocol::goal::GoalLimits,
     },
 }
 
@@ -248,7 +249,7 @@ pub async fn plan_with_delivery(
         },
         own_hop,
     );
-    let write = if let Some((objective, token_budget)) = rendered.goal {
+    let write = if let Some((objective, token_budget, limits)) = rendered.goal {
         if active.is_some() {
             return Ok(Err(
                 "a Task that declares a Goal requires an idle session".to_owned()
@@ -272,6 +273,7 @@ pub async fn plan_with_delivery(
             create,
             objective,
             token_budget,
+            limits,
         }
     } else {
         let steering = active.filter(|_| delivery != AgentMessageDelivery::Interrupt);

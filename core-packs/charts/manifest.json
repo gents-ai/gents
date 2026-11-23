@@ -52,7 +52,7 @@
         "additionalProperties": false,
         "properties": {
           "agg": {
-            "description": "How rows with the same x or category combine: sum (default), mean, count, min, max or median. Heatmaps default to mean.",
+            "description": "How rows with the same x combine; default sum, mean for heatmaps.",
             "enum": [
               "sum",
               "mean",
@@ -74,14 +74,14 @@
                 "type": "string"
               }
             ],
-            "description": "Histograms: a number of bins from 1 to 200, or auto (default)."
+            "description": "Histograms: 1 to 200 bins, or auto (default)."
           },
           "center": {
             "description": "Heatmaps: the value drawn as the neutral colour of a diverging scale.",
             "type": "number"
           },
           "chart": {
-            "description": "The chart type: line, area, stacked_area, bar, stacked_bar, horizontal_bar, scatter, bubble, histogram, box, pie, donut, heatmap or combo.",
+            "description": "The chart type; {\"help\": \"types\"} explains each. Required unless help is set.",
             "enum": [
               "line",
               "area",
@@ -101,7 +101,7 @@
             "type": "string"
           },
           "colors": {
-            "description": "Series colours as hex strings like \"#1f77b4\"; the default palette is colour-blind safe.",
+            "description": "Series colours as hex strings like \"#1f77b4\"; only when asked.",
             "items": {
               "type": "string"
             },
@@ -109,28 +109,41 @@
             "type": "array"
           },
           "data": {
-            "description": "Inline data: {\"columns\": [...], \"rows\": [[...]]} (the data_tables result), a list of objects, or CSV text with a header line. Use this or path."
+            "description": "Inline data: {\"columns\": [...], \"rows\": [[...]]} (a data_tables result), a list of objects, or CSV text. Use this or path."
           },
           "file": {
             "description": "The data file inside the folder named in path.",
             "type": "string"
           },
           "format": {
-            "description": "Number format for values and the y axis, like \",.0f\", \"$,.2f\", \".1%\", \"~s\" or \"{,.0f} units\".",
+            "description": "Number format of values and the y axis, like \",.0f\" or \".1%\"; see {\"help\": \"formats\"}.",
             "type": "string"
           },
           "height": {
-            "description": "Image height in pixels, 150 to 4096 (default 480).",
+            "description": "Image height in pixels (default 480).",
             "maximum": 4096,
             "minimum": 150,
             "type": "integer"
+          },
+          "help": {
+            "description": "Return this help topic instead of drawing; topics lists them all. Needs no other field.",
+            "enum": [
+              "topics",
+              "inputs",
+              "types",
+              "options",
+              "formats",
+              "output",
+              "saving"
+            ],
+            "type": "string"
           },
           "horizontal": {
             "description": "Bar charts: draw the bars horizontally.",
             "type": "boolean"
           },
           "legend": {
-            "description": "Legend placement: auto (default), right, bottom, top, left or none.",
+            "description": "Legend placement (default auto).",
             "enum": [
               "auto",
               "right",
@@ -142,7 +155,7 @@
             "type": "string"
           },
           "line": {
-            "description": "Combo charts: the columns drawn as lines (on the right axis).",
+            "description": "Combo charts: the columns drawn as lines.",
             "items": {
               "type": "string"
             },
@@ -150,7 +163,7 @@
             "type": "array"
           },
           "line_axis": {
-            "description": "Combo charts: draw the lines on the right axis (default) or the left one.",
+            "description": "Combo charts: the axis of the lines (default right).",
             "enum": [
               "right",
               "left"
@@ -158,7 +171,7 @@
             "type": "string"
           },
           "output": {
-            "description": "both (default), svg or png. A tool call shows the PNG; svg returns the SVG text instead.",
+            "description": "both (default), svg or png; svg returns the SVG text instead of the picture.",
             "enum": [
               "both",
               "svg",
@@ -192,10 +205,10 @@
                 "type": "object"
               }
             ],
-            "description": "Write the chart into the folder named in path: a base name like \"chart\" writes chart.svg and chart.png, or give {\"svg\": \"a.svg\", \"png\": \"a.png\"}. path must be a folder."
+            "description": "Write the chart into the folder named in path: a base name like \"chart\", or {\"svg\": \"a.svg\", \"png\": \"a.png\"}; see {\"help\": \"saving\"}."
           },
           "scale": {
-            "description": "PNG pixel density, 0.5 to 4 (default 1); width x height x scale squared is at most 16 million pixels.",
+            "description": "PNG pixel density (default 1).",
             "maximum": 4,
             "minimum": 0.5,
             "type": "number"
@@ -209,7 +222,7 @@
             "type": "string"
           },
           "sort": {
-            "description": "Category order: none (data order, default), x, x_desc, value or value_desc.",
+            "description": "Category order (default none: the data order).",
             "enum": [
               "none",
               "x",
@@ -248,17 +261,17 @@
             "type": "string"
           },
           "width": {
-            "description": "Image width in pixels, 200 to 4096 (default 800).",
+            "description": "Image width in pixels (default 800).",
             "maximum": 4096,
             "minimum": 200,
             "type": "integer"
           },
           "x": {
-            "description": "Column for the x axis, the categories or the pie labels. Default: the first column.",
+            "description": "Column for the x axis, the categories or the pie labels (default the first column).",
             "type": "string"
           },
           "x_format": {
-            "description": "Format of the x axis labels: a number format, or on a time axis a date pattern like \"%b %Y\".",
+            "description": "Format of the x axis labels: a number format, or a date pattern like \"%b %Y\" on a time axis.",
             "type": "string"
           },
           "x_label": {
@@ -274,7 +287,7 @@
             "type": "number"
           },
           "x_scale": {
-            "description": "X axis: auto (default), linear, log, time or category.",
+            "description": "X axis scale (default auto).",
             "enum": [
               "auto",
               "linear",
@@ -285,7 +298,7 @@
             "type": "string"
           },
           "y": {
-            "description": "Value columns, one series each; default: every numeric column. For a heatmap, the column on the other axis.",
+            "description": "Value columns, one series each (default every numeric column); for a heatmap, the column on the other axis.",
             "items": {
               "type": "string"
             },
@@ -301,7 +314,7 @@
             "type": "string"
           },
           "y2_scale": {
-            "description": "Combo charts: right axis, linear (default) or log.",
+            "description": "Combo charts: right axis scale (default linear).",
             "enum": [
               "auto",
               "linear",
@@ -326,7 +339,7 @@
             "type": "number"
           },
           "y_scale": {
-            "description": "Y axis: linear (default) or log; a log axis needs values above zero.",
+            "description": "Y axis scale (default linear); log needs values above zero.",
             "enum": [
               "auto",
               "linear",
@@ -335,9 +348,6 @@
             "type": "string"
           }
         },
-        "required": [
-          "chart"
-        ],
         "type": "object"
       },
       "instructions": "plugins/charts/TOOL.md",

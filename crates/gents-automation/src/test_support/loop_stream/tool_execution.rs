@@ -265,13 +265,14 @@ pub async fn persisted_plugin_image_result_replay(
     .unwrap();
     node.shutdown().await.expect("node shutdown");
     history
-        .iter()
+        .into_iter()
+        .map(gents_loop::provider_input::tool_result_text::for_provider)
         .flat_map(|message| match message {
-            Message::User { content } => content.as_slice(),
-            _ => &[],
+            Message::User { content } => content,
+            _ => Vec::new(),
         })
         .filter_map(|part| match part {
-            UserContent::ToolResult(result) => Some(result.content.clone()),
+            UserContent::ToolResult(result) => Some(result.content),
             _ => None,
         })
         .flatten()

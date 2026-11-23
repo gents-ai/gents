@@ -194,7 +194,12 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
 }
 
 pub(crate) async fn init_home(args: InitArgs) -> Result<Value> {
-    init_home_with_core_packs(args, gents_core_packs::archives()).await
+    init_home_with_core_packs(
+        args,
+        gents_core_packs::archives(),
+        default_packs::InitEntryPoint::Cli,
+    )
+    .await
 }
 
 /// [`init_home`], installing the Engineer's core packs from `core_packs`.
@@ -204,6 +209,7 @@ pub(crate) async fn init_home(args: InitArgs) -> Result<Value> {
 pub(crate) async fn init_home_with_core_packs(
     mut args: InitArgs,
     core_packs: default_packs::Archives<'_>,
+    entry: default_packs::InitEntryPoint,
 ) -> Result<Value> {
     let registry = args.registry.clone();
     let started = Instant::now();
@@ -297,6 +303,13 @@ pub(crate) async fn init_home_with_core_packs(
         });
         return Ok(output);
     }
+    default_packs::admit_init(
+        core_packs,
+        entry,
+        fresh_store,
+        args.engineer,
+        !args.no_default_packs,
+    )?;
 
     let fresh_backend = if fresh_store {
         Some(
@@ -1736,7 +1749,7 @@ fn wide_open_tools_document(node_did: &str) -> Tools {
     Tools {
         tools_id: wide_open_tools_id_for_node(node_did),
         node_did: node_did.to_string(),
-        display_name: Some("Wide-open (permissive preset)".to_string()),
+        display_name: Some("Database queries and context budget".to_string()),
         built_ins: Some(BuiltInTools {
             enable_context_budget: Some(true),
             ..Default::default()
@@ -2063,6 +2076,27 @@ mod inference_seed_tests;
 mod tests {
     use super::*;
     use gents::runtime::embedded::EmbeddedHome;
+
+    #[test]
+    fn the_database_and_context_preset_is_labelled_by_what_it_grants() {
+        assert_eq!(
+            wide_open_tools_document("did:key:example"),
+            Tools {
+                tools_id: "did:key:example:wide-open".to_string(),
+                node_did: "did:key:example".to_string(),
+                display_name: Some("Database queries and context budget".to_string()),
+                built_ins: Some(BuiltInTools {
+                    enable_context_budget: Some(true),
+                    ..Default::default()
+                }),
+                datastore: Some(DatastoreTools {
+                    enable_defra_query: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }
+        );
+    }
 
     #[tokio::test]
     async fn identity_failure_does_not_consume_fresh_bootstrap() {
@@ -2832,26 +2866,40 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn fresh_init_grants_native_operations_once_without_regranting_revocation() {
+        use std::os::unix::fs::PermissionsExt;
         for case in gents_lean_vocab::families::node_provisioning_bootstrap_grant::cases() {
             let temp = tempfile::tempdir().unwrap();
             let home = temp.path().join("home");
+            let data = default_data_dir(&home);
+            let marker = home.join(BOOTSTRAP_CONSUMED_FILE_NAME);
+            fs::create_dir_all(&home).unwrap();
             if !case.input.fresh_evidence {
-                fs::create_dir_all(&home).unwrap();
-                fs::write(home.join(BOOTSTRAP_CONSUMED_FILE_NAME), b"").unwrap();
+                fs::write(&marker, b"").unwrap();
             }
-            let granted = match initialize_disposable_home(&home, false).await {
+            if !case.input.store_empty_observed {
+                fs::create_dir_all(&data).unwrap();
+                fs::write(data.join("stray"), b"not fresh").unwrap();
+            }
+            let holder = if case.input.exclusive {
+                None
+            } else {
+                Some(lock_init_store(&home, &data, false).await.unwrap())
+            };
+            if !case.input.reservation_durable {
+                fs::set_permissions(&home, fs::Permissions::from_mode(0o300)).unwrap();
+            }
+            let initialized = initialize_disposable_home(&home, false).await;
+            fs::set_permissions(&home, fs::Permissions::from_mode(0o700)).unwrap();
+            drop(holder);
+            let granted = match initialized {
                 Ok(initial) => fresh_init_grants_and_keeps_revocation(&home, &initial).await,
                 Err(error) => {
                     assert!(
-                        format!("{error:#}").contains("bootstrap was already attempted"),
+                        !data.join("MANIFEST").exists(),
                         "{}: {error:#}",
-                        case.input.name
-                    );
-                    assert!(
-                        !default_data_dir(&home).join("MANIFEST").exists(),
-                        "{}",
                         case.input.name
                     );
                     false

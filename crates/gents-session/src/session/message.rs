@@ -64,8 +64,6 @@ pub struct AgentMessageArgs {
     #[serde(default)]
     pub task: Option<TaskBody>,
     #[serde(default)]
-    pub interrupt: Option<bool>,
-    #[serde(default)]
     pub delivery: Option<AgentMessageDelivery>,
 }
 
@@ -117,19 +115,8 @@ impl AgentMessageArgs {
         message_body("message", self.message.as_ref(), self.task.as_ref())
     }
 
-    pub fn delivery(&self) -> Result<AgentMessageDelivery, String> {
-        match (self.delivery, self.interrupt) {
-            (None, None | Some(false)) => Ok(AgentMessageDelivery::Queue),
-            (None, Some(true)) | (Some(AgentMessageDelivery::Interrupt), Some(true)) => {
-                Ok(AgentMessageDelivery::Interrupt)
-            }
-            (Some(delivery), None) => Ok(delivery),
-            (
-                Some(delivery @ (AgentMessageDelivery::Queue | AgentMessageDelivery::Steer)),
-                Some(false),
-            ) => Ok(delivery),
-            (Some(_), Some(_)) => Err("interrupt conflicts with delivery".into()),
-        }
+    pub fn delivery(&self) -> AgentMessageDelivery {
+        self.delivery.unwrap_or(AgentMessageDelivery::Queue)
     }
 }
 
@@ -152,5 +139,6 @@ impl Delivery {
 
 pub struct RenderedBody {
     pub content: String,
-    pub goal: Option<(String, Option<i64>)>,
+    /// The rendered objective, token budget and limits of a Task's Goal.
+    pub goal: Option<(String, Option<i64>, gents_protocol::goal::GoalLimits)>,
 }

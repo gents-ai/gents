@@ -1,12 +1,13 @@
 import Proofs.Store.Persistence
 
+/-- What the session hook observes of its own mutation: in flight, acknowledged,
+failed, or acknowledged as lost under its failure policy. It never reads a
+committed row back. -/
 inductive StorageObservation where
   | noMutation
   | inFlight
   | successAcknowledged
   | mutationFailed
-  | staleObserved
-  | readVisible
   | lostAcknowledged
   deriving DecidableEq, Repr
 
@@ -17,15 +18,13 @@ def toContract : StorageObservation -> String
   | .inFlight => "inFlight"
   | .successAcknowledged => "successAcknowledged"
   | .mutationFailed => "mutationFailed"
-  | .staleObserved => "staleObserved"
-  | .readVisible => "readVisible"
   | .lostAcknowledged => "lostAcknowledged"
 
 instance : HasTerminal StorageObservation where
-  isTerminal obs := obs = .readVisible ∨ obs = .lostAcknowledged
+  isTerminal obs := obs = .successAcknowledged ∨ obs = .lostAcknowledged
   isTerminal_dec obs :=
     match obs with
-    | .readVisible => isTrue (Or.inl rfl)
+    | .successAcknowledged => isTrue (Or.inl rfl)
     | .lostAcknowledged => isTrue (Or.inr rfl)
     | .noMutation => isFalse (by intro h; cases h with
         | inl h => exact absurd h (by decide)
@@ -33,13 +32,7 @@ instance : HasTerminal StorageObservation where
     | .inFlight => isFalse (by intro h; cases h with
         | inl h => exact absurd h (by decide)
         | inr h => exact absurd h (by decide))
-    | .successAcknowledged => isFalse (by intro h; cases h with
-        | inl h => exact absurd h (by decide)
-        | inr h => exact absurd h (by decide))
     | .mutationFailed => isFalse (by intro h; cases h with
-        | inl h => exact absurd h (by decide)
-        | inr h => exact absurd h (by decide))
-    | .staleObserved => isFalse (by intro h; cases h with
         | inl h => exact absurd h (by decide)
         | inr h => exact absurd h (by decide))
 
@@ -48,18 +41,12 @@ def toPersistence : StorageObservation -> PersistenceState
   | .inFlight => .committing
   | .successAcknowledged => .committed
   | .mutationFailed => .uncommitted
-  | .staleObserved => .committed
-  | .readVisible => .committed
   | .lostAcknowledged => .lost
 
 inductive Action where
   | beginMutation
   | mutationSuccess
   | mutationFailure
-  | staleRead
-  | staleEvent
-  | readYourWrites
-  | eventArrives
   | retryFailClosed
   | acknowledgeLost
   deriving DecidableEq, Repr
@@ -72,16 +59,6 @@ inductive Transition (policy : PersistenceState.FailurePolicy) :
       Transition policy .inFlight .successAcknowledged
   | mutation_failure :
       Transition policy .inFlight .mutationFailed
-  | stale_read :
-      Transition policy .successAcknowledged .staleObserved
-  | stale_event :
-      Transition policy .successAcknowledged .staleObserved
-  | read_your_writes :
-      Transition policy .successAcknowledged .readVisible
-  | event_arrives_after_success :
-      Transition policy .successAcknowledged .readVisible
-  | event_arrives_after_stale :
-      Transition policy .staleObserved .readVisible
   | retry_fail_closed :
       policy = .failClosed ->
       Transition policy .mutationFailed .noMutation
@@ -97,14 +74,6 @@ def step? (policy : PersistenceState.FailurePolicy)
       if pre = .inFlight then some .successAcknowledged else none
   | .mutationFailure =>
       if pre = .inFlight then some .mutationFailed else none
-  | .staleRead =>
-      if pre = .successAcknowledged then some .staleObserved else none
-  | .staleEvent =>
-      if pre = .successAcknowledged then some .staleObserved else none
-  | .readYourWrites =>
-      if pre = .successAcknowledged then some .readVisible else none
-  | .eventArrives =>
-      if pre = .successAcknowledged ∨ pre = .staleObserved then some .readVisible else none
   | .retryFailClosed =>
       if policy = .failClosed /\ pre = .mutationFailed then some .noMutation else none
   | .acknowledgeLost =>
@@ -146,48 +115,6 @@ theorem mutation_failed_ne_committed :
     toPersistence .mutationFailed ≠ .committed := by
   decide
 
-theorem stale_observation_preserves_success_commit :
-    toPersistence .staleObserved = toPersistence .successAcknowledged := rfl
-
-def terminalWriteObserved (obs : StorageObservation) : Prop :=
-  obs = .successAcknowledged ∨ obs = .readVisible
-
-theorem terminal_write_observed_committed
-    {obs : StorageObservation}
-    (h_obs : terminalWriteObserved obs) :
-    toPersistence obs = .committed := by
-  cases h_obs with
-  | inl h =>
-      rw [h]
-      rfl
-  | inr h =>
-      rw [h]
-      rfl
-
-theorem readYourWrites_visibility_path
-    {policy : PersistenceState.FailurePolicy} :
-    ∃ post : StorageObservation,
-      Trace policy .successAcknowledged post ∧ post = .readVisible := by
-  exact
-    ⟨ .readVisible
-    , Trace.step (Transition.read_your_writes (policy := policy)) Trace.refl
-    , rfl
-    ⟩
-
-theorem successful_mutation_eventual_visibility_path
-    {policy : PersistenceState.FailurePolicy} :
-    ∃ post : StorageObservation,
-      Trace policy .noMutation post ∧ post = .readVisible := by
-  exact
-    ⟨ .readVisible
-    , Trace.step
-        (Transition.begin_mutation (policy := policy))
-        (Trace.step
-          (Transition.mutation_success (policy := policy))
-          (Trace.step (Transition.read_your_writes (policy := policy)) Trace.refl))
-    , rfl
-    ⟩
-
 theorem failClosed_failed_mutation_retry_path :
     ∃ post : StorageObservation,
       Trace .failClosed .noMutation post ∧ post = .noMutation := by
@@ -211,30 +138,6 @@ theorem failOpen_failed_mutation_lost_path :
         (Trace.step
           (Transition.mutation_failure (policy := .failOpen))
           (Trace.step (Transition.acknowledge_lost rfl) Trace.refl))
-    , rfl
-    ⟩
-
-theorem staleRead_eventual_visibility_path
-    {policy : PersistenceState.FailurePolicy} :
-    ∃ post : StorageObservation,
-      Trace policy .successAcknowledged post ∧ post = .readVisible := by
-  exact
-    ⟨ .readVisible
-    , Trace.step
-        (Transition.stale_read (policy := policy))
-        (Trace.step (Transition.event_arrives_after_stale (policy := policy)) Trace.refl)
-    , rfl
-    ⟩
-
-theorem staleEvent_eventual_visibility_path
-    {policy : PersistenceState.FailurePolicy} :
-    ∃ post : StorageObservation,
-      Trace policy .successAcknowledged post ∧ post = .readVisible := by
-  exact
-    ⟨ .readVisible
-    , Trace.step
-        (Transition.stale_event (policy := policy))
-        (Trace.step (Transition.event_arrives_after_stale (policy := policy)) Trace.refl)
     , rfl
     ⟩
 

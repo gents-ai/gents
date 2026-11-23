@@ -674,6 +674,7 @@ pub(super) async fn fail_routed_request(
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
         request.clone(),
+        // Unused: this lifecycle only rejects admission and never claims.
         Duration::from_secs(30).as_secs(),
         execution_origin,
         "",

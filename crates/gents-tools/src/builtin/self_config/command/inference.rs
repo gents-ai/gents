@@ -39,7 +39,7 @@ impl ConfigCommandTool {
                     && (verb == "create" || argv.get(1).is_some_and(|word| word == "create")) =>
             {
                 bail!(
-                "tools are created with their agent (agent create); change an agent's tools with {{\"argv\":[\"tools\",\"edit\"],\"options\":{{\"agent\":\"AGENT_DID\"}},\"set\":{{\"GROUP\":VALUE}}}}"
+                "tools are created with their agent (agent create); change an agent's tools with {{\"argv\":[\"tools\",\"update\"],\"options\":{{\"agent\":\"AGENT_DID\"}},\"set\":{{\"GROUP\":VALUE}}}}"
                 )
             }
             "preview" | "edit" => {

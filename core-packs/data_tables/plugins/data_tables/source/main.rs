@@ -1,6 +1,6 @@
 //! data_tables plugin: SQL over data files with bounded memory. One JSON value
 //! on stdin, one on stdout; a failure is one sentence on stderr and a non-zero
-//! exit (see TOOL.md).
+//! exit (see TOOL.md and the help topics in help/).
 use std::io::{Read, Write};
 use std::sync::Arc;
 
@@ -15,6 +15,7 @@ mod export;
 #[cfg(test)]
 mod export_tests;
 mod graph;
+mod help;
 #[cfg(test)]
 mod hostile_tests;
 mod inline;
@@ -78,6 +79,10 @@ pub fn run(raw: &str) -> Res<String> {
         return out;
     }
     let input: Input = serde_json::from_str(raw).map_err(|e| format!("invalid input: {e}"))?;
+    if let Some(topic) = input.help.as_deref() {
+        return serde_json::to_string(&help::answer(topic)?)
+            .map_err(|e| format!("serializing the result: {e}"));
+    }
     serde_json::to_string(&call(&input).map_err(|e| table::scrub(&e))?)
         .map_err(|e| format!("serializing the result: {e}"))
 }

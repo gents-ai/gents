@@ -22,6 +22,7 @@ import Proofs.Runtime.StreamBatch
 import Proofs.Shared.AccountRotation
 import Proofs.Runtime.AuxiliaryAdmission
 import Proofs.Shared.TextNormalization
+import Proofs.Shared.ToolResultText
 import Proofs.Session.TitleText
 import Proofs.Session.ToolResultThreading
 import Proofs.Session.ToolExecution.ArgumentFailure
@@ -86,6 +87,7 @@ import Proofs.Session.CommandPolicy
 import Proofs.Tools.ToolPolicy
 import Proofs.Tools.Lsp
 import Proofs.Tools.WorkspaceRootOperations
+import Proofs.Tools.SchemaCollections
 import Proofs.P2P.Operations
 import Proofs.Clients.ServiceLifecycle
 import Proofs.Session.ToolExecution

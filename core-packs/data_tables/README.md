@@ -55,7 +55,9 @@ to that agent's Tools. The model calls
 ```
 
 and reads `rows`, `markdown` and `warnings`; a result with `next.cursor` is continued by calling again with that
-`cursor` and every other field unchanged. `plugins/data_tables/TOOL.md` is what the model reads.
+`cursor` and every other field unchanged. `plugins/data_tables/TOOL.md` is the small core the model reads with every
+request; the detail is in help topics (`plugins/data_tables/help/`) that the model reads on demand with
+`{"help": "<topic>"}`.
 
 ## Use it as a callback node
 

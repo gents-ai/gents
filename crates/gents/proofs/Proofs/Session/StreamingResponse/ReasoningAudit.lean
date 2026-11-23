@@ -201,6 +201,8 @@ def invalidUtf8 : Segment :=
        ⟨2, 1, some encrypted⟩, ⟨3, 1, some redacted⟩],
       [65, 255, 69, 82]⟩ }
 
+/-- Native segment payloads are UTF-8 strings, so production never writes this
+run; the model rejects it as malformed. -/
 theorem invalid_signature_run_cannot_be_published :
     validateReasoningSignature [invalidUtf8] [] ⟨⟨100, 0⟩, .full⟩ none =
       .error (.reconstruction (.extent .malformedRuns)) := by native_decide
@@ -264,8 +266,6 @@ def signatureCases : List SignatureCase :=
   , signatureCase "retained_signature_disagrees" [completed]
       ⟨⟨100, 0⟩, .full⟩ (some "other")
   , signatureCase "retained_signature_missing_in_header" [completed]
-      ⟨⟨100, 0⟩, .full⟩ none
-  , signatureCase "invalid_signature_bytes" [invalidUtf8]
       ⟨⟨100, 0⟩, .full⟩ none
   , signatureCase "provider_inline_signature_without_stream" [bodyOnlyCompleted]
       ⟨⟨100, 0⟩, .full⟩ (some "S")

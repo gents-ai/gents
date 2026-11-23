@@ -1193,7 +1193,7 @@ async fn refused_dispatches_name_their_policy_and_next_help() {
             answer["next"]
                 .as_str()
                 .unwrap()
-                .contains("tools\",\"edit\",\"--help"),
+                .contains("tools\",\"update\",\"--help"),
             "{name}: {answer}"
         );
         let row = step.row_of("call-1").await;

@@ -521,9 +521,10 @@ async fn serve_foreground(
         .as_deref()
         .map(read_metrics_auth_token)
         .transpose()?;
+    let stderr = gents::runtime::native_logging::Stderr::new(args.system_log);
     let home_dir = resolve_home_dir(args.home.as_deref());
     if !tokio::fs::try_exists(&home_dir).await? {
-        eprintln!("Error: {} does not exist", home_dir.display());
+        stderr.write(&format!("Error: {} does not exist", home_dir.display()));
         std::process::exit(gents_service::native_service::HOME_GONE_EXIT_CODE);
     }
     // A home whose identity can never own the node is refused from its
@@ -1207,14 +1208,14 @@ async fn serve_foreground(
         // `serving` and everything it holds had been dropped.
         _ = async {
             home_watch::home_gone(&home_dir, home_identity).await;
-            home_watch::exit_home_gone(&home_dir)
+            home_watch::exit_home_gone(stderr, &home_dir)
         } => unreachable!("the home watch exits the process"),
     };
 
     // Every serving path, including a runtime that stopped on its own, reaches
     // the flush below; a replaced home must not receive it.
     if home_watch::home_replaced(&home_dir, home_identity).await {
-        home_watch::exit_home_gone(&home_dir);
+        home_watch::exit_home_gone(stderr, &home_dir);
     }
     // Declared before the drain, so a process that opens this home while it
     // runs (a supervisor's or a desktop's next start) waits for the release

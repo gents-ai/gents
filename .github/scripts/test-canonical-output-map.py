@@ -79,28 +79,24 @@ class MappingTests(unittest.TestCase):
         script = {"input": {"name": "script", "seed": {}, "query_document": 600,
                             "operations": [{"operation": "dispatch"}]},
                   "expected": {"observations": [{"accepted": False}]}}
-        gap = {"input": {**script["input"], "name": "gap", "native_gap": "no product transaction"},
-               "expected": script["expected"]}
 
-        def export(scripts, gaps):
-            return {"families": {"native_execution_contracts_script": {"cases": scripts},
-                                 "native_execution_contracts_script_unreached": {"cases": gaps}}}
+        def export(scripts):
+            return {"families": {"native_execution_contracts_script": {"cases": scripts}}}
 
-        mapping.check_execution_export(export([script], [gap]))
+        mapping.check_execution_export(export([script]))
         with self.assertRaises(ValueError):
             mapping.check_execution_export([])
-        invalid = [([], [gap]), ([None], [gap]), ([script], []), ([script, script], [gap]),
-                   ([script], [{**gap, "input": {**gap["input"], "native_gap": " "}}]),
-                   ([{**script, "input": {**script["input"], "native_gap": "x"}}], [gap]),
-                   ([{**script, "input": {**script["input"], "operations": []}}], [gap]),
-                   ([{**script, "input": {**script["input"], "operations": [{"operation": 1}]}}], [gap]),
-                   ([{**script, "input": {**script["input"], "operations": [{"operation": " "}]}}], [gap]),
-                   ([{**script, "expected": None}], [gap]),
-                   ([{**script, "expected": {"observations": [{}]}}], [gap]),
-                   ([{**script, "input": {**script["input"], "seed": None}}], [gap])]
-        for scripts, gaps in invalid:
-            with self.subTest(scripts=scripts, gaps=gaps), self.assertRaises(ValueError):
-                mapping.check_execution_export(export(scripts, gaps))
+        invalid = [[], [None], [script, script],
+                   [{**script, "input": {**script["input"], "native_gap": "x"}}],
+                   [{**script, "input": {**script["input"], "operations": []}}],
+                   [{**script, "input": {**script["input"], "operations": [{"operation": 1}]}}],
+                   [{**script, "input": {**script["input"], "operations": [{"operation": " "}]}}],
+                   [{**script, "expected": None}],
+                   [{**script, "expected": {"observations": [{}]}}],
+                   [{**script, "input": {**script["input"], "seed": None}}]]
+        for scripts in invalid:
+            with self.subTest(scripts=scripts), self.assertRaises(ValueError):
+                mapping.check_execution_export(export(scripts))
 
 if __name__ == "__main__":
     unittest.main()

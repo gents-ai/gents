@@ -1273,10 +1273,9 @@ async fn init_pins_the_tool_root_under_an_explicit_workspace_root_policy() -> Re
 
     run_init_json(&home_dir, &init_args)?;
 
-    let mut serve = spawn_server(&home_dir, port)?;
-    wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
-    wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
+    // The killed server's runtime.json and readiness row name this URL too;
+    // only the new server's serving line follows its own readiness.
+    let (mut serve, _) = spawn_server_with_ready_json(&home_dir, port, &[], &[])?;
     let reply = run_cli_text(
         &home_dir,
         &["-p", "Reply with exactly the configured token."],

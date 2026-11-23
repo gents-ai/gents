@@ -298,7 +298,7 @@ def effectCommit : Family EffectInput EffectOutput where
       , effects := i.effects.map EffectWire.toModel }
     { valid := c.accepted, committed := c.committed.map StateWire.ofModel }
 
-/-! Create grants: `Hooks.grantsValid` (decision 2026-11-11, maintainer-approved). -/
+/-! Create grants: `Hooks.grantsValid`. -/
 
 structure GrantCase where
   name : String
@@ -439,15 +439,6 @@ production form. -/
 @[conformance_family]
 def grantValidity : Family GrantInput GrantOutput where
   inputs := (grantCases.filter GrantCase.placed).map GrantCase.input
-  model := grantModel
-
-/-- model-production-gap: production has no form for a grant on a document
-the result does not create (a grant is a field of the create that carries
-it), so these cases are invalid by construction there and are checked only
-in the model. -/
-@[conformance_family]
-def grantValidityUnreached : Family GrantInput GrantOutput where
-  inputs := (grantCases.filter fun c => !c.placed).map GrantCase.input
   model := grantModel
 
 example : (grantCases.filter fun c => !c.placed).all (fun c => !c.valid) = true := by
@@ -757,14 +748,6 @@ terminal compare-and-set), so only cases whose transition commits reach
 @[conformance_family]
 def mustCommitStaging : Family MustCommitInput MustCommitOutput where
   inputs := (mustCommitCases.filter fun c => !c.transitionRefused).map MustCommitCase.input
-  model := mustCommitModel
-
-/-- model-production-gap: a refused core transition never reaches production
-staging (the terminal compare-and-set fails before `stage_dropping` runs), so
-these cases are checked only in the model. -/
-@[conformance_family]
-def mustCommitStagingUnreached : Family MustCommitInput MustCommitOutput where
-  inputs := (mustCommitCases.filter (·.transitionRefused)).map MustCommitCase.input
   model := mustCommitModel
 
 example : (mustCommitCases.filter (·.transitionRefused)).all

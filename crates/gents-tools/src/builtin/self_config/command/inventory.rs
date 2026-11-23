@@ -57,6 +57,20 @@ impl ConfigCommandTool {
             now,
         )
         .await?;
+        let refusals = gents_inference::usage_refusal::standing_refusals(
+            &self.core.access()?,
+            node_did,
+            &profiles,
+            now,
+        )
+        .await?;
+        let refused_on = |backend_ids: &[&str]| {
+            refusals
+                .iter()
+                .filter(|refusal| backend_ids.contains(&refusal.backend_id.as_str()))
+                .map(|refusal| refusal.for_agent())
+                .collect::<Vec<_>>()
+        };
         let mut items = Vec::new();
         for account in &accounts {
             let serving: Vec<_> = backends
@@ -87,6 +101,7 @@ impl ConfigCommandTool {
                 "label": account.label,
                 "state": if account.enabled { "enabled" } else { "disabled" },
                 "profiles": profiles_on(&serving),
+                "refusals": refused_on(&serving),
                 "usage": usage,
             }));
         }
@@ -110,13 +125,14 @@ impl ConfigCommandTool {
                 "label": backend.name,
                 "state": state,
                 "profiles": profiles_on(&[backend.backend_id.as_str()]),
+                "refusals": refused_on(&[backend.backend_id.as_str()]),
                 "usage": usage,
             }));
         }
         ordered! {
             "resource": "accounts",
             "items": items,
-            "note": "Read-only. Accounts are managed by the operator with `gents accounts`; a profile may keep its account, use an account-free backend or move to another provider's default account, never to another account of one provider. Usage endpoints are read when due; header-only limits use the latest runtime observation.",
+            "note": "Read-only. Accounts are managed by the operator with `gents accounts`; a profile may keep its account, use an account-free backend or move to another provider's default account, never to another account of one provider. Usage endpoints are read when due; header-only limits use the latest runtime observation. refusals are the provider usage limits still stopping a profile on that account, from the calls you can read.",
         }
         .pretty()
     }

@@ -1082,6 +1082,7 @@ async fn default_limits_tool_reads_live_then_uses_cache_without_exposing_credent
         node,
         node_did: did.into(),
         cache,
+        evidence: user_access.clone(),
     };
     let output = tool
         .call(
@@ -1100,6 +1101,7 @@ async fn default_limits_tool_reads_live_then_uses_cache_without_exposing_credent
         .unwrap();
     let cached: Value = serde_json::from_str(&cached).unwrap();
     assert_eq!(cached["accounts"][0]["read"]["outcome"], "skipped_recent");
+    assert_eq!(cached["refusals"], json!([]));
     let value: Value = serde_json::from_str(&output).unwrap();
     assert_eq!(
         value["accounts"][0]["limits"]["windows"][0]["used_pct"],

@@ -697,8 +697,9 @@ async fn published_readiness_observation_matches_model() {
     use gents_store::config_client::ConfigAccess;
     use gents_store::identity::NodeIdentity;
     for case in gents_lean_vocab::families::identity_operations_readiness_observation::cases() {
-        let (fixture_name, pending, mark) = match case.input.name.as_str() {
-            "valid" => ("success", true, false),
+        let name = case.input.name.as_str();
+        let (fixture_name, pending, mark) = match name {
+            "valid" | "foreign-runtime" | "no-readiness" => ("success", true, false),
             "readiness-unregistered" => ("owner-unknown", true, true),
             "foreign-readiness" => ("owner-mismatch", true, true),
             "replaced-parent" => ("parent-mismatch", true, true),
@@ -747,23 +748,45 @@ async fn published_readiness_observation_matches_model() {
                 }
             }
         }
-        let actor = identity::Did::new(fixture.runtime.did()).unwrap();
-        let observed = fixture
-            .runtime_access
+        if name == "no-readiness" {
+            let doc = escape_graphql_string(&fixture.doc);
+            fixture
+                .runtime_access
+                .write(
+                    "test.readiness.delete",
+                    &format!(r#"mutation {{ delete_NodeReadiness(docID: "{doc}") {{_docID}} }}"#),
+                )
+                .await
+                .unwrap();
+        }
+        let requested = identity::Did::new(fixture.runtime.did()).unwrap();
+        let observer = if name == "foreign-runtime" {
+            ConfigAccess::local_as(
+                fixture.node.clone(),
+                identity::Did::new(fixture.foreign.did()).unwrap(),
+            )
+        } else {
+            fixture.runtime_access.clone()
+        };
+        let observed = observer
             .transact_readonly("test.readiness.observe_owner", |txn| {
-                let actor = &actor;
+                let requested = &requested;
                 Box::pin(async move {
                     gents_store::config_client::node_readiness::observe_published_readiness(
-                        txn, actor,
+                        txn, requested,
                     )
                     .await
                 })
             })
-            .await
-            .unwrap();
+            .await;
+        let usable = match observed {
+            Ok(row) => row.is_some(),
+            Err(_) if observer.actor_did().as_deref() != Some(requested.as_str()) => false,
+            Err(error) => panic!("{name}: observation failed: {error:#}"),
+        };
         case.check(
             gents_lean_vocab::families::identity_operations_readiness_observation::Usable {
-                usable: observed.is_some(),
+                usable,
             },
         );
         fixture.node.shutdown().await.unwrap();

@@ -157,12 +157,17 @@ impl ToolCallLifecycle {
         Ok(published)
     }
 
+    /// `adopt_competing_terminal`: a writer that does not own the execution
+    /// (recovery, a stop of an unowned execution) races the owner's terminal,
+    /// and adopts it as a lost compare instead of checking it as its own
+    /// replay (Lean `firstTerminalIntent`).
     pub(in crate::call::lifecycle) async fn terminalize_with_presentation(
         &mut self,
         expected: ToolCallState,
         fields: TerminalFields<'_>,
         text: &str,
         presentation: Option<PayloadPresentation>,
+        adopt_competing_terminal: bool,
         operation: &'static str,
     ) -> Result<bool> {
         self.terminalize_with_options_at(
@@ -172,7 +177,7 @@ impl ToolCallLifecycle {
                 text,
                 pending_raw: None,
                 presentation,
-                adopt_competing_terminal: false,
+                adopt_competing_terminal,
                 publish_native_result: true,
                 operation,
                 fixture_now: None,

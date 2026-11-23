@@ -282,6 +282,7 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
                                     session_id: task_session,
                                     objective: "Task work",
                                     token_budget: None,
+                                    limits: gents_protocol::goal::GoalLimits::default(),
                                 },
                                 initial_state: GoalState {
                                     status: GoalStatus::Active,
@@ -343,6 +344,8 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
             goal_id: Some(selected.clone()),
             goal_objective: Some("Task work".into()),
             goal_token_budget: None,
+            goal_blocked_audit_threshold: None,
+            goal_max_infrastructure_retries: None,
             goal_assignment_applied: false,
             emit_outcome: false,
             queued_serial: false,

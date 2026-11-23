@@ -5,6 +5,7 @@ const DEFAULT_LIST_LIMIT: u32 = 20;
 const MAX_LIST_LIMIT: u32 = 50;
 
 pub const CHARS_PER_TOKEN_ESTIMATE: u32 = 4;
+/// Page size when a call omits `max_tokens`; the model sets it per call within the bounds below.
 const DEFAULT_READ_PROCESS_MAX_TOKENS: u32 = 4096;
 /// Bound a single returned page's context and allocation; retained output is
 /// fetched in later pages instead of widening this ceiling.
@@ -122,7 +123,6 @@ pub struct ReadToolOutputResponse {
     pub total_bytes: u64,
     pub has_more: bool,
     pub exited: bool,
-    pub exit_code: Option<i32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

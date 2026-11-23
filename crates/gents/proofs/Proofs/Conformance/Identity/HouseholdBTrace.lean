@@ -308,30 +308,15 @@ structure SelfConfigLookupInput where
   name : String
   present : Bool
   visible : Bool
-  sameGeneration : Bool
   nativeAllows : Bool
   deriving ToJson
 
-def selfConfigLookupInputs : List SelfConfigLookupInput :=
-  HouseholdFixture.selfConfigLookupCases.map fun (name, attempt) =>
-    { name, present := attempt.present, visible := attempt.visible,
-      sameGeneration := attempt.sameGeneration, nativeAllows := attempt.nativeAllows }
-
-def selfConfigLookupOutcome (i : SelfConfigLookupInput) : String :=
-  selfConfigOutcome ⟨i.present, i.visible, i.sameGeneration, i.nativeAllows⟩
-
 @[conformance_family]
 def selfConfigLookup : Family SelfConfigLookupInput String where
-  inputs := selfConfigLookupInputs.filter fun i => i.sameGeneration || !i.present
-  model := selfConfigLookupOutcome
-
-/-- model-production-gap: native document ACP cannot fence a document
-replacement between the self-config lookup and its relationship grant, so a
-lookup whose Agent document changed generation in between cannot be driven. -/
-@[conformance_family]
-def selfConfigLookupUnreached : Family SelfConfigLookupInput String where
-  inputs := selfConfigLookupInputs.filter fun i => !i.sameGeneration && i.present
-  model := selfConfigLookupOutcome
+  inputs := HouseholdFixture.selfConfigLookupCases.map fun (name, attempt) =>
+    { name, present := attempt.present, visible := attempt.visible,
+      nativeAllows := attempt.nativeAllows }
+  model := fun i => selfConfigOutcome ⟨i.present, i.visible, i.nativeAllows⟩
 
 structure AtomicCommitInput where
   commit : Bool

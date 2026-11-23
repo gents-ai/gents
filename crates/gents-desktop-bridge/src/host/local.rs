@@ -10,6 +10,8 @@ use tokio_util::sync::CancellationToken;
 
 use super::ClientHost;
 
+const IDLE_SHUTDOWN: Duration = Duration::from_secs(180);
+
 #[cfg(unix)]
 mod unix;
 #[cfg(windows)]
@@ -90,7 +92,7 @@ impl LocalListener {
         host: Arc<ClientHost>,
         stop: CancellationToken,
     ) -> Result<()> {
-        self.serve_with_idle_timeout(host, stop, Some(Duration::from_secs(180)))
+        self.serve_with_idle_timeout(host, stop, Some(IDLE_SHUTDOWN))
             .await
     }
 
@@ -102,7 +104,7 @@ impl LocalListener {
     ) -> Result<()> {
         let mut attachments = JoinSet::new();
         let mut phase = Phase::Accepting;
-        let idle = tokio::time::sleep(idle_timeout.unwrap_or(Duration::from_secs(180)));
+        let idle = tokio::time::sleep(idle_timeout.unwrap_or(IDLE_SHUTDOWN));
         tokio::pin!(idle);
         let result: Result<()> = async {
             loop {

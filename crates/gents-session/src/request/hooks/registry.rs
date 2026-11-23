@@ -34,6 +34,7 @@ pub struct ClaimCandidate {
 /// `request.claim.applied`: core's claim affected the request's row in this
 /// transaction. `fire` is the request's Task fire receipt as core read it
 /// (`_docID session_id goal_id goal_objective goal_token_budget
+/// goal_blocked_audit_threshold goal_max_infrastructure_retries
 /// goal_assignment_applied`), if it has one; `actor` is the transaction's
 /// actor.
 #[derive(Debug, Clone)]

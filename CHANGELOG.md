@@ -6,6 +6,15 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Task `goal_blocked_audit_threshold` (positive, default 3) and
+  `goal_max_infrastructure_retries` (non-negative, default 2) set the limits of
+  the Goals a Task creates. Every Goal a Task creates pins them, including Task
+  messages to an Agent. A Task that sets either without a goal objective is
+  rejected. Goals a person starts or the model creates keep the defaults. Goal
+  snapshots and the desktop's Goal view report both, and the desktop Tasks
+  panel edits them. A Goal's creation claim records both beside its token
+  budget, so a replayed creation that asks for other limits conflicts, as one
+  with another budget does.
 - Breaking: the successor budget of a request lineage (operator reissues and
   background wake redrives) is InferenceExecution `max_request_retries`
   (non-negative, default 3, zero allows none) instead of a value clients sign.
@@ -31,6 +40,15 @@ source consistency checks, not a separate runtime compatibility version.
   `failure_reason`, under the Agent's `max_rate_limit_wait_ms`. Blocked turns,
   a Goal's usage-limit stop and its resume at the reset read these fields
   instead of reclassifying the failure text (#3923).
+- A usage-limited InferenceCall also records what the provider stated of the
+  limit: `provider_limit_window_minutes`, `provider_limit_tokens_used` and
+  `provider_limit_tokens_limit`, each only when stated (xAI's free-tier
+  refusal states all three and is now recognised as a usage limit). The
+  `provider_limits` tool and `config backend accounts` show an Agent the
+  usage refusals still standing on its profiles, read as that Agent, with the
+  config call that moves a refused profile; `gents accounts list` shows the
+  operator every Agent's. A refusal stands until its reported reset passes or
+  a later call on the same backend and model completes.
 - A Task can run a host command instead of an agent: `command: {argv,
   timeout_secs}` in place of `agent_did` and `prompt_template` (a Task with
   both, or neither, is refused). Each fire of its schedule Trigger runs the

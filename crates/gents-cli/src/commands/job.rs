@@ -55,6 +55,7 @@ pub(crate) async fn dispatch(command: JobCommand) -> Result<()> {
 
 const BACKOFF_START: Duration = Duration::from_secs(1);
 const BACKOFF_CAP: Duration = Duration::from_secs(30);
+/// How long `job watch` waits for a just-submitted job to become observable before exiting with `NOT_OBSERVABLE_EXIT`; client wait UX, not runtime behaviour.
 const NOT_YET_OBSERVABLE_LIMIT: Duration = Duration::from_secs(120);
 const NOT_OBSERVABLE_EXIT: i32 = 4;
 

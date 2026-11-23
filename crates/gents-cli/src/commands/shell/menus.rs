@@ -660,6 +660,7 @@ mod tests {
             account_ref: None,
             backend_id: None,
             profiles: Vec::new(),
+            refusals: Vec::new(),
             usage: None,
             read: None,
         }

@@ -119,7 +119,7 @@ and materialization, migration publication, view creation, and collection
 cleanup. These names are the pinned DefraDB node-operation relations for
 those operations.
 
-Cleanup (maintainer decision, 2026-11-09, gents#3572): an Agent that builds
+Decision: an Agent that builds
 application collections may empty and remove them. External premise: the
 pinned DefraDB checks `truncate-collection` for a collection truncate and
 `patch-collection` for deleting a collection's versions, and consults no
@@ -153,14 +153,13 @@ or the ability to grant permissions. Native authorization remains decisive.
 Datastore write declarations create documents only. Self-configuration cleanup
 requires the node category for Agent and Context deletion; the agent category
 alone does not authorize cleanup. Goal creation also carries `delete-document`
-(user decision, 2026-11-07): an Agent that creates Goals may retire and delete
+(decision): an Agent that creates Goals may retire and delete
 the Goals it created, for example once one completes. Node permissions are
 node-wide, so document ACP decides which documents that reaches: the native
 owner, which is the creating Agent, holds delete on its own Goal rows
 (`goal_creator_deletes_its_goal`), while another session Agent does not. The
 goal-create source is the only grant, so disabling goal creation withdraws it.
-P2P pairing mutations likewise carry `delete-document` (maintainer decision,
-2026-11-09): revoking a pairing deletes the Agent-owned overlay, and document
+P2P pairing mutations likewise carry `delete-document` (decision): revoking a pairing deletes the Agent-owned overlay, and document
 ACP limits that to the overlay's native owner, so another Agent's overlay is
 unreachable (`pairing_overlay_delete_is_owner_scoped`). It is the only
 permission that source adds (`p2p_pairing_grants_only_delete_document`). There
@@ -331,18 +330,20 @@ theorem p2p_pairing_grants_delete_document (surface : ToolPolicy.Surface) (packI
     ("p2p-pairing", "delete-document") ∈ toolOperationSources surface packInstall := by
   simp [toolOperationSources, permitted]
 
-/-- For a request without native DAC bypass, a session tool's node-operation
-grant does not expand document visibility. HTTP may resolve bypass for a NAC
-owner or administrator; managed-Agent signing does not allow bypass. -/
+/-- A session tool's node-operation grant does not expand document visibility.
+Every request made as a managed Agent denies itself DAC bypass
+(`ManagedAgentSigner::deny_dac_bypass`), so a managed Agent that node access
+control grants `bypass-dac`, as a native admin, still reads only what document
+ACP grants. -/
 def toolSessionReadAllowed (grants : ToolGrantProjection) (household : State)
-    (actor session : String) (nativeBypass : Bool) : Bool :=
+    (actor session : String) : Bool :=
   toolGrantEffective grants actor "read-document" &&
-    (nativeBypass || Household.allowed 5 household actor "sessions" session "read")
+    Household.allowed 5 household actor "sessions" session "read"
 
 theorem session_tool_cannot_bypass_document_acp (grants : ToolGrantProjection)
     (household : State) (actor session : String)
     (denied : Household.allowed 5 household actor "sessions" session "read" = false) :
-    toolSessionReadAllowed grants household actor session false = false := by
+    toolSessionReadAllowed grants household actor session = false := by
   simp [toolSessionReadAllowed, denied]
 
 def changeToolGrant (state : ToolGrantProjection) (source : ToolGrantSource)
@@ -573,7 +574,7 @@ def clientSignedDeleteCollection (collection : String) : Bool :=
     ["PackInstallation", "InferenceBackendMetadata", "InferenceBackendObservation",
       "BackendCredential", "Goal", "GoalCreationClaim", "EventSourceCursor"].contains collection
 
-/-- The operator stop (security review, 2026-11-10): the Node's user owner
+/-- The operator stop: the Node's user owner
 deletes any Agent's application pairing overlay through the signed client path,
 and document ACP admits it through the Node parent
 (`pairing_overlay_delete_is_owner_scoped`). This permission is delete-only and
@@ -1244,18 +1245,12 @@ def configurationPresent (state : State) (id : String) : Bool :=
 
 /-- Where a destructive admin decision learns which documents exist.
 `acpFiltered` is every read Gents has: an ordinary query, filtered by document
-ACP for its own actor. Native premise, before defradb.rs #2744: DefraDB did not
-apply its DacBypass to ordinary reads, so the native admin (the client User
-key, `GrantSets.GrantSet.householdOwner`) did not see documents other actors
-own through them; the admin case of `crates/gents/src/pack/installation/tests.rs`
-on branch `aos/g20-admin-retire-refuted` (commit 43928b8f33) refuted the
-premise that "the admin can tell missing from hidden". Since #2744 the NAC
-owner and the native admin do read past document ACP
-(`NodeProvisioning.NacOwner`), but no conformance case evidences that such a
-read enumerates every document, so it is still `acpFiltered`: a document an
-actor cannot read is not known to be absent. `complete` names a read that
-enumerates every document whatever its ACP; no such source is evidenced yet,
-and until one is every destructive decision that needs it is refused. -/
+ACP for its own actor. The NAC owner and the native admin read past document
+ACP (`NodeProvisioning.NacOwner`), but nothing evidences that such a read
+enumerates every document, so it is `acpFiltered`: a document an actor cannot
+read is not known to be absent. `complete` names a read that enumerates every
+document whatever its ACP; Gents has none, so every destructive decision that
+needs one is refused. -/
 inductive InventoryRead where
   | acpFiltered
   | complete
@@ -1316,18 +1311,15 @@ theorem acp_filtered_inventory_refuses_destructive_decision (authority : Destruc
 theorem acp_filtered_admin_is_refused_for_incomplete_inventory :
     destructiveAdminDecision ⟨true, true, .acpFiltered⟩ = some .incompleteInventory := by decide
 
-/-- Dangling-reference repair (decision 2026-11-07, narrowed 2026-11-08). A
-saved selection can name a source document that no longer exists. An ordinary
+/-- Dangling-reference repair. A saved selection can name a source document that no longer exists. An ordinary
 update leaves that source in `removed`, where `mayManage` of an absent object
 is false, so the whole update aborts: the default is fail-closed, because an
 unreadable source is indistinguishable from an absent one and skipping its edge
 could retain a live grant. The repair is an explicit request and a destructive
 admin decision: it drops sources from `removed` only when
 `destructiveAdminDecision` allows it, i.e. the native admin of a NAC-enabled
-node reading a complete inventory. The earlier decision let the admin repair on
-the premise that it reads past document ACP; native conformance refuted that
-(`InventoryRead`), so with every available read ACP-filtered the repair is
-refused and is the ordinary update. Every present source, and every added one,
+node reading a complete inventory. Every available read is ACP-filtered
+(`InventoryRead`), so the repair is refused and is the ordinary update. Every present source, and every added one,
 still goes through `updateUsersetSelection`. -/
 def repairUsersetSelection (state : State) (manager : String) (authority : DestructiveAuthority)
     (repair : Bool) (targetResource targetId targetRelation : String) (before after : List String)

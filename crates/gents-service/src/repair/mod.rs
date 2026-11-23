@@ -685,7 +685,24 @@ async fn start(
 ) -> Result<RepairReceipt> {
     let _lock = hold_lock(&repair_lock_path()?).await?;
     let mut repairs = Repairs::new(progress, 2);
-    if let Some(graphql) = answering_graphql(home).await? {
+    let deadline = Instant::now() + ENDPOINT_WAIT;
+    let graphql = loop {
+        let (node, graphql) = recorded_node(home).await?;
+        match (start_action(node), graphql) {
+            (StartAction::UseNode, Some(graphql)) => break Some(graphql),
+            (StartAction::AwaitNode, _) if Instant::now() < deadline => {
+                tokio::time::sleep(POLL_EVERY).await;
+            }
+            (StartAction::AwaitNode, _) => {
+                return Ok(repairs.report(RepairOutcome::Blocked(Blocker::NoAnswer {
+                    seconds: ENDPOINT_WAIT.as_secs(),
+                    last_error: None,
+                })));
+            }
+            _ => break None,
+        }
+    };
+    if let Some(graphql) = graphql {
         let server = answering_server(home, &graphql)?;
         let observed = observe_port(&server, read_initialized_did(home).await.as_deref()).await;
         let outcome = match hand_started(server.http_port, observed) {
@@ -1003,6 +1020,67 @@ pub async fn serving_status(graphql: &str) -> Option<serde_json::Value> {
     ObservedServeLifecycle::observe(&payload)
         .is_ready()
         .then_some(payload)
+}
+
+/// What this home's recorded endpoint answers (Lean `InstallRepair.RecordedNode`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RecordedNode {
+    Silent,
+    Other,
+    Starting,
+    Ready,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StartAction {
+    UseNode,
+    AwaitNode,
+    ReachService,
+}
+
+/// Lean `InstallRepair.startAction`.
+pub(crate) fn start_action(node: RecordedNode) -> StartAction {
+    match node {
+        RecordedNode::Ready => StartAction::UseNode,
+        RecordedNode::Starting => StartAction::AwaitNode,
+        RecordedNode::Silent | RecordedNode::Other => StartAction::ReachService,
+    }
+}
+
+/// A `/status` answer from the node recorded as `node_did`. A node that
+/// predates the lifecycle field is not this version's starting node.
+pub(crate) fn classify_recorded(
+    node_did: &str,
+    payload: Option<&serde_json::Value>,
+) -> RecordedNode {
+    let Some(payload) = payload else {
+        return RecordedNode::Silent;
+    };
+    if served_identity(Some(node_did), payload) != ServedIdentity::Matches {
+        return RecordedNode::Other;
+    }
+    match ObservedServeLifecycle::observe(payload) {
+        ObservedServeLifecycle::Ready => RecordedNode::Ready,
+        ObservedServeLifecycle::Starting => RecordedNode::Starting,
+        ObservedServeLifecycle::Outdated { .. } => RecordedNode::Other,
+    }
+}
+
+async fn recorded_node(home: &Path) -> Result<(RecordedNode, Option<String>)> {
+    let Some(state) = read_runtime_state(home)? else {
+        return Ok((RecordedNode::Silent, None));
+    };
+    let payload = tokio::time::timeout(
+        Duration::from_secs(2),
+        gents::client_runtime::fetch_runtime_connection_payload(&state.graphql),
+    )
+    .await
+    .ok()
+    .and_then(Result::ok);
+    Ok((
+        classify_recorded(&state.node_did, payload.as_ref()),
+        Some(state.graphql),
+    ))
 }
 
 /// Bind the public readiness observation to the Node recorded by this home;

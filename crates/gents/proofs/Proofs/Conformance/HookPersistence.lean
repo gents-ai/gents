@@ -40,7 +40,6 @@ def storageObservationForMutation (policy : PersistenceState.FailurePolicy) :
 
 def terminalWriteObserved : StorageObservation → Bool
   | .successAcknowledged => true
-  | .readVisible => true
   | _ => false
 
 example : PersistenceState.step? .failClosed .committing .writeFail = some .uncommitted := rfl
@@ -101,45 +100,5 @@ def mutation : Family MutationInput MutationOutput where
 example : (mutation.inputs.map fun i =>
     terminalWriteObserved (storageObservationForMutation i.policy i.mutationResult)) =
     [true, true, false, false] := rfl
-
-structure VisibilityInput where
-  name : String
-  policy : PersistenceState.FailurePolicy
-  preObservation : String
-  action : String
-  deriving ToJson
-
-structure VisibilityOutput where
-  postObservation : String
-  postPersistence : String
-  terminalWriteObserved : Bool
-  deriving ToJson
-
-def visibilityCases :
-    List (String × StorageObservation × String × StorageObservation.Action) :=
-  [ ("read_your_writes_success_ack_is_visible", .successAcknowledged, "readYourWrites",
-      .readYourWrites)
-  , ("stale_read_preserves_committed_observation", .successAcknowledged, "staleRead", .staleRead)
-  , ("stale_event_preserves_committed_observation", .successAcknowledged, "staleEvent",
-      .staleEvent)
-  , ("event_after_stale_observation_is_visible", .staleObserved, "eventArrives", .eventArrives) ]
-
-def visibilityModel (i : VisibilityInput) : VisibilityOutput :=
-  let (pre, step) := ((visibilityCases.find? (·.1 == i.name)).map fun c => (c.2.1, c.2.2.2)).getD
-    (.noMutation, .beginMutation)
-  let post := (StorageObservation.step? i.policy pre step).getD pre
-  { postObservation := post.toContract
-    postPersistence := (StorageObservation.toPersistence post).toDefraDB
-    terminalWriteObserved := terminalWriteObserved post }
-
-/-- model-production-gap: the hook observes only its own mutation
-acknowledgements; no production owner reads a committed row back, so
-read-your-writes, stale reads, stale events and late event delivery are
-DefraDB observations no production path classifies. -/
-@[conformance_family]
-def visibilityUnreached : Family VisibilityInput VisibilityOutput where
-  inputs := visibilityCases.map fun (name, pre, action, _) =>
-    { name, policy := .failClosed, preObservation := pre.toContract, action }
-  model := visibilityModel
 
 end Conformance.HookPersistence

@@ -1,0 +1,4 @@
+---- MODULE MCShellSendLandings ----
+EXTENDS ShellSendLandings
+
+====

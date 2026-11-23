@@ -15,6 +15,8 @@ pub struct ResolvedTask {
     pub prompt_template: String,
     pub goal_objective_template: Option<String>,
     pub goal_token_budget: Option<i64>,
+    pub goal_blocked_audit_threshold: Option<i64>,
+    pub goal_max_infrastructure_retries: Option<i64>,
     pub output_schema_ref: Option<String>,
     pub hooks: Vec<TaskHook>,
     pub command: Option<TaskCommand>,
@@ -27,6 +29,14 @@ impl ResolvedTask {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .unwrap_or(&self.task_id)
+    }
+
+    /// The limits each Goal this Task creates or assigns pins.
+    pub fn goal_limits(&self) -> gents_protocol::goal::GoalLimits {
+        gents_protocol::goal::GoalLimits {
+            blocked_audit_threshold: self.goal_blocked_audit_threshold,
+            max_infrastructure_retries: self.goal_max_infrastructure_retries,
+        }
     }
 }
 
@@ -129,6 +139,8 @@ pub fn resolved_task_from(task: &super::Task) -> ResolvedTask {
         prompt_template: task.prompt_template.clone(),
         goal_objective_template: task.goal_objective_template.clone(),
         goal_token_budget: task.goal_token_budget,
+        goal_blocked_audit_threshold: task.goal_blocked_audit_threshold,
+        goal_max_infrastructure_retries: task.goal_max_infrastructure_retries,
         output_schema_ref: task.output_schema_ref.clone(),
         hooks: task.hooks.clone(),
         command: task.command.clone(),

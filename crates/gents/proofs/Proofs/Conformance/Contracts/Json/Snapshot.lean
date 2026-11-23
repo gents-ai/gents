@@ -78,6 +78,7 @@ import Proofs.Conformance.UsageWrite
 import Proofs.Conformance.SessionMessageKill
 import Proofs.Conformance.InferenceObservationRegistry
 import Proofs.Conformance.EagerStreaming
+import Proofs.Conformance.ToolResultText
 import Proofs.Conformance.BackendHealthRetention
 import Proofs.Conformance.BackendProbeSchedule
 import Proofs.Conformance.BackendHealthAdmission
@@ -87,6 +88,8 @@ import Proofs.Conformance.FleetSlotAccounting
 import Proofs.Conformance.Identity.AgentBaseline
 import Proofs.Conformance.InferenceDroppedPermit
 import Proofs.Conformance.InferenceProviderLimit
+import Proofs.Conformance.ProviderUsageRefusal
+import Proofs.Conformance.Identity.ProviderUsageEvidence
 import Proofs.Conformance.EventSourceCursor
 import Proofs.Conformance.Identity.AgentTargetAccess
 import Proofs.Conformance.Identity.WorkspaceCompletion
@@ -314,7 +317,7 @@ import Proofs.Conformance.ContractCases.RollingCompaction
 import Proofs.Conformance.ContractCases.ReductionEngine
 import Proofs.Conformance.ContractCases.RenderedCapture
 import Proofs.Conformance.ContractCases.CompactionProjectionJoin
-import Proofs.Conformance.Contracts.Json.CompactionCanonicalProjection
+import Proofs.Conformance.ContractCases.CompactionCanonicalProjection
 import Proofs.Conformance.CompletionRetry.Contracts
 import Proofs.Conformance.AccountRotation.Contracts
 import Proofs.Conformance.AccountStore
@@ -432,59 +435,14 @@ def snapshotCoverageTailJson : String :=
       ++ coverageLedgerJson
     ++ ",\"feature_surface_requirements\":"
       ++ featureSurfaceRequirementsJson
-    ++ ",\"feature_matrix\":"
-      ++ featureMatrixJson
     ++ "}"
 
 def snapshotJsonTail : String :=
   snapshotPromptTailJson ++ snapshotCaptureTailJson ++ snapshotCoverageTailJson
 
-def snapshotGoalCasesJson : String :=
-  ""
-    ++ "\"generated_by\":\"lake env lean --run Proofs/Conformance/Contracts.lean\","
-
-def snapshotGoalMutationCasesJson : String :=
-  ""
-
-def snapshotRequestCasesJson : String :=
-  ""
-
-def snapshotSessionCasesJson : String :=
-  ""
-
-def snapshotIdentityCasesJson : String :=
-  ""
-
-def snapshotClientCasesJson : String :=
-  ""
-
-def snapshotRuntimeCasesJson : String :=
-  ""
-
-def snapshotRecoveryCasesJson : String :=
-  ""
-    ++ "\"recovery_sweep_ids\":"
-      ++ jsonArray (Recovery.registeredRecoverySweepIds.map jsonString) ++ ","
-
-def snapshotPluginCasesJson : String :=
-  ""
-
-def snapshotFileCasesJson : String :=
-  ""
-
-
 def snapshotJson : String :=
   "{"
-    ++ snapshotGoalCasesJson
-    ++ snapshotGoalMutationCasesJson
-    ++ snapshotRequestCasesJson
-    ++ snapshotSessionCasesJson
-    ++ snapshotIdentityCasesJson
-    ++ snapshotClientCasesJson
-    ++ snapshotRuntimeCasesJson
-    ++ snapshotRecoveryCasesJson
-    ++ snapshotPluginCasesJson
-    ++ snapshotFileCasesJson
+    ++ "\"generated_by\":\"lake env lean --run Proofs/Conformance/Contracts.lean\","
     ++ snapshotJsonTail
 
 end Conformance.Contracts

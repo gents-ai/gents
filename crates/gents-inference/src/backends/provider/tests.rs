@@ -405,6 +405,52 @@ async fn discover_models_sends_chatgpt_codex_version_header_and_query_param() {
     );
 }
 
+#[tokio::test]
+async fn discover_models_sends_the_configured_client_version() {
+    let configured = "9.8.7-configured";
+    let (endpoint, requests) =
+        spawn_model_discovery_server(r#"{"models":[{"slug":"gpt-6.1-sol"}]}"#).await;
+    let mut credential = grok_credential();
+    credential.provider = crate::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER.to_string();
+    discover_models(
+        &Client::new(),
+        BackendProviderKind::ChatGptCodex,
+        &endpoint,
+        None,
+        Some(&credential),
+        Some(configured),
+    )
+    .await
+    .expect("ChatGPT Codex model discovery should succeed");
+    let request = requests.lock().expect("requests lock")[0].to_ascii_lowercase();
+    assert!(
+        request.starts_with(&format!("get /models?client_version={configured} ")),
+        "{request}"
+    );
+    assert!(
+        request.contains(&format!("version: {configured}")),
+        "{request}"
+    );
+
+    let (endpoint, requests) =
+        spawn_model_discovery_server(r#"{"data":[{"model":"grok-4.5"}]}"#).await;
+    discover_models(
+        &Client::new(),
+        BackendProviderKind::XaiGrokOAuth,
+        &endpoint,
+        None,
+        Some(&grok_credential()),
+        Some(configured),
+    )
+    .await
+    .expect("Grok OAuth model discovery should succeed");
+    let request = requests.lock().expect("requests lock")[0].to_ascii_lowercase();
+    assert!(
+        request.contains(&format!("x-grok-client-version: {configured}")),
+        "{request}"
+    );
+}
+
 fn claude_credential() -> crate::auth::credential::OAuthCredential {
     crate::auth::credential::OAuthCredential {
         doc_id: None,

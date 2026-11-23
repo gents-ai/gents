@@ -12,17 +12,15 @@ DAC relation permissions. Goal control exercises these paths as the executing
 Agent. This read-only metadata permission enables those operations without
 schema mutation, document access, or a different transaction identity.
 
-`delete-dac-relation` is the revoke of `add-dac-relation` (maintainer decision,
-2026-11-12, gents#3683): whoever can grant access on a document can revoke it,
+`delete-dac-relation` is the revoke of `add-dac-relation`: whoever can grant access on a document can revoke it,
 so an Agent that links or shares a document it manages can withdraw that
 relationship as itself. Like the add, it is only the native operation gate;
 document ACP still admits a change only from the document's owner or a
 declared manager of that relation (`Household.mayManage`), and a removed tuple
 only narrows access (`Household.revocation_only_narrows`).
 
-`get-collection` is here because every document write needs it (maintainer
-decision, 2026-11-13, gents#3747). External premise (defradb.rs #2744,
-`NodePermission::go_order`): the pinned DefraDB checks `get-collection` before
+`get-collection` is here because every document write needs it. External
+premise (`NodePermission::go_order`): the pinned DefraDB checks `get-collection` before
 `update-document` and `delete-document`, inside and outside a transaction, so
 an Agent without it can write none of its requests, outputs or tool calls. The
 permission reads a collection's definition, never its documents, and changes
@@ -52,8 +50,16 @@ theorem missing_signer_cannot_publish (o : AgentCreatorObservation)
     (missing : o.signerHeld = false) : agentCreatorMayPublish o = false := by
   simp [agentCreatorMayPublish, missing]
 
+/-- External premise: an enabled Agent's native document create and relation
+permissions are projected from its live Agent document as the Agent baseline,
+so production never observes them denied to an authorized creator; a denial
+still refuses the publication. -/
 theorem native_denial_cannot_publish (o : AgentCreatorObservation)
     (denied : o.nativeCreate = false) : agentCreatorMayPublish o = false := by
+  simp [agentCreatorMayPublish, denied]
+
+theorem native_relation_denial_cannot_publish (o : AgentCreatorObservation)
+    (denied : o.nativeRelation = false) : agentCreatorMayPublish o = false := by
   simp [agentCreatorMayPublish, denied]
 
 /-- The Agent command is exposed by either configured category. This is tool
@@ -147,7 +153,7 @@ def NacStatus.name : NacStatus → String
 
 /-- Who owns node access control (NAC) on a home's store.
 
-External premise (the pinned DefraDB revision, defradb.rs #2744): while NAC is
+External premise (the pinned DefraDB revision): while NAC is
 enabled, the NAC owner and every holder of `bypass-dac` (the native `admin`
 relation confers it) read past document ACP. The node's own DID passes every
 node-operation check whatever NAC holds for it (`check_node_access`), but a NAC
@@ -195,6 +201,9 @@ again. -/
 def runtimeMayStart (status : NacStatus) (nodeReadsPastDac : Bool) : Bool :=
   status == .enabled && !nodeReadsPastDac
 
+/-- External premise: `FreshBackendStore::initialize` configures NAC on every
+store and native persists that configuration, so a production start observes
+NAC enabled or disabled and never unconfigured; any status but enabled refuses. -/
 theorem runtime_refuses_without_enabled_nac (status : NacStatus) (nodeReadsPastDac : Bool)
     (notEnabled : status ≠ .enabled) : runtimeMayStart status nodeReadsPastDac = false := by
   cases status <;> simp_all [runtimeMayStart]

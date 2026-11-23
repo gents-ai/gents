@@ -70,6 +70,15 @@ pub struct GoalState {
 
 impl GoalState {
     pub fn step(self, action: GoalAction) -> Option<Self> {
+        self.step_with_blocked_audit_threshold(action, BLOCKED_AUDIT_THRESHOLD)
+    }
+
+    /// Lean `Goals.step?` with the Goal's pinned blocked-audit threshold.
+    pub fn step_with_blocked_audit_threshold(
+        self,
+        action: GoalAction,
+        blocked_audit_threshold: i64,
+    ) -> Option<Self> {
         match action {
             GoalAction::Pause
                 if matches!(self.status, GoalStatus::Active | GoalStatus::BudgetLimited) =>
@@ -121,7 +130,7 @@ impl GoalState {
                     GoalAuditObservation::NewCondition => 1,
                 };
                 Some(Self {
-                    status: if blocked_audits >= BLOCKED_AUDIT_THRESHOLD {
+                    status: if blocked_audits >= blocked_audit_threshold {
                         GoalStatus::Blocked
                     } else {
                         GoalStatus::Active
@@ -172,6 +181,7 @@ pub fn next_blocked_audit(
     previous_request_id: Option<&str>,
     reason: &str,
     request_id: &str,
+    blocked_audit_threshold: i64,
 ) -> (i64, bool) {
     let observation = if previous_request_id == Some(request_id) {
         GoalAuditObservation::SameRequest
@@ -186,7 +196,10 @@ pub fn next_blocked_audit(
         wrapup_requested: false,
         wrapup_completed: false,
     }
-    .step(GoalAction::BlockedAudit(observation))
+    .step_with_blocked_audit_threshold(
+        GoalAction::BlockedAudit(observation),
+        blocked_audit_threshold,
+    )
     .expect("blocked audit is legal from active");
     (state.blocked_audits, state.status == GoalStatus::Blocked)
 }
@@ -203,6 +216,7 @@ pub fn decide_goal_continuation(facts: GoalContinuationFacts) -> GoalDecision {
         infrastructure_retries,
         wrapup_requested,
         wrapup_completed,
+        max_infrastructure_retries,
     } = facts;
     if !session_idle || child_exists {
         return GoalDecision::None;
@@ -215,7 +229,7 @@ pub fn decide_goal_continuation(facts: GoalContinuationFacts) -> GoalDecision {
             GoalRequestTerminal::Failed | GoalRequestTerminal::Dead => {
                 if budget_reached {
                     GoalDecision::Wrapup
-                } else if infrastructure_retries.max(0) < MAX_INFRASTRUCTURE_RETRIES {
+                } else if infrastructure_retries.max(0) < max_infrastructure_retries {
                     GoalDecision::Retry
                 } else {
                     GoalDecision::Pause
@@ -243,7 +257,7 @@ pub fn decide_goal_continuation(facts: GoalContinuationFacts) -> GoalDecision {
                         GoalDecision::Pause
                     }
                     GoalRequestTerminal::Failed | GoalRequestTerminal::Dead => {
-                        if infrastructure_retries.max(0) < MAX_INFRASTRUCTURE_RETRIES {
+                        if infrastructure_retries.max(0) < max_infrastructure_retries {
                             GoalDecision::Retry
                         } else {
                             GoalDecision::AbandonWrapup

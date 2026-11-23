@@ -8,7 +8,7 @@ use gents_tools::surface::refuse_too_broad_root;
 use crate::cli::args::InitArgs;
 use crate::cli::{Cli, Command};
 use crate::commands::eval::terminal_size;
-use crate::commands::init::{default_packs, init_home};
+use crate::commands::init::{default_packs, init_home_with_core_packs};
 use crate::interactive_backend::{confirm, prompt_line_default, resolve_backend_interactively};
 use gents_host::args::StoreKeyCustodyArg;
 use gents_service::home_state::read_finished_init_config;
@@ -152,7 +152,12 @@ pub(super) async fn setup(
     args.registry = registry.map(str::to_owned);
     resolve_backend_interactively(&mut args, next_screen).await?;
 
-    let initialized = init_home(args).await?;
+    let initialized = init_home_with_core_packs(
+        args,
+        gents_core_packs::archives(),
+        default_packs::InitEntryPoint::Start,
+    )
+    .await?;
     for line in next_step_lines(&initialized, &home) {
         eprintln!("{line}");
     }

@@ -208,7 +208,7 @@ pub(crate) async fn cancel_loaded_background_tool_call(
         )
         .await
     {
-        let (process, _, retained) = ToolCallLifecycle::cancel_unowned_background_tool(
+        let (process, won, retained) = ToolCallLifecycle::cancel_unowned_background_tool(
             &node,
             &mut lifecycle,
             background_executions,
@@ -216,7 +216,9 @@ pub(crate) async fn cancel_loaded_background_tool_call(
             reason,
         )
         .await?;
-        return Ok(outcome_for_settled_process(process, &lifecycle, retained));
+        return Ok(outcome_for_settled_process(
+            process, &lifecycle, won, retained,
+        ));
     }
 
     let doc_id = lifecycle
@@ -239,7 +241,7 @@ pub(crate) async fn cancel_loaded_background_tool_call(
             .await
     };
     if process == gents_session::exec::ProcessStopOutcome::StillRunning {
-        if let Some(reloaded) = ToolCallLifecycle::load_by_doc_id_as(
+        let reloaded = ToolCallLifecycle::load_by_doc_id_as(
             node.clone(),
             lifecycle.actor().clone(),
             &doc_id,
@@ -247,15 +249,11 @@ pub(crate) async fn cancel_loaded_background_tool_call(
             lifecycle.session_id(),
             lifecycle.requester_did(),
         )
-        .await?
-        {
-            if reloaded.is_terminal() {
-                return Ok(CancelBackgroundToolCallOutcome::AlreadyTerminal {
-                    state: reloaded.state().as_str().to_owned(),
-                });
-            }
-        }
-        return Ok(CancelBackgroundToolCallOutcome::Unverified);
+        .await?;
+        return Ok(signalled_reply(
+            process,
+            reloaded.map(|reloaded| reloaded.state()),
+        ));
     }
     if background_executions.has_pending_failure(tool_call_id, &doc_id) {
         return Ok(CancelBackgroundToolCallOutcome::Unverified);
@@ -292,7 +290,7 @@ pub(crate) async fn cancel_loaded_background_tool_call(
                 });
             }
         }
-        let (process, _, retained) = ToolCallLifecycle::cancel_unowned_background_tool(
+        let (process, won, retained) = ToolCallLifecycle::cancel_unowned_background_tool(
             &node,
             &mut lifecycle,
             background_executions,
@@ -300,7 +298,9 @@ pub(crate) async fn cancel_loaded_background_tool_call(
             reason,
         )
         .await?;
-        return Ok(outcome_for_settled_process(process, &lifecycle, retained));
+        return Ok(outcome_for_settled_process(
+            process, &lifecycle, won, retained,
+        ));
     }
     if !background_executions
         .settle_retained_stop(&mut lifecycle)
@@ -324,12 +324,38 @@ pub(crate) async fn cancel_loaded_background_tool_call(
     }
 }
 
+/// Lean `Background.ProcessControl.signalledReply`: what a stop that signalled
+/// a running invocation reports from its outcome and the row it re-read once
+/// its wait for the worker's release ended.
+fn signalled_reply(
+    process: gents_session::exec::ProcessStopOutcome,
+    reread: Option<gents_protocol::tool_call::ToolCallState>,
+) -> CancelBackgroundToolCallOutcome {
+    use gents_protocol::tool_call::ToolCallState;
+    match reread {
+        Some(ToolCallState::Cancelled) => CancelBackgroundToolCallOutcome::Cancelled {
+            live_execution_cancelled: true,
+        },
+        Some(ToolCallState::Pending | ToolCallState::Running) | None => {
+            outcome_for_process(process, true)
+        }
+        Some(state) => CancelBackgroundToolCallOutcome::AlreadyTerminal {
+            state: state.as_str().to_owned(),
+        },
+    }
+}
+
+/// A retained stop's receipt, else Lean
+/// `Background.ProcessControl.unownedStopReply`: a failure that lost its
+/// compare names the terminal that won it.
 fn outcome_for_settled_process(
     process: gents_session::exec::ProcessStopOutcome,
     lifecycle: &ToolCallLifecycle,
+    won: bool,
     retained: bool,
 ) -> CancelBackgroundToolCallOutcome {
-    if retained && lifecycle.is_terminal() && !lifecycle.is_cancelled() {
+    let lost_to_terminal = !retained && !won && lifecycle.is_terminal();
+    if lost_to_terminal || (retained && lifecycle.is_terminal() && !lifecycle.is_cancelled()) {
         CancelBackgroundToolCallOutcome::AlreadyTerminal {
             state: lifecycle.state().as_str().to_owned(),
         }

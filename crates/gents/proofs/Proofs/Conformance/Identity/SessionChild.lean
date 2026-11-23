@@ -38,49 +38,29 @@ def repaired (i : ChildScopeInput) : RepairOutput :=
     i.binding i.nativeOwner i.creator i.authenticated i.grantOk i.markOk
   { parentGranted := result.parentGranted, parentLinked := result.parentLinked }
 
-def servedBindingNames : List String :=
-  ["paired_title_segment", "paired_title_capture", "paired_review_segment",
-    "paired_review_capture", "ordinary_same_requester", "ordinary_foreign_requester",
-    "ordinary_absent_requester", "source_kind_mismatch", "foreign_actor", "foreign_child_node",
-    "foreign_child_session", "foreign_child_requester", "missing_auxiliary",
-    "foreign_auxiliary_document"]
-
-def servedRepairNames : List String :=
-  ["paired_title_segment", "missing_parent", "invalid_parent_signature", "foreign_native_owner",
-    "completed_then_revoked"]
-
-/-- A served node writes the session, a signed parent and a pending auxiliary
-request through their production owners, so only the child's own node,
-session, requester, actor, source and request document can be varied; the
-signed rows' contents cannot be forged on that fixture. -/
+/-- Every case: the fixture writes the session and signed parent as the User,
+the auxiliary request as the Agent named as its signer (forged fields and
+signatures included, as a compromised client or runtime holding those keys can
+write them), then asks the binding as the named actor. -/
 @[conformance_family]
 def childScopeBinding : Family ChildScopeInput BindingOutput where
-  inputs := (childScopeCases.filter fun c => c.name ∈ servedBindingNames).map .ofCase
+  inputs := childScopeCases.map .ofCase
   model := fun i => { allowed := childScopeBindingAllowed i.binding }
 
-/-- model-production-gap: the served binding fixture cannot write a session,
-parent or auxiliary request whose signed contents, owner fields or collection
-differ from what their production writers produce. -/
-@[conformance_family]
-def childScopeBindingUnreached : Family ChildScopeInput BindingOutput where
-  inputs := (childScopeCases.filter fun c => c.name ∉ servedBindingNames).map .ofCase
-  model := fun i => { allowed := childScopeBindingAllowed i.binding }
-
-/-- Repair runs on a served node where the auxiliary request, its parent and
-the child segment are written by their signers; the scenario can omit or
-tamper the parent, create the child as another Agent, or complete and then
-revoke the link, and nothing else. -/
+/-- Repair evaluates the binding inside the authenticated repairer's own
+transaction, so the binding's actor is the authenticated creator; a case that
+separates them is a binding case only. -/
 @[conformance_family]
 def childScopeRepair : Family ChildScopeInput RepairOutput where
-  inputs := (childScopeCases.filter fun c => c.name ∈ servedRepairNames).map .ofCase
+  inputs := (childScopeCases.filter fun c =>
+    c.authenticated == some c.binding.actor && c.name != "failed_grant").map .ofCase
   model := repaired
 
-/-- model-production-gap: native grant or marker failures, uncommitted
-children and forged binding fields cannot be injected into the served repair
-fixture. -/
+/-- The parent grant is a native relationship change, and the store's fault
+seams fail only document mutations, so no fixture fails that grant alone. -/
 @[conformance_family]
 def childScopeRepairUnreached : Family ChildScopeInput RepairOutput where
-  inputs := (childScopeCases.filter fun c => c.name ∉ servedRepairNames).map .ofCase
+  inputs := (childScopeCases.filter (·.name == "failed_grant")).map .ofCase
   model := repaired
 
 structure ClientRequestInput where
@@ -114,24 +94,21 @@ example : (clientRequestCases.find? (·.name == "wrong_signer")).map
     (fun c => (recoverClientRequest c.initial c.matchingSignature c.sameSigner c.grantsOk c.markOk).pending) =
     some true := by decide
 
-def servedClientRequestNames : List String := ["wrong_signer", "grant_succeeded"]
-
-/-- One served retry fixture holds a committed, pending client request: another
-actor's recovery leaves it untouched, then its signer recovers it, in that
-order. Grant or marker failures, a mismatched signature and a completed
-publication cannot be produced on that fixture. -/
+/-- The retry fixture holds one committed, signed client retry per case in one
+session: another actor recovers one, its signer recovers one, its signer
+recovers one whose admission signature does not verify, and its signer
+recovers one it completed and whose working Agent grant it then revoked. -/
 @[conformance_family]
 def clientRequestRecovery : Family ClientRequestInput ClientRequestOutput where
-  inputs := servedClientRequestNames.filterMap fun name =>
-    (clientRequestCases.find? (·.name == name)).map .ofCase
+  inputs := (clientRequestCases.filter (·.name != "grant_failed")).map .ofCase
   model := recoveredClientRequest
 
-/-- model-production-gap: the served retry fixture cannot fail the working
-Agent grant or the marker write, sign a mismatched request, or start from a
-completed publication whose grant was revoked. -/
+/-- Recovery stages the working Agent grant in the transaction that clears the
+marker, and the store's fault seams count only document mutations, so no
+fixture fails that grant while its marker write succeeds. -/
 @[conformance_family]
 def clientRequestRecoveryUnreached : Family ClientRequestInput ClientRequestOutput where
-  inputs := (clientRequestCases.filter fun c => c.name ∉ servedClientRequestNames).map .ofCase
+  inputs := (clientRequestCases.filter (·.name == "grant_failed")).map .ofCase
   model := recoveredClientRequest
 
 deriving instance ToJson for Identity.SessionChild.ClientRequestPublication

@@ -137,7 +137,11 @@ pub(crate) use usage::{refresh_goal_usage_observed, GoalUsageObservation};
 pub use write::seed_goal_from_access;
 pub use write::{delete_goal_from_access, delete_goals_for_session_from_access};
 
+/// Lean `Goals.blockedAuditThreshold`: the threshold of a Goal whose Task
+/// declares no `goal_blocked_audit_threshold`.
 pub const BLOCKED_AUDIT_THRESHOLD: i64 = 3;
+/// Lean `Goals.maxInfrastructureRetries`: the limit of a Goal whose Task
+/// declares no `goal_max_infrastructure_retries`.
 pub const MAX_INFRASTRUCTURE_RETRIES: i64 = 2;
 
 pub use gents_protocol::goal::GoalSnapshot;

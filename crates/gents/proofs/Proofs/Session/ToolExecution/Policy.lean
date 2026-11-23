@@ -38,24 +38,6 @@ def all : List SchemaStatus :=
 
 end SchemaStatus
 
-inductive IdempotencyEvidence where
-  | unknown
-  | idempotent
-  | nonIdempotent
-  deriving DecidableEq, Repr
-
-namespace IdempotencyEvidence
-
-def toDefraDB : IdempotencyEvidence → String
-  | .unknown => "unknown"
-  | .idempotent => "idempotent"
-  | .nonIdempotent => "nonIdempotent"
-
-def all : List IdempotencyEvidence :=
-  [ .unknown, .idempotent, .nonIdempotent ]
-
-end IdempotencyEvidence
-
 inductive ToolOperation where
   | mcpListTools
   | mcpCall
@@ -145,7 +127,6 @@ end PreflightDecision
 inductive RetryDisposition where
   | doNotRetry
   | retrySafeRead
-  | retryIdempotentToolCall
   deriving DecidableEq, Repr
 
 namespace RetryDisposition
@@ -153,10 +134,9 @@ namespace RetryDisposition
 def toDefraDB : RetryDisposition → String
   | .doNotRetry => "doNotRetry"
   | .retrySafeRead => "retrySafeRead"
-  | .retryIdempotentToolCall => "retryIdempotentToolCall"
 
 def all : List RetryDisposition :=
-  [ .doNotRetry, .retrySafeRead, .retryIdempotentToolCall ]
+  [ .doNotRetry, .retrySafeRead ]
 
 theorem all_complete
     (disposition : RetryDisposition) :
@@ -185,19 +165,16 @@ structure PreflightCase where
 structure RetryCase where
   name : String
   operation : ToolOperation
-  idempotency : IdempotencyEvidence
-  failure : FailureClass
   disposition : RetryDisposition
   deriving Repr
 
-def retryDisposition
-    (operation : ToolOperation)
-    (idempotency : IdempotencyEvidence)
-    (failure : FailureClass) : RetryDisposition :=
-  match operation, idempotency, failure with
-  | .mcpListTools, _, .transport => .retrySafeRead
-  | .mcpCall, .idempotent, .transport => .retryIdempotentToolCall
-  | _, _, _ => .doNotRetry
+/-- The MCP pool retries a failed `list_tools` once on a fresh connection,
+whatever the failure, because listing is a safe read. It carries no idempotency
+evidence for a tool call, so it never retries `call_tool`, and no other tool
+operation is retried by the tool layer. -/
+def retryDisposition : ToolOperation → RetryDisposition
+  | .mcpListTools => .retrySafeRead
+  | _ => .doNotRetry
 
 def preflightCaseName
     (health : Health)
@@ -209,16 +186,8 @@ def preflightCaseName
       | .block failure => "blocks_" ++ failure.toDefraDB
   "preflight_" ++ health.toDefraDB ++ "_" ++ schema.toDefraDB ++ "_" ++ suffix
 
-def retryCaseName
-    (operation : ToolOperation)
-    (idempotency : IdempotencyEvidence)
-    (failure : FailureClass)
-    (disposition : RetryDisposition) : String :=
-  "retry_"
-    ++ operation.toDefraDB ++ "_"
-    ++ idempotency.toDefraDB ++ "_"
-    ++ failure.toDefraDB ++ "_"
-    ++ disposition.toDefraDB
+def retryCaseName (operation : ToolOperation) (disposition : RetryDisposition) : String :=
+  "retry_" ++ operation.toDefraDB ++ "_" ++ disposition.toDefraDB
 
 def preflightCases : List PreflightCase :=
   Health.all.flatMap fun health =>
@@ -231,16 +200,12 @@ def preflightCases : List PreflightCase :=
       }
 
 def retryCases : List RetryCase :=
-  ToolOperation.all.flatMap fun operation =>
-    IdempotencyEvidence.all.flatMap fun idempotency =>
-      FailureClass.all.map fun failure =>
-        let disposition := retryDisposition operation idempotency failure
-        { name := retryCaseName operation idempotency failure disposition
-        , operation := operation
-        , idempotency := idempotency
-        , failure := failure
-        , disposition := disposition
-        }
+  ToolOperation.all.map fun operation =>
+    let disposition := retryDisposition operation
+    { name := retryCaseName operation disposition
+    , operation := operation
+    , disposition := disposition
+    }
 
 theorem unreachable_blocks_dispatch
     (schema : SchemaStatus) :
@@ -253,28 +218,11 @@ theorem invalid_schema_blocks_healthy_dispatch :
 theorem invalid_schema_blocks_stale_dispatch :
     preflight .stale .invalid = .block .argumentInvalid := rfl
 
-theorem mcp_call_without_idempotency_metadata_does_not_retry
-    (failure : FailureClass) :
-    retryDisposition .mcpCall .unknown failure = .doNotRetry := by
-  cases failure <;> rfl
+theorem mcp_call_does_not_retry : retryDisposition .mcpCall = .doNotRetry := rfl
 
-theorem mcp_call_transport_retry_requires_idempotency
-    (idempotency : IdempotencyEvidence)
-    (h_retry :
-      retryDisposition .mcpCall idempotency .transport =
-        .retryIdempotentToolCall) :
-    idempotency = .idempotent := by
-  cases idempotency <;> simp [retryDisposition] at h_retry ⊢
+theorem native_command_not_retried_by_tool_model :
+    retryDisposition .nativeCommand = .doNotRetry := rfl
 
-theorem native_command_not_retried_by_tool_model
-    (idempotency : IdempotencyEvidence)
-    (failure : FailureClass) :
-    retryDisposition .nativeCommand idempotency failure = .doNotRetry := by
-  cases idempotency <;> cases failure <;> rfl
-
-theorem list_tools_transport_retry_is_safe_read
-    (idempotency : IdempotencyEvidence) :
-    retryDisposition .mcpListTools idempotency .transport = .retrySafeRead := by
-  cases idempotency <;> rfl
+theorem list_tools_retry_is_safe_read : retryDisposition .mcpListTools = .retrySafeRead := rfl
 
 end ToolExecution

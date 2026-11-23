@@ -39,3 +39,6 @@ mod tests;
 
 #[cfg(test)]
 mod slot_accounting_tests;
+
+#[cfg(test)]
+mod usage_refusal_tests;

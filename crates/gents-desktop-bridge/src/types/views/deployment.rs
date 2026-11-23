@@ -147,6 +147,8 @@ pub struct TaskView {
     pub prompt_template: Option<String>,
     pub goal_objective_template: Option<String>,
     pub goal_token_budget: Option<i64>,
+    pub goal_blocked_audit_threshold: Option<i64>,
+    pub goal_max_infrastructure_retries: Option<i64>,
     pub hooks: Vec<gents_documents::TaskHook>,
     pub enabled: Option<bool>,
     pub output_schema_ref: Option<String>,

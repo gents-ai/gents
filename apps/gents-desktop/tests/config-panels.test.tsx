@@ -399,6 +399,48 @@ describe("configuration panels", () => {
     },
   );
 
+  it("shows an execution's loop limits and timeouts and saves edits to them", async () => {
+    const { api, app } = harness();
+    const configured = {
+      ...deployment,
+      inferenceProfiles: deployment.inferenceProfiles.map((row) => ({
+        ...row,
+        execution_id: "execution-a",
+      })),
+      inferenceExecution: [
+        {
+          node_did: deployment.nodeDid,
+          execution_id: "execution-a",
+          max_invalid_tool_calls: 5,
+          repeated_tool_failure_limit: 2,
+          max_request_retries: 0,
+          title_timeout_secs: 7,
+        },
+      ],
+    };
+    renderIn(app, <ProfilesPanel deployment={configured} item="profile-a" />);
+    await waitFor(() =>
+      expect(api.getInferenceBackendRecommendation).toHaveBeenCalled(),
+    );
+    expect(screen.getByLabelText("Max invalid tool calls")).toHaveValue("5");
+    expect(screen.getByLabelText("Repeated tool failure limit")).toHaveValue("2");
+    expect(screen.getByLabelText("Max request retries")).toHaveValue("0");
+    expect(screen.getByLabelText("Title timeout seconds")).toHaveValue("7");
+    const user = await replace("Max invalid tool calls", "6");
+    await replace("Title timeout seconds", "12");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(api.applyConfigComponents).toHaveBeenCalled());
+    expect(
+      api.applyConfigComponents.mock.calls[0]![0].document.inference_execution[0],
+    ).toMatchObject({
+      execution_id: "execution-a",
+      max_invalid_tool_calls: 6,
+      repeated_tool_failure_limit: 2,
+      max_request_retries: 0,
+      title_timeout_secs: 12,
+    });
+  });
+
   it("does not starve model defaults while equivalent snapshots refresh", async () => {
     const { api, app } = harness();
     const view = renderIn(
@@ -2190,6 +2232,8 @@ describe("configuration panels", () => {
       "Endpoint",
       "Connect timeout seconds",
       "Discovery timeout seconds",
+      "Plugin request timeout seconds",
+      "Client version",
       "Max concurrent",
       "Max queue depth",
       "Enabled",
@@ -2205,6 +2249,36 @@ describe("configuration panels", () => {
     ]);
     expect(screen.getByLabelText("Endpoint")).toHaveFocus();
     expect(api.patchConfigComponents).not.toHaveBeenCalled();
+  });
+
+  it("shows a backend's configured client version and request timeout and saves edits to them", async () => {
+    const { api, app } = harness();
+    renderIn(
+      app,
+      <InferencePanel
+        item="backend-a"
+        deployment={{
+          ...deployment,
+          inferenceBackends: [
+            {
+              ...deployment.inferenceBackends[0]!,
+              clientVersion: "1.2.3",
+              requestTimeoutSecs: 45,
+            },
+          ],
+        }}
+      />,
+    );
+    expect(screen.getByLabelText("Client version")).toHaveValue("1.2.3");
+    expect(screen.getByLabelText("Plugin request timeout seconds")).toHaveValue("45");
+    const user = await replace("Client version", "1.2.4");
+    await replace("Plugin request timeout seconds", "90");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(api.patchConfigComponents).toHaveBeenCalledTimes(1));
+    const { patches } = api.patchConfigComponents.mock.calls[0][0];
+    expect(patches[0].changes).toEqual(
+      expect.objectContaining({ client_version: "1.2.4", request_timeout_secs: 90 }),
+    );
   });
 
   it("asks in the shared dialog before disconnecting a subscription from its account row", async () => {
@@ -2272,9 +2346,13 @@ describe("configuration panels", () => {
       "Execution document ID",
       "Max turns",
       "Max total tokens",
+      "Max invalid tool calls",
+      "Repeated tool failure limit",
+      "Max request retries",
       "Stream batch ms",
       "Execution lease seconds",
       "Provider idle seconds",
+      "Title timeout seconds",
       "Deadline seconds",
       "Retry policy ID",
       "Tags",

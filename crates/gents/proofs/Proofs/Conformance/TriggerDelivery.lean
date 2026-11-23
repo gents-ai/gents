@@ -562,19 +562,6 @@ def arrivalCursor : Family CursorInput CursorOutput where
   inputs := cursorScenarios.map cursorInput
   model := cursorOutput
 
-/-- model-production-gap: the arrivals a consumer still owes after the
-checkpoint, empty while its Trigger is disabled (`EventDelivery.Durable.pending`).
-Production returns no such list: the durable event-source scan decides each
-arrival's delivery inside its loop, so no production function yields it for a
-consumer to compare. The journal after the cursor is observed by
-`trigger_delivery_arrival_cursor` (`journalAfter`). -/
-@[conformance_family]
-def arrivalCursorPending : Family CursorInput (List ArrivalWire) where
-  inputs := cursorScenarios.map cursorInput
-  model := fun i =>
-    let run := cursorRun i
-    (EventDelivery.Durable.pending run.after run.source i.enabled).map .ofModel
-
 /-- An unadmitted matching arrival keeps the cursor, stays in the journal and
 leaves no receipt. -/
 example :

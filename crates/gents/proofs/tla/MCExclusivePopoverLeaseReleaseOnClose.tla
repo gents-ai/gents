@@ -1,0 +1,4 @@
+---- MODULE MCExclusivePopoverLeaseReleaseOnClose ----
+EXTENDS ExclusivePopoverLease
+
+====

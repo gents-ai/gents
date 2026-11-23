@@ -21,15 +21,14 @@ deriving instance ToJson for QueuedSteering.AgentDelivery
 
 structure Input where
   delivery : Option QueuedSteering.AgentDelivery
-  interrupt : Option Bool
   deriving ToJson
 
 end AgentDelivery
 
 @[conformance_family]
-def agentDelivery : Family AgentDelivery.Input (Option QueuedSteering.AgentDelivery) where
-  inputs := QueuedSteering.agentDeliveryCases.map fun (delivery, interrupt) => { delivery, interrupt }
-  model := fun i => QueuedSteering.resolveAgentDelivery i.delivery i.interrupt
+def agentDelivery : Family AgentDelivery.Input QueuedSteering.AgentDelivery where
+  inputs := QueuedSteering.agentDeliveryCases.map fun delivery => { delivery }
+  model := fun i => QueuedSteering.resolveAgentDelivery i.delivery
 
 structure InterruptDeliveryInput where
   planned : Option Nat
@@ -222,7 +221,7 @@ example : (QueuedSteering.guardObservations.length == 3 &&
     QueuedSteering.guardObservations.all fun observation =>
       observation.prefixAdmitted && !observation.admitted) = true := by native_decide
 
-/-- model-production-gap: the native queue claim and owned-execution
+/-- The native queue claim and owned-execution
 publication owners reject a different queue head, an incoherent supplied owner
 and publication after an interrupt only on persisted rows; no production
 scenario builds those rows, so each guard is checked in the model alone. -/
@@ -432,272 +431,6 @@ namespace QueuedSteeringTrace
 
 open Lean CanonicalOutput
 
-structure SourceWire where
-  kind : String
-  auxiliaryKind : Option String := none
-  scope : Option Nat := none
-  turn : Option Nat := none
-  attempt : Option Nat := none
-  call : Option Nat := none
-  key : Option Nat := none
-  deriving ToJson
-
-def auxiliaryKindName : AuxiliaryKind → String
-  | .compaction => "compaction"
-  | .compactionFallback => "compaction_fallback"
-  | .title => "title"
-  | .accessReview => "access_review"
-
-def SourceWire.ofModel : Source → SourceWire
-  | .provider scope turn attempt =>
-      { kind := "provider", scope := scope, turn := turn, attempt := attempt }
-  | .auxiliary kind scope turn attempt =>
-      { kind := "auxiliary", auxiliaryKind := auxiliaryKindName kind, scope := scope,
-        turn := turn, attempt := attempt }
-  | .toolEffectArguments call => { kind := "tool_effect_arguments", call := call }
-  | .tool call => { kind := "tool", call := call }
-  | .authored key => { kind := "authored", key := key }
-
-structure CoordinateWire where
-  request : Nat
-  source : SourceWire
-  deriving ToJson
-
-structure WriterWire where
-  kind : String
-  generation : Option Nat := none
-  call : Option Nat := none
-  deriving ToJson
-
-def WriterWire.ofModel : Writer → WriterWire
-  | .request generation => { kind := "request", generation := generation }
-  | .tool call => { kind := "tool", call := call }
-
-def outcomeName : CanonicalOutput.Outcome → String
-  | .complete => "complete"
-  | .«partial» => "partial"
-
-structure ToolWire where
-  id : String
-  callId : Option String
-  name : String
-  deriving ToJson
-
-structure DeclarationWire where
-  block : Nat
-  part : Nat
-  kind : String
-  tool : Option ToolWire
-  mediaKind : Option String
-  deriving ToJson
-
-def DeclarationWire.ofModel (declaration : CanonicalOutput.Declaration) : DeclarationWire :=
-  { block := declaration.block, part := declaration.part,
-    kind := payloadKindJson declaration.kind,
-    tool := declaration.tool.map fun tool =>
-      { id := tool.id, callId := tool.callId, name := tool.name },
-    mediaKind := declaration.mediaKind.map mediaKindJson }
-
-structure RunWire where
-  stream : Nat
-  bytes : Nat
-  declaration : Option DeclarationWire
-  deriving ToJson
-
-structure FlushWire where
-  ordinal : Nat
-  runs : List RunWire
-  payload : List Nat
-  deriving ToJson
-
-structure ClosureWire where
-  kind : String
-  outcome : Option String := none
-  segments : Option Nat := none
-  streamBytes : Option (List Nat) := none
-  deriving ToJson
-
-def ClosureWire.ofModel : Closure → ClosureWire
-  | .retracted => { kind := "retracted" }
-  | .closed outcome segments streamBytes =>
-      { kind := "closed", outcome := outcomeName outcome, segments := segments,
-        streamBytes := streamBytes }
-
-structure SegmentWire where
-  id : Nat
-  coordinate : CoordinateWire
-  writer : WriterWire
-  flush : Option FlushWire
-  close : Option ClosureWire
-  createdAt : Nat
-  deriving ToJson
-
-def SegmentWire.ofModel (segment : Segment) : SegmentWire :=
-  { id := segment.id,
-    coordinate := { request := segment.coordinate.request,
-                    source := SourceWire.ofModel segment.coordinate.source },
-    writer := WriterWire.ofModel segment.writer,
-    flush := segment.flush.map fun flush =>
-      { ordinal := flush.ordinal,
-        runs := flush.runs.map fun run =>
-          { stream := run.stream, bytes := run.bytes,
-            declaration := run.declaration.map DeclarationWire.ofModel },
-        payload := flush.payload.map (·.toNat) },
-    close := segment.close.map ClosureWire.ofModel,
-    createdAt := segment.createdAt }
-
-structure RefWire where
-  closeId : Nat
-  stream : Nat
-  deriving ToJson
-
-def RefWire.ofModel (ref : PayloadRef) : RefWire := { closeId := ref.closeId, stream := ref.stream }
-
-structure PartWire where
-  kind : String
-  start : Option Nat := none
-  stop : Option Nat := none
-  bytes : Option (List Nat) := none
-  deriving ToJson
-
-structure PresentationWire where
-  kind : String
-  parts : Option (List PartWire) := none
-  deriving ToJson
-
-def PresentationWire.ofModel : Presentation → PresentationWire
-  | .full => { kind := "full" }
-  | .composed parts =>
-      let wire : PresentationPart → PartWire
-        | .range start stop => { kind := "range", start := start, stop := stop }
-        | .literal bytes => { kind := "literal", bytes := bytes.map (·.toNat) }
-      { kind := "composed", parts := some (parts.map wire) }
-
-structure PayloadWire where
-  reference : RefWire
-  presentation : PresentationWire
-  deriving ToJson
-
-/-- A prepared steering input is one authored text block, so other block kinds
-carry only their kind; `prepared_candidates_are_text` states it for every trace. -/
-structure BlockWire where
-  kind : String
-  payload : Option PayloadWire
-  deriving ToJson
-
-def BlockWire.ofModel : MessageBlock PayloadSpec → BlockWire
-  | .text payload =>
-      let wire : PayloadWire :=
-        { reference := RefWire.ofModel payload.reference
-          presentation := PresentationWire.ofModel payload.presentation }
-      { kind := "text", payload := some wire }
-  | .reasoning _ _ => { kind := "reasoning", payload := none }
-  | .toolCall .. => { kind := "tool_call", payload := none }
-  | .toolResult .. => { kind := "tool_result", payload := none }
-  | .media _ => { kind := "media", payload := none }
-
-structure PublicationWire where
-  kind : String
-  generation : Option Nat := none
-  call : Option Nat := none
-  origin : Option Nat := none
-  deriving ToJson
-
-def PublicationWire.ofModel : MessagePublication → PublicationWire
-  | .requestExecution generation => { kind := "request_execution", generation := generation }
-  | .requestRecovery generation => { kind := "request_recovery", generation := generation }
-  | .toolDelivery call => { kind := "tool_delivery", call := call }
-  | .fork origin => { kind := "fork", origin := origin }
-
-structure HeaderWire where
-  id : Nat
-  session : Nat
-  request : Option Nat
-  origin : Option Nat
-  refs : List RefWire
-  outcome : String
-  role : String
-  publication : PublicationWire
-  deriving ToJson
-
-structure MessageWire where
-  header : HeaderWire
-  key : String
-  sequence : Nat
-  nativeId : Option String
-  nativeRequestId : Option String
-  blocks : List BlockWire
-  createdAt : Nat
-  deriving ToJson
-
-def MessageWire.ofModel (message : MessageEnvelope) : MessageWire :=
-  let h := message.header
-  { header := { id := h.id, session := h.session, request := h.request, origin := h.origin,
-                refs := h.refs.map RefWire.ofModel, outcome := outcomeName h.outcome,
-                role := roleJson h.role, publication := PublicationWire.ofModel h.publication },
-    key := message.key, sequence := message.sequence, nativeId := message.nativeId,
-    nativeRequestId := message.nativeRequestId, blocks := message.blocks.map BlockWire.ofModel,
-    createdAt := message.createdAt }
-
-structure CandidateWire where
-  closing : SegmentWire
-  message : MessageWire
-  deriving ToJson
-
-structure EntryWire where
-  requestId : Nat
-  createdAt : Nat
-  source : String
-  policy : String
-  queueKey : Option Nat
-  queuedAfter : Option Nat
-  deriving ToJson
-
-structure CaptureWire where
-  nodeDid : Nat
-  sessionId : Nat
-  requestDocId : Nat
-  turnIndex : Nat
-  attempt : Nat
-  bodyToken : Nat
-  priorBodyToken : Option Nat
-  deriving ToJson
-
-structure ObservationWire where
-  requestId : Nat
-  requestDocId : Nat
-  entry : EntryWire
-  interruptAt : Option Nat
-  preparedCandidate : Option CandidateWire
-  capture : CaptureWire
-  lifecycleState : String
-  acceptedInput : Bool
-  queueActive : Option Nat
-  admissionVisible : Bool
-  canonicalAuthoredCount : Nat
-  providerSendPermitted : Bool
-  deriving ToJson
-
-def ObservationWire.ofModel (witness : QueuedSteering.TraceObservation) : ObservationWire :=
-  let script := witness.caseScript
-  let key := script.capture.key
-  { requestId := witness.requestId, requestDocId := witness.requestDocId,
-    entry := { requestId := script.entry.requestId, createdAt := script.entry.createdAt,
-               source := script.entry.source.toDefraDB, policy := script.entry.policy.toDefraDB,
-               queueKey := script.entry.queueKey, queuedAfter := script.entry.queuedAfter },
-    interruptAt := script.interruptAt,
-    preparedCandidate := script.candidate.map fun prepared =>
-      { closing := SegmentWire.ofModel prepared.closing,
-        message := MessageWire.ofModel prepared.message },
-    capture := { nodeDid := key.nodeDid, sessionId := key.sessionId, requestDocId := key.requestId,
-                 turnIndex := key.turnIndex, attempt := key.attempt,
-                 bodyToken := script.capture.request.value,
-                 priorBodyToken := script.capture.priorBinding.map (·.value) },
-    lifecycleState := witness.lifecycleState, acceptedInput := witness.acceptedInput,
-    queueActive := witness.queueActive, admissionVisible := witness.admissionVisible,
-    canonicalAuthoredCount := witness.canonicalAuthoredCount,
-    providerSendPermitted := witness.providerSendPermitted }
-
 def actionNames (witness : QueuedSteering.TraceObservation) : List String :=
   witness.caseScript.actions.map queuedSteeringActionName
 
@@ -786,15 +519,6 @@ def publication : Family PublicationInput (Option PublicationOutput) where
   model := fun i => (observationNamed i.name).map fun witness =>
     { canonicalAuthoredCount := witness.canonicalAuthoredCount,
       providerSendPermitted := witness.providerSendPermitted }
-
-/-- model-production-gap: no native owner exposes the whole steering trace
-observation (admission visibility, capture binding, queue head and prepared
-candidate); claimed pre-start failure, prepublication send denial, conflicting
-capture and exact replay scripts have no native replay. -/
-@[conformance_family]
-def traceUnreached : Family ScriptInput (Option ObservationWire) where
-  inputs := QueuedSteering.traceObservations.map ScriptInput.ofModel
-  model := fun i => (observationNamed i.name).map ObservationWire.ofModel
 
 def pendingFacts (witness : QueuedSteering.TraceObservation) : Bool :=
   let entry := witness.caseScript.entry
@@ -977,10 +701,9 @@ structure CompactionReducerInput where
   deriving Lean.ToJson
 
 def compactionReducerOfName : String → Compaction.Reducer
-  | "strip" => .strip
   | "summarize" => .summarize
   | "provider_view" => .providerView
-  | _ => .identity
+  | _ => .strip
 
 def compactionReducerInputs : List CompactionReducerInput :=
   Compaction.compactionReducerCases.map fun c =>
@@ -1000,11 +723,6 @@ def compactionModelCase (i : CompactionReducerInput) : Compaction.CompactionRedu
 def compactionSummarizes (i : CompactionReducerInput) : Bool :=
   match i.reducer with
   | .summarize => true
-  | _ => false
-
-def compactionIdentity (i : CompactionReducerInput) : Bool :=
-  match i.reducer with
-  | .identity => true
   | _ => false
 
 structure CompactionReducerGateOutput where
@@ -1048,34 +766,17 @@ def compactionReducerApplyOutput (i : CompactionReducerInput) : CompactionReduce
     reportedStubs := c.reported.count, reportedOriginalBytes := c.reported.originalBytes
     reportedStubBytes := c.reported.stubBytes, reportedBytesRemoved := c.reported.bytesRemoved }
 
+/-- Production summarizes by a token budget (`split_for_summary`), not by the
+model's fixed split index, so only the strip and provider-view steps are applied
+natively; the summarize gate is replayed by `compactionReducerGateOpen`. -/
 @[conformance_family]
 def compactionReducerApply : Family CompactionReducerInput CompactionReducerApplyOutput where
-  inputs := compactionReducerInputs.filter fun i =>
-    !compactionSummarizes i && !compactionIdentity i
-  model := compactionReducerApplyOutput
-
-/-- model-production-gap: production summarizes by a token budget
-(`split_for_summary`); no production reducer applies the model's fixed split
-index, and the identity reducer exists only in the model. The message counts,
-pair and order preservation, identity and idempotence of a summarize or
-identity step have no native observation. -/
-@[conformance_family]
-def compactionReducerApplyUnreached :
-    Family CompactionReducerInput CompactionReducerApplyOutput where
-  inputs := compactionReducerInputs.filter fun i =>
-    compactionSummarizes i || compactionIdentity i
+  inputs := compactionReducerInputs.filter fun i => !compactionSummarizes i
   model := compactionReducerApplyOutput
 
 @[conformance_family]
 def compactionReducerGateOpen : Family CompactionReducerInput (Option Bool) where
-  inputs := compactionReducerInputs.filter fun i => !compactionIdentity i
-  model := fun i => (compactionModelCase i).gateOpen
-
-/-- model-production-gap: the identity reducer exists only in the model; no
-production compaction path evaluates its validity gate. -/
-@[conformance_family]
-def compactionReducerIdentityGateUnreached : Family CompactionReducerInput (Option Bool) where
-  inputs := compactionReducerInputs.filter compactionIdentity
+  inputs := compactionReducerInputs
   model := fun i => (compactionModelCase i).gateOpen
 
 structure CompactionCursorInput where

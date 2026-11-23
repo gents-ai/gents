@@ -157,16 +157,7 @@ def moduleClaimInputs : List ModuleClaimInput :=
 
 @[conformance_family]
 def callbackModuleClaim : Family ModuleClaimInput Bool where
-  inputs := moduleClaimInputs.filter fun i => i.committed
-  model := fun i => Automation.callbackModuleClaim i.visible i.same i.prepared i.committed
-
-/-- model-production-gap: `claim_invocation` commits the module plan and the
-claim in its own transaction; no production path aborts that transaction after
-a valid module plan has been prepared, so an aborted module claim cannot be
-driven. -/
-@[conformance_family]
-def callbackModuleClaimUnreached : Family ModuleClaimInput Bool where
-  inputs := moduleClaimInputs.filter fun i => !i.committed
+  inputs := moduleClaimInputs
   model := fun i => Automation.callbackModuleClaim i.visible i.same i.prepared i.committed
 
 structure ClaimedInput where
@@ -239,31 +230,15 @@ def eventReboundCheckpoint : Family ActorInput Bool where
   model := fun i =>
     Household.allowed 5 eventReboundCheckpointState i.actor "delivered_requests" "old-request" "read"
 
-def reboundCursor (i : ActorInput) : Nat :=
-  Automation.checkpointTaskArrival eventReboundCheckpointState i.actor "old-request" true true true 0 1
-
-/-- The rebound scenario checkpoints the Trigger's cursor as the rebound Agent,
-which is the consumer's selected Agent and holds its writer relation. -/
+/-- The rebound scenario checkpoints the Trigger's cursor as the owning User,
+the formerly selected Agent and the rebound Agent, which is the consumer's
+selected Agent and holds its writer relation. -/
 @[conformance_family]
 def eventReboundCursor : Family ActorInput Nat where
-  inputs := actorInputs [siblingDid]
-  model := reboundCursor
-
-/-- model-production-gap: model and production disagree. Production
-`checkpoint_prefix` (crates/gents-documents/src/event_consumer.rs:411-414)
-refuses a checkpoint by any actor other than the consumer's currently selected
-Agent (`event consumer selected Agent changed before checkpoint`), while
-`Identity.Automation.checkpointTaskArrival`
-(Proofs/Store/Identity/Automation.lean:152-156) gates only on reading the
-request, and `reboundCursor` passes `cursorWritable = true` for the former
-Agent. The model therefore advances the owner's and the former Agent's cursor
-where production refuses. Production is the safe side; this is an authority
-model, so the fix belongs in Lean first, for the maintainer and the security
-pass (#3683). -/
-@[conformance_family]
-def eventReboundCursorUnreached : Family ActorInput Nat where
-  inputs := actorInputs [userDid, agentDid]
-  model := reboundCursor
+  inputs := actorInputs [userDid, agentDid, siblingDid]
+  model := fun i =>
+    Automation.checkpointTaskArrival eventReboundCheckpointState i.actor siblingDid "old-request"
+      true true true 0 1
 
 structure PresenceInput where
   name : String
