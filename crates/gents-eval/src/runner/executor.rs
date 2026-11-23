@@ -1,7 +1,7 @@
 //! A serialized [`TrialSpec`] never carries checks, tiers, splits or other
 //! cases; the one field that names a case is [`TrialSpec::script_key`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -152,6 +152,10 @@ pub enum Capture {
     File {
         name: String,
         glob: String,
+        /// Paths whose text the stage's checks read; text is kept for these
+        /// alone, so retained text is bounded by what the case names.
+        #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+        text_paths: BTreeSet<String>,
     },
 }
 
@@ -176,6 +180,7 @@ impl From<&EvalCapture> for Capture {
             EvalCapture::File { name, glob } => Self::File {
                 name: name.clone(),
                 glob: glob.clone(),
+                text_paths: BTreeSet::new(),
             },
         }
     }
@@ -222,14 +227,33 @@ pub enum CaptureResult {
         /// older evidence still reads.
         #[serde(default)]
         outside_workspace: Vec<String>,
+        /// Matches that are not regular files (directories, dangling links),
+        /// recorded so a check can tell an occupied path from an absent one.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        non_files: Vec<String>,
     },
 }
+
+/// Evidence is held in memory for grading, so a captured file's text is retained only up to this size.
+pub const FILE_TEXT_LIMIT_BYTES: u64 = 64 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileRef {
     pub path: String,
     pub sha256: String,
     pub bytes: u64,
+    /// Read for a path the capture's `text_paths` names, absent otherwise.
+    /// Never serialized: `sha256` already digests the bytes, so the evidence
+    /// digest is the same whether or not text was kept.
+    #[serde(skip)]
+    pub text: Option<FileText>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FileText {
+    Kept(String),
+    NotUtf8,
+    OverLimit,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -382,6 +406,52 @@ mod tests {
             vec![serde_json::json!({"k": 2})],
         );
         assert_ne!(a.evidence_digest, c.evidence_digest);
+    }
+
+    #[test]
+    fn a_file_capture_digests_the_same_whether_or_not_its_text_was_kept() {
+        use super::{CaptureResult, FileRef, FileText, TrialEvidence};
+
+        let digest = |sha256: &str, text: Option<FileText>, non_files: Vec<String>| {
+            let mut evidence = ScriptedExecutor::passed_evidence("did:a", "s1", "items", vec![]);
+            evidence.stages[0].captures.insert(
+                "notes".into(),
+                CaptureResult::Files {
+                    files: vec![FileRef {
+                        path: "notes.txt".into(),
+                        sha256: sha256.into(),
+                        bytes: 5,
+                        text,
+                    }],
+                    outside_workspace: vec![],
+                    non_files,
+                },
+            );
+            TrialEvidence::digest(&evidence.stages, &evidence.usage, &evidence.anchor)
+        };
+        let bare = digest("aa", None, vec![]);
+        assert_eq!(
+            bare,
+            digest("aa", Some(FileText::Kept("hello".into())), vec![])
+        );
+        assert_eq!(bare, digest("aa", Some(FileText::NotUtf8), vec![]));
+        assert_ne!(bare, digest("bb", None, vec![]), "the bytes still count");
+        assert_ne!(
+            bare,
+            digest("aa", None, vec!["logs".into()]),
+            "an occupied path still counts"
+        );
+        assert_eq!(
+            serde_json::to_value(FileRef {
+                path: "notes.txt".into(),
+                sha256: "aa".into(),
+                bytes: 5,
+                text: Some(FileText::Kept("hello".into())),
+            })
+            .unwrap(),
+            serde_json::json!({"path": "notes.txt", "sha256": "aa", "bytes": 5}),
+            "a file reference digests as it did before text was kept"
+        );
     }
 
     #[test]

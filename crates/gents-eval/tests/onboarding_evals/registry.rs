@@ -127,6 +127,7 @@ fn every_registered_suite_validates_and_uses_shipped_checks() {
                             EvalCapture::File { .. } => CaptureResult::Files {
                                 files: vec![],
                                 outside_workspace: vec![],
+                                non_files: vec![],
                             },
                         },
                     );
