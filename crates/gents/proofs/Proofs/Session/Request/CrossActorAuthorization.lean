@@ -117,8 +117,9 @@ def sessionMatches (intent : Intent) (named : NamedSession) : Bool :=
 def agentMatches (intent : Intent) (agent : AgentRow) : Bool :=
   agent.document == intent.agentDocument && agent.agent == intent.selectedAgent && agent.enabled
 
-/-- The claim decision over what the claim transaction observes. A missing or
-not yet ready fact leaves the request pending (`unavailable`); a fact that
+/-- The claim decision over what the claim transaction observes. A missing fact,
+or a row whose relationship marker is pending, leaves the request pending
+(`unavailable`); a fact that
 contradicts the retained admission, or a native denial, ends it (`denied`).
 A request its own Agent signed needs only its binding, and an unbound one
 stays pending. The session named by the request being another document than

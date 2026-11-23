@@ -255,10 +255,12 @@ async fn per_group_dispatch_marks_each_group_once() {
                 on_result: Box::new(|_| {}),
             })
             .await;
-        case.check(gents_lean_vocab::families::event_delivery_group_marker::MarkerOutput {
-            materialized: matches!(result, FireResult::Fired { .. }),
-            marker_count_after: materializer.group_markers.lock().unwrap().len() as u64,
-        });
+        case.check(
+            gents_lean_vocab::families::event_delivery_group_marker::MarkerOutput {
+                materialized: matches!(result, FireResult::Fired { .. }),
+                marker_count_after: materializer.group_markers.lock().unwrap().len() as u64,
+            },
+        );
     }
 }
 

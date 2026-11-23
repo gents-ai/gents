@@ -1098,7 +1098,8 @@ mod grouped_tests {
             let response = node
                 .execute("{CallbackInvocation {owner_node_did origin}}")
                 .await;
-            let rows = gents_store::graphql::rows::<Value>(&response, "CallbackInvocation").unwrap();
+            let rows =
+                gents_store::graphql::rows::<Value>(&response, "CallbackInvocation").unwrap();
             assert!(rows.len() <= 1, "{}: one invocation per group", input.name);
             let invocation = rows.first();
             case.check(

@@ -4,7 +4,8 @@ use crate::request::lifecycle::{ClaimOutcome, ExecutionOrigin, RequestLifecycle}
 use gents_protocol::row::AgentRequest;
 use gents_store::config_client::NodePermission;
 
-type ClaimInput = gents_lean_vocab::families::cross_actor_authorization_signed_client_claim::ClaimInput;
+type ClaimInput =
+    gents_lean_vocab::families::cross_actor_authorization_signed_client_claim::ClaimInput;
 
 /// The served node, identities and targets one claim case runs against. The
 /// `owner` holds the Agent document; the `user` is the session's requester;
@@ -71,11 +72,21 @@ impl ClaimWorld {
         let (user, owner) = (self.access(&self.user), self.access(&self.owner));
         match write {
             "revoke_session_update" => user
-                .delete_actor_relationship("AgentSession", &self.session_doc, "working_agent", &collaborator)
+                .delete_actor_relationship(
+                    "AgentSession",
+                    &self.session_doc,
+                    "working_agent",
+                    &collaborator,
+                )
                 .await
                 .unwrap(),
             "grant_session_update" => user
-                .add_actor_relationship("AgentSession", &self.session_doc, "working_agent", &collaborator)
+                .add_actor_relationship(
+                    "AgentSession",
+                    &self.session_doc,
+                    "working_agent",
+                    &collaborator,
+                )
                 .await
                 .unwrap(),
             "revoke_invoke" => owner
@@ -199,7 +210,8 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
         let name = format!("{}-{index}", input.name);
         let home = tempfile::tempdir().unwrap();
         let key = |file: &str| KeyIdentity::load_or_create(home.path().join(file), None).unwrap();
-        let (user, owner, collaborator) = (key("user.key"), key("owner.key"), key("collaborator.key"));
+        let (user, owner, collaborator) =
+            (key("user.key"), key("owner.key"), key("collaborator.key"));
         let (db, runtime) = serve_client_node(
             "signed-client-claim-uses-transaction-bou",
             crate::test_support::no_lifecycle_plugins(),
@@ -244,7 +256,11 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
             session_doc: String::new(),
         };
         let signer_did: ::identity::Did = world.signer().did().parse().unwrap();
-        let invoke_holder = if input.agent_invoke { "session_writer" } else { "reader" };
+        let invoke_holder = if input.agent_invoke {
+            "session_writer"
+        } else {
+            "reader"
+        };
         owner_access
             .add_actor_relationship("Agent", &world.agent_doc, invoke_holder, &signer_did)
             .await
@@ -271,7 +287,11 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
             format!("model-{name}"),
             scope(format!("session-{name}")),
             "signed text",
-            if input.scheduled { "scheduled" } else { "interactive" },
+            if input.scheduled {
+                "scheduled"
+            } else {
+                "interactive"
+            },
             "2026-11-04T00:00:00Z",
             AgentRequestAdmissionRecord::client(world.signer().did()),
         );
@@ -297,7 +317,11 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
             .await
             .unwrap();
         if world.signer_is_collaborator || input.owner.as_deref() == Some("collaborator") {
-            let relation = if input.session_update { "working_agent" } else { "reader" };
+            let relation = if input.session_update {
+                "working_agent"
+            } else {
+                "reader"
+            };
             user_access
                 .add_actor_relationship(
                     "AgentSession",
@@ -337,7 +361,10 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
                 })
                 .await
                 .unwrap();
-            for (relation, did) in [("reader", binding.agent_did.as_str()), ("session_writer", world.signer().did())] {
+            for (relation, did) in [
+                ("reader", binding.agent_did.as_str()),
+                ("session_writer", world.signer().did()),
+            ] {
                 owner_access
                     .add_actor_relationship("Agent", &other_doc, relation, &did.parse().unwrap())
                     .await
@@ -360,11 +387,19 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
         let request_doc = if request_creator.did() != world.signer().did() {
             let input = gents_store::config_client::client_request_input(&create).unwrap();
             world
-                .raw_request(request_creator, &input, &signed_agent, &binding.agent_did, true)
+                .raw_request(
+                    request_creator,
+                    &input,
+                    &signed_agent,
+                    &binding.agent_did,
+                    true,
+                )
                 .await
         } else if input.named_session_matches && input.agent_row != "other" {
             let signer_access = world.access(world.signer());
-            submit_client_request(&signer_access, &create).await.unwrap();
+            submit_client_request(&signer_access, &create)
+                .await
+                .unwrap();
             signer_access
                 .execute(&format!(
                     r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
@@ -434,7 +469,10 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
                     serde_json::json!({ "relationships_pending": false }),
                 )
                 .await;
-            (world.request_row(&creator_access, &replayed).await, replayed)
+            (
+                world.request_row(&creator_access, &replayed).await,
+                replayed,
+            )
         } else {
             (retained, request_doc.clone())
         };
@@ -494,7 +532,9 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
                 },
                 String::new(),
             );
-            lifecycle.bind_managed_agent(agent_identity.as_ref()).unwrap();
+            lifecycle
+                .bind_managed_agent(agent_identity.as_ref())
+                .unwrap();
             lifecycle.set_client_claim_admission(Some(admission.clone()));
             lifecycle
         };
@@ -530,7 +570,10 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
                     world.apply_all(&input.race),
                 )
                 .await;
-            assert!(raced, "{name}: the race lands inside the claim's first attempt");
+            assert!(
+                raced,
+                "{name}: the race lands inside the claim's first attempt"
+            );
             result
         };
         let claimed_now = matches!(result.as_ref(), Ok(ClaimOutcome::Claimed));
@@ -562,7 +605,14 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
             },
         );
         if claimed_now && input.name == "committed_claim" {
-            assert_claimed_execution(&world, &mut lifecycle, &agent_access, agent_identity.clone(), input.scheduled).await;
+            assert_claimed_execution(
+                &world,
+                &mut lifecycle,
+                &agent_access,
+                agent_identity.clone(),
+                input.scheduled,
+            )
+            .await;
         }
         drop(lifecycle);
         world.node.shutdown().await.expect("shut down test node");
