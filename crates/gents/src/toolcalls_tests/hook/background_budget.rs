@@ -73,7 +73,8 @@ async fn admit_until_refused(index: usize, case: &AdmissionCase) {
             .configured
             .map(|configured| i64::try_from(configured).unwrap()),
     );
-    let executions = BackgroundExecutionRegistry::default();
+    let executions = BackgroundExecutionRegistry::default()
+        .with_release_wait(gents_store::test_support::STALL_CEILING);
     let registry = BackgroundToolRegistry::from_config(
         vec![Box::new(PendingTool)],
         &gents_tools::surface::BackgroundToolConfig {

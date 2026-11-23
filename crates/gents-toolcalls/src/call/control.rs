@@ -239,7 +239,7 @@ pub(crate) async fn cancel_loaded_background_tool_call(
             .await
     };
     if process == gents_session::exec::ProcessStopOutcome::StillRunning {
-        if let Some(reloaded) = ToolCallLifecycle::load_by_doc_id_as(
+        let reloaded = ToolCallLifecycle::load_by_doc_id_as(
             node.clone(),
             lifecycle.actor().clone(),
             &doc_id,
@@ -247,15 +247,11 @@ pub(crate) async fn cancel_loaded_background_tool_call(
             lifecycle.session_id(),
             lifecycle.requester_did(),
         )
-        .await?
-        {
-            if reloaded.is_terminal() {
-                return Ok(CancelBackgroundToolCallOutcome::AlreadyTerminal {
-                    state: reloaded.state().as_str().to_owned(),
-                });
-            }
-        }
-        return Ok(CancelBackgroundToolCallOutcome::Unverified);
+        .await?;
+        return Ok(signalled_reply(
+            process,
+            reloaded.map(|reloaded| reloaded.state()),
+        ));
     }
     if background_executions.has_pending_failure(tool_call_id, &doc_id) {
         return Ok(CancelBackgroundToolCallOutcome::Unverified);
@@ -321,6 +317,27 @@ pub(crate) async fn cancel_loaded_background_tool_call(
         Ok(CancelBackgroundToolCallOutcome::AlreadyTerminal {
             state: lifecycle.state().as_str().to_string(),
         })
+    }
+}
+
+/// Lean `Background.ProcessControl.signalledReply`: what a stop that signalled
+/// a running invocation reports from its outcome and the row it re-read once
+/// its wait for the worker's release ended.
+fn signalled_reply(
+    process: gents_session::exec::ProcessStopOutcome,
+    reread: Option<gents_protocol::tool_call::ToolCallState>,
+) -> CancelBackgroundToolCallOutcome {
+    use gents_protocol::tool_call::ToolCallState;
+    match reread {
+        Some(ToolCallState::Cancelled) => CancelBackgroundToolCallOutcome::Cancelled {
+            live_execution_cancelled: true,
+        },
+        Some(ToolCallState::Pending | ToolCallState::Running) | None => {
+            outcome_for_process(process, true)
+        }
+        Some(state) => CancelBackgroundToolCallOutcome::AlreadyTerminal {
+            state: state.as_str().to_owned(),
+        },
     }
 }
 
