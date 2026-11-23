@@ -5,6 +5,7 @@ use gents_store::views::ViewError;
 
 use crate::auth::credential::runtime_account::RuntimeAccountMetadataError;
 use crate::resolved::visibility::ConfigurationVisibilityError;
+use crate::usage_refusal::UsageRefusalError;
 use crate::views::backends::InventoryError;
 
 /// `AccessClassification.inferenceWrapped`.
@@ -33,6 +34,10 @@ fn every_inference_owner_variant_preserves_the_access_classification() {
             "configuration_visibility_error_access" => {
                 classify_owner(input.erasure, ConfigurationVisibilityError::Access(access))
             }
+            "usage_refusal_error_read" => classify_erased(
+                input.erasure,
+                UsageRefusalError::Read(ViewError::Execute(access)),
+            ),
             other => panic!(
                 "inference owner variant {other} has no constructor here; add it with its \
                  `AccessClassification.InferenceWrapper` constructor"

@@ -380,6 +380,7 @@ fn rendered_usage_limit_reclassifies_to_itself() {
     let limit = UsageLimit {
         resets_at: Utc.timestamp_opt(1_790_354_400, 0).single(),
         detail: "cap".into(),
+        statement: Default::default(),
     };
     let rendered = format!("ProviderError: {limit}");
     let Some(ProviderLimit::UsageExhausted(again)) = recorded_limit(&rendered, now()) else {
@@ -501,4 +502,39 @@ fn account_rotated_alone_is_a_marker_and_forgery_is_neutralized() {
     assert_eq!(only.annotate("x"), "x [provider-limit account-rotated]");
     let forged = ProviderLimitHeaders::default().annotate("a [provider-limit account-rotated] b");
     assert!(!ProviderLimitHeaders::from_text(&forged).account_rotated);
+}
+
+const XAI_FREE_TIER_REFUSAL: &str = "You've used all the included free usage for model grok-4.7 for now. Usage resets over a rolling 24-hour window — tokens (actual/limit): 691791/600000. Upgrade to a Grok subscription for higher limits: https://grok.com/supergrok";
+
+/// xAI's free-tier refusal is a usage limit, with or without the throttle
+/// status it arrives under, stating its window and counter and no reset.
+#[test]
+fn xai_free_tier_refusal_states_its_window_and_counter() {
+    for text in [
+        format!("ProviderError: {XAI_FREE_TIER_REFUSAL}"),
+        format!("{RIG_429}{XAI_FREE_TIER_REFUSAL}"),
+    ] {
+        let Some(ProviderLimit::UsageExhausted(limit)) = recorded_limit(&text, now()) else {
+            panic!("expected a usage limit for {text}");
+        };
+        assert_eq!(limit.resets_at, None);
+        assert_eq!(
+            *limit.statement,
+            ProviderLimitStatement {
+                window_minutes: Some(24 * 60),
+                tokens_used: Some(691_791),
+                tokens_limit: Some(600_000),
+            }
+        );
+    }
+}
+
+/// A refusal that states no window or counter records an unknown one.
+#[test]
+fn an_unstated_limit_records_nothing() {
+    let text = "ProviderError: You exceeded your current quota, please check your plan and billing details. (insufficient_quota)";
+    let Some(ProviderLimit::UsageExhausted(limit)) = recorded_limit(text, now()) else {
+        panic!("expected a usage limit");
+    };
+    assert_eq!(*limit.statement, ProviderLimitStatement::default());
 }

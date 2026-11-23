@@ -20,11 +20,23 @@ impl ProviderLimitVerdict {
     }
 }
 
-/// A failed call's `provider_limit` and, for a usage limit the provider
-/// reported a reset for, its `provider_limit_resets_at`
-/// (Lean: `InferenceCall.ProviderLimit.Recorded`).
+/// What a usage refusal states about the limit it hit, each part only when
+/// the provider states it: recorded in `provider_limit_window_minutes`,
+/// `provider_limit_tokens_used` and `provider_limit_tokens_limit`
+/// (Lean: `InferenceCall.ProviderLimit.Statement`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderLimitStatement {
+    pub window_minutes: Option<u64>,
+    pub tokens_used: Option<u64>,
+    pub tokens_limit: Option<u64>,
+}
+
+/// A failed call's `provider_limit` and, for a usage limit, the reset the
+/// provider reported in `provider_limit_resets_at` and what it stated of the
+/// limit (Lean: `InferenceCall.ProviderLimit.Recorded`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RecordedProviderLimit {
     pub verdict: ProviderLimitVerdict,
     pub resets_at: Option<DateTime<Utc>>,
+    pub statement: ProviderLimitStatement,
 }

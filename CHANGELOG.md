@@ -31,6 +31,15 @@ source consistency checks, not a separate runtime compatibility version.
   `failure_reason`, under the Agent's `max_rate_limit_wait_ms`. Blocked turns,
   a Goal's usage-limit stop and its resume at the reset read these fields
   instead of reclassifying the failure text (#3923).
+- A usage-limited InferenceCall also records what the provider stated of the
+  limit: `provider_limit_window_minutes`, `provider_limit_tokens_used` and
+  `provider_limit_tokens_limit`, each only when stated (xAI's free-tier
+  refusal states all three and is now recognised as a usage limit). The
+  `provider_limits` tool and `config backend accounts` show an Agent the
+  usage refusals still standing on its profiles, read as that Agent, with the
+  config call that moves a refused profile; `gents accounts list` shows the
+  operator every Agent's. A refusal stands until its reported reset passes or
+  a later call on the same backend and model completes.
 - A Task can run a host command instead of an agent: `command: {argv,
   timeout_secs}` in place of `agent_did` and `prompt_template` (a Task with
   both, or neither, is refused). Each fire of its schedule Trigger runs the

@@ -343,10 +343,21 @@ fn provider_limit_fields(
         return String::new();
     };
     let resets_at = limit.resets_at.map(|at| at.to_rfc3339());
+    let stated = |field: &str, value: Option<u64>| {
+        value
+            .map(|value| format!("{field}: {value},"))
+            .unwrap_or_default()
+    };
     format!(
-        r#"provider_limit: "{}", {}"#,
+        r#"provider_limit: "{}", {}{}{}{}"#,
         limit.verdict.as_str(),
-        optional_graphql_string("provider_limit_resets_at", resets_at.as_deref())
+        optional_graphql_string("provider_limit_resets_at", resets_at.as_deref()),
+        stated(
+            "provider_limit_window_minutes",
+            limit.statement.window_minutes
+        ),
+        stated("provider_limit_tokens_used", limit.statement.tokens_used),
+        stated("provider_limit_tokens_limit", limit.statement.tokens_limit),
     )
 }
 

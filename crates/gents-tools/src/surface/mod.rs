@@ -438,11 +438,23 @@ impl ToolSurface {
             .host_tools
             .build_native_tools_with_writethrough(writethrough, &runtime.native_executables)?;
         if self.self_config.enabled {
+            let agent = runtime
+                .agent_identity
+                .as_deref()
+                .context("provider limits require the selected agent identity")?;
+            let signer = agent
+                .managed_agent_signer()
+                .ok_or(gents_store::config_client::ConfigClientError::ManagedAgentSignerRequired)?;
             tools.push(Box::new(
                 gents_inference::usage_observation::ProviderLimitsTool {
                     node: runtime.node.clone(),
                     node_did: runtime.node_did.clone(),
                     cache: runtime.usage_cache.clone(),
+                    evidence: gents_store::config_client::ConfigAccess::local_with_agent_signer(
+                        runtime.node.clone(),
+                        identity::Did::new(agent.did())?,
+                        signer,
+                    )?,
                 },
             ));
         }
