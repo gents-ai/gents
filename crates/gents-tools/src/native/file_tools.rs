@@ -17,7 +17,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result};
 use serde::Serialize;
 
-use super::shared::ToolError;
+use super::shared::{ToolContext, ToolError};
+use gents_fs_runner::beneath::{Access, Intent};
 use gents_loop::tool_call_lifecycle::FailureClass;
 
 pub(super) fn deny_workspace_file_writes(
@@ -44,12 +45,24 @@ pub(super) fn merge_optional_notes(left: Option<String>, right: Option<String>) 
     }
 }
 
-/// Language-server resource edits can name binary files; snapshot checks
-/// must keep memory bounded.
-pub(crate) fn file_content_hash(path: &Path) -> std::io::Result<String> {
+/// The content hash of the file `path` names beneath the tool root, or
+/// `None` when nothing is there. Language-server resource edits can name
+/// binary files, so the hash reads in bounded chunks.
+pub(crate) fn file_content_hash(context: &ToolContext, path: &Path) -> Result<Option<String>> {
     use sha2::{Digest, Sha256};
     use std::io::Read as _;
-    let mut file = open_regular_file(path)?;
+    let located = context.locate(
+        path.to_str().context("path is not valid UTF-8")?,
+        Intent::Create,
+    )?;
+    if !located.exists() {
+        return Ok(None);
+    }
+    let mut file = match located.open(Access::Read) {
+        Ok(file) => file,
+        Err(error) if error.is_not_found() => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
     let mut hash = Sha256::new();
     let mut buffer = [0u8; 16 * 1024];
     loop {
@@ -62,25 +75,7 @@ pub(crate) fn file_content_hash(path: &Path) -> std::io::Result<String> {
         }
         hash.update(&buffer[..read]);
     }
-    Ok(format!("sha256:{:x}", hash.finalize()))
-}
-
-pub(crate) fn open_regular_file(path: &Path) -> std::io::Result<std::fs::File> {
-    let mut options = std::fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    }
-    let file = options.open(path)?;
-    if !file.metadata()?.is_file() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "the mutation target is not a regular file",
-        ));
-    }
-    Ok(file)
+    Ok(Some(format!("sha256:{:x}", hash.finalize())))
 }
 
 /// Per-path serialization for file mutators (edit_file read → hash-check →

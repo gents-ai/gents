@@ -27,6 +27,7 @@ pub use command::{
     CommandConstraints, CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode,
     WorkspaceAuthority,
 };
+pub(crate) use context::on_blocking;
 pub use context::ToolContext;
 pub(super) use context::ToolError;
 pub(super) use filesystem::{cap_output, render_file_contents};

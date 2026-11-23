@@ -4,8 +4,9 @@ use std::sync::Arc;
 use anyhow::{anyhow, bail, Context, Result};
 
 use crate::native::{CommandPolicyDenial, NativeExecutables};
+use gents_fs_runner::beneath::{BeneathError, Intent, Located, RootDir};
 use gents_loop::tool_call_lifecycle::FailureClass;
-use gents_pack::pack::rooted_paths::{ensure_within, normalize_for_creation};
+use gents_pack::pack::rooted_paths::ensure_unprotected;
 
 /// The configured tool root and base, the call whose workspace root and
 /// working directory override them while it is served, and the executables
@@ -170,52 +171,58 @@ impl ToolContext {
         self.effective_base()
     }
 
+    /// Resolves `path` beneath the effective root by directory handle: the
+    /// capability every file operation of the native tools acts through.
+    pub(crate) fn locate(&self, path: &str, intent: Intent) -> Result<Located> {
+        let root = RootDir::open(&self.effective_root())?;
+        let located = root.locate(Path::new(path), &self.effective_base(), intent)?;
+        ensure_unprotected(&located.path())?;
+        Ok(located)
+    }
+
+    /// An existing file beneath the effective root.
+    pub(crate) fn locate_existing_file(&self, path: &str) -> Result<Located> {
+        let located = self.locate(path, Intent::Existing)?;
+        if located.is_dir() {
+            bail!("path is not a file: {}", located.path().display());
+        }
+        Ok(located)
+    }
+
+    /// The content of an existing file, read through its resolved handle off
+    /// the runtime's threads.
+    pub(crate) async fn read_existing(&self, path: &Path) -> Result<Vec<u8>> {
+        let path = path.to_str().context("path is not valid UTF-8")?;
+        let located = self.locate_existing_file(path)?;
+        on_blocking(move || located.read()).await
+    }
+
+    /// The path `path` resolves to, for callers that hand it to another
+    /// program or subsystem.
     pub(crate) fn resolve_path_allow_create(&self, path: &str) -> Result<PathBuf> {
-        let candidate = Path::new(path);
-        let resolved = if candidate.is_absolute() {
-            normalize_for_creation(candidate)?
-        } else {
-            normalize_for_creation(&self.effective_base().join(candidate))?
-        };
-        self.ensure_allowed(resolved)
+        Ok(self.locate(path, Intent::Create)?.path())
     }
 
     pub(crate) fn resolve_path(&self, path: &str) -> Result<PathBuf> {
-        let candidate = Path::new(path);
-        let resolved = if candidate.is_absolute() {
-            std::fs::canonicalize(candidate)
-                .with_context(|| format!("resolving path {}", candidate.display()))?
-        } else {
-            let joined = self.effective_base().join(candidate);
-            std::fs::canonicalize(&joined)
-                .with_context(|| format!("resolving path {}", joined.display()))?
-        };
-        self.ensure_allowed(resolved)
+        Ok(self.locate(path, Intent::Existing)?.path())
     }
 
     pub(crate) fn resolve_existing_dir(&self, path: Option<&str>) -> Result<PathBuf> {
         let resolved = match path {
-            Some(path) if !path.trim().is_empty() => self.resolve_path(path)?,
+            Some(path) if !path.trim().is_empty() => {
+                let located = self.locate(path, Intent::Existing)?;
+                if !located.is_dir() {
+                    bail!("path is not a directory: {}", located.path().display());
+                }
+                located.path()
+            }
             _ => self.effective_base(),
         };
-
-        if !resolved.is_dir() {
-            bail!("path is not a directory: {}", resolved.display());
-        }
-
         Ok(resolved)
     }
 
     pub(crate) fn resolve_existing_file(&self, path: &str) -> Result<PathBuf> {
-        let resolved = self.resolve_path(path)?;
-        if !resolved.is_file() {
-            bail!("path is not a file: {}", resolved.display());
-        }
-        Ok(resolved)
-    }
-
-    fn ensure_allowed(&self, path: PathBuf) -> Result<PathBuf> {
-        ensure_within(&self.effective_root(), path)
+        Ok(self.locate_existing_file(path)?.path())
     }
 
     fn effective_root(&self) -> PathBuf {
@@ -246,6 +253,18 @@ impl ToolContext {
         }
         path.display().to_string()
     }
+}
+
+/// Runs a filesystem operation on the blocking pool.
+pub(crate) async fn on_blocking<T>(
+    operation: impl FnOnce() -> Result<T, BeneathError> + Send + 'static,
+) -> Result<T>
+where
+    T: Send + 'static,
+{
+    Ok(tokio::task::spawn_blocking(operation)
+        .await
+        .context("the filesystem task did not finish")??)
 }
 
 fn resolve_default_read_root(

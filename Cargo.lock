@@ -6812,11 +6812,15 @@ version = "1.0.0-rc2"
 dependencies = [
  "anyhow",
  "gents-fs-runner",
+ "gents-lean-vocab",
  "globset",
  "ignore",
  "regex",
+ "rustix",
  "serde",
  "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -7133,6 +7137,7 @@ dependencies = [
  "futures",
  "gents-core-packs",
  "gents-documents",
+ "gents-fs-runner",
  "gents-inference",
  "gents-lean-contract",
  "gents-lean-vocab",
@@ -7392,6 +7397,7 @@ dependencies = [
  "events",
  "futures",
  "gents-documents",
+ "gents-fs-runner",
  "gents-inference",
  "gents-lean-contract",
  "gents-lean-vocab",

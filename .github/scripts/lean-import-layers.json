@@ -302,6 +302,10 @@
     "Proofs.Tools.Identity.TaskTarget": {
       "rust_owner": "gents-store",
       "reason": "raised with Identity.Configuration"
+    },
+    "Proofs.Tools.PathNamespace": {
+      "rust_owner": "gents-fs-runner",
+      "reason": "the beneath-root resolver sits in the filesystem runner crate, below every layer, so the file tools, the runner's walks and pack authoring share it"
     }
   },
   "exceptions": []

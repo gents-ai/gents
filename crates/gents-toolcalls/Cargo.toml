@@ -62,6 +62,7 @@ afterburner-afb = { git = "https://github.com/afterburner-sh/afterburner.git", r
 afterburner-core = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1" }
 
 [dev-dependencies]
+gents-fs-runner = { path = "../gents-fs-runner" }
 gents-workspace-hack = { workspace = true }
 base64.workspace = true
 rig-core.workspace = true
