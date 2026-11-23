@@ -1,0 +1,140 @@
+{
+  "case_id": "manifest-overlap",
+  "split": "validation",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "manifests/inbound.json",
+        "contents": "[\"C-33\", \"C-12\", \"C-27\", \"C-45\", \"C-70\"]\n"
+      },
+      {
+        "path": "manifests/outbound.json",
+        "contents": "[\"C-45\", \"C-61\", \"C-12\", \"C-12\", \"C-70\"]\n"
+      },
+      {
+        "path": "manifests/holds.txt",
+        "contents": "# held at the gate, one crate per line\n\nC-70\nC-45 \n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "run",
+      "prompt": "Which crates are on both the inbound and the outbound manifest but not on hold? The manifests are manifests/inbound.json and manifests/outbound.json, and manifests/holds.txt lists held crate IDs one per line under a comment header. Work it out in one script that reads all three files, return {\"shared\": [...], \"count\": N} with each crate listed once and sorted, and tell me the crates. Leave the files alone.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "inner_reads",
+          "collection": "AgentToolCall",
+          "filter": {
+            "plugin_parent_tool_call_doc_id": {
+              "_ne": null
+            },
+            "tool_name": {
+              "_eq": "read_file"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            }
+          },
+          "fields": [
+            "tool_name",
+            "lifecycle_state",
+            "plugin_parent_tool_call_doc_id"
+          ]
+        },
+        {
+          "kind": "file",
+          "name": "manifests",
+          "glob": "manifests/*"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "script",
+              "read_file"
+            ],
+            "forbidden": [
+              "bash",
+              "write_file",
+              "edit_file"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "shared",
+                "equals": [
+                  "C-12"
+                ]
+              },
+              {
+                "field": "count",
+                "equals": 1
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "inner_reads",
+                "min": 3
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "manifests",
+            "expect": [
+              {
+                "path": "manifests/inbound.json",
+                "sha256": "f6e3f51c88c297aebb6e23a75614cdccec50f8e9bb3fefa787502944181fff66"
+              },
+              {
+                "path": "manifests/outbound.json",
+                "sha256": "94afd8d124a697d0f48bb2f0f29ff8d3b435ef2dda5bcfc14f6df581706c8e64"
+              },
+              {
+                "path": "manifests/holds.txt",
+                "sha256": "05a01781c7bd5b71efb27d0102bfa18dbdc9fcc7d4d835e21ff4436923a6bd9f"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "C-12"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

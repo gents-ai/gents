@@ -1,0 +1,622 @@
+{
+  "case_id": "freight-pagination",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type FreightLeg { leg: String route: String kg: Int }"
+    ],
+    "documents": [
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-000",
+          "route": "north",
+          "kg": 40
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-001",
+          "route": "south",
+          "kg": 77
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-002",
+          "route": "east",
+          "kg": 114
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-003",
+          "route": "north",
+          "kg": 61
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-004",
+          "route": "south",
+          "kg": 98
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-005",
+          "route": "north",
+          "kg": 45
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-006",
+          "route": "south",
+          "kg": 82
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-007",
+          "route": "east",
+          "kg": 119
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-008",
+          "route": "north",
+          "kg": 66
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-009",
+          "route": "south",
+          "kg": 103
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-010",
+          "route": "north",
+          "kg": 50
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-011",
+          "route": "south",
+          "kg": 87
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-012",
+          "route": "east",
+          "kg": 124
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-013",
+          "route": "north",
+          "kg": 71
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-014",
+          "route": "south",
+          "kg": 108
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-015",
+          "route": "north",
+          "kg": 55
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-016",
+          "route": "south",
+          "kg": 92
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-017",
+          "route": "east",
+          "kg": 129
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-018",
+          "route": "north",
+          "kg": 76
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-019",
+          "route": "south",
+          "kg": 113
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-020",
+          "route": "north",
+          "kg": 60
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-021",
+          "route": "south",
+          "kg": 97
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-022",
+          "route": "east",
+          "kg": 44
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-023",
+          "route": "north",
+          "kg": 81
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-024",
+          "route": "south",
+          "kg": 118
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-025",
+          "route": "north",
+          "kg": 65
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-026",
+          "route": "south",
+          "kg": 102
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-027",
+          "route": "east",
+          "kg": 49
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-028",
+          "route": "north",
+          "kg": 86
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-029",
+          "route": "south",
+          "kg": 123
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-030",
+          "route": "north",
+          "kg": 70
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-031",
+          "route": "south",
+          "kg": 107
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-032",
+          "route": "east",
+          "kg": 54
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-033",
+          "route": "north",
+          "kg": 91
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-034",
+          "route": "south",
+          "kg": 128
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-035",
+          "route": "north",
+          "kg": 75
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-036",
+          "route": "south",
+          "kg": 112
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-037",
+          "route": "east",
+          "kg": 59
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-038",
+          "route": "north",
+          "kg": 96
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-039",
+          "route": "south",
+          "kg": 43
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-040",
+          "route": "north",
+          "kg": 80
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-041",
+          "route": "south",
+          "kg": 117
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-042",
+          "route": "east",
+          "kg": 64
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-043",
+          "route": "north",
+          "kg": 101
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-044",
+          "route": "south",
+          "kg": 48
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-045",
+          "route": "north",
+          "kg": 85
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-046",
+          "route": "south",
+          "kg": 122
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-047",
+          "route": "east",
+          "kg": 69
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-048",
+          "route": "north",
+          "kg": 106
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-049",
+          "route": "south",
+          "kg": 53
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-050",
+          "route": "north",
+          "kg": 90
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-051",
+          "route": "south",
+          "kg": 127
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-052",
+          "route": "east",
+          "kg": 74
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-053",
+          "route": "north",
+          "kg": 111
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-054",
+          "route": "south",
+          "kg": 58
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-055",
+          "route": "north",
+          "kg": 95
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-056",
+          "route": "south",
+          "kg": 42
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-057",
+          "route": "east",
+          "kg": 79
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-058",
+          "route": "north",
+          "kg": 116
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-059",
+          "route": "south",
+          "kg": 63
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-060",
+          "route": "north",
+          "kg": 100
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-061",
+          "route": "south",
+          "kg": 47
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-062",
+          "route": "east",
+          "kg": 84
+        }
+      },
+      {
+        "collection": "FreightLeg",
+        "document": {
+          "leg": "FL-063",
+          "route": "north",
+          "kg": 121
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "run",
+      "prompt": "Total the freight weight per route from every FreightLeg record, in one script that reads them with your query tool. There are a lot of legs, so make sure the script sees all of them. Have the script return {\"legs\": <number of legs it read>, \"totals\": {<route>: <total kg>, ...}}, and tell me the heaviest route and its total.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "inner_queries",
+          "collection": "AgentToolCall",
+          "filter": {
+            "plugin_parent_tool_call_doc_id": {
+              "_ne": null
+            },
+            "tool_name": {
+              "_eq": "query"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            }
+          },
+          "fields": [
+            "tool_name",
+            "lifecycle_state",
+            "plugin_parent_tool_call_doc_id"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "script",
+              "query"
+            ],
+            "forbidden": [
+              "bash",
+              "write_file",
+              "edit_file",
+              "file_mailbox_item"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "legs",
+                "equals": 64
+              },
+              {
+                "field": "totals",
+                "equals": {
+                  "north": 2093,
+                  "south": 2267,
+                  "east": 1062
+                }
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "inner_queries",
+                "min": 1
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "south"
+              },
+              {
+                "matches": "\\b2267\\b|2,267"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

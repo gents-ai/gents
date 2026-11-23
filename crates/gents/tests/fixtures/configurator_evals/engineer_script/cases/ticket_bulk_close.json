@@ -1,0 +1,297 @@
+{
+  "case_id": "ticket-bulk-close",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "tickets/T-101.json",
+        "contents": "{\"id\": \"T-101\", \"status\": \"open\", \"waiting_on\": \"customer\", \"idle_days\": 20}\n"
+      },
+      {
+        "path": "tickets/T-102.json",
+        "contents": "{\"id\": \"T-102\", \"status\": \"open\", \"waiting_on\": \"customer\", \"idle_days\": 3}\n"
+      },
+      {
+        "path": "tickets/T-103.json",
+        "contents": "{\"id\": \"T-103\", \"status\": \"open\", \"waiting_on\": \"agent\", \"idle_days\": 30}\n"
+      },
+      {
+        "path": "tickets/T-104.json",
+        "contents": "{\"id\": \"T-104\", \"status\": \"closed\", \"waiting_on\": \"customer\", \"idle_days\": 40}\n"
+      },
+      {
+        "path": "tickets/T-105.json",
+        "contents": "{\"id\": \"T-105\", \"status\": \"open\", \"waiting_on\": \"customer\", \"idle_days\": 14}\n"
+      },
+      {
+        "path": "tickets/T-106.json",
+        "contents": "{\"id\": \"T-106\", \"status\": \"open\", \"waiting_on\": \"customer\", \"idle_days\": 13}\n"
+      },
+      {
+        "path": "tickets/T-107.json",
+        "contents": "{\"id\": \"T-107\", \"status\": \"open\", \"waiting_on\": \"customer\", \"idle_days\": 21}\n"
+      },
+      {
+        "path": "tickets/T-108.json",
+        "contents": "{\"id\": \"T-108\", \"status\": \"pending\", \"waiting_on\": \"customer\", \"idle_days\": 50}\n"
+      },
+      {
+        "path": "tickets/T-109.json",
+        "contents": "{\"id\": \"T-109\", \"status\": \"open\", \"waiting_on\": \"customer\", \"idle_days\": 16}\n"
+      },
+      {
+        "path": "tickets/T-110.json",
+        "contents": "{\"id\": \"T-110\", \"status\": \"open\", \"waiting_on\": \"agent\", \"idle_days\": 2}\n"
+      },
+      {
+        "path": "tickets/T-111.json",
+        "contents": "{\"id\": \"T-111\", \"status\": \"open\", \"waiting_on\": \"customer\", \"idle_days\": 99}\n"
+      },
+      {
+        "path": "tickets/T-112.json",
+        "contents": "{\"id\": \"T-112\", \"status\": \"open\", \"waiting_on\": \"customer\", \"idle_days\": 0}\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "run",
+      "prompt": "Each support ticket is a JSON file in tickets/. In a single script, close every stale ticket: one whose status is open, that is waiting_on the customer, and whose idle_days is at least 14. Set its status to closed and keep its other fields as they are; leave every other ticket file exactly as it is. Have the script return {\"closed\": [...]} with the closed ticket IDs sorted, and tell me how many you closed.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "inner_writes",
+          "collection": "AgentToolCall",
+          "filter": {
+            "plugin_parent_tool_call_doc_id": {
+              "_ne": null
+            },
+            "tool_name": {
+              "_in": [
+                "write_file",
+                "edit_file"
+              ]
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            }
+          },
+          "fields": [
+            "tool_name",
+            "lifecycle_state",
+            "plugin_parent_tool_call_doc_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "inner_reads",
+          "collection": "AgentToolCall",
+          "filter": {
+            "plugin_parent_tool_call_doc_id": {
+              "_ne": null
+            },
+            "tool_name": {
+              "_in": [
+                "read_file",
+                "list_files",
+                "glob",
+                "grep"
+              ]
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            }
+          },
+          "fields": [
+            "tool_name",
+            "lifecycle_state",
+            "plugin_parent_tool_call_doc_id"
+          ]
+        },
+        {
+          "kind": "file",
+          "name": "tickets",
+          "glob": "tickets/*.json"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "script"
+            ],
+            "forbidden": [
+              "bash"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "closed",
+                "equals": [
+                  "T-101",
+                  "T-105",
+                  "T-107",
+                  "T-109",
+                  "T-111"
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "inner_writes",
+                "min": 5
+              },
+              {
+                "capture": "inner_reads",
+                "min": 1
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "tickets",
+            "expect": [
+              {
+                "path": "tickets/T-101.json",
+                "pointer": "/status",
+                "equals": "closed"
+              },
+              {
+                "path": "tickets/T-101.json",
+                "pointer": "/idle_days",
+                "equals": 20
+              },
+              {
+                "path": "tickets/T-101.json",
+                "pointer": "/waiting_on",
+                "equals": "customer"
+              },
+              {
+                "path": "tickets/T-102.json",
+                "sha256": "6a3b91a285769b19a767281e682ce00bc041bac16abe9410e3ab489cf7debc59"
+              },
+              {
+                "path": "tickets/T-103.json",
+                "sha256": "6b9719dc5ec81c49759bc9a7befe9dd87509ea3172576031479b839148f0c473"
+              },
+              {
+                "path": "tickets/T-104.json",
+                "sha256": "3e48836222219ed3bd562bbc6a17a91035b212cb1f0afd8a9df5bd0e499db196"
+              },
+              {
+                "path": "tickets/T-105.json",
+                "pointer": "/status",
+                "equals": "closed"
+              },
+              {
+                "path": "tickets/T-105.json",
+                "pointer": "/idle_days",
+                "equals": 14
+              },
+              {
+                "path": "tickets/T-105.json",
+                "pointer": "/waiting_on",
+                "equals": "customer"
+              },
+              {
+                "path": "tickets/T-106.json",
+                "sha256": "ee86b7f322527f655a227d38350fa161fb1c99b4b6e6c8188226322c6dff9a42"
+              },
+              {
+                "path": "tickets/T-107.json",
+                "pointer": "/status",
+                "equals": "closed"
+              },
+              {
+                "path": "tickets/T-107.json",
+                "pointer": "/idle_days",
+                "equals": 21
+              },
+              {
+                "path": "tickets/T-107.json",
+                "pointer": "/waiting_on",
+                "equals": "customer"
+              },
+              {
+                "path": "tickets/T-108.json",
+                "sha256": "3cfd2612c9a19c65e66ac15a1f297c764e32badbbdc1e51cef24104761cd4ced"
+              },
+              {
+                "path": "tickets/T-109.json",
+                "pointer": "/status",
+                "equals": "closed"
+              },
+              {
+                "path": "tickets/T-109.json",
+                "pointer": "/idle_days",
+                "equals": 16
+              },
+              {
+                "path": "tickets/T-109.json",
+                "pointer": "/waiting_on",
+                "equals": "customer"
+              },
+              {
+                "path": "tickets/T-110.json",
+                "sha256": "0c47188e3da923644b5c7024c86c4a4f42963228dbd6712394618ff284602062"
+              },
+              {
+                "path": "tickets/T-111.json",
+                "pointer": "/status",
+                "equals": "closed"
+              },
+              {
+                "path": "tickets/T-111.json",
+                "pointer": "/idle_days",
+                "equals": 99
+              },
+              {
+                "path": "tickets/T-111.json",
+                "pointer": "/waiting_on",
+                "equals": "customer"
+              },
+              {
+                "path": "tickets/T-112.json",
+                "sha256": "5e0550772cbc0d4abd2e85aed6042f3c48ff4804f455c4f86585b0c5e7d46730"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?i)\\b(5|five)\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}
