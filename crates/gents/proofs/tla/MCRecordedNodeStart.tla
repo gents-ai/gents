@@ -1,0 +1,4 @@
+---- MODULE MCRecordedNodeStart ----
+EXTENDS RecordedNodeStart
+
+====

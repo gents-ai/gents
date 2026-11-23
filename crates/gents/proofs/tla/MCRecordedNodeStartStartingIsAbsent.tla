@@ -1,0 +1,4 @@
+---- MODULE MCRecordedNodeStartStartingIsAbsent ----
+EXTENDS RecordedNodeStart
+
+====
