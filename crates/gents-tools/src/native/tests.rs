@@ -347,7 +347,7 @@ async fn session_message_tool_definitions_register_expected_surface() {
         send.parameters["required"],
         serde_json::json!(["session_id"])
     );
-    for field in ["message", "task", "interrupt"] {
+    for field in ["message", "task", "delivery"] {
         assert!(
             send.parameters["properties"].get(field).is_some(),
             "agent_message advertises {field}"

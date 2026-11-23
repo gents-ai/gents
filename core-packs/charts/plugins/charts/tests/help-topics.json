@@ -1,0 +1,11 @@
+{
+  "input": {
+    "help": "topics"
+  },
+  "expect": {
+    "response": {
+      "help": "topics",
+      "text": "Call with {\"help\": \"<topic>\"} for one of these topics:\n- inputs: the data (data, path, file) and the columns to draw\n- types: every chart type and what it draws\n- options: titles, labels, axes, ranges, legend, theme, colours and size\n- formats: number formats and date axes\n- output: the result, its series, warnings and errors\n- saving: writing the chart as SVG and PNG files\n"
+    }
+  }
+}

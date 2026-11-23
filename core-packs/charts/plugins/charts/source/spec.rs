@@ -168,6 +168,8 @@ pub struct Request<'a> {
     pub output: Option<String>,
     /// Files to write into the bound folder.
     pub save: Option<SaveArg>,
+    /// A help topic to return instead of drawing.
+    pub help: Option<String>,
     /// Set by a graph node.
     pub run_id: Option<String>,
 }

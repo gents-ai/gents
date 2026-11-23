@@ -33,6 +33,7 @@ mod frame_tests;
 mod fuzz_tests;
 pub mod graph;
 pub mod heatmap;
+pub mod help;
 pub mod hist;
 pub mod jsonio;
 #[cfg(test)]
@@ -85,6 +86,9 @@ pub fn run(raw: &str) -> err::Res<String> {
         return Ok(graph::run(raw));
     }
     let req: Request = serde_json::from_str(raw).map_err(|e| err::ChartError(request_error(&e)))?;
+    if let Some(topic) = req.help.as_deref() {
+        return help::answer(topic);
+    }
     let (rendered, files) = pipeline::render(&req)?;
     let output = req.resolve()?.output;
     output::deliver(rendered, output, &files)
@@ -96,7 +100,7 @@ pub(crate) fn request_error(e: &serde_json::Error) -> String {
     if let Some(rest) = msg.strip_prefix("unknown field `") {
         let name = rest.split('`').next().unwrap_or(rest);
         return format!(
-            "the field {name} is not known; check the field names in the tool description",
+            "the field {name} is not known; call with {{\"help\": \"inputs\"}} or {{\"help\": \"options\"}} for the field names",
             name = crate::text::quote(name)
         );
     }

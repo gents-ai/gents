@@ -285,7 +285,6 @@ async fn read_tool_output_slice_inner(
     .await?
     .into_text();
     let slice = read_combined_output_slice(&combined, offset, max_bytes);
-    let exit_code = None;
 
     Ok(ReadToolOutputOutcome::Found(ReadToolOutputResponse {
         tool_call_id: row.tool_call_id,
@@ -297,7 +296,6 @@ async fn read_tool_output_slice_inner(
         total_bytes: slice.total_bytes,
         has_more: slice.has_more,
         exited,
-        exit_code,
     }))
 }
 

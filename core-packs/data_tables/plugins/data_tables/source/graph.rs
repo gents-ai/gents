@@ -4,7 +4,7 @@
 //! with records the next node reads: one `DataResult`, a `DataRow` per result
 //! row (query mode) and a `DataTable` per table (tables and describe modes).
 //! The fields are the ordinary input's, so the two modes cannot drift apart;
-//! the records are documented in TOOL.md. A failure is a `DataResult` with an
+//! the records are documented in the pack README. A failure is a `DataResult` with an
 //! `error`, so the run goes on and the next node can read why.
 use serde_json::{Map, Value, json};
 

@@ -12,12 +12,11 @@ def Delivery.toAgent : Delivery → QueuedSteering.AgentDelivery
   | .queue => .queue
   | .steer => .steer
 
-/-- The agent tool's delivery rule without the legacy interrupt flag is the
-shared rule: an unspecified delivery queues and steering happens only when
-chosen. -/
+/-- The agent tool's delivery rule is the shared rule: an unspecified delivery
+queues and steering happens only when chosen. -/
 theorem resolveDelivery_agrees_with_agent_tool (choice : DeliveryChoice) :
-    QueuedSteering.resolveAgentDelivery choice.toAgent none =
-      some (resolveDelivery choice).toAgent := by
+    QueuedSteering.resolveAgentDelivery choice.toAgent =
+      (resolveDelivery choice).toAgent := by
   cases choice <;> rfl
 
 end SessionOperations

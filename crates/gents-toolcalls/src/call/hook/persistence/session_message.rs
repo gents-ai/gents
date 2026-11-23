@@ -331,13 +331,7 @@ impl DefraSessionHook {
                     unreachable_session_payload(tool_name, &target_session, &parsed, tools)
                 );
             };
-            let delivery = match parsed.delivery() {
-                Ok(delivery) => delivery,
-                Err(message) => refuse!(
-                    FailureClass::ArgumentInvalid,
-                    invalid_tool_arguments_payload(tool_name, "/delivery", message)
-                ),
-            };
+            let delivery = parsed.delivery();
             if delivery == gents_session::session::message::AgentMessageDelivery::Interrupt {
                 if let Some(reason) = gents_session::session::message::interrupt_refusal(
                     &self.node,

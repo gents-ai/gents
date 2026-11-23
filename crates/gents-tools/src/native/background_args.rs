@@ -122,7 +122,6 @@ pub struct ReadToolOutputResponse {
     pub total_bytes: u64,
     pub has_more: bool,
     pub exited: bool,
-    pub exit_code: Option<i32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
