@@ -756,11 +756,14 @@ def readinessRecoveryEligible (pending : Bool) (runtime embeddedRuntime : DID) (
   pending && !runtime.isEmpty && runtime == embeddedRuntime && parentRegistered && nativeOwner == some runtime &&
     recordedParent.isSome && recordedParent == currentParent
 
+/-- Every repair attempt issues the parent grant again and marks the row only
+after that grant succeeds; a grant that fails on a retry stops the attempt
+before the mark, even when an earlier attempt's grant succeeded. -/
 def repairReadiness (state : ParentPublication) (runtime embeddedRuntime : DID) (parentRegistered : Bool)
     (nativeOwner recordedParent currentParent : Option String)
     (grantSucceeded markSucceeded : Bool) : ParentPublication :=
   if readinessRecoveryEligible (!state.parentLinked) runtime embeddedRuntime parentRegistered nativeOwner recordedParent currentParent then
-    repairParent state grantSucceeded markSucceeded
+    if grantSucceeded then repairParent state true markSucceeded else state
   else state
 
 theorem readiness_unknown_owner_cannot_repair (state : ParentPublication) (runtime embeddedRuntime : DID)
@@ -789,6 +792,16 @@ theorem readiness_unregistered_parent_cannot_repair (state : ParentPublication) 
       grantSucceeded markSucceeded = state := by
   simp [repairReadiness, readinessRecoveryEligible]
 
+/-- A native owner is a DID the store authenticated, so no readiness row is
+natively owned by an empty runtime DID; repair refuses one regardless. -/
+theorem readiness_empty_runtime_cannot_repair (state : ParentPublication) (embeddedRuntime : DID)
+    (parentRegistered : Bool) (nativeOwner recordedParent currentParent : Option String)
+    (grantSucceeded markSucceeded : Bool) :
+    repairReadiness state "" embeddedRuntime parentRegistered nativeOwner recordedParent currentParent
+      grantSucceeded markSucceeded = state := by
+  have empty : ("" : String).isEmpty = true := rfl
+  simp [repairReadiness, readinessRecoveryEligible, empty]
+
 theorem failed_readiness_grant_cannot_mark_complete :
     (repairReadiness beginParentPublication "runtime" "runtime" true (some "runtime")
       (some "node") (some "node") false true).parentLinked = false := by decide
@@ -797,8 +810,15 @@ theorem readiness_grant_survives_failed_marker :
     let first := repairReadiness beginParentPublication "runtime" "runtime" true (some "runtime")
       (some "node") (some "node") true false
     let second := repairReadiness first "runtime" "runtime" true (some "runtime")
-      (some "node") (some "node") false true
+      (some "node") (some "node") true true
     first.parentGranted = true ∧ first.parentLinked = false ∧ second.parentLinked = true := by decide
+
+theorem failed_retry_grant_cannot_mark_complete :
+    let first := repairReadiness beginParentPublication "runtime" "runtime" true (some "runtime")
+      (some "node") (some "node") true false
+    let second := repairReadiness first "runtime" "runtime" true (some "runtime")
+      (some "node") (some "node") false true
+    second.parentGranted = true ∧ second.parentLinked = false := by decide
 
 /-- A stale worker may have observed an incomplete marker before another
 worker completed publication and an owner revoked the grant. A detached ACP1
@@ -842,6 +862,18 @@ theorem readiness_marker_does_not_prove_current_relation :
 theorem readiness_unregistered_owner_is_unusable (o : ReadinessObservation)
     (missing : o.readinessOwner = none) : readinessObservationUsable o = false := by
   simp [readinessObservationUsable, missing]
+
+/-- External premise: `node_did` carries a unique index on both `Node` and
+`NodeReadiness`, and a readiness row's `node_doc_id` is immutable, so one store
+holds no second Node or readiness row for a runtime and no readiness row whose
+recorded parent was cleared; such an observation is unusable regardless. -/
+theorem readiness_duplicate_or_unparented_is_unusable (o : ReadinessObservation)
+    (excluded : o.nodeCount = 2 ∨ o.readinessCount = 2 ∨ (o.recordedParent = none ∧ o.nodeId.isSome)) :
+    readinessObservationUsable o = false := by
+  rcases excluded with h | h | ⟨h, hs⟩
+  · simp [readinessObservationUsable, h]
+  · simp [readinessObservationUsable, h]
+  · cases hn : o.nodeId <;> simp_all [readinessObservationUsable]
 
 theorem readiness_pending_is_unusable (o : ReadinessObservation)
     (pending : o.parentLinked = false) : readinessObservationUsable o = false := by

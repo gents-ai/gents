@@ -301,8 +301,6 @@ mod tests {
         "goal_claimed_publication_contracts_identity_staged_unreached",
         "household_tool_grant_rebinding_unreached",
         "household_unattended_receipt_unreached",
-        "identity_operations_deferred_unreached",
-        "identity_operations_readiness_observation_unreached",
         "identity_operations_readiness_recovery_unreached",
         "mailbox_handoff_contracts_linked_unreached",
         "native_completion_trace_unreached",

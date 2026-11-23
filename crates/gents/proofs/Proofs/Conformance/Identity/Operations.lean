@@ -198,32 +198,19 @@ def deferredAppliedGranted : Family DeferredInput Granted where
   inputs := deferredInputs.filter (·.name = "revoked-after-publication")
   model := fun i => { granted := (deferredAfter i).parentGranted }
 
-/-- The runtime scenario writes every deferred collection before the Node,
-links them, revokes a published parent and writes a document a foreign
-owner holds. -/
-@[conformance_family]
-def deferredRuntimeLinked : Family DeferredInput Linked where
-  inputs := deferredInputs.filter (·.name ∈ ["before-node", "success", "foreign-owner"])
-  model := fun i => { linked := (deferredAfter i).parentLinked }
-
-/-- The runtime scenario revokes a published parent and recovers. -/
-@[conformance_family]
-def deferredRuntimeGranted : Family DeferredInput Granted where
-  inputs := deferredInputs.filter (·.name = "revoked-after-publication")
-  model := fun i => { granted := (deferredAfter i).parentGranted }
-
 structure Deferred where
   parent : Option String
   granted : Bool
   linked : Bool
   deriving ToJson
 
-/-- model-production-gap: the served scenarios observe only the parent link
-or grant the families above replay; no production path builds a foreign
-embedded runtime, an unregistered Node or a failed commit, or observes the
-recorded parent Node. -/
+/-- The deferred-enrollment scenario writes every deferred collection before
+the Node, decides each pending row against an unregistered Node, for a foreign
+requested runtime and in an aborted transaction, links them once the user's Node
+exists, revokes a published parent and recovers, and refuses a row its foreign
+owner parented. -/
 @[conformance_family]
-def deferredUnreached : Family DeferredInput Deferred where
+def deferred : Family DeferredInput Deferred where
   inputs := deferredInputs
   model := fun i =>
     let after := deferredAfter i
@@ -300,12 +287,13 @@ structure ParentLinked where
 
 /-- The recovery scenario publishes readiness as the embedded runtime over a
 row the runtime owns natively, with the Node parent present, replaced,
-unregistered or absent, or as a foreign runtime; the user reads the row only
-through the parent grant. -/
+unregistered or absent, as a foreign runtime, with the publication mark
+aborted and retried; the user reads the row only through the parent grant. -/
 @[conformance_family]
 def readinessRecovery : Family RecoveryInput RecoveryOutput where
-  inputs := recoveryInputs.filter (·.name ∈ ["success", "parent-mismatch", "foreign-runtime",
-    "unregistered-parent", "already-complete", "parent-missing", "node-unknown"])
+  inputs := recoveryInputs.filter
+    (·.name ∉ ["owner-unknown", "owner-mismatch", "grant-failed", "retry-grant-failed",
+      "mark-failed", "retry-mark"])
   model := fun c => { parentGranted := (recoveryAfter c).parentGranted
                       parentLinked := (recoveryAfter c).parentLinked }
 
@@ -316,13 +304,13 @@ def readinessRecoveryForeignOwner : Family RecoveryInput ParentLinked where
   inputs := recoveryInputs.filter (·.name ∈ ["owner-unknown", "owner-mismatch"])
   model := fun c => { parentLinked := (recoveryAfter c).parentLinked }
 
-/-- model-production-gap: production cannot inject a failed parent grant or a
-failed publication mark, and a readiness row natively owned by an empty runtime
-DID cannot be written. -/
+/-- The parent grant is a native relationship change and the publication mark
+is an auto-commit write after it; the store's fault seams fail only mutations
+inside an apply transaction, so no fixture fails the grant or the mark alone. -/
 @[conformance_family]
 def readinessRecoveryUnreached : Family RecoveryInput RecoveryOutput where
-  inputs := recoveryInputs.filter (·.name ∈ ["grant-failed", "mark-failed", "retry-mark",
-    "runtime-missing"])
+  inputs := recoveryInputs.filter
+    (·.name ∈ ["grant-failed", "retry-grant-failed", "mark-failed", "retry-mark"])
   model := fun c => { parentGranted := (recoveryAfter c).parentGranted
                       parentLinked := (recoveryAfter c).parentLinked }
 
@@ -357,25 +345,13 @@ def observationUsable (i : ObservationInput) : Usable :=
       i.readinessCount, i.nodeId, i.nodeOwner, i.readinessOwner, i.recordedParent,
       i.parentLinked, i.parentPresent⟩ }
 
-/-- The recovery scenario observes, as the embedded runtime, the readiness row
-each of its fixtures leaves behind, with the one Node it registers or, when the
-fixture records an unknown parent, with no Node. -/
+/-- The recovery scenario observes the readiness row each of its fixtures
+leaves behind, as the embedded runtime or as a foreign one, with the one Node it
+registers, with no Node when the fixture records an unknown parent, and with
+the row deleted. -/
 @[conformance_family]
 def readinessObservation : Family ObservationInput Usable where
-  inputs := observationInputs.filter (·.name ∈ ["valid", "readiness-unregistered",
-    "foreign-readiness", "replaced-parent", "node-unregistered", "revoked-after-publication",
-    "pending", "no-node"])
-  model := observationUsable
-
-/-- model-production-gap: the recovery scenario builds at most one Node and
-exactly one readiness row, records a parent on every row that has a Node, and
-observes as the embedded runtime, so no production path observes a foreign
-requested runtime, a duplicated Node, a missing or duplicated readiness row, or a
-row with no recorded parent beside its Node. -/
-@[conformance_family]
-def readinessObservationUnreached : Family ObservationInput Usable where
-  inputs := observationInputs.filter (·.name ∈ ["foreign-runtime", "duplicate-node",
-    "no-readiness", "duplicate-readiness", "missing-parent"])
+  inputs := observationInputs
   model := observationUsable
 
 structure PartitionInput where
