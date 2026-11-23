@@ -216,6 +216,22 @@ async fn a_vera_home_reads_only_its_own_certified_assignments() -> anyhow::Resul
     assert!(initial.may_run(&home.node_doc, true));
     assert!(!initial.may_run(&home.node_doc, false));
     assert!(running.active.lock().await.contains(&home.node_doc));
+    let conflicting = defra_node::CertifiedAssignments {
+        position: initial.position.clone(),
+        object_ids: Vec::new(),
+        ..certified.clone()
+    };
+    assert!(matches!(
+        access
+            .refresh_with_assignment_view(&scope, &running, conflicting)
+            .await,
+        Err(crate::config_client::assignment_receiver::ReceiverError::InvalidState(_))
+    ));
+    assert!(running.active.lock().await.contains(&home.node_doc));
+    assert_eq!(
+        access.load_assignments(&scope).await?,
+        Some(initial.clone())
+    );
     let other = defra_node::AssignmentQuery {
         subject: home.owner.did().into(),
         ..query.clone()

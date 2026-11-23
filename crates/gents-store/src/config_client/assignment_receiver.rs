@@ -335,7 +335,9 @@ impl ConfigAccess {
             }
             while heights.try_recv().is_ok() {}
             let retry = match self
-                .refresh_assignments_inner(scope, runtime, Some(&mut shutdown))
+                .refresh_from(scope, runtime, Some(&mut shutdown), |query| {
+                    self.certified_assignments(query)
+                })
                 .await
             {
                 Ok(None) => return Ok(()),
@@ -381,19 +383,33 @@ impl ConfigAccess {
     where
         R: AssignmentRuntime,
     {
-        self.refresh_assignments_inner(scope, runtime, None)
-            .await?
-            .ok_or(ReceiverError::InvalidState("unexpected shutdown"))
+        self.refresh_from(scope, runtime, None, |query| {
+            self.certified_assignments(query)
+        })
+        .await?
+        .ok_or(ReceiverError::InvalidState("unexpected shutdown"))
     }
 
-    async fn refresh_assignments_inner<R>(
+    #[cfg(test)]
+    pub(crate) async fn refresh_with_assignment_view(
         &self,
         scope: &AssignmentScope,
-        runtime: &R,
+        runtime: &impl AssignmentRuntime,
+        view: defra_node::CertifiedAssignments,
+    ) -> Result<Option<AssignmentState>, ReceiverError> {
+        self.refresh_from(scope, runtime, None, |_| std::future::ready(Ok(view)))
+            .await
+    }
+
+    async fn refresh_from<F>(
+        &self,
+        scope: &AssignmentScope,
+        runtime: &impl AssignmentRuntime,
         mut shutdown: Option<&mut tokio::sync::watch::Receiver<bool>>,
+        read: impl FnOnce(defra_node::AssignmentQuery) -> F,
     ) -> Result<Option<AssignmentState>, ReceiverError>
     where
-        R: AssignmentRuntime,
+        F: Future<Output = Result<defra_node::CertifiedAssignments, AssignmentReadError>>,
     {
         let subject = self.actor_did().ok_or(ReceiverError::MissingIdentity)?;
         let key = scope_key(&subject, scope);
@@ -413,7 +429,7 @@ impl ConfigAccess {
             issuer: scope.issuer.clone(),
             not_before: previous.as_ref().map(|state| state.position.clone()),
         };
-        let certified = self.certified_assignments(query).await?;
+        let certified = read(query).await?;
         let mut assigned = certified.object_ids;
         assigned.sort();
         assigned.dedup();
