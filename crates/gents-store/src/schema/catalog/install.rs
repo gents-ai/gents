@@ -186,6 +186,14 @@ async fn register_file_image_owner(
                     collection: (*name).into(),
                 })?;
         validate_file_image_policy(&collection, *branchable, ids)?;
+        // Vera checks the document itself for a non-branchable read. Registering
+        // the schema ID would claim the same object on every device.
+        if !collection.is_branchable
+            && crate::local::document_acp::provider_of(node)
+                == crate::local::document_acp::DocumentAcp::Vera
+        {
+            continue;
+        }
         let acp = node.document_acp();
         let policy = ids.id(BuiltInPolicy::ToolFileChange);
         let resource = gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_RESOURCE;
