@@ -99,21 +99,20 @@ class HostileRun(unittest.TestCase):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.run_dir = pathlib.Path(directory.name) / "run"
-        write(self.run_dir / "targets" / "mini-a.json", TARGET)
+        write(self.run_dir / "targets" / "replica-a.json", TARGET)
         source = self.run_dir / "source"
-        write(source / "scripts/evals/matrix.json", {"default": ["s1"], "suites": [
-            {"id": "s1", "path": "ladder/s1", "subject": "ladder/engineer_subject"},
-            {"id": "s2", "path": "ladder/s2", "subject": "ladder/engineer_subject"},
-        ]})
+        write(source / "scripts/evals/matrix.json", {"default": ["s1"]})
         fixtures = source / orchestrate.FIXTURES
-        write(fixtures / "ladder/engineer_subject/manifest.json", {})
+        write(fixtures / "ladder/engineer_subject/pack_config.json", {})
         for suite in ("s1", "s2"):
+            write(fixtures / f"ladder/{suite}/suite.json", {"id": suite, "title": suite, "coverage": [],
+                                                           "subject": "ladder/engineer_subject"})
             write(fixtures / f"ladder/{suite}/pack_config.json",
-                  {"eval_definitions": [{"cases": ["./cases/a.json"]}]})
+                  {"eval_definitions": [{"definition_id": f"{suite}-definition", "cases": ["./cases/a.json"]}]})
             write(fixtures / f"ladder/{suite}/cases/a.json", {"case_id": f"{suite}-case", "split": "train"})
         self.config = {"name": "hostile", "image": "gents-eval:abc", "suites": ["s1"], "splits": ["train"],
-                       "trials": 1, "per_replica": 1, "seed_base": 1000, "allow_host_bash": True,
-                       "replicas": ["mini-a"], "limits": {"disk": "1m", "trial_secs": 60}}
+                       "trials": 1, "per_replica": 1, "seed_base": 1000, "command_execution": "unrestricted",
+                       "replicas": ["replica-a"], "limits": {"disk": "1m", "trial_secs": 60}}
         write(self.run_dir / "run.json", self.config)
 
     def test_a_case_id_that_is_not_a_plain_name_is_refused_before_any_mount(self):
@@ -126,7 +125,7 @@ class HostileRun(unittest.TestCase):
 
     def test_names_that_reach_docker_must_be_plain(self):
         for key, value in (("name", "a,b"), ("image", "gents eval"), ("suites", ["s1,dst=/"]),
-                           ("limits", {"disk": "1g,uid=0", "trial_secs": 60})):
+                           ("limits", {"disk": "1g,uid=0", "trial_secs": 60}), ("command_execution", "yes")):
             write(self.run_dir / "run.json", {**self.config, key: value})
             with self.assertRaises(ValueError, msg=key):
                 orchestrate.Run(self.run_dir)

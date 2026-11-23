@@ -5,6 +5,7 @@
   suites.py select SELECTION SHARD      suite ids SELECTION names (`all` is the default list)
   suites.py field SUITE KEY             one field of a suite (path, definition_id, subject)
   suites.py prepare-subject SUITE DEST  the suite's subject, prepared for a trial, at DEST
+  suites.py command-execution           the mode GENTS_EVAL_COMMAND_EXECUTION requests
 
 A suite is a `suite.json` beside its definition's `pack_config.json` under
 the configurator eval fixtures: its `id`, `title`, `coverage`, the `subject`
@@ -22,6 +23,13 @@ patched as an object keyed by each document's id: `{"tools": {"engineer-tools":
 new key adds a document and `null` removes one. Patched content is inline;
 a patch adds no files. GENTS_EVAL_SUBJECT replaces the subject directory of
 every suite prepared.
+
+Every prepared subject's Engineer runs commands in the mode
+GENTS_EVAL_COMMAND_EXECUTION names (default `off`): `off` leaves it no host
+bash; `unrestricted` grants host bash as `gents init --tool-package yolo`
+does, which a trial holds only inside an isolating container
+(scripts/evals/run-container.sh); the launcher sets the definition's
+`subject.host_bash` to match.
 """
 import collections
 import json
@@ -44,6 +52,7 @@ DOCUMENT_KEYS = {
     "agent_targets": "target_id",
 }
 SUITE_KEYS = {"id", "title", "coverage", "subject", "preset_self_config", "blocked_reason"}
+BASH_MODES = {"off": "Off", "unrestricted": "Unrestricted"}
 
 
 def suites(root):
@@ -167,6 +176,13 @@ def engineer_parts(config):
     return contexts[0]["system_prompt"][2:], contexts[0]["tools_id"]
 
 
+def command_execution():
+    mode = os.environ.get("GENTS_EVAL_COMMAND_EXECUTION") or "off"
+    if mode not in BASH_MODES:
+        raise SystemExit(f"GENTS_EVAL_COMMAND_EXECUTION must be one of {', '.join(sorted(BASH_MODES))}, not {mode!r}")
+    return mode
+
+
 def prepare_subject(root, suite_id, destination):
     root = pathlib.Path(root)
     found = suite(root, suite_id)
@@ -179,21 +195,23 @@ def prepare_subject(root, suite_id, destination):
     config = json.loads(config_path.read_text())
     prompt, tools_id = engineer_parts(config)
     shutil.copy(root / PROMPT, destination / prompt)
-    rewritten = False
     if found.get("preset_self_config"):
-        tools = [t for t in config.get("tools", []) if t.get("tools_id") == tools_id]
-        if len(tools) != 1:
-            raise SystemExit(f"{suite_id}: the {CELL_AGENT} agent's Tools {tools_id} is not in its subject")
-        tools[0]["self_config"] = json.loads((root / PRESET).read_text())
-        rewritten = True
+        engineer_tools(config, suite_id, tools_id)["self_config"] = json.loads((root / PRESET).read_text())
     patch_path = root / FIXTURES / found["path"] / "subject_patch.json"
     if patch_path.is_file():
         config = apply_patch(config, json.loads(patch_path.read_text()))
-        engineer_parts(config)
-        rewritten = True
-    if rewritten:
-        json.dump(config, open(config_path, "w"), indent=2)
+        _, tools_id = engineer_parts(config)
+    host = engineer_tools(config, suite_id, tools_id).setdefault("host", {})
+    host["bash"] = dict(host.get("bash") or {}, mode=BASH_MODES[command_execution()])
+    json.dump(config, open(config_path, "w"), indent=2)
     return destination
+
+
+def engineer_tools(config, suite_id, tools_id):
+    tools = [t for t in config.get("tools", []) if t.get("tools_id") == tools_id]
+    if len(tools) != 1:
+        raise SystemExit(f"{suite_id}: the {CELL_AGENT} agent's Tools {tools_id} is not in its subject")
+    return tools[0]
 
 
 def main(argv):
@@ -207,6 +225,8 @@ def main(argv):
         print(suite(root, arguments[0])[arguments[1]])
     elif command == "prepare-subject" and len(arguments) == 2:
         print(prepare_subject(root, *arguments))
+    elif command == "command-execution" and not arguments:
+        print(command_execution())
     else:
         sys.exit(__doc__)
 

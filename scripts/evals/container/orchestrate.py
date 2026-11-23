@@ -40,8 +40,10 @@ import threading
 import urllib.parse
 import urllib.request
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+HERE = pathlib.Path(__file__).resolve().parent
+sys.path[:0] = [str(HERE), str(HERE.parent)]
 import relay  # noqa: E402
+import suites as registry  # noqa: E402
 
 MAX_ATTEMPTS = 3
 NOTHING_RAN = 3
@@ -54,7 +56,8 @@ HEALTH_CHECKS = 10
 ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 IMAGE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$")
 SPLITS = {"train", "validation", "held_out"}
-FIXTURES = "crates/gents/tests/fixtures/configurator_evals"
+COMMAND_EXECUTION = {"off", "unrestricted"}
+FIXTURES = str(registry.FIXTURES)
 ENGINEER_SUBJECT = "ladder/engineer_subject"
 
 
@@ -292,6 +295,8 @@ class Run:
         checked("image", self.config["image"], IMAGE)
         for suite in self.config["suites"]:
             checked("suite", suite)
+        if self.config["command_execution"] not in COMMAND_EXECUTION:
+            raise ValueError(f"command_execution must be one of {sorted(COMMAND_EXECUTION)}")
         size_bytes(self.config["limits"]["disk"])
         self.replicas = [Replica(self.dir, name) for name in self.config["replicas"]]
         self.stopping = threading.Event()
@@ -323,16 +328,14 @@ class Run:
         if not view.exists():
             staging = view.with_name(view.name + ".tmp")
             shutil.rmtree(staging, ignore_errors=True)
-            wanted = {ENGINEER_SUBJECT, suite["subject"]}
-            if not (self.dir / "overrides" / "definition").is_dir():
-                wanted.add(suite["path"])
+            wanted = {ENGINEER_SUBJECT, suite["subject"], suite["path"]}
             for relative in sorted(wanted):
                 shutil.copytree(self.source(FIXTURES, relative), staging / relative, symlinks=True)
             os.replace(staging, view)
         return view
 
     def plan(self):
-        matrix = load(self.source("scripts/evals/matrix.json"))
+        matrix = registry.matrix(self.source())
         selected = [s for selection in self.config["suites"]
                     for s in (matrix["default"] if selection == "all" else [selection])]
         suites = {}
@@ -414,7 +417,8 @@ class Run:
         limits = self.config["limits"]
         timeout = int(limits["trial_secs"])
         environment = {"HOME": "/eval/user", "NVIDIA_VISIBLE_DEVICES": "void", "GENTS_EVAL_TARGET": replica.name}
-        if self.config["allow_host_bash"]:
+        environment["GENTS_EVAL_COMMAND_EXECUTION"] = self.config["command_execution"]
+        if self.config["command_execution"] == "unrestricted":
             environment["GENTS_EVAL_ALLOW_HOST_BASH"] = "1"
         uid, gid = os.getuid(), os.getgid()
         start = [
@@ -633,10 +637,10 @@ def summarize(run, slots):
         totals[key] = sum(entry.get("class") == key for entry in entries)
     for key in ("input_tokens", "output_tokens"):
         totals[key] = sum(entry.get(key) or 0 for entry in entries)
-    host_bash = run.config["allow_host_bash"]
+    host_bash = run.config["command_execution"] == "unrestricted"
     summary = {
         "run": run.name, "image": run.config["image"], "image_commit": run.config.get("image_commit"),
-        "allow_host_bash": host_bash,
+        "command_execution": run.config["command_execution"],
         "results": "unauthenticated" if host_bash else "grader-written",
         "results_note": (
             "host bash ran as the uid of each trial's runner and grader, so the trial could rewrite its own "

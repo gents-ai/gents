@@ -79,16 +79,32 @@ class PrepareTests(unittest.TestCase):
         (self.suite / "pack_config.json").write_text(json.dumps({"eval_definitions": [{"definition_id": "probe-def"}]}))
         (self.suite / "suite.json").write_text(json.dumps({"id": "probe", "title": "Probe", "coverage": ["x"], "subject": "subject"}))
 
+    def run_suites(self, *arguments, **environment):
+        environment = {key: value for key, value in os.environ.items() if key != "GENTS_EVAL_COMMAND_EXECUTION"} | environment
+        return subprocess.run([sys.executable, str(self.root / "scripts/evals/suites.py"), *arguments],
+                              env=environment, capture_output=True, text=True)
+
     def prepare(self, **environment):
-        result = subprocess.run([sys.executable, str(self.root / "scripts/evals/suites.py"), "prepare-subject", "probe", str(self.root / "out")],
-                                env=dict(os.environ, **environment), capture_output=True, text=True)
+        result = self.run_suites("prepare-subject", "probe", str(self.root / "out"), **environment)
         self.assertEqual(result.returncode, 0, result.stderr)
         return pathlib.Path(result.stdout.strip())
 
-    def test_the_prompt_is_the_shipped_one_and_an_unpatched_config_is_copied_as_is(self):
-        out = self.prepare()
+    def test_the_prompt_is_the_shipped_one_and_the_engineer_runs_no_commands_by_default(self):
+        out = self.prepare(GENTS_EVAL_COMMAND_EXECUTION="")
         self.assertEqual((out / "p.md").read_bytes(), (SOURCE / suites.PROMPT).read_bytes())
-        self.assertEqual((out / "pack_config.json").read_bytes(), (self.suite.parent / "subject/pack_config.json").read_bytes())
+        expected = json.loads(json.dumps(PatchTests.config))
+        expected["tools"][0]["host"] = {"bash": {"mode": "Off"}}
+        self.assertEqual(json.loads((out / "pack_config.json").read_text()), expected)
+
+    def test_unrestricted_grants_the_engineer_host_bash_and_an_unknown_mode_is_refused(self):
+        config = json.loads((self.prepare(GENTS_EVAL_COMMAND_EXECUTION="unrestricted") / "pack_config.json").read_text())
+        tools = {t["tools_id"]: t for t in config["tools"]}
+        self.assertEqual(tools["t"]["host"], {"bash": {"mode": "Unrestricted"}})
+        self.assertEqual(tools["other"], PatchTests.config["tools"][1])
+        self.assertEqual(self.run_suites("command-execution", GENTS_EVAL_COMMAND_EXECUTION="unrestricted").stdout, "unrestricted\n")
+        refused = self.run_suites("prepare-subject", "probe", str(self.root / "out"), GENTS_EVAL_COMMAND_EXECUTION="sandboxed")
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("GENTS_EVAL_COMMAND_EXECUTION must be one of off, unrestricted", refused.stderr)
 
     def test_preset_and_patch_apply_to_the_engineer_tools(self):
         suite = json.loads((self.suite / "suite.json").read_text())

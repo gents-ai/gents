@@ -24,6 +24,9 @@
 # GENTS_EVAL_SUBJECT: subject pack directory every selected suite runs as, sessions
 #   and factory-setup included; select one suite to override only its subject.
 # GENTS_EVAL_DEFINITION_SOURCE: definition directory every selected suite applies.
+# GENTS_EVAL_COMMAND_EXECUTION: off (default) or unrestricted, the mode every
+#   subject's Engineer runs commands in; unrestricted holds only inside an
+#   isolating container (scripts/evals/run-container.sh).
 # Suites are the suite.json files under the eval fixtures (scripts/evals/suites.py);
 # scripts/evals/matrix.json holds the default list `all` runs.
 set -euo pipefail
@@ -86,6 +89,7 @@ if [ "$SELECTION" = list ]; then
   python3 "$SUITES" list "$TRIALS"
   exit 0
 fi
+COMMAND_EXECUTION=$(python3 "$SUITES" command-execution)
 SELECTED=()
 SELECTED_TEXT=$(python3 "$SUITES" select "$SELECTION" "${GENTS_EVAL_SHARD:-1/1}")
 while IFS= read -r level; do [ -z "$level" ] || SELECTED+=("$level"); done <<< "$SELECTED_TEXT"
@@ -234,8 +238,16 @@ for level in "${SELECTED[@]}"; do
   RUN_SUBJECT=$(python3 "$SUITES" prepare-subject "$level" "$EVAL_HOME/subjects-$SHA/$level")
   DEFINITION="$EVAL_HOME/definitions/$level"
   rm -rf "$DEFINITION" && mkdir -p "$EVAL_HOME/definitions" && cp -R "${GENTS_EVAL_DEFINITION_SOURCE:-$FIXTURES/$SUITE_PATH}" "$DEFINITION"
-  python3 -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["node"]={"node_did": sys.argv[3]}; c["default_agent_selection"]={"node_did": sys.argv[3], "default_agent_did": sys.argv[2]}; json.dump(c, open(p,"w"), indent=2)' \
-    "$DEFINITION/pack_config.json" "$DEFAULT_AGENT_DID" "$DID"
+  python3 - "$DEFINITION/pack_config.json" "$DEFAULT_AGENT_DID" "$DID" "$COMMAND_EXECUTION" <<'PYDEFINITION'
+import json, sys
+path, default_agent, did, mode = sys.argv[1:]
+config = json.load(open(path))
+config["node"] = {"node_did": did}
+config["default_agent_selection"] = {"node_did": did, "default_agent_did": default_agent}
+for definition in config["eval_definitions"]:
+    definition["subject"]["host_bash"] = mode == "unrestricted"
+json.dump(config, open(path, "w"), indent=2)
+PYDEFINITION
   python3 - "$DEFINITION" "$RUN_SUBJECT" <<'PYENGINEERBASELINE'
 import json, pathlib, sys
 root, subject = map(pathlib.Path, sys.argv[1:])
@@ -306,7 +318,7 @@ PYSPLIT
     RUN_ID="ladder-$level-$SHA-$TARGET-$split-$STAMP"
     cat >&2 <<EOF
 
-== $level ($split): $TRIALS trials per case, $TRIAL_CONCURRENCY trials at once, $PER_TRIAL call(s) per trial, $MODEL at $ENDPOINT
+== $level ($split): $TRIALS trials per case, $TRIAL_CONCURRENCY trials at once, $PER_TRIAL call(s) per trial, $MODEL at $ENDPOINT, command execution $COMMAND_EXECUTION
 watch:  $GENTS utils eval watch $RUN_ID --home $EVAL_HOME
 EOF
     python3 - "$PLAN_DRAFT" "$DEFINITION_ID" "$RUN_SUBJECT" "$PROFILE_ID" "$split" "$TRIALS" "$TRIAL_CONCURRENCY" "$RUN_ID" <<'PYPLAN'

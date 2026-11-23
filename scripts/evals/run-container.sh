@@ -4,7 +4,7 @@
 #   scripts/evals/run-container.sh image [COMMIT] [--tag TAG]
 #   scripts/evals/run-container.sh start --name RUN --image TAG --target FILE...
 #       [--suite SUITE|all]... [--splits "train validation"] [--trials N]
-#       [--per-replica N] [--max-running N] [--seed-base N] [--allow-host-bash]
+#       [--per-replica N] [--max-running N] [--seed-base N] [--command-execution off|unrestricted]
 #       [--subject DIR] [--definition DIR] [--trial-timeout SECS] [--disk SIZE]
 #       [--cpus N] [--memory SIZE] [--pids N]
 #   scripts/evals/run-container.sh resume|status|stop --name RUN
@@ -25,24 +25,26 @@
 # Each --target is a target file whose endpoint is http://127.0.0.1:<port> on
 # the docker host; slots run --per-replica (default 2) at a time on each and
 # --max-running (default no cap beyond that) in all.
-# --allow-host-bash sets GENTS_EVAL_ALLOW_HOST_BASH=1 inside the containers,
-# so a definition whose subject opts in to host bash holds it; such a run's
-# summary is marked unauthenticated, since the trial shares a uid with its
-# grader. resume restarts the orchestrator: finished slots stay, the others
+# --command-execution names the mode every trial's Engineer runs commands in
+# (GENTS_EVAL_COMMAND_EXECUTION, default off): unrestricted grants the subject
+# host bash as `gents init --tool-package yolo` does and sets
+# GENTS_EVAL_ALLOW_HOST_BASH=1 inside the containers, so it holds there; such
+# a run's summary is marked unauthenticated, since the trial shares a uid with
+# its grader. resume restarts the orchestrator: finished slots stay, the others
 # run again from a fresh eval home. status prints the
 # slot table and totals (also in RUN/summary.txt and RUN/summary.json); stop
 # ends the orchestrator, which kills the run's containers.
 #
-# GENTS_EVAL_CONTAINER_HOST: docker host, reached over ssh (default workstation-2;
-#   `local` runs on this machine).
-# GENTS_EVAL_CONTAINER_ROOT: run root on that host (default /data/runs/gents-evals).
+# GENTS_EVAL_CONTAINER_HOST: docker host, reached over ssh (default `local`, this
+#   machine).
+# GENTS_EVAL_CONTAINER_ROOT: run root on that host (default /var/tmp/gents-evals).
 set -euo pipefail
 
 usage() { sed -n "2,$(( $(grep -n '^set -euo pipefail' "$0" | cut -d: -f1) - 1 ))p" "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
-HOST=${GENTS_EVAL_CONTAINER_HOST:-workstation-2}
-RUNS=${GENTS_EVAL_CONTAINER_ROOT:-/data/runs/gents-evals}
+HOST=${GENTS_EVAL_CONTAINER_HOST:-local}
+RUNS=${GENTS_EVAL_CONTAINER_ROOT:-/var/tmp/gents-evals}
 ID='^[A-Za-z0-9][A-Za-z0-9._-]*$'
 
 on_host() {
@@ -62,7 +64,7 @@ trap 'rm -rf "$SCRATCH"' EXIT
 COMMAND=$1; shift
 NAME='' IMAGE='' TAG='' COMMIT='' SUBJECT='' DEFINITION=''
 TARGETS=() SUITES=()
-SPLITS="train validation" TRIALS=1 PER_REPLICA=2 MAX_RUNNING=0 SEED_BASE=1000 ALLOW=false
+SPLITS="train validation" TRIALS=1 PER_REPLICA=2 MAX_RUNNING=0 SEED_BASE=1000 COMMAND_EXECUTION=off
 CPUS=4 MEMORY=8g PIDS=4096 DISK=2g TRIAL_SECS=3600
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -76,7 +78,7 @@ while [ $# -gt 0 ]; do
     --per-replica) PER_REPLICA=$2; shift 2 ;;
     --max-running) MAX_RUNNING=$2; shift 2 ;;
     --seed-base) SEED_BASE=$2; shift 2 ;;
-    --allow-host-bash) ALLOW=true; shift ;;
+    --command-execution) COMMAND_EXECUTION=$2; shift 2 ;;
     --subject) SUBJECT=$2; shift 2 ;;
     --definition) DEFINITION=$2; shift 2 ;;
     --trial-timeout) TRIAL_SECS=$2; shift 2 ;;
@@ -129,7 +131,8 @@ start() {
   [[ -n "$IMAGE" && ${#TARGETS[@]} -gt 0 ]] || usage
   [ ${#SUITES[@]} -gt 0 ] || SUITES=(all)
   [[ "$TRIALS" =~ ^[1-9][0-9]*$ && "$PER_REPLICA" =~ ^[1-9][0-9]*$ && "$MAX_RUNNING" =~ ^[0-9]+$ &&
-     "$SEED_BASE" =~ ^[0-9]+$ && "$TRIAL_SECS" =~ ^[1-9][0-9]*$ && "$DISK" =~ ^[1-9][0-9]*[kmgt]?$ ]] || usage
+     "$SEED_BASE" =~ ^[0-9]+$ && "$TRIAL_SECS" =~ ^[1-9][0-9]*$ && "$DISK" =~ ^[1-9][0-9]*[kmgt]?$ &&
+     "$COMMAND_EXECUTION" =~ ^(off|unrestricted)$ ]] || usage
   local suite
   for suite in "${SUITES[@]}"; do
     [[ "$suite" =~ $ID ]] || { echo "--suite $suite is not a suite id" >&2; exit 2; }
@@ -141,7 +144,8 @@ start() {
   git -C "$ROOT" cat-file -e "$commit^{commit}" 2>/dev/null ||
     { echo "image $IMAGE was built from $commit, which this repository lacks; fetch it" >&2; exit 2; }
   mkdir -p "$stage/launcher" "$stage/targets" "$stage/overrides" "$stage/logs" "$stage/slots" "$stage/relay" "$stage/source"
-  cp "$HERE/container/orchestrate.py" "$HERE/container/relay.py" "$HERE/container/entrypoint.sh" "$stage/launcher/"
+  cp "$HERE/container/orchestrate.py" "$HERE/container/relay.py" "$HERE/container/entrypoint.sh" "$HERE/suites.py" \
+    "$stage/launcher/"
   git -C "$ROOT" archive --format=tar "$commit" -- scripts/evals/matrix.json crates/gents/tests/fixtures/configurator_evals |
     tar -x -C "$stage/source"
   local names=() target name
@@ -154,11 +158,11 @@ start() {
   done
   [ -z "$SUBJECT" ] || cp -R "$SUBJECT" "$stage/overrides/subject"
   [ -z "$DEFINITION" ] || cp -R "$DEFINITION" "$stage/overrides/definition"
-  python3 - "$stage" "$NAME" "$IMAGE" "$commit" "$(revision scripts/evals/container scripts/evals/run-container.sh)" \
-    "$SPLITS" "$TRIALS" "$PER_REPLICA" "$MAX_RUNNING" "$SEED_BASE" "$ALLOW" "$CPUS" "$MEMORY" "$PIDS" "$DISK" \
+  python3 - "$stage" "$NAME" "$IMAGE" "$commit" "$(revision scripts/evals/container scripts/evals/run-container.sh scripts/evals/suites.py)" \
+    "$SPLITS" "$TRIALS" "$PER_REPLICA" "$MAX_RUNNING" "$SEED_BASE" "$COMMAND_EXECUTION" "$CPUS" "$MEMORY" "$PIDS" "$DISK" \
     "$TRIAL_SECS" "${#SUITES[@]}" "${SUITES[@]}" "${names[@]}" <<'PY'
 import hashlib, json, pathlib, sys
-(stage, name, image, commit, launcher, splits, trials, per_replica, max_running, seed_base, allow, cpus, memory,
+(stage, name, image, commit, launcher, splits, trials, per_replica, max_running, seed_base, command_execution, cpus, memory,
  pids, disk, trial_secs, suite_count, *rest) = sys.argv[1:]
 stage = pathlib.Path(stage)
 suites, replicas = rest[:int(suite_count)], rest[int(suite_count):]
@@ -171,7 +175,7 @@ json.dump({"name": name, "image": image, "image_commit": commit, "launcher_commi
            "launcher_sha256": launcher_files,
            "suites": suites, "splits": splits.split(), "trials": int(trials), "per_replica": int(per_replica),
            "max_running": int(max_running) or None,
-           "seed_base": int(seed_base), "allow_host_bash": allow == "true", "replicas": replicas,
+           "seed_base": int(seed_base), "command_execution": command_execution, "replicas": replicas,
            "limits": {"cpus": cpus, "memory": memory, "pids": int(pids), "disk": disk,
                       "trial_secs": int(trial_secs)}},
           open(stage / "run.json", "w"), indent=2)
