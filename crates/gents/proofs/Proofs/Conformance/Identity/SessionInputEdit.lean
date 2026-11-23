@@ -40,7 +40,7 @@ def claim : Family ClaimInput ClaimOutput where
         ⟨"user", "session-doc", "agent-doc", "input", "evidence", true⟩
         "input" "changed" ⟨true, true, true⟩).replacement
       applied := apply .pending Request.CrossActorAuthorization.exampleIntent
-        Request.CrossActorAuthorization.permittedObservation ⟨true, true, true, true⟩
+        Request.CrossActorAuthorization.permittedObservation true
         (some [i.selectedAllowed]) (some [i.selectedAllowed]) == Outcome.applied
       rollbackReplacement := rolledBack.replacement
       rollbackReceipt := rolledBack.receipt

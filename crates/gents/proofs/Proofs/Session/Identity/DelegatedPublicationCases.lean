@@ -46,8 +46,7 @@ structure Case where
   /-- The writes that land on the target's claim attempts, one per attempt. -/
   claimRaces : List ClaimRace := []
 
-def grantedCommit : NativeCommit := ⟨true, true, true, true⟩
-def deniedCommit : NativeCommit := ⟨true, false, true, true⟩
+def grantedCommit : Bool := true
 def good : Action := .commit true true true
 def observed : Action := .observe true true
 def grant : Action := .publish "parent-agent" true allGrants
@@ -112,7 +111,7 @@ theorem complete_publication_exposes_child_and_preserves_user_control :
 
 theorem denied_invoke_cannot_commit :
     let s := [good, observed, grant].foldl step (initial false)
-    s.committed = false ∧ s.toolRunning = false ∧ claim s deniedCommit = .unavailable := by
+    s.committed = false ∧ s.toolRunning = false ∧ claim s grantedCommit = .unavailable := by
   native_decide
 
 /-- The parent Agent owns the session it published, so document ACP lets it
@@ -128,9 +127,9 @@ theorem revoked_after_publication_detaches_the_session :
 theorem same_agent_uses_client_admission_but_waits_for_links :
     let complete := [good, observed, grant].foldl step (initial false sameAgentBinding)
     let incomplete := [good, observed, .publish "parent-agent" true visiblePartialGrants].foldl step (initial false sameAgentBinding)
-    claim complete deniedCommit = .claimed ∧
+    claim complete grantedCommit = .claimed ∧
       allowed 5 incomplete.household "parent-agent" "delivered_requests" "child-request" "read" = true ∧
-      claim incomplete deniedCommit = .unavailable := by native_decide
+      claim incomplete grantedCommit = .unavailable := by native_decide
 
 theorem unknown_commit_cannot_publish_or_claim :
     let s := [good, grant].foldl step (initial true)
