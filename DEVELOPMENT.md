@@ -66,23 +66,39 @@ A Vera home started without the account option leaves peer publication idle.
 
 By default a Vera home runs in process with its Node as the sole operator.
 To share a deployment, initialize the host with `--document-acp vera
---vera-rpc-port 9841`. Its account and Node are the initial operators, and
-administrative changes require both signatures. Initialization creates a device group owned by the account and admits the host. Save the `vera_anchor` object
-from the initialization result and give it to the second device over an
-authenticated channel. It identifies the account, deployment, consensus key and genesis.
+--vera-rpc-port 9841`. Administrative changes require signatures from both
+the account and the host Node. Save the `vera_anchor` object from the init
+result as `host-anchor.json`. It binds the account, deployment, consensus
+key, genesis, device group and host publisher Node.
 
-Start the host before initializing the follower. Use the host account to add
-the follower device’s DID to the group’s `member` relation with
-`gents runtime p2p enrollment admit-device <group-id> <device-did>`.
-Use `remove-device` with the same arguments to withdraw it. The anchor identifies
-the deployment, while that signed grant admits the device. On the second device, make
-a private route from a local loopback port to the host's loopback port.
-Initialize a fresh follower with `--document-acp vera --vera-rpc-port 9841
---vera-anchor host-anchor.json`, using the local end of that route as the
-port. The follower keeps its own signing identity, worker journal and
-encrypted keyring. On restart it reads the saved deployment identity from
-its home and verifies the host again. The route must still be available.
-Transport publication also requires membership in the account's device group.
+Start the host. From its account, admit the follower's device signing DID
+and save the command's JSON output. Use the group ID from the host's init
+result (`transport_group.group`).
+
+```sh
+gents runtime p2p enrollment admit-device "$GROUP_ID" "$FOLLOWER_DID" > device-admission.json
+```
+
+Transfer both JSON files to the follower over an authenticated channel.
+The signing key stays on the follower. Set up a private tunnel from its
+loopback port to the host's Vera loopback port, then initialize a fresh
+home with the matching device key and your usual model options.
+
+```sh
+gents init --document-acp vera --vera-rpc-port 9841 \
+  --vera-anchor host-anchor.json --vera-device-admission device-admission.json \
+  --key-path "$FOLLOWER_KEY"
+```
+
+The follower verifies the account signature over its Node registration and
+checks current group membership and publishing rights against Vera. On
+restart it uses the admission saved in its home. The private tunnel must
+remain available. To revoke that device’s membership and publisher grant,
+run the following command from the host account.
+
+```sh
+gents runtime p2p enrollment remove-device "$GROUP_ID" "$FOLLOWER_DID"
+```
 
 ## Read the documents assigned to a node
 
