@@ -568,8 +568,8 @@ pub mod fields {
 
 #[cfg(test)]
 mod field_tests {
-    use super::Collection;
     use super::fields::{agent_request, callback_invocation};
+    use super::Collection;
 
     #[test]
     fn generated_fields_follow_the_sdl() {

@@ -158,7 +158,10 @@ pub async fn register_self(
             .clone()
             .unwrap_or_else(|| DEFAULT_NETWORK_ID.to_owned()),
     };
-    let publisher = access.transport_publisher_node().await.map_err(passthrough)?;
+    let publisher = access
+        .transport_publisher_node()
+        .await
+        .map_err(passthrough)?;
     let mutation = registry_upsert_mutation_for_publisher(
         &entry,
         &now.to_rfc3339_opts(SecondsFormat::Secs, true),

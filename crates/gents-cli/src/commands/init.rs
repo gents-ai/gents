@@ -368,11 +368,21 @@ pub(crate) async fn init_home_with_core_packs(
                 .with_context(|| format!("invalid Vera anchor at {}", path.display()))?;
             let device_registration = if let Some(path) = &args.vera_device_admission {
                 #[derive(serde::Deserialize)]
-                struct Admission { node_registration: Value }
-                let bytes = tokio::fs::read(path).await.with_context(|| format!("reading device admission at {}", path.display()))?;
+                struct Admission {
+                    node_registration: Value,
+                }
+                let bytes = tokio::fs::read(path)
+                    .await
+                    .with_context(|| format!("reading device admission at {}", path.display()))?;
                 Some(serde_json::from_slice::<Admission>(&bytes)?.node_registration)
-            } else { None };
-            VeraConnection::Follower { port, anchor, device_registration }
+            } else {
+                None
+            };
+            VeraConnection::Follower {
+                port,
+                anchor,
+                device_registration,
+            }
         } else {
             VeraConnection::Host {
                 port,
@@ -438,7 +448,11 @@ pub(crate) async fn init_home_with_core_packs(
                 document_acp,
                 &connection,
                 if matches!(connection, VeraConnection::Host { .. }) {
-                    Some(gents_store::config_client::ClientSigningCapability::from_ed25519_key(client_identity.private_key_bytes())?)
+                    Some(
+                        gents_store::config_client::ClientSigningCapability::from_ed25519_key(
+                            client_identity.private_key_bytes(),
+                        )?,
+                    )
                 } else {
                     None
                 },
