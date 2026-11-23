@@ -78,6 +78,50 @@ fn release_archive<'a>(archives: Archives<'a>, pack: CorePack) -> Option<&'a [u8
         .map(|(_, bytes)| *bytes)
 }
 
+/// Who asked for the home, which decides the remedy a refusal can offer: only
+/// the CLI can pass `--no-default-packs`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum InitEntryPoint {
+    Cli,
+    Start,
+    Desktop,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "this build cannot initialize the Engineer: missing core pack archives: {missing}; {remedy}"
+)]
+pub(crate) struct MissingCorePackArchives {
+    missing: String,
+    remedy: &'static str,
+}
+
+/// Lean `Pack.CorePacks.refuseInit`, applied to the archives this build carries.
+pub(crate) fn admit_init(
+    archives: Archives<'_>,
+    entry: InitEntryPoint,
+    fresh: bool,
+    engineer: bool,
+    defaults: bool,
+) -> Result<(), MissingCorePackArchives> {
+    let missing: Vec<_> = CorePack::ALL
+        .into_iter()
+        .filter(|&pack| release_archive(archives, pack).is_none())
+        .map(CorePack::coordinate)
+        .collect();
+    if !core_packs::refuse_init(fresh, engineer, defaults, missing.is_empty()) {
+        return Ok(());
+    }
+    Err(MissingCorePackArchives {
+        missing: missing.join(", "),
+        remedy: match entry {
+            InitEntryPoint::Cli => "run `make core-packs && make build-cli` and retry, or pass `--no-default-packs` to opt out, leaving the Engineer without skills",
+            InitEntryPoint::Start => "run `make core-packs && make build-cli` and retry",
+            InitEntryPoint::Desktop => "this desktop dev build is incomplete; run `make desktop-native-dev`",
+        },
+    })
+}
+
 fn not_carried(pack: CorePack) -> String {
     format!(
         "this build carries no {} archive; a build made with `make core-packs` does",
@@ -1147,45 +1191,89 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn a_fresh_engineer_without_archives_is_refused_before_its_bootstrap() {
+        let home = tempfile::tempdir().unwrap();
+        let error = crate::commands::init::init_home_with_core_packs(
+            init_args(home.path(), &[]),
+            &[],
+            InitEntryPoint::Cli,
+        )
+        .await
+        .unwrap_err();
+        let refusal = error.downcast_ref::<MissingCorePackArchives>().unwrap();
+        assert_eq!(
+            refusal.missing,
+            CorePack::ALL.map(CorePack::coordinate).join(", ")
+        );
+        assert_eq!(
+            refusal.to_string(),
+            "this build cannot initialize the Engineer: missing core pack archives: gents/pack_builder, gents/web, gents/dynamic_workflows, gents/charts, gents/data_tables, gents/script; run `make core-packs && make build-cli` and retry, or pass `--no-default-packs` to opt out, leaving the Engineer without skills"
+        );
+        assert!(!home
+            .path()
+            .join(gents_store::local::home::BOOTSTRAP_CONSUMED_FILE_NAME)
+            .exists());
+        let initialized = crate::commands::init::init_home_with_core_packs(
+            init_args(home.path(), &["--no-default-packs"]),
+            &[],
+            InitEntryPoint::Cli,
+        )
+        .await
+        .unwrap();
+        assert_eq!(initialized["status"], "initialized");
+    }
+
+    #[tokio::test]
+    async fn an_existing_home_never_needs_archives() {
+        let home = tempfile::tempdir().unwrap();
+        crate::commands::init::init_home_with_core_packs(
+            init_args(home.path(), &["--no-default-packs"]),
+            &[],
+            InitEntryPoint::Cli,
+        )
+        .await
+        .unwrap();
+        let initialized = crate::commands::init::init_home_with_core_packs(
+            init_args(home.path(), &[]),
+            &[],
+            InitEntryPoint::Cli,
+        )
+        .await
+        .unwrap();
+        assert_eq!(initialized["status"], "initialized");
+    }
+
+    #[test]
+    fn a_refusal_names_only_the_missing_archives_and_a_remedy_its_caller_can_take() {
+        let archives = [
+            ("gents/pack_builder", &b"pack"[..]),
+            ("gents/web", &b"pack"[..]),
+        ];
+        let refused = |entry| admit_init(&archives, entry, true, true, true).unwrap_err();
+        assert_eq!(
+            refused(InitEntryPoint::Start).to_string(),
+            "this build cannot initialize the Engineer: missing core pack archives: gents/dynamic_workflows, gents/charts, gents/data_tables, gents/script; run `make core-packs && make build-cli` and retry"
+        );
+        assert_eq!(
+            refused(InitEntryPoint::Desktop).to_string(),
+            "this build cannot initialize the Engineer: missing core pack archives: gents/dynamic_workflows, gents/charts, gents/data_tables, gents/script; this desktop dev build is incomplete; run `make desktop-native-dev`"
+        );
+    }
+
     /// The real `init --engineer` and `gents config pack starter --enable`
     /// replay Lean `Pack.CorePacks`: init installs every core pack the
     /// release carries without asking and leaves each as `initWiring` says;
     /// enabling leaves each as `enabledWiring` says.
     #[tokio::test]
     async fn first_run_installs_packs_and_releases_the_home_for_its_service() {
-        let packs = tempfile::tempdir().unwrap();
-        let archives: Vec<_> = CorePack::ALL
-            .into_iter()
-            .map(|pack| {
-                let (_, name) =
-                    gents_pack::pack::registry::split_pack_coordinate(pack.coordinate());
-                let dir = packs.path().join(name);
-                let manifest = json!({
-                    "manifest_version": 1, "name": name, "namespace": "gents",
-                    "version": "1.0.0", "description": "Store handoff fixture",
-                    "authors": ["tests"], "tags": [], "kind": "documents",
-                    "assets": ["README.md", "pack_config.json"], "dependencies": [],
-                    "config": "pack_config.json",
-                });
-                let config = json!({
-                    "node": {"node_did": "${GENTS_PACK_NODE_DID}"},
-                    "skills": [{"skill_id": format!("handoff-{name}"),
-                        "node_did": "${GENTS_PACK_NODE_DID}", "name": name,
-                        "description": "Handoff premise", "instructions": "Use it."}],
-                });
-                write_pack(
-                    &dir,
-                    manifest,
-                    &[("pack_config.json", serde_json::to_vec(&config).unwrap())],
-                );
-                (pack.coordinate().to_owned(), archive(&dir))
-            })
-            .collect();
+        let archives = gents_pack::test_support::skill_only_core_pack_archives();
         let archives = borrowed(&archives);
         let home = tempfile::tempdir().unwrap();
         let initialized = crate::commands::init::init_home_with_core_packs(
             init_args(home.path(), &[]),
             &archives,
+            InitEntryPoint::Cli,
         )
         .await
         .unwrap();
@@ -1217,6 +1305,7 @@ mod tests {
         let initialized = crate::commands::init::init_home_with_core_packs(
             init_args(home.path(), &[]),
             &archives,
+            InitEntryPoint::Cli,
         )
         .await
         .unwrap();
@@ -1274,9 +1363,10 @@ mod tests {
         let Some(crate::cli::Command::Init(args)) = cli.command else {
             panic!("expected init")
         };
-        let initialized = crate::commands::init::init_home_with_core_packs(args, &archives)
-            .await
-            .unwrap();
+        let initialized =
+            crate::commands::init::init_home_with_core_packs(args, &archives, InitEntryPoint::Cli)
+                .await
+                .unwrap();
         let report = &initialized["default_packs"];
         assert_eq!(report["not_installed"], json!([]), "{report}");
         let at_init = observed(home.path(), &report["installed"]).await;

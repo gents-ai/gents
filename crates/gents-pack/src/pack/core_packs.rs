@@ -63,6 +63,11 @@ pub fn approval_required(origin: Origin, grants: bool) -> bool {
     grants && origin == Origin::Other
 }
 
+/// Lean `Pack.CorePacks.refuseInit`.
+pub fn refuse_init(fresh: bool, engineer: bool, defaults: bool, all_archives: bool) -> bool {
+    fresh && engineer && defaults && !all_archives
+}
+
 /// Lean `Pack.CorePacks.Wiring`: what one core pack leaves on the Engineer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Wiring {
@@ -503,6 +508,18 @@ mod conformance {
     fn approval_required_matches_the_lean_model() {
         families::pack_core_packs_approval_required::replay(|input| {
             approval_required(input.origin, input.grants)
+        });
+    }
+
+    #[test]
+    fn refuse_init_matches_the_lean_model() {
+        families::pack_core_packs_refuse_init::replay(|input| {
+            refuse_init(
+                input.fresh,
+                input.engineer,
+                input.defaults,
+                input.all_archives,
+            )
         });
     }
 

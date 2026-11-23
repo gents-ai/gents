@@ -1522,6 +1522,49 @@ class TlaStructure(unittest.TestCase):
                                                      "PROPERTY": ["B"]})
 
 
+class PipeDrain(unittest.TestCase):
+    """A job's descendant that outlives it must not hold the gate on its pipe."""
+
+    HOLDER = "import os,time; os._exit(0) if os.fork() else time.sleep(10)"
+    LATE = "import os,time; os._exit(0) if os.fork() else (time.sleep(1), os.write(1, b'last line\\n'))"
+
+    def run_as(self, code, job, idle=0.5):
+        real_popen = subprocess.Popen
+
+        def spawn(command, **kwargs):
+            return real_popen(command if command[0] == "ps" else [sys.executable, "-c", code], **kwargs)
+
+        output = io.StringIO()
+        with mock.patch.object(gate.subprocess, "Popen", side_effect=spawn), \
+                mock.patch.object(gate, "PIPE_DRAIN_IDLE", idle), \
+                mock.patch.object(gate, "results", []), contextlib.redirect_stdout(output):
+            passed = job()
+            return passed, gate.results[-1][1], output.getvalue()
+
+    def test_a_held_pipe_fails_a_cargo_job_without_hanging(self):
+        passed, verdict, _ = self.run_as(self.HOLDER, lambda: gate.cargo_test("holder", [], expect_tests=False))
+        self.assertFalse(passed)
+        self.assertIn("output pipe still held by a descendant", verdict)
+
+    def test_a_held_pipe_fails_a_nextest_job_without_hanging(self):
+        passed, verdict, _ = self.run_as(self.HOLDER, lambda: gate.nextest(["run"], label="holder"))
+        self.assertFalse(passed)
+        self.assertIn("output pipe still held by a descendant", verdict)
+
+    def test_late_output_from_a_descendant_is_kept(self):
+        passed, verdict, output = self.run_as(self.LATE, lambda: gate.nextest(["run"], label="late"), idle=3.0)
+        self.assertTrue(passed, verdict)
+        self.assertIn("last line", output)
+
+    def test_eof_keeps_a_partial_last_line(self):
+        process = subprocess.Popen([sys.executable, "-c", "print('tail', end='')"], stdout=subprocess.PIPE)
+        state = {}
+        self.assertEqual(list(gate.output_lines(process, state)), [b"tail"])
+        process.wait()
+        process.stdout.close()
+        self.assertNotIn("pipe_held", state)
+
+
 REUSE = gate.load_reuse()
 TREE = REUSE.tree(gate.ROOT)
 
