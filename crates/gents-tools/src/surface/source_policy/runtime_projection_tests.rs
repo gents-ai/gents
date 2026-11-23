@@ -7,8 +7,7 @@ use gents_store::identity::NodeIdentity;
 use gents_store::local::runtime_document_projection::RuntimeDocumentProjector;
 
 #[tokio::test]
-async fn installed_projector_links_pending_transport_and_preserves_revocation() -> anyhow::Result<()>
-{
+async fn installed_projector_links_transport_and_preserves_revocation() -> anyhow::Result<()> {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("runtime");
     let runtime = gents_store::identity::KeyIdentity::load_or_create(&path, None)?;
@@ -47,7 +46,7 @@ async fn installed_projector_links_pending_transport_and_preserves_revocation() 
         &gents_protocol::schemas::HomePolicyIds::node_store().render(gents_protocol::schemas::NODE),
     )
     .await?;
-    let access = gents_store::config_client::ConfigAccess::local_as(node.clone(), actor.clone());
+    let access = gents_store::config_client::ConfigAccess::local_as(node.clone(), actor);
     let did = gents_store::graphql::escape_graphql_string(runtime.did());
     let network = access
         .write(
@@ -56,7 +55,6 @@ async fn installed_projector_links_pending_transport_and_preserves_revocation() 
         )
         .await?;
     let network = gents_store::graphql::created_doc_id(&network, "Network")?;
-    let mut pending = std::collections::BTreeMap::new();
     let relation = |name: &'static str, subject: Subject, network: String| {
         let node = node.clone();
         async move {
@@ -81,15 +79,6 @@ async fn installed_projector_links_pending_transport_and_preserves_revocation() 
             Ok::<_, anyhow::Error>(present)
         }
     };
-    pending.insert(
-        "pending",
-        relation(
-            "pending_parent",
-            Subject::entity(actor.clone()),
-            network.clone(),
-        )
-        .await?,
-    );
     let parent = access
         .write(
             "test.projector.node",
@@ -99,15 +88,6 @@ async fn installed_projector_links_pending_transport_and_preserves_revocation() 
     let parent = gents_store::graphql::created_doc_id(&parent, "Node")?;
     let parent_subject = Subject::entity_set("nodes", parent.clone(), "");
     assert!(relation("parent", parent_subject.clone(), network.clone()).await?);
-    pending.insert(
-        "linked",
-        relation(
-            "pending_parent",
-            Subject::entity(actor.clone()),
-            network.clone(),
-        )
-        .await?,
-    );
     access
         .delete_resource_relationship("Network", &network, "parent", "nodes", &parent)
         .await?;
@@ -117,22 +97,7 @@ async fn installed_projector_links_pending_transport_and_preserves_revocation() 
             &format!(r#"mutation {{ update_Network(docID: "{}", input: {{display_name: "updated"}}) {{_docID}} }}"#, gents_store::graphql::escape_graphql_string(&network)),
         )
         .await?;
-    assert!(!relation("parent", parent_subject, network.clone()).await?);
-    pending.insert(
-        "revoked",
-        relation("pending_parent", Subject::entity(actor.clone()), network).await?,
-    );
+    assert!(!relation("parent", parent_subject, network).await?);
     node.shutdown().await?;
-    for case in gents_lean_vocab::families::identity_operations_replica_grant_pending::cases() {
-        let pending = pending
-            .remove(case.input.name.as_str())
-            .unwrap_or_else(|| panic!("the projector scenario never reached {}", case.input.name));
-        case.check(
-            gents_lean_vocab::families::identity_operations_replica_grant_pending::ReplicaPending {
-                pending,
-            },
-        );
-    }
-    assert!(pending.is_empty(), "unmodeled projector observations");
     Ok(())
 }

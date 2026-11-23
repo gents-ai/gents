@@ -80,17 +80,11 @@ def registryWriter (i : WriterInput) : Writer :=
   { writer := localRegistryWriter i.creator "runtime" "user" i.namesRuntime }
 
 /-- The replicated registry scenario creates rows naming the local Node as the
-runtime and as the user, and receives one created by the remote Node. -/
+runtime and as the user, receives one created by the remote Node, and has the
+user create one naming another Node. -/
 @[conformance_family]
 def registryWriterScenario : Family WriterInput Writer where
-  inputs := writerInputs.filter (·.name ≠ "other-node")
-  model := registryWriter
-
-/-- model-production-gap: the replicated registry scenario creates no row
-naming another Node, so no production path observes its writer. -/
-@[conformance_family]
-def registryWriterUnreached : Family WriterInput Writer where
-  inputs := writerInputs.filter (·.name = "other-node")
+  inputs := writerInputs
   model := registryWriter
 
 structure ReaderPolicyInput where
@@ -141,48 +135,13 @@ example : ((pairingReaderCases.find? (·.name == "explicit-revocation")).map fun
     setPairingReader c.granted c.grant c.committed) =
     some (readerPolicy { name := "both-revoked", actor := "agent" }).read := by native_decide
 
-structure ReaderRead where
-  read : Bool
-  deriving ToJson
-
-/-- The applied-pairing scenario reads the route as the reader Agent once the
-user grants its route reader, as a sibling Agent, and as the reader Agent while
-the user grants and revokes its tool and route readers. -/
+/-- The applied-pairing scenario reads, updates and manages the route reader as
+the runtime, the user, the reader Agent and a sibling Agent once the user grants
+the route reader; as the reader Agent while the user grants and revokes its tool
+and route readers; and as the user once the runtime revokes its reader
+management. -/
 @[conformance_family]
-def readerPolicyRead : Family ReaderPolicyInput ReaderRead where
-  inputs := readerPolicyInputs.filter
-    (·.name ∈ ["agent", "sibling", "tool-revoked", "tool-only", "both-revoked"])
-  model := fun i => { read := (readerPolicy i).read }
-
-structure ReaderUpdate where
-  update : Bool
-  deriving ToJson
-
-/-- The applied-pairing scenario has the granted reader Agent update the route
-through the authenticated GraphQL server. -/
-@[conformance_family]
-def readerPolicyUpdate : Family ReaderPolicyInput ReaderUpdate where
-  inputs := readerPolicyInputs.filter (·.name = "agent")
-  model := fun i => { update := (readerPolicy i).update }
-
-structure ManageReader where
-  manageReader : Bool
-  deriving ToJson
-
-/-- The applied-pairing scenario revokes the user's reader-manager relation
-and then has the user manage the reader. -/
-@[conformance_family]
-def readerPolicyManage : Family ReaderPolicyInput ManageReader where
-  inputs := readerPolicyInputs.filter (·.name = "manager-revoked")
-  model := fun i => { manageReader := (readerPolicy i).manageReader }
-
-/-- model-production-gap: the applied-pairing scenario observes only the reads,
-the reader Agent's update and the reader management replayed by
-`readerPolicyRead`, `readerPolicyUpdate` and `readerPolicyManage`; no
-production path observes the runtime's and user's access to the initial route
-or any other route update decision. -/
-@[conformance_family]
-def readerPolicyUnreached : Family ReaderPolicyInput ReaderPolicy where
+def readerPolicyAccess : Family ReaderPolicyInput ReaderPolicy where
   inputs := readerPolicyInputs
   model := readerPolicy
 
@@ -506,13 +465,14 @@ def enrollmentPolicyAllowed (i : EnrollmentPolicyInput) : Allowed :=
   { allowed := allowed 5 (enrollmentPolicyState i.name) i.actor "enrollment_records" i.document
       i.permission }
 
-/-- model-production-gap: the thin-client scenario builds only the request a
-client writes before it has a Node; no production scenario builds the admin's
-received request, its parent, the revoked admin reader or the terminal
-decision. -/
+/-- The replicated enrollment scenario reads and updates the request on the
+candidate's node as a thin client writes it, before it has a Node; on the
+admin's node once received, before and after its parent link and with the
+admin's reader revoked; and the terminal decision the admin's runtime publishes
+to the candidate under its Node. -/
 @[conformance_family]
-def enrollmentPolicyUnreached : Family EnrollmentPolicyInput Allowed where
-  inputs := enrollmentPolicyInputs.filter fun i => !i.name.startsWith "thin-"
+def enrollmentPolicy : Family EnrollmentPolicyInput Allowed where
+  inputs := enrollmentPolicyInputs
   model := enrollmentPolicyAllowed
 
 structure ReplicaInput where
@@ -545,71 +505,11 @@ def replicaInputs : List ReplicaInput :=
 def replicaRead (i : ReplicaInput) (actor collection document : String) : Bool :=
   allowed 5 (replicaState i.name) actor collection document "read"
 
-structure ReplicaReads where
-  runtimeRead : Bool
-  userRead : Bool
-  agentRead : Bool
-  outsiderRead : Bool
-  deriving ToJson
-
 /-- `runtime` in this scenario is the receiving node's own key, which reads
 past document ACP (`Household.nativeRead`); the other actors read what document
 ACP grants. -/
 def replicaHostRead (i : ReplicaInput) (collection document : String) : Bool :=
   nativeRead true 5 (replicaState i.name) "runtime" collection document
-
-def replicaReads (i : ReplicaInput) : ReplicaReads :=
-  { runtimeRead := replicaHostRead i "enrollment_records" "remote"
-    userRead := replicaRead i "user" "enrollment_records" "remote"
-    agentRead := replicaRead i "agent" "enrollment_records" "remote"
-    outsiderRead := replicaRead i "outsider" "enrollment_records" "remote" }
-
-/-- The replicated enrollment scenario reads the received request through the
-receiver's runtime and authenticated GraphQL server once it is pending, once
-the local Node links it and once a revoked parent is repaired. -/
-@[conformance_family]
-def replicaGrantReads : Family ReplicaInput ReplicaReads where
-  inputs := replicaInputs.filter (·.name ∈ ["pending", "linked", "after-repair"])
-  model := replicaReads
-
-structure UserWrite where
-  userWrite : Bool
-  deriving ToJson
-
-/-- The replicated enrollment scenario has the user update the linked
-request. -/
-@[conformance_family]
-def replicaGrantUserWrite : Family ReplicaInput UserWrite where
-  inputs := replicaInputs.filter (·.name = "linked")
-  model := fun i => { userWrite := allowed 5 (replicaState i.name) "user" "enrollment_records" "remote" "update" }
-
-structure AppRead where
-  appRead : Bool
-  deriving ToJson
-
-/-- The replicated enrollment scenario creates a private application session
-only after the revoked parent is repaired. Document ACP grants the receiving
-runtime nothing on it; it reads it as the hosting node key. -/
-@[conformance_family]
-def replicaGrantAppRead : Family ReplicaInput AppRead where
-  inputs := replicaInputs.filter (·.name = "after-repair")
-  model := fun i => { appRead := replicaHostRead i "children" "application" }
-
-structure ReplicaPending where
-  pending : Bool
-  deriving ToJson
-
-def replicaPendingRelation (i : ReplicaInput) : ReplicaPending :=
-  { pending := (replicaState i.name).relations.contains
-      ⟨"enrollment_records", "remote", "pending_parent", .actor "runtime"⟩ }
-
-/-- The installed runtime projector writes a transport document before the
-local Node exists, links it once the Node is written, and keeps a revoked
-parent revoked when the document is next written. -/
-@[conformance_family]
-def replicaGrantPending : Family ReplicaInput ReplicaPending where
-  inputs := replicaInputs.filter (·.name ∈ ["pending", "linked", "revoked"])
-  model := replicaPendingRelation
 
 structure ReplicaGrant where
   runtimeRead : Bool
@@ -621,19 +521,23 @@ structure ReplicaGrant where
   pending : Bool
   deriving ToJson
 
-/-- model-production-gap: no production scenario observes the received request
-before any grant, or reads it between the parent's revocation and its repair;
-the user's write is attempted only on the linked request, the application
-session exists only after the repair, and the pending relation is observed only
-by the runtime projector, which repairs no revoked parent. -/
+/-- The replicated enrollment scenario receives a request before any grant,
+publishes it while the local Node is absent, links it once the Node exists,
+revokes its parent and writes it again. In each state it reads the request as
+the receiver's runtime, the user, an Agent and an outsider, attempts the user's
+update, reads a private application session as the hosting node key, and reads
+the runtime's pending-parent relation. -/
 @[conformance_family]
-def replicaGrantUnreached : Family ReplicaInput ReplicaGrant where
+def replicaGrantScenario : Family ReplicaInput ReplicaGrant where
   inputs := replicaInputs
   model := fun i =>
-    { runtimeRead := (replicaReads i).runtimeRead, userRead := (replicaReads i).userRead
+    { runtimeRead := replicaHostRead i "enrollment_records" "remote"
+      userRead := replicaRead i "user" "enrollment_records" "remote"
       userWrite := allowed 5 (replicaState i.name) "user" "enrollment_records" "remote" "update"
-      agentRead := (replicaReads i).agentRead, outsiderRead := (replicaReads i).outsiderRead
+      agentRead := replicaRead i "agent" "enrollment_records" "remote"
+      outsiderRead := replicaRead i "outsider" "enrollment_records" "remote"
       appRead := replicaHostRead i "children" "application"
-      pending := (replicaPendingRelation i).pending }
+      pending := (replicaState i.name).relations.contains
+        ⟨"enrollment_records", "remote", "pending_parent", .actor "runtime"⟩ }
 
 end Conformance.IdentityOperations
