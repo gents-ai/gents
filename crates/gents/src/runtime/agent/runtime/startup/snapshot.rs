@@ -10,6 +10,8 @@ use gents_inference::admission::BackendAdmissionConfig;
 use gents_inference::backends::registry;
 use gents_tools::surface::{ToolRuntimeContext, ToolSurface};
 
+use super::super::surface_publication::{startup_cause, startup_proceeds, StartupCause};
+
 pub(super) fn is_degraded_startup_unavailable_reason(
     reason: gents_protocol::node_readiness::AgentReadinessUnavailableReason,
 ) -> bool {
@@ -28,11 +30,14 @@ pub(super) fn is_degraded_startup_unavailable_reason(
 /// Demotes each agent whose tool surface fails to build to
 /// `tool_surface_unavailable`. Startup and the control watcher both run it
 /// on every resolved snapshot, so a reconcile cannot bring such an agent back
-/// runnable while its tools still fail to build.
+/// runnable while its tools still fail to build. A build that meets an
+/// installer waits for it until `publication_deadline`, then demotes the
+/// agent with the transient publication cause.
 pub(in crate::runtime::agent::runtime) async fn demote_unbuildable_agents(
     system_log: bool,
     tool_runtime: &ToolRuntimeContext,
     snapshot: &mut ResolvedRuntimeSnapshot,
+    publication_deadline: tokio::time::Instant,
 ) -> Result<()> {
     let mut agent_dids = snapshot.agents.keys().cloned().collect::<Vec<_>>();
     agent_dids.sort();
@@ -47,7 +52,10 @@ pub(in crate::runtime::agent::runtime) async fn demote_unbuildable_agents(
             .get(&agent_did)
             .ok_or_else(|| anyhow!("missing resolved agent {agent_did} during tool admission"))?;
         let tool_runtime = tool_runtime.for_agent(agent);
-        if let Err(error) = tool_surface.build_tools(&tool_runtime).await {
+        if let Err(error) = tool_surface
+            .build_tools_until(&tool_runtime, publication_deadline)
+            .await
+        {
             // Lean `Runtime.StartupDegraded.toolSurfaceReason` decides the cause
             // from the facts the refusal carries: an enabled published root over
             // the tools plus a denial is the missing reader, whose grant the
@@ -71,7 +79,12 @@ pub(in crate::runtime::agent::runtime) async fn demote_unbuildable_agents(
                         .with_public_message(grant)
                 }
                 _ => UnavailableAgent::new(cause, format!("building tool surface: {error:#}")),
-            };
+            }
+            .with_publication_busy(
+                gents_pack::plugin::store::PublishedPluginReadError::error_chain_is_busy(
+                    error.as_ref(),
+                ),
+            );
             tracing::error!(
                 agent_did = %agent_did,
                 public_reason = ?reason.public_reason,
@@ -91,10 +104,27 @@ pub(in crate::runtime::agent::runtime) async fn demote_unbuildable_agents(
     Ok(())
 }
 
+/// Whether startup must read the snapshot under the plugin store's
+/// publication lease: an agent selects plugin tools, or a held store already
+/// left one unavailable. A plugin-free node never depends on the store.
+pub(in crate::runtime::agent::runtime) fn depends_on_publication(
+    snapshot: &ResolvedRuntimeSnapshot,
+) -> bool {
+    snapshot
+        .tool_surfaces
+        .values()
+        .any(|surface| surface.has_plugin_tools())
+        || snapshot
+            .unavailable_agents
+            .values()
+            .any(|unavailable| unavailable.publication_busy)
+}
+
 pub(in crate::runtime::agent::runtime) async fn validate_startup_snapshot(
     agent: &Gents,
     tool_runtime: &ToolRuntimeContext,
     snapshot: &mut ResolvedRuntimeSnapshot,
+    publication_deadline: tokio::time::Instant,
 ) -> Result<()> {
     snapshot.validate_node_readiness_source().with_context(|| {
         format!(
@@ -103,7 +133,13 @@ pub(in crate::runtime::agent::runtime) async fn validate_startup_snapshot(
         )
     })?;
 
-    demote_unbuildable_agents(agent.system_log, tool_runtime, snapshot).await?;
+    demote_unbuildable_agents(
+        agent.system_log,
+        tool_runtime,
+        snapshot,
+        publication_deadline,
+    )
+    .await?;
 
     if snapshot.agents.is_empty() {
         let mut unavailable = snapshot
@@ -120,11 +156,15 @@ pub(in crate::runtime::agent::runtime) async fn validate_startup_snapshot(
             );
         }
 
+        let causes = unavailable
+            .iter()
+            .map(|(_, reason)| startup_cause_of(reason))
+            .collect::<Vec<_>>();
         let blocking = unavailable
             .iter()
-            .filter(|(_, reason)| !is_degraded_startup_unavailable_reason(reason.public_reason))
+            .filter(|(_, reason)| startup_cause_of(reason) == StartupCause::Invalid)
             .collect::<Vec<_>>();
-        if !blocking.is_empty() {
+        if !startup_proceeds(snapshot.agents.len(), &causes) {
             // Only the presentation-safe reason leaves this boundary.
             for (agent_did, reason) in &blocking {
                 tracing::error!(
@@ -264,4 +304,13 @@ async fn resolve_document_snapshot_with_tools(
     resolve_context: &DocumentResolveContext,
 ) -> Result<ResolvedRuntimeSnapshot> {
     crate::runtime::agent::resolve_document_runtime_snapshot(node, resolve_context).await
+}
+
+fn startup_cause_of(reason: &UnavailableAgent) -> StartupCause {
+    startup_cause(
+        is_degraded_startup_unavailable_reason(reason.public_reason),
+        reason.public_reason
+            == gents_protocol::node_readiness::AgentReadinessUnavailableReason::ToolSurfaceUnavailable,
+        reason.publication_busy,
+    )
 }

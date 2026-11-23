@@ -1639,9 +1639,14 @@ async fn startup_tool_admission_cascade_follows_the_lean_model() {
         let mut snapshot = startup::snapshot::resolve_startup_snapshot(&agent)
             .await
             .unwrap();
-        startup::snapshot::validate_startup_snapshot(&agent, &tool_runtime, &mut snapshot)
-            .await
-            .unwrap();
+        startup::snapshot::validate_startup_snapshot(
+            &agent,
+            &tool_runtime,
+            &mut snapshot,
+            tokio::time::Instant::now() + gents_tools::surface::PUBLICATION_WAIT,
+        )
+        .await
+        .unwrap();
         assert!(snapshot.agents.contains_key(caller));
         case.check(tool_admission_startup_cascade::CascadeOutput {
             runnable: snapshot.agents.contains_key(target),

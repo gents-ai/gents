@@ -120,7 +120,7 @@ impl ConfigCommandTool {
             core: self.core.clone(),
             node: self.node.clone(),
             actor: self.identity.clone(),
-            home: self.plugins.home().map(std::path::Path::to_path_buf),
+            store: self.plugins.store_writer(),
             envelope: self.envelope.clone(),
         };
         let verb = argv

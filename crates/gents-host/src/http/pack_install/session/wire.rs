@@ -1,9 +1,9 @@
-use std::path::Path;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use axum::extract::ws::WebSocket;
 use gents_pack::pack::plugin_wire::{wire_outcome, WireCommand, WirePlan};
+use gents_pack::plugin::store::StoreWriter;
 use gents_store::config_client::{ConfigAccess, PackApprovalScope, PackEffectApprover as _};
 use serde_json::json;
 use tokio::sync::Mutex;
@@ -17,7 +17,7 @@ use crate::http::router::RuntimeHttpState;
 pub(super) async fn run(
     socket: &Arc<Mutex<WebSocket>>,
     state: &RuntimeHttpState,
-    home: &Path,
+    store: &StoreWriter,
     user_access: &ConfigAccess,
     refresher: Refresher,
     command: WireCommand,
@@ -34,7 +34,7 @@ pub(super) async fn run(
             "a pack session wires a new pin; preview or remove it over the client's own access"
         )));
     }
-    let wire = WirePlan::read(user_access, &state.node_did, home, &request)
+    let wire = WirePlan::read(user_access, &state.node_did, store, &request)
         .await
         .map_err(not_wired)?;
     let scope = PackApprovalScope {

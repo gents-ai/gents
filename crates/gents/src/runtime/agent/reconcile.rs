@@ -271,6 +271,7 @@ where
             .set_reconcile_phase(ReconcilePhase::Diffing)
             .await;
         if proposal.configuration_fingerprint() == self.current_snapshot.configuration_fingerprint()
+            && !self.active_slots.values().any(AgentSlot::parked)
         {
             tracing::debug!(
                 generation = self.current_snapshot.generation,
@@ -361,11 +362,12 @@ where
             let agent = resolved_snapshot
                 .agent_with_tools(agent_did)
                 .expect("validated runnable/tool-configuration keyset parity");
-            if self
-                .active_slots
-                .get(agent_did)
-                .is_none_or(|slot| !slot.matches(&agent, tool_surface, executor_capacity))
-            {
+            if self.active_slots.get(agent_did).is_none_or(|slot| {
+                recreate_slot(
+                    slot.matches(&agent, tool_surface, executor_capacity),
+                    slot.parked(),
+                )
+            }) {
                 recreated_agent_dids.push(agent_did.clone());
             }
         }
@@ -560,3 +562,16 @@ where
 
 #[cfg(test)]
 mod tests;
+
+/// Lean `RuntimeReconcile.SurfacePublication.recreateSlot`.
+fn recreate_slot(configuration_matches: bool, parked: bool) -> bool {
+    !configuration_matches || parked
+}
+
+#[cfg(test)]
+#[test]
+fn parked_slot_recreation_replays_the_lean_owner() {
+    gents_lean_vocab::families::runtime_reconcile_surface_publication_recreate_slot::replay(|i| {
+        recreate_slot(i.configuration_matches, i.parked)
+    });
+}

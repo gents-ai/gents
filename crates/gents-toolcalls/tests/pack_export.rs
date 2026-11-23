@@ -55,7 +55,9 @@ async fn install_in(
         &gents_pack::pack::InstallTarget {
             access: &local,
             owner: runtime.did(),
-            plugin_home,
+            plugin_home: plugin_home
+                .map(|home| gents_pack::plugin::store::StoreWriter::Offline(home.to_owned()))
+                .as_ref(),
         },
         archive,
         &gents_pack::pack::PackGraphInputs {
@@ -71,7 +73,9 @@ async fn install_in(
         &gents_pack::pack::InstallTarget {
             access,
             owner: runtime.did(),
-            plugin_home,
+            plugin_home: plugin_home
+                .map(|home| gents_pack::plugin::store::StoreWriter::Offline(home.to_owned()))
+                .as_ref(),
         },
         archive,
         &[],

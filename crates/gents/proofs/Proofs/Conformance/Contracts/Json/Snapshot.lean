@@ -105,6 +105,9 @@ import Proofs.Conformance.Identity.NodeProvisioning
 import Proofs.Conformance.Identity.RuntimeUse
 import Proofs.Conformance.Identity.WorkspaceRootAccess
 import Proofs.Conformance.HomeResolution
+import Proofs.Conformance.PluginStoreHome
+import Proofs.Conformance.PluginPublication
+import Proofs.Conformance.SurfacePublication
 import Proofs.Conformance.GraphqlName
 import Proofs.Conformance.ClaudeRefresh
 import Proofs.Conformance.Identity.BlockScope

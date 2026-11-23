@@ -67,7 +67,9 @@ async fn install_in(
         &crate::pack::InstallTarget {
             access: &local,
             owner: runtime.did(),
-            plugin_home,
+            plugin_home: plugin_home
+                .map(|home| crate::plugin::store::StoreWriter::Offline(home.to_owned()))
+                .as_ref(),
         },
         archive,
         &crate::pack::PackGraphInputs {
@@ -83,7 +85,9 @@ async fn install_in(
         &crate::pack::InstallTarget {
             access,
             owner: runtime.did(),
-            plugin_home,
+            plugin_home: plugin_home
+                .map(|home| crate::plugin::store::StoreWriter::Offline(home.to_owned()))
+                .as_ref(),
         },
         archive,
         &[],

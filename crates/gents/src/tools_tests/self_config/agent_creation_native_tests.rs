@@ -773,7 +773,9 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         core: core.clone(),
         node: node.clone(),
         actor: Some(signer.clone()),
-        home: Some(plugin_home.path().to_owned()),
+        store: Some(gents_pack::plugin::store::StoreWriter::Runtime(
+            gents_pack::plugin::store::StoreReadPin::capture(plugin_home.path()),
+        )),
         envelope: gents_loop::tool::ToolCallEnvelope::default(),
     };
     let args = gents_protocol::operations::pack::PackChangeInput {
@@ -1914,7 +1916,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         core: core.clone(),
         node: node.clone(),
         actor: Some(signer.clone()),
-        home: None,
+        store: None,
         envelope: gents_loop::tool::ToolCallEnvelope::default(),
     };
     let args = gents_protocol::operations::pack::PackChangeInput {
