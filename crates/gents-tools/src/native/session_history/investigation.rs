@@ -61,7 +61,7 @@ pub async fn load_session_investigation(
             Err(error) => super::super::ParentAuditUsageObservation::Unavailable {
                 parent_request_doc_id: request.doc_id.clone(),
                 parent_request_id: request.request_id.clone(),
-                error: format!("{error:#}"),
+                error: gents_protocol::error_chain::ErrorChain(&error).to_string(),
             },
         };
         audit_usage.push(observation);
