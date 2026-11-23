@@ -196,7 +196,7 @@ pub enum UnsignedHomeStatus {
 #[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
 pub enum HomeAttestation {
     Signed {
-        statement: HomeStatement,
+        statement: Box<HomeStatement>,
         /// Unpadded base64url.
         signature: String,
     },
@@ -208,7 +208,7 @@ pub enum HomeAttestation {
 impl HomeAttestation {
     pub fn signed(statement: HomeStatement, signature: &[u8]) -> Self {
         Self::Signed {
-            statement,
+            statement: Box::new(statement),
             signature: base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(signature),
         }
     }
@@ -252,7 +252,7 @@ impl HomeAttestation {
             .decode(signature)
             .map_err(|_| HomeStatusRefusal::Malformed)?;
         if verify(node, &statement.signing_payload(), &signature) {
-            Ok(statement)
+            Ok(*statement)
         } else {
             Err(HomeStatusRefusal::BadSignature)
         }
