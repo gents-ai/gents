@@ -704,6 +704,13 @@ See `../README.md` for how this fits the broader formal-verification model.
   when the test accepts either landing first. RED: `WorkFirst` (the
   observer that read the next three updates as the work reread) and
   `TaskTells` (reads that tell their own updates interleave the landings).
+- `DiagnosedReadiness` — a test waiting for a Tools edit to demote an Agent
+  before `gents runtime diagnose` reports it. The reconciler commits the
+  readiness row with the new generation's entries, then the router commits
+  its acknowledgement; until then Lean `ClientAgentReadiness.project` reads
+  the row as `router_generation_stale`. Green waits for the owner's
+  projection of the row diagnose reads. RED: `Decoded` (the observer that
+  waited for any decoded row listing the Agent) and `NoRouterAck`.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## Checking
