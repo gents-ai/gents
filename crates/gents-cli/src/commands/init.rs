@@ -630,6 +630,16 @@ pub(crate) async fn init_home_with_core_packs(
 /// locked retirement that moves the store retires the reservation with it, so a
 /// home that was backed up or deleted can be provisioned again.
 async fn reserve_fresh_bootstrap(home: &Path) -> Result<()> {
+    reserve_fresh_bootstrap_with(home, |file| async move { file.sync_all().await }).await
+}
+
+/// `sync_marker` makes the created marker durable; its failure is an I/O
+/// error of the home's filesystem, and the marker it leaves stays consumed.
+async fn reserve_fresh_bootstrap_with<S, F>(home: &Path, sync_marker: S) -> Result<()>
+where
+    S: FnOnce(tokio::fs::File) -> F,
+    F: std::future::Future<Output = std::io::Result<()>>,
+{
     let marker = home.join(BOOTSTRAP_CONSUMED_FILE_NAME);
     let file = tokio::fs::OpenOptions::new()
         .write(true)
@@ -637,7 +647,7 @@ async fn reserve_fresh_bootstrap(home: &Path) -> Result<()> {
         .open(&marker)
         .await
         .context("fresh home bootstrap was already attempted; explicit recovery is required")?;
-    file.sync_all()
+    sync_marker(file)
         .await
         .context("syncing bootstrap reservation")?;
     #[cfg(unix)]
@@ -3169,7 +3179,17 @@ mod tests {
             if !case.input.directory_synced {
                 fs::set_permissions(&home, fs::Permissions::from_mode(0o300)).unwrap();
             }
-            let confirmed = reserve_fresh_bootstrap(&home).await.is_ok();
+            let confirmed = if case.input.created && !case.input.file_synced {
+                reserve_fresh_bootstrap_with(&home, |_marker| async {
+                    Err(std::io::Error::other(
+                        "the home's filesystem failed the marker sync",
+                    ))
+                })
+                .await
+                .is_ok()
+            } else {
+                reserve_fresh_bootstrap(&home).await.is_ok()
+            };
             fs::set_permissions(&home, fs::Permissions::from_mode(0o700)).unwrap();
             if !confirmed {
                 let error = initialize_disposable_home(&home, false).await.unwrap_err();

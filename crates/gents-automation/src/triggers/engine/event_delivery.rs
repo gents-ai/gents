@@ -338,14 +338,45 @@ pub(crate) async fn load_or_create_group(
     })).await
 }
 
+/// A group's durable clock. Quiescence is stamped once and never moves the
+/// first-seen stamp, so the timeout always runs from the durable first-seen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct GroupClock<T> {
+    pub(crate) first_seen: T,
+    pub(crate) quiesced_at: Option<T>,
+}
+
+impl<T> GroupClock<T> {
+    pub(crate) fn quiesce(self, now: T) -> Self {
+        Self {
+            first_seen: self.first_seen,
+            quiesced_at: self.quiesced_at.or(Some(now)),
+        }
+    }
+}
+
+impl GroupClock<DateTime<Utc>> {
+    pub(crate) fn elapsed(&self, now: DateTime<Utc>, timeout: std::time::Duration) -> bool {
+        now.signed_duration_since(self.first_seen)
+            .to_std()
+            .is_ok_and(|elapsed| elapsed >= timeout)
+    }
+}
+
 pub(crate) async fn quiesce_group(
     access: &gents_store::config_client::ConfigAccess,
     record: &GroupRecord,
     reason: &str,
 ) -> Result<()> {
-    if record.state.quiesced_at.is_some() {
+    let clock = GroupClock {
+        first_seen: record.state.first_seen_at.as_str(),
+        quiesced_at: record.state.quiesced_at.as_deref(),
+    };
+    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    let quiesced = clock.quiesce(now.as_str());
+    let Some(quiesced_at) = quiesced.quiesced_at.filter(|_| quiesced != clock) else {
         return Ok(());
-    }
+    };
     use gents_protocol::document_query::{
         fields::event_group_state as fields, Filter, Input, Update,
     };
@@ -356,10 +387,7 @@ pub(crate) async fn quiesce_group(
                     Filter::eq(fields::DOC_ID, &record.doc_id)
                         .and(Filter::eq(fields::NODE_DID, &record.state.node_did)),
                     Input::new()
-                        .set(
-                            fields::QUIESCED_AT,
-                            Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
-                        )
+                        .set(fields::QUIESCED_AT, quiesced_at)
                         .set(fields::QUIESCED_REASON, reason),
                 )
                 .render();
@@ -454,12 +482,13 @@ pub(crate) async fn evaluate_group(
         return Ok(GroupOutcome::Quiesced);
     }
     let first_seen = DateTime::parse_from_rfc3339(&record.state.first_seen_at)?.with_timezone(&Utc);
-    let timed_out = delivery.timeout_secs()?.is_some_and(|seconds| {
-        Utc::now()
-            .signed_duration_since(first_seen)
-            .to_std()
-            .is_ok_and(|elapsed| elapsed >= std::time::Duration::from_secs(seconds))
-    });
+    let clock = GroupClock {
+        first_seen,
+        quiesced_at: None,
+    };
+    let timed_out = delivery
+        .timeout_secs()?
+        .is_some_and(|seconds| clock.elapsed(Utc::now(), std::time::Duration::from_secs(seconds)));
     if !group_candidate_eligible(docs.len(), expected, minimum, timed_out, true) {
         return Ok(GroupOutcome::Pending {
             first_seen,
@@ -694,6 +723,29 @@ mod tests {
         }
         .validate_group()
         .is_err());
+    }
+
+    #[test]
+    fn group_clock_quiesces_once_from_the_durable_first_seen() {
+        let at = |seconds: u64| {
+            DateTime::<Utc>::from_timestamp(i64::try_from(seconds).unwrap(), 0).unwrap()
+        };
+        let seconds = |stamp: DateTime<Utc>| u64::try_from(stamp.timestamp()).unwrap();
+        gents_lean_vocab::families::event_delivery_group_clock::replay(|input| {
+            let before = GroupClock {
+                first_seen: at(input.first_seen),
+                quiesced_at: input.quiesced_at.map(at),
+            };
+            let after = before.quiesce(at(input.now));
+            let timeout = std::time::Duration::from_secs(input.timeout);
+            gents_lean_vocab::families::event_delivery_group_clock::ClockOutput {
+                first_seen_after: seconds(after.first_seen),
+                quiesced_at_after: after.quiesced_at.map(seconds),
+                quiesced_at_again: after.quiesce(at(input.now + 1)).quiesced_at.map(seconds),
+                elapsed_before: before.elapsed(at(input.now), timeout),
+                elapsed_after: after.elapsed(at(input.now), timeout),
+            }
+        });
     }
 
     #[tokio::test]

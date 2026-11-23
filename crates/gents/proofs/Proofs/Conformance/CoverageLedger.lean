@@ -45,45 +45,33 @@ def Boundary.toJson (boundary : Boundary) : String :=
 
 def boundaries : List Boundary :=
   [ { name := "boundary.backend-health.admission-freshness"
-    , reason := "A successful models-endpoint probe shows only that the endpoint answered; it does not establish that other provider operations work, that the remote stays reachable, or that every replica is fresh." }
+    , reason := "A successful models-endpoint probe shows only that the provider's endpoint answered; whether its other operations work, whether it stays reachable and whether every replica is fresh are the provider's." }
   , { name := "boundary.command-policy.host-execution-assumptions"
-    , reason := "External binaries behave as their declared effects say, and the host kernel enforces the sandbox the command policy selects." }
+    , reason := "External binaries do what their declared effects say, and the host kernel enforces the sandbox the command policy selects; `workspace_write_bash_contains_writes_to_tool_root` evidences the macOS Seatbelt refusing a write outside the tool root." }
   , { name := "boundary.count-carrier.non-null-id"
-    , reason := "DefraDB refuses a non-null ID field declaration (NonNull variant for type ID is not supported), so no count carrier of that schema is ever stored." }
+    , reason := "DefraDB refuses a non-null ID field declaration, so no count carrier of that schema is ever stored; `defradb_refuses_a_non_null_id_count_carrier` evidences the refusal." }
   , { name := "boundary.event-delivery.fair-substrate"
-    , reason := "Delivery liveness assumes the database and host scheduler eventually run every rescan and handler. Finite constructed traces cannot prove scheduler fairness." }
-  , { name := "boundary.event-delivery.substrate"
-    , reason := "Persisting, depersisting and enqueueing, dropping or consuming subscription events are DefraDB and transport behaviour. The executable relation checks their input witnesses, and native delivery families observe emitted requests and local suppression, not a transport queue." }
-  , { name := "boundary.inference-slots.running-row-derived"
-    , reason := "Held backend slots are derived from InferenceCall rows in the running state; the schema has no held-slot document, so slot accounting is checked against that derivation." }
+    , reason := "Delivery liveness assumes the database and the host scheduler eventually run every rescan and handler; scheduler fairness is not a property a finite trace can show." }
   , { name := "boundary.model.nat-typed-ids-time"
-    , reason := "Models represent identifiers and times as natural numbers and assume native identifiers are unique and parse faithfully. They establish neither UUID uniqueness nor agreement between the clocks of different nodes." }
+    , reason := "Models represent identifiers and times as natural numbers: native identifiers are taken as unique and faithfully parsed, and the clocks of different hosts are not assumed to agree." }
   , { name := "boundary.p2p-backpressure.obligation-model"
-    , reason := "P2PBackpressure models one bounded wave. The database's multi-wave queue, durable retry ladder, store-before-ack and restart behaviour belong to defradb.rs and are taken as given." }
-  , { name := "boundary.persistence.abstract-lifecycle"
-    , reason := "PersistenceState abstracts the store adapter's commit acknowledgement for a request; the database stores no per-request persistence document, so the state is observed only through that acknowledgement." }
+    , reason := "P2PBackpressure models one bounded wave; the database's multi-wave queue, durable retry ladder, store-before-acknowledge and restart behaviour are defradb.rs's and are modelled there." }
   , { name := "boundary.plugin-data.transaction"
-    , reason := "DefraDB provides serializable transactions and enforces its unique index, which plugin data writes rely on to reject a concurrent duplicate after a read-then-insert." }
+    , reason := "DefraDB transactions are serializable and enforce unique indexes, so of two transactions that read a unique key as absent and insert it, one commits and the other is refused; `defradb_refuses_a_concurrent_duplicate_after_read_then_insert` evidences it." }
   , { name := "boundary.plugin-job.guest-determinism"
-    , reason := "The WASM guest supplies its step function, output schema and resume bookkeeping; core proofs take the guest's behaviour as given and do not establish its determinism." }
+    , reason := "The WASM guest supplies its step function, output schema and resume bookkeeping; core takes the guest's behaviour as given and does not establish its determinism." }
   , { name := "boundary.plugin-job.single-step-driver"
-    , reason := "A node's store admits one runtime process at a time through an operating-system advisory lock, so one process drives a node's plugin job steps; in-process step coalescing relies on that lock holding." }
+    , reason := "A node's store admits one runtime process at a time through an operating-system advisory lock, which in-process plugin job step coalescing relies on; `a_second_holder_cannot_lock_a_store` evidences the lock." }
   , { name := "boundary.prompt-assembly.service-tier"
-    , reason := "Whether a provider account and model accept a requested service tier, and the speed actually delivered, are decided by the provider; conformance checks only which carriers Gents sends a tier to." }
-  , { name := "boundary.rendered-capture.assembled-request-artifact"
-    , reason := "Transport capture stores the final HTTP JSON body parsed and canonicalized; equality of captures is canonical JSON equality, so original byte order and whitespace are not retained." }
+    , reason := "Whether a provider account and model accept a requested service tier, and the speed delivered, are the provider's; conformance checks only which carriers Gents sends a tier to." }
   , { name := "boundary.rendered-capture.key-encoding-injectivity"
-    , reason := "The durable capture key is the SHA-256 digest of a canonical JSON array of the identity tuple; distinct tuples map to distinct keys as long as SHA-256 is collision-free." }
+    , reason := "The durable capture key is the SHA-256 digest of a canonical JSON array of the identity tuple, so distinct tuples have distinct keys while SHA-256 is collision-free." }
   , { name := "boundary.storage.observation-daemon-visible"
-    , reason := "A mutation's success or failure is the acknowledgement DefraDB returns to the caller; the model takes that acknowledgement as given and does not model DefraDB's commit algorithm." }
+    , reason := "A mutation's success or failure is the acknowledgement DefraDB returns, and models take it as given rather than modelling DefraDB's commit algorithm; `defradb_refuses_a_concurrent_duplicate_after_read_then_insert` evidences an acknowledged commit read back and a refused one leaving nothing." }
   , { name := "boundary.tool-policy.path-namespace"
-    , reason := "The path guard decides on the paths it inspects; between that inspection and the file operation, another process can change the file namespace, and handle identity across that window is the operating system's." }
+    , reason := "Between the path guard's inspection and the file operation another process can change the file namespace; handle identity across that window is the operating system's." }
   , { name := "boundary.trigger.dispatch-source-delivery"
-    , reason := "DefraDB change notifications and host schedule ticks can be delayed or lost; recovery relies on the host running the periodic rescans." }
-  , { name := "fold_queue_contracts_input_edit_unreached"
-    , reason := "Two physical AgentSessionInputEdit documents never share a command_id: the unique command_id index refuses a second local create, and the collection is managed rather than replicated, so no peer can deliver a twin. The fail-closed twin branch in process_command is defensive." }
-  , { name := "node_provisioning_reservation_unreached"
-    , reason := "A file sync of a newly created bootstrap marker fails only on an operating-system I/O error, which a test home cannot induce; production propagates that error and the model refuses the reservation." }
+    , reason := "DefraDB change notifications and subscription events can be delayed, dropped or redelivered, and host schedule ticks can be late or missed; delivery recovers by the periodic rescans the host runs, and native delivery families observe emitted requests and local suppression, not the transport queue." }
   ]
 
 /-- Each name is an emitted family that no native test consumes. The consumer
@@ -91,12 +79,10 @@ scan refuses a family missing from this list and a name here that a test
 consumes, so the list only shrinks: a new family arrives with its consumer. -/
 def openFamilies : List String :=
   [ "apply_reconcile_contract_cases_publish_cases"
-  , "client_window_scope_bound_delivers"
   , "contracts_atomic_admission_unreached"
   , "contracts_background_wake_rows_unreached"
   , "contracts_edit_anchor_fork_unreached"
   , "contracts_fork_publication_unreached"
-  , "contracts_pack_installation_finality_unreached"
   , "contracts_pack_installation_hosted_plugin_unreached"
   , "contracts_queued_steering_guard_unreached"
   , "contracts_runtime_reconcile_unreached"
@@ -104,14 +90,11 @@ def openFamilies : List String :=
   , "contracts_session_advance_unreached"
   , "contracts_session_refresh_unreached"
   , "contracts_title_admission_fresh_verifier_unreached"
-  , "contracts_workspace_transition_unreached"
   , "cross_actor_authorization_unreached"
   , "enrollment_auto_renewal_offer_unreached"
   , "eval_records_published_unreached"
   , "event_delivery_group_capture_unreached"
-  , "event_delivery_group_clock_unreached"
   , "fold_queue_contracts_management_unreached"
-  , "goal_claimed_publication_contracts_identity_staged_unreached"
   , "household_tool_grant_rebinding_unreached"
   , "household_unattended_receipt_unreached"
   , "identity_operations_readiness_recovery_unreached"
@@ -119,10 +102,6 @@ def openFamilies : List String :=
   , "native_completion_trace_unreached"
   , "native_refinement_claim_unreached"
   , "node_provisioning_bootstrap_grant_unreached"
-  , "remote_delivery_claim_unreached"
-  , "remote_delivery_delivery_unreached"
-  , "remote_delivery_recovery_unreached"
-  , "remote_delivery_response_unreached"
   , "session_child_child_scope_repair_unreached"
   , "session_child_client_request_recovery_unreached"
   , "session_documents_retry_unreached"
@@ -130,7 +109,6 @@ def openFamilies : List String :=
   , "title_usage_budget_unreached"
   , "title_usage_catalog_unreached"
   , "title_usage_goal_unreached"
-  , "watcher_actors_scanned_unreached"
   ]
 
 /-- A surface a feature reaches, and the consumed family whose replaying test

@@ -278,12 +278,10 @@ mod tests {
     /// stops emitting it, and a new family arrives with its consumer.
     const OPEN: &[&str] = &[
         "apply_reconcile_contract_cases_publish_cases",
-        "client_window_scope_bound_delivers",
         "contracts_atomic_admission_unreached",
         "contracts_background_wake_rows_unreached",
         "contracts_edit_anchor_fork_unreached",
         "contracts_fork_publication_unreached",
-        "contracts_pack_installation_finality_unreached",
         "contracts_pack_installation_hosted_plugin_unreached",
         "contracts_queued_steering_guard_unreached",
         "contracts_runtime_reconcile_unreached",
@@ -291,14 +289,11 @@ mod tests {
         "contracts_session_advance_unreached",
         "contracts_session_refresh_unreached",
         "contracts_title_admission_fresh_verifier_unreached",
-        "contracts_workspace_transition_unreached",
         "cross_actor_authorization_unreached",
         "enrollment_auto_renewal_offer_unreached",
         "eval_records_published_unreached",
         "event_delivery_group_capture_unreached",
-        "event_delivery_group_clock_unreached",
         "fold_queue_contracts_management_unreached",
-        "goal_claimed_publication_contracts_identity_staged_unreached",
         "household_tool_grant_rebinding_unreached",
         "household_unattended_receipt_unreached",
         "identity_operations_readiness_recovery_unreached",
@@ -306,10 +301,6 @@ mod tests {
         "native_completion_trace_unreached",
         "native_refinement_claim_unreached",
         "node_provisioning_bootstrap_grant_unreached",
-        "remote_delivery_claim_unreached",
-        "remote_delivery_delivery_unreached",
-        "remote_delivery_recovery_unreached",
-        "remote_delivery_response_unreached",
         "session_child_child_scope_repair_unreached",
         "session_child_client_request_recovery_unreached",
         "session_documents_retry_unreached",
@@ -317,7 +308,6 @@ mod tests {
         "title_usage_budget_unreached",
         "title_usage_catalog_unreached",
         "title_usage_goal_unreached",
-        "watcher_actors_scanned_unreached",
     ];
 
     struct Scan {

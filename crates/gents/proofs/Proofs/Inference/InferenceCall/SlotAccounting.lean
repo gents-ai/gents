@@ -5,6 +5,9 @@ open scoped BigOperators
 
 namespace InferenceCallState
 
+/-- Held backend slots are derived from `InferenceCall` rows in the running
+state (`call_state_holds_backend_slot` in gents-inference); the schema has no
+held-slot document. -/
 def holdsBackendSlot : InferenceCallState → Prop
   | .running => True
   | .queued => False

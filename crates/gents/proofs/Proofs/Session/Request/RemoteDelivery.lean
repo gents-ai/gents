@@ -1,6 +1,15 @@
 import Lean
 import Proofs.Session.Request.CrossActorAuthorization
 
+/-!
+Delivery of a session message to an Agent on another runtime. Production
+refuses every target on another node before any send: the session-message
+planner (`plan_with_delivery`) returns its cross-runtime refusal, so no tool
+call reserves a signed remote intent, no request is created on the target and
+no claim observes the sender's permissions. No family is emitted from this
+model; its theorems state what a cross-runtime path must satisfy.
+-/
+
 namespace Request.RemoteDelivery
 
 /-- The accepted tool call retains the exact signed request before any send.
@@ -233,5 +242,9 @@ def recordJson (record : RemoteRecord) : Json := Json.mkObj
   [("intent", intentJson record.intent), ("request_doc_id", toJson record.requestDocument),
    ("owner", toJson record.owner),
    ("working_agent", toJson record.workingAgent), ("working_grant", toJson record.workingAgentGranted)]
+
+example : (cases.find? (·.name == "committed-response-observed")).map (fun c =>
+    resultName (deliver c.intent c.persisted c.existing c.createSucceeded c.workingGrant)) =
+    some "committed" := by native_decide
 
 end Request.RemoteDelivery

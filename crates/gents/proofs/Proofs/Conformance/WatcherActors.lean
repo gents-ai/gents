@@ -15,21 +15,12 @@ structure ScanInput where
 private def scanInput (c : String × List ActorCandidate) : ScanInput :=
   { name := c.1, candidates := c.2 }
 
-/-- A runtime view with one configured Agent can be disabled and can lose its
-identity resolution, so these are the candidate sets one served Agent forms. -/
-def servedNames : List String := ["disabled-resolved", "disabled-unresolved"]
-
+/-- A runtime view holds as many Agents as a case has candidates; each can be
+disabled, owned by another node, lose its identity resolution or name a backend
+it cannot run, so the served view forms every candidate set. -/
 @[conformance_family]
 def scanned : Family ScanInput (List String) where
-  inputs := (actorCases.filter fun c => c.1 ∈ servedNames).map scanInput
-  model := fun i => scanActors i.candidates
-
-/-- model-production-gap: the served runtime fixture provisions one Agent, so a
-view mixing an available, an unavailable, an unresolved and an unconfigured
-Agent is not built by any production test yet. -/
-@[conformance_family]
-def scannedUnreached : Family ScanInput (List String) where
-  inputs := (actorCases.filter fun c => c.1 ∉ servedNames).map scanInput
+  inputs := actorCases.map scanInput
   model := fun i => scanActors i.candidates
 
 end Conformance.WatcherActors
