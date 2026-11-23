@@ -10,6 +10,7 @@ import Proofs.Store.Persistence
 import Proofs.Store.SchemaInstall
 import Proofs.Store.StorageObservation
 import Proofs.Store.StorageWriteGate
+import Proofs.Store.TransactionFence
 import Proofs.Store.NativeCompletion
 import Proofs.Store.NativeClaimLifetime
 import Proofs.Store.StoreHandoff

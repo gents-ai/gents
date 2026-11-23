@@ -615,7 +615,6 @@ pub async fn validate_pending_user_edit_in_txn(
     edit: &PendingQueueEdit,
     creates: &[AgentRequestCreate],
 ) -> Result<std::result::Result<ValidatedPendingEdit, String>> {
-    gents_store::graphql::fence_arrivals(txn, "AgentRequest").await?;
     let current = pending_in_txn(txn, node_did, session_id).await?;
     let checked = (|| -> Result<ValidatedPendingEdit> {
         let selected = selected_group(&current, edit, requester_did)?;

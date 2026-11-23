@@ -287,11 +287,8 @@ impl RequestLifecycle {
             .await
     }
 
-    /// Finishes an interactive request against its observed whole pending queue.
-    /// DefraDB 980190c mutates the AgentRequest arrival head for local and P2P
-    /// inserts in their document transaction. Reading that head inside the
-    /// finalizer supplies the point-read conflict fence that RepeatableRead
-    /// predicate scans alone cannot provide.
+    /// Finishes an interactive request unless the pending queue its finishing
+    /// transaction reads differs from `pending_request_doc_ids`.
     pub(crate) async fn finish_natural_turn(
         &mut self,
         message_doc_id: &str,
@@ -617,9 +614,6 @@ async fn terminalize_execution_in_txn(
     let pending_fence = spec.pending_fence;
     use super::execution_policy::LeaseObservation;
 
-    if pending_fence.is_some() {
-        gents_store::graphql::fence_arrivals(txn, "AgentRequest").await?;
-    }
     let doc_id = escape_graphql_string(request_doc_id);
     let result = {
         use gents_protocol::document_query::{

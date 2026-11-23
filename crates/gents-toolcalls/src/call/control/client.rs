@@ -173,7 +173,6 @@ pub async fn submit(
         let signed = &signed;
         let actor = &actor;
         Box::pin(async move {
-            gents_store::graphql::fence_arrivals(txn, "AgentToolControl").await?;
             let prior = {
                 use gents_protocol::document_query::{fields::agent_tool_control as fields, Filter, Query, Selection};
                 let query = Query::select(Selection::doc_id().field(fields::INTENT_JSON))
@@ -400,7 +399,6 @@ async fn claim_inner(
     );
     access.transact_write("tool_control.claim", |txn| {
         Box::pin(async move {
-            gents_store::graphql::fence_arrivals(txn, "AgentToolControlClaim").await?;
             let response = {
                 use gents_protocol::document_query::{
                     fields::{agent_tool_control as control, agent_tool_control_claim as control_claim},
