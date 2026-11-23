@@ -5,10 +5,12 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use axum::{routing::get, Json, Router};
-use gents::support::live_inference::rows_when;
-use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
-use gents_protocol::row::{decode_node_readiness_snapshot, NodeReadinessRow};
+use gents_host::readiness::load_node_readiness;
+use gents_protocol::node_readiness::{
+    project_node_readiness_summary, AgentReadinessUnavailableReason, ProjectedNodeReadinessSummary,
+};
 use gents_store::config_client::ConfigAccess;
+use gents_store::test_support::read_when_changed;
 use serde_json::{json, Value};
 
 fn document_pack(
@@ -273,29 +275,27 @@ async fn remote_pack_install_update_and_diagnose_keep_plugin_failures_isolated()
             &graphql,
         ],
     )?;
-    // Wait on the node's readiness rows for the edit's demotion of this agent;
-    // a quiescent earlier generation may still precede the Tools edit.
+    // Diagnose reports a readiness row only once the router acknowledged its generation.
     let readiness = ConfigAccess::Graphql(crate::support::graphql::served_endpoint(&graphql));
-    let query = format!(
-        r#"{{ NodeReadiness(filter: {{node_did: {{_eq: "{}"}}}}) {{node_did snapshot_json updated_at}} }}"#,
-        escape_graphql_string(&owner)
-    );
-    rows_when(&readiness, "NodeReadiness", &query, |data| {
-        data["NodeReadiness"].as_array().is_some_and(|rows| {
-            rows.iter().any(|value| {
-                serde_json::from_value::<NodeReadinessRow>(value.clone())
-                    .ok()
-                    .and_then(|row| decode_node_readiness_snapshot(&row, &owner).ok())
-                    .is_some_and(|snapshot| {
-                        snapshot.agents.iter().any(|agent| {
-                            agent.agent_did == broken_agent
-                                && agent.reason
-                                    == Some(AgentReadinessUnavailableReason::ToolSurfaceUnavailable)
-                        })
-                    })
-            })
-        })
-    })
+    let demoted = Some(&AgentReadinessUnavailableReason::ToolSurfaceUnavailable);
+    read_when_changed(
+        &readiness,
+        "NodeReadiness",
+        "diagnosed demotion",
+        async || {
+            let row = load_node_readiness(&readiness, &owner)
+                .await
+                .map_err(|error| format!("{error:#}"))?;
+            match project_node_readiness_summary(row.as_ref(), &owner) {
+                ProjectedNodeReadinessSummary::Observed(summary)
+                    if summary.unavailable_agents.get(&broken_agent) == demoted =>
+                {
+                    Ok(())
+                }
+                projected => Err(format!("{projected:?}")),
+            }
+        },
+    )
     .await;
     let diagnosed = run_cli_json(&home, &["runtime", "diagnose", "--graphql", &graphql])?;
     let unavailable = diagnosed

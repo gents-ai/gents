@@ -664,6 +664,13 @@ See `../README.md` for how this fits the broader formal-verification model.
   excludes, and a parent read through a reused pid misses the job;
   `ShortBound` gives up before the root of a real chain; `Unbounded` walks
   forever through reused pids.
+- `DiagnosedReadiness` — a test waiting for a Tools edit to demote an Agent
+  before `gents runtime diagnose` reports it. The reconciler commits the
+  readiness row with the new generation's entries, then the router commits
+  its acknowledgement; until then Lean `ClientAgentReadiness.project` reads
+  the row as `router_generation_stale`. Green waits for the owner's
+  projection of the row diagnose reads. RED: `Decoded` (the observer that
+  waited for any decoded row listing the Agent) and `NoRouterAck`.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## Checking
