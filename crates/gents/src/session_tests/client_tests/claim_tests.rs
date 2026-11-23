@@ -1174,3 +1174,155 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     }
     node.shutdown().await.unwrap();
 }
+
+/// Two submissions of one signed tool-control intent race: the second commits
+/// while the first is open. `AgentToolControl (client_did, intent_id)` is a
+/// unique index, so the first meets a conflict, rebuilds, and finds the
+/// winner's intent; one intent is saved.
+#[tokio::test]
+async fn concurrent_submissions_of_one_tool_control_intent_save_one_intent() {
+    use gents_protocol::tool_call::AwaitMode;
+    use gents_toolcalls::call::control::client::{prepare, submit, ClientControlError};
+    use gents_toolcalls::call::lifecycle::admission_fixture::{
+        publish_accepted_on_claimed_request, AcceptedFixtureCall,
+    };
+
+    let home = tempfile::tempdir().unwrap();
+    let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
+    let (db, runtime) = serve_client_node(
+        "concurrent-tool-control-intent-submissi",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let runtime: Arc<dyn NodeIdentity> = Arc::new(runtime);
+    let node = db.node.clone();
+    grant_operator_user(&node, runtime.as_ref(), &user).await;
+    let binding = gents_store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
+    let admin = ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
+    for permission in [
+        NodePermission::CollectionGet,
+        NodePermission::DocumentRead,
+        NodePermission::DocumentUpdate,
+        NodePermission::DacRelationAdd,
+    ] {
+        admin
+            .grant_node_permission(&binding.agent_did.parse().unwrap(), permission)
+            .await
+            .unwrap();
+    }
+    let user_access = db.client_access(&user);
+    seed_owned_agent(&user_access, runtime.did(), &binding).await;
+    let mut create = AgentRequestCreate::base(
+        RequestPurpose::Normal,
+        "tool-control-twin-request",
+        RequestScope::new(
+            runtime.did(),
+            user.did(),
+            &binding.agent_did,
+            "tool-control-twin-session",
+        ),
+        "run",
+        "interactive",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        AgentRequestAdmissionRecord::client(user.did()),
+    );
+    create.session_doc_id = Some(reserve_goal_session(&user_access, &create).await.unwrap());
+    let rows = user_access.execute("{ Agent { _docID } }").await.unwrap();
+    create.agent_doc_id = Some(rows["data"]["Agent"][0]["_docID"].as_str().unwrap().into());
+    gents_session::request::admission::sign_agent_request_create(&user, &mut create)
+        .await
+        .unwrap();
+    submit_client_request(&user_access, &create).await.unwrap();
+    let agent: identity::Did = binding.agent_did.parse().unwrap();
+    let agent_identity =
+        gents_store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
+    let agent_access =
+        ConfigAccess::local_managed_agent(node.clone(), agent, agent_identity.as_ref()).unwrap();
+    let response = agent_access
+        .execute(&format!(
+            "{{ AgentRequest {{ {} }} }}",
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
+        ))
+        .await
+        .unwrap();
+    let row: gents_protocol::row::AgentRequestRow =
+        serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
+    let (_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
+    let verifier = AgentRequestAdmissionVerifier::new(node.clone(), runtime.clone(), authority);
+    let (request, admission) = verifier
+        .verify_fresh_for_claim(&AgentRequest::try_from(row).unwrap(), &binding.agent_did)
+        .await
+        .unwrap();
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        node.clone(),
+        request,
+        60,
+        ExecutionOrigin::Interactive,
+        String::new(),
+    );
+    lifecycle
+        .bind_managed_agent(agent_identity.as_ref())
+        .unwrap();
+    lifecycle.set_client_claim_admission(admission);
+    assert!(matches!(
+        lifecycle.claim_with_identity().await,
+        Ok(ClaimOutcome::Claimed)
+    ));
+    let tool = publish_accepted_on_claimed_request(
+        node.clone(),
+        &mut lifecycle,
+        runtime.did(),
+        AcceptedFixtureCall {
+            turn: 0,
+            tool_name: "bash",
+            tool_call_id: "control-twin-call",
+            arguments: serde_json::json!({"command":"work"}),
+            await_mode: AwaitMode::Background,
+            start_running: false,
+        },
+    )
+    .await
+    .unwrap();
+    let intent = prepare(
+        &user_access,
+        &user,
+        runtime.did(),
+        tool.doc_id().unwrap(),
+        Some(("tool-control-twin-session", "control-twin-call")),
+        "process_stop",
+    )
+    .await
+    .unwrap();
+    let twin = std::sync::Mutex::new(None);
+    let (first, paused) =
+        gents_store::config_client::ConfigApplyTxn::with_concurrent_write_before_commit(
+            submit(&user_access, &intent),
+            async {
+                *twin.lock().unwrap() = Some(submit(&user_access, &intent).await);
+            },
+        )
+        .await;
+    assert!(paused, "the twin must commit inside the first submission");
+    let winner = twin
+        .into_inner()
+        .unwrap()
+        .unwrap()
+        .expect("the twin saves the intent");
+    assert!(
+        matches!(&first, Err(ClientControlError::Unconfirmed { intent_doc_id, .. }) if *intent_doc_id == winner),
+        "the rebuilt submission finds the winner's intent: {first:?}"
+    );
+    let saved = agent_access
+        .execute(&format!(
+            r#"{{ AgentToolControl(filter: {{intent_id: {{_eq: "{}"}}}}) {{ _docID }} }}"#,
+            gents_store::graphql::escape_graphql_string(&intent.intent_id)
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        saved["data"]["AgentToolControl"].as_array().unwrap().len(),
+        1,
+        "one intent is saved: {saved}"
+    );
+    node.shutdown().await.unwrap();
+}

@@ -1,6 +1,7 @@
 import Proofs.Session.ToolExecution.State
 import Proofs.Session.ToolExecution.Executable
 import Proofs.Session.ManagedExec.Ownership
+import Proofs.Store.TransactionFence
 namespace Background.ProcessControl
 
 structure Scope where
@@ -134,6 +135,35 @@ theorem retained_claim_never_uses_another_agent (agent : String) (owner : Option
     (retained observed : SignedControlScope) (valid : Bool) (different : owner ≠ some agent) :
     retainedClaimMayRun agent owner retained observed valid = false := by
   simp [retainedClaimMayRun, different]
+
+/-- What submitting a signed intent does with the intent its client already
+holds under the same `intent_id`. `AgentToolControl` carries
+`(client_did, intent_id)` as a unique index, so of two concurrent submissions
+of one signed intent the second to commit aborts
+(`TransactionFence.a_unique_index_fences_twin_arrivals`) and its rebuilt
+attempt reads the first: one intent is saved, and the rebuilt submission
+reports it for observation. -/
+inductive IntentSubmission where
+  | create
+  | observeHeld
+  | refuseRebound
+  deriving DecidableEq, Repr
+
+def submitIntent (heldJson : Option String) (signedJson : String) : IntentSubmission :=
+  match heldJson with
+  | none => .create
+  | some held => if held == signedJson then .observeHeld else .refuseRebound
+
+theorem a_held_intent_is_never_created_again (held signed : String) :
+    submitIntent (some held) signed ≠ .create := by
+  simp only [submitIntent]
+  split <;> simp
+
+theorem twin_submissions_are_fenced (first second : TransactionFence.Doc)
+    (key : TransactionFence.UniqueValue) :
+    TransactionFence.fencedAgainst (TransactionFence.arrival first [key])
+      (TransactionFence.arrival second [key]) = true :=
+  TransactionFence.a_unique_index_fences_twin_arrivals first second key
 
 def commitClientIntent (authenticatedActor : Option String) (authorized : Bool)
     (observedRevision currentRevision : Nat) (invocation : Invocation) : Option ClientIntent :=
