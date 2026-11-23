@@ -1,3 +1,5 @@
+mod inventory;
+
 use gents_lean_vocab::families::document_acp_choice_reopened as family;
 use gents_protocol::operations::install_repair::IncompatibleStoreKind;
 use serde::{Deserialize, Serialize};
