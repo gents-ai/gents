@@ -382,6 +382,37 @@ theorem released_without_spawn_is_stopped :
 theorem released_confirmed_exit_is_stopped :
     settleLiveCancel true .exited = .stopped := by rfl
 
+/-- What a stop of a running invocation reports from its outcome and the row it
+re-reads once its wait for the worker's release ends. The worker commits its
+terminal before it releases, and the wait is bounded by the wall clock, so on a
+loaded host the worker can commit the cancellation this stop signalled after
+the wait gave up: a `cancelled` row is this stop's effect however long the
+worker took. Another terminal ended the invocation first; a row still running
+keeps the stop's own outcome. -/
+inductive SignalledReply where
+  | reply (reply : ManagedExec.CancelReply)
+  | alreadyTerminal (state : ToolExecution.ToolCallState)
+  deriving DecidableEq, Repr
+
+def signalledReply (outcome : ManagedExec.StopOutcome) :
+    ToolExecution.ToolCallState → SignalledReply
+  | .cancelled => .reply .cancelled
+  | .pending | .running => .reply (ManagedExec.cancelReply outcome)
+  | state => .alreadyTerminal state
+
+theorem cancelled_row_is_the_stop_however_late_the_release
+    (outcome : ManagedExec.StopOutcome) :
+    signalledReply outcome .cancelled = .reply .cancelled := rfl
+
+theorem running_row_keeps_the_stop_outcome (outcome : ManagedExec.StopOutcome) :
+    signalledReply outcome .running = .reply (ManagedExec.cancelReply outcome) := rfl
+
+theorem terminal_reply_names_another_ending (outcome : ManagedExec.StopOutcome)
+    (state : ToolExecution.ToolCallState)
+    (h : signalledReply outcome state = .alreadyTerminal state) :
+    state ≠ .cancelled ∧ state ≠ .running ∧ state ≠ .pending := by
+  cases state <;> simp_all [signalledReply]
+
 /-- The first terminal outcome is immutable; a later stop request cannot turn
 an already timed-out or failed invocation into an explicit cancellation. -/
 def firstTerminalIntent (first : Option TerminalIntent) (next : TerminalIntent) : TerminalIntent :=

@@ -711,6 +711,18 @@ See `../README.md` for how this fits the broader formal-verification model.
   the row as `router_generation_stale`. Green waits for the owner's
   projection of the row diagnose reads. RED: `Decoded` (the observer that
   waited for any decoded row listing the Agent) and `NoRouterAck`.
+- `BackgroundStopRelease` — `cancel_process` stopping a running background
+  invocation while its worker settles it. The canceller signals the live
+  execution and waits, bounded by the wall clock, for the worker's release;
+  the worker commits its terminal before it releases. Lean
+  `Background.ProcessControl.signalledReply` decides the reply from the row
+  re-read after a wait that ended unreleased. `NoFalseAlreadyTerminal` and
+  `CancelledMeansCancelled` hold under either bound; with the bound at the
+  hang ceiling the test's `cancelled` holds too (`ObserverAgrees`). RED:
+  `TerminalReread` (the reply before the fix named the stop's own late
+  cancellation `already_terminal`) and `WallBound` (a reachable bound, a
+  `WallClockBound` `WallDeadline` instance, makes a slow worker's stop
+  honestly `unverified`).
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## Checking
