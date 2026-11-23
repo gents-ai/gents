@@ -40,21 +40,15 @@ private def workspaceTransitionOf (i : WorkspaceTransitionInput) : WorkspaceTran
 private def quickstartNames : List String := ["provision_frozen_base"]
 
 /-- Quickstart provisioning is the production path that persists a workspace
-straight from provisioning to sealed with the frozen base tree. -/
+straight from provisioning to sealed with the frozen base tree. Production has
+no other lifecycle-transition owner: each other transition is written inline by
+a host executor plan (create, seal, cleanup), and the illegal transitions
+(sealing without a hash, skipping cleaning) have no production path. The other
+cases of `Workspace.Conformance.workspaceCases` stay checked by the theorems in
+`Proofs.Session.Workspace.Conformance`. -/
 @[conformance_family]
 def workspaceQuickstartTransition : Family WorkspaceTransitionInput WorkspaceTransitionOutput where
   inputs := (Workspace.Conformance.workspaceCases.filter (quickstartNames.contains ·.name)).map
-    workspaceTransitionInput
-  model := workspaceTransitionOf
-
-/-- model-production-gap: production has no lifecycle-transition owner; each
-transition is written inline by a host executor plan (create, seal, cleanup),
-and no scenario replays these transitions through those plans. The illegal
-transitions (sealing without a hash, skipping cleaning) have no production
-path at all. -/
-@[conformance_family]
-def workspaceTransitionUnreached : Family WorkspaceTransitionInput WorkspaceTransitionOutput where
-  inputs := (Workspace.Conformance.workspaceCases.filter (!quickstartNames.contains ·.name)).map
     workspaceTransitionInput
   model := workspaceTransitionOf
 

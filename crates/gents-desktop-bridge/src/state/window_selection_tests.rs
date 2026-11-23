@@ -334,3 +334,25 @@ fn two_windows_on_two_nodes_resolve_through_their_own_selection() {
     state.bridge.lock().unwrap().core.take();
     runtime.block_on(core.shutdown()).unwrap();
 }
+
+/// Replays the bound decision TLA `WindowIndependence` reads: a registered
+/// window selecting one of two nodes or none, and a delivery scoped to a node.
+#[test]
+fn bound_window_deliveries_match_the_lean_table() {
+    let did = |node: &str| match node {
+        "n1" => "did:node:0",
+        "n2" => "did:node:1",
+        other => panic!("unmodeled node {other}"),
+    };
+    gents_lean_vocab::families::client_window_scope_bound_delivers::replay::<String, String>(
+        |input| {
+            let (_temp, state) = state();
+            state.register_window("main");
+            if input.selected != "none" {
+                select(&state, "main", Some(did(&input.selected)));
+            }
+            let bridge = state.bridge.lock().unwrap();
+            bridge.window_selects_node("main", did(&input.node))
+        },
+    );
+}

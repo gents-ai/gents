@@ -44,8 +44,57 @@ async fn tracked_transaction_finality_distinguishes_rejection_from_lost_receipt(
         .unwrap();
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     let access = ConfigAccess::local(node.clone());
+    access
+        .add_collection("type FinalityProbe { value: Int }")
+        .await
+        .unwrap();
+    let created = ConfigAccess::write_local(
+        &node,
+        "test.finality.probe",
+        "mutation { create_FinalityProbe(input: {value: 0}) { _docID } }",
+    )
+    .await
+    .unwrap();
+    let probe = crate::graphql::created_doc_id(&created, "FinalityProbe").unwrap();
     for case in cases {
         let unconfirmed = match case.input.attempts.as_slice() {
+            [first, second] if first == "no_commit" && second == "no_commit" => {
+                let attempts = AtomicUsize::new(0);
+                let concurrent = async {
+                    ConfigAccess::write_local(
+                        &node,
+                        "test.finality.concurrent",
+                        &format!(
+                            "mutation {{ update_FinalityProbe(docID: \"{probe}\", input: {{value: 2}}) {{ _docID }} }}"
+                        ),
+                    )
+                    .await
+                    .unwrap();
+                };
+                let (result, paused) = ConfigApplyTxn::with_concurrent_write_before_commit(
+                    access.transact_write_with_finality("test.finality.conflict", |txn| {
+                        let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+                        let probe = probe.clone();
+                        Box::pin(async move {
+                            anyhow::ensure!(attempt == 0, "reject the repeated callback");
+                            txn.execute(&format!(
+                                "mutation {{ update_FinalityProbe(docID: \"{probe}\", input: {{value: 1}}) {{ _docID }} }}"
+                            ))
+                            .await?;
+                            Ok::<(), anyhow::Error>(())
+                        })
+                    }),
+                    concurrent,
+                )
+                .await;
+                assert!(paused, "the first attempt paused before its commit");
+                assert_eq!(
+                    attempts.load(Ordering::SeqCst),
+                    2,
+                    "the confirmed conflict abort runs the callback again"
+                );
+                result.unwrap_err().unconfirmed
+            }
             [attempt] if attempt == "no_commit" => {
                 access
                     .transact_write_with_finality("test.finality.callback", |_txn| {
@@ -2682,4 +2731,53 @@ async fn cancellation_at_embedded_finalization_boundaries_preserves_commit_outco
         .unwrap();
         node.shutdown().await.expect("node shutdown");
     }
+}
+
+/// Premise evidence for the ledger rows `boundary.plugin-data.transaction`
+/// and `boundary.storage.observation-daemon-visible`: two transactions that
+/// both read a unique key as absent and insert it cannot both commit, the
+/// acknowledged commit is read back and the refused one leaves nothing.
+#[tokio::test]
+async fn defradb_refuses_a_concurrent_duplicate_after_read_then_insert() {
+    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    ConfigAccess::local(Arc::clone(&node))
+        .add_collection("type UniqueKeyProbe { key: String @index(unique: true) writer: String }")
+        .await
+        .unwrap();
+    let read = r#"{ UniqueKeyProbe(filter: {key: {_eq: "shared"}}) { _docID } }"#;
+    let insert = |writer: &str| {
+        format!(
+            r#"mutation {{ create_UniqueKeyProbe(input: {{key: "shared", writer: "{writer}"}}) {{ _docID }} }}"#
+        )
+    };
+    let first = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
+    let second = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
+    for txn in [&first, &second] {
+        let absent = txn.execute(read).await.unwrap();
+        assert_eq!(absent["data"]["UniqueKeyProbe"], json!([]));
+    }
+    first.execute(&insert("first")).await.unwrap();
+    let second_inserted = second.execute(&insert("second")).await;
+    let first_committed = first.commit().await;
+    let second_committed = match second_inserted {
+        Ok(_) => second.commit().await.is_ok(),
+        Err(_) => {
+            second.discard().await.unwrap();
+            false
+        }
+    };
+    assert!(
+        first_committed.is_ok() != second_committed,
+        "exactly one insert commits: first {first_committed:?}, second {second_committed}"
+    );
+    let stored = ConfigAccess::local(Arc::clone(&node))
+        .execute(r#"{ UniqueKeyProbe { key writer } }"#)
+        .await
+        .unwrap();
+    let winner = if second_committed { "second" } else { "first" };
+    assert_eq!(
+        stored["data"]["UniqueKeyProbe"],
+        json!([{"key": "shared", "writer": winner}])
+    );
+    node.shutdown().await.expect("node shutdown");
 }

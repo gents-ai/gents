@@ -43,7 +43,6 @@ def quiesceReasonWire : _root_.EventDelivery.Group.CountQuiesceReason → String
 structure GroupClockCase where
   name : String
   clock : _root_.EventDelivery.Group.EventGroupState
-  cached : Option Nat
   now : Nat
   timeout : Nat
 
@@ -51,11 +50,10 @@ def groupClockCases : List GroupClockCase :=
   let trigger : Triggers.Groups.EventGroupKey :=
     ⟨"did:agent:a", .trigger "same-id", "config-1", "run-1"⟩
   let callback := { trigger with consumer := .callbackBinding "same-id" }
-  [ ⟨"trigger_first_quiescence", ⟨trigger, 100, none⟩, none, 130, 40⟩
-  , ⟨"callback_first_quiescence", ⟨callback, 100, none⟩, none, 130, 40⟩
-  , ⟨"existing_quiescence_is_not_reset", ⟨callback, 100, some 110⟩, none, 150, 40⟩
-  , ⟨"consistent_cache_preserves_deadline", ⟨callback, 100, none⟩, some 100, 150, 40⟩
-  , ⟨"evicted_cache_preserves_deadline", ⟨callback, 100, none⟩, none, 150, 40⟩ ]
+  [ ⟨"trigger_first_quiescence", ⟨trigger, 100, none⟩, 130, 40⟩
+  , ⟨"callback_first_quiescence", ⟨callback, 100, none⟩, 130, 40⟩
+  , ⟨"existing_quiescence_is_not_reset", ⟨callback, 100, some 110⟩, 150, 40⟩
+  , ⟨"durable_first_seen_sets_deadline", ⟨callback, 100, none⟩, 150, 40⟩ ]
 
 structure ConsumerWire where
   kind : String
@@ -92,7 +90,6 @@ structure ClockInput where
   key : KeyWire
   firstSeen : Nat
   quiescedAt : Option Nat
-  cachedFirstSeen : Option Nat
   now : Nat
   timeout : Nat
   deriving Lean.ToJson
@@ -108,25 +105,23 @@ structure ClockOutput where
 def ClockInput.clock (i : ClockInput) : _root_.EventDelivery.Group.EventGroupState :=
   ⟨i.key.toModel, i.firstSeen, i.quiescedAt⟩
 
-/-- model-production-gap: the durable group clock (`load_or_create_group`,
-`quiesce_group` and `evaluate_group` in gents-automation) stamps first-seen and
-quiescence with the wall clock inside a served transaction and keeps no cached
-first-seen observation, so no production path takes `now`, `timeout` or a
-cached first-seen as an input. -/
+/-- The durable group clock (`GroupClock` in gents-automation, which
+`quiesce_group` and `evaluate_group` stamp with the wall clock). Production
+keeps no cached first-seen observation, so the timeout is observed from the
+durable first-seen; `timeout_cache_eviction_preserves_deadline` shows a
+consistent cache would observe the same deadline. -/
 @[conformance_family]
-def groupClockUnreached : Family ClockInput ClockOutput where
+def groupClock : Family ClockInput ClockOutput where
   inputs := groupClockCases.map fun c =>
     { name := c.name, key := KeyWire.ofModel c.clock.key, firstSeen := c.clock.firstSeen
-      quiescedAt := c.clock.quiescedAt, cachedFirstSeen := c.cached, now := c.now
-      timeout := c.timeout }
+      quiescedAt := c.clock.quiescedAt, now := c.now, timeout := c.timeout }
   model := fun i =>
     let after := i.clock.quiesce i.now
     { firstSeenAfter := after.firstSeen
       quiescedAtAfter := after.quiescedAt
       quiescedAtAgain := (after.quiesce (i.now + 1)).quiescedAt
-      elapsedBefore := (i.clock.observe i.cachedFirstSeen).elapsed i.now i.timeout
-      elapsedAfter := (after.observe i.cachedFirstSeen).elapsed i.now i.timeout }
-
+      elapsedBefore := (i.clock.observe none).elapsed i.now i.timeout
+      elapsedAfter := (after.observe none).elapsed i.now i.timeout }
 
 def eventGroupCaptureCases :
     List (String × _root_.EventDelivery.Group.EventGroupState × Triggers.Groups.Candidate) :=

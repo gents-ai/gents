@@ -36,19 +36,13 @@ def reservationInputs : List ReservationInput :=
     fun (name, created, fileSynced, directorySynced) =>
       { name, created, fileSynced, directorySynced }
 
-/-- A home can already hold the marker, and a home that cannot be opened for its
-directory sync fails that step after the marker is written; nothing makes a
-created marker's own file sync fail. -/
+/-- A home can already hold the marker; the home's filesystem can fail the
+created marker's sync (the reservation's sync step is injected); and a home
+that cannot be opened for its directory sync fails that step after the marker
+is written. -/
 @[conformance_family]
 def reservation : Family ReservationInput Bool where
-  inputs := reservationInputs.filter fun i => !i.created || i.fileSynced
-  model := fun i => reservationConfirmed i.created i.fileSynced i.directorySynced
-
-/-- The file sync of a newly created bootstrap marker fails only on an
-operating-system I/O error, which a test home cannot induce. -/
-@[conformance_family]
-def reservationUnreached : Family ReservationInput Bool where
-  inputs := reservationInputs.filter fun i => i.created && !i.fileSynced
+  inputs := reservationInputs
   model := fun i => reservationConfirmed i.created i.fileSynced i.directorySynced
 
 structure BootstrapInput where
