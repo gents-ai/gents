@@ -6,7 +6,9 @@
     "runtime fields",
     "surface selection",
     "persistence",
-    "automation output"
+    "automation output",
+    "caller-keyed surfaces",
+    "read-only lookup"
   ],
   "subject": "ladder/engineer_subject",
   "preset_self_config": true

@@ -6,7 +6,9 @@
     "relational modeling",
     "ordered, unique and vector indexes",
     "additive updates preserve records",
-    "write and read configured records"
+    "write and read configured records",
+    "precedence backfill",
+    "archive field"
   ],
   "subject": "ladder/engineer_subject",
   "preset_self_config": true
