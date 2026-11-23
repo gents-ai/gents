@@ -30,11 +30,19 @@ pub fn seed(policy: &BuiltInPolicy) -> EmbeddedVeraPolicy {
     }
 }
 
+pub fn seed_transport_v2(policy: &BuiltInPolicy) -> EmbeddedVeraPolicy {
+    let mut seed = seed(policy);
+    if *policy == BuiltInPolicy::Household {
+        seed.definition = gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_TRANSPORT_V2.to_owned();
+    }
+    seed
+}
+
 #[cfg(test)]
 mod tests {
     use gents_protocol::schemas::BuiltInPolicy;
 
-    use crate::local::document_acp::{home_policy_ids, DocumentAcp};
+    use crate::local::document_acp::{DocumentAcp, home_policy_ids};
 
     /// The IDs a Vera home names its built-in policies by are the IDs vera.rs
     /// derives for the policies its deployment is seeded with.
@@ -48,6 +56,17 @@ mod tests {
                     .expect("a built-in policy compiles"),
                 ids.id(policy),
                 "{policy:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn v2_genesis_ids_match_its_seeds() {
+        let ids = gents_protocol::schemas::HomePolicyIds::embedded_vera_transport_v2();
+        for policy in BuiltInPolicy::ALL {
+            assert_eq!(
+                super::seed_transport_v2(&policy).id().unwrap(),
+                ids.id(policy)
             );
         }
     }

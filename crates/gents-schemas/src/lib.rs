@@ -40,6 +40,8 @@ pub const AGENT_SESSION_NAME: &str = "AgentSession";
 pub const AGENT_SESSION: &str = include_str!("../schemas/agent/agent_session.graphql");
 pub const AGENT_OWNERSHIP_POLICY: &str =
     include_str!("../schemas/agent/agent_ownership_policy.yaml");
+pub const AGENT_OWNERSHIP_POLICY_TRANSPORT_V2: &str =
+    include_str!("../schemas/agent/agent_ownership_policy_v2.yaml");
 pub const SESSION_POLICY_RESOURCE: &str = "sessions";
 pub const GOAL_NAME: &str = "Goal";
 pub const GOAL: &str = include_str!("../schemas/agent/goal.graphql");
@@ -566,8 +568,8 @@ pub mod fields {
 
 #[cfg(test)]
 mod field_tests {
-    use super::fields::{agent_request, callback_invocation};
     use super::Collection;
+    use super::fields::{agent_request, callback_invocation};
 
     #[test]
     fn generated_fields_follow_the_sdl() {
