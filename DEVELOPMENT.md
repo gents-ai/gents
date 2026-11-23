@@ -1,7 +1,7 @@
 # Development
 
-Building Gents from source. To use Gents, install the desktop app from the
-[README](README.md) instead.
+Building Gents from source. To use Gents, install the desktop app as
+described at [docs.gents.xyz](https://docs.gents.xyz) instead.
 
 ## Requirements
 
@@ -47,4 +47,4 @@ Launch the app with `--desktop-home` naming an empty directory to exercise first
 without touching your own node.
 
 `AGENTS.md` holds the working rules for changes; the
-[proof map](crates/gents/proofs/README.md) identifies the modeled surfaces.
+[proof map](crates/gents/proofs/AGENTS.md) identifies the modeled surfaces.

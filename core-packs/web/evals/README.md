@@ -4,12 +4,9 @@ This directory ships with the browser-use plugin. `manifest.json` is a separatel
 installable native Gents documents pack containing `browser-use-core`.
 `subject/` supplies the browser-only agent and the `browser` inference slot.
 
-The definitions are authored and pack-validated. They have **not yet been run by
-native `gents utils eval`**. Trial provisioning still needs to install the browser plugin,
-start/reset the fixture server, supply a session name, and publish trusted
-observations before stage capture. Gents now owns worker startup and supplies its
-connection internally when the installed pack has its child-process grant.
-The existing `../worker/tests/live_model.py` remains the working end-to-end runner.
+The definitions are pack-validated. The embedded `gents utils eval` runner has
+no browser-specific trial provisioning or observation bridge, so
+`../worker/tests/live_model.py` and `run_live.py` are the end-to-end runners.
 
 | Case | Acceptance evidence |
 | --- | --- |
@@ -28,13 +25,15 @@ not independently prove browser identity or absence of reloads.
 
 ## Trial integration contract
 
+A runner that provisions these trials does the following:
+
 1. Install `gents/web` in the fresh trial home with its authority grant and bind
    the web researcher slot. Grant the subject only its declared browser tool.
 2. Use a fresh worker/browser state and fixture server for every trial. Start
    `../worker/tests/model_fixture.py --port 19472 --output <private-state-file>`.
-   Keep the state file outside the subject workspace. Use concurrency 1 while the
-   worker and fixture use fixed ports 18765 and 19472; isolate network namespaces
-   or add configurable endpoints before parallel runs.
+   Keep the state file outside the subject workspace. The worker and fixture use
+   fixed ports 18765 and 19472, so trials run one at a time unless each has its
+   own network namespace.
 3. Supply a unique browser session name in the subject's runtime context.
    Omit connection to use the native managed worker. Reuse
    the browser session across stages within a case. Reset between trials.
@@ -55,73 +54,62 @@ python3 oracle.py --state /private/path/fixture-state.json \
 ```
 
 The oracle reads server state, never model answers. It rejects missing state and
-unknown stages; missing observations fail the native acceptance checks. The
-current embedded runner does not yet provide this browser-specific provisioning
-and observation bridge. Do not pre-seed passing rows or downgrade these checks to
-make a run appear green. Browser execution has host Python authority, so these
-fixtures test cooperative behavior, not adversarial isolation.
-
-After that bridge exists, install this definition pack and use `gents utils eval run
-browser-use-core --cell browser=./subject:browser --profile browser=<profile-id>
---trials 3 --concurrency 1`. The profile should point at the desired inference
-server, such as `http://workstation-1:8000/v1`. This command is a target invocation,
-not a currently complete setup recipe.
+unknown stages; missing observations fail the native acceptance checks. Do not
+pre-seed passing rows or downgrade these checks to make a run appear green.
+Browser execution has host Python authority, so these fixtures test cooperative
+behavior, not adversarial isolation.
 
 ## Validation and extension
 
-From the repository root:
+From the pack directory (`core-packs/web`):
 
 ```sh
-/path/to/gents config pack check packs/gents/web/evals \
-  packs/gents/web/evals/subject packs/gents/web
-python3 -m unittest discover -s packs/gents/web/evals -p 'test_*.py'
+gents config pack check evals evals/subject .
+python3 -m unittest discover -s evals -p 'test_*.py'
 ```
 
 Bump `comparability_version` when changing prompts, checks, fixtures or grading
 semantics. These cases are public validation tasks, not held-out benchmark data.
-Keep new cases and their fixtures in this pack. Next candidates are virtualized
-lists, iframe/shadow DOM controls, ambiguous submit timeouts, download/edit/upload,
-expired login, crash recovery, and research with conflicting sources. Public-web
-research currently lives in `live_model.py --research`; factual synthesis still
-requires independent review and is not scored by this acceptance definition.
+Keep new cases and their fixtures in this pack. Public-web research is exercised
+by `live_model.py --research`; its factual synthesis needs independent review and
+is not scored by this acceptance definition.
 
-The packaged `live_model.py --managed --connected` runner additionally tests
-discovery, existing authenticated tabs, live editing, disconnect and browser
-preservation. `--managed --web-research` exercises the combined public search,
-HTTP fetch and rendered reader. These integration modes are executable today;
-they are not claims that the native Gents trial-provisioning bridge is complete.
+The packaged `live_model.py --managed --connected` runner also tests discovery,
+existing authenticated tabs, live editing, disconnect and browser preservation.
+`--managed --web-research` exercises the combined public search, HTTP fetch and
+rendered reader.
 
 ## Concurrent real-model runs
 
 `run_live.py` provisions fresh Gents homes, fixture servers, worker ports and
 browsers. It builds the WASM artifacts once, then builds trial archives with exact
-loopback grants matching each worker port. The shipped pack still defaults to
-18765. No wildcard network grant or personal browser is used.
+loopback grants matching each worker port. The shipped pack defaults to 18765. No
+wildcard network grant or personal browser is used.
 
 ```sh
-uv run --locked --project packs/gents/web/worker python packs/gents/web/evals/run_live.py \
+uv run --locked --project worker python evals/run_live.py \
   --gents /path/to/gents \
-  --endpoint http://workstation-1:8000/v1 \
-  --endpoint http://workstation-2:8000/v1 \
-  --concurrency-per-server 32 --output /tmp/browser-eval-64
+  --endpoint <openai-compatible-base-url> \
+  --concurrency-per-server 32 --output <fresh-dir>
 ```
 
-This launches 32 independent trials per endpoint (64 total), alternating the full
-six-task suite and a two-task help/post-submit recovery probe: 256 model tasks if
-all trials finish. The probe deliberately calls an undefined helper after Import;
-passing requires the actual exception, a subsequent successful receipt inspection
-(read or Python DOM output), and exactly one import recorded independently by the
-fixture. The form/tab task uses an independent CDP connection to compare the
-original tab ID, URL, page contents and navigation timestamp before and after the task;
-it also requires a distinct request tab and exactly one recorded submission.
-Finished suite sessions close before the next independent task to limit local browser memory use. The request
-wait and provider idle deadlines both use `--timeout-secs` (default 900).
+`--endpoint` may be repeated; each endpoint runs `--concurrency-per-server`
+independent trials, alternating the full six-task suite and a two-task
+help/post-submit recovery probe. The probe deliberately calls an undefined helper
+after Import; passing requires the actual exception, a subsequent successful
+receipt inspection (read or Python DOM output), and exactly one import recorded
+independently by the fixture. The form/tab task uses an independent CDP
+connection to compare the original tab ID, URL, page contents and navigation
+timestamp before and after the task; it also requires a distinct request tab and
+exactly one recorded submission. Finished suite sessions close before the next
+independent task to limit local browser memory use. The request wait and provider
+idle deadlines both use `--timeout-secs` (default 900).
 
 Use a fresh output directory. `plan.json`, incremental `results.json`,
 `summary.json` and each trial's traces/logs remain there, including failed runs.
 The plan records the base archive hash and live-runner comparability version,
-which is separate from the native definition version.
-Trials are not automatically rerun; any runtime/provider retries remain in the logs.
-The concurrency setting counts active trial processes; each trial issues sequential model requests and browser calls, so
-inference requests in flight vary. This runner uses `gents utils debug request submit`; it does not
-implement the native eval provisioning bridge described above.
+which is separate from the native definition version. Trials are not
+automatically rerun; any runtime/provider retries remain in the logs. The
+concurrency setting counts active trial processes; each trial issues sequential
+model requests and browser calls, so inference requests in flight vary. The runner
+submits through `gents utils debug request submit`.
