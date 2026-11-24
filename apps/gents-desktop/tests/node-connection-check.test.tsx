@@ -48,7 +48,7 @@ describe("checking a node's connection", () => {
   });
 
   it("names why it isn't connected", async () => {
-    expect(await check("disconnected")).toBe("Can’t reach Juno");
+    expect(await check("disconnected")).toBe("Reconnecting to Juno");
   });
 
   it("says a node refuses this app", async () => {
