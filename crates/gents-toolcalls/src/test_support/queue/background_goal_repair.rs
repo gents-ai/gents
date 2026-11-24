@@ -1,11 +1,11 @@
 use super::*;
-pub async fn fixture(name: &str) -> (TestDb, CanonicalBackgroundFixture) {
-    let db = test_db(name).await;
+pub async fn fixture(name: &str) -> (AgentHome, CanonicalBackgroundFixture) {
+    let db = AgentHome::start(name).await;
     let fixture = canonical_background_fixture(&db, name).await;
     (db, fixture)
 }
 
-pub async fn message_ids(db: &TestDb, key: &str) -> Vec<String> {
+pub async fn message_ids(db: &AgentHome, key: &str) -> Vec<String> {
     let key = escape_graphql_string(key);
     let response = db
         .agent_access

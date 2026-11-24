@@ -6,7 +6,7 @@ async fn signed_trigger_materializer(
     name: &str,
     trigger_ids: &[&str],
 ) -> (
-    gents_inference::test_support::TestDb,
+    gents_store::test_support::TestStore,
     Arc<ResolvedAgent>,
     gents_store::config_client::ConfigAccess,
     ProductionMaterializer,

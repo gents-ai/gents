@@ -183,7 +183,7 @@ struct WaitObservation {
 /// deadline the hook times the wait call out and ends the turn instead of
 /// publishing the observer's envelope.
 async fn observe_wait_boundary(boundary: &str) -> WaitObservation {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         &format!("wait-boundary-{boundary}"),
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -348,7 +348,7 @@ async fn generated_wait_boundaries_preserve_background_process() {
 
 #[tokio::test]
 async fn accepted_cross_agent_process_controls_preserve_the_owners_running_job() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "accepted-cross-agent-process-controls-pr",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -528,7 +528,7 @@ mod job_control {
     use gents_store::config_client::ConfigAccess;
 
     struct JobHook {
-        _db: gents_inference::test_support::TestDb,
+        _db: gents_store::test_support::TestStore,
         node: Arc<EmbeddedNode>,
         executions: BackgroundExecutionRegistry,
         owner: DefraSessionHook,
@@ -538,7 +538,7 @@ mod job_control {
 
     impl JobHook {
         pub async fn new() -> Self {
-            let db = gents_inference::test_support::test_db(
+            let db = gents_store::test_support::TestStore::start(
                 "job-hook",
                 gents_session::test_support::no_lifecycle_plugins(),
             )
@@ -722,7 +722,7 @@ mod job_control {
 
         /// A live local child the job spawned: a processing request of this node.
         async fn live_child(&self, row: &str) -> String {
-            crate::background::job::input::tests::insert_as(
+            let doc = crate::background::job::input::tests::insert_as(
                 &self.access(),
                 "AgentRequest",
                 json!({
@@ -741,11 +741,13 @@ mod job_control {
                     "caused_by_parent_request_doc_id": "parent-doc",
                 }),
             )
-            .await
+            .await;
+            gents_session::test_support::record_running_request_as(&self.access(), &doc).await;
+            doc
         }
 
         async fn interrupted(&self, child: &str) -> bool {
-            gents_session::request::interrupt::fetch_interrupt_requested_at_by_doc_id_with_access(
+            gents_session::request::interrupt::request_interrupted_at_by_doc_id_with_access(
                 &self.access(),
                 child,
             )

@@ -1,11 +1,12 @@
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use globset::GlobBuilder;
 
-use crate::context::RunnerContext;
+use crate::beneath::RootDir;
+use crate::context::{HeldDir, RunnerContext};
 use crate::output::{
     echoed_pattern, format_entries, format_grep_matches, render_tool_output, render_within_budget,
     summarize_entries, total_count, truncate_grep_preview, GlobMetadata, GlobOutput, GrepMetadata,
@@ -49,13 +50,13 @@ fn walk_state(
     })
 }
 
-fn top_level_entry_names(dir: &Path) -> Vec<String> {
-    let Ok(read_dir) = std::fs::read_dir(dir) else {
+fn top_level_entry_names(context: &RunnerContext, dir: &HeldDir) -> Vec<String> {
+    let Ok(children) = context.root().children(&dir.fd, &dir.path, |_| false) else {
         return Vec::new();
     };
     let mut names: Vec<String> = Vec::with_capacity(SEARCH_DIR_ENTRY_HINTS + 1);
-    for entry in read_dir.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
+    for entry in children {
+        let name = entry.name.to_string_lossy().into_owned();
         if names.len() == SEARCH_DIR_ENTRY_HINTS && names.last().is_some_and(|last| *last <= name) {
             continue;
         }
@@ -77,7 +78,10 @@ pub fn execute_request_with_base(
     base: Option<PathBuf>,
     request: NativeFsRunnerRequest,
 ) -> Result<String> {
-    execute_in_context(&RunnerContext::new_with_base(root, base)?, request)
+    execute_in_context(
+        &RunnerContext::new_with_base(RootDir::open(&root)?, base)?,
+        request,
+    )
 }
 
 #[cfg(feature = "test-fixtures")]
@@ -87,8 +91,15 @@ pub fn execute_request_with_blocker(
     request: NativeFsRunnerRequest,
     blocker: Option<crate::blocker::TraversalBlocker>,
 ) -> Result<String> {
-    let context = RunnerContext::new_with_base(root, base)?.with_blocker(blocker);
+    let context = RunnerContext::new_with_base(RootDir::open(&root)?, base)?.with_blocker(blocker);
     execute_in_context(&context, request)
+}
+
+/// Serves a request from an already opened root, whose lookup hook a race
+/// test sets.
+#[cfg(feature = "test-fixtures")]
+pub fn execute_request_in_root(root: RootDir, request: NativeFsRunnerRequest) -> Result<String> {
+    execute_in_context(&RunnerContext::new_with_base(root, None)?, request)
 }
 
 fn execute_in_context(context: &RunnerContext, request: NativeFsRunnerRequest) -> Result<String> {
@@ -103,7 +114,7 @@ fn list_files(context: &RunnerContext, args: ListFilesArgs) -> Result<String> {
     let dir = context.resolve_existing_dir(args.path.as_deref())?;
     let walk = walk_state(args.max_entries_visited, None, args.max_wall_ms);
     let entries = collect_entries(context, &dir, args.recursive, args.max_entries.max(1), walk)?;
-    let path = context.display_path(&dir);
+    let path = context.display_path(&dir.path);
     render_within_budget(
         &entries.items,
         entries.truncated || entries.walk.budget_exhausted,
@@ -161,17 +172,19 @@ fn glob(context: &RunnerContext, args: GlobArgs) -> Result<String> {
         .compile_matcher();
     let walk = walk_state(args.max_entries_visited, None, args.max_wall_ms);
     let prefix = glob_literal_prefix(&args.pattern);
+    let pruned;
     let pattern_prefix = (!prefix.is_empty()).then(|| prefix.join("/"));
     let (walk_dir, pattern_prefix_exists) =
-        if prefix.is_empty() || !dir.starts_with(context.base_dir()) {
-            (Some(dir.clone()), true)
+        if prefix.is_empty() || !dir.path.starts_with(context.base_dir()) {
+            (Some(&dir), true)
         } else {
             match context.resolve_prune_subdir(&prefix) {
                 Some(prefix_dir) => {
-                    if prefix_dir.starts_with(&dir) {
-                        (Some(prefix_dir), true)
-                    } else if dir.starts_with(&prefix_dir) {
-                        (Some(dir.clone()), true)
+                    if prefix_dir.path.starts_with(&dir.path) {
+                        pruned = Some(prefix_dir);
+                        (pruned.as_ref(), true)
+                    } else if dir.path.starts_with(&prefix_dir.path) {
+                        (Some(&dir), true)
                     } else {
                         (None, true)
                     }
@@ -181,7 +194,7 @@ fn glob(context: &RunnerContext, args: GlobArgs) -> Result<String> {
         };
     let matches = match walk_dir {
         Some(walk_dir) => {
-            collect_glob_matches(context, &walk_dir, &pattern, args.max_matches.max(1), walk)?
+            collect_glob_matches(context, walk_dir, &pattern, args.max_matches.max(1), walk)?
         }
         None => crate::model::Collected {
             items: Vec::new(),
@@ -190,8 +203,8 @@ fn glob(context: &RunnerContext, args: GlobArgs) -> Result<String> {
         },
     };
     let search_dir_entries = (matches.items.is_empty() && !matches.walk.budget_exhausted)
-        .then(|| top_level_entry_names(&dir));
-    let path = context.display_path(&dir);
+        .then(|| top_level_entry_names(context, &dir));
+    let path = context.display_path(&dir.path);
     render_within_budget(
         &matches.items,
         matches.truncated || matches.walk.budget_exhausted,
@@ -256,9 +269,20 @@ fn grep(context: &RunnerContext, args: GrepArgs) -> Result<String> {
         })
         .collect::<Vec<_>>();
     let search_dir_entries =
-        (matches.is_empty() && path.is_dir() && !collected.walk.budget_exhausted)
-            .then(|| top_level_entry_names(&path));
-    let display_path = context.display_path(&path);
+        (matches.is_empty() && path.is_dir() && !collected.walk.budget_exhausted).then(|| {
+            path.open_dir()
+                .map(|fd| {
+                    top_level_entry_names(
+                        context,
+                        &HeldDir {
+                            fd,
+                            path: path.path(),
+                        },
+                    )
+                })
+                .unwrap_or_default()
+        });
+    let display_path = context.display_path(&path.path());
     render_within_budget(
         &matches,
         collected.truncated || collected.walk.budget_exhausted,

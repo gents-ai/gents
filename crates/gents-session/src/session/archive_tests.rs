@@ -158,7 +158,7 @@ async fn work_rows(node: &Arc<EmbeddedNode>, actor: &dyn NodeIdentity) -> serde_
 
 #[tokio::test]
 async fn archive_restore_survive_reopen_and_reject_stale_windows_without_stopping_work() {
-    let mut db = gents_inference::test_support::test_db(
+    let mut db = gents_store::test_support::TestStore::start(
         "archive-restore-survive-reopen-and-reje",
         crate::test_support::no_lifecycle_plugins(),
     )

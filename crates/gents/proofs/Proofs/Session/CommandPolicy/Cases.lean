@@ -17,6 +17,9 @@ structure CommandSandboxCase where
   category : String
   mode : ExecutionMode
   workspaceWriteSandboxEnforced : Bool
+  program : String
+  lookupCommand : String
+  networkMode : NetworkMode
   decision : SandboxDecision
   deriving Repr
 
@@ -61,13 +64,18 @@ def validationCase
 def sandboxCase
     (name category : String)
     (mode : ExecutionMode)
-    (workspaceWriteSandboxEnforced : Bool) : CommandSandboxCase :=
+    (workspaceWriteSandboxEnforced : Bool)
+    (program : String := "/usr/bin/git")
+    (network : NetworkMode := .inherit) : CommandSandboxCase :=
   let support := { workspaceWriteSandboxEnforced := workspaceWriteSandboxEnforced }
   { name := name
   , category := category
   , mode := mode
   , workspaceWriteSandboxEnforced := workspaceWriteSandboxEnforced
-  , decision := selectSandbox support mode
+  , program := program
+  , lookupCommand := (program.splitOn "/").getLastD program
+  , networkMode := network
+  , decision := selectSandbox support mode program
   }
 
 def envInput
@@ -222,6 +230,89 @@ def commandPolicyOrderingCases : List CommandPolicyCase :=
       "disabled_network_failure"
       (commandPolicy .workspaceWrite [] [] .disabled [])
       (commandRequest "printf" "printf" ["ok"])
+  ]
+
+/-- Arguments that write a file, run a program or change the host, refused on
+every host; on a host without a sandbox backend they are the whole fence. -/
+def readOnlyWriteAndExecCases : List CommandPolicyCase :=
+  [ readOnlySafetyCase "read_only_sed_in_place_in_a_cluster_denies" "sed" "sed"
+      ["-ni", "p", "README.md"]
+  , readOnlySafetyCase "read_only_sed_bsd_in_place_denies" "sed" "sed"
+      ["-I", ".bak", "s/a/b/", "README.md"]
+  , readOnlySafetyCase "read_only_sed_in_place_abbreviation_denies" "sed" "sed"
+      ["--in", "s/a/b/", "README.md"]
+  , readOnlySafetyCase "read_only_sed_expression_value_is_not_an_option" "sed" "sed"
+      ["-es/i/x/", "README.md"]
+  , readOnlySafetyCase "read_only_sed_write_command_is_fenced_at_launch" "sed" "sed"
+      ["-n", "w copy.txt", "README.md"]
+  , readOnlySafetyCase "read_only_curl_cookie_jar_denies" "curl" "curl"
+      ["-c", "jar.txt", "https://example.com"]
+  , readOnlySafetyCase "read_only_curl_cookie_jar_abbreviation_denies" "curl" "curl"
+      ["--cookie-j", "jar.txt", "https://example.com"]
+  , readOnlySafetyCase "read_only_curl_cookie_jar_in_a_cluster_denies" "curl" "curl"
+      ["-sc", "jar.txt", "https://example.com"]
+  , readOnlySafetyCase "read_only_curl_dump_header_denies" "curl" "curl"
+      ["-D", "headers.txt", "https://example.com"]
+  , readOnlySafetyCase "read_only_curl_output_in_a_cluster_denies" "curl" "curl"
+      ["-so", "out.html", "https://example.com"]
+  , readOnlySafetyCase "read_only_curl_remote_name_denies" "curl" "curl"
+      ["-O", "https://example.com/file"]
+  , readOnlySafetyCase "read_only_curl_trace_denies" "curl" "curl"
+      ["--trace", "trace.txt", "https://example.com"]
+  , readOnlySafetyCase "read_only_curl_trace_ascii_denies" "curl" "curl"
+      ["--trace-ascii", "trace.txt", "https://example.com"]
+  , readOnlySafetyCase "read_only_curl_libcurl_denies" "curl" "curl"
+      ["--libcurl", "source.c", "https://example.com"]
+  , readOnlySafetyCase "read_only_curl_output_dir_denies" "curl" "curl"
+      ["--output-dir", "downloads", "https://example.com"]
+  , readOnlySafetyCase "read_only_curl_stderr_file_denies" "curl" "curl"
+      ["--stderr", "log.txt", "https://example.com"]
+  , readOnlySafetyCase "read_only_curl_write_out_file_denies" "curl" "curl"
+      ["-w", "%output{status.txt}%{http_code}", "https://example.com"]
+  , readOnlySafetyCase "read_only_curl_protocol_override_denies" "curl" "curl"
+      ["--proto", "=all", "https://example.com"]
+  , readOnlySafetyCase "read_only_curl_trace_time_allows" "curl" "curl"
+      ["-fsS", "--trace-time", "-H", "Accept: text/plain", "https://example.com"]
+  , readOnlySafetyCase "read_only_git_grep_pager_program_denies" "git" "git"
+      ["grep", "-Otouch", "pattern"]
+  , readOnlySafetyCase "read_only_git_grep_pager_in_a_cluster_denies" "git" "git"
+      ["grep", "-nO", "pattern"]
+  , readOnlySafetyCase "read_only_git_grep_pager_abbreviation_denies" "git" "git"
+      ["grep", "--op=touch", "pattern"]
+  , readOnlySafetyCase "read_only_git_grep_context_allows" "git" "git"
+      ["grep", "-nA2", "pattern"]
+  , readOnlySafetyCase "read_only_git_show_signature_denies" "git" "git"
+      ["log", "--show-signature"]
+  , readOnlySafetyCase "read_only_git_signature_placeholder_denies" "git" "git"
+      ["log", "--format=%H %G?"]
+  , readOnlySafetyCase "read_only_git_textconv_abbreviation_denies" "git" "git"
+      ["grep", "--textc", "pattern"]
+  , readOnlySafetyCase "read_only_git_text_allows" "git" "git"
+      ["grep", "--text", "pattern"]
+  , readOnlySafetyCase "read_only_git_status_verbose_denies" "git" "git"
+      ["status", "-v"]
+  , readOnlySafetyCase "read_only_git_log_format_allows" "git" "git"
+      ["log", "--format=%H %s", "-n", "5"]
+  , readOnlySafetyCase "read_only_rg_search_zip_in_a_cluster_denies" "rg" "rg"
+      ["-iz", "needle"]
+  , readOnlySafetyCase "read_only_file_compile_denies" "file" "file"
+      ["-C", "-m", "magic"]
+  , readOnlySafetyCase "read_only_file_type_allows" "file" "file"
+      ["-b", "README.md"]
+  , readOnlySafetyCase "read_only_lsof_device_cache_denies" "lsof" "lsof"
+      ["-Db"]
+  , readOnlySafetyCase "read_only_tailscale_status_web_denies" "tailscale" "tailscale"
+      ["status", "--web"]
+  , readOnlySafetyCase "read_only_date_set_denies" "date" "date"
+      ["-s", "2030-01-01"]
+  , readOnlySafetyCase "read_only_date_operand_denies" "date" "date"
+      ["010100002030"]
+  , readOnlySafetyCase "read_only_date_format_allows" "date" "date"
+      ["-u", "-d", "yesterday", "+%s"]
+  , readOnlySafetyCase "read_only_hostname_set_denies" "hostname" "hostname"
+      ["other-host"]
+  , readOnlySafetyCase "read_only_hostname_short_allows" "hostname" "hostname"
+      ["-s"]
   ]
 
 def readOnlySafetyCases : List CommandPolicyCase :=
@@ -413,14 +504,50 @@ def readOnlySafetyCases : List CommandPolicyCase :=
       "sudo"
       "sudo"
       []
-  ]
+  ] ++ readOnlyWriteAndExecCases
 
 def commandPolicyCases : List CommandPolicyCase :=
   commandPolicyOrderingCases ++ readOnlySafetyCases
 
 def commandSandboxCases : List CommandSandboxCase :=
   [ sandboxCase
-      "read_only_selects_policy_read_only"
+      "read_only_with_backend_selects_the_read_only_profile"
+      "read_only_sandbox_selection"
+      .readOnly
+      true
+  , sandboxCase
+      "read_only_network_reader_reaches_the_network"
+      "read_only_sandbox_selection"
+      .readOnly
+      true
+      "/usr/bin/curl"
+  , sandboxCase
+      "read_only_network_reader_under_disabled_network_is_offline"
+      "read_only_sandbox_selection"
+      .readOnly
+      true
+      "/usr/bin/curl"
+      .disabled
+  , sandboxCase
+      "read_only_setuid_ps_runs_under_its_validator"
+      "read_only_sandbox_selection"
+      .readOnly
+      true
+      "/bin/ps"
+  , sandboxCase
+      "read_only_setuid_sudo_runs_under_its_validator"
+      "read_only_sandbox_selection"
+      .readOnly
+      true
+      "/usr/bin/sudo"
+  , sandboxCase
+      "read_only_launchctl_runs_under_its_validator"
+      "read_only_sandbox_selection"
+      .readOnly
+      true
+      "/bin/launchctl"
+  , sandboxCase
+      "read_only_without_backend_selects_policy_read_only"
       "read_only_sandbox_selection"
       .readOnly
       false
@@ -429,6 +556,13 @@ def commandSandboxCases : List CommandSandboxCase :=
       "workspace_write_sandbox_selection"
       .workspaceWrite
       true
+  , sandboxCase
+      "workspace_write_enabled_network_reaches_the_network"
+      "workspace_write_sandbox_selection"
+      .workspaceWrite
+      true
+      "/usr/bin/git"
+      .enabled
   , sandboxCase
       "workspace_write_unenforced_denies"
       "workspace_write_sandbox_selection"

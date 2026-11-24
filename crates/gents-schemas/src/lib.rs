@@ -38,8 +38,13 @@ pub const AGENT_MESSAGE_NAME: &str = "AgentMessage";
 pub const AGENT_MESSAGE: &str = include_str!("../schemas/agent/agent_message.graphql");
 pub const AGENT_SESSION_NAME: &str = "AgentSession";
 pub const AGENT_SESSION: &str = include_str!("../schemas/agent/agent_session.graphql");
+pub const AGENT_SESSION_INTERRUPT_NAME: &str = "AgentSessionInterrupt";
+pub const AGENT_SESSION_INTERRUPT: &str =
+    include_str!("../schemas/agent/agent_session_interrupt.graphql");
 pub const AGENT_OWNERSHIP_POLICY: &str =
     include_str!("../schemas/agent/agent_ownership_policy.yaml");
+pub const AGENT_OWNERSHIP_POLICY_TRANSPORT_V2: &str =
+    include_str!("../schemas/agent/agent_ownership_policy_v2.yaml");
 pub const SESSION_POLICY_RESOURCE: &str = "sessions";
 pub const GOAL_NAME: &str = "Goal";
 pub const GOAL: &str = include_str!("../schemas/agent/goal.graphql");
@@ -267,6 +272,7 @@ pub const ALL: &[&str] = &[
     AGENT_REQUEST_RETRY_BUDGET,
     AGENT_OUTPUT_SEGMENT,
     AGENT_SESSION,
+    AGENT_SESSION_INTERRUPT,
     GOAL,
     GOAL_CREATION_CLAIM,
     MAILBOX_ITEM,
@@ -358,6 +364,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     AGENT_REQUEST_RETRY_BUDGET_NAME,
     AGENT_OUTPUT_SEGMENT_NAME,
     AGENT_SESSION_NAME,
+    AGENT_SESSION_INTERRUPT_NAME,
     GOAL_NAME,
     GOAL_CREATION_CLAIM_NAME,
     MAILBOX_ITEM_NAME,

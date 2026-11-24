@@ -47,6 +47,8 @@ mod request_lifecycle;
 mod request_owner_scope;
 #[path = "conformance/session_control.rs"]
 mod session_control;
+#[path = "conformance/session_interrupt_access.rs"]
+mod session_interrupt_access;
 #[path = "conformance/startup_readiness.rs"]
 mod startup_readiness;
 #[path = "conformance/streaming_compaction.rs"]

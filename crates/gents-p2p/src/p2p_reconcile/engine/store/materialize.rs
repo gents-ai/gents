@@ -5,7 +5,7 @@ use chrono::Utc;
 use serde::Deserialize;
 
 use gents_store::config_client::ConfigApplyTxn;
-use gents_store::graphql::{escape_graphql_string, fence_arrivals};
+use gents_store::graphql::escape_graphql_string;
 
 use super::super::super::templates::CLIENT_TEMPLATE;
 use super::super::enrollment::enrollment_entry_is_fresh_at;
@@ -35,7 +35,6 @@ pub async fn materialize_enrollment_desired_in_txn(
         enrollment_entry_is_fresh_at(entry, Utc::now()),
         "enrollment authorization expired before route materialization"
     );
-    fence_arrivals(txn, "PeerPairingDesired").await?;
     let response = {
         use gents_protocol::document_query::{
             fields::peer_pairing_desired as fields, Query, Selection,

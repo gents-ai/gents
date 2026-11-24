@@ -631,7 +631,7 @@ async fn accepted_tool_arguments_read_only_the_accepted_message() {
 
 #[tokio::test]
 async fn list_processes_skip_publishes_canonical_tool_result() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "list-processes-skip-publishes-canonical-",
         gents_automation::lifecycle_hooks::composition(),
     )
@@ -680,7 +680,7 @@ async fn list_processes_skip_publishes_canonical_tool_result() {
 
 #[tokio::test]
 async fn wait_and_cancel_process_skip_publish_canonical_tool_results() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "wait-and-cancel-process-skip-publish-can",
         gents_automation::lifecycle_hooks::composition(),
     )

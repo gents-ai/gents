@@ -126,7 +126,7 @@ async fn from_default_agent_documents_composes_behavior_and_inference_profile() 
         node,
         identity.clone(),
         DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
+            backend_admission: Some(db.backend_admission()),
             tool_ceiling: ToolCeiling::readonly(),
             ..Default::default()
         },
@@ -325,7 +325,7 @@ async fn from_default_agent_documents_resolves_tool_selection_with_ceiling() {
         node,
         identity,
         DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
+            backend_admission: Some(db.backend_admission()),
             tool_ceiling: ToolCeiling::readonly(),
             ..Default::default()
         },
@@ -513,7 +513,7 @@ async fn document_loading_follows_the_lean_tool_admission_model() {
             node,
             identity,
             DocumentRuntimeOptions {
-                backend_admission: Some(db.home.backend_admission()),
+                backend_admission: Some(db.backend_admission()),
                 tool_ceiling: ToolCeiling::readonly(),
                 ..Default::default()
             },
@@ -579,7 +579,7 @@ async fn from_default_agent_documents_loads_runnable_agents_and_tracks_unavailab
         node,
         identity,
         DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
+            backend_admission: Some(db.backend_admission()),
             tool_ceiling: ToolCeiling::readonly(),
             ..Default::default()
         },

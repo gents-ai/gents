@@ -21,12 +21,12 @@ use crate::support::builder_runtime::{
     builder_actors, fixture_agent, runtime_builder, spawn_runtime, submit_request,
 };
 use crate::support::interrupt::{wait_for_request_terminal_state, BootedAgent};
-use crate::support::live_inference::rows_when;
 use crate::support::snapshots::fetch_request_snapshot;
-use crate::support::streaming_backend::{
-    MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse, StreamScript,
-};
 use crate::support::{first_row, test_db};
+use gents_inference::test_support::scripted_backend::{
+    ScriptedBackend, StreamChunk, StreamPlan, StreamResponse, StreamScript,
+};
+use gents_store::test_support::rows_when;
 
 const RETRY_MODEL: &str = "retry-tape-model";
 const RETRY_BACKEND_ID: &str = "retry-tape-backend";
@@ -48,7 +48,7 @@ async fn backend_restart_cluster_recovers() {
             )
         })
         .collect::<Vec<_>>();
-    let backend = MockStreamingBackend::start_with_plans(RETRY_MODEL, plans).unwrap();
+    let backend = ScriptedBackend::start_with_plans(RETRY_MODEL, plans).unwrap();
     let db = test_db("completion-retry-cluster").await;
     let (actors, agent) =
         boot_retry_agent(&db, backend.endpoint(), 3, UNREACHED_DEADLINE.as_secs()).await;
@@ -126,7 +126,7 @@ async fn backend_restart_cluster_recovers() {
 #[tokio::test]
 async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
     let marker = "backoff-vs-liveness";
-    let backend = MockStreamingBackend::start_with_plans(
+    let backend = ScriptedBackend::start_with_plans(
         RETRY_MODEL,
         vec![StreamPlan::new(
             marker,
@@ -298,7 +298,7 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
 #[tokio::test]
 async fn deadline_tight_fails_cleanly() {
     let marker = "deadline-tight";
-    let backend = MockStreamingBackend::start_with_plans(
+    let backend = ScriptedBackend::start_with_plans(
         RETRY_MODEL,
         vec![StreamPlan::new(
             marker,
@@ -381,11 +381,9 @@ async fn interactive_budget_is_quick() {
         marker,
         ["answered after the outage"],
     ));
-    let backend = MockStreamingBackend::start_with_plans(
-        RETRY_MODEL,
-        vec![StreamPlan::new(marker, responses)],
-    )
-    .unwrap();
+    let backend =
+        ScriptedBackend::start_with_plans(RETRY_MODEL, vec![StreamPlan::new(marker, responses)])
+            .unwrap();
     let db = test_db("completion-retry-interactive-budget").await;
     let (actors, agent) =
         boot_retry_agent(&db, backend.endpoint(), 1, UNREACHED_DEADLINE.as_secs()).await;
@@ -513,17 +511,15 @@ async fn start_stall_tape(
     responses: Vec<StreamResponse>,
     execution_origin: &str,
 ) -> (
-    MockStreamingBackend,
+    ScriptedBackend,
     crate::support::TestDb,
     RequestActors,
     BootedAgent,
     String,
 ) {
-    let backend = MockStreamingBackend::start_with_plans(
-        RETRY_MODEL,
-        vec![StreamPlan::new(marker, responses)],
-    )
-    .unwrap();
+    let backend =
+        ScriptedBackend::start_with_plans(RETRY_MODEL, vec![StreamPlan::new(marker, responses)])
+            .unwrap();
     let test_name = format!("completion-retry-{marker}");
     let db = test_db(&test_name).await;
     let actors = builder_actors(&db, RETRY_BACKEND_ID, backend.endpoint(), RETRY_MODEL, 1).await;
@@ -671,7 +667,7 @@ async fn repeated_provider_silence_parks_the_request_until_the_provider_answers(
 #[tokio::test]
 async fn deterministic_400_tape() {
     let marker = "deterministic-400";
-    let backend = MockStreamingBackend::start_with_plans(
+    let backend = ScriptedBackend::start_with_plans(
         RETRY_MODEL,
         vec![StreamPlan::new(
             marker,
@@ -801,7 +797,6 @@ async fn fetch_timeline_request(actors: &RequestActors, request_id: &str) -> Tim
                 failure_reason
                 created_at
                 retry_count
-                interrupt_requested_at
                 caused_by_parent_request_id
                 caused_by_parent_tool_call_id
             }}

@@ -343,8 +343,12 @@ async fn lsp_rename_does_not_overwrite_a_changed_destination() {
         if existed {
             std::fs::write(&destination, "old destination\n").unwrap();
         }
-        let rename =
-            super::super::edits::prepare_rename(source.clone(), destination.clone()).unwrap();
+        let rename = super::super::edits::prepare_rename(
+            &fixture.context,
+            source.clone(),
+            destination.clone(),
+        )
+        .unwrap();
         std::fs::write(&destination, "changed elsewhere\n").unwrap();
         let error = super::super::edits::apply_prepared_edits(
             &gents_loop::tool::ToolCallEnvelope::default(),

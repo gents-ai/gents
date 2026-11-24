@@ -171,9 +171,9 @@ pub async fn run_callback_engine(
 /// Starts a callback test node through the protected start as
 /// [`gents_store::test_support::fixture_root`].
 #[cfg(any(test, feature = "test-fixtures"))]
-pub async fn test_node_builder(name: &str) -> gents_inference::test_support::TestDb {
+pub async fn test_node_builder(name: &str) -> gents_store::test_support::TestStore {
     use gents_store::identity::NodeIdentity as _;
-    gents_inference::test_support::test_db_as(
+    gents_store::test_support::TestStore::start_as(
         name,
         gents_store::test_support::fixture_root().did(),
         crate::lifecycle_hooks::composition(),

@@ -517,7 +517,7 @@ mod tests {
 
     #[tokio::test]
     async fn generated_session_command_discovery_uses_held_agent_and_native_visibility() {
-        let db = gents_inference::test_support::test_db(
+        let db = gents_store::test_support::TestStore::start(
             "session-command-discovery",
             gents_automation::lifecycle_hooks::composition(),
         )

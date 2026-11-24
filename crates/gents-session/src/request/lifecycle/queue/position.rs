@@ -190,7 +190,7 @@ mod tests {
         use defra_node::Node as EmbeddedNode;
         use gents_store::config_client::ConfigAccess;
 
-        let node_db = gents_inference::test_support::test_db(
+        let node_db = gents_store::test_support::TestStore::start(
             "effective-slot-batch-uses-only-found-phy",
             crate::test_support::no_lifecycle_plugins(),
         )

@@ -9,7 +9,7 @@ use gents_store::test_support::first_content;
 use super::prompt::{LayeredPromptBuilder, PromptBuilder};
 
 struct CompactionFixture {
-    db: crate::support::TestDb,
+    db: gents_store::test_support::TestStore,
     _user: gents_store::identity::KeyIdentity,
     agent: Arc<dyn gents_store::identity::NodeIdentity>,
     lifecycle: gents_session::request::lifecycle::RequestLifecycle,
@@ -21,7 +21,11 @@ impl CompactionFixture {
             AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
         };
         use gents_store::identity::NodeIdentity;
-        let (db, user, client, binding) = crate::test_support::root::signed_test_node(name).await;
+        let (db, user, client, binding) = gents_inference::test_support::signed_test_node_from_db(
+            crate::support::trial_store(name).await,
+            name,
+        )
+        .await;
         let agent =
             gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
                 .unwrap();

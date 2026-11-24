@@ -195,6 +195,13 @@ async fn seed_owned_request_projection(
                 let doc = gents_store::graphql::created_doc_id(&response, "AgentSession")?;
                 txn.add_actor_relationship("AgentSession", &doc, "working_agent", agent)
                     .await?;
+                gents_session::session::interrupt_marker::create_in_txn(
+                    txn,
+                    &doc,
+                    session["node_did"].as_str().unwrap_or_default(),
+                    session["session_id"].as_str().unwrap_or_default(),
+                )
+                .await?;
                 Ok::<_, anyhow::Error>(())
             })
         })
@@ -487,26 +494,12 @@ pub(super) async fn canonical_recovery_repairs_expired_request_after_terminal_wr
         agent.did(),
     )
     .await;
-    let runtime_interrupt_doc_id = escape_graphql_string(&runtime_interrupt_doc_id);
-    gents_store::config_client::ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        ::identity::Did::new(agent.did()).unwrap(),
-        agent.as_ref(),
+    gents_session::test_support::interrupt_session_of_request_at(
+        &db.node,
+        &runtime_interrupt_doc_id,
+        "2026-07-10T00:00:00Z",
     )
-    .unwrap()
-    .write(
-        "test.convergence.interrupt_latch",
-        &format!(
-            r#"mutation {{
-                update_AgentRequest(
-                    docID: "{runtime_interrupt_doc_id}",
-                    input: {{ interrupt_requested_at: "2026-07-10T00:00:00Z" }}
-                ) {{ _docID }}
-            }}"#
-        ),
-    )
-    .await
-    .expect("seed request-owned interrupt latch as working Agent");
+    .await;
 
     let runtime_interrupt_repair = RequestLifecycle::repair_terminal_requests_with_identities(
         &db.node,
@@ -732,8 +725,17 @@ pub(super) async fn drain_wakeups_never_interrupts_foreign_replica() {
         "processing",
     )
     .await;
+    seed_owned_request_projection(
+        &db.node,
+        session_id,
+        "convergence-drain-active",
+        owner_did,
+        agent.did(),
+    )
+    .await;
+    gents_session::test_support::record_claim_generation(&db.node, &target_doc_id).await;
 
-    create_queue_request(
+    let owner_wake = create_queue_request(
         &db.node,
         agent.did(),
         "convergence-drain-owner",
@@ -754,6 +756,7 @@ pub(super) async fn drain_wakeups_never_interrupts_foreign_replica() {
     )
     .await;
 
+    gents_session::test_support::record_claim_generation(&db.node, &owner_wake).await;
     let signer = agent.managed_agent_signer().expect("managed Agent signer");
     gents_session::request::interrupt::interrupt_request_by_doc_id(
         &db.node,
@@ -764,19 +767,42 @@ pub(super) async fn drain_wakeups_never_interrupts_foreign_replica() {
     )
     .await
     .unwrap();
-    let latched = root_read(
-        &db.node,
-        &format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ interrupt_requested_at }} }}"#,
-            escape_graphql_string(&target_doc_id)
-        ),
-    )
-    .await;
     assert!(
-        latched["AgentRequest"][0]["interrupt_requested_at"].is_string(),
-        "the exact owned request must be latched"
+        gents_session::request::interrupt::request_interrupted_at_by_doc_id_with_access(
+            &gents_store::config_client::ConfigAccess::local(db.node.clone()),
+            &target_doc_id,
+        )
+        .await
+        .unwrap()
+        .is_some(),
+        "the exact owned request must be interrupted"
     );
 
+    // The owner's wake recorded the generation the interrupt passed, so its
+    // claim drains it (`InterruptGeneration.wakeAtClaim`).
+    let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        ::identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let wake = gents_session::request::binding::load_agent_request_by_doc_id_with_access(
+        &agent_access,
+        &owner_wake,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let mut lifecycle = gents_session::request::lifecycle::RequestLifecycle::new_with_node_did(
+        db.node.clone(),
+        wake,
+        60,
+    );
+    lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
+    assert_eq!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        gents_session::request::lifecycle::ClaimOutcome::Interrupted
+    );
     let owner = fetch_queue_convergence_row(&db.node, "convergence-drain-owner").await;
     assert_eq!(owner.lifecycle_state, RequestLifecycleState::Interrupted);
 

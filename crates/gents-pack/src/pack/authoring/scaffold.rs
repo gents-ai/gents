@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use gents_fs_runner::beneath::{ChildKind, Intent, LocateTarget, Located, RootDir, Walk};
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -24,6 +25,9 @@ pub struct ScaffoldReport {
     pub kind: &'static str,
     pub template: &'static str,
     pub dir: PathBuf,
+    /// The pack directory as written, held for the next step.
+    #[serde(skip)]
+    pub root: RootDir,
     pub files: Vec<String>,
     /// The requested name when it was normalized to `pack`.
     pub renamed_from: Option<String>,
@@ -41,11 +45,18 @@ impl Template {
     }
 }
 
-pub fn scaffold(dir: &Path, name: &str, input: &ScaffoldInput) -> Result<ScaffoldReport> {
+/// Writes a new pack into `dir`, creating it; every file is created through
+/// the handle of the directory it lands in.
+pub fn scaffold(
+    dir: impl LocateTarget,
+    name: &str,
+    input: &ScaffoldInput,
+) -> Result<ScaffoldReport> {
+    let located = dir.locate_target(Intent::Create)?;
     anyhow::ensure!(
-        !dir.join("manifest.json").exists(),
+        !(located.is_dir() && located.subroot()?.exists("manifest.json")),
         "{} already holds a pack",
-        dir.display()
+        located.path().display()
     );
     let requested = name;
     let name = &super::pack_name(requested);
@@ -53,10 +64,11 @@ pub fn scaffold(dir: &Path, name: &str, input: &ScaffoldInput) -> Result<Scaffol
     let template = input
         .template
         .unwrap_or_else(|| Template::for_kind(input.kind));
-    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    let dir = &located
+        .create_dir()
+        .with_context(|| format!("creating {}", located.path().display()))?;
 
-    // Resolve generated paths through the rooted owner before writing, refusing nested symlink escapes.
-    let context = crate::pack::rooted_paths::RootedPaths::new(dir)?;
+    // Every generated path resolves beneath the pack before anything is written.
     let mut output_paths = vec!["README.md".to_owned(), "manifest.json".to_owned()];
     if input.ux {
         output_paths.push(format!("ux/{}/plugin.js", names.name));
@@ -108,7 +120,7 @@ pub fn scaffold(dir: &Path, name: &str, input: &ScaffoldInput) -> Result<Scaffol
         }
     }
     for path in output_paths {
-        context.resolve_path_allow_create(&path)?;
+        dir.locate_relative(Path::new(&path), Intent::Create)?;
     }
 
     let mut files: Vec<(String, String)> = vec![("README.md".into(), readme(&names, template))];
@@ -227,13 +239,8 @@ pub fn scaffold(dir: &Path, name: &str, input: &ScaffoldInput) -> Result<Scaffol
     }
 
     for (path, contents) in &files {
-        let target = dir.join(path);
-        if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("creating {}", parent.display()))?;
-        }
-        std::fs::write(&target, contents)
-            .with_context(|| format!("writing {}", target.display()))?;
+        dir.write(path, contents)
+            .with_context(|| format!("writing {}", dir.path().join(path).display()))?;
     }
     let mut assets: Vec<String> = files.iter().map(|(path, _)| path.clone()).collect();
     if matches!(template, Template::PluginTool | Template::Workflow) {
@@ -241,36 +248,35 @@ pub fn scaffold(dir: &Path, name: &str, input: &ScaffoldInput) -> Result<Scaffol
     }
     assets.sort();
     manifest["assets"] = json!(assets);
-    std::fs::write(
-        dir.join("manifest.json"),
+    dir.write(
+        "manifest.json",
         serde_json::to_string_pretty(&manifest)? + "\n",
     )
     .context("writing manifest.json")?;
 
     let mut written = Vec::new();
-    list_files(dir, dir, &mut written)?;
+    list_files(dir, &mut written)?;
     written.sort();
     Ok(ScaffoldReport {
         pack: names.name,
         namespace: names.namespace,
         kind: template.manifest_kind(),
         template: template.as_slug(),
-        dir: dir.to_path_buf(),
+        dir: dir.path().to_path_buf(),
+        root: dir.clone(),
         files: written,
         renamed_from: (requested != name).then(|| requested.to_owned()),
     })
 }
 
-fn list_files(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
-    for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() {
-            list_files(root, &entry.path(), out)?;
-        } else if let Ok(relative) = entry.path().strip_prefix(root) {
-            out.push(relative.to_string_lossy().replace('\\', "/"));
+fn list_files(dir: &RootDir, out: &mut Vec<String>) -> Result<()> {
+    dir.walk(|entry| {
+        if entry.kind() != ChildKind::Directory {
+            out.push(entry.relative().to_string_lossy().into_owned());
         }
-    }
-    Ok(())
+        Ok(Walk::Enter)
+    })
+    .with_context(|| format!("reading {}", dir.path().display()))
 }
 
 /// A UX plugin's pack-relative entry path, source and `ux[]` manifest row.
@@ -357,15 +363,17 @@ pub fn tool_markdown(name: &str) -> (String, String) {
     )
 }
 
-fn scaffold_plugin(dir: &Path, names: &Names, language: Option<&str>) -> Result<String> {
+fn scaffold_plugin(dir: &RootDir, names: &Names, language: Option<&str>) -> Result<String> {
     write_plugin_source(
-        &dir.join("plugins").join(&names.name),
+        &dir.locate_relative(&Path::new("plugins").join(&names.name), Intent::Create)?,
         &names.name,
         language,
     )
 }
 
-pub fn write_plugin_source(source: &Path, name: &str, language: Option<&str>) -> Result<String> {
+/// Creates the plugin source directory `source` with a starting entry file
+/// and case.
+pub fn write_plugin_source(source: &Located, name: &str, language: Option<&str>) -> Result<String> {
     let language = language.unwrap_or("rust").trim().to_ascii_lowercase();
     let entry = super::build::plugin_entry(&language).with_context(|| {
         format!(
@@ -373,7 +381,12 @@ pub fn write_plugin_source(source: &Path, name: &str, language: Option<&str>) ->
             crate::pack::SUPPORTED_PLUGIN_LANGUAGES.join(", ")
         )
     })?;
-    anyhow::ensure!(!source.exists(), "{} already exists", source.display());
+    anyhow::ensure!(
+        !source.exists(),
+        "{} already exists",
+        source.path().display()
+    );
+    let root = source.create_dir()?;
     let mut files = vec![
         (entry.to_owned(), echo_source(entry)),
         (
@@ -391,10 +404,8 @@ pub fn write_plugin_source(source: &Path, name: &str, language: Option<&str>) ->
         ));
     }
     for (path, contents) in files {
-        let target = source.join(path);
-        std::fs::create_dir_all(target.parent().context("plugin source parent")?)?;
-        std::fs::write(&target, contents)
-            .with_context(|| format!("writing {}", target.display()))?;
+        root.write(&path, contents)
+            .with_context(|| format!("writing {}", root.path().join(&path).display()))?;
     }
     Ok(language)
 }

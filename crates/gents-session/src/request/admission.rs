@@ -1700,7 +1700,7 @@ mod tests {
 
     #[tokio::test]
     async fn unconfigured_node_hop_cap_follows_the_lean_default() {
-        let node_db = gents_inference::test_support::test_db(
+        let node_db = gents_store::test_support::TestStore::start(
             "unconfigured-node-hop-cap",
             crate::test_support::no_lifecycle_plugins(),
         )
@@ -1724,7 +1724,7 @@ mod tests {
     #[tokio::test]
     async fn pending_rejection_selection_matches_lean() {
         let dir = tempfile::tempdir().unwrap();
-        let node_db = gents_inference::test_support::test_db(
+        let node_db = gents_store::test_support::TestStore::start(
             "pending-rejection-selection-matches-lean",
             crate::test_support::no_lifecycle_plugins(),
         )
@@ -1793,7 +1793,7 @@ mod tests {
         let identity = KeyIdentity::load_or_create(temp.path().join("receipt.key"), None).unwrap();
         let binding = gents_store::identity::provision_agent_identity(&identity).unwrap();
         let agent = gents_store::identity::resolve_agent_identity(&identity, &binding).unwrap();
-        let node_db = gents_inference::test_support::test_db(
+        let node_db = gents_store::test_support::TestStore::start(
             "runtime-receipt-authenticates-terminal-e",
             crate::test_support::no_lifecycle_plugins(),
         )
@@ -1895,7 +1895,7 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_trigger_source_requires_current_trigger_and_target_policy() {
-        let node_db = gents_inference::test_support::test_db(
+        let node_db = gents_store::test_support::TestStore::start(
             "runtime-trigger-source-requires-current-",
             crate::test_support::no_lifecycle_plugins(),
         )
@@ -2002,7 +2002,7 @@ mod tests {
     /// whose default managed Agent holds its projected baseline grants, and whose
     /// setup rows are written through the runtime owner's access.
     struct AdmissionFixture {
-        db: gents_inference::test_support::TestDb,
+        db: gents_store::test_support::TestStore,
         runtime: Arc<dyn NodeIdentity>,
         agent: Arc<dyn NodeIdentity>,
         admin: gents_store::config_client::ConfigAccess,
@@ -2012,7 +2012,7 @@ mod tests {
 
     impl AdmissionFixture {
         async fn new(name: &str) -> Self {
-            let db = gents_inference::test_support::test_db(
+            let db = gents_store::test_support::TestStore::start(
                 name,
                 crate::test_support::no_lifecycle_plugins(),
             )

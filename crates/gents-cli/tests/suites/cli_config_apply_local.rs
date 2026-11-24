@@ -13,7 +13,10 @@ async fn config_apply_updates_backend_from_canonical_bundle_locally() -> Result<
     let root = tempdir.path().join("config");
     fs::create_dir_all(&home)?;
     let model = format!("local-apply-{}", Uuid::new_v4().simple());
-    let endpoint = MockModelEndpoint::start(&model)?;
+    let endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     run_init_json(
         &home,
         &[

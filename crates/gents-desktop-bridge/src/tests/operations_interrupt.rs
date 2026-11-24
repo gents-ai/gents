@@ -14,12 +14,22 @@ fn user_cancel(request_id: &str, node: Option<&str>) -> DesktopInterruptRequest 
     }
 }
 
-async fn latch(core: &ClientRuntime, node: &str, request: &str) -> Option<String> {
-    core.operator_access(node).unwrap().execute(&format!(
-        "{{ AgentRequest(filter: {{ request_id: {{ _eq: \"{}\" }} }}) {{ interrupt_requested_at }} }}",
+/// Whether the request was interrupted: before its claim, or by its
+/// session's interrupt passing its claim.
+async fn interrupted(core: &ClientRuntime, node: &str, request: &str) -> bool {
+    let access = core.operator_access(node).unwrap();
+    let row = access.execute(&format!(
+        "{{ AgentRequest(filter: {{ request_id: {{ _eq: \"{}\" }} }}) {{ _docID lifecycle_state }} }}",
         escape_graphql_string(request),
-    )).await.unwrap()["data"]["AgentRequest"][0]["interrupt_requested_at"]
-        .as_str().map(str::to_owned)
+    )).await.unwrap()["data"]["AgentRequest"][0].clone();
+    row["lifecycle_state"] == "interrupted"
+        || gents_session::request::interrupt::request_interrupted_at_by_doc_id_with_access(
+            &access,
+            row["_docID"].as_str().unwrap(),
+        )
+        .await
+        .unwrap()
+        .is_some()
 }
 
 #[tokio::test]
@@ -47,25 +57,21 @@ async fn interrupt_uses_hosting_runtime_and_preserves_other_requests() {
         .unwrap();
     assert!(first.accepted);
     assert!(!first.already_interrupted);
-    assert_eq!(
-        first.interrupt_requested_at,
-        latch(core, node, "parent").await
-    );
-    assert!(first.interrupt_requested_at.is_some());
-    assert!(latch(core, node, "child").await.is_none());
+    assert!(interrupted(core, node, "parent").await);
+    assert!(!interrupted(core, node, "child").await);
     let second = interrupt_request(core, &user_cancel("parent", Some(node)))
         .await
         .unwrap();
     assert!(second.already_interrupted);
-    assert_eq!(second.interrupt_requested_at, first.interrupt_requested_at);
+    assert_eq!(second.interrupted_at, first.interrupted_at);
     let done = submit_request(core, &served.runtime, &served.agent, "done-session", "done").await;
     reject_admission(&served.runtime, &served.agent, &done, "fixture rejection").await;
     let finished = interrupt_request(core, &user_cancel("done", Some(node)))
         .await
         .unwrap();
     assert!(finished.accepted && finished.already_interrupted);
-    assert!(finished.interrupt_requested_at.is_none());
-    assert!(latch(core, node, "done").await.is_none());
+    assert!(finished.interrupted_at.is_none());
+    assert!(!interrupted(core, node, "done").await);
     served.shutdown().await;
 }
 
@@ -100,8 +106,8 @@ async fn interrupt_routes_same_logical_id_to_the_explicit_runtime() {
     interrupt_request(core, &user_cancel("same-id", Some(second_did)))
         .await
         .unwrap();
-    assert!(latch(core, first_did, "same-id").await.is_none());
-    assert!(latch(core, second_did, "same-id").await.is_some());
+    assert!(!interrupted(core, first_did, "same-id").await);
+    assert!(interrupted(core, second_did, "same-id").await);
     second.shutdown().await;
     served.shutdown().await;
 }

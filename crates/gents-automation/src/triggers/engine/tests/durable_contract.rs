@@ -326,7 +326,7 @@ async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_wor
 #[tokio::test]
 async fn generated_fire_transactions_are_atomic_and_owner_scoped() {
     for case in gents_lean_vocab::families::trigger_delivery_fire_admission::cases() {
-        let node_db = gents_inference::test_support::test_db(
+        let node_db = gents_store::test_support::TestStore::start(
             "generated-fire-transactions-are-atomic-a",
             crate::lifecycle_hooks::composition(),
         )
@@ -520,7 +520,7 @@ async fn restart_outcome_recovery_matches_modeled_crash_boundaries() {
         })
         .await
         .unwrap();
-        let mut db = gents_inference::test_support::test_db_at(
+        let mut db = gents_store::test_support::TestStore::open_at(
             directory.path(),
             None,
             crate::lifecycle_hooks::composition(),
@@ -705,7 +705,7 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
         })
         .await
         .unwrap();
-        let db = gents_inference::test_support::test_db_at(
+        let db = gents_store::test_support::TestStore::open_at(
             directory.path(),
             None,
             crate::lifecycle_hooks::composition(),
@@ -967,7 +967,7 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
     for case in gents_lean_vocab::families::trigger_delivery_arrival_cursor::cases() {
         let input = &case.input;
         let name = &input.name;
-        let db = gents_inference::test_support::test_db(
+        let db = gents_store::test_support::TestStore::start(
             "arrival-checkpoints",
             crate::lifecycle_hooks::composition(),
         )
@@ -1302,7 +1302,7 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
         let input = &case.input;
         let name = &input.name;
         use gents_store::identity::NodeIdentity as _;
-        let db = gents_inference::test_support::test_db(
+        let db = gents_store::test_support::TestStore::start(
             "callback-checkpoints",
             crate::lifecycle_hooks::composition(),
         )
@@ -1604,7 +1604,7 @@ fn generated_session_key_cases_match_admission_and_config() {
 async fn budget_fixture(
     name: &str,
 ) -> (
-    gents_inference::test_support::TestDb,
+    gents_store::test_support::TestStore,
     gents_store::config_client::ConfigAccess,
     gents_store::config_client::ConfigAccess,
     ProductionMaterializer,
@@ -1752,4 +1752,83 @@ async fn generated_fire_budget_cases_stop_at_the_modeled_receipt_count() {
             },
         );
     }
+}
+
+/// Lean `Triggers.FireBudget.concurrent_admission_preserves_bound`: two fires
+/// of one Trigger admitted at once against a budget of two with one receipt
+/// already in the window. The second fire's admission commits while the
+/// first's is open; the first then aborts on the receipt sequence, admits
+/// again on a fresh count, and is refused. Two receipts are in the window.
+#[tokio::test]
+async fn concurrent_fire_admissions_stay_within_the_budget() {
+    let (_db, _client, agent, materializer, task, owner, trigger_doc) =
+        budget_fixture("concurrent-fire-budget").await;
+    let now = chrono::DateTime::parse_from_rfc3339(BUDGET_NOW).unwrap();
+    seed_receipt(
+        &agent,
+        &budget_fire(
+            &owner,
+            "seeded",
+            (now - chrono::Duration::seconds(60)).to_rfc3339_opts(SecondsFormat::Secs, true),
+        ),
+    )
+    .await;
+    let prepared = |document: &str| durable::PreparedFire {
+        receipt: budget_fire(&owner, document, BUDGET_NOW.to_owned()),
+        target_existing: false,
+        create_session: false,
+        replace_prior: false,
+        event_source_generation: None,
+        max_fires_per_hour: 2,
+    };
+    let (first, second) = (prepared("first"), prepared("second"));
+    let materialize = |prepared: &durable::PreparedFire| {
+        let prepared = prepared.clone();
+        let materializer = &materializer;
+        let task = &task;
+        let trigger_doc = &trigger_doc;
+        async move {
+            materializer
+                .materialize(FireMaterialization {
+                    task,
+                    trigger_id: Some("handoff"),
+                    trigger_kind: TriggerKind::Schedule,
+                    trigger_doc_id: Some(trigger_doc),
+                    source_doc_id: None,
+                    correlation: None,
+                    trigger_context: None,
+                    rendered_prompt: "work",
+                    rendered_goal_objective: None,
+                    durable_fire_key: &prepared.receipt.fire_key,
+                    delivery: Some(&prepared),
+                    prepared_ids: None,
+                })
+                .await
+        }
+    };
+    let concurrent = std::sync::Mutex::new(None);
+    let (first_result, paused) =
+        gents_store::config_client::ConfigApplyTxn::with_concurrent_write_before_commit(
+            materialize(&first),
+            async {
+                *concurrent.lock().unwrap() = Some(materialize(&second).await);
+            },
+        )
+        .await;
+    assert!(paused, "the second admission must commit inside the first");
+    let second_result = concurrent.into_inner().unwrap().unwrap();
+    assert!(second_result.is_ok(), "{second_result:?}");
+    assert!(
+        matches!(first_result, Err(MaterializeError::BudgetExhausted(_))),
+        "{first_result:?}"
+    );
+    let receipts = agent
+        .execute(r#"{ TriggerFire(filter: {trigger_id: {_eq: "handoff"}}) { fire_sequence } }"#)
+        .await
+        .unwrap();
+    assert_eq!(
+        receipts["data"]["TriggerFire"].as_array().unwrap().len(),
+        2,
+        "{receipts}"
+    );
 }

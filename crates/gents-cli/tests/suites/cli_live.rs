@@ -1334,7 +1334,7 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         r#"{{ AgentToolCall(filter: {{session_id: {{_eq: "{}"}}, tool_name: {{_eq: "bash_unrestricted"}}}}) {{lifecycle_state}} }}"#,
         escape_graphql_string(&session),
     );
-    gents::support::live_inference::rows_when(&access, "AgentToolCall", &query, |rows| {
+    gents_store::test_support::rows_when(&access, "AgentToolCall", &query, |rows| {
         rows["AgentToolCall"]
             .as_array()
             .is_some_and(|rows| rows.iter().any(|row| row["lifecycle_state"] == "running"))

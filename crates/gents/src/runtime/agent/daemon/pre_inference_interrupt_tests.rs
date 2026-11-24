@@ -143,7 +143,7 @@ async fn request_terminal_row(
         access,
         &format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
-                lifecycle_state failure_reason terminalized_at interrupt_requested_at stopped_before_running
+                lifecycle_state failure_reason terminalized_at interrupt_generation stopped_before_running
             }} }}"#
         ),
     )
@@ -383,7 +383,7 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
         gents_session::request::interrupt::spawn_request_interrupt_observer(
             node.clone(),
             agent_access.clone(),
-            request_doc_id.clone(),
+            lifecycle.request(),
             interrupt_tx,
             shutdown_rx.clone(),
         ),
@@ -406,12 +406,15 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
     .expect("the claim's observer must surface the durable latch")
     .expect("the observer channel stays open while the claim is held");
 
-    let latched = request_terminal_row(&agent_access, &request_doc_id)
-        .await
-        .expect("read the latched request row");
     assert!(
-        !latched["interrupt_requested_at"].is_null(),
-        "the window decides on the durable latch: {latched}"
+        gents_session::request::interrupt::request_interrupted_at_by_doc_id_with_access(
+            &agent_access,
+            &request_doc_id,
+        )
+        .await
+        .expect("read the session's interrupt")
+        .is_some(),
+        "the window decides on the durable interrupt"
     );
 
     let outcome = daemon

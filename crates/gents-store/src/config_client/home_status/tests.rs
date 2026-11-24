@@ -49,7 +49,7 @@ async fn a_status_altered_after_signing_is_refused() {
     let nonce = super::fresh_nonce();
     let signed =
         crate::test_support::signed_home_status(&home, &named(7), Some(1_000), &nonce).await;
-    let alterations: [Alteration; 5] = [
+    let alterations: [Alteration; 6] = [
         ("deployment", |statement| {
             statement["delegation_audience"]["audience"]["deployment"] = 8.into();
         }),
@@ -58,6 +58,9 @@ async fn a_status_altered_after_signing_is_refused() {
         }),
         ("clock", |statement| {
             statement["provider_time"] = 2_000.into()
+        }),
+        ("shared household", |statement| {
+            statement["client_authentication"]["publisher_node"] = "another-node".into();
         }),
         ("authentication", |statement| {
             statement["client_authentication"] = serde_json::json!({"kind": "local"});

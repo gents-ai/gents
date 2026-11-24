@@ -10,6 +10,7 @@ import Proofs.Store.Persistence
 import Proofs.Store.SchemaInstall
 import Proofs.Store.StorageObservation
 import Proofs.Store.StorageWriteGate
+import Proofs.Store.TransactionFence
 import Proofs.Store.NativeCompletion
 import Proofs.Store.NativeClaimLifetime
 import Proofs.Store.StoreHandoff
@@ -38,6 +39,10 @@ import Proofs.Observe.FileInventory
 import Proofs.Observe.RetrySummary
 import Proofs.Session.SessionQueue.Properties
 import Proofs.Session.SessionQueue.Interrupt
+import Proofs.Session.SessionQueue.NaturalFinish
+import Proofs.Session.SessionQueue.InterruptGeneration
+import Proofs.Store.Identity.SessionInterrupt
+import Proofs.Store.Identity.SessionInterruptProposal
 import Proofs.Session.SessionQueue.InterruptCases
 import Proofs.Automation.Session.Control
 import Proofs.Session.SessionQueue.Fold
@@ -146,6 +151,7 @@ import Proofs.Tools.SelfConfig.Auth
 import Proofs.ToolCalls.TaskHooks
 
 import Proofs.Runtime.Eval
+import Proofs.Runtime.EvalUsage
 
 import Proofs.Runtime.Optimization
 

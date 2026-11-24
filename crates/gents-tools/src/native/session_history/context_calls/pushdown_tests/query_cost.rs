@@ -92,7 +92,7 @@ async fn seed_unrelated_completed_requests(
 
 #[tokio::test]
 async fn query_inputs_do_not_grow_with_unrelated_completed_requests() {
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "context-query-input-cost",
         gents_session::test_support::no_lifecycle_plugins(),
     )

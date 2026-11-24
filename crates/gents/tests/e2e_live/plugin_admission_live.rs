@@ -25,9 +25,10 @@ use super::plugin_job_support::{
 };
 use crate::support::interrupt::BootedAgent;
 use crate::support::live_inference::{
-    boot_live_agent_with_options, live_target, rows_when, wait_for_request_terminal, LiveUser,
+    boot_live_agent_with_options, live_target, wait_for_request_terminal, LiveUser,
 };
 use crate::support::{test_db, TestDb};
+use gents_store::test_support::rows_when;
 use gents_store::test_support::snapshot_reader::SnapshotReader;
 
 struct LiveJobs {
@@ -229,7 +230,7 @@ impl LiveJobs {
 
     async fn child_rows(&self, row: &Value) -> Vec<Value> {
         self.live.access.execute(&format!(
-            r#"{{ AgentRequest(filter: {{caused_by_parent_tool_call_doc_id: {{_eq: "{}"}}}}) {{_docID request_id lifecycle_state failure_reason interrupt_requested_at}} }}"#,
+            r#"{{ AgentRequest(filter: {{caused_by_parent_tool_call_doc_id: {{_eq: "{}"}}}}) {{_docID request_id lifecycle_state failure_reason}} }}"#,
             escape_graphql_string(row["_docID"].as_str().unwrap()),
         )).await.unwrap()["data"]["AgentRequest"].as_array().unwrap().clone()
     }

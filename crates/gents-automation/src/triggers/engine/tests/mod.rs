@@ -648,7 +648,7 @@ pub(super) fn integration_test_agent(behavior_name: &str) -> Arc<ResolvedAgent> 
 pub(super) async fn signed_materializer_agent(
     name: &str,
 ) -> (
-    gents_inference::test_support::TestDb,
+    gents_store::test_support::TestStore,
     gents_store::identity::KeyIdentity,
     gents_store::config_client::ConfigAccess,
     Arc<ResolvedAgent>,

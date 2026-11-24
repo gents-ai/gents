@@ -115,14 +115,14 @@ async fn request_interrupt_waits_until_running_request_is_terminal() -> Result<(
             "--node-did", &live.node, "--content", &prompt, "--no-wait"]).await?;
         let request = submitted["request_id"].as_str().context("request id")?;
         let query = format!(r#"{{AgentToolCall(filter: {{request_id: {{_eq: "{}"}}, tool_name: {{_eq: "bash_unrestricted"}}}}) {{lifecycle_state}}}}"#, crate::support::escape_graphql_string(request));
-        gents::support::live_inference::rows_when(&live.access, "AgentToolCall", &query,|data| {
+        gents_store::test_support::rows_when(&live.access, "AgentToolCall", &query,|data| {
             data["AgentToolCall"].as_array().is_some_and(|rows| rows.iter().any(|row| row["lifecycle_state"] == "running"))
         }).await;
         let interrupted = live.json(&["utils", "debug", "request", "interrupt", "--graphql", &live.graphql,
             "--wait", "--timeout", "20s", "--output", "json", request]).await?;
         ensure!(interrupted["request_id"] == request && interrupted["lifecycle_state"] == "interrupted" && interrupted["terminal"] == true, "interrupt returned before the request terminalized: {interrupted}");
-        let row = live.first_row("AgentRequest", &format!(r#"{{AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{lifecycle_state interrupt_requested_at}}}}"#, crate::support::escape_graphql_string(request))).await?;
-        ensure!(row["lifecycle_state"] == "interrupted" && row["interrupt_requested_at"].as_str().is_some_and(|s| !s.is_empty()), "the durable interrupt was not retained: {row}");
+        let row = live.first_row("AgentRequest", &format!(r#"{{AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{lifecycle_state}}}}"#, crate::support::escape_graphql_string(request))).await?;
+        ensure!(row["lifecycle_state"] == "interrupted", "the durable interrupt was not retained: {row}");
         Ok(())
     }.await;
     live.finish(result).await
@@ -139,8 +139,8 @@ async fn request_interrupt_does_not_latch_completed_request() -> Result<()> {
         let error = live.failure(&["utils", "debug", "request", "interrupt", "--graphql", &live.graphql,
             "--output", "json", request]).await?;
         ensure!(error.contains("already completed") && error.contains("gents utils debug request show"), "completed interrupt did not explain the refusal: {error}");
-        let row = live.first_row("AgentRequest", &format!(r#"{{AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{lifecycle_state interrupt_requested_at}}}}"#, crate::support::escape_graphql_string(request))).await?;
-        ensure!(row["lifecycle_state"] == "completed" && row.get("interrupt_requested_at").is_none_or(Value::is_null), "the completed request acquired interrupt intent: {row}");
+        let row = live.first_row("AgentRequest", &format!(r#"{{AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{lifecycle_state}}}}"#, crate::support::escape_graphql_string(request))).await?;
+        ensure!(row["lifecycle_state"] == "completed", "the completed request changed: {row}");
         Ok(())
     }.await;
     live.finish(result).await

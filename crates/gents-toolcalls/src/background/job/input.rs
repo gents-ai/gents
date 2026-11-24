@@ -781,7 +781,7 @@ pub(crate) mod tests {
     use gents_store::config_client::ConfigAccess;
 
     pub(crate) async fn open() -> Arc<EmbeddedNode> {
-        gents_inference::test_support::test_db_as(
+        gents_store::test_support::TestStore::start_as(
             "job-input",
             node_did(),
             gents_session::test_support::no_lifecycle_plugins(),
@@ -1664,6 +1664,21 @@ pub(crate) mod tests {
                    "agent_did": agent_did(), "created_at": now}),
         )
         .await;
+        owner
+            .transact_write("test.job.session_marker", |txn| {
+                let session_doc = &session_doc;
+                Box::pin(async move {
+                    gents_session::session::interrupt_marker::create_in_txn(
+                        txn,
+                        session_doc,
+                        node_did(),
+                        "session-1",
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap();
         let agent_doc = doc_id_of(&owner, "Agent", "agent_did", agent_did()).await;
         owner
             .add_actor_relationship("Agent", &agent_doc, "executor", &agent_actor())

@@ -1,6 +1,7 @@
 import Proofs.Tools.Identity.Configuration
 import Proofs.Tools.Lsp.Types
 import Proofs.Tools.Lsp.ServerStart
+import Proofs.Tools.Lsp.Sandbox
 import Proofs.Tools.MCPHealth.Coupling
 import Proofs.Tools.ToolPolicy.OperatorPaths
 import Proofs.Tools.ToolPolicy.PluginCalls
@@ -37,6 +38,7 @@ attribute [conformance_function]
   Identity.Configuration.clientSignedWriteMayRetry
   Lsp.LspAction.mutates
   Lsp.LspAction.mayColdStart
+  Lsp.serverSandbox
   ToolPolicy.OperatorPaths.commandGuardAllows
   ToolPolicy.PluginCalls.available
   ToolPolicy.CallEnvelope.derive

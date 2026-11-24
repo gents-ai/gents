@@ -13,7 +13,7 @@ fn tools_document(mut value: serde_json::Value) -> gents_documents::Tools {
 
 #[tokio::test]
 async fn only_a_host_call_plugin_adds_the_process_tools() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "only-a-host-call-plugin-adds-the-process",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -78,7 +78,7 @@ async fn only_a_host_call_plugin_adds_the_process_tools() {
 #[tokio::test]
 async fn a_plugin_surface_built_during_an_install_waits_for_the_installer() {
     crate::test_support::enable_scoped_event_capture();
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "a-plugin-surface-built-during-an-install",
         gents_session::test_support::no_lifecycle_plugins(),
     )

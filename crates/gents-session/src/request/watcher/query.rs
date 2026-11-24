@@ -117,7 +117,7 @@ impl DefraWatcher {
                     order: [{{ created_at: ASC }}, {{ request_id: ASC }}]
                 ) {{{fields}
                     lifecycle_state
-                    interrupt_requested_at
+                    interrupt_generation
                     valid_until
                 }}
             }}"#,
@@ -270,10 +270,17 @@ impl DefraWatcher {
                     }
                 }
                 Some(RequestLifecycleState::WaitingForBackend) => {
-                    let interrupted = row
-                        .interrupt_requested_at
-                        .as_deref()
-                        .is_some_and(|value| !value.trim().is_empty());
+                    let interrupted = match crate::request::interrupt::row_interrupted_with_access(
+                        access, row,
+                    )
+                    .await
+                    {
+                        Ok(interrupted) => interrupted,
+                        Err(error) => {
+                            tracing::warn!(request_doc_id = %doc, %error, "could not read the session's interrupt marker");
+                            continue;
+                        }
+                    };
                     let expired = row
                         .deadline
                         .as_deref()
@@ -337,12 +344,7 @@ impl DefraWatcher {
                     next_wait_ms = next_wait_ms.min(millis);
                 }
             }
-            if deadline <= now
-                || row
-                    .interrupt_requested_at
-                    .as_deref()
-                    .is_some_and(|value| !value.trim().is_empty())
-            {
+            if deadline <= now {
                 continue;
             }
             let other_active_in_session = !row

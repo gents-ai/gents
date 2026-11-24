@@ -103,7 +103,7 @@ async fn live_interrupt_mid_stream_on_openai_compatible() -> Result<()> {
         observed_row.requester_did.as_deref(),
     )
     .await
-    .expect("the requester's interrupt should latch interrupt_requested_at");
+    .expect("the requester's interrupt should bump its session's interrupt marker");
 
     wait_for_request_lifecycle_state(reader, &request_doc_id, "interrupted").await;
     let call = wait_for_inference_call_state(reader, request_id, "cancelled").await;

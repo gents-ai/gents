@@ -51,6 +51,7 @@ pub(super) async fn seed_agent_session(
             let session_doc = gents_store::graphql::created_doc_id(&response,"AgentSession")?;
             txn.add_resource_relationship("AgentSession", &session_doc, "parent", "agents", agent_doc).await?;
             txn.add_actor_relationship("AgentSession", &session_doc, "working_agent", &fixture.agent.did().parse()?).await?;
+            gents_session::session::interrupt_marker::create_in_txn(txn, &session_doc, db.node_identity.did(), session_id).await?;
             Ok::<_,anyhow::Error>(session_doc)
         })
     }).await.unwrap();

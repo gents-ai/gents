@@ -5,9 +5,9 @@ use gents_store::graphql::escape_graphql_string;
 use gents_tools::surface::ToolCeiling;
 
 use crate::support::fixtures::bind_managed_agent_backend;
-use crate::support::live_inference::rows_when;
 use crate::support::snapshots::{is_routed_ready_after, wait_for_runtime_snapshot_as};
 use crate::support::{managed_agent_fixture, test_db, ManagedAgentFixture};
+use gents_store::test_support::rows_when;
 use gents_store::test_support::snapshot_reader::SnapshotReader;
 
 const UNUSED_BACKEND_ENDPOINT: &str = "http://127.0.0.1:9/v1";

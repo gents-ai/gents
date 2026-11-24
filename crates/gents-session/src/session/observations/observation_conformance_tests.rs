@@ -202,7 +202,7 @@ async fn generated_session_advances_drive_the_claim_observation() {
     for case in
         gents_lean_vocab::families::contracts_session_advance::cases::<RequestLifecycleState>()
     {
-        let node_db = gents_inference::test_support::test_db(
+        let node_db = gents_store::test_support::TestStore::start(
             "generated-session-advances-drive-the-cla",
             crate::test_support::no_lifecycle_plugins(),
         )
@@ -211,7 +211,8 @@ async fn generated_session_advances_drive_the_claim_observation() {
         let input = case.input.clone();
         let after = ConfigAccess::transact_local_idempotent(
             &node,
-            None,
+            node.node_identity_did()
+                .map(|did| ::identity::Did::new(did).expect("node DID")),
             IdempotentTransactionRetry::Standard,
             "test.session.generated_advance",
             |txn| {
@@ -252,7 +253,7 @@ async fn generated_session_refreshes_drive_the_request_observation() {
     for case in
         gents_lean_vocab::families::contracts_session_refresh::cases::<RequestLifecycleState>()
     {
-        let node_db = gents_inference::test_support::test_db(
+        let node_db = gents_store::test_support::TestStore::start(
             "generated-session-refreshes-drive-the-re",
             crate::test_support::no_lifecycle_plugins(),
         )
@@ -265,7 +266,8 @@ async fn generated_session_refreshes_drive_the_request_observation() {
             serde_json::from_value(serde_json::to_value(&input.rows).unwrap()).unwrap();
         let after = ConfigAccess::transact_local_idempotent(
             &node,
-            None,
+            node.node_identity_did()
+                .map(|did| ::identity::Did::new(did).expect("node DID")),
             IdempotentTransactionRetry::Standard,
             "test.session.generated_refresh",
             |txn| {

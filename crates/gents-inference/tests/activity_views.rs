@@ -23,7 +23,7 @@ enum State {
 
 #[tokio::test]
 async fn inference_activity_views_match_model_on_served_node() -> anyhow::Result<()> {
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "inference-activity-views",
         gents_store::node_extension::Extensions::default(),
     )

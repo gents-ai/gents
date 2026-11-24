@@ -489,17 +489,23 @@ pub async fn interrupt(
     access: &ConfigAccess,
     input: RequestInterruptInput,
 ) -> Result<RequestInterruptReceipt, RequestOperationError> {
+    use crate::request::interrupt::{RequestInterrupt, SessionInterruptError};
     let target = get(access, &input.request).await?;
     let request_doc_id = target::row_field("_docID", target.doc_id.clone())?;
     let node_did = input.request.node_did.trim().to_owned();
-    let receipt = |interrupt_requested_at, already_interrupted| RequestInterruptReceipt {
+    let receipt = |interrupted_at, already_interrupted| RequestInterruptReceipt {
         request_id: target.request_id.clone(),
         request_doc_id: request_doc_id.clone(),
         node_did: node_did.clone(),
-        interrupt_requested_at,
+        interrupted_at,
         already_interrupted,
     };
-    let interrupted_at = target::nonblank(target.interrupt_requested_at.clone());
+    let interrupted_at = crate::request::interrupt::request_interrupted_at_by_doc_id_with_access(
+        access,
+        &request_doc_id,
+    )
+    .await
+    .map_err(RequestOperationError::passthrough)?;
     if interrupt_settled(
         target
             .lifecycle_state
@@ -508,28 +514,23 @@ pub async fn interrupt(
     ) {
         return Ok(receipt(interrupted_at, true));
     }
-    crate::request::interrupt::interrupt_request_by_doc_id_with_access(
+    match crate::request::interrupt::interrupt_request_by_doc_id_with_access(
         access,
         &request_doc_id,
         &node_did,
         target.requester_did.as_deref(),
     )
     .await
-    .map_err(RequestOperationError::passthrough)?;
-    let observed = get(access, &input.request).await?;
-    if observed.doc_id.as_deref() != Some(request_doc_id.as_str()) {
-        return Err(RequestOperationError::Ambiguous {
-            node_did,
-            request_id: target.request_id.clone(),
-        });
-    }
-    match target::nonblank(observed.interrupt_requested_at.clone()) {
-        Some(at) => Ok(receipt(Some(at), false)),
-        None => match observed.lifecycle_state.filter(|state| state.is_terminal()) {
-            Some(_) => Ok(receipt(None, true)),
-            None => Err(RequestOperationError::InterruptNotLatched {
+    {
+        Ok(RequestInterrupt::Interrupted { at, already }) => Ok(receipt(at, already)),
+        Ok(RequestInterrupt::InterruptedBeforeClaim { at }) => Ok(receipt(Some(at), false)),
+        Ok(RequestInterrupt::Settled) => Ok(receipt(None, true)),
+        Err(SessionInterruptError::Refused(refusal)) => {
+            Err(RequestOperationError::InterruptRefused {
                 request_id: target.request_id.clone(),
-            }),
-        },
+                reason: refusal.to_string(),
+            })
+        }
+        Err(SessionInterruptError::Store(error)) => Err(RequestOperationError::passthrough(error)),
     }
 }

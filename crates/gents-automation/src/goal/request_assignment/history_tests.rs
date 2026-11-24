@@ -170,7 +170,7 @@ async fn persist_request(
 async fn persisted_history(
     case: &history::HistoryCase<String>,
 ) -> persisted::PersistedObservation<String> {
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "goal-assignment-history",
         crate::lifecycle_hooks::composition(),
     )

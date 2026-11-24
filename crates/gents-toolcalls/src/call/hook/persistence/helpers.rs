@@ -708,7 +708,7 @@ mod tests {
 
     async fn renewal_fixture() -> (
         Arc<EmbeddedNode>,
-        gents_inference::test_support::TestDb,
+        gents_documents::test_support::SignedHome,
         Arc<dyn gents_store::identity::NodeIdentity>,
         gents_protocol::agent_identity::AgentIdentityBinding,
         gents_store::config_client::ConfigAccess,
@@ -720,7 +720,7 @@ mod tests {
         let (node, dir, identity, agent) = test_node().await;
         let access = agent_access(&node, &identity, &agent);
         let epoch = Utc::now();
-        let lifecycle = observed_case_request(&node, &identity, &agent, 20, 20, epoch).await;
+        let lifecycle = observed_case_request(&dir, &agent, 20, 20, epoch).await;
         let row = request_row(&access, &lifecycle.request().doc_id).await;
         let deadline =
             DateTime::parse_from_rfc3339(row.execution_lease_expires_at.as_deref().unwrap())

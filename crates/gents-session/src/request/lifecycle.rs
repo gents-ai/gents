@@ -379,6 +379,10 @@ pub(crate) enum ClaimAdmissionError {
         existing_agent_did: String,
         requested_agent_did: String,
     },
+    /// Lean `InterruptGeneration.claimRecord`: a request whose claim cannot
+    /// record its session's interrupt generation does not run.
+    #[error("session {session_id} has no interrupt marker this Agent can read, so no interrupt could reach the request and it does not run; check the session with agent_session_read")]
+    Uncovered { session_id: String },
 }
 
 pub fn is_claim_admission_error(error: &anyhow::Error) -> bool {
@@ -928,7 +932,7 @@ mod tests {
 
     #[tokio::test]
     async fn error_response_terminalizes_an_existing_streaming_response() {
-        let node_db = gents_inference::test_support::test_db(
+        let node_db = gents_store::test_support::TestStore::start(
             "error-response-terminalizes-an-existing-",
             crate::test_support::no_lifecycle_plugins(),
         )

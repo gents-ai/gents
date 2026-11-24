@@ -5,7 +5,7 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
     use gents_store::identity::NodeIdentity;
 
     let fx = tokio::task::spawn_blocking(Fixture::new).await.unwrap();
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "quickstart-base-freeze",
         crate::test_support::no_lifecycle_plugins(),
     )

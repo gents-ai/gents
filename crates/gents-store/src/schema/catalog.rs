@@ -8,6 +8,12 @@ mod error;
 mod indexes;
 mod install;
 mod node_policies;
+mod shared_transport;
+#[cfg(test)]
+pub(crate) use shared_transport::HostAdmissionError;
+pub(crate) use shared_transport::{
+    ensure_admission_schema, verify_installed_transport, SharedTransportHome,
+};
 #[cfg(test)]
 mod tests;
 #[cfg(any(test, feature = "vera"))]
@@ -121,10 +127,16 @@ static NODE_STORE_CATALOG: LazyLock<Catalog<'static>> =
 static EMBEDDED_VERA_CATALOG: LazyLock<Catalog<'static>> =
     LazyLock::new(|| build_catalog(gents_protocol::schemas::HomePolicyIds::embedded_vera()));
 
+static EMBEDDED_VERA_TRANSPORT_V2_CATALOG: LazyLock<Catalog<'static>> = LazyLock::new(|| {
+    build_catalog(gents_protocol::schemas::HomePolicyIds::embedded_vera_transport_v2())
+});
+
 /// The runtime's catalog for a home whose policies have `ids`, built once per
 /// set of IDs.
 pub fn runtime_catalog(ids: &gents_protocol::schemas::HomePolicyIds) -> &'static Catalog<'static> {
-    if ids == gents_protocol::schemas::HomePolicyIds::embedded_vera() {
+    if ids == gents_protocol::schemas::HomePolicyIds::embedded_vera_transport_v2() {
+        &EMBEDDED_VERA_TRANSPORT_V2_CATALOG
+    } else if ids == gents_protocol::schemas::HomePolicyIds::embedded_vera() {
         &EMBEDDED_VERA_CATALOG
     } else {
         assert_eq!(ids, gents_protocol::schemas::HomePolicyIds::node_store());

@@ -16,6 +16,11 @@ pub(crate) fn is_automated_wakeup(input: &RequestInput) -> bool {
     input.queue.as_ref().is_some_and(queue_is_automated_wakeup)
 }
 
+/// A wake the interrupt covers: scheduled, from a background completion.
+pub(crate) fn is_scheduled_automated_wake(request: &gents_protocol::row::AgentRequest) -> bool {
+    request.execution_origin.as_deref() == Some("scheduled") && is_automated_wakeup(&request.input)
+}
+
 pub(crate) fn row_queue(row: &AgentRequestRow) -> Option<&RequestQueue> {
     row.input.as_ref()?.queue.as_ref()
 }

@@ -604,7 +604,7 @@ mod tests {
 
     #[tokio::test]
     async fn fetches_complete_inference_provenance() {
-        let node_db = gents_inference::test_support::test_db(
+        let node_db = gents_store::test_support::TestStore::start(
             "fetches-complete-inference-provenance",
             gents_automation::lifecycle_hooks::composition(),
         )

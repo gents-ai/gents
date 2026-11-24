@@ -25,7 +25,7 @@ fn provision_agents(
 }
 
 struct Fixture {
-    _db: gents_inference::test_support::TestDb,
+    _db: gents_store::test_support::TestStore,
     node: Arc<defra_node::Node>,
     access: ConfigAccess,
 }

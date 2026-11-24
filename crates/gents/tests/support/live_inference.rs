@@ -17,6 +17,7 @@ use serde::Deserialize;
 use crate::support::agent_requests::RequestActors;
 use crate::support::interrupt::BootedAgent;
 use crate::support::TestDb;
+use gents_store::test_support::rows_when;
 use gents_store::test_support::snapshot_reader::SnapshotReader;
 
 #[path = "inference_target.rs"]
@@ -222,30 +223,6 @@ where
     );
     rows_when(reader, "AgentRequest", &query, |data| {
         request_lifecycle(data, request_id).is_some_and(|state| is_terminal(&state))
-    })
-    .await
-}
-
-/// Resolves with the first read of `query` that satisfies `predicate`,
-/// re-reading on each change to `collection`, through
-/// [`read_when_changed`](gents_store::test_support::read_when_changed).
-pub async fn rows_when<R, F>(
-    reader: &R,
-    collection: &str,
-    query: &str,
-    predicate: F,
-) -> serde_json::Value
-where
-    R: SnapshotReader + ?Sized,
-    F: Fn(&serde_json::Value) -> bool,
-{
-    gents_store::test_support::read_when_changed(reader, collection, "rows_when", async || {
-        let rows = reader.read_data(query).await;
-        if predicate(&rows) {
-            Ok(rows)
-        } else {
-            Err(rows)
-        }
     })
     .await
 }

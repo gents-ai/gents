@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
+use gents_fs_runner::beneath::{Intent, Located};
 pub(super) use gents_pack::pack::authoring::PackEdit;
 use gents_pack::pack::authoring::{PackAddition, PackPart as Part};
 
@@ -24,7 +25,10 @@ pub(super) fn apply_add(pack: &mut PackEdit, command: PackAddCommand) -> Result<
         PackAddCommand::Task { id, agent } => PackAddition::Task { id, agent },
         PackAddCommand::Trigger { id, task, on } => PackAddition::Trigger { id, task, on },
         PackAddCommand::Schema { collection } => PackAddition::Schema { collection },
-        PackAddCommand::Skill { id, from } => PackAddition::Skill { id, from },
+        PackAddCommand::Skill { id, from } => PackAddition::Skill {
+            id,
+            from: from.as_deref().map(existing).transpose()?,
+        },
         PackAddCommand::Plugin {
             name,
             language,
@@ -32,10 +36,14 @@ pub(super) fn apply_add(pack: &mut PackEdit, command: PackAddCommand) -> Result<
         } => PackAddition::Plugin {
             name,
             language,
-            prebuilt,
+            prebuilt: prebuilt.as_deref().map(existing).transpose()?,
         },
         PackAddCommand::Page { name } => PackAddition::Page { name },
     })
+}
+
+fn existing(path: &std::path::Path) -> Result<Located> {
+    Ok(Located::at(path, Intent::Existing)?)
 }
 
 pub(crate) fn remove_part(args: PackRemovePartArgs) -> Result<()> {

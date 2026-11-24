@@ -806,12 +806,28 @@ impl DefraSessionHook {
         }
         match tool_name {
             gents_protocol::tool_names::AGENT_INTERRUPT_TOOL_NAME => {
-                let interrupted = gents_session::session::message::interrupt_session_with_access(
-                    &self.node,
-                    &self.actor_access()?,
-                    &target,
-                )
-                .await?;
+                let interrupted =
+                    match gents_session::session::message::interrupt_session_with_access(
+                        &self.node,
+                        &self.actor_access()?,
+                        &target,
+                    )
+                    .await
+                    {
+                        Ok(interrupted) => interrupted,
+                        Err(gents_session::request::interrupt::SessionInterruptError::Refused(
+                            refusal,
+                        )) => {
+                            return Ok(interrupt_refused_payload(
+                                tool_name,
+                                session,
+                                &refusal.to_string(),
+                            ));
+                        }
+                        Err(gents_session::request::interrupt::SessionInterruptError::Store(
+                            error,
+                        )) => return Err(error),
+                    };
                 Ok(json_string(json!({
                     "ok": true,
                     "session_id": session,

@@ -231,7 +231,9 @@ pub struct RequestInterruptReceipt {
     pub request_id: String,
     pub request_doc_id: String,
     pub node_did: String,
-    pub interrupt_requested_at: Option<String>,
+    /// When the session's interrupt passed this request's claim; absent for a
+    /// request interrupted before its claim or already settled.
+    pub interrupted_at: Option<String>,
     pub already_interrupted: bool,
 }
 
@@ -358,8 +360,8 @@ pub enum RequestOperationError {
         request_id: String,
         reason: &'static str,
     },
-    #[error("the interrupt of request {request_id} was written but is not on the request")]
-    InterruptNotLatched { request_id: String },
+    #[error("request {request_id} was not interrupted: {reason}")]
+    InterruptRefused { request_id: String, reason: String },
     #[error(
         "the submission of request {request_id} is unconfirmed; send the same request id again"
     )]
@@ -418,7 +420,7 @@ impl RequestOperationError {
             Self::OutputUnavailable { .. } => "output_unavailable",
             Self::SuccessorInvalid { .. } => "successor_invalid",
             Self::ReceiptMismatch { .. } => "receipt_mismatch",
-            Self::InterruptNotLatched { .. } => "interrupt_not_latched",
+            Self::InterruptRefused { .. } => "interrupt_refused",
             Self::Unconfirmed { .. } => "submission_unconfirmed",
             Self::IdentityConflict { .. } => "request_identity_conflict",
             Self::Passthrough(_) => "failed",
@@ -459,7 +461,7 @@ impl RequestOperationError {
             | Self::WaitTimedOut { .. }
             | Self::OutputUnavailable { .. }
             | Self::SuccessorInvalid { .. }
-            | Self::InterruptNotLatched { .. } => NextCall::Inspect {
+            | Self::InterruptRefused { .. } => NextCall::Inspect {
                 resource: "request",
             },
         }

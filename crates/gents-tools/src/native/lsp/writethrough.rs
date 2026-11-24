@@ -54,7 +54,9 @@ impl LspWritethrough {
     ) -> Option<String> {
         let lease = self.ready_lease(call, path).await?;
         let uri = super::uri::path_to_file_uri(path);
-        let text = std::fs::read_to_string(path).ok()?;
+        let workspace = super::overlay_workspace_or(call, &self.config.workspace);
+        let context = ToolContext::new(workspace, true).ok()?.for_call(call);
+        let text = String::from_utf8(context.read_existing(path).await.ok()?).ok()?;
         let language_id = primary_for_file(&self.config.servers, path)
             .and_then(|server| server.language_id.clone())
             .unwrap_or_else(|| super::catalog::language_id_for_path(path));
@@ -86,8 +88,6 @@ impl LspWritethrough {
                 return Some("format-on-write skipped: language server formatting failed".into());
             }
         };
-        let workspace = super::overlay_workspace_or(call, &self.config.workspace);
-        let context = ToolContext::new(workspace, true).ok()?.for_call(call);
         let encoding = lease.client().position_encoding().await;
         let workspace_edit = json!({ "changes": { uri: edits } });
         let prepared = match prepare_workspace_edit(&context, &workspace_edit, encoding) {

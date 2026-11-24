@@ -1,6 +1,7 @@
 import Proofs.Session.CommandPolicy.Validation
 import Proofs.Session.CommandPolicy.Sandbox
 import Proofs.Session.CommandPolicy.Env
+import Proofs.Session.CommandPolicy.Launch
 
 namespace CommandPolicy
 
@@ -91,8 +92,9 @@ theorem disabled_network_readOnly_tailscale_netcheck_denies
 theorem workspaceWrite_requires_enforced_sandbox
     (support : RuntimeSupport)
     (sandbox : SandboxKind)
+    (program : String)
     (hselected :
-      selectSandbox support .workspaceWrite = .selected sandbox) :
+      selectSandbox support .workspaceWrite program = .selected sandbox) :
     support.workspaceWriteSandboxEnforced = true ∧
       sandbox = .macosSeatbelt := by
   cases support with
@@ -102,16 +104,94 @@ theorem workspaceWrite_requires_enforced_sandbox
       · simp [selectSandbox] at hselected ⊢
         exact hselected.symm
 
-theorem workspaceWrite_without_enforced_sandbox_denies :
-    selectSandbox { workspaceWriteSandboxEnforced := false } .workspaceWrite =
+theorem workspaceWrite_without_enforced_sandbox_denies (program : String) :
+    selectSandbox { workspaceWriteSandboxEnforced := false } .workspaceWrite program =
       .denied .workspaceWriteSandboxUnavailable := by
   rfl
 
 theorem unrestricted_is_explicitly_unsandboxed
-    (support : RuntimeSupport) :
-    selectSandbox support .unrestricted =
+    (support : RuntimeSupport) (program : String) :
+    selectSandbox support .unrestricted program =
       .selected .unsandboxedUnrestricted := by
   rfl
+
+/-- A write-capable bounded command never consults the read-only allowlist: what
+a binary declares about its effects cannot widen a workspace or artifact
+command, whose bound is the kernel sandbox. -/
+theorem bounded_modes_ignore_declared_effects
+    (policy : Policy) (request : CommandRequest) (allowlist : List String)
+    (bounded : policy.mode = .workspaceWrite ∨ policy.mode = .artifactWrite) :
+    validatePolicy { policy with readOnlyAllowlist := allowlist } request =
+      validatePolicy policy request := by
+  rcases policy with ⟨mode, allowed, forbidden, network, readOnly⟩
+  simp only at bounded
+  rcases bounded with rfl | rfl <;>
+    cases network <;>
+    simp [validatePolicy, validateAfterPrefixes, validateNetworkMode] <;>
+    split <;> simp_all
+
+theorem bounded_modes_select_only_the_kernel_sandbox
+    (support : RuntimeSupport) (mode : ExecutionMode) (sandbox : SandboxKind)
+    (program : String)
+    (bounded : mode = .workspaceWrite ∨ mode = .artifactWrite)
+    (selected : selectSandbox support mode program = .selected sandbox) :
+    sandbox = .macosSeatbelt := by
+  rcases support with ⟨enforced⟩
+  rcases bounded with rfl | rfl <;> cases enforced <;> simp_all [selectSandbox]
+
+/-- On a host with a sandbox backend, a read-only command whose program
+Seatbelt can run is contained by the read-only profile whatever the allowlist
+admits: it and every process it starts write nothing, inspect but cannot signal
+processes outside its sandbox, and reach the network only as a network reader
+under a policy that has not disabled it. The allowlist and the argument
+validators decide only whether it starts. -/
+theorem read_only_effects_are_bounded_by_the_read_only_profile
+    (support : RuntimeSupport) (policy : Policy) (request : CommandRequest)
+    (program : String) (allowlist : List String)
+    (readOnly : policy.mode = .readOnly)
+    (backend : support.workspaceWriteSandboxEnforced = true)
+    (runnable : seatbeltRefusedPrograms.contains program = false) :
+    commandProfile support { policy with readOnlyAllowlist := allowlist } request program =
+      some { writes := .nothing
+             network := readOnlyReachesNetwork request && policy.networkMode.allowsNetwork
+             processInfo := .all } := by
+  rcases policy with ⟨mode, allowed, forbidden, network, listed⟩
+  simp only at readOnly
+  subst readOnly
+  simp only [commandProfile, selectSandbox, backend, runnable]
+  cases network <;> rfl
+
+/-- Without a sandbox backend no kernel profile contains a read-only command:
+the allowlist, the argument validators and the launch options
+(`readOnlyLaunchArgs`) are its whole bound. -/
+theorem read_only_without_a_backend_has_no_kernel_profile
+    (support : RuntimeSupport) (policy : Policy) (request : CommandRequest)
+    (program : String)
+    (readOnly : policy.mode = .readOnly)
+    (noBackend : support.workspaceWriteSandboxEnforced = false) :
+    commandProfile support policy request program = none := by
+  rcases policy with ⟨mode, allowed, forbidden, network, listed⟩
+  simp only at readOnly
+  subst readOnly
+  simp [commandProfile, selectSandbox, noBackend, seatbeltProfile]
+
+theorem seatbelt_refused_programs_run_under_their_validators
+    (support : RuntimeSupport) (program : String)
+    (refused : seatbeltRefusedPrograms.contains program = true) :
+    selectSandbox support .readOnly program = .selected .policyReadOnly := by
+  rcases support with ⟨enforced⟩
+  simp only [selectSandbox, refused]
+  cases enforced <;> rfl
+
+/-- `sed`'s validator admits a script's `w` command: the read-only profile
+refuses the write, and where no profile contains the command, GNU `--sandbox`
+refuses the script. -/
+theorem read_only_sed_write_command_is_fenced_at_launch :
+    let request : CommandRequest :=
+      { command := "sed", lookupCommand := "sed", args := ["-n", "w copy.txt", "input.txt"] }
+    validateReadOnlyArgs request = .allow ∧
+      readOnlyLaunchArgs false request = ["--sandbox", "-n", "w copy.txt", "input.txt"] := by
+  native_decide
 
 theorem filtered_env_excludes_KEY
     (inputHas : EnvKey → Bool) :

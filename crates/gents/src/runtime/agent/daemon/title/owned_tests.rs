@@ -1147,7 +1147,7 @@ fn fencing_title_provider(
 }
 
 struct TitleFixture {
-    _db: crate::support::TestDb,
+    _db: gents_store::test_support::TestStore,
     user_access: ConfigAccess,
     node: Arc<EmbeddedNode>,
     agent_config: Arc<ResolvedAgent>,
@@ -1210,8 +1210,8 @@ impl TitleFixture {
         parent_limit: Option<u64>,
     ) -> Self {
         let (db, _user, user_access, binding) =
-            crate::test_support::root::signed_test_node_from_db(
-                crate::support::test_db("title-owned").await,
+            gents_inference::test_support::signed_test_node_from_db(
+                crate::support::trial_store("title-owned").await,
                 "title-owned",
             )
             .await;
@@ -1475,12 +1475,11 @@ impl TitleFixture {
         );
         let doc = gents_store::graphql::escape_graphql_string(&self.parent.doc_id);
         let response = self.agent_access()
-            .execute(&format!("{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{doc}\" }} }}, limit: 1) {{ lifecycle_state interrupt_requested_at terminal_output }} }}"))
+            .execute(&format!("{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{doc}\" }} }}, limit: 1) {{ lifecycle_state terminal_output }} }}"))
             .await
             .unwrap();
         let row = &response["data"]["AgentRequest"][0];
         assert_eq!(row["lifecycle_state"], "interrupted");
-        assert!(row["interrupt_requested_at"].as_str().is_some());
         assert_eq!(
             serde_json::from_value::<gents_protocol::output::TerminalOutput>(
                 row["terminal_output"].clone()

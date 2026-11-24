@@ -76,7 +76,7 @@ impl Product {
 }
 
 async fn access() -> (
-    crate::test_support::TestDb,
+    gents_store::test_support::TestStore,
     gents_store::identity::KeyIdentity,
     ConfigAccess,
 ) {

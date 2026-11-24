@@ -1,0 +1,3 @@
+---- MODULE MCTranscriptWheelRestTimeAlone ----
+EXTENDS TranscriptWheelRest
+====

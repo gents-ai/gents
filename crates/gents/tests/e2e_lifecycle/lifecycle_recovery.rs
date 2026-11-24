@@ -13,13 +13,14 @@ use std::sync::Arc;
 use crate::support::agent_requests::{RequestActors, RequestSeed};
 use crate::support::fixtures::bind_managed_agent_backend;
 use crate::support::fixtures::configure_agent_tools;
-use crate::support::live_inference::rows_when;
 use crate::support::{
     accepted_turn::{boot_prepared_accepted_turn, PreparedAcceptedTurn},
-    first_row,
-    streaming_backend::{MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse},
-    test_db, BACKEND_ID,
+    first_row, test_db, BACKEND_ID,
 };
+use gents_inference::test_support::scripted_backend::{
+    ScriptedBackend, StreamChunk, StreamPlan, StreamResponse,
+};
+use gents_store::test_support::rows_when;
 
 type StatusRow = AgentRequestRow;
 
@@ -496,7 +497,7 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
         },
     })
     .to_string();
-    let backend = MockStreamingBackend::start_with_plans(
+    let backend = ScriptedBackend::start_with_plans(
         "wake-backoff-model",
         vec![StreamPlan::current_authored_user(
             "continue",
@@ -1257,30 +1258,13 @@ async fn recover_all_interrupts_an_expired_lease_with_a_durable_interrupt() {
         "partial turn",
     )
     .await;
-    let interrupt_requested_at = chrono::Utc::now().to_rfc3339();
-    let escaped_request_doc_id = gents_store::graphql::escape_graphql_string(&request_doc_id);
-    let escaped_interrupt_requested_at =
-        gents_store::graphql::escape_graphql_string(&interrupt_requested_at);
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentRequest(
-                filter: {{ _docID: {{ _eq: "{escaped_request_doc_id}" }} }},
-                input: {{ interrupt_requested_at: "{escaped_interrupt_requested_at}" }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response: gents::defra_node::QueryResponse = serde_json::from_value(
-        gents_store::config_client::ConfigAccess::local(db.node.clone())
-            .write("test.seed_durable_interrupt", &mutation)
-            .await
-            .unwrap(),
+    gents_session::test_support::interrupt_session_of_request_at(
+        &db.node,
+        &request_doc_id,
+        &chrono::Utc::now().to_rfc3339(),
     )
-    .unwrap();
-    assert!(
-        !response.has_errors(),
-        "set durable interrupt failed: {:?}",
-        response.errors
-    );
+    .await;
+    let escaped_request_doc_id = gents_store::graphql::escape_graphql_string(&request_doc_id);
 
     let report = RequestLifecycle::recover_all_with_identities(
         &db.node,

@@ -1,10 +1,5 @@
 use super::super::*;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
-use std::io::{Read, Write};
-use std::net::{Shutdown, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread;
-use std::thread::JoinHandle;
 
 pub(super) use crate::runtime::status::RuntimeStatusHandle;
 pub(super) use gents_documents::Tools;
@@ -271,7 +266,7 @@ pub(super) async fn create_user_agent_session(
 }
 
 pub(super) struct HeldRuntimeFixture {
-    pub db: crate::support::TestDb,
+    pub db: gents_store::test_support::TestStore,
     pub user: KeyIdentity,
     pub user_access: gents_store::config_client::ConfigAccess,
     pub agent: std::sync::Arc<dyn NodeIdentity>,
@@ -279,7 +274,7 @@ pub(super) struct HeldRuntimeFixture {
 
 impl HeldRuntimeFixture {
     pub fn admission(&self) -> gents_store::local::backend_protection::BackendAdmission {
-        self.db.home.backend_admission()
+        self.db.backend_admission()
     }
 
     pub async fn agent_config_access(&self) -> gents_store::config_client::ConfigAccess {
@@ -339,7 +334,11 @@ pub(super) async fn held_runtime_fixture_with_status(
     probe_status: &str,
 ) -> HeldRuntimeFixture {
     use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-    let (db, user, user_access, binding) = crate::test_support::root::signed_test_node(name).await;
+    let (db, user, user_access, binding) = gents_inference::test_support::signed_test_node_from_db(
+        crate::support::trial_store(name).await,
+        name,
+    )
+    .await;
     let node_did = db.node_identity.did();
     let profile_id = format!("{}:inference", binding.agent_did);
     let docs = [
@@ -492,6 +491,7 @@ pub(super) fn request(agent_did: Option<&str>, session_id: &str) -> AgentRequest
         executed_inference_profile_id: None,
         executed_runtime_generation: None,
         request_hop: 0,
+        interrupt_generation: None,
         caused_by_parent_request_id: None,
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
@@ -676,149 +676,6 @@ pub(super) async fn wait_for_runtime_process_state(
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-}
-
-pub(super) struct MockModelEndpoint {
-    pub(super) endpoint: String,
-    pub(super) port: u16,
-    pub(super) stop: Arc<AtomicBool>,
-    pub(super) handle: Option<JoinHandle<()>>,
-}
-
-impl MockModelEndpoint {
-    pub(super) fn start(model_name: &str) -> anyhow::Result<Self> {
-        Self::start_with_blocking_chat(model_name, false)
-    }
-
-    pub(super) fn start_blocking_chat(model_name: &str) -> anyhow::Result<Self> {
-        Self::start_with_blocking_chat(model_name, true)
-    }
-
-    fn start_with_blocking_chat(model_name: &str, blocking_chat: bool) -> anyhow::Result<Self> {
-        let listener = TcpListener::bind(("127.0.0.1", 0))?;
-        let port = listener.local_addr()?.port();
-        let stop = Arc::new(AtomicBool::new(false));
-        let stop_for_thread = stop.clone();
-        let model_name = model_name.to_string();
-        // Drop wakes the blocking accept with a self-connection.
-        let handle = thread::spawn(move || {
-            let mut held_chats = Vec::new();
-            for stream in listener.incoming() {
-                if stop_for_thread.load(Ordering::Relaxed) {
-                    break;
-                }
-                let Ok(mut stream) = stream else { break };
-                let request = match read_http_request(&mut stream) {
-                    Ok(request) => request,
-                    Err(_) => {
-                        let _ = stream.shutdown(Shutdown::Both);
-                        continue;
-                    }
-                };
-                if blocking_chat
-                    && request.method == "POST"
-                    && request.path == "/v1/chat/completions"
-                {
-                    held_chats.push(stream);
-                    continue;
-                }
-
-                let (status, body) = if request.method == "GET"
-                    && (request.path == "/v1/models" || request.path == "/models")
-                {
-                    ("200 OK", format!(r#"{{"data":[{{"id":"{model_name}"}}]}}"#))
-                } else {
-                    ("404 Not Found", r#"{"error":"not found"}"#.to_string())
-                };
-                let _ = write_http_response(&mut stream, status, "application/json", &body);
-                let _ = stream.shutdown(Shutdown::Both);
-            }
-            for stream in held_chats {
-                let _ = stream.shutdown(Shutdown::Both);
-            }
-        });
-
-        Ok(Self {
-            endpoint: format!("http://127.0.0.1:{port}/v1"),
-            port,
-            stop,
-            handle: Some(handle),
-        })
-    }
-
-    pub(super) fn endpoint(&self) -> &str {
-        &self.endpoint
-    }
-}
-
-impl Drop for MockModelEndpoint {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        let _ = TcpStream::connect(("127.0.0.1", self.port));
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
-        }
-    }
-}
-
-pub(super) struct HttpRequestData {
-    pub(super) method: String,
-    pub(super) path: String,
-}
-
-pub(super) fn read_http_request(stream: &mut TcpStream) -> anyhow::Result<HttpRequestData> {
-    // macOS accepts inherit the listener's nonblocking mode; the read timeout
-    // alone cannot stop an early WouldBlock from closing the fixture socket.
-    stream.set_nonblocking(false)?;
-    stream.set_read_timeout(Some(Duration::from_secs(10)))?;
-    let mut buffer = Vec::new();
-    let mut temp = [0u8; 1024];
-    let header_end = loop {
-        let read = stream.read(&mut temp)?;
-        if read == 0 {
-            anyhow::bail!("connection closed before headers");
-        }
-        buffer.extend_from_slice(&temp[..read]);
-        if let Some(index) = find_subslice(&buffer, b"\r\n\r\n") {
-            break index + 4;
-        }
-    };
-    let header_text = String::from_utf8_lossy(&buffer[..header_end]);
-    let mut lines = header_text.split("\r\n").filter(|line| !line.is_empty());
-    let request_line = lines
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("missing request line"))?;
-    let mut parts = request_line.split_whitespace();
-    let method = parts
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("missing request method"))?
-        .to_string();
-    let path = parts
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("missing request path"))?
-        .to_string();
-    Ok(HttpRequestData { method, path })
-}
-
-pub(super) fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
-}
-
-pub(super) fn write_http_response(
-    stream: &mut TcpStream,
-    status: &str,
-    content_type: &str,
-    body: &str,
-) -> anyhow::Result<()> {
-    let response = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    );
-    stream.write_all(response.as_bytes())?;
-    stream.flush()?;
-    Ok(())
 }
 
 #[derive(Default)]

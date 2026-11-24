@@ -61,11 +61,11 @@ use std::sync::{
 };
 
 pub(crate) async fn test_node() -> (
-    gents_inference::test_support::TestDb,
+    gents_store::test_support::TestStore,
     gents_store::identity::KeyIdentity,
 ) {
     use gents_store::identity::NodeIdentity;
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "mcp-node",
         gents_session::test_support::no_lifecycle_plugins(),
     )

@@ -25,8 +25,11 @@ fn selection(configuration: &ResolvedConfiguration) -> &SelectedConfiguration {
 /// generation is readable by the Agent and by no other actor.
 #[tokio::test]
 async fn client_rebinding_defers_the_superseded_generation_and_scopes_the_new_selection() {
-    let (db, user, access, binding) =
-        crate::test_support::root::signed_test_node("configuration-admission").await;
+    let (db, user, access, binding) = gents_inference::test_support::signed_test_node_from_db(
+        crate::support::trial_store("configuration-admission").await,
+        "configuration-admission",
+    )
+    .await;
     let node = db.node.clone();
     let runtime = db.node_identity.clone();
     let owner = runtime.did().to_owned();
@@ -184,8 +187,11 @@ async fn client_rebinding_defers_the_superseded_generation_and_scopes_the_new_se
 
 #[tokio::test]
 async fn configuration_admission_and_deferral_match_lean() {
-    let (db, user, access, binding) =
-        crate::test_support::root::signed_test_node("configuration-version-admission").await;
+    let (db, user, access, binding) = gents_inference::test_support::signed_test_node_from_db(
+        crate::support::trial_store("configuration-version-admission").await,
+        "configuration-version-admission",
+    )
+    .await;
     let node = db.node.clone();
     let runtime = db.node_identity.clone();
     let owner = runtime.did().to_owned();

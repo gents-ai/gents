@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use gents_fs_runner::beneath::RootDir;
 use serde_json::{json, Value};
 
 use super::edit::{PackAddition, PackEdit};
@@ -111,18 +112,19 @@ pub fn open_built_plugin_source(
 /// Replaces what the scaffold wrote for `plugin` in the pack at `dir` with
 /// `document`'s entry file, cases and description.
 fn write_scaffolded_plugin(
-    dir: &Path,
+    dir: &RootDir,
     plugin: &PackPlugin,
     document: &PluginSourceDocument,
 ) -> Result<()> {
-    let source_dir = dir.join(plugin.source.as_deref().context("plugin source path")?);
+    let source_dir = Path::new(plugin.source.as_deref().context("plugin source path")?);
     let entry = super::build::plugin_entry(&plugin.language)
         .with_context(|| format!("gents cannot build {:?} plugins", plugin.language))?;
-    std::fs::write(source_dir.join(entry), &document.source)
+    dir.write(source_dir.join(entry), &document.source)
         .with_context(|| format!("writing {entry}"))?;
-    let cases_dir = source_dir.join("tests");
-    std::fs::remove_dir_all(&cases_dir).context("clearing the scaffolded cases")?;
-    std::fs::create_dir_all(&cases_dir).context("creating the cases directory")?;
+    let cases_dir = dir
+        .create_dir_all(source_dir.join("tests"))
+        .context("creating the cases directory")?;
+    cases_dir.clear().context("clearing the scaffolded cases")?;
     for (index, case) in document.cases().iter().enumerate() {
         let label = case
             .name
@@ -134,15 +136,16 @@ fn write_scaffolded_plugin(
         if let Some(expect) = &case.expect {
             body["expect"] = expect.clone();
         }
-        std::fs::write(
-            cases_dir.join(format!("{:02}_{label}.json", index + 1)),
-            serde_json::to_vec_pretty(&body)?,
-        )
-        .with_context(|| format!("writing case {}", index + 1))?;
+        cases_dir
+            .write(
+                format!("{:02}_{label}.json", index + 1),
+                serde_json::to_vec_pretty(&body)?,
+            )
+            .with_context(|| format!("writing case {}", index + 1))?;
     }
     let (instructions, _) = super::scaffold::tool_markdown(&plugin.name);
-    std::fs::write(
-        dir.join(&instructions),
+    dir.write(
+        &instructions,
         format!("# {}\n\n{}\n", plugin.name, plugin.description),
     )
     .with_context(|| format!("writing {instructions}"))
@@ -164,7 +167,7 @@ pub fn add_plugin_source(pack: &mut PackEdit, document: &PluginSourceDocument) -
     let mut entry = serde_json::to_value(&plugin)?;
     entry["instructions"] = scaffolded["instructions"].clone();
     entries.push(entry);
-    write_scaffolded_plugin(&pack.dir, &plugin, document)
+    write_scaffolded_plugin(pack.root(), &plugin, document)
 }
 
 /// Writes `document` as a one-plugin pack at `dir`, replacing what an earlier
@@ -184,24 +187,23 @@ pub fn materialize_plugin_source(
     // compiler cache: the build owner's stamp reuses it for an unchanged
     // source tree and replaces it for any other, and a source built twice is
     // one digest.
-    let artifact_path = dir.join(&plugin.artifact);
-    let built = std::fs::read(&artifact_path).ok();
+    let mut built = None;
     if dir.exists() {
-        for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
-            let entry = entry?;
-            if entry.file_name() == "target" {
+        let earlier = RootDir::open(dir)?;
+        built = earlier.read(&plugin.artifact).ok();
+        for entry in earlier
+            .entries()
+            .with_context(|| format!("reading {}", dir.display()))?
+        {
+            if entry.name == "target" {
                 continue;
             }
-            let path = entry.path();
-            if entry.file_type()?.is_dir() {
-                std::fs::remove_dir_all(&path)
-            } else {
-                std::fs::remove_file(&path)
-            }
-            .with_context(|| format!("clearing {}", path.display()))?;
+            earlier
+                .remove(&entry.name)
+                .with_context(|| format!("clearing {}", dir.join(&entry.name).display()))?;
         }
     }
-    scaffold(
+    let scaffolded = scaffold(
         dir,
         name,
         &ScaffoldInput {
@@ -212,14 +214,15 @@ pub fn materialize_plugin_source(
             ux: false,
         },
     )?;
+    let dir = &scaffolded.root;
     if let Some(built) = built {
-        std::fs::write(&artifact_path, built)
-            .with_context(|| format!("keeping {}", artifact_path.display()))?;
+        dir.write(&plugin.artifact, built)
+            .with_context(|| format!("keeping {}", plugin.artifact))?;
     }
     write_scaffolded_plugin(dir, &plugin, document)?;
-    let manifest_path = dir.join("manifest.json");
     let mut manifest: Value = serde_json::from_slice(
-        &std::fs::read(&manifest_path).context("reading the scaffolded manifest")?,
+        &dir.read("manifest.json")
+            .context("reading the scaffolded manifest")?,
     )
     .context("parsing the scaffolded manifest")?;
     let scaffolded = manifest["plugins"][0].take();
@@ -242,9 +245,6 @@ pub fn materialize_plugin_source(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    if !schemas.is_empty() {
-        std::fs::create_dir_all(dir.join("schemas")).context("creating the schemas directory")?;
-    }
     for (index, (collection, sdl)) in schemas.iter().enumerate() {
         // Collection names differ by case only; the index keeps paths apart.
         let path = format!(
@@ -252,12 +252,13 @@ pub fn materialize_plugin_source(
             index + 1,
             super::names::to_snake_case(collection)
         );
-        std::fs::write(dir.join(&path), sdl).with_context(|| format!("writing {path}"))?;
+        dir.write(&path, sdl)
+            .with_context(|| format!("writing {path}"))?;
         assets.push(json!(path));
     }
     manifest["assets"] = json!(assets);
-    std::fs::write(
-        &manifest_path,
+    dir.write(
+        "manifest.json",
         serde_json::to_string_pretty(&manifest)? + "\n",
     )
     .context("writing manifest.json")

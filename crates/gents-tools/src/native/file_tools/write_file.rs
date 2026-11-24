@@ -1,5 +1,4 @@
 use super::change_capture;
-use std::path::Path;
 
 use anyhow::{anyhow, Result};
 use gents_loop::tool::Tool;
@@ -7,10 +6,11 @@ use gents_loop::tool::ToolDefinition;
 use serde::Serialize;
 
 use super::super::args::WriteFileArgs;
-use super::super::shared::{ToolContext, ToolError};
+use super::super::shared::{on_blocking, ToolContext, ToolError};
 use super::{
     deny_workspace_file_writes, file_mutation_lock_for, merge_optional_notes, render_tool_output,
 };
+use gents_fs_runner::beneath::{Intent, Located};
 use gents_loop::tool_call_lifecycle::FailureClass;
 use gents_session::file_contents::content_hash;
 
@@ -18,9 +18,8 @@ use gents_session::file_contents::content_hash;
 /// lock. No refusal discloses the current hash, so a retry cannot replace
 /// changed content without re-reading.
 async fn guard_existing_file_overwrite(
-    path: &Path,
+    target: &Located,
     display: &str,
-    created: bool,
     expected: Option<&str>,
     overwrite: bool,
 ) -> Result<(), ToolError> {
@@ -30,7 +29,7 @@ async fn guard_existing_file_overwrite(
         )
         .into());
     }
-    if created {
+    if !target.exists() {
         if let Some(expected) = expected {
             return Err(anyhow!(
                 "{display} has changed since it was read: expected {expected}, but the file no longer exists. Re-read the directory, or omit expected_content_hash to create a new file."
@@ -40,7 +39,8 @@ async fn guard_existing_file_overwrite(
         return Ok(());
     }
     if let Some(expected) = expected {
-        let current = content_hash(&tokio::fs::read(path).await?);
+        let reading = target.clone();
+        let current = content_hash(&on_blocking(move || reading.read()).await?);
         if expected != current {
             return Err(anyhow!(
                 "{display} has changed since it was read (expected {expected}). Re-read it and rebuild the write from its current content."
@@ -129,7 +129,7 @@ impl Tool for WriteFileTool {
     ) -> Result<Self::Output, Self::Error> {
         let context = self.context.for_call(call);
         deny_workspace_file_writes(call)?;
-        let path = context.resolve_path_allow_create(&args.path)?;
+        let path = context.locate(&args.path, Intent::Create)?.path();
         let consent = crate::plugin::approval::workspace::authorize_file_mutation(
             call,
             Self::NAME,
@@ -148,21 +148,27 @@ impl Tool for WriteFileTool {
                 ToolError::reported_failure(FailureClass::PolicyDenied, format!("{error:#}"))
             })?;
         }
-        let created = !path.exists();
+        let target = context.locate(&args.path, Intent::Create)?;
+        if target.path() != path {
+            return Err(anyhow!(
+                "{} changed while it was being opened; repeat the call to resolve it again",
+                context.display_path(&path)
+            )
+            .into());
+        }
+        let created = !target.exists();
         guard_existing_file_overwrite(
-            &path,
+            &target,
             &context.display_path(&path),
-            created,
             args.expected_content_hash.as_deref(),
             args.overwrite,
         )
         .await?;
-        let capture = change_capture::FileChangeCapture::start(call, &context.root(), &path).await;
+        let capture = change_capture::FileChangeCapture::start(call, &target).await;
         let mutation = async {
-            if let Some(parent) = path.parent() {
-                tokio::fs::create_dir_all(parent).await?;
-            }
-            tokio::fs::write(&path, args.content.as_bytes()).await?;
+            let writing = target.clone();
+            let content = args.content.clone().into_bytes();
+            on_blocking(move || writing.write(&content)).await?;
             let mut bytes_written = args.content.len();
             let mut written_hash = content_hash(args.content.as_bytes());
             let mut note = None;
@@ -170,7 +176,8 @@ impl Tool for WriteFileTool {
                 note = writethrough
                     .after_mutation_under_lock(call, &path, crate::native::lsp::MutationKind::Write)
                     .await;
-                if let Ok(bytes) = tokio::fs::read(&path).await {
+                let reading = target.clone();
+                if let Ok(bytes) = on_blocking(move || reading.read()).await {
                     bytes_written = bytes.len();
                     written_hash = content_hash(&bytes);
                 }

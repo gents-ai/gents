@@ -20,7 +20,7 @@ type ModelAuthority = atomic::Authority<String>;
 type ModelReceipt = atomic::Receipt<SessionInputEditOutcome>;
 
 struct Fixture {
-    db: gents_inference::test_support::TestDb,
+    db: gents_store::test_support::TestStore,
     node: Arc<EmbeddedNode>,
     identity: Arc<dyn NodeIdentity>,
     _dir: tempfile::TempDir,
@@ -32,7 +32,7 @@ struct Fixture {
 impl Fixture {
     async fn empty() -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let db = gents_inference::test_support::test_db(
+        let db = gents_store::test_support::TestStore::start(
             "session-input-edit",
             gents_automation::lifecycle_hooks::composition(),
         )
@@ -90,6 +90,7 @@ impl Fixture {
             let doc = gents_store::graphql::created_doc_id(&response, "AgentSession")?;
             txn.add_resource_relationship("AgentSession", &doc, "parent", "agents", &agent_doc).await?;
             txn.add_actor_relationship("AgentSession", &doc, "working_agent", &agent).await?;
+            gents_session::session::interrupt_marker::create_in_txn(txn, &doc, identity.did(), SESSION).await?;
             Ok::<_, anyhow::Error>(())
         })).await.unwrap();
         Self {

@@ -93,7 +93,7 @@ async fn foreground_handoff_after_parent_completion(
         .status()
         .unwrap()
         .success());
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "foreground-background-handoff-keeps-the-",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -328,7 +328,7 @@ async fn foreground_handoff_after_parent_completion(
 
 #[tokio::test]
 async fn cancellation_winning_handoff_clears_the_request_and_cancels_the_same_execution() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "cancellation-winning-handoff-clears-the-",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -415,7 +415,7 @@ async fn cancellation_winning_handoff_clears_the_request_and_cancels_the_same_ex
 
 #[tokio::test]
 async fn refused_foreground_handoff_can_be_retried() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "refused-foreground-handoff-can-be-retrie",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -524,7 +524,7 @@ async fn refused_foreground_handoff_can_be_retried() {
 
 #[tokio::test]
 async fn concurrent_background_starts_on_one_request_fill_exactly_the_ceiling() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "concurrent-background-starts-on-one-requ",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -643,7 +643,7 @@ async fn recover_unverified_foreground(
     gents_lean_vocab::families::process_stop_unverified_foreground::RowOutput<String>,
 ) {
     use gents_session::exec::ownership::test_support::OwnedTestProcess;
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "interrupted-foreground-with-unverified-e",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -781,7 +781,7 @@ async fn failed_recovery_handoff_retains_physical_owner_until_periodic_recovery(
     transfer: &gents_lean_vocab::families::contracts_r6_recovery_transfer::TransferOutput,
 ) -> gents_lean_vocab::families::process_stop_failed_handoff_receipt::HandoffReceiptOutput {
     use gents_session::exec::ownership::test_support::OwnedTestProcess;
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "failed-recovery-handoff-retains-physical",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -905,7 +905,7 @@ async fn confirmation_before_worker_release_keeps_typed_stop_receipt() {
         String,
         gents_session::exec::ProcessStopOutcome,
     >() {
-        let node_db = gents_inference::test_support::test_db(
+        let node_db = gents_store::test_support::TestStore::start(
             "confirmation-before-worker-release-keeps",
             gents_session::test_support::no_lifecycle_plugins(),
         )
@@ -965,7 +965,7 @@ async fn confirmation_before_worker_release_keeps_typed_stop_receipt() {
 async fn interrupt_sweep_preserves_confirmed_timeout_intent() {
     for case in gents_lean_vocab::families::process_stop_interrupt_sweep::cases::<String, String>()
     {
-        let node_db = gents_inference::test_support::test_db(
+        let node_db = gents_store::test_support::TestStore::start(
             "interrupt-sweep-preserves-confirmed-time",
             gents_session::test_support::no_lifecycle_plugins(),
         )

@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn append_sequence_index_fetches_only_latest_header() {
-    let db = test_db("sequence-index").await;
+    let db = AgentHome::start("sequence-index").await;
     let session = "sequence-index-session";
     let query = super::super::atomic_inputs::append_sequence_query(db.node_did(), session);
     let access = gents_store::config_client::ConfigAccess::local(db.node.clone());
@@ -109,7 +109,7 @@ async fn append_sequence_index_fetches_only_latest_header() {
 
 #[tokio::test]
 async fn append_sequence_excludes_foreign_session_messages_and_reservations() {
-    let db = test_db("sequence-owner-scope").await;
+    let db = AgentHome::start("sequence-owner-scope").await;
     let session = "same-session-label";
     for (owner, sequence) in [(db.node_did(), 4), ("did:key:foreign", 700)] {
         crate::session::import_history_observation(

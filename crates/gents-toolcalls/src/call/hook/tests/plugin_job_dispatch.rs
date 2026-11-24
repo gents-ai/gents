@@ -77,7 +77,7 @@ impl Default for Options {
 }
 
 struct Step0 {
-    db: gents_inference::test_support::TestDb,
+    db: gents_store::test_support::TestStore,
     user: gents_store::identity::KeyIdentity,
     owner: gents_store::config_client::ConfigAccess,
     caller: Arc<dyn NodeIdentity>,
@@ -408,7 +408,7 @@ async fn step0(output: Value, options: Options) -> Step0 {
 }
 
 async fn job_chain(
-    db: &gents_inference::test_support::TestDb,
+    db: &gents_store::test_support::TestStore,
     user: &gents_store::identity::KeyIdentity,
     owner: &gents_store::config_client::ConfigAccess,
     agent: &dyn NodeIdentity,
@@ -1541,7 +1541,7 @@ fn controlling(entries: &[(&str, &str)]) -> Value {
 
 impl Step0 {
     async fn interrupted(&self, doc_id: &str) -> bool {
-        gents_session::request::interrupt::fetch_interrupt_requested_at_by_doc_id_with_access(
+        gents_session::request::interrupt::request_interrupted_at_by_doc_id_with_access(
             &self.access(),
             doc_id,
         )

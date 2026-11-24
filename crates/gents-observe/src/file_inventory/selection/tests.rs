@@ -219,7 +219,7 @@ fn terminal_output(
 
 #[tokio::test]
 async fn generated_terminal_selections_preserve_superseded_requests() -> Result<()> {
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "generated-terminal-selections",
         gents_automation::lifecycle_hooks::composition(),
     )

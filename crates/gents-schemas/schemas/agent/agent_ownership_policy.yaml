@@ -346,3 +346,14 @@ resources:
         expr: working_agent + parent->delete
       - name: delete
         expr: parent->delete
+  - name: session_interrupts
+    relations:
+      - name: parent
+        types: [sessions]
+    permissions:
+      - name: read
+        expr: parent->read
+      - name: update
+        expr: parent->update
+      - name: delete
+        expr: parent->delete
