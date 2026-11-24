@@ -188,6 +188,36 @@ pub(crate) mod diag {
 
     static ENGINES: Mutex<Vec<(PathBuf, Weak<RegolithEngine>)>> = Mutex::new(Vec::new());
     static WATCH: Mutex<Vec<((u64, u64), Instant)>> = Mutex::new(Vec::new());
+    static RELEASES: Mutex<Vec<((u64, u64), std::thread::ThreadId, String, Backtrace)>> =
+        Mutex::new(Vec::new());
+
+    pub(crate) fn record_release(id: (u64, u64), exclusive: bool) {
+        if !exclusive {
+            return;
+        }
+        let mut releases = RELEASES.lock().unwrap_or_else(|e| e.into_inner());
+        releases.retain(|(other, ..)| *other != id);
+        if releases.len() > 4096 {
+            releases.remove(0);
+        }
+        releases.push((
+            id,
+            std::thread::current().id(),
+            thread_label(),
+            Backtrace::force_capture(),
+        ));
+    }
+
+    /// Where the last exclusive holder of `db_dir` let go, relative to the
+    /// calling thread: `None` when it has not let go.
+    pub fn take_release(db_dir: &Path) -> Option<(bool, String)> {
+        let id = file_id(&db_dir.join("LOCK"))?;
+        let mut releases = RELEASES.lock().unwrap_or_else(|e| e.into_inner());
+        let index = releases.iter().position(|(other, ..)| *other == id)?;
+        let (_, thread, label, backtrace) = releases.remove(index);
+        let same = thread == std::thread::current().id();
+        Some((same, format!("released on thread {label}:\n{backtrace}")))
+    }
 
     pub(crate) fn register_engine(db_dir: &Path, engine: &Arc<RegolithEngine>) {
         let mut engines = ENGINES.lock().unwrap_or_else(|e| e.into_inner());
@@ -424,6 +454,10 @@ mod real {
                         self.diag.3
                     ));
                 }
+            }
+            #[cfg(unix)]
+            if let Some(id) = self.diag.0 {
+                super::diag::record_release(id, self.diag.1);
             }
             unlock(&self.file);
         }

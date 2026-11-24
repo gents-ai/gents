@@ -68,6 +68,14 @@ mod column_family;
 mod conflict;
 mod encryption;
 mod engine;
+#[cfg(unix)]
+pub fn diag_take_release(db_dir: &std::path::Path) -> Option<(bool, String)> {
+    env::db_lock::diag::take_release(db_dir)
+}
+#[cfg(unix)]
+pub fn diag_emit(text: &str) {
+    env::db_lock::diag::emit(text)
+}
 pub mod env;
 mod error;
 mod event_listener;

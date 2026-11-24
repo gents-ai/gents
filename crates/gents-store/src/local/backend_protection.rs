@@ -612,6 +612,33 @@ fn diag_held(data: &Path) -> bool {
 
 #[track_caller]
 fn diag_probe<A, B>(data: &Path, db: &std::sync::Weak<A>, store: &std::sync::Weak<B>) {
+    match regolith::diag_take_release(data) {
+        Some((true, _)) => {
+            regolith::diag_emit(&format!(
+                "LOCKDIAG released-on-caller caller={}\n",
+                std::panic::Location::caller()
+            ));
+            return;
+        }
+        Some((false, report)) => {
+            regolith::diag_emit(&format!(
+                "LOCKDIAG released-elsewhere caller={} thread={:?} db_strong={} store_strong={} {report}\n",
+                std::panic::Location::caller(),
+                std::thread::current().name(),
+                db.strong_count(),
+                store.strong_count()
+            ));
+            return;
+        }
+        None => {
+            regolith::diag_emit(&format!(
+                "LOCKDIAG not-released-at-probe caller={} db_strong={} store_strong={}\n",
+                std::panic::Location::caller(),
+                db.strong_count(),
+                store.strong_count()
+            ));
+        }
+    }
     if !diag_held(data) {
         return;
     }
