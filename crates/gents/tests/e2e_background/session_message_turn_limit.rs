@@ -18,8 +18,8 @@ use serde_json::json;
 use crate::support::accepted_turn::AcceptedTurnRuntime;
 use crate::support::fixtures::{agent_target, test_identity};
 use crate::support::interrupt::BootedAgent;
-use crate::support::streaming_backend::{
-    MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse,
+use gents_inference::test_support::scripted_backend::{
+    ScriptedBackend, StreamChunk, StreamPlan, StreamResponse,
 };
 use gents_store::test_support::STALL_CEILING;
 
@@ -402,7 +402,7 @@ async fn start_child_session(
     max_turns: Option<i64>,
     withdraw_target: bool,
 ) -> (String, String, ConfigAccess, AcceptedTurnRuntime) {
-    let backend = MockStreamingBackend::start_with_plans(
+    let backend = ScriptedBackend::start_with_plans(
         MODEL,
         vec![
             StreamPlan::current_authored_user(

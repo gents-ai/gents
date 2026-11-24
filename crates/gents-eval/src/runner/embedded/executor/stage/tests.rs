@@ -89,13 +89,13 @@ async fn a_cancelled_seed_stage_is_runtime_before_any_request_exists() {
 
 #[tokio::test]
 async fn trial_teardown_settles_scheduled_inference_without_expiring_its_lease() {
-    use crate::support::streaming_backend::{
-        MockStreamingBackend, StreamPlan, StreamResponse, StreamScript,
+    use gents_inference::test_support::scripted_backend::{
+        ScriptedBackend, StreamPlan, StreamResponse, StreamScript,
     };
 
     for cancel_stage in [false, true] {
         let marker = "scheduled-trial-teardown";
-        let backend = MockStreamingBackend::start_with_plans(
+        let backend = ScriptedBackend::start_with_plans(
             "frozen-model",
             vec![StreamPlan::new(
                 marker,
@@ -129,7 +129,7 @@ async fn trial_teardown_settles_scheduled_inference_without_expiring_its_lease()
             .unwrap();
         let (runtime, _agent) = Box::pin(boot_runtime(
             &home,
-            home.identity.clone(),
+            home.node_identity.clone(),
             DocumentRuntimeOptions::default(),
         ))
         .await
@@ -354,11 +354,12 @@ async fn a_runtime_that_exits_mid_stage_fails_the_stage_as_runtime_at_once() {
 
 #[tokio::test]
 async fn a_seed_template_failure_ends_the_stage_before_its_deadline() {
-    let backend = crate::support::streaming_backend::MockStreamingBackend::start_with_plans(
-        "frozen-model",
-        Vec::new(),
-    )
-    .unwrap();
+    let backend =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::start_with_plans(
+            "frozen-model",
+            Vec::new(),
+        )
+        .unwrap();
     let mut inference = frozen_binding(json!("frozen-profile"));
     inference.backend["endpoint"] = json!(backend.endpoint());
     let dir = tempfile::tempdir().unwrap();
@@ -411,7 +412,7 @@ async fn a_seed_template_failure_ends_the_stage_before_its_deadline() {
     };
     let (runtime, _agent) = crate::runner::embedded::home::boot_runtime_within(
         &home,
-        home.identity.clone(),
+        home.node_identity.clone(),
         options,
         Duration::from_secs(30),
     )

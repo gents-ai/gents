@@ -25,9 +25,10 @@ use super::plugin_job_support::{
 };
 use crate::support::interrupt::BootedAgent;
 use crate::support::live_inference::{
-    boot_live_agent_with_options, live_target, rows_when, wait_for_request_terminal, LiveUser,
+    boot_live_agent_with_options, live_target, wait_for_request_terminal, LiveUser,
 };
 use crate::support::{test_db, TestDb};
+use gents_store::test_support::rows_when;
 use gents_store::test_support::snapshot_reader::SnapshotReader;
 
 struct LiveJobs {

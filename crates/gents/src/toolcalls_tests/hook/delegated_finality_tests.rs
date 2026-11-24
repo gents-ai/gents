@@ -19,7 +19,7 @@ use gents_toolcalls::call::lifecycle::ToolCallLifecycle;
 use serde_json::json;
 
 struct Fixture {
-    _db: crate::support::TestDb,
+    _db: gents_store::test_support::TestStore,
     node: Arc<defra_node::Node>,
     access: ConfigAccess,
     config: ConfigAccess,
@@ -38,9 +38,10 @@ async fn fixture(name: &str) -> Fixture {
     // Users write configuration through the signed client endpoint; a local
     // ConfigAccess may act only as the node or a managed Agent.
     let fixture_name = format!("finality-{name}");
-    let db = crate::support::test_db(&fixture_name).await;
+    let db = crate::support::trial_store(&fixture_name).await;
     let (db, user, user_access) =
-        crate::test_support::root::signed_test_node_without_agent_from_db(db, &fixture_name).await;
+        gents_inference::test_support::signed_test_node_without_agent_from_db(db, &fixture_name)
+            .await;
     let node = db.node.clone();
     let runtime = db.node_identity.clone();
     let value = json!({"node_did": runtime.did(), "enabled": true});

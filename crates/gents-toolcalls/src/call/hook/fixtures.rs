@@ -182,7 +182,7 @@ pub async fn claimed_hook_request(
         .clone()
         .expect("a signed hook holds its Agent's managed signer");
     crate::call::lifecycle::admission_fixture::claimed_signed_request_create_as_agent(
-        &hook.node, &root, &signer, create,
+        &hook.node, &signer, create,
     )
     .await
 }

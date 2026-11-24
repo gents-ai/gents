@@ -20,7 +20,7 @@ enum Cursor {
 async fn context_view_nullable_keyset_matches_model_on_served_node() -> Result<()> {
     let cases = gents_lean_vocab::families::inference_context_views_page::cases::<Cursor>();
     anyhow::ensure!(!cases.is_empty(), "Lean emitted no context view cases");
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "inference-context-views",
         gents_store::node_extension::Extensions::default(),
     )

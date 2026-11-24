@@ -82,7 +82,7 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
         let case = &binding_case.input;
         let task = &task_case.input;
         assert_eq!(case.name, task.name);
-        let db = gents_inference::test_support::test_db(
+        let db = gents_store::test_support::TestStore::start(
             "first-request-binding",
             crate::lifecycle_hooks::composition(),
         )

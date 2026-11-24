@@ -633,7 +633,7 @@ mod tests {
         let provision = || {
             gents_store::identity::provision_agent_identity_authorized(
                 &node,
-                client.home.identity.as_ref(),
+                client.home.node_identity.as_ref(),
                 &user,
             )
         };
@@ -880,7 +880,7 @@ Next: gents config agent --help
         use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         let client = gents_host::test_support::ClientHome::new().await;
         let binding =
-            gents_store::identity::provision_agent_identity(client.home.identity.as_ref())?;
+            gents_store::identity::provision_agent_identity(client.home.node_identity.as_ref())?;
         let agent = json!({
             "creation_nonce": binding.creation_nonce,
             "agent_did": binding.agent_did,

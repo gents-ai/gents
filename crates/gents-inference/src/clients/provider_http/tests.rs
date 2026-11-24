@@ -309,11 +309,11 @@ async fn usage_client(
     cache: &std::sync::Arc<crate::usage_observation::UsageCache>,
     backend_id: &str,
 ) -> (
-    crate::test_support::TestDb,
+    gents_store::test_support::TestStore,
     crate::usage_observation::UsageAccount,
     ProviderHttpClient,
 ) {
-    let db = crate::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "provider-http-usage",
         gents_store::node_extension::Extensions::none(),
     )

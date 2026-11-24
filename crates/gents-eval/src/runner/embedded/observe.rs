@@ -652,17 +652,13 @@ mod tests {
             pending_client_fixture_request, publish_accepted_on_claimed_request,
             AcceptedFixtureCall,
         };
-        let home = EmbeddedHome::create_temp("observe-evidence").await.unwrap();
-        let db = crate::support::test_db_from_home(home);
+        let db = crate::support::trial_store("observe-evidence").await;
         let (db, user, client, binding) =
             crate::test_support::signed_test_node_from_db(db, "observe-evidence").await;
         let did = db.node_identity.did().to_owned();
-        crate::runner::embedded::executor::install::grant_trial_operations(
-            &db.home,
-            &binding.agent_did,
-        )
-        .await
-        .unwrap();
+        crate::runner::embedded::executor::install::grant_trial_operations(&db, &binding.agent_did)
+            .await
+            .unwrap();
         let agent_identity =
             gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
                 .unwrap();

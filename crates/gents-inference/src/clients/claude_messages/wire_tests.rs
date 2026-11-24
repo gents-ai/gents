@@ -569,7 +569,7 @@ fn replay_is_bounded_by_the_retry_budget_and_the_unchanged_token_count() {
 async fn usage_headers_are_observed_on_success_and_on_error() {
     use crate::usage_observation::{UsageAccount, UsageCache, UsageReporter};
     use gents_loop::account_usage::UsageSource;
-    let db = crate::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "claude-wire-usage",
         gents_store::node_extension::Extensions::none(),
     )

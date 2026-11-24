@@ -8,9 +8,10 @@ use gents_store::graphql::escape_graphql_string;
 use serde_json::json;
 
 use crate::support::live_inference::{
-    bind_target, boot_live_agent, live_target, rows_when, wait_for_request_terminal, LiveUser,
+    bind_target, boot_live_agent, live_target, wait_for_request_terminal, LiveUser,
 };
 use crate::support::test_db;
+use gents_store::test_support::rows_when;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn admitted_live_oneshot_completes_with_its_selected_terminal_message() {

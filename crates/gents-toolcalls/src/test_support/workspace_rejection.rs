@@ -22,12 +22,12 @@ pub struct Fixture {
     pub access: ConfigAccess,
     pub agent: Arc<dyn NodeIdentity>,
     pub _workspace_dir: tempfile::TempDir,
-    pub _home: gents_inference::test_support::TestDb,
+    pub _home: gents_store::test_support::TestStore,
 }
 
 impl Fixture {
     pub async fn new() -> Self {
-        let db = gents_inference::test_support::test_db(
+        let db = gents_store::test_support::TestStore::start(
             "workspace-rejection",
             gents_session::test_support::no_lifecycle_plugins(),
         )

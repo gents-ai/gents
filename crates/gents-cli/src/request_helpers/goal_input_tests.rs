@@ -144,7 +144,7 @@ async fn publish_observation(
 ) -> Result<()> {
     let node_did = home.node_did().to_owned();
     let agent =
-        gents_store::identity::resolve_agent_identity(home.home.identity.as_ref(), binding)?;
+        gents_store::identity::resolve_agent_identity(home.home.node_identity.as_ref(), binding)?;
     let mut observation = SessionGoalObservation {
         version: SESSION_GOAL_CONTROL_VERSION,
         node_did: node_did.clone(),

@@ -140,7 +140,7 @@ async fn a_sign_in_after_removing_the_only_account_takes_the_original_slot() {
 #[tokio::test]
 async fn another_nodes_account_is_not_touched() {
     let (db, _user, access) = access().await;
-    let other_db = crate::test_support::test_db(
+    let other_db = gents_store::test_support::TestStore::start(
         "credential-other-node",
         gents_store::node_extension::Extensions::none(),
     )

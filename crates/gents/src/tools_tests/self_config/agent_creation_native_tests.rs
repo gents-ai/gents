@@ -241,7 +241,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     // The node runs the runtime's tool ceiling as its permission projector,
     // which derives each live Agent's baseline node grants from its document.
     let composition = gents_automation::lifecycle_hooks::composition();
-    let db = gents_inference::test_support::test_db_with_tool_policy(
+    let db = gents_store::test_support::TestStore::start_with_tool_policy(
         "agent-creator",
         composition.clone(),
         Arc::new(gents_tools::surface::ToolCeiling::meta_only()),
@@ -257,7 +257,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     gents_store::identity::GrantSet::OperatorUser
         .grant(&admin, &user_did)
         .await?;
-    let endpoint = GraphqlEndpoint::as_principal(db.client_endpoint(), user.did())
+    let endpoint = GraphqlEndpoint::as_principal(db.graphql_endpoint(), user.did())
         .with_client_signing_capability(user.client_signing_capability()?)?
         .with_client_signed_agent_creates()
         .with_extensions(&composition)?;

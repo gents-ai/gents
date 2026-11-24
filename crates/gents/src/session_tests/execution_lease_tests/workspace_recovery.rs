@@ -15,7 +15,7 @@ use std::sync::Arc;
 #[tokio::test]
 async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_workspace_changes() {
     let dir = tempfile::tempdir().unwrap();
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "workspace-recovery-successor",
         gents_automation::lifecycle_hooks::composition(),
     )

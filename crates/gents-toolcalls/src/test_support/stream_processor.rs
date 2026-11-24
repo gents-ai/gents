@@ -24,7 +24,7 @@ pub fn user_text_message(text: &str) -> Message {
 /// The hook and stream writer act under the Agent's managed access; reads of
 /// Agent-owned rows go through `access`, never the node identity.
 pub struct SignedRun {
-    pub db: gents_inference::test_support::TestDb,
+    pub db: gents_store::test_support::TestStore,
     pub user: gents_store::identity::KeyIdentity,
     pub node: Arc<defra_node::Node>,
     pub runtime_did: String,

@@ -9,8 +9,8 @@ use gents_store::test_support::STALL_CEILING;
 use gents_toolcalls::call::control::client::{submit, ClientControlError};
 use serde_json::Value;
 
-use gents::support::streaming_backend::{
-    MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse,
+use gents_inference::test_support::scripted_backend::{
+    ScriptedBackend, StreamChunk, StreamPlan, StreamResponse,
 };
 
 #[cfg(unix)]
@@ -21,7 +21,7 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
     // own client-signed endpoint; the runtime starts over the home's fresh
     // backend admission.
     let home = crate::test_support::ClientHome::new().await;
-    let owner = home.home.identity.clone();
+    let owner = home.home.node_identity.clone();
     let user = &home.user;
     let foreign =
         gents_store::identity::KeyIdentity::load_or_create(dir.path().join("foreign.key"), None)
@@ -47,7 +47,7 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
     let user_access = home.access.clone();
     let prompt = "start two background processes";
     let args = r#"{"tool_name":"bash","args":{"command":"sleep","args":["60"]}}"#;
-    let backend = MockStreamingBackend::start_with_plans(
+    let backend = ScriptedBackend::start_with_plans(
         "control-model",
         vec![StreamPlan::current_authored_user(
             prompt,

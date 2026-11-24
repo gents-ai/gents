@@ -5,7 +5,7 @@ use gents_pack::plugin::store::InstalledPlugin;
 use gents_pack::plugin::PluginOutcome;
 use identity::Did;
 
-async fn selected_surface_runtime() -> (gents_inference::test_support::TestDb, ToolRuntimeContext) {
+async fn selected_surface_runtime() -> (gents_store::test_support::TestStore, ToolRuntimeContext) {
     use gents_store::identity::NodeIdentity as _;
     let (db, _user, _user_access, binding) = gents_inference::test_support::signed_test_node(
         "selected-surface",
@@ -912,7 +912,7 @@ fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
 
 #[tokio::test]
 async fn defra_query_tool_gated_by_selection() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "defra-query-tool-gated-by-selection",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -1100,7 +1100,7 @@ async fn write_tool_whose_count_field_resolves_no_schema_is_refused_at_registrat
 async fn plugin_only_bindings_are_captured_for_trigger_execution() {
     use gents_documents::{PluginToolRef, WriteToolField, WriteToolFieldFill};
 
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "plugin-only-bindings-are-captured-for-tr",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -1194,7 +1194,7 @@ async fn mailbox_surface_registers_stamped_tool_and_captures_owner_lineage() {
 async fn query_tool_is_advertised_and_registered() {
     use gents_documents::{QueryToolDecl, WriteToolField, WriteToolFieldFill};
 
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "query-tool",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -1414,7 +1414,7 @@ async fn explicitly_disabling_goal_tools_removes_them_from_names_and_runtime() {
 
 #[tokio::test]
 async fn goal_tools_are_independent_from_generic_meta_tools() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "goal-tools-are-independent-from-generic-",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -1508,7 +1508,7 @@ async fn goal_creation_requires_its_separate_capability() {
 
 #[tokio::test]
 async fn operator_ceiling_can_deny_goal_creation_only() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "operator-ceiling-can-deny-goal-creation-",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -1545,7 +1545,7 @@ async fn operator_ceiling_can_deny_goal_creation_only() {
 
 #[tokio::test]
 async fn operator_ceiling_denies_all_goal_mutation_when_base_capability_is_off() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "operator-ceiling-denies-all-goal-mutatio",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -1750,7 +1750,7 @@ fn absent_groups_grant_nothing_and_goal_controls_are_independent() {
 
 #[tokio::test]
 async fn session_history_tool_follows_selection() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "session-history-tool-follows-selection",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -2538,7 +2538,7 @@ fn explain_mcp_empty_allowlist_denies_all_services_when_online() {
 
 #[tokio::test]
 async fn agent_config_alias_expands_to_config_scope() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "agent-config-alias-expands-to-config-sco",
         gents_session::test_support::no_lifecycle_plugins(),
     )

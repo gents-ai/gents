@@ -108,7 +108,7 @@ impl ChildScopeWorld {
     pub async fn build(input: &ChildScopeInput) -> Self {
         let b = &input.binding;
         let home = tempfile::tempdir().unwrap();
-        let node_db = gents_inference::test_support::test_db(
+        let node_db = gents_store::test_support::TestStore::start(
             "child-scope-",
             crate::test_support::no_lifecycle_plugins(),
         )

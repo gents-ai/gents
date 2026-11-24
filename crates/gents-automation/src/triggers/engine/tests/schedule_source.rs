@@ -186,7 +186,7 @@ fn interval_cadence_json() -> serde_json::Value {
 
 #[tokio::test]
 async fn schedule_cursor_batch_matches_exact_owner_reads_and_isolates_scope_errors() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "schedule-cursor-batch-matches-exact-owne",
         crate::lifecycle_hooks::composition(),
     )
@@ -242,7 +242,7 @@ async fn schedule_cursor_batch_matches_exact_owner_reads_and_isolates_scope_erro
 
 #[tokio::test]
 async fn schedule_cursor_batches_more_than_one_chunk() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "schedule-cursor-batches-more-than-one-ch",
         crate::lifecycle_hooks::composition(),
     )
@@ -268,7 +268,7 @@ async fn schedule_cursor_batches_more_than_one_chunk() {
 #[tokio::test]
 async fn schedule_source_stops_loading_chunks_after_first_due_trigger() {
     let behavior = schedule_test_behavior();
-    let node_db = gents_inference::test_support::test_db_as(
+    let node_db = gents_store::test_support::TestStore::start_as(
         "schedule-source-stops-loading-chunks",
         behavior.node_did(),
         crate::lifecycle_hooks::composition(),
@@ -337,7 +337,7 @@ async fn schedule_source_stops_loading_chunks_after_first_due_trigger() {
 #[tokio::test]
 async fn schedule_source_next_fire_emits_intent_when_schedule_is_due() {
     let behavior = schedule_test_behavior();
-    let node_db = gents_inference::test_support::test_db_as(
+    let node_db = gents_store::test_support::TestStore::start_as(
         "schedule-source-next-fire-emits-intent",
         behavior.node_did(),
         crate::lifecycle_hooks::composition(),
@@ -435,7 +435,7 @@ async fn schedule_source_next_fire_emits_intent_when_schedule_is_due() {
 #[tokio::test]
 async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() {
     let behavior = schedule_test_behavior();
-    let node_db = gents_inference::test_support::test_db_as(
+    let node_db = gents_store::test_support::TestStore::start_as(
         "schedule-source-on-result-writes-fields",
         behavior.node_did(),
         crate::lifecycle_hooks::composition(),
@@ -620,7 +620,7 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
 
 #[tokio::test]
 async fn schedule_source_next_fire_honors_cancellation_token() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "schedule-source-next-fire-honors-cancell",
         crate::lifecycle_hooks::composition(),
     )
@@ -914,7 +914,7 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
 #[tokio::test]
 async fn schedule_source_seeds_null_next_run_at_and_fires_on_first_tick() {
     let behavior = schedule_test_behavior();
-    let node_db = gents_inference::test_support::test_db_as(
+    let node_db = gents_store::test_support::TestStore::start_as(
         "schedule-source-seeds-null-next-run-at",
         behavior.node_did(),
         crate::lifecycle_hooks::composition(),
@@ -1002,7 +1002,7 @@ async fn schedule_source_seeds_null_next_run_at_and_fires_on_first_tick() {
 #[tokio::test]
 async fn schedule_source_seeds_cron_next_run_at_without_immediate_fire() {
     let behavior = schedule_test_behavior();
-    let node_db = gents_inference::test_support::test_db_as(
+    let node_db = gents_store::test_support::TestStore::start_as(
         "schedule-source-seeds-cron-next-run-at",
         behavior.node_did(),
         crate::lifecycle_hooks::composition(),
@@ -1117,7 +1117,7 @@ async fn schedule_source_seeds_cron_next_run_at_without_immediate_fire() {
 
 #[tokio::test]
 async fn schedule_source_next_fire_survives_idle_ticks_until_cancelled() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "schedule-source-next-fire-survives-idle-",
         crate::lifecycle_hooks::composition(),
     )

@@ -7,7 +7,7 @@ repository.workspace = true
 description = "DefraDB access, identity and schema owners for Gents"
 
 [features]
-default = ["defra-node/native"]
+default = ["defra-node/native", "defra-node/http"]
 typescript = ["gents-loop/typescript", "gents-protocol/typescript"]
 # Carries the single-validator Vera node a home may decide document access
 # through. It runs on a runtime of its own; see AGENTS.md.

@@ -374,7 +374,7 @@ mod tests {
     /// a request's own `job_calls.state` wins.
     #[tokio::test]
     async fn a_job_step_keeps_its_stored_state_across_rounds() {
-        let node_db = gents_inference::test_support::test_db(
+        let node_db = gents_store::test_support::TestStore::start(
             "a-job-step-keeps-its-stored-state-across",
             gents_session::test_support::no_lifecycle_plugins(),
         )

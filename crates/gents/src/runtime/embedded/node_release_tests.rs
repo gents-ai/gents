@@ -135,7 +135,11 @@ async fn measure_fixtures() -> Vec<StageReport> {
         .await,
         measure("signed_test_node", || async {
             let (db, _user, _access, _binding) =
-                crate::test_support::root::signed_test_node("node-release-signed").await;
+                gents_inference::test_support::signed_test_node_from_db(
+                    crate::support::trial_store("node-release-signed").await,
+                    "node-release-signed",
+                )
+                .await;
             Arc::downgrade(&db.node)
         })
         .await,

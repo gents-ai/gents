@@ -15,8 +15,8 @@ use std::{sync::Arc, time::Duration};
 
 /// A started Node and its runtime root, which is the Node's identity. Agents
 /// derived from the root are the Node's own Agents.
-async fn rooted_node() -> (gents_inference::test_support::TestDb, KeyIdentity) {
-    let db = gents_inference::test_support::test_db(
+async fn rooted_node() -> (gents_store::test_support::TestStore, KeyIdentity) {
+    let db = gents_store::test_support::TestStore::start(
         "output-obligation",
         gents_automation::lifecycle_hooks::composition(),
     )
@@ -28,9 +28,9 @@ async fn rooted_node() -> (gents_inference::test_support::TestDb, KeyIdentity) {
 /// The Node's live Agent, created by its enrolled User; its DID derives from
 /// the runtime root and a creation nonce.
 async fn live_agent(
-    db: gents_inference::test_support::TestDb,
+    db: gents_store::test_support::TestStore,
     root: &KeyIdentity,
-) -> (gents_inference::test_support::TestDb, Arc<dyn NodeIdentity>) {
+) -> (gents_store::test_support::TestStore, Arc<dyn NodeIdentity>) {
     let (db, _user, _access, binding) =
         gents_inference::test_support::signed_test_node_from_db(db, "output-obligation").await;
     let agent = gents_store::identity::resolve_agent_identity(root, &binding).unwrap();

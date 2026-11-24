@@ -74,10 +74,10 @@ async fn replay_case(
 ) -> Result<()> {
     let args = parse_case(&case.input);
     let home = gents::runtime::embedded::EmbeddedHome::create_temp("init-seed").await?;
-    let identity = home.identity.clone();
+    let identity = home.node_identity.clone();
     let owner = home.did();
     let node = home.node.clone();
-    let graphql = home.graphql_endpoint().context("served init home")?;
+    let graphql = home.graphql_endpoint();
     let user_home = tempfile::tempdir()?;
     let user = KeyIdentity::load_or_create(user_home.path().join("user.key"), None)?;
     let binding = provision_fresh_home(&node, identity.as_ref(), user.did()).await?;
@@ -201,16 +201,13 @@ async fn provider_selection_after_unconfigured_init_uses_the_discovered_limits()
         panic!("expected init");
     };
     let home = gents::runtime::embedded::EmbeddedHome::create_temp("init-seed").await?;
-    let identity = home.identity.clone();
+    let identity = home.node_identity.clone();
     let owner = home.did();
     let node = home.node.clone();
     let user_home = tempfile::tempdir()?;
     let user = KeyIdentity::load_or_create(user_home.path().join("user.key"), None)?;
     let binding = provision_fresh_home(&node, identity.as_ref(), user.did()).await?;
-    let access = gents_host::test_support::user_access(
-        home.graphql_endpoint().context("served init home")?,
-        &user,
-    );
+    let access = gents_host::test_support::user_access(home.graphql_endpoint(), &user);
     let summary = initialize_runtime_home(
         &access,
         &node,

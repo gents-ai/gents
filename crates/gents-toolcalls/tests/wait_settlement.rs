@@ -5,7 +5,7 @@ use gents_toolcalls::call::hook::*;
 
 #[tokio::test]
 async fn wait_process_refuses_a_job_row_with_the_completion_message_text() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "wait-process-refuses-a-job-row-with-the-",
         gents_session::test_support::no_lifecycle_plugins(),
     )

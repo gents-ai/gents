@@ -415,7 +415,7 @@ async fn deny_is_signed_and_a_shared_offer_names_the_single_use_rule() {
         "challenge-engineer-deny".into(),
     )
     .await;
-    let tool = |db: &gents_inference::test_support::TestDb| {
+    let tool = |db: &gents_store::test_support::TestStore| {
         P2pTool::new(db.node.clone(), Some(db.node_identity.clone()), None, true)
     };
     let server_tool = tool(&server);
