@@ -18,6 +18,20 @@ const RELISTEN_MAX_MS = 8_000;
     leave the selection unread (TLA `DesktopUpdateListener` `StartupRead`). */
 export const UNREGISTERED_READ_MS = 250;
 
+/** What the window and the network tell the observer. */
+export type AppEvent =
+  "shown-again" | "hidden" | "focused" | "online" | "network-changed";
+
+/** Whether an app event asks every node to reconnect now (Lean
+    `ObserverResync.asksRetryNow`): a node lost to the network waits out its
+    reconnect backoff, and each of these is evidence the network may be back.
+    The observer's retry now leaves a connected node alone
+    (`ObserverResync.retryNowRestarts`), so asking for every node restarts
+    only those still lost. */
+export function asksRetryNow(event: AppEvent): boolean {
+  return event === "shown-again" || event === "online" || event === "network-changed";
+}
+
 export function startClientObservation(
   { api, stores, view, actions, lifecycle, trackedRequestId }: DesktopApp,
   listenToUpdates: DesktopClientUpdatedListenerFactory,
@@ -145,18 +159,30 @@ export function startClientObservation(
       void controller.request("session");
     });
 
+    const appEvent = (event: AppEvent) => {
+      if (asksRetryNow(event)) void actions.reconnectNode(null).catch(() => {});
+    };
     let wasHidden = hidden();
     const refreshForegroundState = () => {
       if (hidden()) {
         wasHidden = true;
+        appEvent("hidden");
         return;
       }
-      if (wasHidden) void actions.reconnectNode(null).catch(() => {});
+      appEvent(wasHidden ? "shown-again" : "focused");
       wasHidden = false;
       void controller.request("full");
     };
     document.addEventListener("visibilitychange", refreshForegroundState);
     window.addEventListener("focus", refreshForegroundState);
+    /* a switch between Wi-Fi and mobile data stays online: the connection's
+       own change event, where the WebView has one, says so */
+    const online = () => appEvent("online");
+    const networkChanged = () => appEvent("network-changed");
+    const connection = (navigator as Navigator & { connection?: EventTarget })
+      .connection;
+    window.addEventListener("online", online);
+    connection?.addEventListener("change", networkChanged);
 
     return () => {
       stopped = true;
@@ -169,6 +195,8 @@ export function startClientObservation(
       unsubscribeTracked();
       document.removeEventListener("visibilitychange", refreshForegroundState);
       window.removeEventListener("focus", refreshForegroundState);
+      window.removeEventListener("online", online);
+      connection?.removeEventListener("change", networkChanged);
       unlisten?.();
     };
   }
