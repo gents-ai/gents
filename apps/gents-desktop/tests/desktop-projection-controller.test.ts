@@ -2,10 +2,23 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
 import {
+  BURST_MS,
   createProjectionController,
   desktopUpdateRefreshScope,
+  type ProjectionController,
 } from "../src/hooks/projectionController";
 import { deferred } from "./deferred";
+
+/* a request reads once the burst it starts has passed (requests made
+   together join one read), so under fake timers it is stepped through */
+async function requested(
+  projection: ProjectionController,
+  scope: Parameters<ProjectionController["request"]>[0],
+) {
+  const done = projection.request(scope);
+  await vi.advanceTimersByTimeAsync(BURST_MS);
+  await done;
+}
 
 function controller(
   overrides: Partial<Parameters<typeof createProjectionController>[0]> = {},
@@ -179,6 +192,26 @@ describe("createProjectionController", () => {
     expect(refreshSnapshot).toHaveBeenCalledTimes(1);
   });
 
+  /* a store update for a tracked turn owes the session list a read once the
+     turn ends; a session read requested beside it covers the update's delta,
+     and must pay that read too when it finds the turn ended */
+  it("refreshes the fleet when a delta merged into a session read observes terminal completion", async () => {
+    const refreshSnapshot = vi.fn(async () => {});
+    const refreshSession = vi.fn(
+      async () => ({ turnState: "completed" }) as DesktopSessionSnapshot,
+    );
+    const projection = controller({
+      refreshSnapshot,
+      refreshSession,
+      readSessionUpdate: async () => 0,
+    });
+    const session = projection.request("session");
+    const delta = projection.request("sessionDelta");
+    await Promise.all([session, delta]);
+    expect(refreshSession).toHaveBeenCalledTimes(1);
+    expect(refreshSnapshot).toHaveBeenCalledTimes(1);
+  });
+
   it("refreshes the index once after a terminal session event projection", async () => {
     const refreshSnapshot = vi.fn(async () => {});
     const refreshSession = vi.fn(async () => {
@@ -275,8 +308,8 @@ describe("createProjectionController", () => {
       const refreshSession = vi.fn(async () => null);
       const projection = controller({ readSessionUpdate, refreshSession });
 
-      await projection.request("sessionDelta");
-      await projection.request("sessionDelta");
+      await requested(projection, "sessionDelta");
+      await requested(projection, "sessionDelta");
       expect(readSessionUpdate).toHaveBeenCalledTimes(2);
       expect(refreshSession).not.toHaveBeenCalled();
 
@@ -300,13 +333,13 @@ describe("createProjectionController", () => {
         refreshSession,
       });
 
-      await projection.request("sessionDelta");
-      await projection.request("session");
+      await requested(projection, "sessionDelta");
+      await requested(projection, "session");
       expect(refreshSession).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(5_000);
       expect(refreshSession).toHaveBeenCalledTimes(1);
 
-      await projection.request("sessionDelta");
+      await requested(projection, "sessionDelta");
       projection.dispose();
       await vi.advanceTimersByTimeAsync(5_000);
       expect(refreshSession).toHaveBeenCalledTimes(1);
@@ -329,7 +362,7 @@ describe("createProjectionController", () => {
         refreshSession,
       });
 
-      for (let i = 0; i < 5; i++) await projection.request("storeUpdate");
+      for (let i = 0; i < 5; i++) await requested(projection, "storeUpdate");
       expect(refreshSnapshot).toHaveBeenCalledTimes(5);
       expect(readSessionUpdate).toHaveBeenCalledTimes(5);
       expect(refreshSession).not.toHaveBeenCalled();
@@ -341,7 +374,7 @@ describe("createProjectionController", () => {
       expect(refreshSnapshot).toHaveBeenCalledTimes(5);
 
       readSessionUpdate.mockResolvedValue(0);
-      await projection.request("storeUpdate");
+      await requested(projection, "storeUpdate");
       expect(refreshSession).toHaveBeenCalledTimes(2);
       expect(refreshSnapshot).toHaveBeenCalledTimes(6);
     } finally {
@@ -363,17 +396,17 @@ describe("createProjectionController", () => {
         defersUpdates: () => deferred,
       });
 
-      await projection.request("storeUpdate");
+      await requested(projection, "storeUpdate");
       expect(readSessionUpdate).toHaveBeenCalledTimes(1);
       deferred = true;
-      await projection.request("storeUpdate");
+      await requested(projection, "storeUpdate");
       await vi.advanceTimersByTimeAsync(60_000);
       expect(readSessionUpdate).toHaveBeenCalledTimes(1);
       expect(refreshSession).not.toHaveBeenCalled();
       expect(refreshSnapshot).toHaveBeenCalledTimes(2);
 
       deferred = false;
-      await projection.request("full");
+      await requested(projection, "full");
       expect(refreshSession).toHaveBeenCalledExactlyOnceWith("session-1");
     } finally {
       vi.useRealTimers();

@@ -70,6 +70,8 @@ mod graphql;
 mod held_audience;
 mod home_provider;
 pub mod home_status;
+#[cfg(test)]
+mod isolation_premise_tests;
 pub mod node_deferred_operation;
 mod node_document_publication;
 mod node_permissions;

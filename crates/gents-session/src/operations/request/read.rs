@@ -19,7 +19,7 @@ pub(super) fn request_selection() -> Selection<Doc> {
         .field(fields::TERMINAL_REDRIVE_ATTEMPTS)
         .field(fields::SUPERSEDED_BY_REQUEST)
         .field(fields::SUPERSEDED_BY_REQUEST_DOC_ID)
-        .field(fields::INTERRUPT_REQUESTED_AT)
+        .field(fields::INTERRUPT_GENERATION)
         .field(fields::CLAIMED_AT)
 }
 

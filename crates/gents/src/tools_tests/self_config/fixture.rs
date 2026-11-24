@@ -6,12 +6,13 @@ pub struct SelfConfigFixture {
 
 impl SelfConfigFixture {
     pub async fn new(name: &str) -> Self {
-        let (db, _user, user_access, binding) =
-            gents_inference::test_support::signed_test_node_from_db(
-                crate::support::trial_store(name).await,
-                name,
-            )
-            .await;
+        let signed_home = gents_documents::test_support::SignedHome::enroll(
+            crate::support::trial_store(name).await,
+            name,
+        )
+        .await;
+        let binding = gents_inference::test_support::default_agent(&signed_home).await;
+        let (db, _user, user_access) = signed_home.into_parts();
         gents_toolcalls::test_support::grant_modeled_direct_sets(
             &db.node,
             db.node_identity.did(),

@@ -1,0 +1,3 @@
+---- MODULE MCTranscriptWheelRestFastFramesTimeAlone ----
+EXTENDS TranscriptWheelRest
+====

@@ -166,7 +166,7 @@ pub(crate) async fn start_running_in_txn(
                     .field(fields::LIFECYCLE_STATE)
                     .field(fields::EXECUTION_GENERATION)
                     .field(fields::EXECUTION_LEASE_EXPIRES_AT)
-                    .field(fields::INTERRUPT_REQUESTED_AT),
+                    .field(fields::INTERRUPT_GENERATION),
             )
             .filter(Filter::eq(fields::DOC_ID, &start.request))
             .filter(Filter::eq(fields::NODE_DID, &start.agent))
@@ -184,7 +184,14 @@ pub(crate) async fn start_running_in_txn(
             || RequestLifecycleState::parse_opt(row["lifecycle_state"].as_str())
                 != Some(RequestLifecycleState::Processing)
             || row["execution_generation"].as_str() != Some(start.generation.as_str())
-            || !row["interrupt_requested_at"].is_null()
+            || gents_session::request::interrupt::request_interrupted_at_in_txn(
+                txn,
+                &start.agent,
+                &start.session,
+                row["interrupt_generation"].as_i64(),
+            )
+            .await?
+            .is_some()
         {
             return Err(ToolDispatchRejection::LostRequestOwnership.into());
         }

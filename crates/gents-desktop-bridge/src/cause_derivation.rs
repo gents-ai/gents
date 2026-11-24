@@ -4,7 +4,9 @@ use crate::types::DerivedCancelCauseView;
 
 #[derive(Debug, Clone, Default)]
 pub struct RequestEvidence {
-    pub interrupt_requested_at: Option<String>,
+    /// When the root request was interrupted: its terminal time once its
+    /// lifecycle is `interrupted`.
+    pub interrupted_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -50,16 +52,14 @@ pub fn derive_tool_call_cause(
         });
     }
 
-    if req.interrupt_requested_at.is_some() {
-        let at = req.interrupt_requested_at.clone();
+    if let Some(at) = &req.interrupted_at {
         return Some(DerivedCancelCauseView {
-            cause: "userCancelled".into(),
+            cause: "interrupted".into(),
             source: "requestInterrupt".into(),
             confidence: "direct".into(),
-            at: at.clone(),
+            at: Some(at.clone()),
             evidence: vec![format!(
-                "AgentRequest.interrupt_requested_at = {}",
-                at.as_deref().unwrap_or("(unset)"),
+                "root AgentRequest.lifecycle_state = \"interrupted\" at {at}"
             )],
         });
     }
@@ -71,7 +71,7 @@ pub fn derive_tool_call_cause(
         at: tool.completed_at.clone(),
         evidence: vec![
             "checked: no deadline (lifecycle_state is not timedOut)".into(),
-            "checked: no interrupt_requested_at on root".into(),
+            "checked: root request not interrupted".into(),
             "no persisted AgentToolCall.cancel_cause on this row".into(),
         ],
     })
@@ -79,18 +79,8 @@ pub fn derive_tool_call_cause(
 
 pub fn derive_request_cause(
     lifecycle_state: Option<RequestLifecycleState>,
-    req: &RequestEvidence,
     terminalized_at: Option<String>,
 ) -> Option<DerivedCancelCauseView> {
-    if let Some(at) = &req.interrupt_requested_at {
-        return Some(DerivedCancelCauseView {
-            cause: "userCancelled".into(),
-            source: "requestInterrupt".into(),
-            confidence: "direct".into(),
-            at: Some(at.clone()),
-            evidence: vec![format!("AgentRequest.interrupt_requested_at = {at}")],
-        });
-    }
     if lifecycle_state != Some(RequestLifecycleState::Interrupted) {
         return None;
     }

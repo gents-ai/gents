@@ -110,7 +110,7 @@ fn the_full_subject_is_the_engineer_init_provisions_without_host_bash() {
         ),
         (
             Some(true),
-            Some(false),
+            Some(true),
             Some(true),
             Some(true),
             Some(true),

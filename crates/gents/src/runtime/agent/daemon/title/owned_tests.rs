@@ -1209,12 +1209,13 @@ impl TitleFixture {
         content: Option<String>,
         parent_limit: Option<u64>,
     ) -> Self {
-        let (db, _user, user_access, binding) =
-            gents_inference::test_support::signed_test_node_from_db(
-                crate::support::trial_store("title-owned").await,
-                "title-owned",
-            )
-            .await;
+        let signed_home = gents_documents::test_support::SignedHome::enroll(
+            crate::support::trial_store("title-owned").await,
+            "title-owned",
+        )
+        .await;
+        let binding = gents_inference::test_support::default_agent(&signed_home).await;
+        let (db, _user, user_access) = signed_home.into_parts();
         let node = db.node.clone();
         let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
         let agent_did = binding.agent_did.clone();
@@ -1475,12 +1476,11 @@ impl TitleFixture {
         );
         let doc = gents_store::graphql::escape_graphql_string(&self.parent.doc_id);
         let response = self.agent_access()
-            .execute(&format!("{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{doc}\" }} }}, limit: 1) {{ lifecycle_state interrupt_requested_at terminal_output }} }}"))
+            .execute(&format!("{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{doc}\" }} }}, limit: 1) {{ lifecycle_state terminal_output }} }}"))
             .await
             .unwrap();
         let row = &response["data"]["AgentRequest"][0];
         assert_eq!(row["lifecycle_state"], "interrupted");
-        assert!(row["interrupt_requested_at"].as_str().is_some());
         assert_eq!(
             serde_json::from_value::<gents_protocol::output::TerminalOutput>(
                 row["terminal_output"].clone()

@@ -121,18 +121,17 @@ def rereadRows : List String :=
 
 The follow-up machine is replayed against the production owners. A trace is a
 sequence of the user's, the runtime's and the client's actions; between them
-the observer's drain loop starts any owed read, one at a time (`settle`). Each
-action is a `Step` (`apply_reachable`), so every observed state is `Reachable`
-and `phase_has_exit` covers it. The retry action is taken only while the
-projected status offers it and no read runs. A shown session dropped while its
-refresh runs offers it beside that read; production then holds two reads whose
-older answer fails the refresh fence, and a trace answers only the latest, so
-the driver leaves that case out. -/
-
-structure Driver where
-  s : State
-  /-- the drain loop is running a read of its own -/
-  drainBusy : Bool
+the observer's drain loop starts any owed read, one pass at a time, once its
+burst window has passed (`settle`). `elapse` is the replay's clock passing the
+window. Each action is a `Step` (`apply_reachable`), so every observed state is
+`Reachable` and `phase_has_exit` covers it. The retry action is taken only
+while the projected status offers it and no read runs. A shown session dropped
+while its refresh runs offers it beside that read; production then holds two
+reads whose older answer fails the refresh fence, and a trace answers only the
+latest, so the driver leaves that case out. The replay's clock moves only at
+`elapse`, `fire` and `restart`, so an open window opened no earlier than an
+armed re-read and, being shorter than every re-read delay, ends first: `fire`
+is taken only with the window closed. -/
 
 inductive Reply where
   | found | missing | pending | failed | refused
@@ -165,11 +164,11 @@ inductive Act where
   | drop
   | stop
   | restart
+  | elapse
   deriving DecidableEq, Repr, Inhabited
 
-def settle (d : Driver) : Driver :=
-  if d.s.running && d.s.queued && !d.drainBusy then { s := beginRead d.s, drainBusy := true }
-  else d
+def settle (s : State) : State :=
+  if s.running && s.queued && !s.busy && !s.window then beginRead s else s
 
 def retryOffered (s : State) : Bool :=
   s.reading.isNone && (project (input s none)).bind (·.action) == some .retryLocal
@@ -178,42 +177,38 @@ def other (n : Nat) : Nat := if n == 0 then 1 else 0
 
 def selectState (s : State) (drop : Bool) : State := selectTarget s (other s.selected) drop
 
-def apply (d : Driver) : Act → Option Driver
-  | .select drop => some (settle { d with s := selectState d.s drop })
-  | .notice =>
-      if d.s.running then some (settle { d with s := { d.s with queued := true, fresh := true } })
-      else none
+def apply (s : State) : Act → Option State
+  | .select drop => some (settle (selectState s drop))
+  | .notice => if s.running then some (settle { s.owe with fresh := true }) else none
   | .complete r =>
-      match d.s.reading with
-      | some t => some (settle { s := finish d.s t r.outcome, drainBusy := false })
+      match s.reading with
+      | some t => some (settle (finish s t r.outcome))
       | none => none
   | .fire =>
-      if d.s.timer then some (settle { d with s := { d.s with timer := false, queued := true } })
+      if s.timer && !s.window then some (settle { s with timer := false, fired := true }.owe)
       else none
   | .retry =>
-      if retryOffered d.s then some (settle { d with s := { launch d.s with budget := rereadBudget } })
-      else none
-  | .drop => some (settle { d with s := { d.s with shown := none } })
-  | .stop => if d.s.running then some { s := stopObserver d.s, drainBusy := false } else none
+      if retryOffered s then some (settle { launch s with budget := rereadBudget }) else none
+  | .drop => some (settle { s with shown := none })
+  | .stop => if s.running then some (stopObserver s) else none
   | .restart =>
-      if !d.s.running then
-        some (settle { d with s := { d.s with running := true, queued := true, fresh := true } })
-      else none
+      if !s.running then some (settle { s with running := true, fresh := true }.owe) else none
+  | .elapse => if s.window then some (settle { s with window := false }) else none
 
-theorem settle_reachable (d : Driver) (h : Reachable d.s) : Reachable (settle d).s := by
+theorem settle_reachable (s : State) (h : Reachable s) : Reachable (settle s) := by
   unfold settle
   split
   · rename_i hc
     simp only [Bool.and_eq_true, Bool.not_eq_true'] at hc
-    exact Reachable.step h (Step.begin _ hc.1.2)
+    exact Reachable.step h (Step.begin _ hc.1.1.2 hc.1.2 hc.2)
   · exact h
 
 theorem other_ne (n : Nat) : other n ≠ n := by
   unfold other
   split <;> rename_i h <;> simp only [beq_iff_eq] at h <;> omega
 
-theorem apply_reachable (d d' : Driver) (a : Act) (hs : Reachable d.s)
-    (h : apply d a = some d') : Reachable d'.s := by
+theorem apply_reachable (d d' : State) (a : Act) (hs : Reachable d)
+    (h : apply d a = some d') : Reachable d' := by
   cases a with
   | select drop =>
       simp only [apply, Option.some.injEq] at h; subst h
@@ -232,7 +227,9 @@ theorem apply_reachable (d d' : Driver) (a : Act) (hs : Reachable d.s)
   | fire =>
       simp only [apply] at h; split at h
       · simp only [Option.some.injEq] at h; subst h
-        rename_i ht; exact settle_reachable _ (Reachable.step hs (Step.fire _ ht))
+        rename_i ht
+        simp only [Bool.and_eq_true] at ht
+        exact settle_reachable _ (Reachable.step hs (Step.fire _ ht.1))
       · cases h
   | retry =>
       simp only [apply] at h; split at h
@@ -254,16 +251,23 @@ theorem apply_reachable (d d' : Driver) (a : Act) (hs : Reachable d.s)
         simp only [Bool.not_eq_true'] at hr
         exact settle_reachable _ (Reachable.step hs (Step.restart _ hr))
       · cases h
+  | elapse =>
+      simp only [apply] at h; split at h
+      · simp only [Option.some.injEq] at h; subst h
+        rename_i hw; exact settle_reachable _ (Reachable.step hs (Step.elapse _ hw))
+      · cases h
 
-def start : Driver := settle { s := initial 0, drainBusy := false }
+/-- The replay starts once the first read's window has passed. -/
+def start : State := settle { initial 0 with window := false }
 
-theorem start_reachable : Reachable start.s := settle_reachable _ (Reachable.init 0)
+theorem start_reachable : Reachable start :=
+  settle_reachable _ (Reachable.step (Reachable.init 0) (Step.elapse _ rfl))
 
 def allActs : List Act :=
-  [.select false, .select true, .drop, .notice, .stop, .restart, .fire, .retry] ++
+  [.select false, .select true, .drop, .notice, .stop, .restart, .fire, .retry, .elapse] ++
     replies.map .complete
 
-def enabled (d : Driver) : List Act := allActs.filter fun a => (apply d a).isSome
+def enabled (d : State) : List Act := allActs.filter fun a => (apply d a).isSome
 
 def actJson : Act → String
   | .select drop => "{\"kind\":\"select\",\"drop\":" ++ toString drop ++ "}"
@@ -274,6 +278,7 @@ def actJson : Act → String
   | .drop => "{\"kind\":\"drop\"}"
   | .stop => "{\"kind\":\"stop\"}"
   | .restart => "{\"kind\":\"restart\"}"
+  | .elapse => "{\"kind\":\"elapse\"}"
 
 private def optNat : Option Nat → String
   | none => "null"
@@ -281,8 +286,7 @@ private def optNat : Option Nat → String
 
 /-- What a trace compares after each action. The status detail carries error
 text the model abstracts, so the projection rows above check it instead. -/
-def obsJson (d : Driver) : String :=
-  let s := d.s
+def obsJson (s : State) : String :=
   let status := match project (input s none) with
     | none => "null"
     | some st =>
@@ -297,7 +301,7 @@ def obsJson (d : Driver) : String :=
 
 /-- Runs a trace, keeping only the enabled prefix. -/
 def runTrace (acts : List Act) : List Act × List String :=
-  let rec go (d : Driver) : List Act → List Act × List String
+  let rec go (d : State) : List Act → List Act × List String
     | [] => ([], [])
     | a :: rest =>
         match apply d a with
@@ -314,7 +318,7 @@ def traceJson (acts : List Act) : String :=
     String.intercalate "," os ++ "]}"
 
 /-- Every enabled sequence of up to `depth` actions from the start. -/
-def exhaustive : Nat → Driver → List (List Act)
+def exhaustive : Nat → State → List (List Act)
   | 0, _ => [[]]
   | depth + 1, d =>
       [] :: (enabled d).flatMap fun a =>
@@ -323,7 +327,7 @@ def exhaustive : Nat → Driver → List (List Act)
         | some d' => (exhaustive depth d').map (a :: ·)
 
 /-- Pseudo-random walks over the enabled actions, reproducible from `seed`. -/
-def walk (seed : Nat) : Nat → Driver → List Act
+def walk (seed : Nat) : Nat → State → List Act
   | 0, _ => []
   | n + 1, d =>
       let acts := enabled d
@@ -335,6 +339,23 @@ def walk (seed : Nat) : Nat → Driver → List Act
         | none => []
         | some d' => a :: walk next n d'
 
+/-- A scripted trace with the burst window passed wherever its next act waits
+on it. -/
+def paced (acts : List Act) : List Act :=
+  let rec go (d : State) : List Act → List Act
+    | [] => []
+    | a :: rest =>
+        match apply d a with
+        | some d' => a :: go d' rest
+        | none =>
+            match apply d .elapse with
+            | none => []
+            | some e =>
+                match apply e a with
+                | some d' => .elapse :: a :: go d' rest
+                | none => []
+  go start acts
+
 def waitingStreak (r : Reply) : List Act :=
   (List.range rereadBudget).flatMap (fun _ => [.complete r, .fire]) ++
     [.complete r, .retry, .complete r, .notice, .complete .found]
@@ -343,9 +364,12 @@ def waitingStreak (r : Reply) : List Act :=
 streak a notice resets, the client stopping while a read or a re-read waits,
 a retry while it is stopped, a selection while it is stopped, a mismatched reply,
 a refresh of a shown session that is dropped, stopped or answered with a
-waiting phase, and recent reads: reopened and confirmed, refused, reopened
-while another read runs, settled without confirmation, and stopped. -/
-def scripted : List (List Act) :=
+waiting phase, recent reads: reopened and confirmed, refused, reopened while
+another read runs, settled without confirmation, and stopped; and the drain
+loop's passes: requests made inside one window read by one pass, and a store
+notice made while a pass runs read by the next pass, which starts as that pass
+ends. -/
+def scriptedActs : List (List Act) :=
   [.pending].map waitingStreak ++
   [ [.complete .pending, .fire, .complete .pending, .notice, .complete .pending, .fire,
       .complete .pending, .fire, .complete .pending, .fire, .complete .pending, .fire,
@@ -373,7 +397,13 @@ def scripted : List (List Act) :=
     [.complete .found, .select false, .complete .found, .select false, .complete .missing,
       .select false, .select false, .complete .found],
     [.complete .found, .select false, .complete .found, .notice, .select false,
-      .complete .refused, .complete .found, .select false] ]
+      .complete .refused, .complete .found, .select false],
+    [.complete .found, .notice, .notice, .select false, .elapse, .complete .found, .notice,
+      .elapse, .complete .found],
+    [.notice, .complete .pending, .complete .pending, .notice, .elapse, .notice,
+      .complete .pending, .complete .found] ]
+
+def scripted : List (List Act) := scriptedActs.map paced
 
 def traceRows : List String :=
   (exhaustive 3 start).map traceJson ++

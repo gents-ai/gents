@@ -7,6 +7,7 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import { BridgeInvokeError } from "@source-inc/gents-desktop-client";
 import { startClientObservation } from "../src/hooks/clientObservation";
+import { BURST_MS } from "../src/hooks/projectionController";
 import { RECENT_READS, createSessionReads } from "../src/hooks/sessionReads";
 import { createSelectionStore } from "../src/hooks/selectionStore";
 import { createSessionStore, readSession } from "../src/hooks/sessionStore";
@@ -290,14 +291,14 @@ describe("opening a recently read session in the app", () => {
       vi.fn(async () => () => {}),
     );
     try {
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(BURST_MS);
       pending.shift()!(snapshotOf("s-1"));
       await vi.advanceTimersByTimeAsync(0);
       const first = readSession(app.stores.session);
       expect(first?.sessionId).toBe("s-1");
 
       app.actions.selectSession("s-2");
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(BURST_MS);
       pending.shift()!(snapshotOf("s-2"));
       await vi.advanceTimersByTimeAsync(0);
       expect(readSession(app.stores.session)?.sessionId).toBe("s-2");

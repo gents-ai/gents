@@ -84,8 +84,13 @@ async fn keyed_delivery(
 /// the unique `(node_did, session_id)` index resolves the race between them.
 #[tokio::test]
 async fn fires_for_one_key_admit_before_it_exists_and_share_one_session() {
-    let (db, _user, _user_access, binding) =
-        crate::test_support::signed_test_node("keyed-session-fires").await;
+    let signed_home = gents_documents::test_support::SignedHome::start(
+        "keyed-session-fires",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, _user_access) = signed_home.into_parts();
     let agent =
         gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
     let owner = db.node_identity.did().to_owned();

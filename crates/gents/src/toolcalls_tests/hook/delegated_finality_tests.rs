@@ -40,8 +40,9 @@ async fn fixture(name: &str) -> Fixture {
     let fixture_name = format!("finality-{name}");
     let db = crate::support::trial_store(&fixture_name).await;
     let (db, user, user_access) =
-        gents_inference::test_support::signed_test_node_without_agent_from_db(db, &fixture_name)
-            .await;
+        gents_documents::test_support::SignedHome::enroll(db, &fixture_name)
+            .await
+            .into_parts();
     let node = db.node.clone();
     let runtime = db.node_identity.clone();
     let value = json!({"node_did": runtime.did(), "enabled": true});

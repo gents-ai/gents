@@ -105,6 +105,7 @@ runs:
 
     # Lean 4.18's LLVM 15 linker emits a native cache executable that macOS 26
     # rejects; the interpreter runs the same checked-in entry point.
+    # MATHLIB_CACHE_DIR is this runner's own (setup-lean-build-cache.sh); `clean` keeps only the pinned Mathlib's files.
     - name: Download precompiled Mathlib artifacts
       if: inputs.lean == 'true'
       shell: bash
@@ -112,6 +113,7 @@ runs:
       run: |
         lake --verbose build Cache.Main
         lake env lean --run .lake/packages/mathlib/Cache/Main.lean get
+        lake env lean --run .lake/packages/mathlib/Cache/Main.lean clean
 
     # Lean-backed tests build this target on first use under a shared lock with
     # their output captured; on a cold runner cache that build outlasts the

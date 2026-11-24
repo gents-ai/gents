@@ -19,10 +19,11 @@ class LeanBuildCacheTests(unittest.TestCase):
         self.cache_root = root / "lean-cache"
         self.cache = self.cache_root / "runner_1"
         self.lake = self.proofs / ".lake"
+        self.github_env = root / "github-env"
 
     def setup(self):
         env = dict(os.environ, GITHUB_WORKSPACE=str(self.workspace), LEAN_CACHE_ROOT=str(self.cache_root),
-                   RUNNER_NAME="runner 1")
+                   GITHUB_ENV=str(self.github_env), RUNNER_NAME="runner 1")
         return subprocess.run(["bash", str(SCRIPT)], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                               text=True)
 
@@ -33,6 +34,11 @@ class LeanBuildCacheTests(unittest.TestCase):
 
     def test_a_fresh_checkout_links_the_runner_cache(self):
         self.assert_linked(self.setup())
+
+    def test_mathlib_downloads_go_to_the_runner_s_own_directory(self):
+        self.assert_linked(self.setup())
+        self.assertEqual(self.github_env.read_text(),
+                         f"MATHLIB_CACHE_DIR={self.cache_root / '.mathlib/runner_1'}\n")
 
     def test_the_expected_link_is_reused(self):
         self.assert_linked(self.setup())

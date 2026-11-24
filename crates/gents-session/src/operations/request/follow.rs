@@ -166,7 +166,7 @@ pub(super) fn terminal_refusal(output: &CanonicalRequestOutput) -> &'static str 
 pub(super) struct WaitProgressMarker {
     lifecycle_state: Option<RequestLifecycleState>,
     failure_reason: Option<String>,
-    interrupt_requested_at: Option<String>,
+    interrupt_generation: Option<i64>,
     valid_until: Option<String>,
     execution_lease_expires_at: Option<String>,
     terminal_output: Option<String>,
@@ -205,7 +205,7 @@ impl WaitProgressMarker {
         Self {
             lifecycle_state: row.and_then(|row| row.lifecycle_state),
             failure_reason: row.and_then(|row| row.failure_reason.clone()),
-            interrupt_requested_at: row.and_then(|row| row.interrupt_requested_at.clone()),
+            interrupt_generation: row.and_then(|row| row.interrupt_generation),
             valid_until: row.and_then(|row| row.valid_until.clone()),
             execution_lease_expires_at: row.and_then(|row| row.execution_lease_expires_at.clone()),
             terminal_output: row

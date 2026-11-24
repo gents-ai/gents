@@ -58,5 +58,15 @@ mod tests {
                 "{policy:?}"
             );
         }
+        let transport_v2 = gents_protocol::schemas::HomePolicyIds::embedded_vera_transport_v2();
+        for policy in BuiltInPolicy::ALL {
+            assert_eq!(
+                super::seed_transport_v2(&policy)
+                    .id()
+                    .expect("a built-in policy compiles"),
+                transport_v2.id(policy),
+                "transport v2 {policy:?}"
+            );
+        }
     }
 }

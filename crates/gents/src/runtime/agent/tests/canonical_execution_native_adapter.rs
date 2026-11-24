@@ -1540,12 +1540,13 @@ impl NativeCanonicalExecutionAdapter {
                 title_binding.map_or(seed.request_id, |binding| binding.logical_request)
             );
             let initial_session_id = format!("lean-session-{}", seed.session_id);
-            let (db, user, owner, binding) =
-                gents_inference::test_support::signed_test_node_from_db(
-                    crate::support::trial_store("lean-canonical-execution").await,
-                    "lean-canonical-execution",
-                )
-                .await;
+            let signed_home = gents_documents::test_support::SignedHome::enroll(
+                crate::support::trial_store("lean-canonical-execution").await,
+                "lean-canonical-execution",
+            )
+            .await;
+            let binding = gents_inference::test_support::default_agent(&signed_home).await;
+            let (db, user, owner) = signed_home.into_parts();
             let identity = db.node_identity.clone();
             let node_did = identity.did().to_owned();
             let node = db.node.clone();

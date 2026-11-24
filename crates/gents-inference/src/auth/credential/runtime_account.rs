@@ -85,11 +85,13 @@ mod tests {
     #[tokio::test]
     async fn runtime_default_read_shares_agent_transaction_and_preserves_secret_acl(
     ) -> anyhow::Result<()> {
-        let (db, user, user_access, binding) = crate::test_support::signed_test_node(
+        let signed_home = gents_documents::test_support::SignedHome::start(
             "runtime-default-account",
             gents_store::node_extension::Extensions::none(),
         )
         .await;
+        let binding = crate::test_support::default_agent(&signed_home).await;
+        let (db, user, user_access) = signed_home.into_parts();
         let runtime = db.node_identity.as_ref();
         let signer = gents_store::identity::resolve_agent_identity(runtime, &binding)?;
         let agent = ConfigAccess::local_managed_agent(

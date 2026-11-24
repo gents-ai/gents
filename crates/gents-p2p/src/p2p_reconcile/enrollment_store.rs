@@ -1397,15 +1397,6 @@ impl GraphqlEnrollmentStore {
         &self,
         txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     ) -> Result<EnrollmentProjection> {
-        for collection in [
-            "Network",
-            "NetworkEnrollmentRequest",
-            "NetworkEnrollmentDecision",
-            "NetworkAuthorizationRevision",
-            "NetworkEnrollmentRouteReceipt",
-        ] {
-            gents_store::graphql::fence_arrivals(txn, collection).await?;
-        }
         let response = txn
             .execute_local_response(ENROLLMENT_DOCUMENT_QUERY)
             .await?;

@@ -653,8 +653,10 @@ mod tests {
             AcceptedFixtureCall,
         };
         let db = crate::support::trial_store("observe-evidence").await;
-        let (db, user, client, binding) =
-            crate::test_support::signed_test_node_from_db(db, "observe-evidence").await;
+        let signed_home =
+            gents_documents::test_support::SignedHome::enroll(db, "observe-evidence").await;
+        let binding = gents_inference::test_support::default_agent(&signed_home).await;
+        let (db, user, client) = signed_home.into_parts();
         let did = db.node_identity.did().to_owned();
         crate::runner::embedded::executor::install::grant_trial_operations(&db, &binding.agent_did)
             .await
@@ -925,7 +927,10 @@ mod tests {
         let home = EmbeddedHome::create_temp("observe-unsettled")
             .await
             .unwrap();
-        for state in ["pending", "processing"] {
+        // The deadline interrupt ends a pending request before its claim and
+        // passes a processing one's claim; the observation reports the state
+        // it read, which the interrupt did not make terminal evidence.
+        for (state, after) in [("pending", "interrupted"), ("processing", "processing")] {
             let case = cases
                 .iter()
                 .find(|case| {
@@ -939,11 +944,26 @@ mod tests {
                 .unwrap();
             let request_id = format!("req-unsettled-{state}");
             insert_request(&home, &request_id, state).await;
-            let observed = await_terminal(
+            let access =
+                ConfigAccess::local_as(home.node.clone(), identity::Did::new(home.did()).unwrap());
+            if state == "processing" {
+                let row = poll_request(&home.node, &request_id)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                gents_session::test_support::record_running_request_as(
+                    &access,
+                    row.doc_id.as_deref().unwrap(),
+                )
+                .await;
+            }
+            let observed = await_terminal_with_access(
                 &home.node,
+                &access,
                 &request_id,
                 Some(Duration::ZERO),
                 Duration::ZERO,
+                &NoHook,
             )
             .await
             .unwrap();
@@ -951,7 +971,7 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
-            assert_eq!(stored.lifecycle_state.as_deref(), Some(state));
+            assert_eq!(stored.lifecycle_state.as_deref(), Some(after));
             assert!(observed.interrupted_on_deadline);
             assert_eq!(
                 serde_json::to_value(&observed).unwrap()["terminal_state"],
@@ -1123,15 +1143,21 @@ mod tests {
         .await
         .unwrap();
         assert!(observed.interrupted_on_deadline);
-        assert_eq!(observed.terminal_state, None);
+        assert_eq!(
+            observed.terminal_state.map(|state| state.as_str()),
+            Some("interrupted")
+        );
         let request_id = gents_store::graphql::escape_graphql_string("req-stuck");
         let query = format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ interrupt_requested_at }} }}"#
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ lifecycle_state }} }}"#
         );
         let response = home.node.execute(&query).await;
         assert!(response.errors.is_empty(), "{:?}", response.errors);
-        let rendered = serde_json::to_string(&response.data).unwrap();
-        assert!(rendered.contains("interrupt_requested_at"), "{rendered}");
+        assert_eq!(
+            response.data.unwrap()["AgentRequest"][0]["lifecycle_state"],
+            "interrupted",
+            "the pending request is interrupted before its claim"
+        );
     }
 
     struct DeadlineHook {

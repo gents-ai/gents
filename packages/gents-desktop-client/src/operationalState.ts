@@ -358,7 +358,7 @@ export function projectRuntimeConnectionStatus(
         kind: "waiting",
         layer: "runtime",
         reason: "disconnected",
-        label: "Runtime unreachable",
+        label: "Reconnecting to runtime",
         shortLabel: "Reconnecting",
         detail: "The runtime connection was lost; reconnecting.",
       });
@@ -512,7 +512,7 @@ const SYNC_CAUSE_TEXT: Record<string, SyncCauseText> = {
     detail: "Waiting for the authenticated runtime connection.",
   },
   runtime_disconnected: {
-    label: "Runtime unreachable",
+    label: "Reconnecting to runtime",
     shortLabel: "Reconnecting",
     detail: "The runtime is not answering; it may be stopped. Reconnecting.",
   },

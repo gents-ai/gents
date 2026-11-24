@@ -76,7 +76,12 @@ type AgentRequest @policy(id: "$household", resource: "delivered_requests") {
     # Runtime-derived execution deadline; excluded from requester signatures.
     deadline: String
     retry_count: Int @immutable
-    interrupt_requested_at: String
+    # The session interrupt marker's generation this request saw: a wake
+    # records it when published or redriven, every request when claimed. A
+    # running request is interrupted once the marker passes it; a wake that
+    # recorded less than the marker is drained when claimed
+    # (Lean `SessionQueue.InterruptGeneration`).
+    interrupt_generation: Int
     valid_until: String @immutable
     # Session-message lineage, filled only on agent_new/agent_message calls or
     # a request-only control continuation; null on roots. request_hop null

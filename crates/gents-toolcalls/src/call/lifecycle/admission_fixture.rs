@@ -586,8 +586,9 @@ pub async fn published_admission_with_owner(
         });
     let db = gents_store::test_support::TestStore::open_at(&path, p2p, options.composition.clone())
         .await?;
-    let (db, user, owner, binding) =
-        gents_inference::test_support::signed_test_node_from_db(db, &name).await;
+    let signed_home = gents_documents::test_support::SignedHome::enroll(db, &name).await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, owner) = signed_home.into_parts();
     let node = db.node.clone();
     let runtime = db.node_identity.clone();
     let node_did = runtime.did().to_owned();
@@ -1335,17 +1336,45 @@ pub async fn materialize_session_at(
         .unwrap();
 }
 
+/// Moves the request to `state` and, as a claim does, records the session's
+/// interrupt generation on it.
 pub async fn set_state(
     access: &gents_store::config_client::ConfigAccess,
     doc_id: &str,
     state: &str,
 ) {
+    let doc = gents_store::graphql::escape_graphql_string(doc_id);
+    let generation = access
+        .transact_readonly("test.set_state.marker", |txn| {
+            let doc = &doc;
+            Box::pin(async move {
+                let row = txn
+                    .execute(&format!(
+                        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}) {{ node_did session_id }} }}"#
+                    ))
+                    .await?["data"]["AgentRequest"][0]
+                    .clone();
+                Ok::<_, anyhow::Error>(
+                    gents_session::session::interrupt_marker::read_for_session_in_txn(
+                        txn,
+                        row["node_did"].as_str().unwrap_or_default(),
+                        row["session_id"].as_str().unwrap_or_default(),
+                    )
+                    .await?
+                    .map(|marker| marker.generation),
+                )
+            })
+        })
+        .await
+        .unwrap();
+    let generation = generation
+        .map(|generation| format!(", interrupt_generation: {generation}"))
+        .unwrap_or_default();
     access
         .write(
             "test.set_state",
             &format!(
-                r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "{state}" }}) {{ _docID }} }}"#,
-                gents_store::graphql::escape_graphql_string(doc_id)
+                r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}, input: {{ lifecycle_state: "{state}"{generation} }}) {{ _docID }} }}"#
             ),
         )
         .await

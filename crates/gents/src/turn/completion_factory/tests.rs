@@ -27,6 +27,7 @@ fn request() -> AgentRequest {
         execution_lease_expires_at: None,
         execution_lease_secs: None,
         request_hop: 0,
+        interrupt_generation: None,
         caused_by_parent_request_id: None,
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
@@ -395,11 +396,13 @@ fn prior_usage_decode_rejects_partial_or_negative_components() {
 #[tokio::test]
 async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
     for case in gents_lean_vocab::families::budget_rehydration_ledger::cases::<String>() {
-        let (db, user, owner, binding) = gents_inference::test_support::signed_test_node_from_db(
+        let signed_home = gents_documents::test_support::SignedHome::enroll(
             crate::support::trial_store("completion-budget-rehydration").await,
             "completion-budget-rehydration",
         )
         .await;
+        let binding = gents_inference::test_support::default_agent(&signed_home).await;
+        let (db, user, owner) = signed_home.into_parts();
         let node = db.node.clone();
         let agent = agent_with_binding(
             db.node_identity.clone(),
@@ -713,11 +716,13 @@ fn calibration_accounting(estimator: &str, estimated: usize, ratio: Option<u64>)
 
 #[tokio::test]
 async fn session_calibration_seeds_from_durable_inference_calls() {
-    let (db, user, owner, binding) = gents_inference::test_support::signed_test_node_from_db(
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
         crate::support::trial_store("completion-session-calibration").await,
         "completion-session-calibration",
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, owner) = signed_home.into_parts();
     let node = db.node.clone();
     let agent = agent_with_binding(
         db.node_identity.clone(),

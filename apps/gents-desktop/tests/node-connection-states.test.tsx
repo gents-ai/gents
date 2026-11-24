@@ -143,7 +143,7 @@ describe("a node's connection", () => {
       () => useNodeConfigReadOnly(forge("disconnected", true) as NodeView),
       { wrapper: withApp(app) },
     );
-    expect(result.current).toBe("Read-only here: Can’t reach Forge.");
+    expect(result.current).toBe("Read-only here: Reconnecting to Forge.");
   });
 });
 
@@ -174,7 +174,7 @@ const states = (
     show("disconnected", true);
     expect(screen.getByText(shown)).toBeVisible();
     expect(screen.getByTestId("node-connection-stale")).toHaveTextContent(
-      "Can’t reach Forge. This may be out of date.",
+      "Reconnecting to Forge. This may be out of date.",
     );
   });
 };

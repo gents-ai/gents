@@ -81,7 +81,7 @@ async fn recovery_leaves_session_message_row_and_its_request_running_after_calle
         .access()
         .unwrap()
         .execute(&format!(
-            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state await_mode }} AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ caused_by_parent_tool_call_doc_id interrupt_requested_at lifecycle_state }} }}"#,
+            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state await_mode }} AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ caused_by_parent_tool_call_doc_id lifecycle_state }} }}"#,
             gents_store::graphql::escape_graphql_string(&tool_doc_id),
             gents_store::graphql::escape_graphql_string(&message.caused_request_doc_id),
         ))
@@ -94,8 +94,14 @@ async fn recovery_leaves_session_message_row_and_its_request_running_after_calle
         data["AgentRequest"][0]["caused_by_parent_tool_call_doc_id"],
         tool_doc_id
     );
-    assert!(
-        data["AgentRequest"][0]["interrupt_requested_at"].is_null(),
+    assert_eq!(
+        gents_session::request::interrupt::request_interrupted_at_by_doc_id_with_access(
+            &admitted.tool.access().unwrap(),
+            &message.caused_request_doc_id,
+        )
+        .await
+        .unwrap(),
+        None,
         "interrupting the caller must not reach the request its call caused"
     );
     admitted.node.shutdown().await.expect("shut down test node");
