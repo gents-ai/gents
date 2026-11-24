@@ -28,22 +28,45 @@ pub fn retain_latest(rows: &mut Vec<ContextCallRow>, limit: usize) {
     rows.truncate(limit);
 }
 
+/// The position after the rows read so far, in view order. `_docID` has no
+/// range operators, so the rows already read that share the last row's
+/// queued time, sequence and call ID are left out by identity in `seen`.
 #[derive(Debug, Clone)]
 pub struct ContextCursor {
     pub queued_at: Option<String>,
     pub call_seq: Option<i64>,
     pub call_id: Option<String>,
-    pub doc_id: String,
+    pub seen: Vec<String>,
 }
 
-impl From<&ContextCallRow> for ContextCursor {
-    fn from(row: &ContextCallRow) -> Self {
-        Self {
-            queued_at: row.queued_at.clone(),
-            call_seq: row.call_seq,
-            call_id: row.call_id.clone(),
-            doc_id: row.doc_id.clone(),
-        }
+impl ContextCursor {
+    /// The position after `page`, read after `previous` (`None` before the
+    /// first page). An empty page leaves the position where it was.
+    pub fn after_page(previous: Option<Self>, page: &[ContextCallRow]) -> Option<Self> {
+        let Some(last) = page.last() else {
+            return previous;
+        };
+        let tied = |queued_at: &Option<String>,
+                    call_seq: &Option<i64>,
+                    call_id: &Option<String>| {
+            *queued_at == last.queued_at && *call_seq == last.call_seq && *call_id == last.call_id
+        };
+        let mut seen = previous
+            .filter(|cursor| tied(&cursor.queued_at, &cursor.call_seq, &cursor.call_id))
+            .map(|cursor| cursor.seen)
+            .unwrap_or_default();
+        seen.extend(
+            page.iter()
+                .rev()
+                .take_while(|row| tied(&row.queued_at, &row.call_seq, &row.call_id))
+                .map(|row| row.doc_id.clone()),
+        );
+        Some(Self {
+            queued_at: last.queued_at.clone(),
+            call_seq: last.call_seq,
+            call_id: last.call_id.clone(),
+            seen,
+        })
     }
 }
 
@@ -191,7 +214,7 @@ fn descending_cursor(cursor: &ContextCursor) -> Filter<inference_call::Doc> {
         queued_equal,
         sequence_equal,
         call_equal,
-        Filter::lt(inference_call::DOC_ID, &cursor.doc_id),
+        Filter::none_of(inference_call::DOC_ID, &cursor.seen),
     ]));
     Filter::any(branches)
 }
