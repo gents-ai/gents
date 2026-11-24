@@ -539,9 +539,9 @@ async fn a_request_the_server_closed_on_a_kept_alive_connection_is_sent_again() 
         let mut stream = model
             .stream(request)
             .await
-            .unwrap_or_else(|error| panic!("call {call}: {error}"));
+            .unwrap_or_else(|error| panic!("call {call}: {error:?}"));
         while let Some(item) = stream.next().await {
-            item.unwrap_or_else(|error| panic!("call {call}: {error}"));
+            item.unwrap_or_else(|error| panic!("call {call}: {error:?}"));
         }
     }
     assert_eq!(backend.observed_completion_requests(), 3);
