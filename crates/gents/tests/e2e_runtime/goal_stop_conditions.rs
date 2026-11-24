@@ -241,7 +241,11 @@ async fn a_goal_that_reaches_its_budget_gets_one_wrapup_turn_then_pauses() {
 fn repeated_call(marker: &str, id: &str) -> StreamResponse {
     StreamResponse::streams(
         marker,
-        vec![StreamChunk::tool_call(id, "list_processes", "{}".to_owned())],
+        vec![StreamChunk::tool_call(
+            id,
+            "list_processes",
+            "{}".to_owned(),
+        )],
     )
 }
 
@@ -279,7 +283,9 @@ async fn a_goal_that_repeats_the_same_call_is_paused_for_no_progress() {
     let limit = usize::try_from(gents_automation::goal::progress::NO_PROGRESS_LIMIT).unwrap();
     let plan = StreamPlan::current_authored_user(
         MARKER,
-        (0..limit + 2).flat_map(|turn| repeated_turn(MARKER, turn)).collect(),
+        (0..limit + 2)
+            .flat_map(|turn| repeated_turn(MARKER, turn))
+            .collect(),
     );
     let Booted {
         actors,
@@ -333,8 +339,10 @@ async fn set_policy(
     actors: &RequestActors,
     session: &str,
     on_blocked: gents_protocol::goal::OnBlocked,
-) -> Result<gents_protocol::goal::GoalStopPolicy, gents_protocol::operations::goal::GoalOperationError>
-{
+) -> Result<
+    gents_protocol::goal::GoalStopPolicy,
+    gents_protocol::operations::goal::GoalOperationError,
+> {
     gents_automation::operations::goal::set_stop_policy(
         access,
         actors.node_did(),
@@ -394,7 +402,11 @@ async fn confirm_once_pauses_on_the_second_blocked_report() {
     })
     .await;
     assert_eq!(goal["blocked_reason"], "The printer is still offline.");
-    assert_eq!(continuations.len(), 2, "one confirmation turn, then the pause");
+    assert_eq!(
+        continuations.len(),
+        2,
+        "one confirmation turn, then the pause"
+    );
     runtime.shutdown().await;
 }
 
@@ -450,7 +462,10 @@ async fn keep_trying_continues_past_blocked_reports_until_no_progress() {
     let goal = goal_failure(&actors, &session).await;
     assert_eq!(goal["last_failure"], "no_progress");
     assert_eq!(goal["blocked_reason"], "I need the mail key.");
-    assert!(continuations.len() > 1, "blocked reports did not stop the goal");
+    assert!(
+        continuations.len() > 1,
+        "blocked reports did not stop the goal"
+    );
     runtime.shutdown().await;
 }
 

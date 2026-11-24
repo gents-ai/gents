@@ -1052,7 +1052,8 @@ impl GoalSource {
             .and_then(|json| serde_json::from_str(json).ok())
             .unwrap_or_default();
         let goal_now = serde_json::json!([goal.objective, goal.token_budget]).to_string();
-        let changed = turn.goal_state_changed || (!record.goal.is_empty() && record.goal != goal_now);
+        let changed =
+            turn.goal_state_changed || (!record.goal.is_empty() && record.goal != goal_now);
         let now = u64::try_from(Utc::now().timestamp()).unwrap_or_default();
         let (mut next, pause) = crate::goal::progress::progress_step(
             &record,
