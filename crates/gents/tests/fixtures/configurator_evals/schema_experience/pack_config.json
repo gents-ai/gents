@@ -22,6 +22,7 @@
       "cases": [
         "./cases/help_center_search.json",
         "./cases/projects_and_tasks.json",
+        "./cases/newsroom_published_tally.json",
         "./cases/stock_records.json",
         "./cases/customer_timeline.json",
         "./cases/catalog_neighbors.json",

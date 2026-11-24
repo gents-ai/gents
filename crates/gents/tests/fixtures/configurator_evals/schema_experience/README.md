@@ -12,6 +12,7 @@ Every case that creates or changes a collection has a later stage that stores re
 | --- | --- | --- | --- |
 | help-center-search | a help center searchable by word | unique index, English full-text indexes, ranked search | the schema; the three loaded articles; the best match's slug in the reply |
 | projects-and-tasks | projects with tasks | two-way relationship, linked writes | the schema; each task linked to its project; the open task in the reply |
+| newsroom-published-tally | which writer has the most published stories, and who has none | two-way relationship, many linked writes from a file, reads across the relationship | the schema; six writers and sixteen stories, each linked to its writer; Chloe Varga, Dev Patel and Fatima Noor in the reply |
 | stock-records | parts keyed by SKU | unique index, create and lookup | the schema; the two parts; the looked-up part in the reply |
 | customer-timeline | one customer's events newest first | compound ordered index | the schema; the four events; the two latest in the reply |
 | catalog-neighbors | nearest items to a vector | flat Euclidean vector index, similarity read | the schema; the four items; the nearest one in the reply |
