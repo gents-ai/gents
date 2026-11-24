@@ -149,20 +149,21 @@ async function cost(
   void measurement.catch(() => {});
   try {
     /* the browser delivers the scroll and the chunk's commit in real time
-       while the paused clock only moves when told: one step fires the
-       harness notify's timer, and the reply is revealed on animation
-       frames, one per step until the list grows. The measured frames never
-       reach the rest that writes the carried position and draws another
-       stretch of rows: a scroll or a jump steps no frame before it lands,
-       and nothing in a chunk's window arms one, since the owner's own write
-       is not read as a scroll */
+       while the paused clock only moves when told: it steps a frame at a
+       time until the read the harness notify asks for lands, which starts
+       once the projection's burst window has passed, and the reply is
+       revealed on animation frames, one per step until the list grows. The
+       measured frames never reach the rest that writes the carried position
+       and draws another stretch of rows: a scroll or a jump steps no frame
+       before it lands, and nothing in a chunk's window arms one, since the
+       owner's own write is not read as a scroll */
     let steps = 0;
     const drive = async () => {
       const state = await viewport.evaluate((el) => ({
         ...JSON.parse(el.dataset.measuringCost ?? "{}"),
         height: el.scrollHeight,
       }));
-      if (state.phase === "streamed" ? steps === 0 : state.phase === "committed") {
+      if (state.phase === "streamed" || state.phase === "committed") {
         await page.clock.runFor(16);
         steps += 1;
       }
