@@ -818,7 +818,17 @@ async fn serve_foreground(
         let checked = node.clone();
         stream_members.admit_members_with(Arc::new(move |did: String| {
             let node = checked.clone();
-            Box::pin(async move { gents_store::config_client::holds_node_read(&node, &did).await })
+            Box::pin(async move {
+                use crate::http::shutdown_streams::PermissionRead;
+                match gents_store::config_client::holds_node_read(&node, &did).await {
+                    Ok(true) => PermissionRead::Held,
+                    Ok(false) => PermissionRead::Lost,
+                    Err(error) => {
+                        tracing::warn!(%error, "a subscriber's node read permission could not be read");
+                        PermissionRead::Unreadable
+                    }
+                }
+            })
         }));
     }
     let store_access = match gents_store::config_client::ConfigAccess::claimed_local(

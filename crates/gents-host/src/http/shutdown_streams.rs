@@ -37,9 +37,29 @@ pub struct ShutdownStreams {
     member: Arc<OnceLock<MemberCheck>>,
 }
 
-/// Whether a DID still holds node read permission. The node supplies it once
-/// it has started; until then only the handshake's check applies.
-pub type MemberCheck = Arc<dyn Fn(String) -> BoxFuture<'static, bool> + Send + Sync>;
+/// What a check of a DID's node read permission said. The node supplies the
+/// check once it has started; until then only the handshake's check applies.
+pub type MemberCheck = Arc<dyn Fn(String) -> BoxFuture<'static, PermissionRead> + Send + Sync>;
+
+/// What the node's ACP said of a subscriber's node read permission (Lean
+/// `SubscriptionStream.PermissionRead`; a stream without a check is `None`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PermissionRead {
+    Held,
+    Lost,
+    /// The check failed.
+    Unreadable,
+}
+
+/// Whether a subscription's next event is delivered, or how the stream ends
+/// (Lean `SubscriptionStream.gate`).
+fn event_gate(read: Option<PermissionRead>) -> Option<EndReason> {
+    match read {
+        None | Some(PermissionRead::Held) => None,
+        Some(PermissionRead::Lost) => Some(EndReason::Revoked),
+        Some(PermissionRead::Unreadable) => Some(EndReason::Expired),
+    }
+}
 
 /// The path of DefraDB's GraphQL route, whose event streams are
 /// subscriptions authorized by a bearer.
@@ -115,7 +135,9 @@ async fn bound_event_streams(
 /// Why the runtime ended a subscription, sent as its last event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EndReason {
-    /// The bearer it was opened with expired: the subscriber renews.
+    /// The bearer it was opened with expired, or its subscriber's permission
+    /// could not be read: the subscriber renews, and the renewal's handshake
+    /// decides.
     Expired,
     /// Its subscriber lost node read permission: a refusal.
     Revoked,
@@ -159,14 +181,15 @@ where
         (Box::pin(events), gate, revoked),
         |(mut events, gate, revoked)| async move {
             let event = events.next().await?;
-            if let Some((member, did)) = &gate {
-                if !member(did.clone()).await {
-                    *revoked
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner) =
-                        Some(EndReason::Revoked);
-                    return None;
-                }
+            let read = match &gate {
+                Some((member, did)) => Some(member(did.clone()).await),
+                None => None,
+            };
+            if let Some(end) = event_gate(read) {
+                *revoked
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(end);
+                return None;
             }
             Some((event, (events, gate, revoked)))
         },

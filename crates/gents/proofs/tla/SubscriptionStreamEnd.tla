@@ -1,7 +1,7 @@
 ---- MODULE SubscriptionStreamEnd ----
 \* lean: none
 \* crates: gents-host, gents-store
-\* models: SubscriptionStream.step, SubscriptionStream.renewalMargin
+\* models: SubscriptionStream.step, SubscriptionStream.renewalMargin, SubscriptionStream.gate
 \* One subscriber's SSE subscription against a served Gents runtime, while
 \* the node may revoke the subscriber's node read permission.
 \*
@@ -10,7 +10,9 @@
 \* bearer's expiry with `gents-end: expired`, and before delivering each event
 \* it checks the subscriber still holds node read permission; at the first
 \* that it does not, it delivers nothing and ends the stream with
-\* `gents-end: revoked`.
+\* `gents-end: revoked`. A check that cannot be read delivers nothing and
+\* ends the stream as expired (Lean `SubscriptionStream.gate`), so the
+\* subscriber hands shake again and the node's ACP decides there.
 \*
 \* Subscriber (gents-store `subscribe`, the observer's renewal): each
 \* handshake mints a fresh bearer (`Lifetime` ticks). The arm completes
@@ -25,6 +27,8 @@
 \* `Renews = FALSE` (a caller that took the renewal cadence and kept the
 \* stream) leaves a revoked subscriber's silent stream open past every bound.
 \* With `Cut`, such a caller is still bounded by the bearer's expiry.
+\* `FailOpen = TRUE` delivers an event whose check could not be read, which
+\* leaks an event to a revoked subscriber.
 EXTENDS Naturals
 
 CONSTANTS
@@ -34,10 +38,12 @@ CONSTANTS
   Horizon,   \* ticks checked
   Gate,      \* the runtime checks permission before each event
   Cut,       \* the runtime ends the stream at its bearer's expiry
-  Renews     \* the subscriber renews on its own cadence
+  Renews,    \* the subscriber renews on its own cadence
+  FailOpen   \* an event whose permission check cannot be read is delivered
 
 ASSUME /\ Lifetime \in Nat \ {0} /\ Half \in Nat \ {0} /\ Arm \in Nat
        /\ Horizon \in Nat /\ Gate \in BOOLEAN /\ Cut \in BOOLEAN /\ Renews \in BOOLEAN
+       /\ FailOpen \in BOOLEAN
 
 VARIABLES
   now,       \* the clock
@@ -73,13 +79,24 @@ Revoke ==
   /\ member' = FALSE /\ revokedAt' = now
   /\ UNCHANGED <<now, phase, mintedAt, armedAt, leaked, renewals>>
 
-\* The node publishes an event the subscriber's query matches.
+\* The node publishes an event the subscriber's query matches, and the
+\* runtime reads the subscriber's permission.
 Event ==
   /\ phase = "open"
   /\ IF Gate /\ ~member
        THEN /\ phase' = "refused" /\ UNCHANGED leaked
        ELSE /\ leaked' = (leaked \/ ~member) /\ UNCHANGED phase
   /\ UNCHANGED <<now, member, revokedAt, mintedAt, armedAt, renewals>>
+
+\* The same event, but the permission check cannot be read: the stream ends
+\* as expired and the subscriber hands shake again at once.
+UnreadableEvent ==
+  /\ phase = "open" /\ Gate
+  /\ IF FailOpen
+       THEN /\ leaked' = (leaked \/ ~member)
+            /\ UNCHANGED <<phase, mintedAt, armedAt>>
+       ELSE /\ Handshake /\ UNCHANGED leaked
+  /\ UNCHANGED <<now, member, revokedAt, renewals>>
 
 RenewDue == phase = "open" /\ Renews /\ now >= armedAt + Half
 CutDue == phase \in {"arming", "open"} /\ Cut /\ now >= mintedAt + Lifetime
@@ -105,7 +122,7 @@ Tick ==
 
 Next ==
   \/ ArmDone
-  \/ Revoke \/ Event \/ Renew \/ Expire \/ Tick
+  \/ Revoke \/ Event \/ UnreadableEvent \/ Renew \/ Expire \/ Tick
 
 Spec == Init /\ [][Next]_vars
 

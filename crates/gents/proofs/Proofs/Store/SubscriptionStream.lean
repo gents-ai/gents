@@ -166,4 +166,52 @@ theorem a_slow_arm_meets_the_cut (armSeconds : Nat)
     renewalMargin 0 armSeconds = 0 := by
   simp only [renewalMargin, renewalPeriodSeconds, bearerLifetimeSeconds] at *; omega
 
+/-- What the runtime's check of a subscriber's node read permission (the
+node's ACP) said before a subscription's next event. `unchecked`: the stream
+has no check, because the node had not started when it opened or its bearer
+names no issuer; the handshake's check and the expiry cut bound it. -/
+inductive PermissionRead where
+  | unchecked | held | lost | unreadable
+  deriving DecidableEq, Repr
+
+/-- What the runtime does with a subscription's next event. -/
+inductive EventGate where
+  | deliver | endExpired | endRevoked
+  deriving DecidableEq, Repr
+
+/-- Decision: the runtime delivers a subscription's next event only when the
+check says its subscriber still holds node read permission, or when the
+stream has no check. A lost permission ends the stream as revoked. A check
+that cannot be read delivers nothing either: the stream ends as expired, so
+the subscriber renews and the renewal's handshake, which the node's ACP
+authorizes, decides. -/
+def gate (read : PermissionRead) : EventGate :=
+  match read with
+  | .unchecked | .held => .deliver
+  | .lost => .endRevoked
+  | .unreadable => .endExpired
+
+/-- The last event a gate that ends the stream sends, as its subscriber
+receives it. -/
+def EventGate.arrival : EventGate → Option Arrival
+  | .deliver => none
+  | .endExpired => some .expiredEnd
+  | .endRevoked => some .revokedEnd
+
+/-- An event reaches a checked subscriber only on a read that says it holds
+node read permission. -/
+theorem only_a_held_permission_delivers (read : PermissionRead)
+    (h : gate read = .deliver) : read = .unchecked ∨ read = .held := by
+  cases read <;> simp_all [gate]
+
+/-- A check that cannot be read ends the stream as a renewal for its
+subscriber, never as a refusal: the renewal's handshake decides. -/
+theorem an_unreadable_check_renews (minted taken : Bool) :
+    (gate .unreadable).arrival.map (step minted taken) =
+      some (closes .nothing (some .renewalDue)) := rfl
+
+/-- A lost permission ends the stream as a refusal for its subscriber. -/
+theorem a_lost_permission_is_refused (minted taken : Bool) :
+    (gate .lost).arrival.map (step minted taken) = some (step minted taken .denial) := rfl
+
 end SubscriptionStream

@@ -246,8 +246,12 @@ async fn a_subscriber_that_lost_node_read_receives_nothing_more() {
     let counted = checks.clone();
     streams.admit_members_with(std::sync::Arc::new(move |did: String| {
         let check = counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let held = check < 3 && did == "did:key:z";
-        Box::pin(async move { held })
+        let read = if check < 3 && did == "did:key:z" {
+            PermissionRead::Held
+        } else {
+            PermissionRead::Lost
+        };
+        Box::pin(async move { read })
     }));
     let driven = DrivenStream::new();
     let endpoint = serve_driven(&streams, "/api/v0/graphql", &driven).await;
@@ -269,7 +273,9 @@ async fn a_subscriber_that_lost_node_read_receives_nothing_more() {
 async fn only_graphql_subscriptions_are_bounded_by_their_bearer() {
     let (_shutdown, observed) = watch::channel(false);
     let streams = ShutdownStreams::new(observed);
-    streams.admit_members_with(std::sync::Arc::new(|_| Box::pin(async { false })));
+    streams.admit_members_with(std::sync::Arc::new(|_| {
+        Box::pin(async { PermissionRead::Lost })
+    }));
     let driven = DrivenStream::new();
     let endpoint = serve_driven(&streams, "/events", &driven).await;
     let mut open = subscribe(&endpoint, "/events", &bearer(0, "did:key:z")).await;
@@ -283,4 +289,63 @@ async fn only_graphql_subscriptions_are_bounded_by_their_bearer() {
         EVENT.repeat(5),
         "another event stream keeps delivering"
     );
+}
+
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ModelPermissionRead {
+    Unchecked,
+    Held,
+    Lost,
+    Unreadable,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ModelEventGate {
+    Deliver,
+    EndExpired,
+    EndRevoked,
+}
+
+/// Each permission read the Lean gate decides on, through the stream the
+/// runtime serves: one event, then what `bounded` delivers or ends with.
+#[tokio::test]
+async fn every_event_gate_matches_the_lean_model() {
+    use gents_lean_vocab::families::subscription_stream_gate as family;
+    let cases = tokio::task::spawn_blocking(family::cases::<ModelEventGate, ModelPermissionRead>)
+        .await
+        .unwrap();
+    assert!(!cases.is_empty());
+    for case in cases {
+        let read = match case.input.read {
+            ModelPermissionRead::Unchecked => None,
+            ModelPermissionRead::Held => Some(PermissionRead::Held),
+            ModelPermissionRead::Lost => Some(PermissionRead::Lost),
+            ModelPermissionRead::Unreadable => Some(PermissionRead::Unreadable),
+        };
+        let member = read.map(|read| -> MemberCheck {
+            std::sync::Arc::new(move |_| Box::pin(async move { read }))
+        });
+        let events = futures_util::stream::iter([Ok(Bytes::from_static(EVENT))]);
+        let bearer = Bearer {
+            expires_in: BOUND * 2,
+            subscriber: Some("did:key:z".to_owned()),
+        };
+        let delivered = bounded(events, bearer, member)
+            .map(|chunk| chunk.unwrap())
+            .collect::<Vec<_>>()
+            .await
+            .concat();
+        let gate = if delivered == EVENT {
+            ModelEventGate::Deliver
+        } else if delivered == EndReason::Expired.event() {
+            ModelEventGate::EndExpired
+        } else if delivered == EndReason::Revoked.event() {
+            ModelEventGate::EndRevoked
+        } else {
+            panic!("unexpected stream: {}", String::from_utf8_lossy(&delivered));
+        };
+        case.check(gate);
+    }
 }
