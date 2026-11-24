@@ -199,6 +199,12 @@ theorem unreadable_bootstrap_stays_unresolved
 
 /-- A client observation can recover a client error, not managed-server authority.
 
+A snapshot is this device's saved settings, read. A configuration error says
+they did not arrive (their read failed, or ran past startup's bound), so a
+snapshot recovers it: the person is not left on an error once the settings
+are in hand. It moves the error where it moves loading, to the client's start
+or to ready, never back to loading, since the settings it carries are read.
+
 `autostartDeclined` is true exactly when the desktop will not autostart the
 client. The shell derives it from the one predicate that also gates autostart
 (`shouldAutoStartDesktopClient`), so startup never waits on a client that
@@ -206,10 +212,14 @@ nothing will start. -/
 def observeStartup (phase : StartupPhase) (running autostartDeclined : Bool) :
     StartupPhase :=
   match phase with
-  | .loadingConfiguration | .startingClient =>
+  | .loadingConfiguration | .startingClient | .configurationError =>
       if running || autostartDeclined then .ready else .startingClient
   | .clientError => if running then .ready else .clientError
   | other => other
+
+theorem observed_settings_recover_configuration_error (running autostartDeclined : Bool) :
+    observeStartup .configurationError running autostartDeclined =
+      observeStartup .loadingConfiguration running autostartDeclined := by rfl
 
 theorem observed_running_client_recovers_client_error (autostartDeclined : Bool) :
     observeStartup .clientError true autostartDeclined = .ready := by rfl
@@ -255,6 +265,184 @@ theorem the_window_is_taken_only_to_ask (settled : Bool) (status : InitConfigSta
     settled = false ∧
       (status = .unreadable ∨ (status = .configured ∧ notConnected = true)) := by
   cases settled <;> cases status <;> cases notConnected <;> simp_all [startupGate]
+
+/-- How a read of this device's saved settings answered: with the snapshot,
+or with an error. -/
+inductive SettingsAnswer where
+  | succeeded | failed
+  deriving DecidableEq, Repr
+
+/-- The startup phase once a read of this device's saved settings answers.
+Every read begins an attempt; `current` is true when no read began after it
+(the snapshot publication's generation, `ClientObservationOrdering.accepts`).
+A superseded attempt's answer moves nothing. A current success is a snapshot
+observation (`observeStartup`), with `running` and `autostartDeclined` taken
+from the snapshot it carries. A current failure ends the startup step that
+waits on it: loading becomes a configuration error and a client start a
+client error. A failure moves no other phase, so a ready app stays ready and
+an error stays that error. -/
+def settingsAnswered (phase : StartupPhase) (current : Bool) (answer : SettingsAnswer)
+    (running autostartDeclined : Bool) : StartupPhase :=
+  if current then
+    match answer with
+    | .succeeded => observeStartup phase running autostartDeclined
+    | .failed =>
+        match phase with
+        | .loadingConfiguration => .configurationError
+        | .startingClient => .clientError
+        | other => other
+  else phase
+
+/-- Startup bounds its wait on the current settings read with a client clock.
+Past the bound, a startup still loading on that read shows a configuration
+error with its retry, and nothing else moves. The read is not abandoned: its
+answer still arrives through `settingsAnswered`, and a success recovers. -/
+def settingsReadTimedOut (phase : StartupPhase) (current : Bool) : StartupPhase :=
+  match current, phase with
+  | true, .loadingConfiguration => .configurationError
+  | _, other => other
+
+/-- A late success recovers a configuration error to where the settings it
+carries warrant, never to loading. -/
+theorem current_settings_recover_configuration_error (running autostartDeclined : Bool) :
+    settingsAnswered .configurationError true .succeeded running autostartDeclined =
+      if running || autostartDeclined then .ready else .startingClient := by rfl
+
+theorem superseded_answer_moves_nothing (phase : StartupPhase) (answer : SettingsAnswer)
+    (running autostartDeclined : Bool) :
+    settingsAnswered phase false answer running autostartDeclined = phase := by rfl
+
+theorem superseded_timeout_moves_nothing (phase : StartupPhase) :
+    settingsReadTimedOut phase false = phase := by cases phase <;> rfl
+
+theorem late_failure_leaves_a_ready_app (current running autostartDeclined : Bool) :
+    settingsAnswered .ready current .failed running autostartDeclined = .ready := by
+  cases current <;> rfl
+
+theorem failure_keeps_configuration_error (current running autostartDeclined : Bool) :
+    settingsAnswered .configurationError current .failed running autostartDeclined =
+      .configurationError := by
+  cases current <;> rfl
+
+/-- One launch's startup as the settings reads drive it: the phase, the
+generation of the latest read, and whether a current read has answered with
+the settings. `retry` is Try again (or skipping the managed node's check):
+startup loads again and a new read begins. `readBegins` is any other read,
+which supersedes the one before it. -/
+structure Launch where
+  phase : StartupPhase
+  generation : Nat
+  settingsRead : Bool
+
+inductive LaunchEvent where
+  | retry
+  | readBegins
+  | timedOut (captured : Nat)
+  | answered (captured : Nat) (answer : SettingsAnswer) (running autostartDeclined : Bool)
+
+def Launch.initial : Launch :=
+  { phase := .checkingManagedServer, generation := 0, settingsRead := false }
+
+def Launch.step (s : Launch) : LaunchEvent → Launch
+  | .retry => { s with phase := .loadingConfiguration, generation := s.generation + 1 }
+  | .readBegins => { s with generation := s.generation + 1 }
+  | .timedOut captured =>
+      { s with phase := settingsReadTimedOut s.phase (accepts s.generation captured) }
+  | .answered captured answer running autostartDeclined =>
+      let current := accepts s.generation captured
+      { s with
+        phase := settingsAnswered s.phase current answer running autostartDeclined
+        settingsRead := s.settingsRead || (current && answer == .succeeded) }
+
+inductive Launch.Reachable : Launch → Prop
+  | initial : Launch.Reachable Launch.initial
+  | step {s : Launch} (event : LaunchEvent) :
+      Launch.Reachable s → Launch.Reachable (s.step event)
+
+private theorem answered_ready (phase : StartupPhase) (current : Bool)
+    (answer : SettingsAnswer) (running autostartDeclined : Bool)
+    (h : settingsAnswered phase current answer running autostartDeclined = .ready) :
+    phase = .ready ∨ (current = true ∧ answer = .succeeded) := by
+  cases current <;> cases answer <;> cases phase <;> simp_all [settingsAnswered]
+
+private theorem timed_out_ready (phase : StartupPhase) (current : Bool)
+    (h : settingsReadTimedOut phase current = .ready) : phase = .ready := by
+  cases current <;> cases phase <;> simp_all [settingsReadTimedOut]
+
+/-- The shell never shows before this device's saved settings are read: a
+launch is ready only once a current read has answered with them. -/
+theorem ready_only_after_settings_read (s : Launch) (reachable : s.Reachable)
+    (ready : s.phase = .ready) : s.settingsRead = true := by
+  induction reachable with
+  | initial => simp [Launch.initial] at ready
+  | step event _ ih =>
+      cases event with
+      | retry => simp [Launch.step] at ready
+      | readBegins => exact ih ready
+      | timedOut captured => exact ih (timed_out_ready _ _ ready)
+      | answered captured answer running autostartDeclined =>
+          rcases answered_ready _ _ _ _ _ ready with was | ⟨current, success⟩
+          · simp [Launch.step, ih was]
+          · simp [Launch.step, current, success]
+
+/-- Only a retry puts startup back to loading: no answer and no timeout move
+an error, or anything else, to loading. -/
+theorem only_a_retry_reloads (s : Launch) (event : LaunchEvent) (notRetry : event ≠ .retry)
+    (loading : (s.step event).phase = .loadingConfiguration) :
+    s.phase = .loadingConfiguration := by
+  cases event with
+  | retry => exact absurd rfl notRetry
+  | readBegins => exact loading
+  | timedOut captured =>
+      simp only [Launch.step] at loading
+      generalize accepts s.generation captured = current at loading
+      cases current <;> cases h : s.phase <;> simp_all [settingsReadTimedOut]
+  | answered captured answer running autostartDeclined =>
+      simp only [Launch.step] at loading
+      generalize accepts s.generation captured = current at loading
+      cases current <;> cases answer <;> cases h : s.phase <;>
+        simp_all [settingsAnswered, observeStartup] <;>
+        split at loading <;> simp_all
+
+/-- A configuration error is entered only from loading on the current read,
+and left only by a retry or by a current read answering with the settings. -/
+theorem configuration_error_moves_only_on_settings_or_retry (s : Launch) (event : LaunchEvent)
+    (error : s.phase = .configurationError)
+    (moved : (s.step event).phase ≠ .configurationError) :
+    event = .retry ∨ ∃ running autostartDeclined,
+      event = .answered s.generation .succeeded running autostartDeclined := by
+  cases event with
+  | retry => exact Or.inl rfl
+  | readBegins => exact absurd error moved
+  | timedOut captured =>
+      simp only [Launch.step, error] at moved
+      cases accepts s.generation captured <;> simp [settingsReadTimedOut] at moved
+  | answered captured answer running autostartDeclined =>
+      simp only [Launch.step, error] at moved
+      by_cases current : accepts s.generation captured = true
+      · cases answer
+        · refine Or.inr ⟨running, autostartDeclined, ?_⟩
+          simp [accepts] at current
+          simp [current]
+        · simp [current, settingsAnswered] at moved
+      · simp [current, settingsAnswered] at moved
+
+theorem configuration_error_entered_only_from_loading (s : Launch) (event : LaunchEvent)
+    (entered : (s.step event).phase = .configurationError) :
+    s.phase = .configurationError ∨ s.phase = .loadingConfiguration := by
+  cases event with
+  | retry => simp [Launch.step] at entered
+  | readBegins => exact Or.inl entered
+  | timedOut captured =>
+      simp only [Launch.step] at entered
+      generalize accepts s.generation captured = current at entered
+      cases current <;> cases h : s.phase <;> simp_all [settingsReadTimedOut]
+  | answered captured answer running autostartDeclined =>
+      simp only [Launch.step] at entered
+      generalize accepts s.generation captured = current at entered
+      cases current <;> cases answer <;> cases h : s.phase <;>
+        simp_all [settingsAnswered, observeStartup] <;>
+        split at entered <;> simp_all
 
 end ClientSnapshotObservation
 

@@ -7,8 +7,11 @@ import { describe, expect, it } from "vitest";
 import { acceptsLiveCursor } from "@source-inc/gents-desktop-client";
 import { acceptsAsyncResult } from "../../src/hooks/observationOrdering";
 import {
+  projectStartupPhaseAfterSettingsAnswer,
+  projectStartupPhaseAfterSettingsTimeout,
   projectStartupPhaseAfterSnapshot,
   type DesktopStartupPhase,
+  type SettingsAnswer,
 } from "../../src/lib/loadingStatus";
 import { projectFirstRunPhase, type FirstRunPhase } from "../../src/ui/lib/firstRun";
 import { projectStartupGate, type StartupGate } from "../../src/lib/startupGate";
@@ -113,8 +116,36 @@ type StartupGateCase = {
   expected: StartupGate;
 };
 
-describe("generated startup gate", () => {
-  it("drives the startup gate with every case of its Lean family", async () => {
+type LeanStartupPhase =
+  | "checking_managed_server"
+  | "loading_configuration"
+  | "starting_client"
+  | "managed_server_error"
+  | "configuration_error"
+  | "client_error"
+  | "ready";
+
+type SettingsAnsweredCase = {
+  input: {
+    phase: LeanStartupPhase;
+    current: boolean;
+    answer: SettingsAnswer;
+    running: boolean;
+    autostart_declined: boolean;
+  };
+  expected: LeanStartupPhase;
+};
+
+type SettingsReadTimedOutCase = {
+  input: { phase: LeanStartupPhase; current: boolean };
+  expected: LeanStartupPhase;
+};
+
+const startupPhase = (phase: LeanStartupPhase) =>
+  phase.replaceAll("_", "-") as DesktopStartupPhase;
+
+describe("generated startup gate and settings read", () => {
+  it("drives the startup gate and the settings read's answers with every case of their Lean families", async () => {
     const proofsDir = join(
       dirname(fileURLToPath(import.meta.url)),
       "../../../../crates/gents/proofs",
@@ -131,19 +162,24 @@ describe("generated startup gate", () => {
     const begin = stdout.indexOf(CONTRACT_JSON_BEGIN) + CONTRACT_JSON_BEGIN.length;
     const end = stdout.indexOf(CONTRACT_JSON_END);
     const { families } = JSON.parse(stdout.slice(begin, end)) as {
-      families: Record<string, { cases: StartupGateCase[] }>;
+      families: Record<string, { cases: unknown[] }>;
     };
-    const family = "families::client_snapshot_observation_startup_gate::cases()";
-    const key = /^families::(\w+)::cases\(\)$/.exec(family)![1]!;
-    const cases = families[key]!.cases;
-    expect(cases).toHaveLength(16);
+    const cases = <T>(family: string) => {
+      const key = /^families::(\w+)::cases\(\)$/.exec(family)![1]!;
+      return families[key]!.cases as T[];
+    };
+
+    const gate = cases<StartupGateCase>(
+      "families::client_snapshot_observation_startup_gate::cases()",
+    );
+    expect(gate).toHaveLength(16);
     /* a node the connect screen calls not connected is a stopped one this
        desktop is not enrolled with; otherwise there is no local node, or an
        enrolled one, each in turn */
     const stopped = { state: "stopped", pairingReady: false } as ManagedServerStatus;
     const enrolled = { state: "running", pairingReady: true } as ManagedServerStatus;
     let other = 0;
-    for (const { input, expected } of cases) {
+    for (const { input, expected } of gate) {
       const localNode = input.node_not_connected
         ? stopped
         : other++ % 2
@@ -156,6 +192,34 @@ describe("generated startup gate", () => {
           localNode,
         ),
       ).toBe(expected);
+    }
+
+    const answered = cases<SettingsAnsweredCase>(
+      "families::client_snapshot_observation_settings_answered::cases()",
+    );
+    expect(answered).toHaveLength(112);
+    for (const { input, expected } of answered) {
+      expect(
+        projectStartupPhaseAfterSettingsAnswer(
+          startupPhase(input.phase),
+          input.current,
+          input.answer,
+          input.running,
+          input.autostart_declined,
+        ),
+        JSON.stringify(input),
+      ).toBe(startupPhase(expected));
+    }
+
+    const timedOut = cases<SettingsReadTimedOutCase>(
+      "families::client_snapshot_observation_settings_read_timed_out::cases()",
+    );
+    expect(timedOut).toHaveLength(14);
+    for (const { input, expected } of timedOut) {
+      expect(
+        projectStartupPhaseAfterSettingsTimeout(startupPhase(input.phase), input.current),
+        JSON.stringify(input),
+      ).toBe(startupPhase(expected));
     }
   }, 300_000);
 });

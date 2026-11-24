@@ -38,9 +38,9 @@ end RuntimeConnectionObservation
 
 namespace ClientSnapshotObservation
 
-deriving instance Lean.ToJson for InitConfigStatus, StartupGate
+deriving instance Lean.ToJson for InitConfigStatus, StartupGate, StartupPhase, SettingsAnswer
 
-attribute [conformance_function] startupGate
+attribute [conformance_function] startupGate settingsAnswered settingsReadTimedOut
 
 end ClientSnapshotObservation
 

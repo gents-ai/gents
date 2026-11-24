@@ -632,13 +632,10 @@ describe("startup waits on this device's saved settings, never on a node", () =>
     expect(fetchDesktopSnapshot).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps the error and its retry when a settings read answers after startup gave up on it", async () => {
+  it("leaves the error once a settings read answers after startup gave up on it", async () => {
     setTimingForTests({ configurationReadTimeoutMs: 50 });
     const late = deferred<DesktopClientSnapshot>();
-    const fetchDesktopSnapshot = vi
-      .fn()
-      .mockImplementationOnce(() => late.promise)
-      .mockResolvedValue(snapshot(false, false));
+    const fetchDesktopSnapshot = vi.fn().mockImplementationOnce(() => late.promise);
     render(
       <App
         bridge={bridge(
@@ -649,12 +646,35 @@ describe("startup waits on this device's saved settings, never on a node", () =>
     );
 
     expect(await screen.findByTestId("startup-retry")).toBeInTheDocument();
-    /* startup gave up: a late answer leaves the error and its retry in place */
     await act(async () => late.resolve(snapshot(false, false)));
-    expect(screen.getByTestId("startup-retry")).toBeInTheDocument();
+    expect(await screen.findByTestId("setup-screen")).toBeInTheDocument();
+    expect(screen.queryByTestId("startup-retry")).not.toBeInTheDocument();
+    expect(fetchDesktopSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a settings read a retry superseded", async () => {
+    setTimingForTests({ configurationReadTimeoutMs: 50 });
+    const superseded = deferred<DesktopClientSnapshot>();
+    const retried = deferred<DesktopClientSnapshot>();
+    const fetchDesktopSnapshot = vi
+      .fn()
+      .mockImplementationOnce(() => superseded.promise)
+      .mockImplementationOnce(() => retried.promise);
+    render(
+      <App
+        bridge={bridge(
+          fetchDesktopSnapshot,
+          vi.fn(async () => snapshot(false, true)),
+        )}
+      />,
+    );
+
+    await userEvent.click(await screen.findByTestId("startup-retry"));
+    await waitFor(() => expect(fetchDesktopSnapshot).toHaveBeenCalledTimes(2));
+    await act(async () => superseded.resolve(snapshot(false, false)));
     expect(screen.queryByTestId("setup-screen")).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByTestId("startup-retry"));
+    await act(async () => retried.resolve(snapshot(false, false)));
     expect(await screen.findByTestId("setup-screen")).toBeInTheDocument();
   });
 });
