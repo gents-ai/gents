@@ -95,6 +95,12 @@ pub struct ClientUpdateEvent {
     pub reason: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub store_version: Option<u64>,
+    /// A store update's fingerprint of what the session lists show (each
+    /// row's status, title, activity and previews): equal across updates
+    /// that change none of it, such as a followed turn's reply pieces.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub session_list: Option<String>,
 }
 
 impl ClientUpdateEvent {
@@ -102,14 +108,17 @@ impl ClientUpdateEvent {
         Self {
             reason,
             store_version: None,
+            session_list: None,
         }
     }
 
-    /// `version` advances on every publication into any node's store.
-    pub fn store(version: u64) -> Self {
+    /// `version` advances on every publication into any node's store;
+    /// `session_list` is [`crate::client_runtime::ClientRuntime::session_list_fingerprint`].
+    pub fn store(version: u64, session_list: u64) -> Self {
         Self {
             reason: "store",
             store_version: Some(version),
+            session_list: Some(format!("{session_list:016x}")),
         }
     }
 }

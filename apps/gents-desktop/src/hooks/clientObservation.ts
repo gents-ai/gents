@@ -73,6 +73,8 @@ export function startClientObservation(
       startupRead = false;
       void controller.request("session");
     };
+    /* the session list fingerprint of the last store update */
+    let lastSessionList: string | null = null;
     let relistenTimer: ReturnType<typeof setTimeout> | undefined;
     let relistenMs = RELISTEN_FIRST_MS;
     let registrationError: string | null = null;
@@ -80,11 +82,21 @@ export function startClientObservation(
       void listenToDesktopClientUpdates(
         async (event) => {
           if (stopped) return;
+          /* a store update fingerprints what the session lists show, and a
+             new fingerprint means a row changed. One without a fingerprint
+             (an emitter that cannot tell) changes nothing: while a turn is
+             followed it reads the open session only, as it always has, so a
+             stream's budget never depends on the emitter */
+          const sessionList = event.sessionList ?? null;
+          const sessionListChanged =
+            sessionList !== null && sessionList !== lastSessionList;
+          if (event.reason === "store") lastSessionList = sessionList;
           const scope = desktopUpdateRefreshScope(
             event.reason,
             selection.getState().sessionId,
             trackedRequestId(),
             selectedSessionUnresolved(),
+            sessionListChanged,
           );
           await controller.request(scope);
         },
