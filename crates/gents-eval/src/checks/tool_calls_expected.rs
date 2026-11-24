@@ -29,6 +29,8 @@ struct Params {
     allowed_argv: BTreeMap<String, Vec<Vec<String>>>,
     #[serde(default)]
     config_read_only: bool,
+    #[serde(default, rename = "route_reason")]
+    _route_reason: Option<String>,
 }
 
 impl Check for ToolCallsExpected {
@@ -52,7 +54,8 @@ impl Check for ToolCallsExpected {
                     "required": {"type": "array", "items": {"type": "string"}},
                     "forbidden": {"type": "array", "items": {"type": "string"}},
                     "max_calls": {"type": ["integer", "null"], "minimum": 0},
-                    "allowed_argv": {"type":"object", "additionalProperties":{"type":"array", "minItems":1, "items":{"type":"array", "minItems":1, "items":{"type":"string"}}}}
+                    "allowed_argv": {"type":"object", "additionalProperties":{"type":"array", "minItems":1, "items":{"type":"array", "minItems":1, "items":{"type":"string"}}}},
+                    "route_reason": {"type":"string", "pattern":"\\S", "description":"Why the stage's prompt itself asks for this route; never graded. Rule 3 of the Engineer eval rules admits a required, forbidden, max_calls or allowed_argv entry only with one."}
                 },
                 "anyOf": [
                     {"required":["config_read_only"], "properties":{"config_read_only":{"const":true}}},
