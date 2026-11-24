@@ -384,8 +384,10 @@ async fn scheduled_oauth_probe_failure_records_a_bounded_reason_and_recovers() {
         &health,
         &probe_options(),
         did,
-        Some((&mut schedule, true)),
-        None,
+        super::super::prober::CycleControl {
+            schedule: Some((&mut schedule, true)),
+            ..Default::default()
+        },
     )
     .await;
     assert!(outcome.promotable.is_empty());
@@ -410,8 +412,10 @@ async fn scheduled_oauth_probe_failure_records_a_bounded_reason_and_recovers() {
         &health,
         &probe_options(),
         did,
-        Some((&mut schedule, true)),
-        None,
+        super::super::prober::CycleControl {
+            schedule: Some((&mut schedule, true)),
+            ..Default::default()
+        },
     )
     .await;
     assert_eq!(outcome.promotable, vec!["claude".to_string()]);
@@ -1148,6 +1152,7 @@ async fn recorded_measurements_match_the_lean_model() {
                 health_map: &health,
                 options: &options,
                 cancel: None,
+                progress: None,
             },
             &mut outcome,
         )

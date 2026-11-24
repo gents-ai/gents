@@ -12,8 +12,8 @@ use gents_documents::InferenceBackend;
 
 use super::oauth::{oauth_credential_for_probe, OAuthProbeContext};
 use super::{
-    bounded_probe_error, step_backend, BackendHealthEntry, BackendHealthMap, BackendProberOptions,
-    ProbeEvent,
+    bounded_probe_error, probe_event, step_backend, AdmittedCallProgress, BackendHealthEntry,
+    BackendHealthMap, BackendProberOptions, ProbeEvent, ProbeOutcome,
 };
 
 #[derive(Debug, Default)]
@@ -72,8 +72,67 @@ fn same_probe_inputs(previous: &InferenceBackend, current: &InferenceBackend) ->
         && previous.discovery_timeout_secs == current.discovery_timeout_secs
 }
 
-pub(super) fn probe_timeout(backend: &InferenceBackend) -> Duration {
+/// The probe's deadline: the backend's discovery timeout, never beyond the
+/// prober's own. It is the probe's only timeout, so a probe that runs out of
+/// time ends as a timeout rather than as a transport error.
+pub(super) fn probe_timeout(
+    backend: &InferenceBackend,
+    options: &BackendProberOptions,
+) -> Duration {
     Duration::from_secs(backend.effective_discovery_timeout_secs().max(1) as u64)
+        .min(options.probe_timeout)
+}
+
+enum Probed {
+    Answered(Vec<gents_documents::AdvertisedModel>),
+    Failed(anyhow::Error),
+    TimedOut { admitted_call_progressed: bool },
+}
+
+impl Probed {
+    fn outcome(&self) -> (ProbeOutcome, bool) {
+        match self {
+            Self::Answered(_) => (ProbeOutcome::Answered, false),
+            Self::Failed(_) => (ProbeOutcome::Failed, false),
+            Self::TimedOut {
+                admitted_call_progressed,
+            } => (ProbeOutcome::TimedOut, *admitted_call_progressed),
+        }
+    }
+}
+
+/// One models-endpoint probe under its deadline; `None` once shutdown cancels
+/// it. A timeout reports whether a call admitted to the backend received a
+/// response item while the probe ran.
+async fn probe_models<F>(
+    env: ProbeEnv<'_>,
+    backend: &InferenceBackend,
+    discover: F,
+) -> Option<Probed>
+where
+    F: std::future::Future<Output = anyhow::Result<Vec<gents_documents::AdvertisedModel>>>,
+{
+    let mark = env
+        .progress
+        .map(|progress| (progress, progress.progress_mark(&backend.backend_id)));
+    let cancellation = env.cancel.cloned().unwrap_or_default();
+    let result = cancellation
+        .run_until_cancelled(tokio::time::timeout(
+            probe_timeout(backend, env.options),
+            discover,
+        ))
+        .await?;
+    if cancellation.is_cancelled() {
+        return None;
+    }
+    Some(match result {
+        Ok(Ok(models)) => Probed::Answered(models),
+        Ok(Err(error)) => Probed::Failed(error),
+        Err(_) => Probed::TimedOut {
+            admitted_call_progressed: mark
+                .is_some_and(|(progress, mark)| progress.progress_mark(&backend.backend_id) > mark),
+        },
+    })
 }
 
 async fn record_discovered_catalog(
@@ -117,6 +176,7 @@ pub async fn probe_backends_cycle(
         health_map,
         options,
         cancel: None,
+        progress: None,
     };
     probe_selected_backends(node, client, backends, env, oauth, None).await
 }
@@ -127,6 +187,7 @@ pub(super) struct ProbeEnv<'a> {
     pub(super) health_map: &'a BackendHealthMap,
     pub(super) options: &'a BackendProberOptions,
     pub(super) cancel: Option<&'a CancellationToken>,
+    pub(super) progress: Option<&'a dyn AdmittedCallProgress>,
 }
 
 /// Shutdown cancels remote observation, never an admitted catalog write. An
@@ -168,28 +229,25 @@ pub(super) async fn probe_selected_backends(
             }
             let (event, error_text) = match credential {
                 Ok(credential) => {
-                    let cancellation = env.cancel.cloned().unwrap_or_default();
-                    let Some(probe_result) = cancellation
-                        .run_until_cancelled(tokio::time::timeout(
-                            probe_timeout(backend),
-                            crate::backends::provider::discover_models(
-                                client,
-                                backend.provider_kind,
-                                &backend.endpoint,
-                                None,
-                                Some(&credential),
-                                backend.client_version.as_deref(),
-                            ),
-                        ))
-                        .await
+                    let Some(probed) = probe_models(
+                        env,
+                        backend,
+                        crate::backends::provider::discover_models(
+                            client,
+                            backend.provider_kind,
+                            &backend.endpoint,
+                            None,
+                            Some(&credential),
+                            backend.client_version.as_deref(),
+                        ),
+                    )
+                    .await
                     else {
                         return outcome;
                     };
-                    if cancellation.is_cancelled() {
-                        return outcome;
-                    }
-                    match probe_result {
-                        Ok(Ok(models)) => {
+                    let (probe, progressed) = probed.outcome();
+                    let error_text = match probed {
+                        Probed::Answered(models) => {
                             record_discovered_catalog(
                                 &context.node,
                                 backend,
@@ -198,11 +256,12 @@ pub(super) async fn probe_selected_backends(
                                 models,
                             )
                             .await;
-                            (ProbeEvent::ProbeSuccess, None)
+                            None
                         }
-                        Ok(Err(error)) => (ProbeEvent::ProbeFail, Some(error.to_string())),
-                        Err(_) => (ProbeEvent::ProbeFail, Some("probe timed out".to_string())),
-                    }
+                        Probed::Failed(error) => Some(error.to_string()),
+                        Probed::TimedOut { .. } => Some("probe timed out".to_string()),
+                    };
+                    (probe_event(probe, progressed), error_text)
                 }
                 Err(error) => {
                     use crate::auth::credential::{OAuthAuthProblem, OAuthCredentialError};
@@ -216,10 +275,10 @@ pub(super) async fn probe_selected_backends(
                         },
                         OAuthCredentialError::Other(_) => ProbeEvent::ProbeFail,
                     };
-                    (event, Some(format!("{error:#}")))
+                    (Some(event), Some(format!("{error:#}")))
                 }
             };
-            record_probe_event(node, backend, event, error_text, env, &mut outcome).await;
+            record_probe_result(node, backend, event, error_text, env, &mut outcome).await;
             continue;
         }
 
@@ -258,59 +317,75 @@ pub(super) async fn probe_selected_backends(
         };
         let client = private_client.as_ref().unwrap_or(client);
         let (event, error_text) = match resolved_auth.and_then(|auth| auth.probe_key()) {
-            Err(error) => (ProbeEvent::ProbeFail, Some(error.to_string())),
+            Err(error) => (Some(ProbeEvent::ProbeFail), Some(error.to_string())),
             Ok(api_key) => {
-                let cancellation = env.cancel.cloned().unwrap_or_default();
-                let Some(probe_result) = cancellation
-                    .run_until_cancelled(tokio::time::timeout(
-                        probe_timeout(backend),
-                        crate::backends::provider::discover_models(
-                            client,
-                            backend.provider_kind,
-                            &backend.endpoint,
-                            api_key.as_deref(),
-                            None,
-                            backend.client_version.as_deref(),
-                        ),
-                    ))
-                    .await
+                let Some(probed) = probe_models(
+                    env,
+                    backend,
+                    crate::backends::provider::discover_models(
+                        client,
+                        backend.provider_kind,
+                        &backend.endpoint,
+                        api_key.as_deref(),
+                        None,
+                        backend.client_version.as_deref(),
+                    ),
+                )
+                .await
                 else {
                     return outcome;
                 };
-
-                if cancellation.is_cancelled() {
-                    return outcome;
-                }
-                match probe_result {
-                    Ok(Ok(models)) => {
+                let (probe, progressed) = probed.outcome();
+                let error_text = match probed {
+                    Probed::Answered(models) => {
                         record_discovered_catalog(node, backend, &doc, None, models).await;
-                        (ProbeEvent::ProbeSuccess, None)
+                        None
                     }
-                    Ok(Err(error)) => (
-                        ProbeEvent::ProbeFail,
-                        Some(
-                            if matches!(
-                                &backend.auth,
-                                gents_documents::BackendAuth::Credential { .. }
-                            ) {
-                                "backend discovery failed".to_owned()
-                            } else {
-                                error.to_string()
-                            },
-                        ),
+                    Probed::Failed(error) => Some(
+                        if matches!(
+                            &backend.auth,
+                            gents_documents::BackendAuth::Credential { .. }
+                        ) {
+                            "backend discovery failed".to_owned()
+                        } else {
+                            error.to_string()
+                        },
                     ),
-                    Err(_) => (ProbeEvent::ProbeFail, Some("probe timed out".to_string())),
-                }
+                    Probed::TimedOut { .. } => Some("probe timed out".to_string()),
+                };
+                (probe_event(probe, progressed), error_text)
             }
         };
 
-        record_probe_event(node, backend, event, error_text, env, &mut outcome).await;
+        record_probe_result(node, backend, event, error_text, env, &mut outcome).await;
     }
 
     if env.cancel.is_none_or(|cancel| !cancel.is_cancelled()) {
         health_map.retain_backends(&probed_ids).await;
     }
     outcome
+}
+
+/// Records the event a probe supplied; a probe that supplied none (its models
+/// endpoint timed out while an admitted call received responses) leaves the
+/// backend's measurement as it was.
+async fn record_probe_result(
+    node: &Arc<EmbeddedNode>,
+    backend: &InferenceBackend,
+    event: Option<ProbeEvent>,
+    error_text: Option<String>,
+    env: ProbeEnv<'_>,
+    outcome: &mut ProbeCycleOutcome,
+) {
+    match event {
+        Some(event) => record_probe_event(node, backend, event, error_text, env, outcome).await,
+        None => tracing::info!(
+            backend_id = %backend.backend_id,
+            endpoint = %backend.endpoint,
+            "backend probe: models endpoint timed out while an admitted call received responses; \
+             health unchanged"
+        ),
+    }
 }
 
 pub(super) async fn record_probe_event(

@@ -179,8 +179,8 @@ pub enum StreamResponse {
         status: u16,
         body: String,
     },
-    /// The server closes the connection the request arrived on without
-    /// answering, as a server whose idle timeout fires as a request arrives.
+    /// The server reads the request, then closes the connection it arrived
+    /// on without a response byte.
     Disconnect,
 }
 
@@ -434,6 +434,11 @@ pub struct HeldCall<'a> {
 
 impl HeldCall<'_> {
     pub async fn entered(&self) {
+        self.entered_times(1).await;
+    }
+
+    /// Resolves once `count` held requests carrying the marker have arrived.
+    pub async fn entered_times(&self, count: usize) {
         let marker = self.marker.as_str();
         let entered = self
             .backend
@@ -442,12 +447,12 @@ impl HeldCall<'_> {
                 inner
                     .held_entries
                     .get(marker)
-                    .filter(|count| **count > 0)
+                    .filter(|entered| **entered >= count)
                     .copied()
             })
             .await;
         if entered.is_none() {
-            panic!("no request carrying {marker} arrived within {STALL_CEILING:?}");
+            panic!("{count} request(s) carrying {marker} did not arrive within {STALL_CEILING:?}");
         }
     }
 
@@ -505,6 +510,13 @@ impl ScriptedBackend {
         if let Some(stopped) = stopped {
             let _ = stopped.await;
         }
+    }
+
+    /// Every connection open now ends unanswered when its next request
+    /// arrives, as when a server's keep-alive timeout closes an idle
+    /// connection while the client's next request is already on its way.
+    pub fn expire_kept_alive_connections(&self) {
+        self.state.connections.close_all();
     }
 
     /// Holds every completion carrying `marker` before its response starts,
