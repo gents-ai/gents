@@ -469,18 +469,33 @@ impl MaterializerHandle for ProductionMaterializer {
                     goal_limits == gents_protocol::goal::GoalLimits::default(),
                     "goal limits require a goal objective template"
                 );
-                let request_id = prepared_ids
-                    .as_ref()
-                    .map(|(request, _)| request.clone())
-                    .unwrap_or_else(|| {
+                let occurrence = match (trigger_kind, trigger_id.as_deref()) {
+                    (TriggerKind::Schedule, Some(trigger_id)) => {
+                        Some(gents_protocol::trigger_delivery::FireIdentity::schedule(
+                            &node_did,
+                            trigger_id,
+                            &durable_fire_key,
+                        ))
+                    }
+                    _ => None,
+                };
+                let (request_id, session_id) = match (&occurrence, &prepared_ids) {
+                    (Some(occurrence), _) => {
+                        (occurrence.request_id(), Some(occurrence.session_id()))
+                    }
+                    (None, Some((request, session))) => (request.clone(), Some(session.clone())),
+                    (None, None) => (
                         if super::event_delivery::is_group_fire_key(&durable_fire_key) {
                             durable_fire_key.clone()
                         } else {
                             uuid::Uuid::new_v4().to_string()
-                        }
-                    });
+                        },
+                        None,
+                    ),
+                };
+                let retry_key = occurrence.as_ref().map(|occurrence| occurrence.fire_key());
                 let conversation_title = task_session_title(&task_label);
-                let enqueued =
+                let written =
                     gents_session::request::lifecycle::materialize::write_pending_agent_request_with_identity(
                         &node,
                         agent_actor,
@@ -495,11 +510,16 @@ impl MaterializerHandle for ProductionMaterializer {
                             requester_did: None,
                             trigger_doc_id: trigger_doc_id.as_deref(),
                         },
-                        Some(&request_id),
-                        prepared_ids.as_ref().map(|(_, session)| session.as_str()),
+                        gents_session::request::lifecycle::materialize::PendingRequestIdentity {
+                            request_id: Some(&request_id),
+                            session_id: session_id.as_deref(),
+                            retry_key: retry_key.as_deref(),
+                        },
                         Some(agent_identity.as_ref()),
                     )
                     .await?;
+                duplicate = written.replayed;
+                let enqueued = written.request;
                 (enqueued, conversation_title)
             };
             if workspace_ref.is_some() {

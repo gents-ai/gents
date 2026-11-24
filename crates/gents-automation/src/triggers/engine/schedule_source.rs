@@ -259,10 +259,11 @@ impl TriggerSource for ScheduleSource {
                             group_vars: None,
                             trigger_context: None,
                             args_vars: None,
-                            durable_fire_key: gents_protocol::trigger_delivery::durable_fire_key(
-                                "schedule",
-                                &[trigger_id, &next_run_at],
-                            ),
+                            durable_fire_key:
+                                gents_protocol::trigger_delivery::schedule_occurrence_key(
+                                    trigger_id,
+                                    &next_run_at,
+                                ),
                             pre_materialized_request_id: None,
                             event_source_generation: None,
                             on_result: Box::new(move |result| {

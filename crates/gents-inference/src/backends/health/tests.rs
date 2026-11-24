@@ -1,7 +1,7 @@
 mod cycle;
 mod oauth;
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 
 use axum::{routing::get, Json, Router};
 use tokio::sync::{mpsc, oneshot};
@@ -201,100 +201,6 @@ fn backend_fields_refine_the_modeled_probe_revision() {
             due
         },
     );
-}
-
-struct ModelsListener {
-    port: u16,
-    requests: Arc<AtomicUsize>,
-    last_authorization: Arc<std::sync::RwLock<Option<String>>>,
-    shutdown: Option<oneshot::Sender<()>>,
-    handle: Option<tokio::task::JoinHandle<std::io::Result<()>>>,
-}
-
-impl ModelsListener {
-    fn start() -> Self {
-        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind models listener");
-        listener
-            .set_nonblocking(true)
-            .expect("set models listener nonblocking");
-        let port = listener.local_addr().expect("local addr").port();
-        let listener =
-            tokio::net::TcpListener::from_std(listener).expect("build async models listener");
-        let requests = Arc::new(AtomicUsize::new(0));
-        let observed = requests.clone();
-        let last_authorization = Arc::new(std::sync::RwLock::new(None));
-        let captured = last_authorization.clone();
-        let models = move |headers: axum::http::HeaderMap| {
-            let observed = observed.clone();
-            let captured = captured.clone();
-            async move {
-                observed.fetch_add(1, Ordering::Relaxed);
-                if let Some(value) = headers
-                    .get(axum::http::header::AUTHORIZATION)
-                    .and_then(|value| value.to_str().ok())
-                {
-                    *captured.write().expect("authorization capture lock") = Some(value.into());
-                }
-                Json(serde_json::json!({
-                    "data": [{"id": "test-model"}],
-                    "models": [{"model": "test-model", "name": "Test model"}]
-                }))
-            }
-        };
-        let app = Router::new()
-            .route("/v1/models", get(models.clone()))
-            .route("/v1/models-v2", get(models));
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let handle = tokio::spawn(async move {
-            axum::serve(listener, app)
-                .with_graceful_shutdown(async move {
-                    let _ = shutdown_rx.await;
-                })
-                .await
-        });
-        Self {
-            port,
-            requests,
-            last_authorization,
-            shutdown: Some(shutdown_tx),
-            handle: Some(handle),
-        }
-    }
-
-    fn endpoint(&self) -> String {
-        format!("http://127.0.0.1:{}/v1", self.port)
-    }
-
-    fn requests(&self) -> usize {
-        self.requests.load(Ordering::Relaxed)
-    }
-
-    fn last_authorization(&self) -> Option<String> {
-        self.last_authorization
-            .read()
-            .expect("authorization capture lock")
-            .clone()
-    }
-
-    async fn shutdown(mut self) {
-        if let Some(shutdown) = self.shutdown.take() {
-            let _ = shutdown.send(());
-        }
-        if let Some(handle) = self.handle.take() {
-            handle
-                .await
-                .expect("join models listener task")
-                .expect("serve models listener");
-        }
-    }
-}
-
-impl Drop for ModelsListener {
-    fn drop(&mut self) {
-        if let Some(shutdown) = self.shutdown.take() {
-            let _ = shutdown.send(());
-        }
-    }
 }
 
 fn backend(backend_id: &str, endpoint: String) -> InferenceBackend {

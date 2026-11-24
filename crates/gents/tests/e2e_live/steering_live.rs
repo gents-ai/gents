@@ -19,7 +19,7 @@ use tokio::sync::Notify;
 use crate::support::agent_requests::{submit_user_request, RequestActors};
 use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
 use crate::support::live_inference::{bind_target, live_target, wait_for_request_terminal};
-use crate::support::test_db;
+use crate::support::trial_store;
 
 const SESSION: &str = "live-steering-session";
 const ACTIVE: &str = "live-steering-active";
@@ -84,7 +84,7 @@ async fn enqueue(actors: &RequestActors, id: &str, content: &str) -> Result<Stri
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn live_steering_edits_reorders_and_removes_before_same_request_continues() -> Result<()> {
     let target = live_target().await;
-    let db = test_db("live-steering").await;
+    let db = trial_store("live-steering").await;
     let actors = bind_target(&db, &target).await;
     let did = actors.node_did();
     let user_did = actors.fixture.user.did();
@@ -101,7 +101,7 @@ async fn live_steering_edits_reorders_and_removes_before_same_request_continues(
     let entered = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let _release_on_failure = Release(release.clone());
-    let runtime = Gents::builder().node(db.node.clone()).backend_admission(db.home.backend_admission()).identity(db.node_identity.clone()).default_agent_did(agent_did)
+    let runtime = Gents::builder().node(db.node.clone()).backend_admission(db.backend_admission()).identity(db.node_identity.clone()).default_agent_did(agent_did)
         .tool_ceiling(ToolCeiling::meta_only()).agent(agent_did).identity_binding(actors.fixture.binding.clone()).backend_id(target.backend_id()).model_name(target.model())
         .system_prompt("Call held_probe exactly once before answering. After it returns, use the latest user messages, then give a concise answer. Do not call other tools.")
         .sampling(SamplingConfig { reasoning_effort: Some(ReasoningEffort::High), temperature: Some(1.0), top_p: Some(0.95), ..Default::default() })

@@ -36,7 +36,7 @@ pub(super) async fn test_node() -> (
     (db, signer)
 }
 
-pub(super) async fn grant_test_agent(
+pub(crate) async fn grant_test_agent(
     db: &gents_store::test_support::TestStore,
     signer: &gents_store::identity::ManagedAgentSigner,
 ) {
@@ -106,7 +106,7 @@ impl std::ops::Deref for TestRegistry {
     }
 }
 
-pub(super) async fn seeded_request(
+pub(crate) async fn seeded_request(
     node: &Arc<EmbeddedNode>,
     signer: &gents_store::identity::ManagedAgentSigner,
     request_id: &str,
@@ -481,7 +481,7 @@ async fn wait_for_call_row_count(
     .await
 }
 
-async fn wait_for_request_call_state(
+pub(crate) async fn wait_for_request_call_state(
     node: &Arc<EmbeddedNode>,
     signer: &gents_store::identity::ManagedAgentSigner,
     request_id: &str,

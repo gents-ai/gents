@@ -11,6 +11,18 @@ pub struct FireIdentity {
 }
 
 impl FireIdentity {
+    /// The identity of a schedule Trigger's occurrence, whose `occurrence_key`
+    /// is [`schedule_occurrence_key`]: the request, session and retry key of
+    /// every fire of that occurrence (Lean `Triggers.ScheduleOccurrence.identity`).
+    pub fn schedule(owner_did: &str, trigger_id: &str, occurrence_key: &str) -> Self {
+        Self {
+            owner_did: owner_did.to_owned(),
+            trigger_id: trigger_id.to_owned(),
+            source_collection: "Schedule".to_owned(),
+            source_doc_id: occurrence_key.to_owned(),
+        }
+    }
+
     /// Character-count framing is shared with `Triggers.Durable.Identity`.
     /// Every component, including the owner, participates in admission identity.
     pub fn fire_key(&self) -> String {
@@ -168,6 +180,12 @@ pub struct EventSourceCursor {
     pub consumer: crate::event_delivery::EventConsumer,
     pub source_collection: String,
     pub after: String,
+}
+
+/// The occurrence a schedule tick fires: the Trigger and the cursor value it
+/// found due (Lean `Triggers.ScheduleOccurrence.occurrenceKey`).
+pub fn schedule_occurrence_key(trigger_id: &str, occurrence: &str) -> String {
+    durable_fire_key("schedule", &[trigger_id, occurrence])
 }
 
 pub fn durable_fire_key(namespace: &str, components: &[&str]) -> String {

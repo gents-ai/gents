@@ -13,20 +13,20 @@ use gents_store::graphql::escape_graphql_string;
 use gents_store::subscription_source::UpdateSubscriptionSource;
 use gents_store::{config_client::ConfigAccess, identity::NodeIdentity};
 use serde::Deserialize;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use crate::support::mock_subscription::MockUpdateSubscriptionSource;
-use crate::support::{test_db, TestDb};
+use crate::support::trial_store;
 use gents_store::test_support::snapshot_reader::SnapshotReader;
+use gents_store::test_support::TestStore;
 use gents_store::test_support::STALL_CEILING;
 
 const SESSION: &str = "goal-session";
 const RESCAN: Duration = Duration::from_millis(20);
 
 async fn goal_creation_actors(
-    db: &TestDb,
+    db: &TestStore,
 ) -> (gents_store::identity::KeyIdentity, Arc<dyn NodeIdentity>) {
     let fixture = crate::support::managed_agent_fixture(db).await;
     let admin = ConfigAccess::local_as(db.node.clone(), db.node_identity.did().parse().unwrap());
@@ -83,7 +83,7 @@ fn snapshot(local_did: &str, agent_did: &str) -> Arc<ActiveRuntimeSnapshot> {
 }
 
 async fn publish_node_readiness_for_agent(
-    db: &TestDb,
+    db: &TestStore,
     process_state: gents_protocol::row::NodeReadinessProcessState,
     behavior: Option<gents_protocol::row::AgentReadinessUnavailableReason>,
     agent_did: &str,
@@ -158,7 +158,7 @@ async fn publish_node_readiness_for_agent(
 }
 
 async fn source_for_agent(
-    db: &TestDb,
+    db: &TestStore,
     agent_identity: &Arc<dyn NodeIdentity>,
 ) -> (GoalSource, watch::Sender<Arc<ActiveRuntimeSnapshot>>) {
     publish_node_readiness_for_agent(
@@ -172,7 +172,7 @@ async fn source_for_agent(
 }
 
 fn agent_snapshot(
-    db: &TestDb,
+    db: &TestStore,
     agent_identity: &Arc<dyn NodeIdentity>,
 ) -> Arc<ActiveRuntimeSnapshot> {
     let node =
@@ -189,7 +189,7 @@ fn agent_snapshot(
 }
 
 fn unready_source_for_agent(
-    db: &TestDb,
+    db: &TestStore,
     agent_identity: &Arc<dyn NodeIdentity>,
 ) -> (GoalSource, watch::Sender<Arc<ActiveRuntimeSnapshot>>) {
     let (tx, rx) = watch::channel(agent_snapshot(db, agent_identity));
@@ -214,11 +214,12 @@ struct GoalBackgroundHandoff {
     background_executions:
         gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry,
     process_tool_call_id: String,
-    release: tokio::net::TcpStream,
+    release: std::fs::File,
+    _release_dir: tempfile::TempDir,
 }
 
 async fn boot_goal_background_handoff_with_plans(
-    db: &TestDb,
+    db: &TestStore,
     fixture: &crate::support::ManagedAgentFixture,
     request_id: &str,
     child_plans: Vec<gents_inference::test_support::scripted_backend::StreamPlan>,
@@ -227,13 +228,14 @@ async fn boot_goal_background_handoff_with_plans(
     let agent_identity = fixture.agent.clone();
     let behavior = agent_identity.did();
     let prompt = "start late background handoff";
-    let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+    let release_dir = tempfile::tempdir().unwrap();
+    let release_gate = release_dir.path().join("release");
+    assert!(tokio::process::Command::new("mkfifo")
+        .arg(&release_gate)
+        .status()
         .await
-        .unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let held_command = format!(
-        "import socket,sys\nwith socket.create_connection(('127.0.0.1', {port}), timeout=5) as connection:\n connection.settimeout(60)\n connection.sendall(b'ready\\n')\n if connection.recv(1) != b'r': sys.exit(124)\nsys.stdout.write('late result required for final wrapup')"
-    );
+        .unwrap()
+        .success());
     let prepared = crate::support::accepted_turn::prepare_managed_accepted_turn(
         db,
         fixture,
@@ -252,8 +254,13 @@ async fn boot_goal_background_handoff_with_plans(
                     serde_json::json!({
                         "tool_name": "bash",
                         "args": {
-                            "command": "python3",
-                            "args": ["-c", held_command]
+                            "command": "sh",
+                            "args": [
+                                "-c",
+                                r#"read release < "$1" && [ "$release" = r ] && printf '%s' 'late result required for final wrapup'"#,
+                                "goal-background-probe",
+                                release_gate.to_string_lossy()
+                            ]
                         }
                     })
                     .to_string(),
@@ -278,7 +285,7 @@ async fn boot_goal_background_handoff_with_plans(
             host: Some(gents_documents::HostTools {
                 bash: Some(gents_documents::BashTools {
                     mode: gents_documents::BashMode::ReadOnly,
-                    read_only_commands: Some(vec!["python3".into()]),
+                    read_only_commands: Some(vec!["sh".into()]),
                     background_enabled: true,
                     ..Default::default()
                 }),
@@ -294,7 +301,7 @@ async fn boot_goal_background_handoff_with_plans(
         db.node.clone(),
         identity,
         gents::DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
+            backend_admission: Some(db.backend_admission()),
             tool_ceiling: gents_tools::surface::ToolCeiling::readonly(),
             ..Default::default()
         },
@@ -317,10 +324,12 @@ async fn boot_goal_background_handoff_with_plans(
     let parent_doc = rows[0]["_docID"].as_str().unwrap().to_owned();
     let (process_tool_call_id, release) = tokio::time::timeout(STALL_CEILING, async {
         let mut changes = fixture.access.subscribe_changes("AgentToolCall").await;
-        let (mut release, _) = listener.accept().await.unwrap();
-        let mut ready = [0_u8; 6];
-        release.read_exact(&mut ready).await.unwrap();
-        assert_eq!(&ready, b"ready\n");
+        let release = tokio::task::spawn_blocking(move || {
+            std::fs::OpenOptions::new().write(true).open(release_gate)
+        })
+        .await
+        .unwrap()
+        .expect("the held process opens its release gate");
         loop {
             let response = fixture.access.execute(&format!(r#"{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{}" }}, tool_name: {{ _eq: "bash" }}, lifecycle_state: {{ _eq: "running" }} }}, limit: 1) {{ _docID tool_call_id }} }}"#, gents_store::graphql::escape_graphql_string(&parent_doc))).await.unwrap();
             if let Some(row) = response["data"]["AgentToolCall"].as_array().unwrap().first() {
@@ -341,6 +350,7 @@ async fn boot_goal_background_handoff_with_plans(
         background_executions,
         process_tool_call_id,
         release,
+        _release_dir: release_dir,
     }
 }
 
@@ -364,7 +374,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
 
     let objective = "Respect the budget even when execution fails";
     for terminal in ["failed", "dead"] {
-        let db = test_db(&format!("goal-budget-after-{terminal}")).await;
+        let db = trial_store(&format!("goal-budget-after-{terminal}")).await;
         let fixture = crate::support::managed_agent_fixture(&db).await;
         let agent_identity = fixture.agent.clone();
         let access = ConfigAccess::local_managed_agent(
@@ -400,6 +410,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             background_executions,
             process_tool_call_id,
             mut release,
+            _release_dir,
         } = boot_goal_background_handoff_with_plans(&db, &fixture, parent, vec![hold_wrapup]).await;
         let prior_usage = session_token_usage(
             &db.node,
@@ -457,7 +468,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             1,
             "the wrapup reached its held provider response"
         );
-        release.write_all(b"r").await.unwrap();
+        std::io::Write::write_all(&mut release, b"r\n").unwrap();
         let completion = tokio::time::timeout(
             STALL_CEILING,
             background_executions.wait_for_completion(&process_tool_call_id),
@@ -622,7 +633,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
 mod control_failure;
 
 async fn goal_fixture_request_with_state(
-    db: &TestDb,
+    db: &TestStore,
     user: &gents_store::identity::KeyIdentity,
     agent: &Arc<dyn NodeIdentity>,
     request_id: &str,
@@ -633,7 +644,7 @@ async fn goal_fixture_request_with_state(
 }
 
 async fn goal_fixture_request_with_state_at(
-    db: &TestDb,
+    db: &TestStore,
     user: &gents_store::identity::KeyIdentity,
     agent: &Arc<dyn NodeIdentity>,
     request_id: &str,
@@ -645,7 +656,7 @@ async fn goal_fixture_request_with_state_at(
 }
 
 async fn goal_fixture_request_in_session_at(
-    db: &TestDb,
+    db: &TestStore,
     user: &gents_store::identity::KeyIdentity,
     agent: &Arc<dyn NodeIdentity>,
     session: &str,
@@ -708,7 +719,7 @@ async fn goal_fixture_request_in_session_at(
 }
 
 async fn reserve_goal_session(
-    db: &TestDb,
+    db: &TestStore,
     user: &gents_store::identity::KeyIdentity,
     agent: &Arc<dyn NodeIdentity>,
     session: &str,
@@ -848,7 +859,7 @@ async fn publish_owned_terminal_activity(
 }
 
 async fn goal_recovery_actors(
-    db: &TestDb,
+    db: &TestStore,
     request_id: &str,
     state: &str,
 ) -> (

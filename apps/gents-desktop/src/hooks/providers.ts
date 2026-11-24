@@ -8,7 +8,7 @@ import type {
 } from "@source-inc/gents-desktop-client";
 
 import { newestWinsBy, singleFlight } from "../lib/reads";
-import type { ClientStore } from "./clientStore";
+import type { ClientState, ClientStore } from "./clientStore";
 import { providers, type ProviderStore } from "./providerStore";
 
 type ProviderParams = {
@@ -52,9 +52,33 @@ export function createProviders({ api, store, client }: ProviderParams) {
     }
   }
 
+  /* a node's accounts are re-listed when its account backends change (an
+     account added, removed, renamed, enabled or disabled syncs its backend),
+     not on every snapshot: a heartbeat or a probe changes nothing here */
+  const accountKeys = new Map<string, string | null>();
+  function accountKey(state: ClientState, nodeDid: string) {
+    const deployment = state.snapshot?.client?.deployments.find(
+      (deployment) => deployment.nodeDid === nodeDid,
+    );
+    if (!deployment) return null;
+    return JSON.stringify(
+      deployment.inferenceBackends.map((backend) => [
+        backend.backendId,
+        backend.accountRef,
+        backend.authKind,
+        backend.enabled,
+        backend.name,
+      ]),
+    );
+  }
   client.subscribe((state, prev) => {
     if (state.snapshot === prev.snapshot) return;
-    for (const nodeDid of watching.keys()) void loadProviderAccounts(nodeDid);
+    for (const nodeDid of watching.keys()) {
+      const key = accountKey(state, nodeDid);
+      if (accountKeys.get(nodeDid) === key) continue;
+      accountKeys.set(nodeDid, key);
+      void loadProviderAccounts(nodeDid);
+    }
   });
 
   function readUsage(nodeDid: string, force: boolean, provider: string | null) {
@@ -84,11 +108,15 @@ export function createProviders({ api, store, client }: ProviderParams) {
     loadProviderAccounts,
     watchProviderAccounts(nodeDid: string) {
       watching.set(nodeDid, (watching.get(nodeDid) ?? 0) + 1);
+      accountKeys.set(nodeDid, accountKey(client.getState(), nodeDid));
       void loadProviderAccounts(nodeDid);
       return () => {
         const left = (watching.get(nodeDid) ?? 1) - 1;
         if (left > 0) watching.set(nodeDid, left);
-        else watching.delete(nodeDid);
+        else {
+          watching.delete(nodeDid);
+          accountKeys.delete(nodeDid);
+        }
       };
     },
     loadProviderUsage(nodeDid: string) {

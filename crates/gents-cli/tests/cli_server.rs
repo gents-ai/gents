@@ -1427,7 +1427,10 @@ async fn server_exposes_fleet_slot_snapshot_endpoint() -> Result<()> {
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("mock-fleet-slots-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockChatEndpoint::start_hanging(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let port = allocate_port()?;
     let agent_name = format!("cli-fleet-slots-{}", Uuid::new_v4().simple());
     let graphql = graphql_url(port);
@@ -2231,11 +2234,11 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
 
     let model_name = format!("mock-auth-model-{}", Uuid::new_v4().simple());
     let expected_reply = "AUTH_BACKEND_OK";
-    let mock_endpoint = MockChatEndpoint::start_with_required_bearer(
-        &model_name,
-        expected_reply,
-        Some("backend-key"),
-    )?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .replies(expected_reply)
+            .require_bearer(Some("backend-key"))
+            .start()?;
 
     let port = allocate_port()?;
     let agent_name = format!("cli-auth-{}", Uuid::new_v4().simple());
@@ -3241,7 +3244,12 @@ async fn restarted_server_never_reports_the_killed_process_ready() -> Result<()>
             fs::create_dir_all(&home_dir)?;
 
             let model_name = format!("mock-restart-claim-model-{}", Uuid::new_v4().simple());
-            let mock_endpoint = MockChatEndpoint::start_hanging(&model_name)?;
+            let mock_endpoint =
+                gents_inference::test_support::scripted_backend::ScriptedBackend::builder(
+                    &model_name,
+                )
+                .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+                .start()?;
             let agent_name = format!("cli-restart-claim-{}", Uuid::new_v4().simple());
 
             let init = run_init_json(

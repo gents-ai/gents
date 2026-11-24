@@ -13,9 +13,9 @@ use gents_tools::surface::ToolCeiling;
 use tokio::sync::watch;
 
 use crate::support::fixtures::bind_managed_agent_backend;
-use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::waits::RecordingProcessObserver;
-use crate::support::{managed_agent_fixture, test_db};
+use crate::support::{managed_agent_fixture, trial_store};
+use gents_inference::test_support::scripted_backend::ScriptedBackend;
 
 #[derive(Clone, Debug)]
 struct BuildFailure {
@@ -137,11 +137,11 @@ async fn wait_for_node_readiness(
 
 #[tokio::test]
 async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<()> {
-    let db = test_db("startup-readiness-559").await;
+    let db = trial_store("startup-readiness-559").await;
     let fixture = managed_agent_fixture(&db).await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
-    let mock_endpoint = MockModelEndpoint::start("default")?;
+    let mock_endpoint = ScriptedBackend::start("default", Vec::new())?;
     bind_managed_agent_backend(
         &db,
         &fixture,
@@ -169,7 +169,7 @@ async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<(
         node.clone(),
         identity.clone(),
         DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
+            backend_admission: Some(db.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             process_state_observer: Some(observer.clone()),
             startup_build_failure_observer: Some(build_failure_observer.clone()),
@@ -265,11 +265,11 @@ async fn transient_build_failure_within_budget_still_reaches_ready_healthy() -> 
         std::env::remove_var(VAR);
     }
 
-    let db = test_db("startup-readiness-559-transient").await;
+    let db = trial_store("startup-readiness-559-transient").await;
     let fixture = managed_agent_fixture(&db).await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
-    let mock_endpoint = MockModelEndpoint::start("default")?;
+    let mock_endpoint = ScriptedBackend::start("default", Vec::new())?;
     bind_managed_agent_backend(
         &db,
         &fixture,
@@ -292,7 +292,7 @@ async fn transient_build_failure_within_budget_still_reaches_ready_healthy() -> 
         node.clone(),
         identity.clone(),
         DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
+            backend_admission: Some(db.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             retry_policy: gents::runtime::agent::retry::RetryPolicy {
                 max_retries: 3,

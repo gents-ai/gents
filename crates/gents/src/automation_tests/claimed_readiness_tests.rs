@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::support::{test_db, TestDb};
+use crate::support::trial_store;
 use chrono::Utc;
 use gents_automation::goal::readiness_gate::GoalClaimedDecision;
 use gents_automation::goal::readiness_gate::GoalReconcileSettled;
@@ -18,6 +18,7 @@ use gents_protocol::node_readiness::{
     AgentReadinessEntry, AgentReadinessState, AgentReadinessUnavailableReason,
     NodeReadinessProcessState, NodeReadinessSnapshot, NODE_READINESS_FORMAT_VERSION,
 };
+use gents_store::test_support::TestStore;
 
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
@@ -53,7 +54,7 @@ fn active_claim() -> Value {
 }
 
 async fn source(
-    db: &TestDb,
+    db: &TestStore,
 ) -> (
     GoalSource,
     crate::runtime::status::RuntimeStatusHandle,
@@ -100,7 +101,7 @@ async fn source(
     )
 }
 
-async fn selected_agent(db: &TestDb) -> String {
+async fn selected_agent(db: &TestStore) -> String {
     let query = format!(
         r#"{{ Agent(filter: {{ node_did: {{ _eq: "{}" }}, display_name: {{ _eq: "{}" }} }}, limit: 2) {{ agent_did }} }}"#,
         escape_graphql_string(db.node_identity.did()),
@@ -119,7 +120,7 @@ async fn selected_agent(db: &TestDb) -> String {
         .to_owned()
 }
 
-async fn selected_identity(db: &TestDb) -> Arc<dyn gents_store::identity::NodeIdentity> {
+async fn selected_identity(db: &TestStore) -> Arc<dyn gents_store::identity::NodeIdentity> {
     let agent_did = selected_agent(db).await;
     let agent = gents_documents::load_agent(&db.node, db.node_identity.did(), &agent_did)
         .await
@@ -132,7 +133,7 @@ async fn selected_identity(db: &TestDb) -> Arc<dyn gents_store::identity::NodeId
     gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap()
 }
 
-async fn agent_access(db: &TestDb) -> ConfigAccess {
+async fn agent_access(db: &TestStore) -> ConfigAccess {
     let agent = selected_identity(db).await;
     ConfigAccess::local_managed_agent(
         db.node.clone(),
@@ -142,14 +143,14 @@ async fn agent_access(db: &TestDb) -> ConfigAccess {
     .unwrap()
 }
 
-async fn load_goal(db: &TestDb) -> GoalDocument {
+async fn load_goal(db: &TestStore) -> GoalDocument {
     gents_automation::goal::load_canonical_goal(&db.node, db.node_identity.did(), SESSION)
         .await
         .unwrap()
         .unwrap()
 }
 
-async fn child_count(db: &TestDb, goal: &GoalDocument, parent: &str) -> usize {
+async fn child_count(db: &TestStore, goal: &GoalDocument, parent: &str) -> usize {
     let response = graphql_with_transaction_retry(
         &db.node,
         &format!(r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, caused_by_trigger_kind: {{_eq: "goal"}}, caused_by_trigger_id: {{_eq: "{}"}}, caused_by_parent_request_id: {{_eq: "{}"}}}}) {{_docID}} }}"#,
@@ -163,11 +164,15 @@ async fn child_count(db: &TestDb, goal: &GoalDocument, parent: &str) -> usize {
         .len()
 }
 
-async fn install_claim(db: &TestDb, before: &Value) -> GoalDocument {
+async fn install_claim(db: &TestStore, before: &Value) -> GoalDocument {
     install_claim_with_terminal(db, before, "failed").await
 }
 
-async fn install_claim_with_terminal(db: &TestDb, before: &Value, terminal: &str) -> GoalDocument {
+async fn install_claim_with_terminal(
+    db: &TestStore,
+    before: &Value,
+    terminal: &str,
+) -> GoalDocument {
     let agent = gents_inference::test_support::install_test_agent(
         &db.node,
         db.node_identity.did(),
@@ -265,7 +270,7 @@ async fn install_claim_with_terminal(db: &TestDb, before: &Value, terminal: &str
 }
 
 async fn publish_readiness(
-    db: &TestDb,
+    db: &TestStore,
     observation: &str,
     status: &crate::runtime::status::RuntimeStatusHandle,
     settled: bool,
@@ -346,7 +351,7 @@ async fn required_question_holds_the_claim_until_its_native_item_is_acted() {
     let mut before = active_claim();
     before["infrastructure_retries"] = json!(0);
     before["last_failure"] = Value::Null;
-    let db = test_db("required-question-continuation").await;
+    let db = trial_store("required-question-continuation").await;
     let goal = install_claim_with_terminal(&db, &before, "completed").await;
     let parent = goal.last_continued_from_request_id.as_deref().unwrap();
     let (controller, status, _status_owner) = source(&db).await;
@@ -421,7 +426,7 @@ async fn generated_claimed_readiness_cases_drive_goal_source() {
         gents_lean_vocab::families::goal_claimed_readiness_claimed::cases::<String, String>()
     {
         let name = case.input.name.as_str();
-        let db = test_db(name).await;
+        let db = trial_store(name).await;
         let before = install_claim(&db, &serde_json::to_value(&case.input.before).unwrap()).await;
         let parent = before.last_continued_from_request_id.as_deref().unwrap();
         let (controller, status, _status_owner) = source(&db).await;
@@ -595,7 +600,7 @@ async fn generated_claimed_readiness_cases_drive_goal_source() {
 
 #[tokio::test]
 async fn readiness_stop_rejects_a_replaced_claim_epoch() {
-    let db = test_db("claimed-readiness-stale-epoch").await;
+    let db = trial_store("claimed-readiness-stale-epoch").await;
     let stale = install_claim(&db, &active_claim()).await;
     let parent = stale.last_continued_from_request_id.as_deref().unwrap();
     assert!(
@@ -632,7 +637,7 @@ async fn unclaimed_goal_follows_live_reconcile_status_and_modeled_readiness() {
     };
     use gents_store::identity::NodeIdentity;
 
-    let db = test_db("goal-unclaimed-live-readiness").await;
+    let db = trial_store("goal-unclaimed-live-readiness").await;
     let fixture = crate::support::managed_agent_fixture(&db).await;
     let agent = fixture.agent.clone();
     let actor = identity::Did::new(agent.did()).unwrap();

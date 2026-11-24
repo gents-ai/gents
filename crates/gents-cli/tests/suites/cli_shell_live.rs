@@ -460,7 +460,10 @@ async fn the_shell_opens_on_setup_without_a_model_and_wakes_when_one_is_added() 
     .await?;
     let home = live.home.clone();
     tokio::task::spawn_blocking(move || {
-        let model = MockChatEndpoint::start("stand-in", REPLY_TEXT)?;
+        let model =
+            gents_inference::test_support::scripted_backend::ScriptedBackend::builder("stand-in")
+                .replies(REPLY_TEXT)
+                .start()?;
         let shell = open_shell(&home)?;
         wait_for(&shell, "Add a provider", SHELL_UP)?;
         wait_for(&shell, "cannot be reached, so it cannot answer", KEYS)?;

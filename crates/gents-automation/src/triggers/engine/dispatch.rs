@@ -191,12 +191,7 @@ impl TriggerEngine {
         let delivery_identity = if intent.trigger_kind == TriggerKind::Schedule {
             let snapshot = self.snapshot_rx.borrow().clone();
             intent.trigger_id.as_ref().map(|trigger| {
-                gents_protocol::trigger_delivery::FireIdentity {
-                    owner_did: snapshot.local_did.clone(),
-                    trigger_id: trigger.clone(),
-                    source_collection: "Schedule".into(),
-                    source_doc_id: intent.durable_fire_key.clone(),
-                }
+                FireIdentity::schedule(&snapshot.local_did, trigger, &intent.durable_fire_key)
             })
         } else if intent.trigger_kind == TriggerKind::Event {
             let snapshot = self.snapshot_rx.borrow().clone();
@@ -456,19 +451,29 @@ impl TriggerEngine {
             TriggerKind::Manual | TriggerKind::Schedule
         ) && !targeted_schedule
         {
-            Some(if intent.task.goal_objective_template.is_some() {
-                let Some(agent) = snapshot.agent(&intent.task.agent_did) else {
-                    let result = FireResult::Errored {
+            let task_agent = || {
+                snapshot
+                    .agent(&intent.task.agent_did)
+                    .ok_or_else(|| FireResult::Errored {
                         error: "Task agent unavailable".into(),
-                    };
-                    return Err(result);
-                };
+                    })
+            };
+            Some(if intent.task.goal_objective_template.is_some() {
                 let identity = crate::goal::task_goal_fire_identity(
-                    agent.node_did(),
+                    task_agent()?.node_did(),
                     &intent.task.task_id,
                     &intent.durable_fire_key,
                 );
                 (identity.request_id, identity.session_id)
+            } else if let (TriggerKind::Schedule, Some(trigger_id)) =
+                (intent.trigger_kind, intent.trigger_id.as_deref())
+            {
+                let identity = FireIdentity::schedule(
+                    task_agent()?.node_did(),
+                    trigger_id,
+                    &intent.durable_fire_key,
+                );
+                (identity.request_id(), identity.session_id())
             } else {
                 (
                     uuid::Uuid::new_v4().to_string(),

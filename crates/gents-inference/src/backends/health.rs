@@ -87,6 +87,34 @@ impl BackendHealthState {
     }
 }
 
+/// Evidence the prober reads from the owner of the calls admitted to a
+/// backend: a mark that grows whenever one of those calls receives a response
+/// item, so a mark that grew while a probe ran shows the backend serving.
+pub trait AdmittedCallProgress: Send + Sync {
+    fn progress_mark(&self, backend_id: &str) -> u64;
+}
+
+/// How one models-endpoint probe ended (Lean `Proofs.BackendHealth.ProbeOutcome`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProbeOutcome {
+    Answered,
+    Failed,
+    TimedOut,
+}
+
+/// Lean `Proofs.BackendHealth.probeEvent`.
+pub(crate) fn probe_event(
+    outcome: ProbeOutcome,
+    admitted_call_progressed: bool,
+) -> Option<ProbeEvent> {
+    match outcome {
+        ProbeOutcome::Answered => Some(ProbeEvent::ProbeSuccess),
+        ProbeOutcome::Failed => Some(ProbeEvent::ProbeFail),
+        ProbeOutcome::TimedOut if admitted_call_progressed => None,
+        ProbeOutcome::TimedOut => Some(ProbeEvent::ProbeFail),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ProbeEvent {
@@ -335,6 +363,20 @@ pub(crate) fn step_backend(
 #[cfg(test)]
 mod conformance {
     use super::*;
+
+    #[test]
+    fn probe_outcomes_supply_the_lean_probe_events() {
+        use gents_lean_vocab::families::proofs_backend_health_probe_event as family;
+        for case in family::cases::<ProbeEvent, String>() {
+            let outcome = match case.input.outcome.as_str() {
+                "answered" => ProbeOutcome::Answered,
+                "failed" => ProbeOutcome::Failed,
+                "timed_out" => ProbeOutcome::TimedOut,
+                other => panic!("unknown probe outcome {other:?}"),
+            };
+            case.check(probe_event(outcome, case.input.admitted_call_progressed));
+        }
+    }
 
     #[test]
     fn health_state_blocks_routing_matches_lean() {

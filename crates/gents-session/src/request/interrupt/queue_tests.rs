@@ -1258,16 +1258,16 @@ async fn a_request_whose_requester_is_not_its_sessions_is_refused() {
 }
 
 /// External premise of `InterruptGeneration.interruptFootprint`
-/// (`a_session_writer_aborts_an_interrupt`,
-/// `only_marker_and_session_writers_abort_an_interrupt`): with a session
-/// interrupt read and about to commit, a write of the session document aborts
-/// that attempt and the interrupt lands on the next; a write of the session's
-/// running request does not abort it.
+/// (`only_another_interrupt_aborts_an_interrupt`): with a session interrupt
+/// read and about to commit, a write of the session document or of its
+/// running request commits beside it and costs it no attempt; another
+/// interrupt of the session, which writes the marker, aborts that attempt and
+/// the interrupt lands on the next.
 #[tokio::test]
-async fn a_session_write_aborts_a_session_interrupt() {
-    for (writes_session, expected_attempts) in [(true, 2), (false, 1)] {
+async fn only_another_interrupt_aborts_a_session_interrupt() {
+    for (writer, expected_attempts) in [("session", 1), ("request", 1), ("interrupt", 2)] {
         let case: ModeledCase = serde_json::from_value(json!({
-            "name": format!("session-write-{writes_session}"), "node_id": 1, "requester_id": 1,
+            "name": format!("session-write-{writer}"), "node_id": 1, "requester_id": 1,
             "session_id": 903, "active_request_id": 103, "inputs": []
         }))
         .unwrap();
@@ -1291,7 +1291,27 @@ async fn a_session_write_aborts_a_session_interrupt() {
                     })
                 });
         let write = async {
-            let mutation = if writes_session {
+            if writer == "interrupt" {
+                fixture
+                    .agent_access
+                    .transact_write("test.session_write_interrupt.other", |txn| {
+                        let parent = &parent;
+                        Box::pin(async move {
+                            interrupt_session_in_txn(
+                                txn,
+                                &parent.session_id,
+                                &parent.node_did,
+                                parent.requester_did.as_deref(),
+                            )
+                            .await
+                        })
+                    })
+                    .await
+                    .expect("the other interrupt commits")
+                    .expect("the other interrupt is permitted");
+                return;
+            }
+            let mutation = if writer == "session" {
                 let session = fixture
                     .agent_access
                     .execute(&format!(
@@ -1324,7 +1344,7 @@ async fn a_session_write_aborts_a_session_interrupt() {
         assert_eq!(
             attempts.load(Ordering::SeqCst),
             expected_attempts,
-            "writes the session document: {writes_session}"
+            "concurrent write: {writer}"
         );
         fixture
             .db
@@ -1333,4 +1353,129 @@ async fn a_session_write_aborts_a_session_interrupt() {
             .await
             .expect("shut down test node");
     }
+}
+
+/// A session interrupt lands while its session is written continuously
+/// (`InterruptGeneration.only_another_interrupt_aborts_an_interrupt`,
+/// `InterruptCoverage.tla` `InterruptCommits`): rounds of a wake publication,
+/// a title, the running turn's terminal and the claim of the next turn commit
+/// through their production owners before the interrupt starts and until it
+/// has landed, and it lands on its first attempt.
+#[tokio::test]
+async fn an_interrupt_lands_while_its_session_is_written_continuously() {
+    use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle, RequestTerminalOutcome};
+    let case: ModeledCase = serde_json::from_value(json!({
+        "name": "continuous", "node_id": 1, "requester_id": 1, "session_id": 905,
+        "active_request_id": 105, "inputs": []
+    }))
+    .unwrap();
+    let QueueFixture {
+        db,
+        agent,
+        agent_access,
+        parent,
+        _lifecycle: first,
+        ..
+    } = fixture(&case).await;
+    let node = db.node.clone();
+    let landed = AtomicBool::new(false);
+    let first_round = Notify::new();
+    let round_done = Notify::new();
+    let attempts = std::sync::atomic::AtomicUsize::new(0);
+    let writers = async {
+        let mut running = Some(first);
+        let mut round = 0_u64;
+        loop {
+            let wake: ModeledEntry = serde_json::from_value(json!({
+                "request_id": 500 + round, "created_at": 10, "execution_origin": "scheduled",
+                "source": "background_completion", "policy": "coalesce",
+                "queue_key": 950 + round, "queued_after": null
+            }))
+            .unwrap();
+            enqueue_generated_wake(&agent_access, &node, &parent, &case, &wake).await;
+            crate::session::observations::update_session_title_with_source(
+                &agent_access,
+                &parent.node_did,
+                parent.requester_did.as_deref(),
+                &parent.session_id,
+                &format!("round {round}"),
+                gents_protocol::session::SessionTitleSource::Generated,
+            )
+            .await
+            .unwrap();
+            if let Some(mut finished) = running.take() {
+                finished
+                    .terminalize_owned(
+                        RequestTerminalOutcome::Completed,
+                        gents_protocol::output::TerminalOutput::NoMessage,
+                        None,
+                    )
+                    .await
+                    .unwrap();
+            }
+            for row in rows(&agent_access, &parent.session_id).await {
+                if row["lifecycle_state"] != "pending" {
+                    continue;
+                }
+                let request = crate::request::binding::load_agent_request_by_doc_id_with_access(
+                    &agent_access,
+                    row["_docID"].as_str().unwrap(),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+                let mut next = RequestLifecycle::new_with_node_did(node.clone(), request, 60);
+                next.bind_managed_agent(agent.as_ref()).unwrap();
+                if next.claim_with_identity().await.unwrap() == ClaimOutcome::Claimed {
+                    running = Some(next);
+                    break;
+                }
+            }
+            round += 1;
+            round_done.notify_one();
+            if round == 1 {
+                first_round.notify_one();
+            }
+            if landed.load(Ordering::SeqCst) {
+                break;
+            }
+        }
+    };
+    let interrupt = async {
+        first_round.notified().await;
+        let attempt = agent_access.transact_write("test.continuous_interrupt", |txn| {
+            let (parent, attempts) = (&parent, &attempts);
+            Box::pin(async move {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                interrupt_session_in_txn(
+                    txn,
+                    &parent.session_id,
+                    &parent.node_did,
+                    parent.requester_did.as_deref(),
+                )
+                .await
+            })
+        });
+        let (interrupted, paused) = with_write_before_commit(attempt, async {
+            round_done.notified().await;
+            round_done.notified().await;
+            round_done.notified().await;
+        })
+        .await;
+        assert!(
+            paused,
+            "a whole round commits inside the interrupt's attempt"
+        );
+        landed.store(true, Ordering::SeqCst);
+        interrupted
+    };
+    let (interrupted, ()) = tokio::join!(interrupt, writers);
+    let interrupted = interrupted.unwrap().expect("the interrupt is permitted");
+    assert_eq!(interrupted.generation, 1);
+    assert_eq!(
+        attempts.load(Ordering::SeqCst),
+        1,
+        "no session write costs the interrupt an attempt"
+    );
+    node.shutdown().await.expect("shut down test node");
 }

@@ -12,10 +12,11 @@ use crate::support::builder_runtime::{
 };
 use crate::support::interrupt::BootedAgent;
 use crate::support::live_inference::wait_for_request_terminal;
-use crate::support::{test_db, TestDb};
+use crate::support::trial_store;
 use gents_inference::test_support::scripted_backend::{
     ScriptedBackend, StreamChunk, StreamPlan, StreamResponse,
 };
+use gents_store::test_support::TestStore;
 
 const MODEL: &str = "goal-stop-model";
 const BACKEND: &str = "goal-stop-backend";
@@ -36,12 +37,12 @@ struct Booted {
     actors: RequestActors,
     runtime: BootedAgent,
     session: String,
-    _db: TestDb,
+    _db: TestStore,
 }
 
 async fn boot(test: &str, plan: StreamPlan) -> Booted {
     let backend = ScriptedBackend::start_with_plans(MODEL, vec![plan]).unwrap();
-    let db = test_db(test).await;
+    let db = trial_store(test).await;
     let actors = builder_actors(&db, BACKEND, backend.endpoint(), MODEL, 1).await;
     let agent = fixture_agent(runtime_builder(&db, &actors), &actors, actors.agent_did())
         .backend_id(BACKEND)

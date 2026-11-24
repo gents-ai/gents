@@ -1149,3 +1149,237 @@ async fn schedule_source_next_fire_survives_idle_ticks_until_cancelled() {
          this means the source treated an idle tick as exhaustion and returned None early"
     );
 }
+
+/// A home whose operator configured one plain interval schedule Trigger per
+/// id in `triggers` (no session template, no Goal), with the engine and the
+/// production materializer over a snapshot that runs them in parallel.
+async fn plain_schedule_home(
+    name: &str,
+    triggers: &[&str],
+) -> (
+    gents_store::test_support::TestStore,
+    Arc<ResolvedAgent>,
+    watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
+    TriggerEngine,
+) {
+    let (db, _user, client, behavior) = signed_materializer_agent(name).await;
+    let node = db.node.clone();
+    let owner = behavior.node_did().to_owned();
+    let agent_did = behavior.agent_did.clone();
+    let config: gents_documents::PackConfig = serde_json::from_value(serde_json::json!({
+        "node": {"node_did": owner},
+        "default_agent_selection": {"node_did": owner, "default_agent_did": agent_did},
+        "tasks": [{"node_did": owner, "task_id": "t1", "agent_did": agent_did, "prompt_template": "occurrence"}],
+        "schedules": [{"node_did": owner, "schedule_id": "source", "cadence": interval_cadence_json()}],
+        "triggers": triggers.iter().map(|trigger| serde_json::json!({
+            "node_did": owner, "trigger_id": trigger, "task_id": "t1",
+            "source": {"kind": "schedule", "schedule_id": "source"}, "concurrency": "parallel",
+        })).collect::<Vec<_>>(),
+    }))
+    .unwrap();
+    apply_user_config(&client, &config, triggers[0]).await;
+    let (trigger_docs, schedule_doc) = client
+        .transact_readonly("test.schedule_docs", |txn| {
+            let owner = &owner;
+            Box::pin(async move {
+                use gents_documents::read_desired_state_record_in_txn as record;
+                use gents_store::collection::Collection;
+                let mut trigger_docs = Vec::new();
+                for trigger in triggers {
+                    let trigger = record(txn, Collection::Trigger, owner, trigger)
+                        .await?
+                        .expect("configured trigger");
+                    trigger_docs.push(trigger.0);
+                }
+                let schedule = record(txn, Collection::Schedule, owner, "source")
+                    .await?
+                    .expect("configured schedule");
+                Ok::<_, anyhow::Error>((trigger_docs, schedule.0))
+            })
+        })
+        .await
+        .unwrap();
+    let mut task = resolved_task("occurrence");
+    task.agent_did = agent_did;
+    let mut schedules = RapidHashMap::default();
+    for (trigger, trigger_doc) in triggers.iter().zip(trigger_docs) {
+        let mut schedule =
+            resolved_schedule_with_concurrency("source", task.clone(), ConcurrencyMode::Parallel);
+        schedule.trigger_doc_id = trigger_doc;
+        schedule.schedule_doc_id = schedule_doc.clone();
+        schedules.insert((*trigger).to_owned(), schedule);
+    }
+    let (_, rx) = watch::channel(snapshot_with_agent_and_schedules(
+        behavior.clone(),
+        schedules,
+    ));
+    let materializer = Arc::new(ProductionMaterializer::new(node, rx.clone()));
+    let engine = TriggerEngine::new(rx.clone(), materializer);
+    (db, behavior, rx, engine)
+}
+
+async fn trigger_request_ids(
+    node: &Arc<defra_node::Node>,
+    behavior: &ResolvedAgent,
+    trigger: &str,
+) -> Vec<String> {
+    let response = agent_access(node, behavior)
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ caused_by_trigger_id: {{ _eq: "{}" }} }}) {{ request_id }} }}"#,
+            escape_graphql_string(trigger),
+        ))
+        .await
+        .unwrap();
+    response["data"]["AgentRequest"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["request_id"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// An occurrence whose dispatch committed its request but whose cursor was not
+/// advanced (the commit's receipt is lost, so the fire reports an error and
+/// writes no new `next_run_at`, as when the cursor write fails, lags or dies
+/// with the process) is offered again by the next tick, and that dispatch
+/// answers with the occurrence's one request.
+#[tokio::test]
+async fn an_occurrence_offered_again_before_its_cursor_advances_keeps_one_request() {
+    let (db, behavior, rx, engine) =
+        plain_schedule_home("schedule-occurrence-offered-again", &["every-minute"]).await;
+    let node = db.node.clone();
+    let cancel = CancellationToken::new();
+    let mut source = ScheduleSource::new(rx, node.clone(), cancel.clone())
+        .with_tick_every(Duration::from_millis(1));
+
+    let first = source
+        .next_fire()
+        .await
+        .expect("the seeded occurrence is due");
+    let occurrence = first.durable_fire_key.clone();
+    let (first_result, receipt_lost) =
+        gents_store::config_client::ConfigApplyTxn::with_post_commit_receipt_loss_for_operation(
+            Some("lifecycle.materialize_pending"),
+            engine.dispatch(first),
+        )
+        .await;
+    assert!(
+        receipt_lost,
+        "the request's commit receipt was lost: {first_result:?}"
+    );
+    assert!(
+        matches!(first_result, FireResult::Errored { .. }),
+        "a lost receipt reports the fire as failed, so its cursor stays: {first_result:?}"
+    );
+    let committed = trigger_request_ids(&node, &behavior, "every-minute").await;
+    assert_eq!(
+        committed.len(),
+        1,
+        "the first dispatch committed its request"
+    );
+
+    let again = source
+        .next_fire()
+        .await
+        .expect("the unadvanced occurrence is due");
+    assert_eq!(
+        again.durable_fire_key, occurrence,
+        "the next tick offers the same occurrence"
+    );
+    let second = engine.dispatch(again).await;
+    let requests = trigger_request_ids(&node, &behavior, "every-minute").await;
+    assert_eq!(
+        requests, committed,
+        "one occurrence holds one request; the second dispatch answered {second:?}"
+    );
+    assert!(
+        matches!(&second, FireResult::Duplicate { request_id } if *request_id == committed[0]),
+        "{second:?}"
+    );
+    cancel.cancel();
+}
+
+#[tokio::test]
+async fn schedule_occurrence_dispatches_follow_the_lean_occurrence_model() {
+    use gents_lean_vocab::families::schedule_occurrence_dispatches as family;
+    use gents_protocol::trigger_delivery::{schedule_occurrence_key, FireIdentity};
+    let cases = family::cases();
+    let triggers = (0..cases.len())
+        .map(|index| format!("occurrence-case-{index}"))
+        .collect::<Vec<_>>();
+    let trigger_refs = triggers.iter().map(String::as_str).collect::<Vec<_>>();
+    let (db, behavior, _rx, engine) =
+        plain_schedule_home("schedule-occurrence-model", &trigger_refs).await;
+    let node = db.node.clone();
+    let owner = behavior.node_did().to_owned();
+    let mut task = resolved_task("occurrence");
+    task.agent_did = behavior.agent_did.clone();
+    for (case, trigger) in cases.into_iter().zip(&triggers) {
+        let mut replayed = Vec::new();
+        let mut answers = Vec::new();
+        let mut published: Vec<String> = Vec::new();
+        for occurrence in &case.input.dispatches {
+            let key = schedule_occurrence_key(trigger, occurrence);
+            let result = engine
+                .dispatch(FireIntent {
+                    trigger_id: Some(trigger.clone()),
+                    trigger_kind: TriggerKind::Schedule,
+                    task: task.clone(),
+                    concurrency: ConcurrencyMode::Parallel,
+                    event_vars: serde_json::json!({}),
+                    doc_vars: None,
+                    correlation: None,
+                    group_vars: None,
+                    trigger_context: None,
+                    args_vars: None,
+                    durable_fire_key: key.clone(),
+                    pre_materialized_request_id: None,
+                    event_source_generation: None,
+                    on_result: Box::new(|_| {}),
+                })
+                .await;
+            let (request_id, replay) = match result {
+                FireResult::Fired { request_id } => (request_id, false),
+                FireResult::Duplicate { request_id } => (request_id, true),
+                other => panic!("{trigger} dispatch of {occurrence}: {other:?}"),
+            };
+            assert_eq!(
+                request_id,
+                FireIdentity::schedule(&owner, trigger, &key).request_id(),
+                "the request takes the occurrence's identity"
+            );
+            if !replay {
+                published.push(request_id.clone());
+            }
+            replayed.push(replay);
+            answers.push(
+                u64::try_from(published.iter().position(|id| *id == request_id).unwrap()).unwrap(),
+            );
+        }
+        let identities = case
+            .input
+            .dispatches
+            .iter()
+            .map(|occurrence| {
+                let identity = FireIdentity::schedule(
+                    "node",
+                    "trigger",
+                    &schedule_occurrence_key("trigger", occurrence),
+                );
+                family::OccurrenceIdentity {
+                    request_id: identity.request_id(),
+                    session_id: identity.session_id(),
+                    retry_key: identity.fire_key(),
+                }
+            })
+            .collect();
+        let requests =
+            u64::try_from(trigger_request_ids(&node, &behavior, trigger).await.len()).unwrap();
+        case.check(family::DispatchOutput {
+            requests,
+            replayed,
+            answers,
+            identities,
+        });
+    }
+}
