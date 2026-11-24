@@ -1,4 +1,5 @@
 pub mod captured_fields_match;
+pub mod captured_files_match;
 pub mod captured_rows_count;
 pub mod crew_spec_match;
 pub mod final_message_matches;
@@ -9,10 +10,12 @@ pub mod tool_result_matches;
 
 use std::collections::BTreeMap;
 
+use gents_documents::EvalStage;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::checks::captured_fields_match::CapturedFieldsMatch;
+use crate::checks::captured_files_match::CapturedFilesMatch;
 use crate::checks::captured_rows_count::CapturedRowsCount;
 use crate::checks::crew_spec_match::CrewSpecMatch;
 use crate::checks::final_message_matches::FinalMessageMatches;
@@ -22,7 +25,7 @@ use crate::runner::executor::StageEvidence;
 use crate::OutcomeKind;
 
 /// Frozen into every run's origin; bump when the builtin set changes in a way that could move a score.
-pub const CHECK_REGISTRY_VERSION: &str = "6";
+pub const CHECK_REGISTRY_VERSION: &str = "7";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CheckVerdict {
@@ -52,6 +55,11 @@ pub trait Check: Send + Sync {
     fn evaluate(&self, params: &Value, stage: &StageEvidence) -> CheckVerdict;
 
     fn describe(&self) -> CheckDescription;
+
+    /// What schema-valid params still get wrong, read against the stage that declares them; reported when a case is validated.
+    fn conformance(&self, _params: &Value, _stage: &EvalStage) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 pub struct CheckRegistry {
@@ -64,6 +72,7 @@ impl CheckRegistry {
             checks: BTreeMap::new(),
         };
         registry.register(Box::new(CapturedFieldsMatch));
+        registry.register(Box::new(CapturedFilesMatch));
         registry.register(Box::new(CapturedRowsCount));
         registry.register(Box::new(CrewSpecMatch));
         registry.register(Box::new(FinalMessageMatches));
@@ -259,6 +268,7 @@ mod tests {
             registry.names(),
             vec![
                 "captured_fields_match",
+                "captured_files_match",
                 "captured_rows_count",
                 "crew_spec_match",
                 "final_message_matches",

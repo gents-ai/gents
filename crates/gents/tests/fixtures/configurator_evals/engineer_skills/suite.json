@@ -1,0 +1,12 @@
+{
+  "id": "engineer-skills",
+  "title": "Engineer skills",
+  "coverage": [
+    "load the build-planning skill before building",
+    "follow a domain skill to its answer",
+    "pick the matching sibling skill",
+    "diagnose and pack guidance from shipped skills",
+    "no skill for an unrelated question"
+  ],
+  "subject": "engineer_full"
+}

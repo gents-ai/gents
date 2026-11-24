@@ -1,0 +1,38 @@
+{
+  "node": {},
+  "eval_definitions": [
+    {
+      "definition_id": "engineer-pages",
+      "comparability_version": 1,
+      "title": "Pages: desktop pages, charts and tables",
+      "subject": {
+        "kind": "agent",
+        "inference_slots": [
+          "engineer"
+        ],
+        "core_packs": [
+          "gents/pack_builder",
+          "gents/web",
+          "gents/dynamic_workflows",
+          "gents/charts",
+          "gents/data_tables",
+          "gents/script"
+        ]
+      },
+      "cases": [
+        "./cases/ticket_board_page.json",
+        "./cases/rename_read_tool.json",
+        "./cases/restore_my_holdings.json",
+        "./cases/fix_stale_calibrations.json",
+        "./cases/clear_lint_finding.json",
+        "./cases/dock_totals_bar.json",
+        "./cases/tide_line.json",
+        "./cases/unbilled_parcels.json",
+        "./cases/add_chart_keep_css.json",
+        "./cases/refund_aging.json",
+        "./cases/harbor_arrivals_page.json",
+        "./cases/rig_flow_scatter.json"
+      ]
+    }
+  ]
+}

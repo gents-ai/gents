@@ -4,6 +4,7 @@ mod inspect;
 mod live;
 mod live_context;
 pub mod observe;
+mod transcript;
 
 pub use executor::outcome::provider_reason_from_failure;
 pub use executor::EmbeddedExecutor;
@@ -16,4 +17,9 @@ pub use observe::{
     request_evidence_from_query_data, request_evidence_from_sources, InferenceCallEvidence,
     MessageEvidence, NoHook, ObservationHook, RequestEvidence, ResponseEvidence,
     TerminalObservation, ToolCallEvidence,
+};
+pub use transcript::{
+    export_retained_transcript, AssistantOutput, ChildRequest, ContextReductions, ProviderCall,
+    Reduction, StageTranscript, TokenUsage, ToolCallCounts, TranscriptCalls, TranscriptOptions,
+    TrialTranscript,
 };

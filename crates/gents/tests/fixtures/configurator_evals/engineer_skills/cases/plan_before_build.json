@@ -1,0 +1,82 @@
+{
+  "case_id": "plan-before-build",
+  "split": "train",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "plan",
+      "prompt": "I'd like an app for tracking loaner laptops at the front desk: who has which laptop and when it's due back. The front desk staff are the only users; they record each loan by hand when a laptop goes out and comes back, so it only has to be current when someone looks; students must never see who has which laptop. Plan it, and stop before the first build call. Nothing exists for it on this node yet, so don't create collections, pages or automations, and don't go reading configuration or schema help for this.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "loaded",
+          "collection": "AgentOutputSegment",
+          "filter": {
+            "session_id": {
+              "_eq": "$session"
+            },
+            "payload": {
+              "_like": "Skill: plan-work%"
+            }
+          },
+          "fields": [
+            "ordinal"
+          ]
+        },
+        {
+          "kind": "file",
+          "name": "workspace",
+          "glob": "*"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "load_skill"
+            ],
+            "forbidden": [
+              "bash",
+              "bash_unrestricted"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "loaded",
+                "min": 1
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "workspace",
+            "expect": [
+              {
+                "path": "ACCEPTANCE.md",
+                "matches": "(?m)^\\s*(?:[-*+]|\\d+[.)])\\s+\\S"
+              },
+              {
+                "path": "ACCEPTANCE.md",
+                "matches": "(?i)must not|mustn't|never|cannot|can't|not (?:be )?(?:able|allowed|possible|happen)"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

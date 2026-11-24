@@ -13,18 +13,21 @@ use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 #[cfg(feature = "live-e2e")]
 use gents_documents::{InferenceBackend, InferenceProfile};
 use gents_eval::checks::CheckRegistry;
-use gents_eval::runner::embedded::{EmbeddedExecutor, EmbeddedHome};
+use gents_eval::runner::embedded::{
+    export_retained_transcript, EmbeddedExecutor, EmbeddedHome, TranscriptCalls, TranscriptOptions,
+};
 use gents_eval::runner::{
-    freeze_refused, run, Capture, CellRequest, CellSource, RunOptions, RunRequest,
+    freeze_refused, run, Capture, CellRequest, CellSource, RunOptions, RunRequest, TrialLocator,
 };
 #[cfg(feature = "live-e2e")]
-use gents_eval::runner::{CaptureResult, TrialExecutor, TrialLocator};
+use gents_eval::runner::{CaptureResult, TrialExecutor};
+use gents_observe::observe::adapter_projection::ProjectionRedactionMode;
 use gents_store::{collection::Collection, config_client::ConfigAccess};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
-use support::streaming_backend::{MockStreamingBackend, StreamPlan, StreamResponse};
+use support::streaming_backend::{MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse};
 const MODEL: &str = "canary-model";
 const SOLO_MARKER: &str = "canary-solo";
 const REPORT_MARKER: &str = "canary-report";
@@ -102,6 +105,7 @@ async fn the_canary_runs_two_cases_end_to_end_on_an_embedded_home_with_live_infe
     let CaptureResult::Files {
         files,
         outside_workspace,
+        ..
     } = &recollected.stages[0].captures["notes"]
     else {
         panic!(
@@ -583,6 +587,294 @@ async fn a_failing_first_stage_skips_the_second_and_grades_it_skipped_prerequisi
 }
 
 #[tokio::test]
+async fn a_finished_trial_exports_the_bodies_its_provider_received_and_the_message_it_ended_on() {
+    const REASONING: &str = "weighing what the canary should report";
+    let mut plans = answering_plans();
+    plans[1] = StreamPlan::new(
+        REPORT_MARKER,
+        vec![StreamResponse::streams(
+            REPORT_MARKER,
+            vec![
+                StreamChunk::reasoning(REASONING),
+                StreamChunk::text("reported"),
+            ],
+        )],
+    );
+    let backend = MockStreamingBackend::start_with_plans(MODEL, plans).unwrap();
+    let (canary, request) = canary_request(backend.endpoint(), "run-export").await;
+    let outcome = run(
+        &canary.access,
+        &request,
+        &canary.executor(),
+        &CheckRegistry::builtin(),
+        CancellationToken::new(),
+        &RunOptions::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(outcome.completed, 2, "{outcome:#?}");
+    let trials = load_trials(&canary.access, &request.owner, &request.run_id)
+        .await
+        .unwrap();
+    let two = trial(&trials, "two-stage");
+    let completion = two.completion.clone().unwrap();
+    let runtime = support::runtime_handle();
+    let runs_dir = canary.runs_dir();
+    let at = locator(two);
+    let stage_requests = completion
+        .stages
+        .iter()
+        .map(|stage| stage.request_id.clone().unwrap())
+        .collect::<Vec<_>>();
+    let export = |calls, redaction| {
+        export_retained_transcript(
+            &runtime,
+            &runs_dir,
+            &at,
+            canary.evaluator.as_ref(),
+            stage_requests.clone(),
+            TranscriptOptions { calls, redaction },
+        )
+    };
+
+    let full = export(TranscriptCalls::Final, ProjectionRedactionMode::Full)
+        .await
+        .unwrap();
+    assert_eq!(
+        (full.usage.input_tokens, full.usage.output_tokens),
+        (
+            completion.usage.input_tokens,
+            completion.usage.output_tokens
+        ),
+        "the trial's calls sum as the run report sums them: {full:#?}"
+    );
+    let [report, confirm] = full.stages.as_slice() else {
+        panic!("one transcript per stage: {full:#?}");
+    };
+    let observed = backend.observed_completion_bodies();
+    for stage in [report, confirm] {
+        let [call] = stage.calls.as_slice() else {
+            panic!("the final call only: {stage:#?}");
+        };
+        assert!(
+            observed.contains(&call.request),
+            "an exported body is one the provider received: {call:#?}"
+        );
+        assert!(call.request["tools"]
+            .as_array()
+            .is_some_and(|tools| !tools.is_empty()));
+        assert_eq!(
+            stage.usage.input_tokens,
+            call.usage.as_ref().and_then(|usage| usage.input_tokens)
+        );
+    }
+    let report_output = report.final_output.as_ref().unwrap();
+    assert_eq!(report_output.reasoning.as_deref(), Some(REASONING));
+    let confirm_history = confirm.calls[0].request["messages"].as_array().unwrap();
+    assert!(
+        !report_output.wire.is_empty()
+            && report_output
+                .wire
+                .iter()
+                .all(|item| confirm_history.contains(item)),
+        "the next stage's provider saw the report stage's final message as rendered: {report_output:#?}"
+    );
+    assert!(!confirm.calls[0].request.to_string().contains(REASONING));
+    let confirm_output = confirm.final_output.as_ref().unwrap();
+    assert!(serde_json::to_string(&confirm_output.wire)
+        .unwrap()
+        .contains("confirmed"));
+
+    let all = export(TranscriptCalls::All, ProjectionRedactionMode::Full)
+        .await
+        .unwrap();
+    for (every, last) in all.stages.iter().zip(&full.stages) {
+        assert_eq!(
+            every.calls.last().map(|call| &call.request),
+            Some(&last.calls[0].request)
+        );
+    }
+
+    let redacted = export(
+        TranscriptCalls::Final,
+        ProjectionRedactionMode::TrainingSafe,
+    )
+    .await
+    .unwrap();
+    let roles = |messages: &Value| {
+        messages
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|message| message["role"].clone())
+            .collect::<Vec<_>>()
+    };
+    let redacted_history = &redacted.stages[1].calls[0].request["messages"];
+    assert_eq!(
+        roles(redacted_history),
+        roles(&confirm.calls[0].request["messages"])
+    );
+    assert!(!redacted_history.to_string().contains(REPORT_MARKER));
+    assert_eq!(
+        redacted.stages[0]
+            .final_output
+            .as_ref()
+            .and_then(|output| output.reasoning.as_deref()),
+        Some("[training_safe_redacted]")
+    );
+}
+
+#[tokio::test]
+async fn a_responses_backend_runs_its_trial_without_a_sampling_seed() {
+    let backend = support::mock_endpoint::MockModelEndpoint::start(MODEL).unwrap();
+    let (canary, mut request) = canary_request(backend.endpoint(), "run-responses").await;
+    let mut responses = backend_document(
+        &canary.owner,
+        "canary-backend",
+        backend.endpoint(),
+        json!({"kind": "unauthenticated"}),
+    );
+    responses["openai_wire_api"] = json!("responses");
+    let mut profile = profile_document(&canary.owner, "canary", "canary-backend", MODEL);
+    profile["reasoning_effort"] = json!("high");
+    canary
+        .install(vec![
+            (Collection::InferenceBackend, responses),
+            (Collection::InferenceProfile, profile),
+        ])
+        .await;
+    request.case_ids = Some(vec!["one-stage".into()]);
+
+    let outcome = run(
+        &canary.access,
+        &request,
+        &canary.executor(),
+        &CheckRegistry::builtin(),
+        CancellationToken::new(),
+        &RunOptions::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!((outcome.completed, outcome.not_evidence), (1, 0));
+
+    let bodies = backend
+        .recorded_requests()
+        .into_iter()
+        .filter(|request| request.path == "/v1/responses")
+        .map(|request| serde_json::from_str::<Value>(&request.body).unwrap())
+        .collect::<Vec<_>>();
+    assert!(
+        bodies.iter().all(|body| body.get("seed").is_none()),
+        "{bodies:#?}"
+    );
+    let turns = bodies
+        .into_iter()
+        .filter(|body| body.get("tools").is_some())
+        .collect::<Vec<_>>();
+    assert!(!turns.is_empty(), "the trial's agent reached the provider");
+    for mut body in turns {
+        let fields = body.as_object_mut().unwrap();
+        for content in ["input", "tools"] {
+            fields.remove(content);
+        }
+        assert!(fields.remove("user").is_some_and(|user| user.is_string()));
+        assert_eq!(
+            body,
+            json!({
+                "model": MODEL,
+                "max_output_tokens": gents_inference::resolved::DEFAULT_MAX_OUTPUT_TOKENS,
+                "stream": true,
+                "temperature": 0.0,
+                "tool_choice": "auto",
+                "reasoning": {"effort": "high"},
+                "include": ["reasoning.encrypted_content"],
+            }),
+            "{body}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_responses_reasoning_backend_runs_a_second_request_in_the_session() {
+    let backend =
+        support::mock_endpoint::MockModelEndpoint::start_with_reasoning_tool_turns(MODEL).unwrap();
+    let (canary, mut request) = canary_request(backend.endpoint(), "run-responses-replay").await;
+    let mut responses = backend_document(
+        &canary.owner,
+        "canary-backend",
+        backend.endpoint(),
+        json!({"kind": "unauthenticated"}),
+    );
+    responses["openai_wire_api"] = json!("responses");
+    let mut profile = profile_document(&canary.owner, "canary", "canary-backend", MODEL);
+    profile["reasoning_effort"] = json!("high");
+    canary
+        .install(vec![
+            (Collection::InferenceBackend, responses),
+            (Collection::InferenceProfile, profile),
+        ])
+        .await;
+    request.case_ids = Some(vec!["two-stage".into()]);
+
+    let outcome = run(
+        &canary.access,
+        &request,
+        &canary.executor(),
+        &CheckRegistry::builtin(),
+        CancellationToken::new(),
+        &RunOptions::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!((outcome.completed, outcome.not_evidence), (1, 0));
+
+    let inputs = backend
+        .recorded_requests()
+        .into_iter()
+        .filter(|request| request.path == "/v1/responses")
+        .map(|request| serde_json::from_str::<Value>(&request.body).unwrap())
+        .filter(|body| body.get("tools").is_some())
+        .map(|body| body["input"].as_array().unwrap().clone())
+        .collect::<Vec<_>>();
+    assert_eq!(inputs.len(), 4, "two stages of two turns each: {inputs:#?}");
+    let second_request = &inputs[2];
+    let provider_items = second_request
+        .iter()
+        .filter(|item| item["role"] != "system" && item["role"] != "user")
+        .map(|item| {
+            let mut item = item.clone();
+            if item["type"] == "function_call_output" {
+                item["output"].take();
+            }
+            item
+        })
+        .collect::<Vec<_>>();
+    let first_call = inputs[1]
+        .iter()
+        .find(|item| item["type"] == "function_call")
+        .unwrap();
+    assert_eq!(
+        provider_items,
+        vec![
+            json!({"type": "reasoning", "id": "rs_4", "summary": [],
+                "encrypted_content": "sealed-4"}),
+            first_call.clone(),
+            json!({"type": "function_call_output", "call_id": "call_4", "output": null,
+                "status": "completed"}),
+            json!({"type": "reasoning", "id": "rs_5", "summary": [],
+                "encrypted_content": "sealed-5"}),
+            json!({"type": "message", "id": "msg_5", "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "mock response",
+                    "annotations": []}]}),
+        ],
+        "the second request returns every item the first request's responses produced"
+    );
+    assert_eq!(second_request.last().unwrap()["role"], "user");
+    assert_eq!(inputs[3][..second_request.len()], second_request[..]);
+}
+
+#[tokio::test]
 async fn freeze_refuses_unrestricted_bash_and_an_oauth_backend_before_creating_any_home() {
     let (canary, base) = canary_request("http://127.0.0.1:1/v1", "run-refused").await;
     let executor = canary.executor();
@@ -930,6 +1222,7 @@ async fn canary_request(endpoint: &str, run_id: &str) -> (Canary, RunRequest) {
             Capture::File {
                 name: "notes".into(),
                 glob: "**/*.txt".into(),
+                text_paths: Default::default(),
             },
         ],
         runs_dir: canary.runs_dir(),
@@ -1102,7 +1395,6 @@ fn trial<'a>(trials: &'a [TrialRecord], case_id: &str) -> &'a TrialRecord {
         .unwrap_or_else(|| panic!("no {case_id} trial in {trials:#?}"))
 }
 
-#[cfg(feature = "live-e2e")]
 fn locator(trial: &TrialRecord) -> TrialLocator {
     TrialLocator {
         trial_node_did: trial.identity.trial_node_did.clone(),

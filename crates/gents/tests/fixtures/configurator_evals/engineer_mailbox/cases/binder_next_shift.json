@@ -1,0 +1,155 @@
+{
+  "case_id": "binder-next-shift",
+  "split": "held_out",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "handoff/binder-transfer.json",
+        "contents": "[\n  {\n    \"binder\": \"L4\",\n    \"status\": \"signed off\",\n    \"subject\": \"Lobby binder L4\",\n    \"handoff_note\": \"The closed binder is at Window Six.\"\n  },\n  {\n    \"binder\": \"M7\",\n    \"status\": \"awaiting handoff\",\n    \"subject\": \"Pier binder M7\",\n    \"handoff_note\": \"Collect the blue seal from Window Eight.\"\n  }\n]\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "handoff",
+      "prompt": "I'm taking the next shift. Read the binder transfer notes in handoff/binder-transfer.json and put the one unresolved transfer in my inbox, using the slip's subject as the title and its handoff note as the note. Leave the signed-off transfer alone, and don't change the notes file.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "visible",
+          "collection": "MailboxItem",
+          "filter": {},
+          "fields": [
+            "item_key",
+            "title"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "notice",
+          "collection": "MailboxItem",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "target_node_did": {
+              "_eq": "$trial"
+            },
+            "target_agent_did": {
+              "_eq": "gents:agent-slot:engineer"
+            },
+            "requester_did": {
+              "_eq": "$evaluator"
+            },
+            "session_id": {
+              "_eq": "$session"
+            }
+          },
+          "fields": [
+            "item_key",
+            "node_did",
+            "requester_did",
+            "kind",
+            "action",
+            "status",
+            "title",
+            "summary",
+            "payload",
+            "source_kind",
+            "session_id",
+            "request_id",
+            "target_node_did",
+            "target_agent_did"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "file_mailbox_item"
+            ],
+            "forbidden": [
+              "write",
+              "bash",
+              "bash_unrestricted",
+              "write_file",
+              "edit_file"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "outcome",
+                "equals": "created"
+              },
+              {
+                "field": "item.title",
+                "equals": "Pier binder M7"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "visible",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "notice",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "notice",
+                "key": "title",
+                "id": "Pier binder M7",
+                "expect": [
+                  {
+                    "field": "summary",
+                    "fallback_field": "payload",
+                    "equals": "Collect the blue seal from Window Eight."
+                  },
+                  {
+                    "field": "kind",
+                    "equals": "flag"
+                  },
+                  {
+                    "field": "action",
+                    "equals": "ack"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "open"
+                  },
+                  {
+                    "field": "source_kind",
+                    "equals": "agent"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

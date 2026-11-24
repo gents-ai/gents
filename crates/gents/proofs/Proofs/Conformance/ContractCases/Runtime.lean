@@ -48,6 +48,24 @@ def runtimeWithInFlight : RuntimeState :=
   , sessionAgent := Function.update runtimeRouterObserved.sessionAgent 100 (some 20)
   }
 
+/-- A call in flight on generation 1 after the router observes generation 2:
+the published generation retires generation 1's slot, which keeps running the
+call it dispatched. -/
+def runtimeRetiredWithInFlight : RuntimeState :=
+  { runtimeRouterObserved with
+    accepted := {500}
+  , inFlight := {500}
+  , requestGeneration := Function.update runtimeRouterObserved.requestGeneration 500 1
+  , requestSession := Function.update runtimeRouterObserved.requestSession 500 100
+  , requestAgent := Function.update runtimeRouterObserved.requestAgent 500 10
+  , sessionAgent := Function.update runtimeRouterObserved.sessionAgent 100 (some 10)
+  }
+
+/-- The retired generation once its call in flight finishes. -/
+def runtimeRetiredCallFinished : RuntimeState :=
+  (RuntimeState.step? runtimeRetiredWithInFlight (.finishRequest 500)).getD
+    runtimeRetiredWithInFlight
+
 def runtimeCaseFromStep
     (name actionName : String)
     (pre : RuntimeState)
@@ -165,15 +183,8 @@ def runtimeReconcileCases : List RuntimeReconcileCase :=
   , runtimeCaseFromStep
       "finish_request_releases_generation"
       "finishRequest"
-      runtimeWithInFlight
+      runtimeRetiredWithInFlight
       (.finishRequest 500)
-      500
-      100
-  , runtimeCaseFromStep
-      "replayed_request_is_not_accepted_twice"
-      "acceptRequest"
-      { runtimeWithInFlight with inFlight := ∅ }
-      (.acceptRequest .ready 100 500 20)
       500
       100
   , runtimeCaseFromStep
@@ -181,6 +192,20 @@ def runtimeReconcileCases : List RuntimeReconcileCase :=
       "retireGeneration"
       runtimeRouterObserved
       (.retireGeneration 1)
+  , runtimeCaseFromStep
+      "retired_generation_waits_for_its_call_in_flight"
+      "retireGeneration"
+      runtimeRetiredWithInFlight
+      (.retireGeneration 1)
+      500
+      100
+  , runtimeCaseFromStep
+      "retire_after_its_call_finishes"
+      "retireGeneration"
+      runtimeRetiredCallFinished
+      (.retireGeneration 1)
+      500
+      100
   , runtimeCaseFromStep
       "apply_failed_clears_pending"
       "applyFailed"

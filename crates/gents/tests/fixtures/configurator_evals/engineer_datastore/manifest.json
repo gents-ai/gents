@@ -12,10 +12,18 @@
   "kind": "documents",
   "assets": [
     "README.md",
-    "pack_config.json",
+    "cases/board_notice_linkage.json",
+    "cases/board_open_receiving_tickets.json",
+    "cases/dispatch_active_route_assignment.json",
+    "cases/library_hold_edition_links.json",
+    "cases/protected_and_wrong_scope.json",
+    "cases/rental_location_cleanup.json",
+    "cases/sample_bin_placement.json",
     "cases/shipment_count_page.json",
     "cases/shipment_lifecycle.json",
-    "cases/protected_and_wrong_scope.json"
+    "cases/yard_approval_holds.json",
+    "pack_config.json",
+    "suite.json"
   ],
   "config": "pack_config.json"
 }

@@ -15,7 +15,8 @@
     "pack_config.json",
     "cases/indexed_versus_scan.json",
     "cases/empty_report_execution.json",
-    "cases/recover_and_refuse.json"
+    "cases/recover_and_refuse.json",
+    "suite.json"
   ],
   "config": "pack_config.json"
 }

@@ -1,5 +1,8 @@
 use gents::support;
 
+#[path = "onboarding_evals/engineer_full.rs"]
+mod engineer_full;
+
 #[path = "onboarding_evals/factory_setup.rs"]
 mod factory_setup;
 
@@ -8,6 +11,9 @@ mod targets;
 
 #[path = "onboarding_evals/ladder.rs"]
 mod ladder;
+
+#[path = "onboarding_evals/registry.rs"]
+mod registry;
 
 #[path = "onboarding_evals/schema.rs"]
 mod schema;

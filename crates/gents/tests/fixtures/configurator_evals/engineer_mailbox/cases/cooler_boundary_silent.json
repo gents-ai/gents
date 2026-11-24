@@ -1,0 +1,163 @@
+{
+  "case_id": "cooler-boundary-silent",
+  "split": "validation",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type CoolerReading { cooler: String shipment: String reading_c: Float logged_at: String }"
+    ],
+    "documents": [
+      {
+        "collection": "CoolerReading",
+        "document": {
+          "cooler": "C-12",
+          "shipment": "VF-88",
+          "reading_c": 2,
+          "logged_at": "05:10"
+        }
+      },
+      {
+        "collection": "CoolerReading",
+        "document": {
+          "cooler": "C-12",
+          "shipment": "VF-88",
+          "reading_c": 4.5,
+          "logged_at": "07:10"
+        }
+      },
+      {
+        "collection": "CoolerReading",
+        "document": {
+          "cooler": "C-12",
+          "shipment": "VF-88",
+          "reading_c": 8,
+          "logged_at": "09:10"
+        }
+      },
+      {
+        "collection": "CoolerReading",
+        "document": {
+          "cooler": "C-12",
+          "shipment": "VF-88",
+          "reading_c": 6.5,
+          "logged_at": "11:10"
+        }
+      },
+      {
+        "collection": "CoolerReading",
+        "document": {
+          "cooler": "C-14",
+          "shipment": "RX-02",
+          "reading_c": 9.4,
+          "logged_at": "07:40"
+        }
+      },
+      {
+        "collection": "CoolerReading",
+        "document": {
+          "cooler": "C-14",
+          "shipment": "RX-02",
+          "reading_c": 1.2,
+          "logged_at": "09:40"
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "check",
+      "prompt": "Cooler C-12 carried the vaccine-free shipment VF-88, and it had to stay between 2 and 8 degrees inclusive. Its readings are in CoolerReading. Flag my inbox only if one of its readings was outside that range, and tell me what you found.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "visible",
+          "collection": "MailboxItem",
+          "filter": {},
+          "fields": [
+            "item_key",
+            "title",
+            "kind"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "notice",
+          "collection": "MailboxItem",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "target_node_did": {
+              "_eq": "$trial"
+            },
+            "target_agent_did": {
+              "_eq": "gents:agent-slot:engineer"
+            },
+            "requester_did": {
+              "_eq": "$evaluator"
+            },
+            "session_id": {
+              "_eq": "$session"
+            }
+          },
+          "fields": [
+            "item_key",
+            "node_did",
+            "requester_did",
+            "kind",
+            "action",
+            "status",
+            "title",
+            "summary",
+            "payload",
+            "source_kind",
+            "session_id",
+            "request_id",
+            "target_node_did",
+            "target_agent_did"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "visible",
+            "min": 0,
+            "max": 0
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "write",
+              "bash",
+              "bash_unrestricted",
+              "write_file",
+              "edit_file",
+              "file_mailbox_item"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "any": [
+              {
+                "matches": "(?i)within|inside|in range|no (alert|flag)|not (flag|file)|did(n'?t| not) (flag|file|add)|nothing"
+              }
+            ]
+          },
+          "tier": "development",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

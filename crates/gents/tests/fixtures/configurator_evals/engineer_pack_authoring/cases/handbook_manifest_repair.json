@@ -1,0 +1,193 @@
+{
+  "case_id": "handbook-manifest-repair",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "packs/shift_handbook/README.md",
+        "contents": "# Shift handbook\n\nHandoff labels and radio checks for the night desk.\n\n## Configuration\n\nNothing to set.\n\n## Usage\n\nInstall the pack.\n"
+      },
+      {
+        "path": "packs/shift_handbook/pack_config.json",
+        "contents": "{\n  \"node\": {},\n  \"skills\": [\n    {\n      \"skill_id\": \"handoff-label\",\n      \"name\": \"handoff-label\",\n      \"description\": \"Load when labelling a handoff crate.\",\n      \"instructions\": \"./skills/handoff_label/SKILL.md\"\n    },\n    {\n      \"skill_id\": \"radio-checks\",\n      \"name\": \"radio-checks\",\n      \"description\": \"Load before the hourly radio check.\",\n      \"instructions\": \"./skills/radio_checks/SKILL.md\"\n    }\n  ]\n}\n"
+      },
+      {
+        "path": "packs/shift_handbook/skills/handoff_label/SKILL.md",
+        "contents": "---\nname: handoff-label\ndescription: Load when labelling a handoff crate.\n---\n\n# Handoff labels\n\nWrite the bay, the crate count and your initials on every handoff label.\n"
+      },
+      {
+        "path": "packs/shift_handbook/skills/radio_checks/SKILL.md",
+        "contents": "---\nname: radio-checks\ndescription: Load before the hourly radio check.\n---\n\n# Radio checks\n\nCall each pier on channel 14 at the top of the hour and log who answers.\n"
+      },
+      {
+        "path": "packs/shift_handbook/manifest.json",
+        "contents": "{\n  \"manifest_version\": 1,\n  \"name\": \"shift_handbook\",\n  \"namespace\": \"fielddesk\",\n  \"version\": \"1.0.0\",\n  \"description\": \"Night desk skills.\",\n  \"authors\": [\n    \"fielddesk contributors\"\n  ],\n  \"kind\": \"documents\",\n  \"assets\": [\n    \"README.md\",\n    \"pack_config.json\",\n    \"skills/handoff_labels/SKILL.md\",\n    \"skills/radio_checks/SKILL.md\"\n  ],\n  \"config\": \"pack_config.json\"\n}\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "repair",
+      "prompt": "packs/shift_handbook fails its pack check. Fix the manifest so it passes, leaving the skill files, README and pack_config.json exactly as they are, then build it and install the archive you built.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "install",
+          "collection": "PackInstallation",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "coordinate": {
+              "_eq": "fielddesk/shift_handbook"
+            }
+          },
+          "fields": [
+            "coordinate",
+            "version",
+            "digest",
+            "source"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "skills",
+          "collection": "Skill",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "skill_id": {
+              "_in": [
+                "handoff-label",
+                "radio-checks"
+              ]
+            }
+          },
+          "fields": [
+            "skill_id",
+            "name",
+            "description",
+            "instructions",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "file",
+          "name": "packs",
+          "glob": "packs/**/*"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash",
+              "bash_unrestricted"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "install",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "skills",
+                "min": 2,
+                "max": 2
+              }
+            ],
+            "rows": [
+              {
+                "capture": "install",
+                "key": "coordinate",
+                "id": "fielddesk/shift_handbook",
+                "expect": [
+                  {
+                    "field": "version",
+                    "equals": "1.0.0"
+                  },
+                  {
+                    "field": "digest",
+                    "matches": "^sha256:[0-9a-f]{64}$"
+                  }
+                ]
+              },
+              {
+                "capture": "skills",
+                "key": "skill_id",
+                "id": "handoff-label",
+                "expect": [
+                  {
+                    "field": "instructions",
+                    "contains": "crate count and your initials"
+                  }
+                ]
+              },
+              {
+                "capture": "skills",
+                "key": "skill_id",
+                "id": "radio-checks",
+                "expect": [
+                  {
+                    "field": "instructions",
+                    "contains": "channel 14"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "packs",
+            "expect": [
+              {
+                "path": "packs/shift_handbook/manifest.json",
+                "pointer": "/assets",
+                "contains": "skills/handoff_label/SKILL.md"
+              },
+              {
+                "path": "packs/fielddesk.shift_handbook-1.0.0.pack",
+                "exists": true
+              },
+              {
+                "path": "packs/shift_handbook/README.md",
+                "sha256": "eb75a6612760089469bee592d905afbb4a01f8a48a9fdf5e516166bff77a2b8c"
+              },
+              {
+                "path": "packs/shift_handbook/pack_config.json",
+                "sha256": "90860cbdc4ead8b1c2187868aad0e42f7e2e33260049af2f0d2112d64ad3b33d"
+              },
+              {
+                "path": "packs/shift_handbook/skills/handoff_label/SKILL.md",
+                "sha256": "e353e23653ce4f6d8167f19ed0fef3b8e692e268195fa2aeea0cf2f5114b60bb"
+              },
+              {
+                "path": "packs/shift_handbook/skills/radio_checks/SKILL.md",
+                "sha256": "c8743efb47115f84745a6a2d78bf4b0dc5934886e3c271c19c85caa1e19d8fad"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

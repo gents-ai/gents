@@ -2,32 +2,47 @@
 """Run live Engineer evals against a served model and judge them.
 
   live_engineer_eval.py probe --out DIR
-  live_engineer_eval.py run --out DIR --gents BIN [--scope case|ladder] [--home DIR]
+  live_engineer_eval.py run --out DIR --scope case|suites --image TAG [--container-root DIR]
+  live_engineer_eval.py run --out DIR --scope ladder --gents BIN [--home DIR]
 
-Both read GENTS_CI_LIVE_MODEL_BASE_URL (OpenAI-compatible, including /v1) and
-GENTS_CI_LIVE_MODEL_NAME, and write DIR/result.json and DIR/summary.md.
-Exit status: 0 pass (or probe usable), 1 fail or harness error, 3 skipped
-because the endpoint is not configured, unreachable or not serving the model.
+Both read GENTS_CI_LIVE_MODEL_BASE_URL (OpenAI-compatible vLLM, including
+/v1) and GENTS_CI_LIVE_MODEL_NAME, and write DIR/result.json and
+DIR/summary.md. Exit status: 0 pass (or probe usable), 1 fail or harness
+error, 3 skipped because the endpoint is not configured, unreachable or not
+serving the model.
 
-Every run goes through scripts/evals/run-ladder.sh with the target's own
-sampling (no temperature or top_p override); the graders read stored documents.
+Every run uses the target's own sampling (no temperature or top_p override).
+Graders read stored documents and files, and the reply where the reply is the
+answer. Each result records the command-execution mode its Engineer ran under
+and the isolation that held it.
 
-Scope `case` runs L2 scout-grants-two-file-tools TRIALS times and passes when
-at least REQUIRED trials pass the grader.
+Scopes `case` and `suites` run the shipped Engineer (the `engineer_full`
+subject, every core pack installed) with unrestricted command execution, as
+`gents init --tool-package yolo` grants it, each trial in its own container
+(scripts/evals/run-container.sh on this machine, image TAG); the endpoint must
+be a loopback URL. `case` runs engineer-mailbox kiln-flag-and-question.
+`suites` runs the train and validation cases of every suite on that subject
+and fails only when a trial does not finish with a grade.
 
-Scope `ladder` runs L1-L5 and the factory-setup capstone (train and validation
-cases, TRIALS each) over SHARDS launchers until the deadline. Each case is
-judged against the same REQUIRED-of-TRIALS threshold and recorded; on a healthy
-build about 4 of 37 cases fall below it (eval report of 2026-11-13), so case
-verdicts are a trend, not the job's outcome. The job fails when a rung L1-L5
-passes fewer than RUNG_FLOOR of its finished trials, or finishes fewer than
-MIN_FINISHED trials before the deadline. Healthy builds scored 70-100% per rung;
-the build that could not create agents scored 0% on L2 and 33% on L5.
-factory-setup (1-2 of 3 on healthy builds) is reported, not gated.
+Scope `ladder` runs the configuration-only Engineer (command execution off,
+embedded trials) through scripts/evals/run-ladder.sh: L1-L5 and the
+factory-setup capstone, train and validation cases, over SHARDS launchers
+until the deadline. Case verdicts are a trend; the job fails when a rung L1-L5
+passes fewer than RUNG_FLOOR of its graded trials or grades fewer than
+MIN_FINISHED before the deadline. factory-setup is reported, not gated.
+
+Every scope runs TRIALS trials per case, CONCURRENCY at once: the ceiling is
+the isolated environments the host holds, not the model server. A case passes
+when at least MIN_PASS_RATE of its trials pass the grader. Every result
+records, per case, the trials planned and graded, the passes, the pass rate
+with its 95% Wilson interval, and the tokens and tool calls per passing
+trial, beside the model id, the Gents revision, the command-execution mode
+and the isolation.
 """
 import argparse
 import collections
 import json
+import math
 import os
 import pathlib
 import shutil
@@ -40,17 +55,29 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import suites
+
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-SUITE = "l2-agent"
-CASE = "scout-grants-two-file-tools"
+SUITE = "engineer-mailbox"
+CASE = "kiln-flag-and-question"
+SHIPPED_SUBJECT = "engineer_full"
 CELL = "engineer"
 TARGET = "live-ci"
+PROVIDER_KIND = "Vllm"
 GATED_RUNGS = ["l1-inference", "l2-agent", "l3-datastore", "l4-automation", "l5-agents-tools"]
 MIN_FINISHED = 6
 MAX_TRANSCRIPTS = 15
 SKIPPED = 3
 PROBE_TIMEOUT_SECS = 15
 SAMPLING = "target defaults (no override)"
+RUN_CONTAINER = ROOT / "scripts/evals/run-container.sh"
+POLL_SECS = float(os.environ.get("LIVE_EVAL_POLL_SECS", "15"))
+STOP_WAIT_SECS = 300
+MODES = {
+    "case": {"command_execution": "unrestricted", "isolation": "a container per trial"},
+    "suites": {"command_execution": "unrestricted", "isolation": "a container per trial"},
+    "ladder": {"command_execution": "off", "isolation": "embedded trials on the runner"},
+}
 
 
 def write_result(out, result):
@@ -107,14 +134,10 @@ def redact_tree(out, base_url):
                 path.write_bytes(redacted)
 
 
-def matrix():
-    return json.loads((ROOT / "scripts/evals/matrix.json").read_text())
-
-
-def one_case_definition(destination):
+def one_case_definition(destination, suite_id=SUITE):
     """Copies the suite's definition with only CASE, so another case added to the suite does not join the run."""
-    suite = next(s for s in matrix()["suites"] if s["id"] == SUITE)
-    shutil.copytree(ROOT / "crates/gents/tests/fixtures/configurator_evals" / suite["path"], destination)
+    suite = suites.suite(ROOT, suite_id)
+    shutil.copytree(ROOT / suites.FIXTURES / suite["path"], destination)
     config = json.loads((destination / "pack_config.json").read_text())
     definition = config["eval_definitions"][0]
     cases = [path for path in definition["cases"]
@@ -130,7 +153,7 @@ def target_file(path, base_url, model):
     path.write_text(json.dumps({
         "node": {},
         "inference_backends": [{
-            "backend_id": TARGET, "name": "Live CI model", "provider_kind": "OpenAiCompatible",
+            "backend_id": TARGET, "name": "Live CI model", "provider_kind": PROVIDER_KIND,
             "openai_wire_api": "chat_completions", "endpoint": base_url,
             "auth": {"kind": "unauthenticated"}, "max_concurrent": 32, "max_queue_depth": 100,
         }],
@@ -168,7 +191,8 @@ def end_group(process, grace=float(os.environ.get("LIVE_EVAL_STOP_GRACE_SECS", "
 def launch(args, home, log_path, target, selection, concurrency, **extra):
     env = dict(os.environ, GENTS_BIN=str(args.gents), GENTS_EVAL_HOME=str(home), GENTS_EVAL_TARGET=TARGET,
                GENTS_EVAL_TARGET_FILE=str(target), GENTS_EVAL_PORT=str(free_port()), GENTS_EVAL_WATCH="0",
-               GENTS_EVAL_TEMPERATURE="", GENTS_EVAL_TOP_P="", **extra)
+               GENTS_EVAL_TEMPERATURE="", GENTS_EVAL_TOP_P="",
+               GENTS_EVAL_COMMAND_EXECUTION=MODES[args.scope]["command_execution"], **extra)
     command = ["bash", str(ROOT / "scripts/evals/run-ladder.sh"), selection, str(args.trials), str(concurrency)]
     log = open(log_path, "w")
     return subprocess.Popen(command, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True), log
@@ -217,6 +241,7 @@ def trial_row(slot, trials):
                     "failure_kind": s.get("failure_kind")} for s in latest.get("stages", [])],
         "agent_documents": (live.get("documents") or {}).get("Agent"),
         "tool_calls": live.get("tool_calls"),
+        "tokens": trial_tokens(latest, live),
         "failed_tool_calls": live.get("failed_tool_calls"),
         "model_turns": live.get("model_turns"),
         "elapsed_secs": live.get("elapsed_secs"),
@@ -228,12 +253,59 @@ def trial_row(slot, trials):
     }
 
 
-def case_verdict(passes, finished, trials, required):
-    if passes >= required:
-        return "pass"
-    if passes + (trials - finished) < required:
-        return "fail"
-    return "incomplete"
+def trial_tokens(latest, live):
+    """The trial's provider-reported usage, or the counts its live snapshot observed when the provider
+    reported none."""
+    usage = (latest or {}).get("usage") or {}
+    if usage.get("input_tokens") is None and usage.get("output_tokens") is None:
+        usage = live or {}
+    return {"input": usage.get("input_tokens"), "output": usage.get("output_tokens")}
+
+
+def report_trial(view, case_id):
+    """The slot for CASE_ID in a one-trial run's report view, with its live snapshot."""
+    for cell in (view or {}).get("report", {}).get("cells", []):
+        for slot in cell.get("slots", []):
+            if slot.get("case_id") == case_id:
+                return slot, (view.get("trials") or {})
+    return None, {}
+
+
+def wilson(passes, n, z=1.96):
+    """The 95% Wilson score interval of a pass rate."""
+    if not n:
+        return None
+    rate = passes / n
+    scale = 1 + z * z / n
+    centre = (rate + z * z / (2 * n)) / scale
+    half = z * math.sqrt(rate * (1 - rate) / n + z * z / (4 * n * n)) / scale
+    return [round(max(0.0, centre - half), 4), round(min(1.0, centre + half), 4)]
+
+
+def mean(values):
+    values = [value for value in values if isinstance(value, (int, float))]
+    return round(sum(values) / len(values), 1) if values else None
+
+
+def case_stats(rows, planned, min_pass_rate):
+    """A case's trials judged against MIN_PASS_RATE of PLANNED: pass once enough passed, fail once the
+    trials left cannot reach it, else incomplete; rates count graded trials only."""
+    graded = [row for row in rows if row["class"] in ("pass", "fail")]
+    passed = [row for row in graded if row["class"] == "pass"]
+    needed = max(1, math.ceil(min_pass_rate * planned))
+    if len(passed) >= needed:
+        verdict = "pass"
+    elif len(passed) + planned - len(graded) < needed:
+        verdict = "fail"
+    else:
+        verdict = "incomplete"
+    return {"planned": planned, "finished": len(graded), "passes": len(passed),
+            "pass_rate": round(len(passed) / len(graded), 4) if graded else None,
+            "pass_rate_95": wilson(len(passed), len(graded)),
+            "input_tokens_per_pass": mean(row["tokens"]["input"] for row in passed),
+            "output_tokens_per_pass": mean(row["tokens"]["output"] for row in passed),
+            "tool_calls_per_pass": mean(row.get("tool_calls") for row in passed),
+            "verdict": verdict}
 
 
 def finish(result, out, base_url, started, args):
@@ -255,48 +327,169 @@ def copy_logs(home, out, prefix=""):
             shutil.copy(log, out / f"{prefix}{log.name}")
 
 
+def shipped_suites():
+    return [suite["id"] for suite in suites.suites(ROOT) if suite["subject"] == SHIPPED_SUBJECT]
+
+
+def run_container(args, *arguments, log):
+    env = dict(os.environ, GENTS_EVAL_CONTAINER_HOST="local", GENTS_EVAL_CONTAINER_ROOT=str(args.container_root))
+    return subprocess.run(["bash", str(RUN_CONTAINER), *arguments], env=env, stdout=log, stderr=subprocess.STDOUT,
+                          check=False).returncode
+
+
+def wait_for_orchestrator(args, name, run_dir, deadline, log):
+    """Returns whether the run ended by itself; past the deadline it is stopped."""
+    pid_file = run_dir / "orchestrator.pid"
+    while pid_file.exists():
+        if time.monotonic() >= deadline:
+            run_container(args, "stop", "--name", name, log=log)
+            stop_by = time.monotonic() + STOP_WAIT_SECS
+            while pid_file.exists() and time.monotonic() < stop_by:
+                time.sleep(1)
+            return False
+        time.sleep(POLL_SECS)
+    return True
+
+
+def contained_row(entry, view):
+    slot, trials = report_trial(view, entry.get("case_id"))
+    live = (trials.get(((slot or {}).get("latest") or {}).get("trial_id")) or {}).get("live") or {}
+    return {
+        "suite": entry.get("suite"), "case_id": entry.get("case_id"), "split": entry.get("split"),
+        "trial_index": entry.get("trial_index"), "state": entry.get("state"), "attempts": entry.get("attempts"),
+        "class": entry.get("class"), "score_bp": entry.get("score_bp"),
+        "tokens": trial_tokens({"usage": entry}, live),
+        "tool_calls": live.get("tool_calls"), "model_turns": live.get("model_turns"),
+        "failed_verdicts": [f"{v.get('stage_id')}/{v.get('check')}: {v.get('detail') or v.get('reason_code')}"
+                            for v in entry.get("verdicts", []) if v.get("kind") != "passed"],
+    }
+
+
+def keep_run_record(run_dir, out, summary):
+    """Copies what the run recorded about itself into OUT, removes the run's exports, and returns each
+    finished slot's report view."""
+    views = {}
+    record = out / "container"
+    record.mkdir(parents=True, exist_ok=True)
+    for name in ("run.json", "summary.json", "summary.txt", "orchestrator.log"):
+        if (run_dir / name).is_file():
+            shutil.copy(run_dir / name, record / name)
+    if (run_dir / "logs").is_dir():
+        shutil.copytree(run_dir / "logs", record / "logs", dirs_exist_ok=True)
+    for entry in (summary or {}).get("slots", []):
+        state = json.loads((run_dir / "slots" / entry["slot"] / "state.json").read_text()) \
+            if (run_dir / "slots" / entry["slot"] / "state.json").is_file() else {}
+        report = pathlib.Path(state.get("export") or "/nonexistent") / "home/eval/runs" / str(state.get("run_id")) / "report.json"
+        if entry.get("state") == "done" and report.is_file() and not report.is_symlink():
+            (out / "trials").mkdir(parents=True, exist_ok=True)
+            shutil.copy(report, out / "trials" / f"{entry['slot']}.report.json")
+            try:
+                views[entry["slot"]] = json.loads(report.read_text())
+            except ValueError:
+                pass
+    shutil.rmtree(run_dir, ignore_errors=True)
+    return views
+
+
+def run_contained(args, out, work, result, selected, definition=None, split=None):
+    """Runs SELECTED suites' train and validation cases, each trial in its own container, and
+    returns the run's summary, or None when it left none."""
+    if urllib.parse.urlparse(work_endpoint(work)).hostname != "127.0.0.1":
+        result.update(outcome="error", reason="a contained run reaches the model through a relay on this machine; "
+                                              "GENTS_CI_LIVE_MODEL_BASE_URL must be http://127.0.0.1:<port>/v1")
+        return None
+    name = f"live-{args.scope}-{int(time.time())}"
+    run_dir = args.container_root / name
+    command = ["start", "--name", name, "--image", args.image, "--target", str(work / f"{TARGET}.json"),
+               "--trials", str(args.trials), "--per-replica", str(args.concurrency),
+               "--command-execution", MODES[args.scope]["command_execution"],
+               "--trial-timeout", str(args.trial_timeout)]
+    for suite_id in selected:
+        command += ["--suite", suite_id]
+    if definition is not None:
+        command += ["--definition", str(definition), "--splits", split]
+    started = time.monotonic()
+    with open(out / "container.log", "w") as log:
+        status = run_container(args, *command, log=log)
+        if status != 0:
+            result.update(outcome="error", reason=f"run-container.sh start exited {status}; see container.log")
+            return None
+        finished = wait_for_orchestrator(args, name, run_dir, started + args.eval_timeout, log)
+    result["stopped_at_deadline"] = not finished
+    summary_path = run_dir / "summary.json"
+    summary = json.loads(summary_path.read_text()) if summary_path.is_file() else None
+    views = keep_run_record(run_dir, out, summary)
+    if summary is None:
+        result.update(outcome="error", reason="the contained run left no summary; see container/orchestrator.log")
+        return None
+    summary["rows"] = [contained_row(entry, views.get(entry.get("slot"))) for entry in summary["slots"]]
+    result.update(results=summary.get("results"), image=args.image, gents_revision=summary.get("image_commit"),
+                  tokens={side: sum(row["tokens"][side] or 0 for row in summary["rows"]) for side in ("input", "output")})
+    if summary.get("command_execution") != MODES[args.scope]["command_execution"]:
+        result.update(outcome="error", reason=f"the run recorded command execution {summary.get('command_execution')!r}")
+        return None
+    return summary
+
+
+def work_endpoint(work):
+    return json.loads((work / f"{TARGET}.json").read_text())["inference_backends"][0]["endpoint"]
+
+
+def contained_cases(rows, args):
+    cases = {}
+    for row in rows:
+        cases.setdefault(f"{row['suite']}/{row['case_id']}", []).append(row)
+    return {key: dict(suite=members[0]["suite"], case_id=members[0]["case_id"], split=members[0]["split"],
+                      **case_stats(members, args.trials, args.min_pass_rate))
+            for key, members in cases.items()}
+
+
 def run_case(args, out, home, work, result):
     split = one_case_definition(work / "definition")
-    started = time.monotonic()
-    processes = [launch(args, home, out / "ladder.log", work / f"{TARGET}.json", SUITE, args.trials,
-                        GENTS_EVAL_DEFINITION_SOURCE=str(work / "definition"), GENTS_EVAL_SPLITS=split)]
-    status = wait_all(processes, started + args.eval_timeout)[0]
-    result["ladder_exit"] = status
-    reports = sorted((home / "eval" / "runs").glob(f"ladder-{SUITE}-*/report.json"))
-    if len(reports) == 1:
-        view = json.loads(reports[0].read_text())
-        shutil.copy(reports[0], out / "report.json")
-        cell = next(c for c in view["report"]["cells"] if c["cell_id"] == CELL)
-        slots = sorted((s for s in cell["slots"] if s["case_id"] == CASE), key=lambda s: s["trial_index"])
-        rows = [trial_row(slot, view.get("trials", {})) for slot in slots]
-        passes = sum(row["class"] == "pass" for row in rows)
-        usage = cell.get("usage") or {}
-        result.update(outcome="pass" if passes >= args.required else "fail",
-                      reason=f"{passes} of {len(rows)} trials passed the grader; {args.required} required",
-                      passes=passes, trials_detail=rows,
-                      tokens={"input": usage.get("input_tokens"), "output": usage.get("output_tokens")})
-        for slot in slots:
-            collect_trial(args, home, out / "trials" / f"{slot['trial_index']}.json",
-                          view["report"]["run"]["run_id"], CASE, slot["trial_index"])
-        if len(slots) != args.trials:
-            result.update(outcome="fail", reason=f"{len(slots)} of {args.trials} planned trials have a slot; " + result["reason"])
-    else:
-        why = "timed out" if status is None else f"exited {status}"
-        result.update(outcome="error", reason=f"the eval {why} and left {len(reports)} reports; see ladder.log")
-    end_launchers(processes)
-    copy_logs(home, out)
+    summary = run_contained(args, out, work, result, [SUITE], definition=work / "definition", split=split)
+    if summary is None:
+        return
+    rows = summary["rows"]
+    stats = case_stats(rows, args.trials, args.min_pass_rate)
+    unfinished = args.trials - stats["finished"]
+    result.update(cases=contained_cases(rows, args), trials_detail=rows, passes=stats["passes"],
+                  outcome="pass" if stats["verdict"] == "pass" and not unfinished else "fail",
+                  reason=f"{stats['passes']} of {stats['finished']} graded trials passed; "
+                         f"{args.min_pass_rate:.0%} of {args.trials} required"
+                         + (f"; {unfinished} of {args.trials} planned trials have no grade" if unfinished else ""))
+
+
+def run_suites(args, out, home, work, result):
+    selected = shipped_suites()
+    summary = run_contained(args, out, work, result, selected)
+    if summary is None:
+        return
+    rows = summary["rows"]
+    suite_rows = []
+    for suite_id in selected:
+        members = [row for row in rows if row["suite"] == suite_id]
+        graded = [row for row in members if row["class"] in ("pass", "fail")]
+        passes = sum(row["class"] == "pass" for row in graded)
+        suite_rows.append({"suite": suite_id, "trials": len(members), "finished": len(graded), "passes": passes,
+                           "pass_rate": round(passes / len(graded), 4) if graded else None,
+                           "pass_rate_95": wilson(passes, len(graded))})
+    unfinished = [row for row in rows if row["state"] != "done"]
+    result.update(suites=suite_rows, cases=contained_cases(rows, args), trials_detail=rows,
+                  outcome="fail" if unfinished else "pass",
+                  reason=(f"{len(unfinished)} of {len(rows)} trials did not finish with a grade" if unfinished else
+                          f"every trial finished with a grade; {sum(r['passes'] for r in suite_rows)} of {len(rows)} passed"))
 
 
 def run_full_ladder(args, out, home, work, result):
-    suites = matrix()
-    by_definition = {s["definition_id"]: s["id"] for s in suites["suites"]}
-    rungs = suites["default"]
+    registry = suites.matrix(ROOT)
+    by_definition = {s["definition_id"]: s["id"] for s in registry["suites"]}
+    rungs = registry["default"]
     homes = [home / f"s{index}" for index in range(1, args.shards + 1)]
     started = time.monotonic()
     processes = []
     for index, shard_home in enumerate(homes, 1):
         processes.append(launch(args, shard_home, out / f"ladder-s{index}.log", work / f"{TARGET}.json", "all",
-                                args.per_launcher, GENTS_EVAL_SHARD=f"{index}/{args.shards}"))
+                                max(1, args.concurrency // args.shards), GENTS_EVAL_SHARD=f"{index}/{args.shards}"))
         time.sleep(args.stagger)
     statuses = wait_all(processes, started + args.eval_timeout)
     result["launcher_exits"] = statuses
@@ -319,12 +512,9 @@ def run_full_ladder(args, out, home, work, result):
         members = {case_id: entry for case_id, entry in cases.items() if entry["rung"] == rung}
         passes = finished = 0
         for case_id, entry in members.items():
-            case_passes = sum(t["class"] == "pass" for t in entry["trials"])
-            case_finished = sum(t["class"] in ("pass", "fail") for t in entry["trials"])
-            entry.update(passes=case_passes, finished=case_finished,
-                         verdict=case_verdict(case_passes, case_finished, args.trials, args.required))
-            passes += case_passes
-            finished += case_finished
+            entry.update(case_stats(entry["trials"], args.trials, args.min_pass_rate))
+            passes += entry["passes"]
+            finished += entry["finished"]
             if entry["verdict"] == "fail":
                 failing_slots += [(rung, *item) for item in entry["_slots"] if item[2]["class"] == "fail"]
         gated = rung in GATED_RUNGS
@@ -383,33 +573,51 @@ def run(args):
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
     target_file(work / f"{TARGET}.json", base_url, model)
-    (run_case if args.scope == "case" else run_full_ladder)(args, out, home, work, result)
+    {"case": run_case, "suites": run_suites, "ladder": run_full_ladder}[args.scope](args, out, home, work, result)
     return finish(result, out, base_url, started, args)
 
 
 def base_result(args, model):
-    result = {"scope": args.scope, "model": model, "trials": args.trials, "required_passes": args.required,
-              "sampling": SAMPLING}
+    result = {"scope": args.scope, "model": model, "gents_revision": revision(), "trials": args.trials,
+              "concurrency": args.concurrency, "min_pass_rate": args.min_pass_rate, "sampling": SAMPLING,
+              **MODES[args.scope]}
     if args.scope == "case":
-        result.update(suite=SUITE, case_id=CASE)
+        result.update(suite=SUITE, case_id=CASE, subject=SHIPPED_SUBJECT)
+    elif args.scope == "suites":
+        result.update(subject=SHIPPED_SUBJECT)
     else:
         result.update(rung_floor=args.rung_floor, min_finished=MIN_FINISHED, gated_rungs=GATED_RUNGS,
                       shards=args.shards)
     return result
 
 
+def revision():
+    if os.environ.get("GITHUB_SHA"):
+        return os.environ["GITHUB_SHA"]
+    probe = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, text=True, check=False)
+    return probe.stdout.strip() or None
+
+
 def render_summary(result):
-    title = "Live Engineer eval" if result.get("scope", "case") == "case" else "Live Engineer ladder"
+    scope = result.get("scope", "case")
+    title = {"case": "Live Engineer eval", "suites": "Live Engineer suites"}.get(scope, "Live Engineer ladder")
     lines = [f"## {title}: {result['outcome'].upper()}", ""]
-    if result.get("scope", "case") == "case":
-        lines += [f"- Case: `{result['suite']}` / `{result['case_id']}` (the Engineer creates and configures a second agent, then re-enters to finish it)",
-                  f"- Rule: pass when at least {result['required_passes']} of {result['trials']} trials pass the grader"]
+    if scope == "case":
+        lines += [f"- Case: `{result['suite']}` / `{result['case_id']}` on the shipped Engineer (`{result['subject']}`, every core pack)",
+                  f"- Rule: pass when at least {result['min_pass_rate']:.0%} of {result['trials']} trials pass the grader"]
+    elif scope == "suites":
+        lines += [f"- Scope: train and validation cases of every suite on the shipped Engineer (`{result['subject']}`), "
+                  f"{result['trials']} trial(s) each",
+                  "- Rule: fails when a trial does not finish with a grade; pass rates are recorded"]
     else:
         lines += ["- Scope: L1-L5 and factory-setup, train and validation cases",
-                  f"- Case threshold (recorded, a trend): at least {result['required_passes']} of {result['trials']} trials pass the grader",
+                  f"- Case threshold (recorded, a trend): at least {result['min_pass_rate']:.0%} of {result['trials']} trials pass the grader",
                   f"- Job rule: fails when a rung L1-L5 passes fewer than {result['rung_floor']:.0%} of its finished trials "
                   f"or finishes fewer than {result['min_finished']}; factory-setup is reported, not gated"]
-    lines += [f"- Model: `{result.get('model') or 'unset'}`, sampling: {result.get('sampling')}",
+    lines += [f"- Model: `{result.get('model') or 'unset'}`, Gents `{result.get('gents_revision')}`, "
+              f"sampling: {result.get('sampling')}",
+              f"- Command execution: {result.get('command_execution')}, isolation: {result.get('isolation')}"
+              + (f"; results {result['results']}" if result.get("results") else ""),
               f"- Result: {result['reason']}"]
     if result.get("eval_secs") is not None:
         lines.append(f"- Eval wall time: {result['eval_secs']} s"
@@ -432,22 +640,28 @@ def render_summary(result):
                     missed = sorted({m for t in entry["trials"] for m in t["failed_verdicts"] + t["unmet"]})
                     lines.append(f"- `{entry['rung']}` / `{entry['case_id']}`: {entry['passes']} of {entry['finished']} finished passed"
                                  + (f"; missed: {'; '.join(missed[:3])}" if missed else ""))
-    rows = result.get("trials_detail") or []
-    if rows:
-        lines += ["", "| Trial | Grader | Stages (terminal state) | Agents | Tool calls (failed) | Turns | Wall |",
-                  "|---|---|---|---|---|---|---|"]
-        for row in rows:
-            stages = ", ".join(f"{s['stage_id']} {s['terminal_state'] or 'not terminal'}" for s in row["stages"]) or "none"
-            lines.append(f"| {row['trial_index']} | {row['class']} ({row['score_bp']} bp) | {stages} | "
-                         f"{row['agent_documents']} | {row['tool_calls']} ({row['failed_tool_calls']}) | "
-                         f"{row['model_turns']} | {row['elapsed_secs']} s |")
-        for row in rows:
-            missed = row["failed_verdicts"] + row["unmet"]
-            if missed:
-                lines += ["", f"Trial {row['trial_index']} missed:"] + [f"- {item}" for item in missed[:20]]
-            failing = {name: tool.get("failed") for name, tool in row["tools"].items() if tool.get("failed")}
-            if failing and row["class"] != "pass":
-                lines.append(f"- failed tool calls by tool: {failing}")
+    if result.get("suites"):
+        lines += ["", "| Suite | Trials passed / finished / planned |", "|---|---|"]
+        for row in result["suites"]:
+            lines.append(f"| {row['suite']} | {row['passes']} / {row['finished']} / {row['trials']} |")
+    if result.get("scope") != "ladder" and result.get("cases"):
+        lines += ["", "| Case | Passed / graded (planned) | Pass rate (95% CI) | Tokens in / out per pass | Tool calls per pass |",
+                  "|---|---|---|---|---|"]
+        for key, case in sorted(result["cases"].items()):
+            interval = case["pass_rate_95"]
+            rate = "-" if case["pass_rate"] is None else f"{case['pass_rate']:.0%} ({interval[0]:.0%}-{interval[1]:.0%})"
+            lines.append(f"| {key} | {case['passes']} / {case['finished']} ({case['planned']}) | {rate} | "
+                         f"{case['input_tokens_per_pass']} / {case['output_tokens_per_pass']} | {case['tool_calls_per_pass']} |")
+    contained = result.get("trials_detail") or []
+    if contained:
+        lines += ["", "| Suite / case | Trial | State | Grader | Tokens in / out |", "|---|---|---|---|---|"]
+        for row in contained:
+            lines.append(f"| {row['suite']} / {row['case_id']} | {row['trial_index']} | {row['state']} ({row['attempts']} attempt(s)) | "
+                         f"{row['class']} ({row['score_bp']} bp) | {row['tokens']['input']} / {row['tokens']['output']} |")
+        for row in contained:
+            if row["failed_verdicts"]:
+                lines += ["", f"{row['suite']} / {row['case_id']} trial {row['trial_index']} missed:"] + \
+                         [f"- {item}" for item in row["failed_verdicts"][:20]]
     return "\n".join(lines) + "\n"
 
 
@@ -455,22 +669,29 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", choices=["probe", "run"])
     parser.add_argument("--out", type=pathlib.Path, required=True)
-    parser.add_argument("--scope", choices=["case", "ladder"], default="case")
-    parser.add_argument("--gents", type=pathlib.Path)
+    parser.add_argument("--scope", choices=sorted(MODES), default="case")
+    parser.add_argument("--gents", type=pathlib.Path, help="the gents binary scope ladder runs")
+    parser.add_argument("--image", help="the eval image scopes case and suites run (run-container.sh image)")
+    parser.add_argument("--container-root", type=pathlib.Path, default=pathlib.Path("/var/tmp/gents-live-eval"),
+                        help="where contained runs keep their slots until the eval copies their record")
+    parser.add_argument("--per-replica", type=int, default=2, help="contained trials at once")
+    parser.add_argument("--trial-timeout", type=int, default=3600, help="seconds each contained attempt may run")
     parser.add_argument("--home", type=pathlib.Path)
     parser.add_argument("--trials", type=int, default=3)
-    parser.add_argument("--required", type=int, default=2)
+    parser.add_argument("--min-pass-rate", type=float, default=0.5,
+                        help="share of a case's trials that must pass the grader")
+    parser.add_argument("--concurrency", type=int, default=8,
+                        help="trials at once: contained trials on the one replica, or split across ladder launchers")
     parser.add_argument("--shards", type=int, default=4)
-    parser.add_argument("--per-launcher", type=int, default=4, help="concurrent trials per ladder launcher")
     parser.add_argument("--stagger", type=float, default=10.0, help="seconds between ladder launcher starts")
     parser.add_argument("--rung-floor", type=float, default=0.5)
-    parser.add_argument("--eval-timeout", type=int, help="deadline in seconds (case 1500, ladder 6000)")
+    parser.add_argument("--eval-timeout", type=int, help="deadline in seconds (case 1800, suites 14400, ladder 6000)")
     parser.add_argument("--job-started", type=float)
     args = parser.parse_args()
-    if not 1 <= args.required <= args.trials:
-        parser.error("--required must be between 1 and --trials")
+    if args.trials < 1 or args.concurrency < 1 or not 0 < args.min_pass_rate <= 1:
+        parser.error("--trials and --concurrency must be positive and --min-pass-rate in (0, 1]")
     if args.eval_timeout is None:
-        args.eval_timeout = 1500 if args.scope == "case" else 6000
+        args.eval_timeout = {"case": 1800, "suites": 14400, "ladder": 6000}[args.scope]
     if args.command == "probe":
         base_url, model = endpoint()
         blocked = probe(base_url, model)
@@ -480,8 +701,10 @@ def main():
             return SKIPPED
         print(f"{model} is served")
         return 0
-    if not args.gents:
-        parser.error("run needs --gents")
+    if args.scope == "ladder" and not args.gents:
+        parser.error("scope ladder needs --gents")
+    if args.scope != "ladder" and not args.image:
+        parser.error(f"scope {args.scope} needs --image")
     return run(args)
 
 

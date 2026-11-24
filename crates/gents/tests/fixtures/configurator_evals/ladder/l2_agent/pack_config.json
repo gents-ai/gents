@@ -3,7 +3,7 @@
   "eval_definitions": [
     {
       "definition_id": "configurator-l2-agent",
-      "comparability_version": 11,
+      "comparability_version": 12,
       "title": "The Engineer: agent + context + tool-grant configuration",
       "subject": {
         "kind": "agent",
@@ -19,7 +19,8 @@
         "./cases/delegate_refuse_self_widening.json",
         "./cases/clerk_automation_seed_fire.json",
         "./cases/cursor_grants_list_only.json",
-        "./cases/ledger_prompt_edit_in_place.json"
+        "./cases/ledger_prompt_edit_in_place.json",
+        "./cases/restore_desk_instructions.json"
       ]
     }
   ]

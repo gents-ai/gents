@@ -1,0 +1,134 @@
+{
+  "case_id": "dock-totals-bar",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "quay.csv",
+        "contents": "dock,crates\nTern,11\nKite,20\nTern,17\nLoon,13\nKite,4\n"
+      },
+      {
+        "path": "quay-late.csv",
+        "contents": "dock,crates\nLoon,9\nKite,3\nTern,6\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "chart",
+      "prompt": "Chart crates per dock as bars, counting both quay.csv and the late deliveries in quay-late.csv and combining repeat deliveries. Which dock handled the most, and how many crates? End with a JSON object with dock and crates.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "file_changes",
+          "collection": "ToolFileChange",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "tool_call_doc_id",
+            "session_id",
+            "file_changes"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "charts",
+          "collection": "AgentToolCall",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "tool_name": {
+              "_eq": "charts"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            }
+          },
+          "fields": [
+            "_docID",
+            "tool_name",
+            "lifecycle_state",
+            "plugin_parent_tool_call_doc_id",
+            "result"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "charts"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "file_changes",
+            "min": 0,
+            "max": 0
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "charts",
+                "min": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "charts",
+                "key": "lifecycle_state",
+                "id": "completed",
+                "expect": [
+                  {
+                    "field": "result",
+                    "matches": "\\\\?\"chart\\\\?\"\\s*:\\s*\\\\?\"bar\\\\?\""
+                  },
+                  {
+                    "field": "result",
+                    "matches": "\\\\?\"sum\\\\?\"\\s*:\\s*83(\\.0+)?\\b"
+                  },
+                  {
+                    "field": "result",
+                    "matches": "\\\\?\"max\\\\?\"\\s*:\\s*34(\\.0+)?\\b"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\"dock\"\\s*:\\s*\"Tern\""
+              },
+              {
+                "matches": "\"crates\"\\s*:\\s*34\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

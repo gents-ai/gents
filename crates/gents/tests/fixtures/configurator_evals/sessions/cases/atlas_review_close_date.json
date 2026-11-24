@@ -1,0 +1,141 @@
+{
+  "case_id": "atlas-review-close-date",
+  "split": "held_out",
+  "reducer": "all",
+  "fixtures": {
+    "documents": [
+      {
+        "collection": "AgentSession",
+        "document": {
+          "node_did": "$trial",
+          "requester_did": "$evaluator",
+          "session_id": "atlas-rollout-may",
+          "agent_did": "gents:agent-slot:engineer",
+          "created_at": "2025-05-05T08:00:00Z",
+          "closed_at": "2025-05-09T17:00:00Z",
+          "title": {
+            "text": "Atlas rollout review",
+            "source": "user"
+          },
+          "tags": [
+            "release"
+          ]
+        }
+      },
+      {
+        "collection": "AgentSession",
+        "document": {
+          "node_did": "$trial",
+          "requester_did": "$evaluator",
+          "session_id": "atlas-rollback-may",
+          "agent_did": "gents:agent-slot:engineer",
+          "created_at": "2025-05-11T08:00:00Z",
+          "closed_at": null,
+          "title": {
+            "text": "Atlas rollback follow-up",
+            "source": "user"
+          },
+          "tags": [
+            "release"
+          ]
+        }
+      },
+      {
+        "collection": "AgentSession",
+        "document": {
+          "node_did": "$trial",
+          "requester_did": "$evaluator",
+          "session_id": "atlas-rollout-oct",
+          "agent_did": "gents:agent-slot:engineer",
+          "created_at": "2026-10-01T08:00:00Z",
+          "closed_at": null,
+          "title": {
+            "text": "Atlas rollout review",
+            "source": "user"
+          },
+          "tags": [
+            "release"
+          ]
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "investigate",
+      "prompt": "Can you find the 2025 Atlas rollout review? Send me the session ID and, if it's closed, the date it closed.",
+      "checks": [
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?i)(?:2025-0?5-0?9(?:[^0-9]|$)|0?5/0?9/2025|May\\s+0?9(?:st|nd|rd|th)?(?:[^0-9]|$)|\\b0?9(?:th)?\\s+(?:of\\s+)?May)"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "sessions"
+            ],
+            "forbidden": [
+              "bash",
+              "query",
+              "config"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "links": [
+              {
+                "capture": "sources",
+                "key": "session_id",
+                "id": "atlas-rollout-may",
+                "field": "session_id",
+                "target_capture": "sources",
+                "target_key": "session_id",
+                "reported_fields": [
+                  "session_id"
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "sources",
+          "collection": "AgentSession",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "session_id": {
+              "_in": [
+                "atlas-rollout-may"
+              ]
+            }
+          },
+          "fields": [
+            "_docID",
+            "session_id",
+            "title",
+            "closed_at"
+          ]
+        }
+      ]
+    }
+  ]
+}

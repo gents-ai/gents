@@ -545,11 +545,6 @@ is not something production can ask of it; `unsafe_boundary_refuses` and
 `intake_and_management_decisions` keep those cases. -/
 def unaskedIntakeNames : List String := ["unsafe_provider_boundary", "stale_active_observation"]
 
-/-- Production admits an agent-message steer only with the verified
-`agent_message` tool call that issued it (`verified_agent_source`); the served
-intake fixture enqueues signed rows without one. -/
-def agentMessageIntakeNames : List String := ["agent_message_same_authority"]
-
 @[conformance_family]
 def managementReplace : Family ManagementInput (Option QueueImageWire) where
   inputs := (SessionQueue.ManagementCases.cases.filter signedReplacement).map ManagementInput.ofCase
@@ -560,13 +555,26 @@ def isIntake (c : SessionQueue.ManagementCases.Case) : Bool :=
   | .intake .. => true
   | .replace .. => false
 
+/-- An intake whose pending run holds a steer an `agent_message` tool call
+issued; production admits such a steer only with the verified call that issued
+it, so it is replayed through the tool-call owner. -/
+def isAgentMessageIntake (c : SessionQueue.ManagementCases.Case) : Bool :=
+  isIntake c && c.before.pending.any (·.source == .steering)
+
 /-- Intake at the active turn's boundary: what it selects and what it leaves
 pending, in created order. -/
 @[conformance_family]
 def managementIntake : Family ManagementInput (Option QueueImageWire) where
   inputs := (SessionQueue.ManagementCases.cases.filter fun c =>
     isIntake c && !unaskedIntakeNames.contains c.name &&
-      !agentMessageIntakeNames.contains c.name).map ManagementInput.ofCase
+      !isAgentMessageIntake c).map ManagementInput.ofCase
+  model := managementAfter
+
+/-- Intake of an `agent_message` steer at the active turn's boundary. -/
+@[conformance_family]
+def agentMessageIntake : Family ManagementInput (Option QueueImageWire) where
+  inputs := (SessionQueue.ManagementCases.cases.filter isAgentMessageIntake).map
+    ManagementInput.ofCase
   model := managementAfter
 
 def roundTrips (entries : List QueueEntry) : Bool :=

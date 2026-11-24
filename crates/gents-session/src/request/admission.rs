@@ -515,7 +515,7 @@ impl ClientClaimAdmission {
                 && row.agent_did.as_deref() == Some(request.agent_did.as_str())
         });
         if retained.signer_did == request.agent_did {
-            return Ok(if bound { Allowed } else { Unavailable });
+            return Ok(if bound { Allowed } else { Denied });
         }
         let owners = txn
             .document_owners("AgentRequest", std::slice::from_ref(&request.doc_id))

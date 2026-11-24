@@ -1281,12 +1281,17 @@ private def turnStartsFrom (offset : Nat) (positions : List Nat) :
       let tail ← turnStartsFrom offset positions (seen + count) rest
       some ((position - offset) :: tail)
 
-def replaySentAccepted (wire : PromptAssembly.ClaudeMap.ReplayWire)
+def replaySentAccepted (issuer : PromptAssembly.ClaudeMap.ReplayIssuer)
+    (wire : PromptAssembly.ClaudeMap.ReplayWire)
     (resolve : PromptAssembly.ClaudeMap.ReplayTag →
       List PromptAssembly.ClaudeMap.ResolvedReplayEvidence)
     (sent : List PromptAssembly.ClaudeMap.ReplayFlatItem)
     (rows : List PromptAssembly.ClaudeMap.TaggedReplayRow) : Bool :=
   let groups := PromptAssembly.ClaudeMap.turnGroups rows
+  if !PromptAssembly.ClaudeMap.prefixBound wire then
+    groups.all (PromptAssembly.ClaudeMap.turnBase issuer wire resolve
+      (PromptAssembly.ClaudeMap.reasoningCandidates rows))
+  else
   let counts := groups.map fun group =>
     (group.candidates.map (PromptAssembly.ClaudeMap.wireReasoningCount wire)).sum
   match turnStartsFrom (PromptAssembly.ClaudeMap.turnHeaderOffset wire)
@@ -1378,7 +1383,7 @@ private def simRespond (sim : ReplaySim) (turn : Nat) (reasoning : List String)
     durable := sim.durable ++ [row], effective := sim.effective ++ [row],
     resolutions := sim.resolutions ++ [{ tag := simTag turn, evidence }],
     stripNext := false, cases,
-    accepted := sim.accepted && replaySentAccepted sim.wire resolve sent restored,
+    accepted := sim.accepted && replaySentAccepted sim.issuer sim.wire resolve sent restored,
     lastReplayed := replayedTurns restored }
 
 private def userRow (text : String) : PromptAssembly.ClaudeMap.TaggedReplayRow :=
@@ -1458,6 +1463,11 @@ def replayScenarios : List ReplaySim :=
   , runReplayScenario "responses-compaction-and-restart" .responses
       [u "a", r 1 ["e1"], u "b", r 2 ["e2"], .compact 2, u "c", r 3 ["e3"], .restart,
        u "d", r 4 []]
+  , runReplayScenario "responses-context-change" .responses
+      [u "a", r 1 ["e1"], .context "system+tools-changed", u "b", r 2 ["e2"], u "c", r 3 []]
+  , runReplayScenario "responses-issuer-switch-then-back" .responses
+      [u "a", r 1 ["e1"], .issuer "other-route", u "b", r 2 ["e2"], .issuer "claude",
+       u "c", r 3 ["e3"], u "d", r 4 []]
   ]
 
 example : replayScenarios.all (·.accepted) = true := by native_decide
@@ -1476,7 +1486,9 @@ example : replayScenarios.map (fun sim => (sim.name, sim.lastReplayed)) =
     , ("redacted-thinking", [1, 2])
     , ("unsigned-thinking-cuts-run", [3])
     , ("responses-encrypted", [1, 2])
-    , ("responses-compaction-and-restart", [3]) ] := by native_decide
+    , ("responses-compaction-and-restart", [2, 3])
+    , ("responses-context-change", [1, 2])
+    , ("responses-issuer-switch-then-back", [3]) ] := by native_decide
 
 private def shapeTwoBlockRow : PromptAssembly.ClaudeMap.TaggedReplayRow :=
   { source := some (checkpointTag 4), physicalHeader := some "header",

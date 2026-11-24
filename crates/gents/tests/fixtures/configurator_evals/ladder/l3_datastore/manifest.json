@@ -13,6 +13,8 @@
   "assets": [
     "README.md",
     "cases/held_ds_surface_on_new_agent.json",
+    "cases/train_ds_board_desk_reader.json",
+    "cases/train_ds_parcel_scan_surface.json",
     "cases/train_ds_schema_surface_select_call.json",
     "cases/val_ds_automation_seed_to_output.json",
     "cases/val_ds_baseline.json",
@@ -20,7 +22,8 @@
     "cases/val_ds_finish_partial_setup.json",
     "cases/val_ds_row_persists_across_stages.json",
     "cases/val_ds_two_collection_surface.json",
-    "pack_config.json"
+    "pack_config.json",
+    "suite.json"
   ],
   "config": "pack_config.json"
 }

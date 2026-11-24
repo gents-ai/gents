@@ -1,0 +1,202 @@
+{
+  "case_id": "train-daily-cron-digest",
+  "split": "train",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "configure",
+      "prompt": "Every day at 07:30 Berlin time (Europe/Berlin), I want you to write the morning dock digest: two sentences on what the receiving dock should expect today. Handle it yourself. Set this up now as a recurring automation; do not run it now.",
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "runs",
+            "min": 0,
+            "max": 0
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "trigger_config",
+            "min_rows": 1,
+            "expect": [
+              {
+                "field": "task_id",
+                "matches": ".+"
+              },
+              {
+                "field": "source",
+                "matches": ".+"
+              },
+              {
+                "field": "enabled",
+                "equals": true
+              }
+            ],
+            "max_rows": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "schedule_config",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "links": [
+              {
+                "capture": "trigger_config",
+                "source_match": {
+                  "field": "source.kind",
+                  "equals": "schedule"
+                },
+                "field": "source.schedule_id",
+                "target_capture": "schedule_config",
+                "target_key": "schedule_id",
+                "expect": [
+                  {
+                    "field": "cadence.kind",
+                    "equals": "cron"
+                  },
+                  {
+                    "field": "cadence.expression",
+                    "matches": "^\\s*30\\s+0?7\\s+(\\*|\\*/1|1-31)\\s+(\\*|\\*/1|1-12)\\s+(\\*|\\*/1|0-6|0-7|1-7)\\s*$"
+                  },
+                  {
+                    "field": "cadence.timezone",
+                    "equals": "Europe/Berlin"
+                  }
+                ]
+              },
+              {
+                "capture": "trigger_config",
+                "source_match": {
+                  "field": "source.kind",
+                  "equals": "schedule"
+                },
+                "field": "task_id",
+                "target_capture": "task_config",
+                "target_key": "task_id",
+                "expect": [
+                  {
+                    "field": "agent_did",
+                    "equals": "gents:agent-slot:engineer"
+                  },
+                  {
+                    "field": "enabled",
+                    "equals": true
+                  },
+                  {
+                    "field": "emit_outcome",
+                    "matches": "^(false|null)$"
+                  },
+                  {
+                    "field": "prompt_template",
+                    "matches": "(?i)digest|dock"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "schedule_config",
+          "collection": "Schedule",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "schedule_id",
+            "display_name",
+            "cadence"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "trigger_config",
+          "collection": "Trigger",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "trigger_id",
+            "task_id",
+            "source",
+            "concurrency",
+            "session_id_template",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "task_config",
+          "collection": "Task",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "task_id",
+            "agent_did",
+            "prompt_template",
+            "emit_outcome",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "runs",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "caused_by_trigger_kind": {
+              "_eq": "manual"
+            },
+            "purpose": {
+              "_eq": "normal"
+            }
+          },
+          "fields": [
+            "request_id",
+            "caused_by_trigger_id",
+            "caused_by_trigger_kind",
+            "lifecycle_state"
+          ]
+        }
+      ]
+    }
+  ]
+}

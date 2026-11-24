@@ -1,0 +1,122 @@
+{
+  "case_id": "shelf-budget-raise",
+  "split": "held_out",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "inventory/shelf-A.txt",
+        "contents": "shelf A\nitems: 12\n"
+      },
+      {
+        "path": "inventory/shelf-B.txt",
+        "contents": "shelf B\nitems: 7\n"
+      },
+      {
+        "path": "inventory/shelf-C.txt",
+        "contents": "shelf C\nitems: 30\n"
+      },
+      {
+        "path": "inventory/shelf-D.txt",
+        "contents": "shelf D\nitems: 4\n"
+      },
+      {
+        "path": "inventory/shelf-E.txt",
+        "contents": "shelf E\nitems: 16\n"
+      },
+      {
+        "path": "inventory/shelf-F.txt",
+        "contents": "shelf F\nitems: 9\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "goal",
+      "settle": true,
+      "prompt": "Open a goal for this session, objective exactly \"Count the items on every shelf in inventory/ into shelf-count.json\", token budget 200000. The shelf files are plain text. If inventory/ turns out to hold more than four shelf files, lift the goal's budget to 600000 before counting. shelf-count.json should hold {\"items\": N}. Close the goal out when it's done.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "goal",
+          "collection": "Goal",
+          "filter": {
+            "session_id": {
+              "_eq": "$session"
+            }
+          },
+          "fields": [
+            "goal_id",
+            "objective",
+            "status",
+            "token_budget",
+            "completion_evidence",
+            "consecutive_blocked_audits",
+            "last_blocked_reason"
+          ]
+        },
+        {
+          "kind": "file",
+          "name": "count",
+          "glob": "shelf-count.json"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "create_goal"
+            ],
+            "forbidden": [
+              "bash",
+              "bash_unrestricted"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "goal",
+            "expect": [
+              {
+                "field": "objective",
+                "equals": "Count the items on every shelf in inventory/ into shelf-count.json"
+              },
+              {
+                "field": "token_budget",
+                "equals": 600000
+              },
+              {
+                "field": "status",
+                "equals": "complete"
+              }
+            ],
+            "min_rows": 1,
+            "max_rows": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "count",
+            "expect": [
+              {
+                "path": "shelf-count.json",
+                "pointer": "/items",
+                "equals": 78
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

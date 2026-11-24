@@ -1,0 +1,124 @@
+{
+  "case_id": "urgent-count-once",
+  "split": "validation",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type PickupSlip { slip: String depot: String urgent: Boolean }"
+    ],
+    "documents": [
+      {
+        "collection": "PickupSlip",
+        "document": {
+          "slip": "PS-301",
+          "depot": "North",
+          "urgent": true
+        }
+      },
+      {
+        "collection": "PickupSlip",
+        "document": {
+          "slip": "PS-302",
+          "depot": "Harbor",
+          "urgent": false
+        }
+      },
+      {
+        "collection": "PickupSlip",
+        "document": {
+          "slip": "PS-303",
+          "depot": "Harbor",
+          "urgent": true
+        }
+      },
+      {
+        "collection": "PickupSlip",
+        "document": {
+          "slip": "PS-304",
+          "depot": "East",
+          "urgent": false
+        }
+      },
+      {
+        "collection": "PickupSlip",
+        "document": {
+          "slip": "PS-305",
+          "depot": "North",
+          "urgent": true
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "answer",
+      "prompt": "Before we build anything: I only need to know, this once, how many PickupSlip records are urgent. Do we need to build an app for that? Decide, then answer. Reply with JSON with \"design\" (what you'd build, in a few words) and \"urgent\" (the count).",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "loaded",
+          "collection": "AgentOutputSegment",
+          "filter": {
+            "session_id": {
+              "_eq": "$session"
+            },
+            "payload": {
+              "_like": "Skill: plan-work%"
+            }
+          },
+          "fields": [
+            "ordinal"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "load_skill"
+            ],
+            "forbidden": [
+              "write",
+              "bash",
+              "bash_unrestricted",
+              "write_file",
+              "edit_file"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "loaded",
+                "min": 1
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\"urgent\"\\s*:\\s*3\\b"
+              },
+              {
+                "matches": "\"design\"\\s*:\\s*\"[^\"]*(?i:chat|reply|answer|no app|none|nothing)"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

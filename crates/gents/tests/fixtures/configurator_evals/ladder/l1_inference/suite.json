@@ -1,0 +1,13 @@
+{
+  "id": "l1-inference",
+  "title": "Inference configuration",
+  "coverage": [
+    "inspect and propose",
+    "approval before changes",
+    "selected limits",
+    "backend reuse",
+    "independent role settings"
+  ],
+  "subject": "ladder/engineer_subject",
+  "preset_self_config": true
+}

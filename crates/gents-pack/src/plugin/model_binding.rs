@@ -193,14 +193,14 @@ fn endpoint_for_selected(
     allow_runtime_credential: bool,
     limiters: &ModelCallLimiters,
 ) -> Result<ModelEndpoint> {
-    use gents_loop::backend_provider::BackendProviderKind::{OpenAiCompatible, OpenRouter};
+    use gents_loop::backend_provider::BackendProviderKind::{OpenAiCompatible, OpenRouter, Vllm};
     anyhow::ensure!(
         backend.enabled,
         "the backend of profile {:?} is disabled",
         profile.profile_id
     );
     anyhow::ensure!(
-        matches!(backend.provider_kind, OpenAiCompatible | OpenRouter)
+        matches!(backend.provider_kind, OpenAiCompatible | Vllm | OpenRouter)
             && OpenAiWireApi::effective_for_provider(
                 backend.provider_kind,
                 backend.openai_wire_api

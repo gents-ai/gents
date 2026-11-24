@@ -1,0 +1,139 @@
+{
+  "case_id": "dock-totals-file",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "deliveries.csv",
+        "contents": "dock,crates,status\nElm,13,received\nPine,26,received\nOak,18,received\nElm,7,rejected\nPine,4,received\nOak,9,received\nElm,5,received\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "run",
+      "prompt": "Write me a dock totals report with one script: have it read deliveries.csv, total the crates per dock counting only received rows, and write the result to reports/dock_totals.json as a JSON object mapping each dock name to its crate total. Leave deliveries.csv unchanged and tell me which dock was busiest.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "inner_writes",
+          "collection": "AgentToolCall",
+          "filter": {
+            "plugin_parent_tool_call_doc_id": {
+              "_ne": null
+            },
+            "tool_name": {
+              "_eq": "write_file"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            }
+          },
+          "fields": [
+            "tool_name",
+            "lifecycle_state",
+            "plugin_parent_tool_call_doc_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "inner_reads",
+          "collection": "AgentToolCall",
+          "filter": {
+            "plugin_parent_tool_call_doc_id": {
+              "_ne": null
+            },
+            "tool_name": {
+              "_eq": "read_file"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            }
+          },
+          "fields": [
+            "tool_name",
+            "lifecycle_state",
+            "plugin_parent_tool_call_doc_id"
+          ]
+        },
+        {
+          "kind": "file",
+          "name": "workspace",
+          "glob": "**/*"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "script",
+              "read_file",
+              "write_file"
+            ],
+            "forbidden": [
+              "bash",
+              "bash_unrestricted"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "inner_writes",
+                "min": 1
+              },
+              {
+                "capture": "inner_reads",
+                "min": 1
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "workspace",
+            "expect": [
+              {
+                "path": "reports/dock_totals.json",
+                "pointer": "",
+                "equals": {
+                  "Elm": 18,
+                  "Pine": 30,
+                  "Oak": 27
+                }
+              },
+              {
+                "path": "deliveries.csv",
+                "sha256": "92c30b6e200f1c0dff172d70bd5b16201fec5947c25f47cccf199eaa2180f188"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "Pine"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

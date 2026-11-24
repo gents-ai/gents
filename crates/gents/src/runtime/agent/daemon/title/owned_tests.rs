@@ -1852,6 +1852,32 @@ async fn wait_for_title_streams(fixture: &TitleFixture, minimum: usize, fields: 
 }
 
 #[tokio::test]
+async fn a_title_request_sends_the_profile_temperature() {
+    let fixture = TitleFixture::new().await;
+    assert_eq!(fixture.agent_config.sampling.temperature, None);
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let seen = bodies.clone();
+    let provider = ScriptedProvider::responding(move |dispatch| {
+        seen.lock().unwrap().push(dispatch.body.clone());
+        Reply::turn(vec![
+            RawStreamingChoice::Message("generated-title".into()),
+            RawStreamingChoice::FinalResponse(()),
+        ])
+    })
+    .capturing_openai("scripted");
+    let (_shutdown, rx) = watch::channel(false);
+    fixture
+        .task(provider, true)
+        .run(fixture.title.clone(), rx)
+        .await
+        .unwrap();
+    let bodies = bodies.lock().unwrap().clone();
+    assert_eq!(bodies.len(), 1);
+    let body = bodies[0].as_ref().expect("the OpenAI wire body");
+    assert!(body.get("temperature").is_none(), "{body}");
+}
+
+#[tokio::test]
 async fn title_reasoning_survives_parent_terminal_under_own_request() {
     gents_lean_vocab::snapshot().await;
     for case in
@@ -2874,6 +2900,18 @@ async fn title_output_cap_applies_only_when_reasoning_is_disabled_on_the_wire() 
             capped,
         ),
         (
+            BackendProviderKind::Vllm,
+            chat,
+            Some(ReasoningEffort::Low),
+            configured,
+        ),
+        (
+            BackendProviderKind::Vllm,
+            chat,
+            Some(ReasoningEffort::None),
+            capped,
+        ),
+        (
             BackendProviderKind::OpenAiCompatible,
             responses,
             None,
@@ -2938,7 +2976,7 @@ async fn title_output_cap_applies_only_when_reasoning_is_disabled_on_the_wire() 
         );
     }
 
-    agent_config.backend_provider_kind = BackendProviderKind::OpenAiCompatible;
+    agent_config.backend_provider_kind = BackendProviderKind::Vllm;
     agent_config.openai_wire_api = chat;
     agent_config.sampling.reasoning_effort = Some(ReasoningEffort::None);
     let config = crate::turn::completion_factory::loop_config(

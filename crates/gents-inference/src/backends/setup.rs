@@ -440,7 +440,7 @@ pub fn provider_selection_for_backend(
         BackendProviderKind::OpenAiCompatible if is_xai_api_endpoint(endpoint) => {
             (InferenceProviderId::Grok, InferenceAuthMethod::ApiKey)
         }
-        BackendProviderKind::OpenAiCompatible => (
+        BackendProviderKind::OpenAiCompatible | BackendProviderKind::Vllm => (
             InferenceProviderId::Local,
             InferenceAuthMethod::OptionalApiKey,
         ),

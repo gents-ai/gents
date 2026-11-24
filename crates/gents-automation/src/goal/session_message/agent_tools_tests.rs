@@ -492,6 +492,156 @@ async fn agent_new_goal_publishes_for_target_with_the_caller_as_native_owner() {
 }
 
 #[tokio::test]
+async fn generated_agent_message_intake_binds_to_the_steering_snapshot() {
+    use gents_lean_vocab::families::fold_queue_contracts_agent_message_intake as family;
+    use gents_protocol::request_lifecycle::RequestLifecycleState;
+
+    for case in family::cases::<String, String, String, String, String>() {
+        let input = &case.input;
+        let operation = &input.operation;
+        let head = operation.active.as_ref().unwrap();
+        assert_eq!(operation.kind, "intake", "{}", input.name);
+        assert_eq!(operation.safe_boundary, Some(true), "{}", input.name);
+        assert_eq!(input.before.active, Some(head.request_id), "{}", input.name);
+        assert!(
+            input.before.folding.is_empty() && input.before.terminal.is_empty(),
+            "{}",
+            input.name
+        );
+        let (message, caller, caused) = started(&input.name).await;
+        let node = message.admission.node.clone();
+        set_state(&owner(&message), &caused.doc_id, "processing").await;
+        let cause = cause(&message, caller.request_hop).await;
+        let target = SessionMessageTarget {
+            node_did: caused.node_did.clone(),
+            agent_did: caused.agent_did.clone(),
+            session_id: caused.session_id.clone(),
+        };
+        let mut bound = vec![(head.request_id, caused.doc_id.clone())];
+        for entry in &input.before.pending {
+            assert!(
+                entry.source == "steering"
+                    && entry.delivery == "steer"
+                    && entry.policy == "append"
+                    && entry.execution_origin == "interactive"
+                    && entry.fresh
+                    && entry.requester_id == head.requester_id
+                    && entry.turn_context == head.turn_context
+                    && entry.queued_after == Some(head.request_id)
+                    && entry.queue_key.is_none()
+                    && entry.execution_directory.is_none()
+                    && entry.goal_assignment.is_none()
+                    && operation.admitted.contains(&entry.request_id),
+                "{}: the calling Agent issues only admitted steers into the active turn: {entry:?}",
+                input.name
+            );
+            let plan = plan_with_delivery(
+                &node,
+                &SessionGoals,
+                &cause,
+                &target,
+                MessageContent {
+                    rendered: RenderedBody {
+                        content: format!("steer {}", entry.request_id),
+                        goal: None,
+                    },
+                    title: None,
+                },
+                AgentMessageDelivery::Steer,
+                &signer(&message),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            let receipt = owner(&message)
+                .transact_write("test.agent_message_steer", |txn| {
+                    let (cause, plan) = (&cause, &plan);
+                    Box::pin(async move {
+                        stage_planned_write_in_txn(txn, &SessionGoals, cause, plan).await
+                    })
+                })
+                .await
+                .unwrap();
+            bound.push((entry.request_id, receipt.doc_id));
+        }
+        let (_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
+        let verifier = gents_session::request::admission::AgentRequestAdmissionVerifier::new(
+            node.clone(),
+            message.admission.runtime.clone(),
+            authority,
+        );
+        let agent = signer(&message);
+        let snapshot = gents_session::request::lifecycle::queue::steering_snapshot(
+            &node,
+            &caused,
+            &verifier,
+            Some(&agent),
+        )
+        .await
+        .unwrap();
+        let folding = snapshot
+            .inputs
+            .iter()
+            .map(|folded| {
+                bound
+                    .iter()
+                    .find(|(_, doc)| {
+                        gents_session::request::lifecycle::queue::folded_input_key(doc)
+                            == folded.key
+                    })
+                    .expect("steering input is one of the modeled requests")
+                    .0
+            })
+            .collect::<Vec<_>>();
+        let response = owner(&message)
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID lifecycle_state superseded_by_request_doc_id }} }}"#,
+                escape_graphql_string(&target.session_id),
+            ))
+            .await
+            .unwrap();
+        let rows = response["data"]["AgentRequest"].as_array().unwrap();
+        assert_eq!(rows.len(), bound.len(), "{}: {rows:?}", input.name);
+        let state = |id: u64| {
+            let doc = &bound.iter().find(|(model, _)| *model == id).unwrap().1;
+            let row = rows.iter().find(|row| row["_docID"] == *doc).unwrap();
+            (
+                serde_json::from_value::<RequestLifecycleState>(row["lifecycle_state"].clone())
+                    .unwrap(),
+                row["superseded_by_request_doc_id"].is_null(),
+            )
+        };
+        let mut ids = bound.iter().map(|(id, _)| *id);
+        let mut terminal = ids
+            .clone()
+            .filter(|id| state(*id).0.is_terminal())
+            .collect::<Vec<_>>();
+        terminal.sort_unstable();
+        case.check(Some(family::QueueImageWire {
+            active: ids.find(|id| {
+                matches!(
+                    state(*id).0,
+                    RequestLifecycleState::Claimed | RequestLifecycleState::Processing
+                )
+            }),
+            pending: input
+                .before
+                .pending
+                .iter()
+                .map(|entry| entry.request_id)
+                .filter(|id| {
+                    state(*id) == (RequestLifecycleState::Pending, true) && !folding.contains(id)
+                })
+                .collect(),
+            folding,
+            terminal,
+        }));
+        node.shutdown().await.expect("shut down test node");
+        std::fs::remove_dir_all(&message.admission.path).unwrap();
+    }
+}
+
+#[tokio::test]
 async fn an_idle_same_node_interrupt_pauses_the_goal() {
     let (message, _, caused) = started("agent-interrupt-steer").await;
     let node = message.admission.node.clone();

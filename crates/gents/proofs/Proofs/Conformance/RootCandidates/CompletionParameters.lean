@@ -6,7 +6,7 @@ open Lean Conformance
 
 @[conformance_family]
 def reasoningProfileParams : Family ReasoningInput (Option String) :=
-  ⟨["OpenAiCompatible", "OpenRouter", "ChatGptCodex", "XaiGrokOAuth",
+  ⟨["OpenAiCompatible", "Vllm", "OpenRouter", "ChatGptCodex", "XaiGrokOAuth",
     "ClaudeCliSubscription", "AnthropicApiKey", "ClaudeBedrock", "ClaudeVertex",
     "ClaudeFoundry", "ClaudeAnthropicAws", "ClaudeMantle", "ClaudeGoogleCloud", "ClaudeGateway"].flatMap
     (fun provider => [false, true].flatMap fun responses =>
@@ -14,7 +14,7 @@ def reasoningProfileParams : Family ReasoningInput (Option String) :=
         fun effort => ⟨provider, responses, effort⟩), reasoning⟩
 
 private def cacheInputs : List CacheInput :=
-  ["OpenAiCompatible", "ChatGptCodex", "ClaudeCliSubscription", "OpenRouter", "AnthropicApiKey", "XaiGrokOAuth"].flatMap
+  ["OpenAiCompatible", "Vllm", "ChatGptCodex", "ClaudeCliSubscription", "OpenRouter", "AnthropicApiKey", "XaiGrokOAuth"].flatMap
     fun provider => ["", "  ", " session-456 "].flatMap fun session =>
       ["", "request-123", "next-request"].map fun request => ⟨provider, session, request⟩
 

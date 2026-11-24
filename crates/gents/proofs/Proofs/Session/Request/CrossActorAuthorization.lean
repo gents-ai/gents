@@ -119,16 +119,17 @@ def agentMatches (intent : Intent) (agent : AgentRow) : Bool :=
 
 /-- The claim decision over what the claim transaction observes. A missing fact,
 or a row whose relationship marker is pending, leaves the request pending
-(`unavailable`); a fact that
-contradicts the retained admission, or a native denial, ends it (`denied`).
-A request its own Agent signed needs only its binding, and an unbound one
-stays pending. The session named by the request being another document than
-the one it signed is a binding failure, not a missing fact. -/
+(`unavailable`); a fact that contradicts the retained admission, or a native
+denial, ends it (`denied`). A request its own Agent signed needs only its
+binding, and an unbound one is denied like every other contradiction: by then
+every fact the self-signed path reads has been read, so nothing that arrives
+later can bind it. The session named by the request being another document
+than the one it signed is a binding failure, not a missing fact. -/
 def decideClaim (intent : Intent) (observation : Observation) : Decision :=
   if observation.transientFailure then .error
   else if observation.request != .ready || observation.session != .ready then .unavailable
   else if intent.author == intent.selectedAgent then
-    if bound intent observation then .claimed else .unavailable
+    if bound intent observation then .claimed else .denied
   else match observation.owner, observation.namedSession with
     | none, _ => .unavailable
     | _, none => .unavailable
@@ -367,16 +368,21 @@ theorem named_session_of_another_agent_or_requester_is_denied :
         namedSession := some { document := "session-doc", agent := "agent", requester := "other" } } =
       .denied := by decide
 
-/-- A request its own Agent signed claims on its binding alone, and an unbound
-one waits. -/
+/-- A request the selected Agent signs for itself, created by that Agent. -/
+def selfSignedIntent : Intent := { exampleIntent with author := "agent" }
+
+def selfSignedObservation : Observation :=
+  { permittedObservation with
+    live := { permittedObservation.live with author := some "agent" },
+    owner := some "agent" }
+
+/-- A request its own Agent signed claims on its binding alone, an unbound one
+is denied, and one whose session row is not ready waits. -/
 theorem self_signed_claim_needs_only_its_binding :
-    decideClaim { exampleIntent with author := "agent" }
-      { permittedObservation with
-        live := { permittedObservation.live with author := some "agent" },
-        sessionUpdate := false,
-        agentInvoke := false } = .claimed ∧
-    decideClaim { exampleIntent with author := "agent", content := "altered" }
-      { permittedObservation with live := { permittedObservation.live with author := some "agent" } } =
+    decideClaim selfSignedIntent
+      { selfSignedObservation with sessionUpdate := false, agentInvoke := false } = .claimed ∧
+    decideClaim { selfSignedIntent with content := "altered" } selfSignedObservation = .denied ∧
+    decideClaim selfSignedIntent { selfSignedObservation with session := .pending } =
       .unavailable := by decide
 
 /-- A revoke the race commits before the claim's commit is decided by the
@@ -573,7 +579,12 @@ def cases : List Case :=
       observation := { collaboratorObservation with sessionUpdate := false },
       race := [.grantSessionUpdate] }
   , { name := "existing_effect_unchanged",
-      prior := { lifecycle := .claimed, committedBy := some "agent" } } ]
+      prior := { lifecycle := .claimed, committedBy := some "agent" } }
+  , { name := "self_signed_claim", intent := selfSignedIntent, observation := selfSignedObservation }
+  , { name := "self_signed_unbound", intent := { selfSignedIntent with content := "altered" },
+      observation := selfSignedObservation }
+  , { name := "self_signed_session_pending", intent := selfSignedIntent,
+      observation := { selfSignedObservation with session := .pending } } ]
 
 open Lean
 
