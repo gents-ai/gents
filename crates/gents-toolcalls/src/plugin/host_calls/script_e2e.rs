@@ -52,8 +52,8 @@ async fn script_discovers_batches_and_reads_objects_on_a_scratch_home() {
     record.digest = format!("sha256:{digest}");
     record.declaration.host_imports = vec![gents_pack::pack::HostImport::HostCall];
     gents_pack::plugin::store::write_record(home.path(), &record).unwrap();
-    std::fs::write(home.path().join("a.txt"), "alpha\n").unwrap();
-    std::fs::write(home.path().join("b.txt"), "beta\n").unwrap();
+    std::fs::write(home.path().join("a.json"), "{\"rows\": [1, 2]}\n").unwrap();
+    std::fs::write(home.path().join("b.txt"), "beta\r\ngamma").unwrap();
     let files = Files(
         ReadFileTool::new(
             ToolContext::new(home.path().to_owned(), false).unwrap(),
@@ -65,8 +65,8 @@ async fn script_discovers_batches_and_reads_objects_on_a_scratch_home() {
     let files = Arc::new(files);
     let input = json!({"script": r#"
             const names = Object.keys(tools);
-            const files = await Promise.all([tools.read_file({path: 'a.txt'}), tools.read_file({path: 'b.txt'})]);
-            return {names, types: files.map(f => typeof f), contents: files.map(f => f.content), ok: files.every(f => f.ok)};
+            const files = await Promise.all([tools.read_file({path: 'a.json'}), tools.read_file({path: 'b.txt'})]);
+            return {names, types: files.map(f => typeof f), rows: JSON.parse(files[0].content).rows, text: files[1].content, ok: files.every(f => f.ok)};
         "#});
     let envelope = gents_loop::tool::ToolCallEnvelope::default()
         .with_effects(Some(files.clone() as Arc<dyn ToolEffectDispatcher>));
@@ -92,7 +92,7 @@ async fn script_discovers_batches_and_reads_objects_on_a_scratch_home() {
     );
     assert_eq!(
         result.outcome.output,
-        json!({"names": ["read_file"], "types": ["object", "object"], "contents": ["L1: alpha", "L1: beta"], "ok": true})
+        json!({"names": ["read_file"], "types": ["object", "object"], "rows": [1, 2], "text": "beta\r\ngamma", "ok": true})
     );
     let oversized = executor
         .call_data_bound_for(
