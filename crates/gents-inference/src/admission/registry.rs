@@ -247,3 +247,14 @@ impl AdmissionRegistry {
         }
     }
 }
+
+/// A pool outlives its backend's incarnations while it holds permits; once
+/// admission closes and its last permit releases it is pruned, so a mark read
+/// later can be smaller than an earlier one, and only growth is progress.
+impl crate::backends::health::AdmittedCallProgress for AdmissionRegistry {
+    fn progress_mark(&self, backend_id: &str) -> u64 {
+        self.backends()
+            .get(backend_id)
+            .map_or(0, |entry| entry.pool.progress_mark())
+    }
+}

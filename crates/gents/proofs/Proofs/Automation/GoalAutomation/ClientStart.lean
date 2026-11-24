@@ -332,7 +332,7 @@ def replace? (s : State) (assignments : Assignments) (replacement : Replacement)
         snapshot :=
           { revision := replacement.nextRevision, objective := TextNormalization.canonicalObjective objective
             execution :=
-              { goal := ⟨.active, 0, false, false⟩, sequence := 0
+              { goal := ⟨.active, false, false⟩, sequence := 0
                 lastContinuedFrom := none, latestRequest := 0, children := []
                 tokensUsed := 0, tokenBudget := budget.map Int.toNat } }
         rootRequest := replacement.firstRequest, usageBaseline := replacement.sessionUsage
@@ -375,6 +375,25 @@ theorem replacement_resets_only_new_accounting (s : State) (assignments : Assign
       simp only [hs, Option.bind_some, Option.some.injEq] at h
       cases h
       simp
+
+/-- A replacement Goal's budget is exactly the one requested; none requested
+means no ceiling. -/
+theorem replacement_budget_is_what_was_set (s : State) (assignments : Assignments)
+    (replacement : Replacement) (requested : AgentSession.Document)
+    (objective : String) (budget : Option Int) (facts : Facts) (commit : Bool)
+    (post : State × Assignments)
+    (h : replace? s assignments replacement requested objective budget facts commit = some post) :
+    post.2.current.snapshot.execution.tokenBudget = budget.map Int.toNat := by
+  dsimp only [replace?] at h
+  split at h
+  · contradiction
+  · cases hs : start? { s with submission := ⟨false, false, false, false⟩ }
+        requested objective budget facts commit replacement.nextId with
+    | none => simp [hs] at h
+    | some started =>
+      simp only [hs, Option.bind_some, Option.some.injEq] at h
+      cases h
+      rfl
 
 theorem stale_replacement_cannot_publish (s : State) (assignments : Assignments)
     (replacement : Replacement) (requested : AgentSession.Document)

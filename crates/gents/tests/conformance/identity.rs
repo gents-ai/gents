@@ -7,7 +7,7 @@ async fn live_agent_session_and_delegation_access_match_the_model() -> anyhow::R
     use crate::support::agent_requests::{canonical_now, RequestActors, RequestSeed};
     use crate::support::{self, ManagedAgentFixture};
 
-    let db = support::test_db("live-agent-access-conformance").await;
+    let db = support::trial_store("live-agent-access-conformance").await;
     let fixture = support::managed_agent_fixture(&db).await;
     let (sibling_agent, sibling_binding) =
         support::install_managed_agent(&db, &fixture.access, &fixture.user, "Sibling").await;
@@ -147,7 +147,7 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
             .map(|role| role.role.as_str())
             .ok_or_else(|| anyhow::anyhow!("unknown modeled actor {modeled}"))
     };
-    let db = crate::support::test_db("modeled-configuration-native").await;
+    let db = crate::support::trial_store("modeled-configuration-native").await;
     let fixture = crate::support::managed_agent_fixture(&db).await;
     let node = db.node.clone();
     let node_did = db.node_identity.did();
@@ -457,7 +457,7 @@ async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyh
 
     let traces = gents_lean_vocab::families::household_self_config_trace::cases();
     let trace = traces.first().expect("modeled self-config trace");
-    let db = crate::support::test_db("modeled-self-config-native").await;
+    let db = crate::support::trial_store("modeled-self-config-native").await;
     let node = db.node.clone();
     let runtime = db.node_identity.clone();
     let fixture = crate::support::managed_agent_fixture(&db).await;

@@ -375,7 +375,6 @@ fn project_task_view(
         prompt_template: Some(task.prompt_template.clone()),
         goal_objective_template: normalize_optional(task.goal_objective_template.as_deref()),
         goal_token_budget: task.goal_token_budget,
-        goal_blocked_audit_threshold: task.goal_blocked_audit_threshold,
         goal_max_infrastructure_retries: task.goal_max_infrastructure_retries,
         hooks: task.hooks.clone(),
         enabled: Some(task.enabled),

@@ -18,7 +18,7 @@ struct Limited {
 impl Limited {
     async fn new(call_failure: &str) -> Self {
         let f = Fixture::new(&json!({
-            "status": "usage_limited", "sequence": 0, "blocked_audits": 0,
+            "status": "usage_limited", "sequence": 0,
             "wrapup_requested": false, "wrapup_completed": false,
             "tokens_used": 0, "token_budget": 1000, "last_continued_from": null
         }))
@@ -383,7 +383,7 @@ async fn resume_on_covers_limits_only() {
 #[tokio::test]
 async fn client_resume_recovers_pending_relationships_without_replaying_revocations() {
     let fixture = Fixture::new(&json!({
-        "status": "paused", "sequence": 0, "blocked_audits": 0,
+        "status": "paused", "sequence": 0,
         "wrapup_requested": false, "wrapup_completed": false,
         "tokens_used": 0, "token_budget": 1000, "last_continued_from": null
     }))

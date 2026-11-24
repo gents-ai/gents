@@ -9,7 +9,7 @@ use gents_store::config_client::{ConfigAccess, NodePermission};
 use gents_store::identity::{GrantSet, NodeIdentity};
 
 struct PrivateSessionFixture {
-    db: crate::support::TestDb,
+    db: gents_store::test_support::TestStore,
     runtime: Arc<dyn NodeIdentity>,
     user: gents_store::identity::KeyIdentity,
     selected: gents_store::identity::KeyIdentity,
@@ -18,7 +18,7 @@ struct PrivateSessionFixture {
 
 impl PrivateSessionFixture {
     async fn new() -> Self {
-        let db = crate::support::test_db("private-session-selection").await;
+        let db = crate::support::trial_store("private-session-selection").await;
         let runtime = db.node_identity.clone();
         let user = test_identity("selection-user");
         let selected = test_identity("selection-agent");
@@ -335,12 +335,12 @@ async fn materialized_request_session_is_selectable_and_matches_lean() {
                 requester_did: None,
                 trigger_doc_id: None,
             },
-            None,
-            None,
+            Default::default(),
             Some(agent.as_ref()),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .request;
         let mut routed = request(Some(agent.did()), &enqueued.session_id);
         routed.node_did = node_did;
         routed.requester_did = Some(agent.did().to_owned());

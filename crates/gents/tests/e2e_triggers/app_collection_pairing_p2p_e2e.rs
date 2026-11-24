@@ -17,13 +17,14 @@ use gents_tools::surface::ToolCeiling;
 use serde_json::{json, Value};
 
 use crate::support::fixtures::bind_default_agent_backend;
-use crate::support::mock_endpoint::MockModelEndpoint;
-use crate::support::{install_managed_agent, load_managed_fixture_user, test_p2p_db, TestDb};
+use crate::support::{install_managed_agent, load_managed_fixture_user, test_p2p_db};
+use gents_inference::test_support::scripted_backend::ScriptedBackend;
 use gents_p2p::test_support::enrollment::{
     authorize_enrollment_generation, authorize_enrollment_peer, wait_for_peer_identity,
     EnrollmentGeneration,
 };
 use gents_store::test_support::snapshot_reader::SnapshotReader;
+use gents_store::test_support::TestStore;
 
 const NETWORK_ID: &str = "net-app-collection-pairing";
 const NETWORK_NAME: &str = "App Collection Pairing Net";
@@ -670,7 +671,7 @@ fn pairing_args(action: &str, peer: &str, did: &str, collections: &[&str]) -> Va
     json!({"action":action,"peer_id":peer,"peer_did":did,"collections":collections})
 }
 
-fn pairing_tool(db: &TestDb, agent: Option<Arc<dyn NodeIdentity>>, mutate: bool) -> P2pTool {
+fn pairing_tool(db: &TestStore, agent: Option<Arc<dyn NodeIdentity>>, mutate: bool) -> P2pTool {
     P2pTool::new(
         db.node.clone(),
         Some(db.node_identity.clone()),
@@ -687,7 +688,7 @@ struct PairingAgent {
 }
 
 impl PairingAgent {
-    async fn configure(&self, db: &TestDb, p2p_mutations: bool, enabled: bool) {
+    async fn configure(&self, db: &TestStore, p2p_mutations: bool, enabled: bool) {
         use gents_documents::{
             apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
         };
@@ -741,7 +742,7 @@ impl PairingAgent {
     }
 }
 
-async fn pairing_agent(db: &TestDb, label: &str) -> PairingAgent {
+async fn pairing_agent(db: &TestStore, label: &str) -> PairingAgent {
     let user = load_managed_fixture_user(db).await;
     let access = db.client_access(&user);
     let (identity, binding) = install_managed_agent(db, &access, &user, label).await;
@@ -762,7 +763,7 @@ async fn pairing_status(tool: &P2pTool, peer: &str) -> Value {
     listed["outcome"]["desired"][0].clone()
 }
 
-async fn wait_for_status(db: &TestDb, tool: &P2pTool, peer: &str, reason: Option<&str>) {
+async fn wait_for_status(db: &TestStore, tool: &P2pTool, peer: &str, reason: Option<&str>) {
     wait_until(
         &db.node,
         PAIRING_INPUTS,
@@ -780,7 +781,7 @@ async fn wait_for_status(db: &TestDb, tool: &P2pTool, peer: &str, reason: Option
     .await;
 }
 
-async fn current_authorization(db: &TestDb, peer: &str) -> (String, u64, String) {
+async fn current_authorization(db: &TestStore, peer: &str) -> (String, u64, String) {
     let projection = GraphqlEnrollmentStore::new(db.node.clone(), db.node_identity.clone())
         .load_projection()
         .await
@@ -797,7 +798,7 @@ async fn current_authorization(db: &TestDb, peer: &str) -> (String, u64, String)
     )
 }
 
-fn runtime_access(db: &TestDb) -> ConfigAccess {
+fn runtime_access(db: &TestStore) -> ConfigAccess {
     ConfigAccess::local_as(
         db.node.clone(),
         identity::Did::new(db.node_identity.did()).expect("runtime DID"),
@@ -805,7 +806,7 @@ fn runtime_access(db: &TestDb) -> ConfigAccess {
 }
 
 async fn write_direct_overlay(
-    db: &TestDb,
+    db: &TestStore,
     agent: &PairingAgent,
     peer: &str,
     collection: &str,
@@ -872,7 +873,7 @@ fn refused_or_empty(result: &anyhow::Result<Value>, field: &str) -> bool {
 }
 
 async fn start_runtime(
-    db: &TestDb,
+    db: &TestStore,
 ) -> (
     tokio::sync::watch::Sender<bool>,
     tokio::task::JoinHandle<anyhow::Result<()>>,
@@ -881,7 +882,7 @@ async fn start_runtime(
         db.node.clone(),
         db.node_identity.clone(),
         DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
+            backend_admission: Some(db.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             p2p_intervals: gents_p2p::p2p_reconcile::intervals::P2pIntervals::with_overrides(
                 None,
@@ -913,8 +914,8 @@ async fn application_documents_replicate_only_after_each_node_opts_in() {
     let identity_a = db_a.node_identity.clone();
     let identity_b = db_b.node_identity.clone();
 
-    let mock_a = MockModelEndpoint::start("default").unwrap();
-    let mock_b = MockModelEndpoint::start("default").unwrap();
+    let mock_a = ScriptedBackend::start("default", Vec::new()).unwrap();
+    let mock_b = ScriptedBackend::start("default", Vec::new()).unwrap();
     bind_default_agent_backend(&db_a, "backend-app-collection-a", mock_a.endpoint()).await;
     bind_default_agent_backend(&db_b, "backend-app-collection-b", mock_b.endpoint()).await;
 
@@ -1254,8 +1255,8 @@ async fn authorless_overlay_is_skipped_and_control_route_stands() {
     let identity_b = db_b.node_identity.clone();
     let did_a = identity_a.did().to_string();
 
-    let mock_a = MockModelEndpoint::start("default").unwrap();
-    let mock_b = MockModelEndpoint::start("default").unwrap();
+    let mock_a = ScriptedBackend::start("default", Vec::new()).unwrap();
+    let mock_b = ScriptedBackend::start("default", Vec::new()).unwrap();
     bind_default_agent_backend(&db_a, "backend-soft-a", mock_a.endpoint()).await;
     bind_default_agent_backend(&db_b, "backend-soft-b", mock_b.endpoint()).await;
 
@@ -1351,7 +1352,7 @@ async fn authorless_overlay_is_skipped_and_control_route_stands() {
 }
 
 async fn install_shared_fixture(
-    db: &crate::support::TestDb,
+    db: &gents_store::test_support::TestStore,
     archive: &gents_pack::pack::archive::PackArchive,
 ) {
     use gents_pack::pack::{
@@ -1419,16 +1420,19 @@ async fn install_shared_fixture(
     assert_eq!(pack.digest, archive.digest());
 }
 
-async fn household_access(db: &crate::support::TestDb) -> ConfigAccess {
+async fn household_access(db: &gents_store::test_support::TestStore) -> ConfigAccess {
     let user = crate::support::load_managed_fixture_user(db).await;
     ConfigAccess::Graphql(
-        gents_store::config_client::GraphqlEndpoint::as_principal(db.client_endpoint(), user.did())
-            .with_client_signing_capability(user.client_signing_capability().unwrap())
-            .unwrap(),
+        gents_store::config_client::GraphqlEndpoint::as_principal(
+            db.graphql_endpoint(),
+            user.did(),
+        )
+        .with_client_signing_capability(user.client_signing_capability().unwrap())
+        .unwrap(),
     )
 }
 
-async fn write_fixture_move(db: &crate::support::TestDb, id: &str, mark: &str) {
+async fn write_fixture_move(db: &gents_store::test_support::TestStore, id: &str, mark: &str) {
     let id = escape_graphql_string(id);
     let mark = escape_graphql_string(mark);
     let mutation = format!(
@@ -1441,7 +1445,7 @@ async fn write_fixture_move(db: &crate::support::TestDb, id: &str, mark: &str) {
         .unwrap();
 }
 
-async fn fixture_moves(db: &crate::support::TestDb, id: &str) -> Vec<Value> {
+async fn fixture_moves(db: &gents_store::test_support::TestStore, id: &str) -> Vec<Value> {
     let escaped = escape_graphql_string(id);
     let query = format!(
         r#"{{ SharedFixtureMove(filter: {{ move_id: {{ _eq: "{escaped}" }} }}) {{ move_id mark }} }}"#
@@ -1464,8 +1468,8 @@ async fn document_pack_collections_pair_only_by_explicit_opt_in() {
     install_shared_fixture(&a, &archive).await;
     install_shared_fixture(&b, &archive).await;
 
-    let mock_a = MockModelEndpoint::start("default").unwrap();
-    let mock_b = MockModelEndpoint::start("default").unwrap();
+    let mock_a = ScriptedBackend::start("default", Vec::new()).unwrap();
+    let mock_b = ScriptedBackend::start("default", Vec::new()).unwrap();
     bind_default_agent_backend(&a, "fixture-a-backend", mock_a.endpoint()).await;
     bind_default_agent_backend(&b, "fixture-b-backend", mock_b.endpoint()).await;
     let (stop_a, task_a) = start_runtime(&a).await;
@@ -1564,8 +1568,8 @@ async fn application_pairing_replicates_only_while_its_author_holds_the_grant() 
         register_change_proposed_schema(&db.node).await;
         register_guarded_change_schema(&db.node).await;
     }
-    let mock_a = MockModelEndpoint::start("default").unwrap();
-    let mock_b = MockModelEndpoint::start("default").unwrap();
+    let mock_a = ScriptedBackend::start("default", Vec::new()).unwrap();
+    let mock_b = ScriptedBackend::start("default", Vec::new()).unwrap();
     bind_default_agent_backend(&db_a, "backend-authority-a", mock_a.endpoint()).await;
     bind_default_agent_backend(&db_b, "backend-authority-b", mock_b.endpoint()).await;
     let pairer_a = pairing_agent(&db_a, "authority-a").await;
@@ -1674,7 +1678,7 @@ async fn application_pairing_replicates_only_while_its_author_holds_the_grant() 
         escape_graphql_string(&peer_b)
     );
     let before = pairing_status(&tool_a, &peer_b).await;
-    let admin_key = db_a.data_path().join("pairing-admin.key");
+    let admin_key = db_a.path().join("pairing-admin.key");
     let admin = tokio::task::spawn_blocking(move || KeyIdentity::load_or_create(admin_key, None))
         .await
         .expect("join admin key setup")

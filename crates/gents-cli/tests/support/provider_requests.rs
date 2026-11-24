@@ -1,11 +1,5 @@
 use serde_json::Value;
 
-pub mod chat;
-pub mod openai;
-
-pub use chat::MockChatEndpoint;
-pub use openai::MockOpenAIEndpoint;
-
 pub fn request_has_tool_result_message(request: &Value) -> bool {
     request
         .get("messages")

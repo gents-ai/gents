@@ -12,10 +12,11 @@ use crate::support::builder_runtime::{
 };
 use crate::support::interrupt::BootedAgent;
 use crate::support::live_inference::{request_lifecycle, request_terminal_rows};
-use crate::support::{test_db, ManagedAgentFixture, TestDb};
+use crate::support::{trial_store, ManagedAgentFixture};
 use gents_inference::test_support::scripted_backend::{
     ScriptedBackend, StreamChunk, StreamPlan, StreamResponse, StreamScript,
 };
+use gents_store::test_support::TestStore;
 
 const MODEL: &str = "budget-model";
 const BACKEND_ID: &str = "budget-backend";
@@ -33,11 +34,11 @@ const DISK_BYTES_PER_REQUEST: u64 = 256 * 1024;
 async fn per_request_store_growth_follows_new_content_not_history() {
     let started = Instant::now();
     let backend = ScriptedBackend::start_with_plans(MODEL, workload_plans()).unwrap();
-    let mut db = test_db("storage-budget").await;
+    let mut db = trial_store("storage-budget").await;
     let fixture = into_fixture(builder_actors(&db, BACKEND_ID, backend.endpoint(), MODEL, 4).await);
     db.simulate_process_crash().await.expect("flush baseline");
     let actors = reopen_actors(&db, fixture).await;
-    let baseline_disk = disk_bytes(db.data_path()).await;
+    let baseline_disk = disk_bytes(db.path()).await;
     let agent = boot_agent(&db, &actors).await;
     let node_did = agent.node_did.clone();
 
@@ -67,9 +68,7 @@ async fn per_request_store_growth_follows_new_content_not_history() {
     agent.shutdown().await;
     let fixture = into_fixture(actors);
     db.simulate_process_crash().await.expect("flush workload");
-    let disk = disk_bytes(db.data_path())
-        .await
-        .saturating_sub(baseline_disk);
+    let disk = disk_bytes(db.path()).await.saturating_sub(baseline_disk);
     let actors = reopen_actors(&db, fixture).await;
     let mut transcripts = Vec::new();
     for session in 0..SESSIONS {
@@ -309,7 +308,7 @@ impl ToolDyn for AuditProbe {
     }
 }
 
-async fn boot_agent(db: &TestDb, actors: &RequestActors) -> BootedAgent {
+async fn boot_agent(db: &TestStore, actors: &RequestActors) -> BootedAgent {
     let runtime = fixture_agent(
         runtime_builder(db, actors).tool_ceiling(ToolCeiling::meta_only()),
         actors,
@@ -337,7 +336,7 @@ fn into_fixture(actors: RequestActors) -> ManagedAgentFixture {
 
 /// The User and Agent keep their identities across a process restart; only
 /// their accesses bind the reopened database.
-async fn reopen_actors(db: &TestDb, mut fixture: ManagedAgentFixture) -> RequestActors {
+async fn reopen_actors(db: &TestStore, mut fixture: ManagedAgentFixture) -> RequestActors {
     fixture.access = db.client_access(&fixture.user);
     RequestActors::from_fixture(db, fixture).await
 }

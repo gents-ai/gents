@@ -16,20 +16,21 @@ use gents_store::config_client::{ConfigAccess, NodePermission};
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 
-use crate::support::{test_p2p_db, TestDb};
+use crate::support::test_p2p_db;
 use gents_p2p::test_support::transport::wait_for_connected_peer;
+use gents_store::test_support::TestStore;
 
 /// The owner Node with its enrolled User and Agent; the User submits over the
 /// owner's HTTP endpoint with its client key, and `peer` is a second Node
 /// that may receive only discovery documents.
 struct DeliveryFixture {
     _directory: tempfile::TempDir,
-    owner: TestDb,
+    owner: TestStore,
     node: Arc<EmbeddedNode>,
     node_identity: Arc<dyn NodeIdentity>,
     agent_identity: Arc<dyn NodeIdentity>,
     user: KeyIdentity,
-    peer: TestDb,
+    peer: TestStore,
     requester: ConfigAccess,
     outsider: ConfigAccess,
     agent: ConfigAccess,
@@ -61,7 +62,7 @@ impl DeliveryFixture {
         // client-signed owners, so the database's ACP is what refuses it.
         let outsider = ConfigAccess::Graphql(
             gents_store::config_client::GraphqlEndpoint::as_principal(
-                owner.client_endpoint(),
+                owner.graphql_endpoint(),
                 outsider.did(),
             )
             .with_client_signing_capability(outsider.client_signing_capability().unwrap())

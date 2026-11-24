@@ -192,9 +192,9 @@ export function Title({
 const GOAL_CONTROLS: Record<string, readonly ("pause" | "resume" | "edit" | "stop")[]> =
   {
     active: ["pause", "edit", "stop"],
-    budget_limited: ["pause", "stop"],
+    budget_limited: ["resume", "edit", "stop"],
     paused: ["resume", "edit", "stop"],
-    blocked: ["resume", "stop"],
+    blocked: ["resume", "edit", "stop"],
     usage_limited: ["resume", "stop"],
   };
 
@@ -212,6 +212,12 @@ export function GoalUnavailable({ label, text }: { label: string; text: string }
     </div>
   );
 }
+
+/** How a Goal that waits for its user runs again. */
+const GOAL_RESUME: Record<string, string> = {
+  blocked: "Reply in this chat, or press Resume.",
+  budget_limited: "Raise or lift the budget, then press Resume.",
+};
 
 /* Decimal strings carry the runtime's signed 64-bit counters; display
    tolerates the precision a number loses past 2^53. */
@@ -231,7 +237,14 @@ export function Goal({
   onControl?: (action: Exclude<GoalControlAction, { kind: "create" | "edit" }>) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const controls = onControl && !stale ? (GOAL_CONTROLS[goal.status] ?? []) : [];
+  const wrapping = goal.wrapupRequested && !goal.wrapupCompleted;
+  /* A budget-limited Goal still in its wrap-up turn can only be paused or
+     stopped; once the wrap-up finished it waits for its user. */
+  const allowed =
+    goal.status === "budget_limited" && wrapping
+      ? (["pause", "stop"] as const)
+      : (GOAL_CONTROLS[goal.status] ?? []);
+  const controls = onControl && !stale ? allowed : [];
   const tokenBudget = count(goal.tokenBudget);
   const activeTimeSeconds = count(goal.activeTimeSeconds);
   const continuationSequence = count(goal.continuationSequence);
@@ -243,7 +256,7 @@ export function Goal({
     goal.status === "complete"
       ? "met"
       : goal.status === "blocked"
-        ? "blocked"
+        ? "waiting for you"
         : goal.status === "paused"
           ? "paused"
           : goal.status === "usage_limited"
@@ -251,7 +264,7 @@ export function Goal({
             : goal.status === "budget_limited"
               ? "· budget reached"
               : null;
-  const wrapping = goal.wrapupRequested && !goal.wrapupCompleted;
+  const resume = GOAL_RESUME[goal.status];
   const phrase = [
     state ? `Goal ${state}` : "Goal",
     wrapping && goal.status !== "complete" ? "· wrapping up" : null,
@@ -401,12 +414,18 @@ export function Goal({
               <dd className="text-right">{goalStatusText(goal.status)}</dd>
             </div>
           )}
-          {goal.lastBlockedReason && (
-            <div className="flex justify-between gap-4" title={goal.lastBlockedReason}>
-              <dt className="shrink-0">Why it stopped</dt>
+          {goal.blockedReason && (
+            <div className="flex justify-between gap-4" title={goal.blockedReason}>
+              <dt className="shrink-0">What it needs</dt>
               <dd className="text-right text-foreground">
-                {reasonText(goal.lastBlockedReason)}
+                {reasonText(goal.blockedReason)}
               </dd>
+            </div>
+          )}
+          {resume && !wrapping && (
+            <div className="flex justify-between gap-4" data-testid="goal-resume-hint">
+              <dt className="shrink-0">To resume</dt>
+              <dd className="text-right">{resume}</dd>
             </div>
           )}
           {goal.lastFailure && (

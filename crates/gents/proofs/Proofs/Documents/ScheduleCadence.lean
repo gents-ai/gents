@@ -1,7 +1,13 @@
 /-! Advancing a schedule Trigger's cursor (`next_run_at`) once a tick fires the
 due occurrence. Times are seconds since the epoch; `next t` is the cadence's
-first occurrence strictly after `t`. A fire's key is the occurrence it fires, so
-an occurrence fired twice is refused at admission. -/
+first occurrence strictly after `t`.
+
+`fires` is the occurrences a tick sequence offers when each fire's cursor write
+lands before the next tick reads the cursor. Production does not keep that
+premise (the write follows the dispatch, in its own task, and can lag, fail or
+be lost with the process), so the cursor is an optimization: a re-offered
+occurrence answers with its one request because the request's identity is the
+occurrence's (`Triggers.ScheduleOccurrence.no_occurrence_fires_twice`). -/
 
 namespace ScheduleCadence
 
@@ -55,8 +61,7 @@ theorem fires_at_or_after (next : Nat → Nat) (policy : MissedRunPolicy)
           (advance_passes_fired_occurrence next policy due now increasing fired) (ih _ k h))
     · exact ih due k h
 
-/-- Fired occurrences strictly increase, so no tick sequence, however late or
-repeated, fires one occurrence twice. -/
+/-- Fired occurrences strictly increase. -/
 theorem fires_strictly_increase (next : Nat → Nat) (policy : MissedRunPolicy)
     (increasing : ∀ t, t < next t) :
     ∀ (ticks : List Nat) (due : Nat), (fires next policy due ticks).Pairwise (· < ·) := by
@@ -73,7 +78,9 @@ theorem fires_strictly_increase (next : Nat → Nat) (policy : MissedRunPolicy)
         (fires_at_or_after next policy increasing later _ k hk)
     · exact ih due
 
-theorem no_occurrence_fires_twice (next : Nat → Nat) (policy : MissedRunPolicy)
+/-- With every cursor write landing before the next tick, no tick sequence,
+however late or repeated, offers one occurrence twice. -/
+theorem cursor_fires_each_occurrence_once (next : Nat → Nat) (policy : MissedRunPolicy)
     (increasing : ∀ t, t < next t) (ticks : List Nat) (due : Nat) :
     (fires next policy due ticks).Nodup :=
   (fires_strictly_increase next policy increasing ticks due).imp Nat.ne_of_lt

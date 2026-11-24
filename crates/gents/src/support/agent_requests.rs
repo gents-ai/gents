@@ -14,7 +14,8 @@ use gents_session::request::lifecycle::RequestLifecycle;
 use gents_store::graphql::escape_graphql_string;
 use gents_store::{config_client::ConfigAccess, identity::NodeIdentity};
 
-use super::{ManagedAgentFixture, TestDb};
+use super::ManagedAgentFixture;
+use gents_store::test_support::TestStore;
 
 /// Canonical UTC seconds, the only `created_at` form the signed owners accept.
 pub fn canonical_now() -> String {
@@ -83,12 +84,12 @@ pub struct RequestActors {
 }
 
 impl RequestActors {
-    pub async fn new(db: &TestDb) -> Self {
+    pub async fn new(db: &TestStore) -> Self {
         let fixture = super::managed_agent_fixture(db).await;
         Self::from_fixture(db, fixture).await
     }
 
-    pub async fn from_fixture(db: &TestDb, fixture: ManagedAgentFixture) -> Self {
+    pub async fn from_fixture(db: &TestStore, fixture: ManagedAgentFixture) -> Self {
         let node_did = db.node_identity.did().to_owned();
         let runtime = ConfigAccess::local_as(
             db.node.clone(),

@@ -35,7 +35,7 @@ pub struct AcceptedTurnRuntime {
 }
 
 pub async fn enqueue_local_accepted_request(
-    db: &super::TestDb,
+    db: &gents_store::test_support::TestStore,
     agent_did: &str,
     request_id: &str,
     session_id: &str,
@@ -45,7 +45,7 @@ pub async fn enqueue_local_accepted_request(
 }
 
 pub async fn enqueue_local_accepted_request_until(
-    db: &super::TestDb,
+    db: &gents_store::test_support::TestStore,
     agent_did: &str,
     request_id: &str,
     session_id: &str,
@@ -85,7 +85,7 @@ pub async fn enqueue_local_accepted_request_until(
 }
 
 pub async fn enqueue_managed_accepted_request(
-    db: &super::TestDb,
+    db: &gents_store::test_support::TestStore,
     fixture: &super::ManagedAgentFixture,
     request_id: &str,
     session_id: &str,
@@ -95,7 +95,7 @@ pub async fn enqueue_managed_accepted_request(
 }
 
 pub async fn enqueue_managed_accepted_request_until(
-    db: &super::TestDb,
+    db: &gents_store::test_support::TestStore,
     fixture: &super::ManagedAgentFixture,
     request_id: &str,
     session_id: &str,
@@ -162,14 +162,14 @@ impl AcceptedTurnRuntime {
 }
 
 pub async fn prepare_accepted_turn(
-    db: &super::TestDb,
+    db: &gents_store::test_support::TestStore,
     spec: AcceptedTurnSpec<'_>,
 ) -> PreparedAcceptedTurn {
     prepare_accepted_turn_as(db, db.node_identity.as_ref(), spec).await
 }
 
 pub async fn prepare_managed_accepted_turn(
-    db: &super::TestDb,
+    db: &gents_store::test_support::TestStore,
     fixture: &super::ManagedAgentFixture,
     mut spec: AcceptedTurnSpec<'_>,
 ) -> PreparedAcceptedTurn {
@@ -278,7 +278,7 @@ pub async fn prepare_managed_accepted_turn(
 }
 
 pub async fn prepare_accepted_turn_as(
-    db: &super::TestDb,
+    db: &gents_store::test_support::TestStore,
     identity: &dyn NodeIdentity,
     spec: AcceptedTurnSpec<'_>,
 ) -> PreparedAcceptedTurn {
@@ -286,7 +286,7 @@ pub async fn prepare_accepted_turn_as(
 }
 
 pub async fn prepare_accepted_turn_with_signer(
-    db: &super::TestDb,
+    db: &gents_store::test_support::TestStore,
     identity: &dyn NodeIdentity,
     signer: &dyn NodeIdentity,
     mut spec: AcceptedTurnSpec<'_>,
@@ -382,7 +382,7 @@ pub async fn prepare_accepted_turn_with_signer(
 }
 
 pub async fn boot_prepared_accepted_turn(
-    db: &super::TestDb,
+    db: &gents_store::test_support::TestStore,
     prepared: PreparedAcceptedTurn,
     agent: Gents,
 ) -> AcceptedTurnRuntime {
@@ -398,7 +398,7 @@ pub async fn boot_prepared_accepted_turn(
 }
 
 pub async fn boot_accepted_turn(
-    db: &super::TestDb,
+    db: &gents_store::test_support::TestStore,
     spec: AcceptedTurnSpec<'_>,
     runtime_options: DocumentRuntimeOptions,
 ) -> AcceptedTurnRuntime {
@@ -408,7 +408,7 @@ pub async fn boot_accepted_turn(
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
+            backend_admission: Some(db.backend_admission()),
             ..runtime_options
         },
     )
@@ -418,7 +418,7 @@ pub async fn boot_accepted_turn(
 }
 
 pub async fn boot_accepted_turn_with_backend_capacity(
-    db: &super::TestDb,
+    db: &gents_store::test_support::TestStore,
     spec: AcceptedTurnSpec<'_>,
     runtime_options: DocumentRuntimeOptions,
     max_concurrent: usize,
@@ -428,7 +428,7 @@ pub async fn boot_accepted_turn_with_backend_capacity(
 }
 
 pub async fn boot_managed_accepted_turn_with_backend_capacity(
-    db: &super::TestDb,
+    db: &gents_store::test_support::TestStore,
     fixture: &super::ManagedAgentFixture,
     spec: AcceptedTurnSpec<'_>,
     runtime_options: DocumentRuntimeOptions,
@@ -476,7 +476,7 @@ pub async fn boot_managed_accepted_turn_with_backend_capacity(
         db.node.clone(),
         db.node_identity.clone(),
         DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
+            backend_admission: Some(db.backend_admission()),
             ..runtime_options
         },
     )
@@ -486,7 +486,7 @@ pub async fn boot_managed_accepted_turn_with_backend_capacity(
 }
 
 pub async fn boot_accepted_turn_with_backend_capacity_and_dynamic_followups(
-    db: &super::TestDb,
+    db: &gents_store::test_support::TestStore,
     spec: AcceptedTurnSpec<'_>,
     runtime_options: DocumentRuntimeOptions,
     max_concurrent: usize,
@@ -503,7 +503,7 @@ pub async fn boot_accepted_turn_with_backend_capacity_and_dynamic_followups(
 }
 
 async fn boot_accepted_turn_with_backend_capacity_inner(
-    db: &super::TestDb,
+    db: &gents_store::test_support::TestStore,
     spec: AcceptedTurnSpec<'_>,
     runtime_options: DocumentRuntimeOptions,
     max_concurrent: usize,
@@ -558,7 +558,7 @@ async fn boot_accepted_turn_with_backend_capacity_inner(
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
+            backend_admission: Some(db.backend_admission()),
             ..runtime_options
         },
     )

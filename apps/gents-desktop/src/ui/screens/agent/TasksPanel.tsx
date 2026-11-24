@@ -73,7 +73,6 @@ export function TaskEditor({
     emitOutcome: task.emitOutcome ?? false,
     goalObjectiveTemplate: task.goalObjectiveTemplate ?? "",
     goalTokenBudget: str(task.goalTokenBudget),
-    goalBlockedAuditThreshold: str(task.goalBlockedAuditThreshold),
     goalMaxInfrastructureRetries: str(task.goalMaxInfrastructureRetries),
     outputSchemaRef: task.outputSchemaRef ?? "",
     hooks: (task.hooks ?? []).map(toHookDraft),
@@ -81,18 +80,12 @@ export function TaskEditor({
   };
   const budget = (n: typeof saved) =>
     optionalInteger("Goal token budget", n.goalTokenBudget, { min: 1 });
-  const auditThreshold = (n: typeof saved) =>
-    optionalInteger("Blocked audit threshold", n.goalBlockedAuditThreshold, { min: 1 });
   const retryLimit = (n: typeof saved) =>
     optionalInteger("Infrastructure retries", n.goalMaxInfrastructureRetries, {
       min: 0,
     });
   const goalLimitSet = (n: typeof saved) =>
-    !!(
-      n.goalTokenBudget.trim() ||
-      n.goalBlockedAuditThreshold.trim() ||
-      n.goalMaxInfrastructureRetries.trim()
-    );
+    !!(n.goalTokenBudget.trim() || n.goalMaxInfrastructureRetries.trim());
   const d = useDraft(
     saved,
     (n) => {
@@ -109,7 +102,6 @@ export function TaskEditor({
           emit_outcome: n.emitOutcome,
           goal_objective_template: n.goalObjectiveTemplate || null,
           goal_token_budget: budget(n),
-          goal_blocked_audit_threshold: auditThreshold(n),
           goal_max_infrastructure_retries: retryLimit(n),
           enabled: n.enabled,
           output_schema_ref: n.outputSchemaRef || null,
@@ -133,7 +125,6 @@ export function TaskEditor({
               ? "Goal limits need a goal objective"
               : undefined,
           goalTokenBudget: problemOf(() => budget(n)),
-          goalBlockedAuditThreshold: problemOf(() => auditThreshold(n)),
           goalMaxInfrastructureRetries: problemOf(() => retryLimit(n)),
           hooks: typeof hooks === "string" ? hooks : undefined,
         };
@@ -363,15 +354,6 @@ export function TaskEditor({
           placeholder="Optional"
         />
         <NumberRow
-          id={id("audits")}
-          label="Blocked audit threshold"
-          description="Optional positive whole number of consecutive same-condition blocked audits that block the goal; blank uses 3. Needs an objective."
-          value={d.draft.goalBlockedAuditThreshold}
-          error={d.problems.goalBlockedAuditThreshold}
-          onChange={(v) => d.set("goalBlockedAuditThreshold", v)}
-          placeholder="3"
-        />
-        <NumberRow
           id={id("retries")}
           label="Infrastructure retries"
           description="Optional whole number of automatic retries after a failed request before the goal pauses; blank uses 2. Needs an objective."
@@ -416,7 +398,6 @@ export function TaskEditor({
           promptTemplate: id("prompt"),
           goalObjectiveTemplate: id("goal"),
           goalTokenBudget: id("budget"),
-          goalBlockedAuditThreshold: id("audits"),
           goalMaxInfrastructureRetries: id("retries"),
           hooks: `${id("hooks")}-0-id`,
         }}
@@ -788,7 +769,6 @@ export function taskDocument(deployment: NodeView, t: TaskView) {
     emit_outcome: t.emitOutcome,
     goal_objective_template: t.goalObjectiveTemplate,
     goal_token_budget: t.goalTokenBudget,
-    goal_blocked_audit_threshold: t.goalBlockedAuditThreshold,
     goal_max_infrastructure_retries: t.goalMaxInfrastructureRetries,
     hooks: t.hooks.length ? t.hooks : null,
     enabled: t.enabled ?? true,

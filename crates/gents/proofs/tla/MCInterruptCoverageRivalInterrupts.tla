@@ -1,0 +1,4 @@
+---- MODULE MCInterruptCoverageRivalInterrupts ----
+EXTENDS InterruptCoverage
+
+====

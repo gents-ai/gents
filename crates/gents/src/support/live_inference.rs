@@ -16,9 +16,9 @@ use serde::Deserialize;
 
 use crate::support::agent_requests::RequestActors;
 use crate::support::interrupt::BootedAgent;
-use crate::support::TestDb;
 use gents_store::test_support::rows_when;
 use gents_store::test_support::snapshot_reader::SnapshotReader;
+use gents_store::test_support::TestStore;
 
 #[path = "inference_target.rs"]
 pub mod inference_target;
@@ -52,7 +52,7 @@ pub async fn live_target() -> InferenceTarget {
 /// (`GrantSet::HouseholdOwner`), and it configures the Node, the managed Agent
 /// and the Agent's inference documents. Requests and reads go through the
 /// returned actors.
-pub async fn bind_target(db: &TestDb, target: &InferenceTarget) -> RequestActors {
+pub async fn bind_target(db: &TestStore, target: &InferenceTarget) -> RequestActors {
     let fixture = crate::support::managed_agent_fixture(db).await;
     crate::support::grant_household_owner(db, &fixture.user).await;
     let node_did = db.node_identity.did().to_owned();
@@ -126,12 +126,15 @@ pub async fn bind_target(db: &TestDb, target: &InferenceTarget) -> RequestActors
     RequestActors::from_fixture(db, fixture).await
 }
 
-pub async fn boot_live_agent(db: &TestDb, identity: Arc<dyn NodeIdentity>) -> Result<BootedAgent> {
+pub async fn boot_live_agent(
+    db: &TestStore,
+    identity: Arc<dyn NodeIdentity>,
+) -> Result<BootedAgent> {
     boot_live_agent_with_ceiling(db, identity, ToolCeiling::meta_only()).await
 }
 
 pub async fn boot_live_agent_with_ceiling(
-    db: &TestDb,
+    db: &TestStore,
     identity: Arc<dyn NodeIdentity>,
     tool_ceiling: ToolCeiling,
 ) -> Result<BootedAgent> {
@@ -148,12 +151,11 @@ pub async fn boot_live_agent_with_ceiling(
 }
 
 pub async fn boot_live_agent_with_options(
-    db: &TestDb,
+    db: &TestStore,
     identity: Arc<dyn NodeIdentity>,
     options: DocumentRuntimeOptions,
 ) -> Result<(BootedAgent, Gents)> {
-    let (running, agent) =
-        gents::runtime::embedded::boot_runtime(&db.home, identity, options).await?;
+    let (running, agent) = gents::runtime::embedded::boot_runtime(db, identity, options).await?;
     Ok((
         BootedAgent::new(running.shutdown, running.handle, running.node_did),
         agent,
@@ -372,7 +374,7 @@ pub struct LiveAgentSpec<'a> {
 impl LiveUser {
     /// Makes the node's fixture User its household owner, then writes the
     /// Node document and the target's backend as that User.
-    pub async fn install(db: &TestDb, target: &InferenceTarget) -> Self {
+    pub async fn install(db: &TestStore, target: &InferenceTarget) -> Self {
         let user = crate::support::managed_fixture_user(db).await;
         crate::support::grant_household_owner(db, &user).await;
         let access = db.client_access(&user);

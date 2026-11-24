@@ -8,7 +8,8 @@ use crate::support::interrupt::BootedAgent;
 use crate::support::live_inference::{
     bind_target, boot_live_agent, live_target, wait_for_request_terminal,
 };
-use crate::support::{test_p2p_db_with_admission, TestDb};
+use crate::support::test_p2p_db_with_admission;
+use gents_store::test_support::TestStore;
 
 const CONCURRENT_WAVES: usize = 4;
 
@@ -59,15 +60,15 @@ async fn connect_discovery_peer(owner: &EmbeddedNode, peer: &EmbeddedNode) {
 
 struct LiveTopologyGuard {
     agent: Option<BootedAgent>,
-    owner: Option<TestDb>,
-    peer_a: Option<TestDb>,
-    peer_b: Option<TestDb>,
+    owner: Option<TestStore>,
+    peer_a: Option<TestStore>,
+    peer_b: Option<TestStore>,
     shut_down: bool,
     runtime: gents_store::drop_cleanup::DropCleanup,
 }
 
 impl LiveTopologyGuard {
-    fn new(owner: TestDb, peer_a: TestDb, peer_b: TestDb) -> Self {
+    fn new(owner: TestStore, peer_a: TestStore, peer_b: TestStore) -> Self {
         Self {
             agent: None,
             owner: Some(owner),
@@ -82,15 +83,15 @@ impl LiveTopologyGuard {
         self.agent = Some(agent);
     }
 
-    fn owner(&self) -> &TestDb {
+    fn owner(&self) -> &TestStore {
         self.owner.as_ref().expect("owner still held")
     }
 
-    fn peer_a(&self) -> &TestDb {
+    fn peer_a(&self) -> &TestStore {
         self.peer_a.as_ref().expect("peer_a still held")
     }
 
-    fn peer_b(&self) -> &TestDb {
+    fn peer_b(&self) -> &TestStore {
         self.peer_b.as_ref().expect("peer_b still held")
     }
 

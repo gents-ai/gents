@@ -8,6 +8,7 @@ import type {
 
 import { useAccounts } from "../src/ui/hooks/useProviders";
 import { publishSnapshot, testApp, withApp } from "./app-fixture";
+import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 
 const account = (credentialId: string) => ({ credentialId }) as ProviderAccountView;
 
@@ -33,22 +34,37 @@ describe("provider accounts held once for every panel", () => {
     expect(second.result.current.accounts).toHaveLength(2);
   });
 
-  it("reads an agent's accounts once when the client changes, however many panels show them", async () => {
+  it("reads an agent's accounts once when its account backends change, however many panels show them", async () => {
     const listProviderAccounts = vi.fn().mockResolvedValue([account("a")]);
     const { app, second } = twoPanels(listProviderAccounts);
     await waitFor(() => expect(second.result.current.accounts).toHaveLength(1));
     const before = listProviderAccounts.mock.calls.length;
+    const withBackend = (name: string) =>
+      ({
+        bootstrap,
+        client: {
+          deployments: [
+            {
+              ...deployment,
+              nodeDid: "did:key:agent",
+              inferenceBackends: [
+                { ...deployment.inferenceBackends[0]!, backendId: "claude", name },
+              ],
+            },
+          ],
+        },
+      }) as unknown as DesktopClientSnapshot;
 
-    act(() =>
-      publishSnapshot(app, {
-        bootstrap: { changed: true },
-        client: null,
-      } as unknown as DesktopClientSnapshot),
-    );
-
+    act(() => publishSnapshot(app, withBackend("Claude")));
     await waitFor(() =>
       expect(listProviderAccounts.mock.calls.length).toBe(before + 1),
     );
+    await act(async () => {});
+    expect(listProviderAccounts.mock.calls.length).toBe(before + 1);
+
+    /* a snapshot that leaves the account backends as they were (a heartbeat,
+       a probe) lists nothing again */
+    act(() => publishSnapshot(app, withBackend("Claude")));
     await act(async () => {});
     expect(listProviderAccounts.mock.calls.length).toBe(before + 1);
   });

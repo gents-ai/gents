@@ -173,7 +173,6 @@ async fn stage_goal_backed_request(
             start: GoalStart { objective, ..start },
             initial_state: GoalState {
                 status: GoalStatus::Active,
-                blocked_audits: 0,
                 wrapup_requested: false,
                 wrapup_completed: false,
             },

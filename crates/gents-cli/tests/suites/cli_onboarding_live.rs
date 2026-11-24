@@ -22,8 +22,11 @@ mod no_model {
 
     /// A home whose backend is down publishes no runnable agent, so `--agent` needs
     /// one that answers. It runs no turn here and needs no model server.
-    fn answering_backend() -> Result<MockChatEndpoint> {
-        MockChatEndpoint::start(NO_MODEL_NAME, "unused")
+    fn answering_backend(
+    ) -> Result<gents_inference::test_support::scripted_backend::ScriptedBackend> {
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(NO_MODEL_NAME)
+            .replies("unused")
+            .start()
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -305,7 +308,10 @@ mod no_model {
     }
 
     /// Answers setup against the answering backend, then quits the shell it opens.
-    async fn set_up_and_quit(terminal: &mut Terminal, backend: &MockChatEndpoint) -> Result<()> {
+    async fn set_up_and_quit(
+        terminal: &mut Terminal,
+        backend: &gents_inference::test_support::scripted_backend::ScriptedBackend,
+    ) -> Result<()> {
         terminal
             .answer_scanned_inference(backend.endpoint(), NO_MODEL_NAME)
             .await?;
@@ -350,7 +356,7 @@ mod no_model {
     /// changes nothing, and starting over sets it aside and sets it up again.
     async fn is_set_aside_and_set_up_again(
         live: &LiveBox,
-        backend: &MockChatEndpoint,
+        backend: &gents_inference::test_support::scripted_backend::ScriptedBackend,
         home: &Path,
         why: &str,
     ) -> Result<()> {
@@ -498,7 +504,7 @@ mod no_model {
     /// refusal that names `repoint` instead of moving the service.
     async fn set_up_and_refused(
         terminal: &mut Terminal,
-        backend: &MockChatEndpoint,
+        backend: &gents_inference::test_support::scripted_backend::ScriptedBackend,
         home: &Path,
         serving: &Path,
     ) -> Result<()> {
@@ -643,7 +649,7 @@ mod no_model {
     /// A default folder that is set up and running, and a second folder that cannot load.
     async fn default_running_and_another_broken(
         live: &LiveBox,
-        backend: &MockChatEndpoint,
+        backend: &gents_inference::test_support::scripted_backend::ScriptedBackend,
     ) -> Result<(InitializedHome, PathBuf, u32)> {
         let default = live.init_home(".gents", backend.endpoint(), NO_MODEL_NAME)?;
         live.bring_up(&default.home).await?;

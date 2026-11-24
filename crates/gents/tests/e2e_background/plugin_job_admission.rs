@@ -16,10 +16,11 @@ use super::plugin_job_support::{
 use crate::support::accepted_turn::{
     boot_managed_accepted_turn_with_backend_capacity, AcceptedTurnSpec,
 };
-use crate::support::{test_db, TestDb};
+use crate::support::trial_store;
 use gents_inference::test_support::scripted_backend::{
     StreamChunk, StreamPlan, StreamResponse, StreamScript,
 };
+use gents_store::test_support::TestStore;
 use gents_store::test_support::STALL_CEILING;
 
 const CAPACITY_EXCEEDED: &str = "background_tool_budget_exceeded";
@@ -61,7 +62,7 @@ fn held_child(prompt: &str) -> StreamPlan {
 /// Boots the fixture job on a request working folder of `cwd`, with room for
 /// `capacity` simultaneous provider turns.
 async fn boot(
-    db: TestDb,
+    db: TestStore,
     session_id: &str,
     cwd: &Path,
     tool_ceiling: ToolCeiling,
@@ -228,8 +229,8 @@ async fn nine_concurrent_adoptions_on_one_request_leave_exactly_eight() {
         .zip(&prompts)
         .map(|(id, prompt)| job_call(id, &plan(&format!("{id}-handle"), spawn("a", prompt))))
         .collect();
-    let db = test_db("plugin-job-cap").await;
-    let cwd = db.data_path().join("job_cwd");
+    let db = trial_store("plugin-job-cap").await;
+    let cwd = db.path().join("job_cwd");
     std::fs::create_dir_all(&cwd).expect("create the job working folder");
     let cwd = cwd.canonicalize().expect("resolve the job working folder");
     let (h, _home) = boot(

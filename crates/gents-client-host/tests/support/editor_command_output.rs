@@ -1,5 +1,5 @@
-use super::{fake_llm, ChatAction};
 use anyhow::{ensure, Context, Result};
+use gents_inference::test_support::scripted_backend::StreamResponse;
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string as escape;
 use serde_json::{json, Value};
@@ -8,7 +8,7 @@ pub const ACTIVITY_PROMPT: &str = "Run the command-output activity profile.";
 pub const ACTIVITY_REPLY: &str = "The twelve command-output fixtures completed.";
 const ACTIVITY_COMMANDS: usize = 12;
 
-pub fn reply(request: &Value) -> Option<ChatAction> {
+pub fn reply(request: &Value) -> Option<StreamResponse> {
     let messages = request["messages"].as_array()?;
     let has_user = |expected: &str| {
         messages.iter().any(|message| {
@@ -43,17 +43,15 @@ pub fn reply(request: &Value) -> Option<ChatAction> {
                     ""
                 };
                 let script = format!("{begin}i=0; while [ \"$i\" -lt 8 ]; do printf 'ACTIVITY-{index}:%s:%s\\n' \"$i\" '{payload}'; sleep 0.1; i=$((i+1)); done{end}");
-                return Some(ChatAction::Sse(fake_llm::tool_call_sse_with_id(
-                    &call,
+                return Some(StreamResponse::tool_call(
+                    call,
                     "bash_unrestricted",
-                    &json!({"command":"/bin/sh", "args":["-c", script], "timeout_secs":60})
+                    json!({"command":"/bin/sh", "args":["-c", script], "timeout_secs":60})
                         .to_string(),
-                )));
+                ));
             }
         }
-        return Some(ChatAction::Sse(fake_llm::completion_text_sse(
-            ACTIVITY_REPLY,
-        )));
+        return Some(StreamResponse::text(ACTIVITY_REPLY));
     }
     None
 }

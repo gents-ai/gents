@@ -232,7 +232,7 @@ pub enum GoalOperationError {
     FirstRequestMismatch,
     #[error("reason is only accepted with status complete or blocked")]
     ReasonNotAccepted,
-    #[error("blocked requires a non-empty reason identifying the repeated condition")]
+    #[error("blocked requires a non-empty reason saying what you need from the user")]
     ReasonRequired,
     #[error("{target} is not legal from the goal's current status {status}")]
     IllegalTransition {
@@ -248,13 +248,16 @@ pub enum GoalOperationError {
 pub fn resume_path(status: GoalStatus) -> &'static str {
     match status {
         GoalStatus::Active => "it is already active",
-        GoalStatus::Blocked | GoalStatus::Paused | GoalStatus::UsageLimited => {
+        GoalStatus::Blocked => {
+            "it is waiting for its user: send a message in the session to answer it, or resume it with `gents automation goal resume-request --session SESSION --from REQUEST_ID` (REQUEST_ID is the terminal latest predecessor request)"
+        }
+        GoalStatus::Paused | GoalStatus::UsageLimited => {
             "an operator resumes it with `gents automation goal resume-request --session SESSION --from REQUEST_ID` (REQUEST_ID is the terminal latest predecessor request)"
         }
         GoalStatus::Complete => "a complete goal is terminal and has no resume path",
         GoalStatus::Stopped => "the goal was removed by its operator and cannot be resumed",
         GoalStatus::BudgetLimited => {
-            "a budget_limited goal cannot be reactivated and has no resume path"
+            "it reached its token budget: raise it with `gents automation goal set --session SESSION --token-budget N` or lift it with `--clear-token-budget`, then resume it with `gents automation goal resume-request --session SESSION --from REQUEST_ID`"
         }
     }
 }

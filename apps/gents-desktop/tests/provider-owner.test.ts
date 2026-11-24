@@ -16,13 +16,32 @@ function later<T>() {
 
 function owner(api: object) {
   const store = createProviderStore();
+  const client = createClientStore();
   const providers = createProviders({
     api: api as never,
     store,
-    client: createClientStore(),
+    client,
   });
-  return { providers, store };
+  return { providers, store, client };
 }
+
+/* a client snapshot holding AGENT's node with these account backends */
+const snapshotWith = (backends: { backendId: string; accountRef: string | null }[]) =>
+  ({
+    client: {
+      deployments: [
+        {
+          nodeDid: AGENT,
+          inferenceBackends: backends.map((backend) => ({
+            ...backend,
+            authKind: "oauth",
+            enabled: true,
+            name: backend.backendId,
+          })),
+        },
+      ],
+    },
+  }) as never;
 
 describe("the providers' owner", () => {
   it("signs in through the provider's login, hears its URL while it runs, and shows the new account", async () => {
@@ -102,5 +121,34 @@ describe("the providers' owner", () => {
     api.listProviderAccounts.mockResolvedValueOnce([]);
     await providers.loadProviderAccounts(AGENT);
     expect(store.getState().accounts[AGENT]).toEqual([]);
+  });
+
+  it("re-lists a watched node's accounts when its account backends change, not on every snapshot", async () => {
+    const api = { listProviderAccounts: vi.fn().mockResolvedValue([account("c1")]) };
+    const { providers, client } = owner(api);
+    client.setState({
+      snapshot: snapshotWith([{ backendId: "b1", accountRef: "c1" }]),
+    });
+    const unwatch = providers.watchProviderAccounts(AGENT);
+    expect(api.listProviderAccounts).toHaveBeenCalledTimes(1);
+
+    /* a heartbeat or a probe: a new snapshot, the same account backends */
+    client.setState({
+      snapshot: snapshotWith([{ backendId: "b1", accountRef: "c1" }]),
+    });
+    expect(api.listProviderAccounts).toHaveBeenCalledTimes(1);
+
+    /* an account added: its backend appears */
+    client.setState({
+      snapshot: snapshotWith([
+        { backendId: "b1", accountRef: "c1" },
+        { backendId: "b2", accountRef: "c2" },
+      ]),
+    });
+    expect(api.listProviderAccounts).toHaveBeenCalledTimes(2);
+
+    unwatch();
+    client.setState({ snapshot: snapshotWith([]) });
+    expect(api.listProviderAccounts).toHaveBeenCalledTimes(2);
   });
 });

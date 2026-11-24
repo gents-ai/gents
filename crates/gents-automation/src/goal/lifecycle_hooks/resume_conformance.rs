@@ -38,7 +38,6 @@ fn goal_row(node: &str, agent: &str, goal: &wire::Goal<String>) -> Row {
             "continuation_sequence": 0,
             "tokens_used": 0,
             "active_time_seconds": 0,
-            "consecutive_blocked_audits": 0,
             "wrapup_requested": false,
             "wrapup_completed": false,
             "created_at": "2026-11-11T00:00:00Z",

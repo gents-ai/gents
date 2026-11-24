@@ -257,3 +257,190 @@ async fn agent_tool_call_carries_only_generic_background_fields() {
         );
     }
 }
+
+/// Runs a builder-rendered document on `node`, failing on the store's errors.
+async fn run_rendered(
+    node: &EmbeddedNode,
+    rendered: gents_protocol::document_query::Rendered,
+) -> Result<QueryResponse> {
+    let response = node
+        .execute_request(QueryRequest::new(rendered.document).with_variables(rendered.variables))
+        .await;
+    ensure!(!response.has_errors(), "{:?}", response.errors);
+    Ok(response)
+}
+
+/// The `_docID`s a builder-rendered read of `ids` returns from `node`, or the
+/// store's errors. The read must reach the store as the `docID` argument.
+async fn read_doc_ids(node: &EmbeddedNode, ids: &[&str]) -> Result<Vec<String>, String> {
+    read_doc_ids_as(node, None, ids).await
+}
+
+/// [`read_doc_ids`] as the identity `context` names, or as no one.
+async fn read_doc_ids_as(
+    node: &EmbeddedNode,
+    context: Option<&defra_core::RequestContext>,
+    ids: &[&str],
+) -> Result<Vec<String>, String> {
+    use gents_protocol::document_query::{Filter, Query, Selection};
+    use gents_schemas::fields::agent_request as request;
+    let rendered = Query::select(Selection::doc_id())
+        .filter(Filter::any_of(request::DOC_ID, ids.iter().copied()))
+        .render();
+    assert!(
+        rendered.document.contains("(docID: $v0)"),
+        "the set is read as the docID argument alone: {}",
+        rendered.document
+    );
+    let request = QueryRequest::new(rendered.document).with_variables(rendered.variables);
+    let response = match context {
+        Some(context) => node
+            .execute_request_as(context, request)
+            .await
+            .map_err(|error| error.to_string())?,
+        None => node.execute_request(request).await,
+    };
+    rows_or_errors(response)
+}
+
+/// The `_docID`s of a read's `AgentRequest` rows, or its errors.
+fn rows_or_errors(response: QueryResponse) -> Result<Vec<String>, String> {
+    if response.has_errors() {
+        return Err(format!("{:?}", response.errors));
+    }
+    let data = response.data.unwrap_or_default();
+    Ok(data["AgentRequest"]
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| row["_docID"].as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
+/// Premise for reading a set of document ids as the `docID` list argument,
+/// which `gents_protocol::document_query` renders for a top-level `_docID`
+/// set: a deleted id, a well-formed id that never existed, a malformed id and
+/// a document the reader may not read are absent, as they were under
+/// `_docID: {_in: [...]}`, and the read does not fail.
+#[tokio::test]
+async fn a_doc_id_list_reads_only_the_live_documents_it_names() -> Result<()> {
+    use gents_protocol::document_query::{Create, Delete, Input};
+    use gents_schemas::fields::agent_request as request;
+    let node = Arc::new(crate::test_support::node_builder().build().await?);
+    ensure_runtime_schemas(&node).await?;
+    let mut ids = Vec::new();
+    for request_id in ["live", "deleted"] {
+        let created = run_rendered(
+            &node,
+            Create::new(
+                Input::new()
+                    .set(request::NODE_DID, "did:test:node")
+                    .set(request::REQUEST_ID, request_id),
+            )
+            .render(),
+        )
+        .await?;
+        let row = crate::graphql::single_mutation_document(&created, "create_AgentRequest")?
+            .context("create omitted its row")?;
+        ids.push(
+            row["_docID"]
+                .as_str()
+                .context("create omitted _docID")?
+                .to_owned(),
+        );
+    }
+    let (live, deleted) = (ids[0].as_str(), ids[1].as_str());
+    run_rendered(&node, Delete::<request::Doc>::doc(deleted).render()).await?;
+    let never = "bae-c94acbfa-dd53-40d0-97f3-29ce16c333fc";
+
+    assert_eq!(
+        read_doc_ids(&node, &[live, deleted, never]).await,
+        Ok(vec![live.to_owned()])
+    );
+
+    /* a malformed id, which a caller could pass on, is not an error either:
+    it names no document, under the argument as under the old filter */
+    assert_eq!(
+        read_doc_ids(&node, &[live, "not-a-doc-id"]).await,
+        Ok(vec![live.to_owned()])
+    );
+    let old_filter = node
+        .execute_request(
+            QueryRequest::new(
+                "query($ids: [String!]) { AgentRequest(filter: {_docID: {_in: $ids}}) { _docID } }",
+            )
+            .with_variables(serde_json::json!({ "ids": [live, "not-a-doc-id"] })),
+        )
+        .await;
+    ensure!(
+        !old_filter.has_errors(),
+        "old filter: {:?}",
+        old_filter.errors
+    );
+    assert_eq!(
+        old_filter.data.context("old filter omitted data")?["AgentRequest"],
+        serde_json::json!([{ "_docID": live }])
+    );
+
+    /* a document the reader may not read is left out, not an error, under
+    the argument as under the old filter: one such id in the list never
+    fails the read of the others. Each actor here reads only what it
+    created. */
+    use crate::identity::NodeIdentity as _;
+    let as_actor = |name: &str| {
+        defra_core::RequestContext::default().with_identity(Some(
+            crate::test_support::test_identity(name).did().to_owned(),
+        ))
+    };
+    let (owner, reader) = (as_actor("owner"), as_actor("reader"));
+    let mut created = Vec::new();
+    for (actor, request_id) in [(&owner, "owned"), (&reader, "readable")] {
+        let rendered = Create::new(
+            Input::new()
+                .set(request::NODE_DID, "did:test:node")
+                .set(request::REQUEST_ID, request_id),
+        )
+        .render();
+        let response = node
+            .execute_request_as(
+                actor,
+                QueryRequest::new(rendered.document).with_variables(rendered.variables),
+            )
+            .await?;
+        ensure!(!response.has_errors(), "{:?}", response.errors);
+        created.push(
+            crate::graphql::single_mutation_document(&response, "create_AgentRequest")?
+                .context("create omitted its row")?["_docID"]
+                .as_str()
+                .context("create omitted _docID")?
+                .to_owned(),
+        );
+    }
+    let (owned, readable) = (created[0].as_str(), created[1].as_str());
+    assert_eq!(
+        read_doc_ids_as(&node, Some(&reader), &[readable, owned, live]).await,
+        Ok(vec![readable.to_owned()])
+    );
+    assert_eq!(
+        read_doc_ids_as(&node, Some(&owner), &[readable, owned]).await,
+        Ok(vec![owned.to_owned()]),
+        "the owner reads its own"
+    );
+    assert_eq!(
+        rows_or_errors(
+            node.execute_request_as(
+                &reader,
+                QueryRequest::new(
+                    "query($ids: [String!]) { AgentRequest(filter: {_docID: {_in: $ids}}) { _docID } }",
+                )
+                .with_variables(serde_json::json!({ "ids": [readable, owned, live] })),
+            )
+            .await?
+        ),
+        Ok(vec![readable.to_owned()]),
+        "the old filter"
+    );
+    Ok(())
+}

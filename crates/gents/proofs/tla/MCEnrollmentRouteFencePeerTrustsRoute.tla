@@ -1,0 +1,4 @@
+---- MODULE MCEnrollmentRouteFencePeerTrustsRoute ----
+EXTENDS EnrollmentRouteFence
+
+====

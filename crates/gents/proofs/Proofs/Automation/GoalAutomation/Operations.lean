@@ -109,9 +109,8 @@ theorem a_live_goal_is_never_replaced (actor : Actor) (session : Session) (expec
       startDecision actor session .live expected claim ≠ .fresh := by
   cases actor <;> cases session <;> cases expected <;> cases claim <;> simp [startDecision]
 
-/-- The status a set asks for. `block` from a person is an operator block;
-from the working Agent it is a blocked audit, which blocks only after
-`Goals.step?` counts enough of them. `usageLimited` and `budgetLimited` name
+/-- The status a set asks for. `block` is one blocked report, from a person or
+the working Agent alike: it pauses the Goal awaiting its user. `usageLimited` and `budgetLimited` name
 statuses a set may ask for only to be refused: the runtime alone reaches them,
 when a limit is hit. -/
 inductive Target where
@@ -133,8 +132,9 @@ inductive FieldChange where
   | clearBudget
   deriving DecidableEq, Repr
 
-/-- The set's `reason`: completion evidence with `complete`, the repeated
-condition with the working Agent's `block`. Blank is present but empty after
+/-- The set's `reason`: completion evidence with `complete`, what the working
+Agent needs from its user with its `block`. Only its presence is decided on;
+its text is shown to the user and never read by a decision. Blank is present but empty after
 trimming. -/
 inductive Reason where
   | absent
@@ -164,7 +164,7 @@ inductive SetDecision where
   | resumeRequired
   /-- `Goals.step?` admits no such transition from the Goal's status. -/
   | illegal
-  /-- The working Agent's block names the repeated condition. -/
+  /-- The working Agent's block says what it needs. -/
   | reasonRequired
   /-- The working Agent completes only once its output obligations are met. -/
   | obligationsUnmet
@@ -193,20 +193,20 @@ def takesReason : Target → Bool
   | .complete | .block => true
   | _ => false
 
-/-- The transition a target asks `Goals.step?` for. A person's block is an
-operator block; the working Agent's is an audit of a condition. -/
-def action (actor : Actor) : Target → Option Goals.Action
+/-- The transition a target asks `Goals.step?` for. A block is the same
+transition whoever reports it. -/
+def action (_actor : Actor) : Target → Option Goals.Action
   | .keep | .activate => none
   | .pause => some .pause
   | .stop => some .stop
   | .complete => some .complete
-  | .block => some (if actor = .person then .operatorBlock else .blockedAudit .newCondition)
+  | .block => some .block
   | .usageLimited => some .usageLimit
   | .budgetLimited => some .budgetExhausted
 
 /-- The Goal as a set observes it: legality of every transition a set may
 apply depends on its status alone. -/
-def observed (status : Goals.Status) : Goals.State := ⟨status, 0, false, false⟩
+def observed (status : Goals.Status) : Goals.State := ⟨status, false, false⟩
 
 def legal (actor : Actor) (status : Goals.Status) (target : Target) : Bool :=
   (action actor target).all fun step => (Goals.step? (observed status) step).isSome
@@ -307,7 +307,13 @@ theorem budget_limited_goal_is_only_completed_by_its_agent (target : Target)
     simp_all [setDecision, agentTarget, changesStatus, origin, Edit.editable, runtimeTarget,
       takesReason, legal, action, observed, Goals.step?]
 
-theorem agent_block_is_an_audit_of_a_named_condition (status : Goals.Status)
+/-- The working Agent's one blocked report applies on an active Goal and says
+what it needs; the transition it asks for is the same whatever the reason's
+text, so rewording a reason changes nothing. -/
+theorem agent_block_transition_ignores_reason_text :
+    action .workingAgent .block = some .block := rfl
+
+theorem agent_block_needs_an_active_goal_and_a_reason (status : Goals.Status)
     (fields : FieldChange) (reason : Reason) (autoResume obligationsMet : Bool)
     (h : setDecision .workingAgent status .block fields reason autoResume obligationsMet =
       .apply) :

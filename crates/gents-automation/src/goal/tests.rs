@@ -591,7 +591,6 @@ async fn goal_and_claim_publication_links_match_lean() {
                             },
                             initial_state: GoalState {
                                 status: GoalStatus::Active,
-                                blocked_audits: 0,
                                 wrapup_requested: false,
                                 wrapup_completed: false,
                             },

@@ -30,15 +30,46 @@ export function shouldAutoStartDesktopClient(
   );
 }
 
+/** Lean `ClientSnapshotObservation.observeStartup`. */
 export function projectStartupPhaseAfterSnapshot(
   phase: DesktopStartupPhase,
   running: boolean,
   autostartDeclined: boolean,
 ): DesktopStartupPhase {
-  if (phase === "loading-configuration" || phase === "starting-client") {
+  if (
+    phase === "loading-configuration" ||
+    phase === "starting-client" ||
+    phase === "configuration-error"
+  ) {
     return running || autostartDeclined ? "ready" : "starting-client";
   }
   return phase === "client-error" && running ? "ready" : phase;
+}
+
+export type SettingsAnswer = "succeeded" | "failed";
+
+/** Lean `ClientSnapshotObservation.settingsAnswered`. */
+export function projectStartupPhaseAfterSettingsAnswer(
+  phase: DesktopStartupPhase,
+  current: boolean,
+  answer: SettingsAnswer,
+  running: boolean,
+  autostartDeclined: boolean,
+): DesktopStartupPhase {
+  if (!current) return phase;
+  if (answer === "succeeded")
+    return projectStartupPhaseAfterSnapshot(phase, running, autostartDeclined);
+  if (phase === "loading-configuration") return "configuration-error";
+  if (phase === "starting-client") return "client-error";
+  return phase;
+}
+
+/** Lean `ClientSnapshotObservation.settingsReadTimedOut`. */
+export function projectStartupPhaseAfterSettingsTimeout(
+  phase: DesktopStartupPhase,
+  current: boolean,
+): DesktopStartupPhase {
+  return current && phase === "loading-configuration" ? "configuration-error" : phase;
 }
 
 export type LoadingStepState = "active" | "complete" | "pending" | "error";

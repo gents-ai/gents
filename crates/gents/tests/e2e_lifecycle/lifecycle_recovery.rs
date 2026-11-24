@@ -15,7 +15,7 @@ use crate::support::fixtures::bind_managed_agent_backend;
 use crate::support::fixtures::configure_agent_tools;
 use crate::support::{
     accepted_turn::{boot_prepared_accepted_turn, PreparedAcceptedTurn},
-    first_row, test_db, BACKEND_ID,
+    first_row, trial_store, BACKEND_ID,
 };
 use gents_inference::test_support::scripted_backend::{
     ScriptedBackend, StreamChunk, StreamPlan, StreamResponse,
@@ -25,7 +25,7 @@ use gents_store::test_support::rows_when;
 type StatusRow = AgentRequestRow;
 
 async fn grant_recovery_agent(
-    db: &crate::support::TestDb,
+    db: &gents_store::test_support::TestStore,
     collection: &str,
     doc_id: &str,
     agent_did: &str,
@@ -42,7 +42,9 @@ async fn grant_recovery_agent(
         .expect("grant recovery fixture to selected Agent");
 }
 
-fn runtime_access(db: &crate::support::TestDb) -> gents_store::config_client::ConfigAccess {
+fn runtime_access(
+    db: &gents_store::test_support::TestStore,
+) -> gents_store::config_client::ConfigAccess {
     gents_store::config_client::ConfigAccess::local_as(
         db.node.clone(),
         identity::Did::new(db.node_identity.did()).unwrap(),
@@ -50,7 +52,7 @@ fn runtime_access(db: &crate::support::TestDb) -> gents_store::config_client::Co
 }
 
 async fn create_recovery_session(
-    db: &crate::support::TestDb,
+    db: &gents_store::test_support::TestStore,
     agent_identity: &Arc<dyn gents_store::identity::NodeIdentity>,
     session_id: &str,
     created_at: &str,
@@ -80,7 +82,7 @@ async fn create_recovery_session(
 }
 
 async fn create_recovery_request(
-    db: &crate::support::TestDb,
+    db: &gents_store::test_support::TestStore,
     agent_identity: &Arc<dyn gents_store::identity::NodeIdentity>,
     request_id: &str,
     session_id: &str,
@@ -119,7 +121,7 @@ async fn create_recovery_request(
 }
 
 fn read_only_bash_tools(
-    db: &crate::support::TestDb,
+    db: &gents_store::test_support::TestStore,
     agent_did: &str,
     tools: &str,
     command: &str,
@@ -143,13 +145,13 @@ fn read_only_bash_tools(
 
 /// The Node's runtime built from its documents, with the read-only ceiling
 /// the recovery tools need.
-async fn recovery_runtime(db: &crate::support::TestDb) -> gents::Gents {
+async fn recovery_runtime(db: &gents_store::test_support::TestStore) -> gents::Gents {
     let identity: Arc<dyn gents_store::identity::NodeIdentity> = db.node_identity.clone();
     gents::Gents::from_default_agent_documents(
         db.node.clone(),
         identity,
         gents::DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
+            backend_admission: Some(db.backend_admission()),
             tool_ceiling: gents_tools::surface::ToolCeiling::readonly(),
             ..Default::default()
         },
@@ -225,7 +227,7 @@ async fn seed_failed_wake(
 
 #[tokio::test]
 async fn failed_background_wake_behind_a_newer_interactive_head_is_ineligible() {
-    let db = test_db("lifecycle-background-wake-newer-head").await;
+    let db = trial_store("lifecycle-background-wake-newer-head").await;
     let actors = RequestActors::new(&db).await;
     let session_id = "wake-redrive-session";
     seed_failed_wake(
@@ -266,7 +268,7 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
             .with_max_level(tracing::Level::WARN)
             .finish(),
     );
-    let db = test_db("lifecycle-background-wake-redrive").await;
+    let db = trial_store("lifecycle-background-wake-redrive").await;
     let actors = RequestActors::new(&db).await;
     let agent_identity = actors.agent().clone();
     let agent_did = agent_identity.did();
@@ -360,7 +362,7 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
 async fn failed_background_wake_sweep_follows_the_lean_redrive_model() {
     use gents_lean_vocab::families::wake_redrive_sweep_sweep;
     for case in gents_lean_vocab::families::wake_redrive_sweep_sweep::cases::<String>() {
-        let db = test_db("lifecycle-background-wake-isolated-backoff").await;
+        let db = trial_store("lifecycle-background-wake-isolated-backoff").await;
         let actors = RequestActors::new(&db).await;
         let agent_identity = actors.agent().clone();
         let access = &actors.agent_access;
@@ -446,7 +448,7 @@ async fn failed_background_wake_sweep_follows_the_lean_redrive_model() {
 /// changes when its session link is published (`AgentMessage`).
 #[tokio::test]
 async fn failed_background_wake_waits_for_persisted_backoff() {
-    let db = test_db("lifecycle-background-wake-backoff").await;
+    let db = trial_store("lifecycle-background-wake-backoff").await;
     let actors = RequestActors::new(&db).await;
     let agent_identity = actors.agent().clone();
     let agent_did = agent_identity.did();
@@ -699,7 +701,7 @@ async fn background_wake_retry_rows(
 }
 
 async fn seed_accepted_request_projection(
-    db: &crate::support::TestDb,
+    db: &gents_store::test_support::TestStore,
     agent_identity: &Arc<dyn gents_store::identity::NodeIdentity>,
     session_id: &str,
     request_id: &str,
@@ -803,7 +805,7 @@ fn canonical_created_doc_id(
 }
 
 async fn seed_completed_canonical_output(
-    db: &crate::support::TestDb,
+    db: &gents_store::test_support::TestStore,
     agent_identity: &Arc<dyn gents_store::identity::NodeIdentity>,
     request_doc_id: &str,
     session_id: &str,
@@ -904,7 +906,7 @@ async fn seed_completed_canonical_output(
 }
 
 async fn seed_open_canonical_flush(
-    db: &crate::support::TestDb,
+    db: &gents_store::test_support::TestStore,
     agent_identity: &Arc<dyn gents_store::identity::NodeIdentity>,
     request_doc_id: &str,
     session_id: &str,
@@ -955,7 +957,7 @@ async fn seed_open_canonical_flush(
 
 #[tokio::test]
 async fn recover_all_marks_requests_as_error() {
-    let db = test_db("lifecycle-recover-error").await;
+    let db = trial_store("lifecycle-recover-error").await;
     let agent_identity = crate::support::managed_agent(&db).await;
     let request_doc_id = create_recovery_request(
         &db,
@@ -1007,7 +1009,7 @@ async fn recover_all_marks_requests_as_error() {
 
 #[tokio::test]
 async fn recover_all_preserves_completed_canonical_output_after_lease_expiry() {
-    let db = test_db("lifecycle-recover-complete").await;
+    let db = trial_store("lifecycle-recover-complete").await;
     let agent_identity = crate::support::managed_agent(&db).await;
     let request_doc_id = create_recovery_request(
         &db,
@@ -1124,7 +1126,7 @@ async fn recover_all_preserves_completed_canonical_output_after_lease_expiry() {
 }
 #[tokio::test]
 async fn recover_all_leaves_live_execution_lease_untouched() {
-    let db = test_db("lifecycle-recover-live-lease").await;
+    let db = trial_store("lifecycle-recover-live-lease").await;
     let agent_identity = crate::support::managed_agent(&db).await;
     let request_doc_id = create_recovery_request(
         &db,
@@ -1224,7 +1226,7 @@ async fn recover_all_leaves_live_execution_lease_untouched() {
 
 #[tokio::test]
 async fn recover_all_interrupts_an_expired_lease_with_a_durable_interrupt() {
-    let db = test_db("lifecycle-recover-expired-interrupt").await;
+    let db = trial_store("lifecycle-recover-expired-interrupt").await;
     let agent_identity = crate::support::managed_agent(&db).await;
     let request_doc_id = create_recovery_request(
         &db,
