@@ -319,13 +319,13 @@ impl ChatNode {
     pub(super) async fn session(&self, id: &str, agent: &str) {
         let (id, agent) = (escape_graphql_string(id), did(agent));
         let at = self.next_at();
-        let created = self.run(&format!(
-            r#"mutation {{ create_AgentSession(input: {{ session_id: "{id}", node_did: "{OWNER}", requester_did: "{OWNER}", agent_did: "{agent}", created_at: "{at}" }}) {{ _docID }} }}"#
-        ))
-        .await;
-        let doc = created["create_AgentSession"][0]["_docID"]
-            .as_str()
-            .unwrap();
+        let doc = self
+            .create(
+                "mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }",
+                serde_json::json!({"input": {"session_id": id, "node_did": OWNER, "requester_did": OWNER, "agent_did": agent, "created_at": at}}),
+                "AgentSession",
+            )
+            .await;
         self.run(&format!(
             r#"mutation {{ create_AgentSessionInterrupt(input: {{ session_doc_id: "{doc}", session_id: "{id}", node_did: "{OWNER}", generation: 0 }}) {{ _docID }} }}"#
         ))

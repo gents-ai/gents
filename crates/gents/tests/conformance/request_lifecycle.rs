@@ -1755,7 +1755,6 @@ async fn drive_cancel_drains_automated_wakeups_preserves_user_pending(
             })
         })
         .await
-        .map_err(anyhow::Error::from)
         .and_then(|refused| refused.map_err(anyhow::Error::from));
     let request = gents_session::request::binding::load_agent_request_by_doc_id_with_access(
         &actors.agent_access,
