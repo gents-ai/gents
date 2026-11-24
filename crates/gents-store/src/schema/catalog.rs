@@ -9,6 +9,8 @@ mod indexes;
 mod install;
 mod node_policies;
 mod shared_transport;
+#[cfg(test)]
+pub(crate) use shared_transport::HostAdmissionError;
 pub(crate) use shared_transport::{
     ensure_admission_schema, verify_installed_transport, SharedTransportHome,
 };

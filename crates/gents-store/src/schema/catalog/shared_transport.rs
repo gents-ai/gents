@@ -24,7 +24,7 @@ pub(crate) enum HostAdmissionError {
     Identity(#[from] identity::Error),
     #[error(transparent)]
     Endpoint(#[from] crate::node_extension::ExtensionError),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Config(#[from] crate::config_client::ConfigClientError),
     #[error("transport registration failed: {0}")]
     Registration(#[source] Box<dyn std::error::Error + Send + Sync>),
