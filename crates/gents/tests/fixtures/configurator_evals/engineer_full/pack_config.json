@@ -41,7 +41,7 @@
       },
       "built_ins": {
         "enable_goal_tools": true,
-        "enable_goal_creation": false,
+        "enable_goal_creation": true,
         "enable_session_history_tool": true,
         "enable_schema_tool": true,
         "enable_p2p_tool": true,

@@ -24,7 +24,6 @@
     "cases/greenhouse_water_goal.json",
     "cases/shelf_budget_raise.json",
     "pack_config.json",
-    "subject_patch.json",
     "suite.json"
   ],
   "config": "pack_config.json"
