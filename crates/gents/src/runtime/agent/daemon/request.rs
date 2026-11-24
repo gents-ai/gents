@@ -305,7 +305,7 @@ async fn resolve_inference_outcome(
         if let Some(intent) = watched_interrupt {
             Some(intent.at.to_rfc3339())
         } else {
-            gents_session::request::interrupt::fetch_interrupt_requested_at_by_doc_id_with_access(
+            gents_session::request::interrupt::request_interrupted_at_by_doc_id_with_access(
                 &interrupt_access,
                 &request.doc_id,
             )
@@ -316,7 +316,7 @@ async fn resolve_inference_outcome(
         Some(intent.at.to_rfc3339())
     } else {
         let persisted =
-            gents_session::request::interrupt::fetch_interrupt_requested_at_by_doc_id_with_access(
+            gents_session::request::interrupt::request_interrupted_at_by_doc_id_with_access(
                 &interrupt_access,
                 &request.doc_id,
             )

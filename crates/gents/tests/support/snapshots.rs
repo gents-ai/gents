@@ -209,14 +209,12 @@ where
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestSnapshotRaw {
-    pub interrupt_requested_at: Option<String>,
     pub valid_until: Option<String>,
 }
 
 impl From<AgentRequestRow> for RequestSnapshotRaw {
     fn from(row: AgentRequestRow) -> Self {
         Self {
-            interrupt_requested_at: row.interrupt_requested_at.filter(|value| !value.is_empty()),
             valid_until: row.valid_until.filter(|value| !value.is_empty()),
         }
     }
@@ -234,7 +232,6 @@ where
                 limit: 1
             ) {{
                 request_id
-                interrupt_requested_at
                 valid_until
             }}
         }}"#

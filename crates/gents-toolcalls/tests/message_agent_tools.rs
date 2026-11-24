@@ -926,7 +926,7 @@ async fn interrupt_stops_the_turn_and_the_steer_is_a_new_request() {
         Some(caused.request_id.clone())
     );
     assert!(
-        gents_session::request::interrupt::fetch_interrupt_requested_at_by_doc_id_with_access(
+        gents_session::request::interrupt::request_interrupted_at_by_doc_id_with_access(
             &owner(&message),
             &message.caused_request_doc_id
         )
@@ -1252,8 +1252,9 @@ async fn caused_session_records_its_opening_request() {
 
 /// ACP decides a session interrupt, not `agent_interrupt_allowed`: an Agent
 /// that is not the target session's working Agent and holds no relation to it
-/// cannot read the session's requests, so the owner the message tools and job
-/// effects call refuses and latches nothing; the working Agent latches.
+/// cannot read the session or update its interrupt marker, so the owner the
+/// message tools and job effects call refuses with a typed refusal that names
+/// the next call and interrupts nothing; the working Agent interrupts.
 #[tokio::test]
 async fn an_agent_without_a_relation_to_the_target_session_cannot_interrupt_it() {
     let (message, _caller, caused) = started(
@@ -1281,20 +1282,32 @@ async fn an_agent_without_a_relation_to_the_target_session_cannot_interrupt_it()
     .unwrap();
     let foreign_result = interrupt_session_with_access(&node, &foreign, &scope).await;
     let latch = || async {
-        owner(&message)
-            .execute(&format!(
-                r#"{{ AgentRequest(docIDs: ["{}"]) {{ interrupt_requested_at }} }}"#,
-                escape_graphql_string(&message.caused_request_doc_id)
-            ))
-            .await
-            .unwrap()["data"]["AgentRequest"][0]["interrupt_requested_at"]
-            .clone()
+        gents_session::request::interrupt::request_interrupted_at_by_doc_id_with_access(
+            &owner(&message),
+            &message.caused_request_doc_id,
+        )
+        .await
+        .unwrap()
     };
-    assert!(foreign_result.is_err(), "{foreign_result:?}");
-    assert!(latch().await.is_null());
+    let refusal = foreign_result.unwrap_err();
+    assert!(
+        matches!(
+            refusal,
+            gents_session::request::interrupt::SessionInterruptError::Refused(
+                gents_session::request::interrupt::SessionInterruptRefusal::NotPermitted { .. }
+            )
+        ),
+        "{refusal:?}"
+    );
+    assert!(
+        refusal.to_string().contains("may not interrupt session")
+            && refusal.to_string().contains("agent_message"),
+        "{refusal}"
+    );
+    assert!(latch().await.is_none());
     let own = interrupt_session_with_access(&node, &owner(&message), &scope).await;
     assert_eq!(own.unwrap().as_deref(), Some(caused.request_id.as_str()));
-    assert!(!latch().await.is_null());
+    assert!(latch().await.is_some());
     node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }

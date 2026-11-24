@@ -482,23 +482,10 @@ pub async fn create_retry_request(node: &EmbeddedNode, spec: &RetryRequestSpec<'
     first_row::<DocIdRow>(&resp, "AgentRequest").doc_id
 }
 
-pub async fn set_interrupt_requested_at(node: &EmbeddedNode, doc_id: &str, at: &str) {
-    let doc_id = escape_graphql_string(doc_id);
-    let at = escape_graphql_string(at);
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentRequest(
-                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
-                input: {{ interrupt_requested_at: "{at}" }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let resp = node.execute(&mutation).await;
-    assert!(
-        !resp.has_errors(),
-        "set_interrupt_requested_at failed: {:?}",
-        resp.errors
-    );
+/// Interrupts the session of the request `doc_id` at `at`, as the interrupt
+/// owner would.
+pub async fn interrupt_request_session_at(node: &Arc<EmbeddedNode>, doc_id: &str, at: &str) {
+    gents_session::test_support::interrupt_session_of_request_at(node, doc_id, at).await;
 }
 
 pub async fn set_request_lifecycle_state(node: &EmbeddedNode, doc_id: &str, lifecycle_state: &str) {
@@ -559,6 +546,7 @@ pub fn build_request(
         execution_lease_secs: None,
         execution_lease_expires_at: None,
         request_hop: 0,
+        interrupt_generation: None,
         caused_by_parent_request_id: None,
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
@@ -955,7 +943,7 @@ pub async fn load_request_row_by_logical_id(
                 execution_origin created_at deadline valid_until request_hop
                 caused_by_parent_request_id caused_by_parent_request_doc_id
                 caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id lifecycle_state
-                interrupt_requested_at execution_generation execution_lease_expires_at
+                interrupt_generation execution_generation execution_lease_expires_at
                 terminal_output
             }} }}"#
         ))

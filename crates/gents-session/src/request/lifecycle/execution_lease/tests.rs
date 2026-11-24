@@ -1727,7 +1727,7 @@ async fn session_interrupt_finds_parked_backend_request() {
         .unwrap();
     assert_eq!(interrupted.as_deref(), Some(request.request_id.as_str()));
     assert!(
-        crate::request::interrupt::fetch_interrupt_requested_at_by_doc_id_with_access(
+        crate::request::interrupt::request_interrupted_at_by_doc_id_with_access(
             &access,
             &request.doc_id
         )
@@ -1753,13 +1753,7 @@ async fn session_interrupt_finds_parked_backend_request() {
 #[tokio::test]
 async fn backend_park_does_not_release_lease_when_interrupted() {
     let (_node, _db, _identity, _agent, access, mut lifecycle) = parked_fixture().await;
-    let interrupted_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-    agent_update_request(
-        &access,
-        &lifecycle.request().doc_id,
-        &format!(r#"interrupt_requested_at: "{interrupted_at}""#),
-    )
-    .await;
+    crate::test_support::interrupt_request_doc(&access, &lifecycle.request().doc_id).await;
     assert!(!lifecycle.park_for_backend().await.unwrap());
     assert!(lifecycle.execution_generation().is_ok());
     assert_eq!(lifecycle.state, LocalLifecycleState::Streaming);
@@ -1847,13 +1841,7 @@ async fn parked_request_can_be_interrupted_once_without_a_live_lease() {
             .unwrap(),
         TerminalizeResult::Lost
     );
-    let interrupted_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-    agent_update_request(
-        &access,
-        &doc_id,
-        &format!(r#"interrupt_requested_at: "{interrupted_at}""#),
-    )
-    .await;
+    crate::test_support::interrupt_request_doc(&access, &doc_id).await;
     assert_eq!(
         terminalize_parked_request(&access, &doc_id, &generation, true)
             .await
@@ -1878,13 +1866,7 @@ async fn watcher_settles_interrupted_parked_work() {
     let (node, _db, identity, agent, access, mut lifecycle) = parked_fixture().await;
     let request = lifecycle.request().clone();
     assert!(lifecycle.park_for_backend().await.unwrap());
-    let interrupted_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-    agent_update_request(
-        &access,
-        &request.doc_id,
-        &format!(r#"interrupt_requested_at: "{interrupted_at}""#),
-    )
-    .await;
+    crate::test_support::interrupt_request_doc(&access, &request.doc_id).await;
     let mut watcher = crate::request::watcher::DefraWatcher::for_agents(
         node.clone(),
         &request.node_did,

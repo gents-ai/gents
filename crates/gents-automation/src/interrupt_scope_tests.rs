@@ -44,7 +44,7 @@ async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues(
             let agent = fixture_agent_did(FIXTURE_AGENT_NONCE);
             let input=source.map(|source|json!({"queue":{"source":source,"policy":if source=="background_completion" {"coalesce"} else {"append"},"key":if source=="background_completion" {Some(format!("background_completion:{session}"))}else{None}}}));
             let value = json!({"request_id":id,"purpose":"normal","node_did":owner,"requester_did":requester,"session_id":session,
-            "agent_did":agent,"lifecycle_state":"pending","execution_origin":if source.is_some(){"scheduled"}else{"interactive"},"input":input,"created_at":"2026-09-01T00:00:00Z"});
+            "agent_did":agent,"lifecycle_state":if source.is_none() && requester.is_none() && id == "same-parent-label" {"processing"} else {"pending"},"interrupt_generation":0,"execution_origin":if source.is_some(){"scheduled"}else{"interactive"},"input":input,"created_at":"2026-09-01T00:00:00Z"});
             let root = ::identity::Did::new(gents_store::test_support::PIN_FIXED_DID).unwrap();
             gents_store::config_client::ConfigAccess::transact_local_write(
             node, Some(root), "test.interrupt.scope_fixture", |txn| { let (value, agent) = (value.clone(), agent.clone()); Box::pin(async move {
@@ -61,11 +61,40 @@ async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues(
         async fn row(node: &Arc<EmbeddedNode>, doc: &str) -> Value {
             let doc = escape_graphql_string(doc);
             let response = fixture_agent_access(node, FIXTURE_AGENT_NONCE)
-            .execute(&format!("{{AgentRequest(filter:{{_docID:{{_eq:\"{doc}\"}}}}){{lifecycle_state interrupt_requested_at}}}}"))
+            .execute(&format!("{{AgentRequest(filter:{{_docID:{{_eq:\"{doc}\"}}}}){{lifecycle_state}}}}"))
             .await
             .unwrap();
             response["data"]["AgentRequest"][0].clone()
         }
+        /// The session `(owner, session)` and its interrupt marker, created by
+        /// the runtime root with the fixture Agent as its working Agent.
+        async fn create_session(node: &Arc<EmbeddedNode>, owner: &str, session: &str) {
+            let agent = fixture_agent_did(FIXTURE_AGENT_NONCE);
+            let root = ::identity::Did::new(gents_store::test_support::PIN_FIXED_DID).unwrap();
+            gents_store::config_client::ConfigAccess::transact_local_write(
+            node, Some(root), "test.interrupt.scope_session", |txn| { let agent = agent.clone(); Box::pin(async move {
+                let response = txn.execute_with_variables(
+                    "mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }",
+                    &json!({"input": {"node_did": owner, "session_id": session, "agent_did": agent, "created_at": "2026-09-01T00:00:00Z"}}),
+                ).await?;
+                let doc = gents_protocol::graphql::extract_mutation_doc_id(&response, "AgentSession")?;
+                txn.add_actor_relationship("AgentSession", &doc, "working_agent", &::identity::Did::new(&agent)?).await?;
+                gents_session::session::interrupt_marker::create_in_txn(txn, &doc, owner, session).await?;
+                Ok::<_, anyhow::Error>(())
+            }) },
+        ).await.unwrap()
+        }
+        /// When the interrupt of its session passed the request `doc`.
+        async fn interrupted_at(node: &Arc<EmbeddedNode>, doc: &str) -> Option<String> {
+            request_interrupted_at_by_doc_id_with_access(
+                &fixture_agent_access(node, FIXTURE_AGENT_NONCE),
+                doc,
+            )
+            .await
+            .unwrap()
+        }
+        create_session(&node, owner, &session).await;
+        create_session(&node, foreign_owner, &session).await;
         let parent = create(&node, "same-parent-label", owner, None, &session, None).await;
         let foreign_parent = create(
             &node,
@@ -136,13 +165,31 @@ async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues(
                 .downcast_ref::<gents_store::config_client::ConfigClientError>(),
             Some(gents_store::config_client::ConfigClientError::ManagedAgentSignerRequired)
         ));
-        assert!(row(&node, &parent).await["interrupt_requested_at"].is_null());
+        assert_eq!(interrupted_at(&node, &parent).await, None);
         interrupt_request_by_doc_id(&node, signer, &parent, owner, None)
             .await
             .unwrap();
-        let foreign_parent_row = row(&node, &foreign_parent).await;
-        assert_eq!(foreign_parent_row["lifecycle_state"], "pending");
-        assert!(foreign_parent_row["interrupt_requested_at"].is_null());
+        assert_eq!(interrupted_at(&node, &foreign_parent).await, None);
+        for doc in [&own, &user] {
+            let request = gents_session::request::binding::load_agent_request_by_doc_id_with_access(
+                &fixture_agent_access(&node, FIXTURE_AGENT_NONCE),
+                doc,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            let mut lifecycle = gents_session::request::lifecycle::RequestLifecycle::new_with_node_did(
+                node.clone(),
+                request,
+                60,
+            );
+            lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
+            assert_ne!(
+                lifecycle.claim_with_identity().await.unwrap(),
+                gents_session::request::lifecycle::ClaimOutcome::Claimed,
+                "the interrupted parent still runs"
+            );
+        }
         let mut states = Vec::new();
         for (id, doc) in [
             (input.automated_request_ids[0], &own),
@@ -151,9 +198,6 @@ async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues(
             (input.foreign_owner_request_ids[0], &foreign),
         ] {
             let row = row(&node, doc).await;
-            if row["lifecycle_state"] == "pending" {
-                assert!(row["interrupt_requested_at"].is_null());
-            }
             states.push((id, row["lifecycle_state"].as_str().unwrap().to_owned()));
         }
         let with_state = |ids: &[u64], state: &str| {
@@ -180,14 +224,15 @@ async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues(
         ),
         preserved_foreign_owner_request_ids: with_state(&input.foreign_owner_request_ids, "pending"),
     };
-        let first = row(&node, &parent).await["interrupt_requested_at"].clone();
+        let first = interrupted_at(&node, &parent).await;
+        assert!(first.is_some());
         interrupt_request_by_doc_id(&node, signer, &parent, owner, None)
             .await
             .unwrap();
         assert_eq!(
-            row(&node, &parent).await["interrupt_requested_at"],
+            interrupted_at(&node, &parent).await,
             first,
-            "repeat interrupt preserves latch timestamp"
+            "a repeat interrupt of an interrupted request writes nothing"
         );
         node.shutdown().await.expect("shut down test node");
         case.check(observed);
@@ -226,14 +271,14 @@ async fn logical_interrupt_latches_only_as_the_signed_working_agent() {
     )
     .await
     .unwrap();
-    let latched = || async {
+    let state = || async {
         let doc = escape_graphql_string(&doc);
         fixture_agent_access(&node, FIXTURE_AGENT_NONCE)
             .execute(&format!(
-                "{{AgentRequest(filter:{{_docID:{{_eq:\"{doc}\"}}}}){{interrupt_requested_at}}}}"
+                "{{AgentRequest(filter:{{_docID:{{_eq:\"{doc}\"}}}}){{lifecycle_state}}}}"
             ))
             .await
-            .unwrap()["data"]["AgentRequest"][0]["interrupt_requested_at"]
+            .unwrap()["data"]["AgentRequest"][0]["lifecycle_state"]
             .clone()
     };
     // A key without a managed Agent signer, even one derived by this runtime,
@@ -247,10 +292,10 @@ async fn logical_interrupt_latches_only_as_the_signed_working_agent() {
             .downcast_ref::<gents_store::config_client::ConfigClientError>(),
         Some(gents_store::config_client::ConfigClientError::ManagedAgentSignerRequired)
     ));
-    assert!(latched().await.is_null());
+    assert_eq!(state().await, "pending");
     interrupt_request(&node, agent.as_ref(), "logical-latch")
         .await
         .unwrap();
-    assert!(latched().await.is_string());
+    assert_eq!(state().await, "interrupted", "a pending request is interrupted before its claim");
     node.shutdown().await.expect("shut down test node");
 }

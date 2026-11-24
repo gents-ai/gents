@@ -569,13 +569,13 @@
   {
     "read": {
       "path": "crates/gents-session/src/request/hooks/owed.rs",
-      "collection": "AgentRequest",
-      "arguments": "filter: { node_did: { _eq: \"$GENTS_node$\" }, agent_did: { _eq: \"$GENTS_agent_did$\" }, interrupt_requested_at: { _ne: null } }, order: { interrupt_requested_at: DESC }, limit: $GENTS_bound$"
+      "collection": "AgentSessionInterrupt",
+      "arguments": "filter: { node_did: { _eq: \"$GENTS_node$\" }, interrupted_at: { _ge: \"$GENTS_horizon$\" } }, order: { interrupted_at: DESC }, limit: $GENTS_bound$"
     },
     "bindings": [
       {
         "node": "probe",
-        "agent_did": "probe",
+        "horizon": "probe",
         "bound": "64"
       }
     ]

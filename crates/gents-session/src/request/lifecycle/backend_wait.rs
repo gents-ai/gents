@@ -356,7 +356,7 @@ async fn park_in_txn(
     let response = txn.execute_local_response(&format!(r#"{{ AgentRequest(
         filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
         _docID request_id purpose node_did requester_did session_id lifecycle_state backend_id
-        deadline execution_generation execution_lease_expires_at interrupt_requested_at terminal_output
+        deadline execution_generation execution_lease_expires_at interrupt_generation terminal_output
     }} }}"#)).await?;
     let row = gents_store::graphql::first_row::<AgentRequestRow>(&response, "AgentRequest")?
         .context("backend wait request disappeared")?;
@@ -371,10 +371,7 @@ async fn park_in_txn(
     }
     if row.lifecycle_state != Some(State::Processing)
         || row.execution_generation.as_deref() != Some(generation)
-        || row
-            .interrupt_requested_at
-            .as_deref()
-            .is_some_and(|v| !v.is_empty())
+        || crate::request::interrupt::row_interrupted_in_txn(txn, &row).await?
         || row.terminal_output.is_some()
     {
         return Ok(ParkResult::Lost);
@@ -534,10 +531,6 @@ async fn park_in_txn(
             .is_some_and(|id| !id.trim().is_empty()),
         "backend wait requires a selected backend"
     );
-    let interrupt_filter = match row.interrupt_requested_at.as_deref() {
-        Some(value) => format!("\"{}\"", escape_graphql_string(value)),
-        None => "null".to_string(),
-    };
     let generation = escape_graphql_string(generation);
     let expiry = escape_graphql_string(lease);
     let retry_at = escape_graphql_string(&wake.to_rfc3339());
@@ -548,8 +541,7 @@ async fn park_in_txn(
     let mutation = format!(
         r#"mutation {{ update_AgentRequest(docID: "{doc_id}",
         filter: {{ _docID: {{ _eq: "{doc_id}" }}, lifecycle_state: {{ _eq: "{from}" }},
-        execution_generation: {{ _eq: "{generation}" }}, execution_lease_expires_at: {{ _eq: "{expiry}" }},
-        interrupt_requested_at: {{ _eq: {interrupt_filter} }} }},
+        execution_generation: {{ _eq: "{generation}" }}, execution_lease_expires_at: {{ _eq: "{expiry}" }} }},
         input: {{ lifecycle_state: "{to}", execution_lease_expires_at: null }} ) {{ _docID }} }}"#
     );
     let result = txn.execute_local_response(&mutation).await?;
@@ -734,8 +726,8 @@ async fn wake_in_txn(
         .execute_local_response(&format!(
             r#"{{ AgentRequest(
         filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
-        _docID request_id node_did lifecycle_state backend_id deadline execution_generation
-        execution_lease_secs execution_lease_expires_at interrupt_requested_at terminal_output
+        _docID request_id node_did session_id lifecycle_state backend_id deadline execution_generation
+        execution_lease_secs execution_lease_expires_at interrupt_generation terminal_output
         background_completion_input_through_sequence
     }} }}"#
         ))
@@ -773,10 +765,7 @@ async fn wake_in_txn(
         if now >= expiry
             || now >= deadline
             || row.backend_id.as_deref() != Some(backend_id)
-            || row
-                .interrupt_requested_at
-                .as_deref()
-                .is_some_and(|v| !v.is_empty())
+            || crate::request::interrupt::row_interrupted_in_txn(txn, &row).await?
             || row.terminal_output.is_some()
         {
             return Ok(WakeResult::Lost);
@@ -787,10 +776,7 @@ async fn wake_in_txn(
         return resumed_receipt(&row, generation, claim_cid, deadline);
     }
     if row.lifecycle_state != Some(State::WaitingForBackend)
-        || row
-            .interrupt_requested_at
-            .as_deref()
-            .is_some_and(|v| !v.is_empty())
+        || crate::request::interrupt::row_interrupted_in_txn(txn, &row).await?
         || row.terminal_output.is_some()
     {
         return Ok(WakeResult::Lost);
@@ -837,10 +823,6 @@ async fn wake_in_txn(
         .checked_add_signed(duration)
         .context("execution lease duration overflows")?
         .min(deadline);
-    let interrupt_filter = match row.interrupt_requested_at.as_deref() {
-        Some(value) => format!("\"{}\"", escape_graphql_string(value)),
-        None => "null".to_string(),
-    };
     let backend = escape_graphql_string(backend_id);
     let old_generation = escape_graphql_string(previous_generation);
     let generation_gql = escape_graphql_string(generation);
@@ -851,8 +833,7 @@ async fn wake_in_txn(
         .execute_local_response(&format!(
             r#"mutation {{ update_AgentRequest(docID: "{doc_id}",
         filter: {{ _docID: {{ _eq: "{doc_id}" }}, lifecycle_state: {{ _eq: "{from}" }},
-        backend_id: {{ _eq: "{backend}" }}, execution_generation: {{ _eq: "{old_generation}" }},
-        interrupt_requested_at: {{ _eq: {interrupt_filter} }} }},
+        backend_id: {{ _eq: "{backend}" }}, execution_generation: {{ _eq: "{old_generation}" }} }},
         input: {{ lifecycle_state: "{to}", execution_generation: "{generation_gql}",
         execution_lease_expires_at: "{expiry}" }} ) {{ _docID }} }}"#
         ))

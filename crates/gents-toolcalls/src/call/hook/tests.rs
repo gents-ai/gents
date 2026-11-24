@@ -1202,7 +1202,7 @@ async fn interrupt_cancels_native_tools_and_keeps_children_running() {
         .as_str()
         .expect("the hook's Agent sees its child request");
     assert!(
-        gents_session::request::interrupt::fetch_interrupt_requested_at_by_doc_id_with_access(
+        gents_session::request::interrupt::request_interrupted_at_by_doc_id_with_access(
             &hook.actor_access().unwrap(),
             child_doc_id,
         )

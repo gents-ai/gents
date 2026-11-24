@@ -730,8 +730,7 @@ async fn validate_steer_in_txn(
         };
         Query::select(
             Selection::owned(gents_protocol::request_admission::SIGNED_REQUEST_FIELDS)
-                .field(fields::EXECUTION_LEASE_SECS)
-                .field(fields::INTERRUPT_REQUESTED_AT),
+                .field(fields::EXECUTION_LEASE_SECS),
         )
         .filter(Filter::eq(fields::NODE_DID, &create.node_did))
         .filter(Filter::eq(fields::SESSION_ID, &create.session_id))

@@ -1,5 +1,5 @@
 use gents_protocol::request_lifecycle::RequestLifecycleState;
-use gents_protocol::row::{normalize_optional_string, AgentRequestRow};
+use gents_protocol::row::AgentRequestRow;
 
 pub(super) const BACKGROUND_COMPLETION_AGING_THRESHOLD: chrono::Duration =
     chrono::Duration::seconds(30);
@@ -16,9 +16,6 @@ pub(super) fn is_pending(row: &AgentRequestRow) -> bool {
 }
 
 pub(super) fn preclaim_signal(row: &AgentRequestRow) -> PreclaimSignal {
-    if normalize_optional_string(row.interrupt_requested_at.clone()).is_some() {
-        return PreclaimSignal::Terminal;
-    }
     match crate::request::lifecycle::parse_valid_until(
         row.valid_until.as_deref(),
         chrono::Utc::now(),

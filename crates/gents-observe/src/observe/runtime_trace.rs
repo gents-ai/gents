@@ -92,6 +92,7 @@ mod tests {
             execution_lease_expires_at: None,
             execution_lease_secs: None,
             request_hop: 1,
+            interrupt_generation: None,
             caused_by_parent_request_id: Some("parent-req".to_string()),
             caused_by_parent_request_doc_id: Some("parent-req-doc".to_string()),
             caused_by_parent_tool_call_id: Some("parent-tool".to_string()),

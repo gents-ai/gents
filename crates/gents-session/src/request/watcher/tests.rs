@@ -360,43 +360,6 @@ async fn pending_requests_skip_queued_same_session_rows_until_claimable() {
 }
 
 #[tokio::test]
-async fn pending_requests_include_interrupted_queued_rows_for_terminalization() {
-    let fixture = ScopedWatcherFixture::new().await;
-    fixture
-        .insert_request(
-            "req-active",
-            "sess-queue",
-            "processing",
-            "2026-03-12T00:00:00Z",
-        )
-        .await;
-    let queued_doc_id = fixture
-        .insert_request(
-            "req-queued-interrupt",
-            "sess-queue",
-            "pending",
-            "2026-03-12T00:00:01Z",
-        )
-        .await;
-    fixture
-        .update_request(
-            &queued_doc_id,
-            serde_json::json!({ "interrupt_requested_at": chrono::Utc::now().to_rfc3339() }),
-        )
-        .await;
-
-    let watcher = fixture.watcher();
-    let pending = watcher.pending_requests().await.unwrap();
-    assert_eq!(
-        pending
-            .iter()
-            .map(|request| request.request_id.as_str())
-            .collect::<Vec<_>>(),
-        vec!["req-queued-interrupt"]
-    );
-}
-
-#[tokio::test]
 async fn pending_requests_quarantines_incoherent_row_without_hiding_valid_work() {
     let fixture = ScopedWatcherFixture::new().await;
     let mut incoherent = fixture.request_input("req-incoherent-pending", "sess-incoherent");

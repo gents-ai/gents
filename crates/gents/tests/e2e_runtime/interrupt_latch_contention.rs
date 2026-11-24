@@ -114,9 +114,9 @@ async fn interrupt_rebuilds_after_concurrent_lease_renewals() {
         RENEWALS + 1,
         "each overtaken attempt aborted and was rebuilt once"
     );
-    let row = actors.request_row(&doc, "interrupt_requested_at").await;
-    let stamped = row["interrupt_requested_at"].as_str().expect("latched");
-    assert_eq!(receipt.interrupt_requested_at.as_deref(), Some(stamped));
+    let row = actors.request_row(&doc, "lifecycle_state").await;
+    assert_eq!(row["lifecycle_state"], "interrupted", "interrupted before its claim");
+    assert!(!receipt.already_interrupted);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -137,7 +137,13 @@ async fn interrupt_rebuild_keeps_another_interrupters_latch() {
         &actors,
         &doc,
         1,
-        |_| serde_json::json!({ "interrupt_requested_at": OTHER_STAMP }),
+        |_| {
+            serde_json::json!({
+                "lifecycle_state": "interrupted",
+                "failure_reason": "interrupted by another actor",
+                "terminalized_at": OTHER_STAMP,
+            })
+        },
     );
     let proxy = CommitRaceProxy::spawn(db.client_endpoint(), hook).await;
     let contended = operator_access(&proxy, &actors);
@@ -147,7 +153,7 @@ async fn interrupt_rebuild_keeps_another_interrupters_latch() {
         .expect("the interrupt settles on the other interrupter's latch");
 
     assert_eq!(commits.load(Ordering::SeqCst), 2);
-    let row = actors.request_row(&doc, "interrupt_requested_at").await;
-    assert_eq!(row["interrupt_requested_at"], OTHER_STAMP);
-    assert_eq!(receipt.interrupt_requested_at.as_deref(), Some(OTHER_STAMP));
+    let row = actors.request_row(&doc, "terminalized_at").await;
+    assert_eq!(row["terminalized_at"], OTHER_STAMP);
+    assert!(receipt.already_interrupted, "the rebuilt interrupt finds it settled");
 }

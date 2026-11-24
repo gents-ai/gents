@@ -292,7 +292,7 @@ async fn recover_expired_generation_with_access_and_facts(
                                 .field(fields::REQUESTER_DID)
                                 .field(fields::SESSION_ID)
                                 .field(fields::LIFECYCLE_STATE)
-                                .field(fields::INTERRUPT_REQUESTED_AT)
+                                .field(fields::INTERRUPT_GENERATION)
                                 .field(fields::EXECUTION_GENERATION)
                                 .field(fields::EXECUTION_LEASE_EXPIRES_AT)
                                 .field(fields::TERMINAL_OUTPUT),
@@ -715,10 +715,8 @@ async fn recover_expired_generation_with_access_and_facts(
                     };
                     let reply_preview =
                         validate_selection(&mut reader, &headers, &row, &selection).await?;
-                    let target_state = if row
-                        .interrupt_requested_at
-                        .as_deref()
-                        .is_some_and(|v| !v.trim().is_empty())
+                    let target_state = if crate::request::interrupt::row_interrupted_in_txn(txn, &row)
+                        .await?
                     {
                         RequestLifecycleState::Interrupted
                     } else {

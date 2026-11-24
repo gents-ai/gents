@@ -424,7 +424,7 @@ async fn drive_request_legal_transition(
                 let interrupted = action == "interruptBackendWait";
                 if interrupted {
                     actors
-                        .set_interrupt_requested_at(&doc_id, &chrono::Utc::now().to_rfc3339())
+                        .interrupt_request_session_at(&doc_id, &chrono::Utc::now().to_rfc3339())
                         .await;
                 } else {
                     let past = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
@@ -462,7 +462,7 @@ async fn drive_request_legal_transition(
                     let interrupted = action == "interruptResuming";
                     if interrupted {
                         actors
-                            .set_interrupt_requested_at(&doc_id, &chrono::Utc::now().to_rfc3339())
+                            .interrupt_request_session_at(&doc_id, &chrono::Utc::now().to_rfc3339())
                             .await;
                     } else {
                         let past = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
@@ -533,7 +533,7 @@ async fn drive_request_legal_transition(
         "interruptBeforeClaim" => {
             let interrupt_at = chrono::Utc::now().to_rfc3339();
             actors
-                .set_interrupt_requested_at(&doc_id, &interrupt_at)
+                .interrupt_request_session_at(&doc_id, &interrupt_at)
                 .await;
             assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Interrupted);
         }
@@ -541,7 +541,7 @@ async fn drive_request_legal_transition(
             assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
             let interrupt_at = chrono::Utc::now().to_rfc3339();
             actors
-                .set_interrupt_requested_at(&doc_id, &interrupt_at)
+                .interrupt_request_session_at(&doc_id, &interrupt_at)
                 .await;
             lifecycle
                 .terminalize_owned(
@@ -559,7 +559,7 @@ async fn drive_request_legal_transition(
                 .unwrap();
             let interrupt_at = chrono::Utc::now().to_rfc3339();
             actors
-                .set_interrupt_requested_at(&doc_id, &interrupt_at)
+                .interrupt_request_session_at(&doc_id, &interrupt_at)
                 .await;
             lifecycle
                 .terminalize_owned(
@@ -747,7 +747,7 @@ async fn production_request_writers_only_reach_contracted_edges() {
             }
             if writer == "claim_after_interrupt" {
                 actors
-                    .set_interrupt_requested_at(&doc_id, &chrono::Utc::now().to_rfc3339())
+                    .interrupt_request_session_at(&doc_id, &chrono::Utc::now().to_rfc3339())
                     .await;
             }
             if writer == "repair_terminal_requests" {
@@ -1958,7 +1958,7 @@ async fn terminal_repair_sweep_follows_the_lean_scope_model() {
             }
             if row.interrupt_requested {
                 actors
-                    .set_interrupt_requested_at(&doc, &chrono::Utc::now().to_rfc3339())
+                    .interrupt_request_session_at(&doc, &chrono::Utc::now().to_rfc3339())
                     .await;
             }
             docs.push(doc);

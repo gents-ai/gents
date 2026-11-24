@@ -94,7 +94,6 @@ async fn pending_tie_break_prefers_interrupt_over_expire() {
     let created_at = support::agent_requests::canonical_now();
     let past =
         support::agent_requests::canonical_at(chrono::Utc::now() - chrono::Duration::seconds(1));
-    let interrupt_at = chrono::Utc::now().to_rfc3339();
     let doc_id = actors
         .create_request(
             support::agent_requests::RequestSeed::new(&request_id, &session_id, &created_at)
@@ -102,24 +101,10 @@ async fn pending_tie_break_prefers_interrupt_over_expire() {
                 .valid_until(Some(&past)),
         )
         .await;
-    actors
-        .set_interrupt_requested_at(&doc_id, &interrupt_at)
-        .await;
-
-    let request = actors.build_request(
-        doc_id.clone(),
-        request_id.clone(),
-        session_id.clone(),
-        created_at,
+    assert_eq!(
+        gents_session::test_support::interrupt_request_doc(&actors.agent_access, &doc_id).await,
+        gents_session::request::interrupt::RequestInterrupt::InterruptedBeforeClaim
     );
-    let mut lifecycle = actors.lifecycle(
-        request,
-        DEADLINE_SECS,
-        ExecutionOrigin::Interactive,
-        BACKEND_ID,
-    );
-
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Interrupted);
 
     let snap = fetch_request_snapshot(&actors, &doc_id).await;
     assert_eq!(snap.lifecycle_state, RequestLifecycleState::Interrupted);
@@ -158,7 +143,7 @@ async fn fail_after_interrupt_latch_prefers_interrupted() {
 
     let interrupt_at = chrono::Utc::now().to_rfc3339();
     actors
-        .set_interrupt_requested_at(&doc_id, &interrupt_at)
+        .interrupt_request_session_at(&doc_id, &interrupt_at)
         .await;
 
     lifecycle
@@ -172,96 +157,6 @@ async fn fail_after_interrupt_latch_prefers_interrupted() {
 
     let snap = fetch_request_snapshot(&actors, &doc_id).await;
     assert_eq!(snap.lifecycle_state, RequestLifecycleState::Interrupted);
-}
-
-#[tokio::test]
-async fn s7_interrupt_requested_at_is_latch_never_rewritten() {
-    let db = test_db("s7-interrupt-latch").await;
-    let actors = support::agent_requests::RequestActors::new(&db).await;
-    let t0 = "2026-04-20T12:00:00+00:00".to_string();
-
-    let request_id_a = uuid::Uuid::new_v4().to_string();
-    let session_id_a = uuid::Uuid::new_v4().to_string();
-    let created_at = support::agent_requests::canonical_now();
-    let doc_id_a = actors
-        .create_request(
-            support::agent_requests::RequestSeed::new(&request_id_a, &session_id_a, &created_at)
-                .state("pending"),
-        )
-        .await;
-
-    actors.set_interrupt_requested_at(&doc_id_a, &t0).await;
-    let snap0 = fetch_request_snapshot_raw(&actors, &doc_id_a).await;
-    assert_eq!(snap0.interrupt_requested_at.as_deref(), Some(t0.as_str()));
-
-    let request_a = actors.build_request(
-        doc_id_a.clone(),
-        request_id_a.clone(),
-        session_id_a.clone(),
-        created_at.clone(),
-    );
-    let mut lifecycle_a = actors.lifecycle(
-        request_a,
-        DEADLINE_SECS,
-        ExecutionOrigin::Interactive,
-        BACKEND_ID,
-    );
-    assert_eq!(
-        lifecycle_a.claim().await.unwrap(),
-        ClaimOutcome::Interrupted
-    );
-
-    let snap_a = fetch_request_snapshot_raw(&actors, &doc_id_a).await;
-    assert_eq!(
-        snap_a.interrupt_requested_at.as_deref(),
-        Some(t0.as_str()),
-        "S7: interrupt_before_claim must not rewrite interrupt_requested_at"
-    );
-
-    let request_id_b = uuid::Uuid::new_v4().to_string();
-    let session_id_b = uuid::Uuid::new_v4().to_string();
-    let doc_id_b = actors
-        .create_request(
-            support::agent_requests::RequestSeed::new(&request_id_b, &session_id_b, &created_at)
-                .state("pending"),
-        )
-        .await;
-
-    let request_b = actors.build_request(
-        doc_id_b.clone(),
-        request_id_b.clone(),
-        session_id_b.clone(),
-        created_at.clone(),
-    );
-    let mut lifecycle_b = actors.lifecycle(
-        request_b,
-        DEADLINE_SECS,
-        ExecutionOrigin::Interactive,
-        BACKEND_ID,
-    );
-    assert_eq!(lifecycle_b.claim().await.unwrap(), ClaimOutcome::Claimed);
-
-    actors.set_interrupt_requested_at(&doc_id_b, &t0).await;
-    let snap_b_pre = fetch_request_snapshot_raw(&actors, &doc_id_b).await;
-    assert_eq!(
-        snap_b_pre.interrupt_requested_at.as_deref(),
-        Some(t0.as_str())
-    );
-    lifecycle_b
-        .terminalize_owned(
-            RequestTerminalOutcome::Interrupted,
-            TerminalOutput::NoMessage,
-            Some("interrupted"),
-        )
-        .await
-        .unwrap();
-
-    let snap_b = fetch_request_snapshot_raw(&actors, &doc_id_b).await;
-    assert_eq!(
-        snap_b.interrupt_requested_at.as_deref(),
-        Some(t0.as_str()),
-        "S7: transition_to_interrupted must not rewrite interrupt_requested_at"
-    );
 }
 
 #[tokio::test]
@@ -536,11 +431,13 @@ async fn interrupt_request_follows_the_lean_drain_model() {
             Err(error) if error.to_string().contains("missing") => "missing".to_owned(),
             Err(error) => panic!("interrupt failed for an unmodeled reason: {error:#}"),
         };
-        let latched = actors
-            .request_row(&parent_doc, "interrupt_requested_at")
-            .await["interrupt_requested_at"]
-            .as_str()
-            .is_some_and(|value| !value.is_empty());
+        let latched = gents_session::request::interrupt::request_interrupted_at_by_doc_id_with_access(
+            &actors.agent_access,
+            &parent_doc,
+        )
+        .await
+        .unwrap()
+        .is_some();
         let mut rows = Vec::new();
         for request_id in &request_ids {
             let row = fetch_drain_row(&actors, request_id).await;

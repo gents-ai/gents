@@ -632,7 +632,7 @@ async fn terminalize_execution_in_txn(
                 .field(request::LIFECYCLE_STATE)
                 .field(request::EXECUTION_GENERATION)
                 .field(request::EXECUTION_LEASE_EXPIRES_AT)
-                .field(request::INTERRUPT_REQUESTED_AT)
+                .field(request::INTERRUPT_GENERATION)
                 .field(request::TERMINAL_OUTPUT)
                 .field(request::DEADLINE),
         )
@@ -644,6 +644,7 @@ async fn terminalize_execution_in_txn(
     let row = gents_store::graphql::first_row::<AgentRequestRow>(&result, "AgentRequest")
         .map_err(anyhow::Error::from)?
         .context("execution request disappeared")?;
+    let interrupted = crate::request::interrupt::row_interrupted_in_txn(txn, &row).await?;
     let purpose = row.purpose.context("execution request purpose missing")?;
     let auxiliary = purpose.is_auxiliary();
     if auxiliary
@@ -660,12 +661,7 @@ async fn terminalize_execution_in_txn(
         .as_deref()
         .context("missing execution generation")?;
     let state = row.lifecycle_state.context("missing request state")?;
-    let effective_outcome = if outcome == RequestTerminalOutcome::Failed
-        && row
-            .interrupt_requested_at
-            .as_deref()
-            .is_some_and(|v| !v.is_empty())
-    {
+    let effective_outcome = if outcome == RequestTerminalOutcome::Failed && interrupted {
         RequestTerminalOutcome::Interrupted
     } else {
         outcome
@@ -699,10 +695,7 @@ async fn terminalize_execution_in_txn(
     };
     let parked = ParkedObservation {
         leased: expiry.is_some(),
-        interrupted: row
-            .interrupt_requested_at
-            .as_deref()
-            .is_some_and(|value| !value.is_empty()),
+        interrupted,
         deadline: row
             .deadline
             .as_deref()
@@ -758,7 +751,6 @@ async fn terminalize_execution_in_txn(
         state,
         owner,
         expiry,
-        interrupt_requested_at: row.interrupt_requested_at.as_deref(),
         deadline: row.deadline.as_deref(),
         reason: if matches!(authority, TerminalAuthority::Parked { .. })
             && effective_outcome == RequestTerminalOutcome::Interrupted
@@ -791,7 +783,6 @@ struct TerminalSite<'a> {
     owner: &'a str,
     /// A parked row holds no lease.
     expiry: Option<&'a str>,
-    interrupt_requested_at: Option<&'a str>,
     deadline: Option<&'a str>,
     reason: &'a str,
     fresh_generation: &'a ExecutionGeneration,
@@ -997,7 +988,6 @@ async fn write_terminal_request(
         state,
         owner,
         expiry,
-        interrupt_requested_at,
         deadline,
         reason,
         fresh_generation,
@@ -1021,11 +1011,7 @@ async fn write_terminal_request(
                 .map(|value| format!("\"{}\"", escape_graphql_string(value)))
                 .unwrap_or_else(|| "null".to_string())
         };
-        format!(
-            ", interrupt_requested_at: {{ _eq: {} }}, deadline: {{ _eq: {} }}",
-            quoted(interrupt_requested_at),
-            quoted(deadline)
-        )
+        format!(", deadline: {{ _eq: {} }}", quoted(deadline))
     } else {
         String::new()
     };

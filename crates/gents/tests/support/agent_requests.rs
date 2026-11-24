@@ -357,6 +357,10 @@ impl RequestActors {
         lifecycle
     }
 
+    pub async fn interrupt_request_session_at(&self, doc_id: &str, at: &str) {
+        gents_session::test_support::interrupt_session_of_request_at(&self.node, doc_id, at).await;
+    }
+
     /// Patches request fields as the working Agent, the only actor that
     /// updates a claimed or pending request it owns.
     pub async fn update_request(&self, doc_id: &str, input: serde_json::Value) {
@@ -371,11 +375,6 @@ impl RequestActors {
             )
             .await
             .expect("update fixture request as working Agent");
-    }
-
-    pub async fn set_interrupt_requested_at(&self, doc_id: &str, at: &str) {
-        self.update_request(doc_id, serde_json::json!({"interrupt_requested_at": at}))
-            .await;
     }
 
     pub async fn set_lifecycle_state(&self, doc_id: &str, state: RequestLifecycleState) {

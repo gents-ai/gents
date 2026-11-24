@@ -171,7 +171,6 @@ fn editable(row: &AgentRequestRow, requester: &str) -> bool {
         )
         && row.lifecycle_state == Some(RequestLifecycleState::Pending)
         && row.execution_generation.is_none()
-        && row.interrupt_requested_at.is_none()
         && row.execution_origin.as_deref() == Some("interactive")
         && row.retry_parent_request.is_none()
         && row.caused_by_trigger_id.is_none()
@@ -858,12 +857,11 @@ pub async fn apply_pending_user_edit_in_txn(
             format!(
                 r#"mutation($terminal_output: JSON) {{ update_AgentRequest(docID: "{}", filter: {{
                         _docID: {{ _eq: "{}" }}, lifecycle_state: {{ _eq: "{pending}" }}
-                    }}, input: {{ lifecycle_state: "{interrupted}", interrupt_requested_at: "{}",
+                    }}, input: {{ lifecycle_state: "{interrupted}",
                         terminalized_at: "{}", failure_reason: "{}",
                         terminal_redrive_attempts: 0, terminal_output: $terminal_output }}) {{ _docID }} }}"#,
                 escape_graphql_string(old_id),
                 escape_graphql_string(old_id),
-                escape_graphql_string(&chrono::Utc::now().to_rfc3339()),
                 escape_graphql_string(&chrono::Utc::now().to_rfc3339()),
                 escape_graphql_string(REMOVED_REASON),
                 pending = transition.from().as_str(),

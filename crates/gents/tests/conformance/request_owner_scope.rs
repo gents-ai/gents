@@ -487,26 +487,12 @@ pub(super) async fn canonical_recovery_repairs_expired_request_after_terminal_wr
         agent.did(),
     )
     .await;
-    let runtime_interrupt_doc_id = escape_graphql_string(&runtime_interrupt_doc_id);
-    gents_store::config_client::ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        ::identity::Did::new(agent.did()).unwrap(),
-        agent.as_ref(),
+    gents_session::test_support::interrupt_session_of_request_at(
+        &db.node,
+        &runtime_interrupt_doc_id,
+        "2026-07-10T00:00:00Z",
     )
-    .unwrap()
-    .write(
-        "test.convergence.interrupt_latch",
-        &format!(
-            r#"mutation {{
-                update_AgentRequest(
-                    docID: "{runtime_interrupt_doc_id}",
-                    input: {{ interrupt_requested_at: "2026-07-10T00:00:00Z" }}
-                ) {{ _docID }}
-            }}"#
-        ),
-    )
-    .await
-    .expect("seed request-owned interrupt latch as working Agent");
+    .await;
 
     let runtime_interrupt_repair = RequestLifecycle::repair_terminal_requests_with_identities(
         &db.node,
@@ -764,17 +750,15 @@ pub(super) async fn drain_wakeups_never_interrupts_foreign_replica() {
     )
     .await
     .unwrap();
-    let latched = root_read(
-        &db.node,
-        &format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ interrupt_requested_at }} }}"#,
-            escape_graphql_string(&target_doc_id)
-        ),
-    )
-    .await;
     assert!(
-        latched["AgentRequest"][0]["interrupt_requested_at"].is_string(),
-        "the exact owned request must be latched"
+        gents_session::request::interrupt::request_interrupted_at_by_doc_id_with_access(
+            &gents_store::config_client::ConfigAccess::local(db.node.clone()),
+            &target_doc_id,
+        )
+        .await
+        .unwrap()
+        .is_some(),
+        "the exact owned request must be interrupted"
     );
 
     let owner = fetch_queue_convergence_row(&db.node, "convergence-drain-owner").await;

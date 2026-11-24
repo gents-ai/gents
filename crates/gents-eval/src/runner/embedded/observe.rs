@@ -1130,12 +1130,15 @@ mod tests {
         assert_eq!(observed.terminal_state, None);
         let request_id = gents_store::graphql::escape_graphql_string("req-stuck");
         let query = format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ interrupt_requested_at }} }}"#
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ lifecycle_state }} }}"#
         );
         let response = home.node.execute(&query).await;
         assert!(response.errors.is_empty(), "{:?}", response.errors);
-        let rendered = serde_json::to_string(&response.data).unwrap();
-        assert!(rendered.contains("interrupt_requested_at"), "{rendered}");
+        assert_eq!(
+            response.data.unwrap()["AgentRequest"][0]["lifecycle_state"],
+            "interrupted",
+            "the pending request is interrupted before its claim"
+        );
     }
 
     struct DeadlineHook {

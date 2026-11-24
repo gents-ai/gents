@@ -745,7 +745,7 @@ mod job_control {
         }
 
         async fn interrupted(&self, child: &str) -> bool {
-            gents_session::request::interrupt::fetch_interrupt_requested_at_by_doc_id_with_access(
+            gents_session::request::interrupt::request_interrupted_at_by_doc_id_with_access(
                 &self.access(),
                 child,
             )

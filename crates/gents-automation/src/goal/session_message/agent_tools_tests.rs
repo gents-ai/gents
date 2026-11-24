@@ -170,7 +170,7 @@ async fn interrupt_delivery_latches_only_the_prepublication_head() {
             .await
             .unwrap();
         let response = owner(&message).execute(&format!(
-            r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID interrupt_requested_at }} }}"#,
+            r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
             escape_graphql_string(&target.session_id),
         )).await.unwrap();
         let rows = response["data"]["AgentRequest"].as_array().unwrap();
@@ -185,9 +185,24 @@ async fn interrupt_delivery_latches_only_the_prepublication_head() {
         let second = replacement
             .as_ref()
             .map(|doc| rows.iter().find(|row| row["_docID"] == *doc).unwrap());
-        let actual = if old["interrupt_requested_at"].as_str().is_some() {
+        let interrupted = |row: &serde_json::Value| {
+            let access = owner(&message);
+            let doc = row["_docID"].as_str().unwrap().to_owned();
+            async move {
+                gents_session::request::interrupt::request_interrupted_at_by_doc_id_with_access(
+                    &access, &doc,
+                )
+                .await
+                .unwrap()
+                .is_some()
+            }
+        };
+        let actual = if interrupted(old).await {
             Some(1)
-        } else if second.is_some_and(|row| row["interrupt_requested_at"].as_str().is_some()) {
+        } else if match second {
+            Some(row) => interrupted(row).await,
+            None => false,
+        } {
             Some(2)
         } else {
             None
@@ -195,10 +210,7 @@ async fn interrupt_delivery_latches_only_the_prepublication_head() {
         let goal = canonical_goal(&message, &caused.node_did, &caused.session_id)
             .await
             .unwrap();
-        assert!(
-            new["interrupt_requested_at"].is_null(),
-            "{input:?}, rows={rows:?}"
-        );
+        assert!(!interrupted(new).await, "{input:?}, rows={rows:?}");
         case.check(
             gents_lean_vocab::families::contracts_interrupt_delivery::InterruptDeliveryOutput {
                 expected: actual,

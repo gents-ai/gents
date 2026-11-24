@@ -815,7 +815,7 @@ mod tests {
     /// Whether `doc_id` carries an interrupt latch, read as the job's Agent
     /// that owns its children.
     async fn interrupted(admission: &PublishedAdmission, doc_id: &str) -> bool {
-        gents_session::request::interrupt::fetch_interrupt_requested_at_by_doc_id_with_access(
+        gents_session::request::interrupt::request_interrupted_at_by_doc_id_with_access(
             &access(admission),
             doc_id,
         )

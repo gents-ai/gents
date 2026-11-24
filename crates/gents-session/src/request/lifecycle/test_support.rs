@@ -145,6 +145,7 @@ pub fn parent_request(
         executed_inference_profile_id: None,
         executed_runtime_generation: None,
         request_hop: 2,
+        interrupt_generation: None,
         caused_by_parent_request_id: Some("root-parent-request".to_string()),
         caused_by_parent_request_doc_id: Some("root-parent-request-doc".to_string()),
         caused_by_parent_tool_call_id: Some("root-parent-tool-call".to_string()),

@@ -712,3 +712,92 @@ pub async fn test_p2p_db(name: &str) -> gents_inference::test_support::TestDb {
         gents_inference::test_support::signed_test_node_without_agent_from_db(db, name).await;
     db
 }
+
+/// Interrupts the request `request_doc_id` through the production owner, as
+/// `access`: a running request by its session's interrupt marker, a pending
+/// one before its claim.
+pub async fn interrupt_request_doc(
+    access: &gents_store::config_client::ConfigAccess,
+    request_doc_id: &str,
+) -> crate::request::interrupt::RequestInterrupt {
+    let row = access
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ node_did requester_did }} }}"#,
+            gents_store::graphql::escape_graphql_string(request_doc_id)
+        ))
+        .await
+        .unwrap()["data"]["AgentRequest"][0]
+        .clone();
+    crate::request::interrupt::interrupt_request_by_doc_id_with_access(
+        access,
+        request_doc_id,
+        row["node_did"].as_str().unwrap(),
+        row["requester_did"].as_str(),
+    )
+    .await
+    .unwrap()
+}
+
+
+/// Interrupts the session of the request `request_doc_id` at `at` for a
+/// fixture that wrote the request itself: the request records the marker's
+/// generation as a claim would, and the marker is bumped as the interrupt
+/// owner bumps it. A session the fixture created without its marker gets one.
+pub async fn interrupt_session_of_request_at(
+    node: &std::sync::Arc<defra_node::Node>,
+    request_doc_id: &str,
+    at: &str,
+) {
+    let doc = gents_store::graphql::escape_graphql_string(request_doc_id);
+    gents_store::config_client::ConfigAccess::transact_local_write(
+        node,
+        None,
+        "test.interrupt_session_of_request",
+        |txn| {
+            let doc = &doc;
+            Box::pin(async move {
+                let row = txn
+                    .execute(&format!(
+                        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}) {{ node_did session_id interrupt_generation }} }}"#
+                    ))
+                    .await?["data"]["AgentRequest"][0]
+                    .clone();
+                let (node_did, session_id) = (
+                    row["node_did"].as_str().unwrap_or_default(),
+                    row["session_id"].as_str().unwrap_or_default(),
+                );
+                let session = gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
+                    txn, node_did, session_id,
+                )
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("fixture request has no session"))?;
+                let marker = match crate::session::interrupt_marker::read_in_txn(txn, &session.doc_id).await? {
+                    Some(marker) => marker,
+                    None => {
+                        txn.execute_with_variables(
+                            "mutation($input: AgentSessionInterruptMutationInputArg!) { create_AgentSessionInterrupt(input: $input) { _docID } }",
+                            &serde_json::json!({"input": {"session_doc_id": session.doc_id, "node_did": node_did, "session_id": session_id, "generation": 0}}),
+                        )
+                        .await?;
+                        crate::session::interrupt_marker::read_in_txn(txn, &session.doc_id)
+                            .await?
+                            .ok_or_else(|| anyhow::anyhow!("fixture marker disappeared"))?
+                    }
+                };
+                if row["interrupt_generation"].is_null() {
+                    txn.execute(&format!(
+                        r#"mutation {{ update_AgentRequest(docID: "{doc}", input: {{ interrupt_generation: {} }}) {{ _docID }} }}"#,
+                        marker.generation
+                    ))
+                    .await?;
+                }
+                crate::session::interrupt_marker::bump_in_txn(txn, &marker, at)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("fixture marker bump wrote nothing"))?;
+                Ok::<_, anyhow::Error>(())
+            })
+        },
+    )
+    .await
+    .unwrap();
+}

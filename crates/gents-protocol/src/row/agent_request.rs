@@ -28,6 +28,7 @@ pub const AGENT_REQUEST_FIELDS: &str = r#"
                     executed_inference_profile_id
                     executed_runtime_generation
                     request_hop
+                    interrupt_generation
                     caused_by_parent_request_id
                     caused_by_parent_request_doc_id
                     caused_by_parent_tool_call_id
@@ -86,6 +87,9 @@ pub struct AgentRequest {
     pub executed_inference_profile_id: Option<String>,
     pub executed_runtime_generation: Option<i64>,
     pub request_hop: u32,
+    /// The session interrupt generation this request recorded
+    /// (`SessionQueue.InterruptGeneration`).
+    pub interrupt_generation: Option<i64>,
     pub caused_by_parent_request_id: Option<String>,
     pub caused_by_parent_request_doc_id: Option<String>,
     pub caused_by_parent_tool_call_id: Option<String>,
@@ -199,6 +203,7 @@ impl TryFrom<AgentRequestRow> for AgentRequest {
             ),
             executed_runtime_generation: row.executed_runtime_generation,
             request_hop,
+            interrupt_generation: row.interrupt_generation,
             caused_by_parent_request_id: row.caused_by_parent_request_id,
             caused_by_parent_request_doc_id: row.caused_by_parent_request_doc_id,
             caused_by_parent_tool_call_id: row.caused_by_parent_tool_call_id,

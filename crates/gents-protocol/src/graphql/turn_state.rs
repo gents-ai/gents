@@ -78,7 +78,7 @@ pub fn turn_state_query(request_id: &str) -> String {
                 metadata
                 lifecycle_state
                 failure_reason
-                interrupt_requested_at
+                interrupt_generation
                 valid_until
             }}
         }}"#

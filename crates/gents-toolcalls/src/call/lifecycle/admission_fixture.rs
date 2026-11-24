@@ -1349,17 +1349,45 @@ pub async fn materialize_session_at(
         .unwrap();
 }
 
+/// Moves the request to `state` and, as a claim does, records the session's
+/// interrupt generation on it.
 pub async fn set_state(
     access: &gents_store::config_client::ConfigAccess,
     doc_id: &str,
     state: &str,
 ) {
+    let doc = gents_store::graphql::escape_graphql_string(doc_id);
+    let generation = access
+        .transact_readonly("test.set_state.marker", |txn| {
+            let doc = &doc;
+            Box::pin(async move {
+                let row = txn
+                    .execute(&format!(
+                        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}) {{ node_did session_id }} }}"#
+                    ))
+                    .await?["data"]["AgentRequest"][0]
+                    .clone();
+                Ok::<_, anyhow::Error>(
+                    gents_session::session::interrupt_marker::read_for_session_owner_in_txn(
+                        txn,
+                        row["node_did"].as_str().unwrap_or_default(),
+                        row["session_id"].as_str().unwrap_or_default(),
+                    )
+                    .await?
+                    .map(|marker| marker.generation),
+                )
+            })
+        })
+        .await
+        .unwrap();
+    let generation = generation
+        .map(|generation| format!(", interrupt_generation: {generation}"))
+        .unwrap_or_default();
     access
         .write(
             "test.set_state",
             &format!(
-                r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "{state}" }}) {{ _docID }} }}"#,
-                gents_store::graphql::escape_graphql_string(doc_id)
+                r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}, input: {{ lifecycle_state: "{state}"{generation} }}) {{ _docID }} }}"#
             ),
         )
         .await

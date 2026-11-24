@@ -1649,7 +1649,7 @@ async fn step_failures_without_a_remembered_row_read_it_and_settle_on_the_third(
         "plugin_job_step_failed"
     );
     assert!(
-        gents_session::request::interrupt::fetch_interrupt_requested_at_by_doc_id_with_access(
+        gents_session::request::interrupt::request_interrupted_at_by_doc_id_with_access(
             &step.job.access,
             &child
         )

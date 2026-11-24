@@ -214,42 +214,11 @@ fn transition_history_does_not_emit_processing_self_loop() {
 }
 
 #[test]
-fn transition_history_keeps_interrupt_attempt_on_terminal_completion() {
-    let request = json!({
-        "lifecycle_state": "completed",
-        "claimed_at": "2026-05-20T10:00:01Z",
-        "interrupt_requested_at": "2026-05-20T10:00:02Z",
-        "terminalized_at": "2026-05-20T10:00:03Z",
-    });
-
-    let transitions = transition_history(&request, Some("finish"));
-    let interrupt = transitions
-        .iter()
-        .find(|transition| transition.action == "interrupt_requested")
-        .expect("interrupt request transition should be present");
-    assert_eq!(interrupt.from, None);
-    assert_eq!(interrupt.to, "completed");
-    assert_eq!(interrupt.at.as_deref(), Some("2026-05-20T10:00:02Z"));
-    assert!(interrupt
-        .note
-        .as_deref()
-        .is_some_and(|note| note.contains("terminal snapshot")));
-
-    let finish = transitions
-        .iter()
-        .find(|transition| transition.action == "finish")
-        .expect("finish transition should be present");
-    assert_eq!(finish.from, None);
-    assert_eq!(finish.at.as_deref(), Some("2026-05-20T10:00:03Z"));
-}
-
-#[test]
 fn terminal_timestamp_uses_canonical_request_fields() {
     let request = json!({
         "lifecycle_state": "completed",
         "terminalized_at": "2026-05-20T10:00:03Z",
         "valid_until": "2026-05-20T10:00:05Z",
-        "interrupt_requested_at": "2026-05-20T10:00:02Z",
     });
 
     assert_eq!(
@@ -266,7 +235,7 @@ fn terminal_timestamp_uses_canonical_request_fields() {
     );
     assert_eq!(
         terminal_timestamp(&request, "interrupt").as_deref(),
-        Some("2026-05-20T10:00:02Z")
+        Some("2026-05-20T10:00:03Z")
     );
 
     let expiring = json!({
@@ -281,10 +250,7 @@ fn terminal_timestamp_uses_canonical_request_fields() {
     assert_eq!(terminal_source("finish"), "AgentRequest.terminalized_at");
     assert_eq!(terminal_source("fail"), "AgentRequest.terminalized_at");
     assert_eq!(terminal_source("expire"), "AgentRequest.terminalized_at");
-    assert_eq!(
-        terminal_source("interrupt"),
-        "AgentRequest.interrupt_requested_at"
-    );
+    assert_eq!(terminal_source("interrupt"), "AgentRequest.terminalized_at");
 }
 
 #[test]
@@ -301,7 +267,6 @@ fn terminal_transitions_do_not_guess_prior_state() {
         let request = json!({
             "lifecycle_state": state,
             "claimed_at": "2026-05-20T10:00:01Z",
-            "interrupt_requested_at": "2026-05-20T10:00:02Z",
             "valid_until": "2026-05-20T10:00:03Z",
             "deadline": "2026-05-20T10:00:04Z",
         });
@@ -335,18 +300,18 @@ fn request_cancel_cause_uses_request_fields_on_interrupted_requests() {
     let cancel = request_cancel_cause_view(&request)
         .expect("interrupted requests should render CancelCause");
     assert_eq!(cancel.cause, "unknown");
-    assert_eq!(cancel.interrupt_requested_at, None);
+    assert_eq!(cancel.interrupted_at, None);
 
     let request = json!({
         "lifecycle_state": "interrupted",
         "cancel_cause": "operator_interrupt",
-        "interrupt_requested_at": "2026-05-20T10:00:03Z",
+        "terminalized_at": "2026-05-20T10:00:03Z",
     });
     let cancel = request_cancel_cause_view(&request)
         .expect("interrupted requests should render CancelCause");
     assert_eq!(cancel.cause, "operator_interrupt");
     assert_eq!(
-        cancel.interrupt_requested_at.as_deref(),
+        cancel.interrupted_at.as_deref(),
         Some("2026-05-20T10:00:03Z")
     );
 }

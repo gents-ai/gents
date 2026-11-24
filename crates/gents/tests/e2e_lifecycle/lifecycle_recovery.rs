@@ -1257,30 +1257,13 @@ async fn recover_all_interrupts_an_expired_lease_with_a_durable_interrupt() {
         "partial turn",
     )
     .await;
-    let interrupt_requested_at = chrono::Utc::now().to_rfc3339();
-    let escaped_request_doc_id = gents_store::graphql::escape_graphql_string(&request_doc_id);
-    let escaped_interrupt_requested_at =
-        gents_store::graphql::escape_graphql_string(&interrupt_requested_at);
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentRequest(
-                filter: {{ _docID: {{ _eq: "{escaped_request_doc_id}" }} }},
-                input: {{ interrupt_requested_at: "{escaped_interrupt_requested_at}" }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response: gents::defra_node::QueryResponse = serde_json::from_value(
-        gents_store::config_client::ConfigAccess::local(db.node.clone())
-            .write("test.seed_durable_interrupt", &mutation)
-            .await
-            .unwrap(),
+    gents_session::test_support::interrupt_session_of_request_at(
+        &db.node,
+        &request_doc_id,
+        &chrono::Utc::now().to_rfc3339(),
     )
-    .unwrap();
-    assert!(
-        !response.has_errors(),
-        "set durable interrupt failed: {:?}",
-        response.errors
-    );
+    .await;
+    let escaped_request_doc_id = gents_store::graphql::escape_graphql_string(&request_doc_id);
 
     let report = RequestLifecycle::recover_all_with_identities(
         &db.node,
