@@ -21,10 +21,14 @@ test("scrolling up a long session does not wait at the top for each page", async
     const scroller = document
       .querySelector('[data-testid="transcript-panel"]')!
       .closest<HTMLElement>('[data-slot="scroll-area-viewport"]')!;
+    const content = scroller.querySelector<HTMLElement>("[data-transcript-content]")!;
     const frames: { top: number; rows: number; t: number }[] = [];
+    /* `top` is how far the rows read reach above the view: while the reader's
+       wheel moves, the owner carries rows that landed above on the content,
+       so the view's own position can reach 0 with those rows still above */
     const tick = () => {
       frames.push({
-        top: scroller.scrollTop,
+        top: scroller.getBoundingClientRect().top - content.getBoundingClientRect().top,
         rows: Number(
           scroller.querySelector("[data-transcript-list]")?.getAttribute("data-rows") ??
             0,
