@@ -123,12 +123,12 @@ async fn not_evidence_retries_up_to_the_cap_then_the_slot_is_left_as_not_evidenc
     );
     let empty = completion_of(&trials, 1);
     assert!(
-        completion_is_not_evidence(&empty),
+        attempt_retryable(&empty),
         "the attempt that never reached its stage is not evidence"
     );
     assert_eq!(empty.anchor.requests, 0);
     assert!(
-        !completion_is_not_evidence(&completion_of(&trials, 3)),
+        !attempt_retryable(&completion_of(&trials, 3)),
         "the attempt that ran its stage is"
     );
 
@@ -158,7 +158,7 @@ async fn not_evidence_retries_up_to_the_cap_then_the_slot_is_left_as_not_evidenc
     );
     assert!(trials.iter().all(|trial| trial.completion.is_some()));
     assert!(
-        completion_is_not_evidence(&completion_of(&trials, 4)),
+        attempt_retryable(&completion_of(&trials, 4)),
         "the slot's latest completed attempt is still not evidence"
     );
     assert_eq!(not_evidence_slots(&trials), 1);
@@ -205,7 +205,7 @@ async fn a_stage_that_failed_on_the_harness_re_plans_the_slot() {
         ],
         "the first attempt learned nothing, so the slot owed another"
     );
-    assert!(completion_is_not_evidence(&completion_of(&trials, 1)));
+    assert!(attempt_retryable(&completion_of(&trials, 1)));
 
     let verdicts = load_verdicts(&launching.access, launching.owner(), "run-1")
         .await
@@ -249,18 +249,17 @@ async fn the_breaker_trips_on_consecutive_not_evidence_and_resume_continues() {
     .unwrap_err();
     let down = provider_down(&error).unwrap_or_else(|| panic!("expected ProviderDown: {error:#}"));
     assert_eq!(
-        (down.outcome.run_id.as_str(), down.consecutive_not_evidence),
-        ("run-1", 2)
+        (down.outcome.run_id.as_str(), down.cause),
+        ("run-1", ProviderDownCause::NoEvidence { consecutive: 2 })
     );
     assert!(down.outcome.breaker_tripped);
     let trials = load_trials(&launching.access, launching.owner(), "run-1")
         .await
         .unwrap();
     assert_eq!(trials.len(), 2);
-    assert!(trials.iter().all(|trial| trial
-        .completion
-        .as_ref()
-        .is_some_and(completion_is_not_evidence)));
+    assert!(trials
+        .iter()
+        .all(|trial| trial.completion.as_ref().is_some_and(attempt_retryable)));
 
     let recovered = ScriptedExecutor::new().with_default(passed());
     let outcome = resume(
@@ -360,7 +359,7 @@ async fn the_breaker_reports_the_count_it_tripped_on_not_the_one_it_ended_with()
 
     let down =
         provider_down(&error).unwrap_or_else(|| panic!("expected a ProviderDown, got {error:#}"));
-    assert_eq!(down.consecutive_not_evidence, 2);
+    assert_eq!(down.cause, ProviderDownCause::NoEvidence { consecutive: 2 });
     assert!(down.outcome.breaker_tripped);
     assert_eq!(
         down.outcome.completed, 4,
@@ -414,4 +413,182 @@ async fn an_invalidated_run_refuses_resume() {
         reason.contains("run-1") && reason.contains("invalidated"),
         "{reason}"
     );
+}
+
+fn provider_unavailable() -> TrialEvidence {
+    ScriptedExecutor::failed_evidence(
+        "did:key:trial",
+        "check",
+        OutcomeKind::Provider,
+        Some(crate::ProviderReason::Unavailable),
+    )
+}
+
+fn outage_request(launching: &Launching, pack: &Path) -> RunRequest {
+    let mut request = request(launching, pack, "run-1");
+    request.cells.truncate(1);
+    request.trials_per_case = 1;
+    request.concurrency = 1;
+    request.max_infra_retries = 1;
+    request.breaker_threshold = 1;
+    request
+}
+
+#[tokio::test]
+async fn a_run_waits_out_an_outage_and_attempts_the_lost_slot_again() {
+    let (launching, pack) = launching("captured_rows_count").await;
+    let request = outage_request(&launching, &pack);
+    let executor = ScriptedExecutor::new()
+        .with(key("case-a", 1), provider_unavailable())
+        .with_default(passed())
+        .with_provider_answers([false, false, false, true]);
+
+    let outcome = run(
+        &launching.access,
+        &request,
+        &executor,
+        &CheckRegistry::builtin(),
+        CancellationToken::new(),
+        &options(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        (
+            outcome.completed,
+            outcome.not_evidence,
+            outcome.breaker_tripped
+        ),
+        (3, 0, false),
+        "the attempt the outage took does not count toward a breaker of one"
+    );
+    let trials = load_trials(&launching.access, launching.owner(), "run-1")
+        .await
+        .unwrap();
+    assert_eq!(
+        trial_keys(&trials),
+        [
+            ("base".to_string(), "case-a".to_string(), 0, 1, true),
+            ("base".to_string(), "case-a".to_string(), 0, 2, true),
+            ("base".to_string(), "case-b".to_string(), 0, 1, true),
+        ],
+        "the slot the outage took is attempted again; the slot behind it waited and ran once"
+    );
+    assert_eq!(
+        executor.provider_answers_left(),
+        0,
+        "the run asked the provider until it answered"
+    );
+}
+
+#[tokio::test]
+async fn an_outage_longer_than_the_wait_stops_the_run_and_resume_continues() {
+    let (launching, pack) = launching("captured_rows_count").await;
+    let registry = CheckRegistry::builtin();
+    let request = outage_request(&launching, &pack);
+    let executor = ScriptedExecutor::new()
+        .with(key("case-a", 1), provider_unavailable())
+        .with_default(passed())
+        .with_provider_answers([false, false]);
+    let unwaiting = RunOptions {
+        provider_wait_limit: Duration::ZERO,
+        ..options()
+    };
+
+    let error = run(
+        &launching.access,
+        &request,
+        &executor,
+        &registry,
+        CancellationToken::new(),
+        &unwaiting,
+    )
+    .await
+    .unwrap_err();
+    let down = provider_down(&error).unwrap_or_else(|| panic!("expected ProviderDown: {error:#}"));
+    assert_eq!(
+        down.cause,
+        ProviderDownCause::Unanswered {
+            waited: Duration::ZERO
+        }
+    );
+    assert!(!down.outcome.breaker_tripped);
+    assert!(
+        format!("{down}").contains("the provider did not answer"),
+        "{down}"
+    );
+    let trials = load_trials(&launching.access, launching.owner(), "run-1")
+        .await
+        .unwrap();
+    assert_eq!(
+        trial_keys(&trials),
+        [("base".to_string(), "case-a".to_string(), 0, 1, true)],
+        "no slot was started against a provider that does not answer"
+    );
+
+    let outcome = resume(
+        &launching.access,
+        RunLocation {
+            owner: launching.owner(),
+            run_id: "run-1",
+            runs_dir: &launching.runs_dir(),
+        },
+        &ScriptedExecutor::new().with_default(passed()),
+        &registry,
+        CancellationToken::new(),
+        &options(),
+    )
+    .await
+    .unwrap();
+    assert_eq!((outcome.completed, outcome.not_evidence), (2, 0));
+    let trials = load_trials(&launching.access, launching.owner(), "run-1")
+        .await
+        .unwrap();
+    assert_eq!(
+        trial_keys(&trials),
+        [
+            ("base".to_string(), "case-a".to_string(), 0, 1, true),
+            ("base".to_string(), "case-a".to_string(), 0, 2, true),
+            ("base".to_string(), "case-b".to_string(), 0, 1, true),
+        ]
+    );
+}
+
+#[test]
+fn retry_and_outage_decisions_match_the_lean_model() {
+    use crate::runner::outage::{breaker_count, outage_step, OutageStep};
+    use crate::runner::plan::{slot_owes_attempt, stages_retryable, SlotAttempts};
+    use crate::ProviderReason;
+    use gents_lean_vocab::families;
+
+    families::eval_attempt_retry::replay::<OutcomeKind, ProviderReason>(|input| {
+        stages_retryable(
+            input
+                .stages
+                .iter()
+                .map(|stage| (stage.failure_kind, stage.provider_reason)),
+        )
+    });
+    families::eval_slot_attempt::replay(|input| {
+        slot_owes_attempt(
+            u32::try_from(input.max_infra_retries).unwrap(),
+            u32::try_from(input.max_abandoned).unwrap(),
+            SlotAttempts {
+                latest_retryable: input.latest_retryable,
+                retryable: u32::try_from(input.retryable).unwrap(),
+                abandoned: u32::try_from(input.abandoned).unwrap(),
+            },
+        )
+    });
+    families::eval_outage::replay::<OutageStep>(|input| {
+        outage_step(input.provider_answers, input.waited_secs, input.limit_secs)
+    });
+    families::eval_breaker::replay(|input| {
+        u64::from(breaker_count(
+            u32::try_from(input.consecutive).unwrap(),
+            input.retryable,
+            input.provider_answers,
+        ))
+    });
 }

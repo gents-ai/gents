@@ -269,4 +269,165 @@ theorem a_non_evidence_verdict_stores_a_null_score (kind : OutcomeKind)
     storedScore kind reason score = none := by
   simp [storedScore, nonEvidence]
 
+structure StageFailure where
+  kind : OutcomeKind
+  providerReason : Option ProviderReason
+  deriving DecidableEq, Repr
+
+namespace StageFailure
+def evidenceClass (failure : StageFailure) : EvidenceClass :=
+  classify failure.kind failure.providerReason
+end StageFailure
+
+/-- A stage's recorded failure, from its request's outcome, the reason read from the
+provider's wording, and whether the backend ended the request.
+
+External premise: the backend ends a request in two ways. The runtime parks a request in
+`waiting_for_backend` only after its completion loop spent the transport retry budget
+(`LoopVerdict::BackendUnavailable`), and the runner interrupts a request it finds parked.
+Inference admission ends every call of a backend it no longer serves with the recorded
+reason `BackendGone`. Either ends the request whatever the subject did, so a provider
+failure, alone or beside a failed tool call, is the provider being unavailable whatever
+its wording. A deadline, a tool failure and a runtime failure keep their attribution. -/
+def stageOutcome (endedByBackend : Bool) (request : Option OutcomeKind)
+    (stated : Option ProviderReason) : Option StageFailure :=
+  request.map fun kind =>
+    if endedByBackend && (kind == .provider || kind == .unknown) then
+      ⟨.provider, some .unavailable⟩
+    else ⟨kind, if kind == .provider then stated else none⟩
+
+theorem a_request_the_backend_ended_is_not_evidence (kind : OutcomeKind)
+    (stated : Option ProviderReason) (provider : kind = .provider ∨ kind = .unknown) :
+    (stageOutcome true (some kind) stated).map StageFailure.evidenceClass =
+      some .notEvidence := by
+  rcases provider with rfl | rfl <;> simp [stageOutcome, StageFailure.evidenceClass, classify]
+
+theorem the_backend_keeps_every_other_attribution (parked : Bool) (kind : OutcomeKind)
+    (stated : Option ProviderReason) (other : kind ≠ .provider ∧ kind ≠ .unknown) :
+    stageOutcome parked (some kind) stated = some ⟨kind, none⟩ := by
+  cases parked <;> cases kind <;> simp_all [stageOutcome]
+
+theorem an_accepted_request_records_no_failure (parked : Bool)
+    (stated : Option ProviderReason) : stageOutcome parked none stated = none := by
+  simp [stageOutcome]
+
+/-- The failures that decide whether an attempt is evidence: a stage skipped because an
+earlier one failed says nothing of its own. -/
+def decidingFailures (stages : List (Option StageFailure)) : List StageFailure :=
+  stages.filterMap fun stage => stage.filter (·.kind != .skippedPrerequisite)
+
+/-- An attempt is run again only when no stage of it was accepted or failed on its own,
+or when every stage that failed on its own did so for the provider being unavailable or
+the harness failing. The report already leaves such an attempt out of the score, so
+nothing counted is replaced. One stage failing for any other reason (the subject's, the
+grader's, an unattributed one) keeps the attempt. -/
+def attemptRetryable (stages : List (Option StageFailure)) : Bool :=
+  (stages.all (·.isSome) || !(decidingFailures stages).isEmpty) &&
+    (decidingFailures stages).all (·.evidenceClass == .notEvidence)
+
+theorem a_retried_attempt_holds_no_other_failure (stages : List (Option StageFailure))
+    (failure : StageFailure) (retryable : attemptRetryable stages = true)
+    (recorded : some failure ∈ stages) (ran : failure.kind ≠ .skippedPrerequisite) :
+    failure.evidenceClass = .notEvidence := by
+  simp only [attemptRetryable, Bool.and_eq_true, List.all_eq_true] at retryable
+  have deciding : failure ∈ decidingFailures stages :=
+    List.mem_filterMap.mpr ⟨some failure, recorded, by simp [Option.filter, ran]⟩
+  simpa using retryable.2 failure deciding
+
+theorem a_subject_failure_is_never_retried (stages : List (Option StageFailure))
+    (failure : StageFailure) (recorded : some failure ∈ stages)
+    (ran : failure.kind ≠ .skippedPrerequisite)
+    (subject : subjectCausable failure.kind failure.providerReason = true) :
+    attemptRetryable stages = false := by
+  cases retryable : attemptRetryable stages with
+  | false => rfl
+  | true =>
+    have excluded := a_retried_attempt_holds_no_other_failure stages failure retryable recorded ran
+    exact (subject_causable_is_never_excluded failure.kind failure.providerReason subject
+      excluded).elim
+
+theorem a_passing_attempt_is_never_retried (stages : List (Option StageFailure))
+    (ran : stages ≠ []) (passed : ∀ stage ∈ stages, stage = none) :
+    attemptRetryable stages = false := by
+  have none : decidingFailures stages = [] := by
+    simp only [decidingFailures, List.filterMap_eq_nil_iff]
+    intro stage member
+    simp [passed stage member]
+  cases stages with
+  | nil => contradiction
+  | cons stage rest =>
+    have head : stage = Option.none := passed stage (List.mem_cons_self _ _)
+    subst head
+    simp [attemptRetryable, none]
+
+structure SlotAttempts where
+  /-- Whether the completed attempt with the highest number is retryable; absent when no
+  attempt completed. -/
+  latestRetryable : Option Bool
+  retryable : Nat
+  abandoned : Nat
+  deriving DecidableEq, Repr
+
+/-- A slot is attempted again while its latest completed attempt is not evidence, at
+most `maxInfraRetries` times after the first, and while fewer than `maxAbandoned` of its
+attempts were left without a completion. -/
+def slotOwesAttempt (maxInfraRetries maxAbandoned : Nat) (slot : SlotAttempts) : Bool :=
+  slot.latestRetryable != some false && decide (slot.retryable ≤ maxInfraRetries) &&
+    decide (slot.abandoned < maxAbandoned)
+
+theorem a_graded_slot_is_never_attempted_again (maxInfraRetries maxAbandoned : Nat)
+    (slot : SlotAttempts) (graded : slot.latestRetryable = some false) :
+    slotOwesAttempt maxInfraRetries maxAbandoned slot = false := by
+  simp [slotOwesAttempt, graded]
+
+theorem retries_are_bounded (maxInfraRetries maxAbandoned : Nat) (slot : SlotAttempts)
+    (owed : slotOwesAttempt maxInfraRetries maxAbandoned slot = true) :
+    slot.retryable ≤ maxInfraRetries ∧ slot.abandoned < maxAbandoned := by
+  simp only [slotOwesAttempt, Bool.and_eq_true, decide_eq_true_eq] at owed
+  exact ⟨owed.1.2, owed.2⟩
+
+inductive OutageStep where
+  | admit | wait | stop
+  deriving DecidableEq, Repr
+
+namespace OutageStep
+def toDefraDB : OutageStep → String
+  | .admit => "admit"
+  | .wait => "wait"
+  | .stop => "stop"
+end OutageStep
+
+/-- Before a trial is admitted after an attempt that was not evidence, the runner asks
+whether the provider answers. It admits the trial once it does, waits while the outage
+is younger than the limit, and stops the run at the limit. -/
+def outageStep (providerAnswers : Bool) (waitedSecs limitSecs : Nat) : OutageStep :=
+  if providerAnswers then .admit
+  else if waitedSecs < limitSecs then .wait
+  else .stop
+
+theorem an_answering_provider_admits (waitedSecs limitSecs : Nat) :
+    outageStep true waitedSecs limitSecs = .admit := by
+  simp [outageStep]
+
+theorem an_outage_wait_is_bounded (waitedSecs limitSecs : Nat)
+    (waiting : outageStep false waitedSecs limitSecs = .wait) : waitedSecs < limitSecs := by
+  simp only [outageStep] at waiting
+  split at waiting <;> simp_all
+
+/-- The breaker counts attempts in a row that were not evidence although the provider
+answered afterwards: a harness that cannot run trials. An attempt lost to a provider
+that does not answer is the outage's, which `outageStep` bounds, and leaves the count. -/
+def breakerCount (consecutive : Nat) (retryable providerAnswers : Bool) : Nat :=
+  if !retryable then 0
+  else if providerAnswers then consecutive + 1
+  else consecutive
+
+theorem evidence_resets_the_breaker (consecutive : Nat) (providerAnswers : Bool) :
+    breakerCount consecutive false providerAnswers = 0 := by
+  simp [breakerCount]
+
+theorem an_outage_never_advances_the_breaker (consecutive : Nat) (retryable : Bool) :
+    breakerCount consecutive retryable false ≤ consecutive := by
+  cases retryable <;> simp [breakerCount]
+
 end Eval

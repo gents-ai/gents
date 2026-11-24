@@ -5,6 +5,7 @@ pub mod freeze;
 pub mod goal;
 pub mod grade;
 mod liveness;
+mod outage;
 pub mod plan;
 pub mod progress;
 mod projection;
@@ -32,7 +33,7 @@ pub use liveness::{
     STALE_WINDOW,
 };
 pub use plan::{
-    abandonment_bounded_slots, completion_is_not_evidence, not_evidence_slots, plan, trial_id_for,
+    abandonment_bounded_slots, attempt_retryable, not_evidence_slots, plan, trial_id_for,
     PlannedTrial, MAX_ABANDONED_ATTEMPTS,
 };
 pub use progress::{
@@ -58,6 +59,7 @@ use tokio_util::sync::CancellationToken;
 use crate::checks::CheckRegistry;
 use crate::runner::freeze::thaw;
 use crate::runner::liveness::{cancel_requested, clear_cancel, marker_poll, refuse_if_held};
+use crate::runner::outage::{breaker_count, ProviderGate};
 use crate::runner::progress::ProgressWriter;
 use crate::runner::trial::{execute_trial, Slot, TrialContext, ViewWriter};
 use crate::TrialRecord;
@@ -76,16 +78,32 @@ pub struct RunOutcome {
 #[derive(Debug)]
 pub struct ProviderDown {
     pub outcome: RunOutcome,
-    pub consecutive_not_evidence: u32,
+    pub cause: ProviderDownCause,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProviderDownCause {
+    /// The breaker: attempts in a row that were not evidence although the
+    /// provider answered after each.
+    NoEvidence { consecutive: u32 },
+    /// The provider did not answer for the whole outage wait.
+    Unanswered { waited: Duration },
 }
 
 impl std::fmt::Display for ProviderDown {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "eval run {} stopped: {} trials in a row produced no evidence",
-            self.outcome.run_id, self.consecutive_not_evidence
-        )
+        let run_id = &self.outcome.run_id;
+        match self.cause {
+            ProviderDownCause::NoEvidence { consecutive } => write!(
+                f,
+                "eval run {run_id} stopped: {consecutive} trials in a row produced no evidence while the provider answered; `gents utils eval resume {run_id}` attempts their slots again"
+            ),
+            ProviderDownCause::Unanswered { waited } => write!(
+                f,
+                "eval run {run_id} stopped: the provider did not answer for {}s; `gents utils eval resume {run_id}` continues once it does",
+                waited.as_secs()
+            ),
+        }
     }
 }
 
@@ -143,6 +161,10 @@ pub struct RunOptions {
     pub trial_budget: Option<TrialBudget>,
     pub poll_backoff_base: Duration,
     pub poll_backoff_cap: Duration,
+    /// How long a run starts no trial while the provider does not answer
+    /// before it stops.
+    pub provider_wait_limit: Duration,
+    pub provider_probe_gap: Duration,
 }
 
 impl Default for RunOptions {
@@ -151,6 +173,8 @@ impl Default for RunOptions {
             trial_budget: None,
             poll_backoff_base: Duration::from_secs(5),
             poll_backoff_cap: Duration::from_secs(60),
+            provider_wait_limit: Duration::from_secs(15 * 60),
+            provider_probe_gap: Duration::from_secs(10),
         }
     }
 }
@@ -238,6 +262,7 @@ pub(crate) async fn execute_frozen(
     let heartbeat_gap = marker_poll(options).max(Duration::from_millis(250));
     let views = ViewWriter::default();
     views.refresh(frozen, recorder).await;
+    let provider = ProviderGate::new(options);
 
     loop {
         progress.heartbeat(heartbeat_gap);
@@ -255,6 +280,7 @@ pub(crate) async fn execute_frozen(
         let admission_stopped = CancellationToken::new();
         let mut retried: Vec<u32> = Vec::new();
         let mut tripped: Option<u32> = None;
+        let mut unanswered = false;
         let mut failed: Option<anyhow::Error> = None;
         {
             let trial_context = TrialContext {
@@ -264,6 +290,7 @@ pub(crate) async fn execute_frozen(
                 registry,
                 cancel: &cancel,
                 trial_budget: options.trial_budget.as_ref(),
+                provider: &provider,
                 progress: &progress,
                 views: &views,
             };
@@ -322,18 +349,23 @@ pub(crate) async fn execute_frozen(
                 match slot {
                     Slot::Skipped => {}
                     Slot::Abandoned => outcome.abandoned += 1,
+                    Slot::ProviderDown => {
+                        unanswered = true;
+                        stop.store(true, Ordering::Relaxed);
+                        admission_stopped.cancel();
+                    }
                     Slot::Completed {
                         attempt,
-                        not_evidence,
+                        retryable,
+                        provider_answers,
                     } => {
                         outcome.completed += 1;
-                        if !not_evidence {
-                            consecutive = 0;
+                        consecutive = breaker_count(consecutive, retryable, provider_answers);
+                        if !retryable {
                             continue;
                         }
                         retried.push(attempt);
-                        consecutive += 1;
-                        if consecutive >= frozen.breaker_threshold {
+                        if provider_answers && consecutive >= frozen.breaker_threshold {
                             outcome.breaker_tripped = true;
                             tripped.get_or_insert(consecutive);
                             stop.store(true, Ordering::Relaxed);
@@ -351,11 +383,25 @@ pub(crate) async fn execute_frozen(
             tracing::error!(
                 run_id,
                 consecutive_not_evidence,
-                "eval run stopped: the provider is producing no evidence"
+                "eval run stopped: trials produce no evidence while the provider answers"
             );
             return Err(anyhow::Error::from(ProviderDown {
                 outcome,
-                consecutive_not_evidence,
+                cause: ProviderDownCause::NoEvidence {
+                    consecutive: consecutive_not_evidence,
+                },
+            }));
+        }
+        if unanswered {
+            let waited = options.provider_wait_limit;
+            tracing::error!(
+                run_id,
+                waited_secs = waited.as_secs(),
+                "eval run stopped: the provider did not answer"
+            );
+            return Err(anyhow::Error::from(ProviderDown {
+                outcome,
+                cause: ProviderDownCause::Unanswered { waited },
             }));
         }
         if cancel_requested(&frozen.run_dir, &cancel) {

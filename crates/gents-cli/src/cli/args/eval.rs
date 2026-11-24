@@ -468,7 +468,9 @@ pub(crate) struct EvalRunArgs {
     /// time; name a run with `--run-id` to reuse it (the idempotent freeze).
     #[arg(long)]
     pub(crate) run_id: Option<String>,
-    #[arg(long, default_value_t = 1)]
+    /// Attempts a slot gets beyond its first when an attempt ended on the
+    /// provider being unavailable or the harness failing.
+    #[arg(long, default_value_t = 2)]
     pub(crate) max_infra_retries: u32,
     /// The pack registry to fall back to for a pack the home's store does not
     /// hold; a download is stored in the home for the next run.
