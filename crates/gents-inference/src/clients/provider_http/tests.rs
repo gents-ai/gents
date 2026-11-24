@@ -524,20 +524,10 @@ async fn a_request_the_server_closed_on_a_kept_alive_connection_is_sent_again() 
     .unwrap();
     let model = client.completion_model("model");
     for call in 0..2 {
-        let request = rig::completion::CompletionRequest {
-            model: None,
-            preamble: None,
-            chat_history: rig::one_or_many::OneOrMany::one(rig::message::Message::user("hello")),
-            documents: Vec::new(),
-            tools: Vec::new(),
-            temperature: None,
-            max_tokens: Some(16),
-            tool_choice: None,
-            additional_params: None,
-            output_schema: None,
-        };
         let mut stream = model
-            .stream(request)
+            .completion_request("hello")
+            .max_tokens(16)
+            .stream()
             .await
             .unwrap_or_else(|error| panic!("call {call}: {error:?}"));
         while let Some(item) = stream.next().await {
