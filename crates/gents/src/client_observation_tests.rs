@@ -13,20 +13,15 @@ use gents_protocol::schemas::{
 use gents_store::client_journal::runtime_directory::RuntimeDirectory;
 use std::{sync::Arc, time::Duration};
 
-async fn served_observer(
-    home: &crate::client_test_support::ServedRuntimeHome,
-) -> (tempfile::TempDir, Arc<ObservedStores>, ObserverHandle) {
-    served_observer_with(home, None).await
-}
-
 /// The bearer lifetime of the observers whose tests reach a renewal: its
 /// subscriptions renew every half of it, in seconds rather than the default
 /// half minute.
 const SHORT_BEARER_LIFETIME: Duration = Duration::from_secs(6);
 
-async fn served_observer_with(
+/// An observer of `home`'s runtime whose bearers last `bearer_lifetime`.
+async fn served_observer(
     home: &crate::client_test_support::ServedRuntimeHome,
-    bearer_lifetime: Option<Duration>,
+    bearer_lifetime: Duration,
 ) -> (tempfile::TempDir, Arc<ObservedStores>, ObserverHandle) {
     let directory = tempfile::tempdir().unwrap();
     let mut peer = gents_protocol::runtime_connection::RuntimeConnection {
@@ -44,12 +39,10 @@ async fn served_observer_with(
     peers.upsert(peer).await.unwrap();
     let configured = peers;
     let store = ObservedStores::new();
-    let mut endpoints = gents_store::config_client::runtime_endpoints::RuntimeEndpoints::new(
+    let endpoints = gents_store::config_client::runtime_endpoints::RuntimeEndpoints::new(
         home.user().client_signing_capability().unwrap(),
-    );
-    if let Some(lifetime) = bearer_lifetime {
-        endpoints = endpoints.with_bearer_lifetime(lifetime);
-    }
+    )
+    .with_bearer_lifetime(bearer_lifetime);
     let handle = spawn_observer(store.clone(), configured, Arc::new(endpoints));
     (directory, store, handle)
 }
@@ -76,8 +69,7 @@ async fn node_doc_id(home: &crate::client_test_support::ServedRuntimeHome) -> St
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn planned_renewal_keeps_the_runtime_connected() {
     let home = crate::client_test_support::ServedRuntimeHome::start().await;
-    let (_directory, store, handle) =
-        served_observer_with(&home, Some(SHORT_BEARER_LIFETIME)).await;
+    let (_directory, store, handle) = served_observer(&home, SHORT_BEARER_LIFETIME).await;
     wait_for_connection(&store, home.node_did(), RuntimeConnectionStatus::Connected).await;
     let before = handle.metrics_snapshot();
     let mut shown = vec![RuntimeConnectionStatus::Connected];
@@ -175,8 +167,7 @@ async fn revoked_user_is_refused_by_the_served_runtime() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn revoked_user_sees_access_unavailable_and_recovers_after_approval() {
     let home = crate::client_test_support::ServedRuntimeHome::start().await;
-    let (_directory, store, handle) =
-        served_observer_with(&home, Some(SHORT_BEARER_LIFETIME)).await;
+    let (_directory, store, handle) = served_observer(&home, SHORT_BEARER_LIFETIME).await;
     wait_for_connection(&store, home.node_did(), RuntimeConnectionStatus::Connected).await;
     assert!(!store.snapshot(home.node_did()).nodes.is_empty());
     let user = ::identity::Did::new(home.user().did()).unwrap();

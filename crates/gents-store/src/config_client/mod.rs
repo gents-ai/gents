@@ -232,7 +232,55 @@ pub struct GraphqlEndpoint {
     /// `ConfigAccess` holds an endpoint inline). A subscription is renewed at
     /// half of it and the runtime ends it at its expiry.
     bearer_lifetime_secs: u32,
+    /// The bearer this endpoint last minted for a request, shared by its
+    /// clones.
+    bearer: HeldBearer,
 }
+
+/// A request bearer and when it was minted. Minting derives a public key and
+/// signs a token, both elliptic-curve work, and a client makes about a
+/// request a second, so a bearer is reused until half its lifetime has
+/// passed: every request still carries one with at least half its life left.
+/// DefraDB bearers carry no nonce, so a captured one is usable for its whole
+/// lifetime either way. What an endpoint holds is not part of which endpoint
+/// it is, so two endpoints compare equal whatever they hold.
+#[derive(Clone, Default)]
+struct HeldBearer(Arc<std::sync::Mutex<Option<(std::time::Instant, String)>>>);
+
+impl HeldBearer {
+    fn reuse_or_mint(
+        &self,
+        lifetime: std::time::Duration,
+        mint: impl FnOnce() -> Result<String>,
+    ) -> Result<String> {
+        let mut held = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((minted, bearer)) = held.as_ref() {
+            if minted.elapsed() < lifetime / 2 {
+                return Ok(bearer.clone());
+            }
+        }
+        let bearer = mint()?;
+        *held = Some((std::time::Instant::now(), bearer.clone()));
+        Ok(bearer)
+    }
+}
+
+impl std::fmt::Debug for HeldBearer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("HeldBearer")
+    }
+}
+
+impl PartialEq for HeldBearer {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for HeldBearer {}
 
 impl GraphqlEndpoint {
     pub fn anonymous(url: impl Into<String>) -> Self {
@@ -249,6 +297,7 @@ impl GraphqlEndpoint {
             pack_replay: None,
             extensions: crate::node_extension::Extensions::default(),
             bearer_lifetime_secs: crate::identity::DEFRADB_BEARER_LIFETIME.as_secs() as u32,
+            bearer: HeldBearer::default(),
         }
     }
 
@@ -270,6 +319,7 @@ impl GraphqlEndpoint {
             pack_replay: None,
             extensions: crate::node_extension::Extensions::default(),
             bearer_lifetime_secs: crate::identity::DEFRADB_BEARER_LIFETIME.as_secs() as u32,
+            bearer: HeldBearer::default(),
         }
     }
 
@@ -297,6 +347,7 @@ impl GraphqlEndpoint {
             pack_replay: None,
             extensions: crate::node_extension::Extensions::default(),
             bearer_lifetime_secs: crate::identity::DEFRADB_BEARER_LIFETIME.as_secs() as u32,
+            bearer: HeldBearer::default(),
         })
     }
 
@@ -324,6 +375,7 @@ impl GraphqlEndpoint {
     /// Whole seconds; at least one.
     pub fn with_bearer_lifetime(mut self, lifetime: std::time::Duration) -> Self {
         self.bearer_lifetime_secs = u32::try_from(lifetime.as_secs()).unwrap_or(u32::MAX).max(1);
+        self.bearer = HeldBearer::default();
         self
     }
 
@@ -355,6 +407,7 @@ impl GraphqlEndpoint {
             return Err(ConfigClientError::ClientSignerMismatch);
         }
         self.client_signing_capability = Some(capability);
+        self.bearer = HeldBearer::default();
         Ok(self)
     }
 
@@ -487,12 +540,17 @@ impl GraphqlEndpoint {
                     self.delegation_audience.device_now()
                 )?
             ),
-            None => crate::identity::reused_defradb_bearer(
-                did,
-                &self.audience()?,
-                &capability.config,
-                self.bearer_lifetime(),
-            )?,
+            None => {
+                let audience = self.audience()?;
+                self.bearer.reuse_or_mint(self.bearer_lifetime(), || {
+                    Ok(crate::identity::mint_defradb_bearer(
+                        did,
+                        &audience,
+                        &capability.config,
+                        self.bearer_lifetime(),
+                    )?)
+                })?
+            }
         };
         Ok(Some(authorization))
     }
@@ -510,7 +568,7 @@ impl GraphqlEndpoint {
                 if self.delegated_authorization.is_none()
                     && self.delegation_audience.record().audience.is_none() =>
             {
-                Some(crate::identity::fresh_defradb_bearer(
+                Some(crate::identity::mint_defradb_bearer(
                     did,
                     &self.audience()?,
                     &capability.config,
@@ -519,13 +577,19 @@ impl GraphqlEndpoint {
             }
             _ => None,
         };
-        let Some(authorization) = minted else {
-            return self.authorize(request);
+        let value = match minted {
+            Some(authorization) => {
+                let mut value = reqwest::header::HeaderValue::from_str(&authorization)
+                    .map_err(ConfigClientError::BearerHeader)?;
+                value.set_sensitive(true);
+                Some(value)
+            }
+            None => self.authorization_header()?,
         };
-        let mut value = reqwest::header::HeaderValue::from_str(&authorization)
-            .map_err(ConfigClientError::BearerHeader)?;
-        value.set_sensitive(true);
-        Ok(request.header(reqwest::header::AUTHORIZATION, value))
+        Ok(match value {
+            Some(value) => request.header(reqwest::header::AUTHORIZATION, value),
+            None => request,
+        })
     }
 
     fn authorization_header(&self) -> Result<Option<reqwest::header::HeaderValue>> {

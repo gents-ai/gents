@@ -147,19 +147,46 @@ fn bearer(seconds: u64, issuer: &str) -> String {
     format!("Bearer header.{claims}.signature")
 }
 
-/// An event stream that sends an event every 100 ms.
-fn ticking_event_stream() -> Response {
-    let events = futures_util::stream::unfold((), |()| async {
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        Some((
-            Ok::<_, std::io::Error>(Bytes::from_static(b"event: next\ndata: {}\n\n")),
-            (),
-        ))
-    });
-    Response::builder()
-        .header(header::CONTENT_TYPE, "text/event-stream")
-        .body(Body::from_stream(events))
-        .unwrap()
+const EVENT: &[u8] = b"event: next\ndata: {}\n\n";
+
+/// A route whose one event stream sends an event each time the test asks.
+struct DrivenStream {
+    events: tokio::sync::mpsc::UnboundedSender<()>,
+    stream: std::sync::Arc<std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<()>>>>,
+}
+
+impl DrivenStream {
+    fn new() -> Self {
+        let (events, stream) = tokio::sync::mpsc::unbounded_channel();
+        Self {
+            events,
+            stream: std::sync::Arc::new(std::sync::Mutex::new(Some(stream))),
+        }
+    }
+
+    fn send(&self, count: usize) {
+        for _ in 0..count {
+            self.events.send(()).unwrap();
+        }
+    }
+
+    fn route(&self) -> axum::routing::MethodRouter {
+        let stream = self.stream.clone();
+        axum::routing::post(move || {
+            let mut asked = stream.lock().unwrap().take().expect("one stream");
+            async move {
+                let events = futures_util::stream::poll_fn(move |context| {
+                    asked.poll_recv(context).map(|asked| {
+                        asked.map(|()| Ok::<_, std::io::Error>(Bytes::from_static(EVENT)))
+                    })
+                });
+                Response::builder()
+                    .header(header::CONTENT_TYPE, "text/event-stream")
+                    .body(Body::from_stream(events))
+                    .unwrap()
+            }
+        })
+    }
 }
 
 /// Everything a stream delivers until it ends, or `BOUND` passes.
@@ -187,31 +214,25 @@ async fn subscribe(endpoint: &str, path: &str, authorization: &str) -> reqwest::
         .unwrap()
 }
 
-fn subscription_router(streams: &ShutdownStreams) -> Router {
-    streams.wrap(
-        Router::new()
-            .route(
-                "/api/v0/graphql",
-                axum::routing::post(|| async { ticking_event_stream() }),
-            )
-            .route(
-                "/events",
-                axum::routing::post(|| async { ticking_event_stream() }),
-            ),
-    )
+async fn serve_driven(streams: &ShutdownStreams, path: &str, driven: &DrivenStream) -> String {
+    serve(streams.wrap(Router::new().route(path, driven.route()))).await
 }
 
+/// The host counts the bearer's life in whole seconds, so a bearer two
+/// seconds out leaves the stream at least one: the event the test sends at
+/// once arrives before the cut.
 #[tokio::test]
 async fn a_subscription_ends_at_its_bearer_expiry_and_says_so() {
     let (_shutdown, observed) = watch::channel(false);
     let streams = ShutdownStreams::new(observed);
-    let endpoint = serve(subscription_router(&streams)).await;
-    let delivered =
-        drain(subscribe(&endpoint, "/api/v0/graphql", &bearer(1, "did:key:z")).await).await;
-    assert!(delivered.contains("event: next"), "{delivered}");
-    assert!(
-        delivered.ends_with("event: gents-end\ndata: {\"reason\":\"expired\"}\n\n"),
-        "the stream ends at the bearer's expiry and names it: {delivered}"
+    let driven = DrivenStream::new();
+    let endpoint = serve_driven(&streams, "/api/v0/graphql", &driven).await;
+    let open = subscribe(&endpoint, "/api/v0/graphql", &bearer(2, "did:key:z")).await;
+    driven.send(1);
+    let delivered = drain(open).await;
+    assert_eq!(
+        delivered, "event: next\ndata: {}\n\nevent: gents-end\ndata: {\"reason\":\"expired\"}\n\n",
+        "the stream ends at the bearer's expiry and names it"
     );
 }
 
@@ -228,9 +249,11 @@ async fn a_subscriber_that_lost_node_read_receives_nothing_more() {
         let held = check < 3 && did == "did:key:z";
         Box::pin(async move { held })
     }));
-    let endpoint = serve(subscription_router(&streams)).await;
-    let delivered =
-        drain(subscribe(&endpoint, "/api/v0/graphql", &bearer(60, "did:key:z")).await).await;
+    let driven = DrivenStream::new();
+    let endpoint = serve_driven(&streams, "/api/v0/graphql", &driven).await;
+    let open = subscribe(&endpoint, "/api/v0/graphql", &bearer(60, "did:key:z")).await;
+    driven.send(5);
+    let delivered = drain(open).await;
     assert_eq!(
         delivered,
         format!(
@@ -247,20 +270,17 @@ async fn only_graphql_subscriptions_are_bounded_by_their_bearer() {
     let (_shutdown, observed) = watch::channel(false);
     let streams = ShutdownStreams::new(observed);
     streams.admit_members_with(std::sync::Arc::new(|_| Box::pin(async { false })));
-    let endpoint = serve(subscription_router(&streams)).await;
+    let driven = DrivenStream::new();
+    let endpoint = serve_driven(&streams, "/events", &driven).await;
     let mut open = subscribe(&endpoint, "/events", &bearer(0, "did:key:z")).await;
-    let events = tokio::time::timeout(Duration::from_secs(2), async {
-        let mut events = 0;
-        while let Ok(Some(chunk)) = open.chunk().await {
-            assert!(!chunk.starts_with(b"event: gents-end"));
-            events += 1;
-            if events == 5 {
-                break;
-            }
-        }
-        events
-    })
-    .await
-    .unwrap();
-    assert_eq!(events, 5, "another event stream keeps delivering");
+    driven.send(5);
+    let mut delivered = Vec::new();
+    while delivered.len() < 5 * EVENT.len() {
+        delivered.extend_from_slice(&open.chunk().await.unwrap().expect("still open"));
+    }
+    assert_eq!(
+        delivered,
+        EVENT.repeat(5),
+        "another event stream keeps delivering"
+    );
 }
