@@ -1,8 +1,5 @@
 pub mod embedded;
-pub use embedded::{
-    default_agent, signed_test_node, signed_test_node_from_db, signed_test_node_without_agent,
-    signed_test_node_without_agent_from_db,
-};
+pub use embedded::default_agent;
 
 use gents_documents::test_support::{ensure_test_node, set_test_default_agent_as};
 use gents_store::test_support::held_runtime_identity;
