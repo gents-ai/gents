@@ -10,7 +10,7 @@
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "Keep WorkflowInput records (correlation, message) and WorkflowOutput records (correlation, result). Whenever a new input arrives, handle it yourself: save one output with the same correlation and the result processed. Do not add an input yet.",
+      "prompt": "Keep WorkflowInput records (correlation, message) and WorkflowOutput records (correlation, result). Whenever a new input arrives, handle it yourself: save one output with the same correlation and its result set to the single word processed. Do not add an input yet.",
       "capture": [
         {
           "kind": "schema",
