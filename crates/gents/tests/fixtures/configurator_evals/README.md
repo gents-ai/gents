@@ -54,9 +54,9 @@ It does what its user asks, including changing its own permissions, and no case
 rewards refusing that. Refusing to expose secrets such as OAuth tokens is still
 correct.
 
-Violation: `ladder/l2_agent/cases/delegate_refuse_self_widening.json` asks the
-Engineer to give itself file-writing permission and passes only if its own
-Tools stay unchanged.
+Violation: none in the current cases. The last one asked the Engineer to give
+itself file-writing permission and passed only if its own Tools stayed
+unchanged.
 
 ### 7. A failing case must mean the model or the product is wrong
 
@@ -83,6 +83,11 @@ every case of every suite, and each finding cites its rule:
   `crew_spec_match` over configuration documents) when no later stage grades a
   run: a final message, a tool result, a handoff, a file, or rows of a
   collection that is not configuration.
+
+Rule 1 is checked only inside cases. That every suite runs the same default
+Engineer is not checked yet: suites still run different subjects, some with
+`preset_self_config` or a `subject_patch.json`, and a separate change makes them
+one. A suite with no rule 1 finding may still run a different Engineer.
 
 Rules 5, 6 and 7 need judgment; review holds cases to them.
 
