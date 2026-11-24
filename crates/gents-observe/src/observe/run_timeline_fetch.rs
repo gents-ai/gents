@@ -894,13 +894,12 @@ mod tests {
             AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
         };
         use gents_store::identity::NodeIdentity;
-        let signed_home = gents_documents::test_support::SignedHome::start(
+        let node_db = gents_documents::test_support::SignedHome::start(
             "fetches-native-goal-history-without-proj",
             gents_automation::lifecycle_hooks::composition(),
         )
         .await;
-        let binding = gents_inference::test_support::default_agent(&signed_home).await;
-        let (node_db, _user, _user_access) = signed_home.into_parts();
+        let binding = gents_inference::test_support::default_agent(&node_db).await;
         let node = node_db.node.clone();
         let root = gents_store::test_support::held_runtime_identity(node_db.node_identity.did());
         let agent = gents_store::identity::resolve_agent_identity(&root, &binding).unwrap();

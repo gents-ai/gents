@@ -1582,13 +1582,12 @@ async fn collection_cleanup_refuses_managed_and_referenced_collections() {
 async fn schema_preview_and_publication_expose_ignored_native_directives() {
     use gents_store::config_client::NodePermission;
 
-    let signed_home = gents_documents::test_support::SignedHome::start(
+    let db = gents_documents::test_support::SignedHome::start(
         "schema-native-warnings",
         gents_session::test_support::no_lifecycle_plugins(),
     )
     .await;
-    let binding = gents_inference::test_support::default_agent(&signed_home).await;
-    let (db, _user, _user_access) = signed_home.into_parts();
+    let binding = gents_inference::test_support::default_agent(&db).await;
     let agent =
         gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
     let admin = ConfigAccess::local_as(
