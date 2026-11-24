@@ -510,7 +510,7 @@ pub async fn claimed_signed_request_create(
         &create.created_at,
     )
     .await;
-    claimed_signed_request_create_as_agent(node, identity, agent_identity.as_ref(), create).await
+    claimed_signed_request_create_as_agent(node, agent_identity.as_ref(), create).await
 }
 
 /// [`claimed_signed_request_create`] for a session that `agent_identity`
@@ -519,61 +519,43 @@ pub async fn claimed_signed_request_create(
 /// the owning Agent selects it directly.
 pub async fn claimed_signed_request_create_as_agent(
     node: &Arc<EmbeddedNode>,
-    identity: &dyn NodeIdentity,
     agent_identity: &dyn NodeIdentity,
     mut create: gents_protocol::request_admission::AgentRequestCreate,
 ) -> RequestLifecycle {
+    assert_eq!(
+        create.admission.kind,
+        gents_protocol::request_admission::AgentRequestAdmissionKind::LocalSelf,
+        "the selected Agent signs and owns a fixture request"
+    );
     create.agent_did = agent_identity.did().to_owned();
-    if create.admission.kind
-        == gents_protocol::request_admission::AgentRequestAdmissionKind::LocalSelf
-    {
-        create.requester_did = create.agent_did.clone();
-        create.admission =
-            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
-                &create.agent_did,
-            );
-        gents_session::request::admission::sign_agent_request_create(agent_identity, &mut create)
-            .await
-            .expect("sign fixture request as selected agent");
-    } else {
-        gents_session::request::admission::sign_agent_request_create(identity, &mut create)
-            .await
-            .expect("sign canonical admission fixture request");
-    }
-    let local_self = create.admission.kind
-        == gents_protocol::request_admission::AgentRequestAdmissionKind::LocalSelf;
+    create.requester_did = create.agent_did.clone();
+    create.admission = gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+        &create.agent_did,
+    );
+    gents_session::request::admission::sign_agent_request_create(agent_identity, &mut create)
+        .await
+        .expect("sign fixture request as selected agent");
     let actor_access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
         identity::Did::new(create.agent_did.as_str()).unwrap(),
         agent_identity,
     )
     .unwrap();
-    if local_self {
-        actor_access
-            .write(
-                "fixture.create_request",
-                &create.graphql_mutation().unwrap(),
-            )
-            .await
-            .expect("create agent-owned local request");
-    } else {
-        let created = node.execute(&create.graphql_mutation().unwrap()).await;
-        assert!(!created.has_errors(), "{:#?}", created.errors);
-    }
+    actor_access
+        .write(
+            "fixture.create_request",
+            &create.graphql_mutation().unwrap(),
+        )
+        .await
+        .expect("create agent-owned local request");
     let request_id = gents_store::graphql::escape_graphql_string(&create.request_id);
     let query = format!(
         r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
         gents_protocol::row::AGENT_REQUEST_FIELDS,
     );
-    let row: gents_protocol::row::AgentRequestRow = if local_self {
-        let result = actor_access.execute(&query).await.unwrap();
-        serde_json::from_value(result["data"]["AgentRequest"][0].clone()).unwrap()
-    } else {
-        let result = node.execute(&query).await;
-        gents_store::graphql::first_row(&result, "AgentRequest")
-            .unwrap()
-            .unwrap()
-    };
+    let result = actor_access.execute(&query).await.unwrap();
+    let row: gents_protocol::row::AgentRequestRow =
+        serde_json::from_value(result["data"]["AgentRequest"][0].clone()).unwrap();
     let mut lifecycle = RequestLifecycle::new_with_node_did(
         node.clone(),
         row.try_into().unwrap(),

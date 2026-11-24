@@ -8,7 +8,7 @@ use gents_store::identity::NodeIdentity;
 use serde_json::{json, Value};
 
 use super::{load_candidates, redrive_one, RedriveOutcome};
-use crate::request::lifecycle::test_support::{test_db, TestDb};
+use crate::test_support::AgentHome;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -65,7 +65,7 @@ fn absent_doc_id() -> String {
     format!("bae-{}", uuid::Uuid::new_v4())
 }
 
-async fn create_request(db: &TestDb, session_doc: &str, input: Value) -> String {
+async fn create_request(db: &AgentHome, session_doc: &str, input: Value) -> String {
     let literal = gents_protocol::graphql::graphql_input_literal(&input).unwrap();
     let agent_did = db.agent_did();
     let node_did = db.node_did();
@@ -171,7 +171,7 @@ fn row_observation(names: &Names, row: &Value) -> family::RowObservation {
 }
 
 async fn publication(
-    db: &TestDb,
+    db: &AgentHome,
     names: &Names,
     session: &str,
     wake_doc: &str,
@@ -247,7 +247,7 @@ async fn publication(
 }
 
 async fn replay(
-    db: &TestDb,
+    db: &AgentHome,
     other: &str,
     index: usize,
     input: &family::WakeRowsInput<ExtraRow>,
@@ -311,7 +311,7 @@ async fn replay(
     names.id(&wake_request, 901);
     crate::request::retry_budget::write_pin(
         db.node.clone(),
-        db.identity.clone(),
+        db.node_identity.clone(),
         node_did,
         &wake_doc,
         3,
@@ -389,9 +389,9 @@ async fn replay(
 
 #[tokio::test]
 async fn generated_background_wake_rows_redrive_through_the_recovery_owner() {
-    let db = test_db("background-wake-rows").await;
+    let db = AgentHome::start("background-wake-rows").await;
     let other = gents_store::identity::KeyIdentity::load_or_create(
-        db._tempdir.path().join("other-requester.key"),
+        db.path().join("other-requester.key"),
         None,
     )
     .unwrap();
