@@ -511,7 +511,10 @@ async fn a_profile_resolves_to_its_chat_completions_endpoint() {
         .unwrap();
     assert_eq!(endpoint.url, "http://127.0.0.1:1/v1/chat/completions");
     assert_eq!(endpoint.model, "test-model");
-    assert_eq!(endpoint.max_concurrent, 1);
+    assert_eq!(
+        endpoint.max_concurrent,
+        usize::try_from(gents_documents::inference_defaults::DEFAULT_MAX_CONCURRENT).unwrap()
+    );
     assert!(endpoint.api_key.is_none());
     let error = models
         .resolve(&binding("gone"), Some(&actor))

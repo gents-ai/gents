@@ -380,7 +380,10 @@ fn admission_rejects_unrelated_observation_and_defaults_capacity() {
     let admission = BackendAdmissionConfig::from_backend(&backend, &observation).unwrap();
     assert_eq!(
         (admission.max_concurrent, admission.max_queue_depth),
-        (1, 100)
+        (
+            usize::try_from(gents_documents::inference_defaults::DEFAULT_MAX_CONCURRENT).unwrap(),
+            100
+        )
     );
     assert!(admission.is_available());
     observation.probe_status = None;
