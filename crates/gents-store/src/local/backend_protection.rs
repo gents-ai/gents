@@ -253,10 +253,13 @@ impl<'a> FreshBackendStore<'a> {
             Ok(document_acp::created(&node, document_acp)?)
         }
         .await;
+        let weak_db = Arc::downgrade(node.database());
+        let weak_store = Arc::downgrade(node.database().store());
         let shutdown = node.shutdown().await;
         let deployment = result?;
         shutdown?;
         drop(node);
+        diag_probe(&self.data, &weak_db, &weak_store);
         if let Some(deployment) = deployment {
             let data = self.data.clone();
             tokio::task::spawn_blocking(move || document_acp::record(&data, &deployment)).await??;
@@ -370,7 +373,11 @@ impl<'a> ProtectedBackendStore<'a> {
             }
         }
         .await;
+        let weak_db = Arc::downgrade(node.database());
+        let weak_store = Arc::downgrade(node.database().store());
         let shutdown = node.shutdown().await;
+        drop(node);
+        diag_probe(&self.data, &weak_db, &weak_store);
         let transport_replica = checked.map_err(|error| match error {
             BackendProtectionError::InvalidBinding => BackendProtectionError::Incompatible(
                 gents_protocol::operations::install_repair::IncompatibleStore {
@@ -581,4 +588,59 @@ pub(crate) async fn validate_policy_binding(
         return Err(BackendProtectionError::InvalidBinding);
     }
     Ok(())
+}
+
+fn diag_threads() -> Vec<String> {
+    let mut names = Vec::new();
+    if let Ok(entries) = std::fs::read_dir("/proc/self/task") {
+        for entry in entries.flatten() {
+            if let Ok(name) = std::fs::read_to_string(entry.path().join("comm")) {
+                names.push(name.trim().to_owned());
+            }
+        }
+    }
+    names.sort();
+    names
+}
+
+fn diag_held(data: &Path) -> bool {
+    match regolith::Db::open_read_only(data, regolith::Options::default()) {
+        Ok(_) => false,
+        Err(error) => error.to_string().contains("already locked"),
+    }
+}
+
+#[track_caller]
+fn diag_probe<A, B>(data: &Path, db: &std::sync::Weak<A>, store: &std::sync::Weak<B>) {
+    if !diag_held(data) {
+        return;
+    }
+    let started = std::time::Instant::now();
+    eprintln!(
+        "LOCKDIAG held after drop (caller {}): db_strong={} store_strong={} threads={:?}",
+        std::panic::Location::caller(),
+        db.strong_count(),
+        store.strong_count(),
+        diag_threads()
+    );
+    let pid = std::process::id();
+    if let Ok(out) = std::process::Command::new("gdb")
+        .args(["-p", &pid.to_string(), "-batch", "-ex", "thread apply all bt 25"])
+        .output()
+    {
+        eprintln!("LOCKDIAG gdb:\n{}", String::from_utf8_lossy(&out.stdout));
+    }
+    while diag_held(data) {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        if started.elapsed() > std::time::Duration::from_secs(120) {
+            break;
+        }
+    }
+    eprintln!(
+        "LOCKDIAG released after {:?}: db_strong={} store_strong={} threads={:?}",
+        started.elapsed(),
+        db.strong_count(),
+        store.strong_count(),
+        diag_threads()
+    );
 }

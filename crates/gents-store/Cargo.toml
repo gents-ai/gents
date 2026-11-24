@@ -77,6 +77,7 @@ tempfile = "3"
 security-framework = { version = "3.7.0", features = ["OSX_10_15"] }
 
 [dev-dependencies]
+workers = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "1632acb47b16547631c552e85d7fc358668b9a98" }
 defra-node = { workspace = true, features = ["embedded-vera", "http"] }
 gents-claude = { workspace = true, features = ["transport"] }
 gents-store = { path = ".", features = ["test-fixtures", "typescript"] }

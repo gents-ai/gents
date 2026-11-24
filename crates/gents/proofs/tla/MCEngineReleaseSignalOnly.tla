@@ -1,0 +1,4 @@
+---- MODULE MCEngineReleaseSignalOnly ----
+EXTENDS EngineRelease
+
+====
