@@ -32,7 +32,6 @@ const BEHAVIOR: &str = "claimed-readiness-behavior";
 fn recovery_projection(goal: &GoalDocument) -> Value {
     json!({
         "status": goal.status,
-        "blocked_audits": goal.consecutive_blocked_audits.unwrap_or_default(),
         "wrapup_requested": goal.wrapup_requested.unwrap_or(false),
         "wrapup_completed": goal.wrapup_completed.unwrap_or(false),
         "infrastructure_retries": goal.infrastructure_retry_count.unwrap_or_default(),
@@ -45,7 +44,6 @@ fn recovery_projection(goal: &GoalDocument) -> Value {
 fn active_claim() -> Value {
     json!({
         "status": "active",
-        "blocked_audits": 0,
         "wrapup_requested": false,
         "wrapup_completed": false,
         "infrastructure_retries": 1,
@@ -253,11 +251,19 @@ async fn install_claim_with_terminal(
             .unwrap());
     }
     let claimed = load_goal(db).await;
-    assert!(update_goal_fields_if_status_from_access(&access, &claimed, GoalStatus::Active, &format!(
-        r#"status: "{}", wrapup_requested: {}, wrapup_completed: {}, consecutive_blocked_audits: {}"#,
-        escape_graphql_string(before["status"].as_str().unwrap()),
-        before["wrapup_requested"], before["wrapup_completed"], before["blocked_audits"],
-    )).await.unwrap());
+    assert!(update_goal_fields_if_status_from_access(
+        &access,
+        &claimed,
+        GoalStatus::Active,
+        &format!(
+            r#"status: "{}", wrapup_requested: {}, wrapup_completed: {}"#,
+            escape_graphql_string(before["status"].as_str().unwrap()),
+            before["wrapup_requested"],
+            before["wrapup_completed"],
+        )
+    )
+    .await
+    .unwrap());
     let installed = load_goal(db).await;
     assert_eq!(recovery_projection(&installed), *before);
     installed

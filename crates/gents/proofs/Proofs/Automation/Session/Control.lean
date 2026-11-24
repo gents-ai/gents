@@ -112,7 +112,6 @@ def initial : State :=
         persistence := .uncommitted }
     goal :=
       { status := .active
-        blockedAudits := 1
         wrapupRequested := false
         wrapupCompleted := false }
     stopped := false

@@ -55,8 +55,7 @@
             "status",
             "token_budget",
             "completion_evidence",
-            "consecutive_blocked_audits",
-            "last_blocked_reason"
+            "blocked_reason"
           ]
         },
         {

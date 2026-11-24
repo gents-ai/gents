@@ -95,14 +95,13 @@ fn goal_view(
                 objective: shown(snapshot.objective),
                 status: shown(snapshot.status),
                 token_budget: snapshot.token_budget.map(|budget| budget.to_string()),
-                blocked_audit_threshold: snapshot.blocked_audit_threshold.to_string(),
                 max_infrastructure_retries: snapshot.max_infrastructure_retries.to_string(),
                 tokens_used: count(snapshot.tokens_used),
                 active_time_seconds: count(snapshot.active_time_seconds),
                 continuation_sequence: count(snapshot.continuation_sequence),
                 wrapup_requested: snapshot.wrapup_requested,
                 wrapup_completed: snapshot.wrapup_completed,
-                last_blocked_reason: snapshot.last_blocked_reason.and_then(present),
+                blocked_reason: snapshot.blocked_reason.and_then(present),
                 last_failure: snapshot.last_failure.and_then(present),
                 completion_evidence: snapshot.completion_evidence.and_then(present),
             }
@@ -332,7 +331,7 @@ mod tests {
         snapshot.tokens_used = -5;
         snapshot.active_time_seconds = -1;
         snapshot.continuation_sequence = -2;
-        snapshot.last_blocked_reason = Some(" ".into());
+        snapshot.blocked_reason = Some(" ".into());
         snapshot.last_failure = Some("usage_limited: out".into());
         snapshot.completion_evidence = Some(String::new());
 
@@ -348,7 +347,7 @@ mod tests {
             ),
             ("", "", "0", "0", "0")
         );
-        assert_eq!(shown.last_blocked_reason, None);
+        assert_eq!(shown.blocked_reason, None);
         assert_eq!(shown.last_failure.as_deref(), Some("usage_limited: out"));
         assert_eq!(shown.completion_evidence, None);
     }

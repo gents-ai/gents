@@ -84,7 +84,6 @@ async fn set_goal_in_txn(
             "tokens_used": existing.tokens_used.unwrap_or_default().max(0),
             "active_time_seconds": active_time,
             "active_started_at": post.status.accrues_active_time().then_some(now_string.as_str()),
-            "consecutive_blocked_audits": post.blocked_audits,
             "wrapup_requested": post.wrapup_requested,
             "wrapup_completed": post.wrapup_completed,
             "updated_at": now_string,
@@ -114,10 +113,7 @@ async fn set_goal_in_txn(
             txn,
             node_did,
             &updated.goal_id,
-            updated
-                .last_blocked_reason
-                .as_deref()
-                .unwrap_or(&updated.status),
+            &updated.status,
             &now_string,
         )
         .await?;
@@ -126,11 +122,6 @@ async fn set_goal_in_txn(
 
     let initial_state = GoalState {
         status,
-        blocked_audits: if status == GoalStatus::Blocked {
-            BLOCKED_AUDIT_THRESHOLD
-        } else {
-            0
-        },
         wrapup_requested: status == GoalStatus::BudgetLimited,
         wrapup_completed: status == GoalStatus::Complete,
     };
@@ -163,7 +154,6 @@ async fn set_goal_in_txn(
             "token_usage_baseline": baseline,
             "active_time_seconds": 0,
             "active_started_at": status.accrues_active_time().then_some(now_string.as_str()),
-            "consecutive_blocked_audits": initial_state.blocked_audits,
             "continuation_sequence": 0,
             "wrapup_requested": initial_state.wrapup_requested,
             "wrapup_completed": initial_state.wrapup_completed,

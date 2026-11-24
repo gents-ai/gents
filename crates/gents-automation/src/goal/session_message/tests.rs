@@ -5,7 +5,7 @@ use gents_session::session::message::{SessionGoal, SessionMessageGoals};
 #[tokio::test]
 async fn the_session_goal_is_the_canonical_goal() {
     let f = Fixture::new(&serde_json::json!({"status":"active","sequence":0,
-        "last_continued_from":null,"latest_request":10,"children":[],"blocked_audits":0,
+        "last_continued_from":null,"latest_request":10,"children":[],
         "wrapup_requested":false,"wrapup_completed":false,"tokens_used":37,"token_budget":1000}))
     .await;
     let canonical = f.current_goal().await;

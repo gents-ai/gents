@@ -4,8 +4,8 @@ use serde_json::json;
 
 use crate::goal::{
     create_goal_for_request_from_access, load_goal_tool_context, load_goal_tool_context_with_usage,
-    refresh_goal_usage_observed, CreateGoalForSessionError, GoalAuditObservation,
-    GoalUsageObservation, RequestAssignmentObservation,
+    refresh_goal_usage_observed, CreateGoalForSessionError, GoalUsageObservation,
+    RequestAssignmentObservation,
 };
 use crate::operations::goal::set_as_working_agent;
 use gents_loop::tool_call_lifecycle::FailureClass;
@@ -307,19 +307,11 @@ async fn update_goal(call: &GoalToolCall<'_>) -> anyhow::Result<GoalToolReply> {
             Some(GoalStatus::Complete) => {
                 json!({"accepted": true, "status": GoalStatus::Complete.as_str()})
             }
-            Some(GoalStatus::Blocked) => {
-                let blocked = updated.parsed_status() == Some(GoalStatus::Blocked);
-                let mut answer = json!({"accepted": blocked, "status": updated.status});
-                if !blocked {
-                    answer["next"] = blocked_audit_next(&goal, &updated, request_id).into();
-                }
-                answer["consecutive_blocked_audits"] = updated
-                    .consecutive_blocked_audits
-                    .unwrap_or_default()
-                    .into();
-                answer["required_blocked_audits"] = updated.blocked_audit_threshold().into();
-                answer
-            }
+            Some(GoalStatus::Blocked) => json!({
+                "accepted": true,
+                "status": updated.status,
+                "next": BLOCKED_NEXT,
+            }),
             _ => json!({"accepted": true, "goal": crate::goal::snapshot(&updated, Utc::now())}),
         },
     };
@@ -330,31 +322,8 @@ async fn update_goal(call: &GoalToolCall<'_>) -> anyhow::Result<GoalToolReply> {
     Ok(GoalToolReply::Complete(result))
 }
 
-fn blocked_audit_next(
-    observed: &crate::goal::GoalDocument,
-    updated: &crate::goal::GoalDocument,
-    request_id: &str,
-) -> String {
-    let remaining =
-        updated.blocked_audit_threshold() - updated.consecutive_blocked_audits.unwrap_or_default();
-    let repeat = match remaining {
-        1 => "repeat this reason verbatim in the next goal turn".to_owned(),
-        _ => format!("repeat this reason verbatim in each of the next {remaining} goal turns"),
-    };
-    let observation = updated
-        .last_blocked_reason
-        .as_deref()
-        .map(|reason| crate::operations::goal::audit_observation(observed, reason, request_id));
-    match (observation, observed.last_blocked_reason.as_deref()) {
-        (Some(GoalAuditObservation::NewCondition), Some(previous)) => format!(
-            "the count restarted at 1 because this reason differs from the previous one, {previous:?}; {repeat}"
-        ),
-        (Some(GoalAuditObservation::SameRequest), _) => {
-            format!("this turn already counted; {repeat}")
-        }
-        _ => repeat,
-    }
-}
+/// What a blocked report does, as the model reads it in its reply.
+const BLOCKED_NEXT: &str = "the goal is paused and no more goal turns run; the user resumes it by answering. End this turn by telling the user what you need.";
 
 /// Writes an `update_goal` call through the Goal handler as the working
 /// Agent; a refusal becomes the tool's answer.
@@ -364,15 +333,7 @@ async fn write_through_handler(
     input: &GoalSetInput,
     obligations_unmet: Option<&str>,
 ) -> anyhow::Result<Result<crate::goal::GoalDocument, serde_json::Value>> {
-    match set_as_working_agent(
-        &call.access()?,
-        goal,
-        input,
-        obligations_unmet,
-        call.request_id(),
-    )
-    .await
-    {
+    match set_as_working_agent(&call.access()?, goal, input, obligations_unmet).await {
         Ok(updated) => Ok(Ok(updated)),
         Err(GoalOperationError::Passthrough(error)) => Err(anyhow::anyhow!(error)),
         Err(GoalOperationError::Stale) => Ok(Err(

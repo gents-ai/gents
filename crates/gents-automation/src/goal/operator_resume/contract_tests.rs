@@ -4,7 +4,7 @@ use serde_json::json;
 use support::*;
 
 pub(crate) fn paused_goal_state() -> serde_json::Value {
-    json!({"status":"paused","blocked_audits":2,"wrapup_requested":false,
+    json!({"status":"paused","wrapup_requested":false,
         "wrapup_completed":false,"sequence":0,"last_continued_from":null,"latest_request":10,
         "children":[],"tokens_used":37,"token_budget":1000})
 }
@@ -197,7 +197,7 @@ async fn generated_goal_config_reactivation_cases_drive_transactional_setter() {
     for case in
         gents_lean_vocab::families::goal_operator_resume_contracts_config::cases::<GoalStatus>()
     {
-        let before = json!({"status":case.input.current,"blocked_audits":2,"wrapup_requested":false,
+        let before = json!({"status":case.input.current,"wrapup_requested":false,
             "wrapup_completed":false,"sequence":0,"last_continued_from":null,"latest_request":10,
             "children":[],"tokens_used":37,"token_budget":1000});
         let f = Fixture::new(&before).await;

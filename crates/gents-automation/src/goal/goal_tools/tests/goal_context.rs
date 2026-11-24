@@ -348,7 +348,6 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                             ..Default::default()
                         },
                         None,
-                        &request_id,
                     )
                     .await
                     .is_err(),

@@ -49,7 +49,7 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
     let cases =
         gents_lean_vocab::families::goal_request_assignment_contracts_message_input::cases();
     let before = json!({"status":"active","sequence":0,"last_continued_from":null,
-        "latest_request":10,"children":[],"blocked_audits":0,"wrapup_requested":false,
+        "latest_request":10,"children":[],"wrapup_requested":false,
         "wrapup_completed":false,"tokens_used":37,"token_budget":1000});
     for (index, case) in cases.iter().enumerate() {
         let input = &case.input;

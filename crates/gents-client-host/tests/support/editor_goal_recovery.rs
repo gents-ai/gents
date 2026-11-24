@@ -32,23 +32,20 @@ impl Provider {
         }
         match self.attempts.fetch_add(1, Ordering::SeqCst) {
             0 => None,
-            audit @ (1 | 3 | 5) => Some(StreamResponse::tool_call(
-                format!("goal-blocked-audit-{}", audit.div_ceil(2)),
+            1 => Some(StreamResponse::tool_call(
+                "goal-blocked-report",
                 "update_goal",
                 json!({"status":"blocked", "reason":BLOCKED_REASON}).to_string(),
             )),
-            2 | 4 | 6 => Some(StreamResponse::text(
-                "The dependency is still unavailable.",
-            )),
-            7 => Some(StreamResponse::status(
+            2 => Some(StreamResponse::status(
                 axum::http::StatusCode::TOO_MANY_REQUESTS.as_u16(),
                 json!({"error":{"type":"insufficient_quota", "code":"insufficient_quota", "message":"Your monthly usage limit has been reached."}}).to_string(),
             )),
-            8 => Some(StreamResponse::Stream(
+            3 => Some(StreamResponse::Stream(
                 StreamScript::paused(GATE, [RESUMING])
                     .then(vec![StreamChunk::text(" and finished.")]),
             )),
-            9.. => Some(StreamResponse::text(WRAPUP)),
+            4.. => Some(StreamResponse::text(WRAPUP)),
         }
     }
 }
@@ -76,7 +73,7 @@ pub async fn wait_for_source_blocked(
             let settled = value["data"]["Goal"].as_array().is_some_and(|goals| {
                 goals.len() == 1
                     && goals[0]["status"] == "blocked"
-                    && goals[0]["last_blocked_reason"] == BLOCKED_REASON
+                    && goals[0]["blocked_reason"] == BLOCKED_REASON
             }) && value["data"]["AgentRequest"]
                 .as_array()
                 .is_some_and(|requests| {

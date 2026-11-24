@@ -431,11 +431,22 @@ impl Fixture {
             };
             format!("\"{request}\"")
         };
-        execute(&self.agent_access(), &format!(r#"mutation {{ update_Goal(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{
-            continuation_sequence: {}, last_continued_from_request_id: {last}, consecutive_blocked_audits: {},
+        execute(
+            &self.agent_access(),
+            &format!(
+                r#"mutation {{ update_Goal(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{
+            continuation_sequence: {}, last_continued_from_request_id: {last},
             wrapup_requested: {}, wrapup_completed: {}, tokens_used: {}, token_budget: {}
-        }}) {{ _docID }} }}"#, escape_graphql_string(&self.goal.doc_id), before["sequence"], before["blocked_audits"],
-            before["wrapup_requested"], before["wrapup_completed"], before["tokens_used"], before["token_budget"])).await;
+        }}) {{ _docID }} }}"#,
+                escape_graphql_string(&self.goal.doc_id),
+                before["sequence"],
+                before["wrapup_requested"],
+                before["wrapup_completed"],
+                before["tokens_used"],
+                before["token_budget"]
+            ),
+        )
+        .await;
     }
     pub async fn seed_child(&self, conflicting: bool) {
         self.seed_child_with_targets(
@@ -1022,7 +1033,7 @@ impl Fixture {
                 "watermark-parent" => 30,
                 other => panic!("unmapped predecessor watermark {other}"),
             });
-        json!({"status":g.status,"blocked_audits":g.consecutive_blocked_audits.unwrap_or(0),
+        json!({"status":g.status,
             "wrapup_requested":g.wrapup_requested.unwrap_or(false),"wrapup_completed":g.wrapup_completed.unwrap_or(false),
             "sequence":g.continuation_sequence(),"last_continued_from":last,"latest_request":latest,
             "children":children,"tokens_used":g.tokens_used.unwrap_or(0),"token_budget":g.token_budget})

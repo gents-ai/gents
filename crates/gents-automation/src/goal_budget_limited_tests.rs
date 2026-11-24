@@ -7,7 +7,6 @@ fn update_goal_cannot_resume_from_budget_limited() {
     // budget_limited, independent of any help text.
     let budget_limited = GoalState {
         status: GoalStatus::BudgetLimited,
-        blocked_audits: 0,
         wrapup_requested: true,
         wrapup_completed: false,
     };
