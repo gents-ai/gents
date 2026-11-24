@@ -447,12 +447,14 @@ async fn run_agent_owned(
         shutdown.clone(),
         Some(slot_failure_policy),
     )
-    .await?;
+    .await?
+    .with_observer(agent.runtime_snapshot_observer.clone());
     let initial_active_snapshot = generation_supervisor.current_snapshot();
     if let Err(error) = runtime_status
         .publish_startup_snapshot(initial_active_snapshot.as_ref())
         .await
     {
+        drop(initial_active_snapshot);
         runtime_shutdown_tx.send_replace(true);
         cancel.cancel();
         let shutdown_result = generation_supervisor.shutdown_slots().await;
@@ -463,8 +465,10 @@ async fn run_agent_owned(
             )),
         };
     }
-    let (active_snapshot_tx, active_snapshot_rx) = watch::channel(initial_active_snapshot.clone());
-    runtime.active_snapshots.bind(active_snapshot_rx.clone());
+    // A snapshot's dispatchers hold its slots' request channels open, and a
+    // retired slot exits only once they close: the watch takes the only
+    // startup copy, so replacing it releases generation 1.
+    let (active_snapshot_tx, active_snapshot_rx) = watch::channel(initial_active_snapshot);
     runtime.job_driver.runtime().bind_snapshot(
         gents_automation::triggers::runtime_snapshot::ActiveSnapshotAgentIdentities::boxed(
             active_snapshot_rx.clone(),
@@ -486,12 +490,7 @@ async fn run_agent_owned(
     let runtime_snapshot_observer_handle = tasks::spawn_snapshot_observer(startup_tasks);
     let trigger_engine_handle = tasks::spawn_trigger_engine(startup_tasks);
     let callback_engine_handle = tasks::spawn_callback_engine(startup_tasks);
-    let readiness_handle = tasks::spawn_readiness(
-        startup_tasks,
-        lifecycle,
-        &initial_active_snapshot,
-        readiness_fatal_error,
-    );
+    let readiness_handle = tasks::spawn_readiness(startup_tasks, lifecycle, readiness_fatal_error);
 
     let mut background_tasks = JoinSet::new();
 
