@@ -328,7 +328,9 @@ describe("error card retry", () => {
               source: "requestInterrupt",
               confidence: "direct",
               at: "2026-07-25T20:00:00Z",
-              evidence: ["root AgentRequest.lifecycle_state = "interrupted" at 2026-07-25T20:00:00Z"],
+              evidence: [
+                'root AgentRequest.lifecycle_state = "interrupted" at 2026-07-25T20:00:00Z',
+              ],
             },
           },
         }}

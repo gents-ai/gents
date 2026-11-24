@@ -24,7 +24,9 @@ describe("Transcript cancel cause surfacing", () => {
               source: "requestInterrupt",
               confidence: "direct",
               at: "2026-05-20T10:32:14Z",
-              evidence: ["root AgentRequest.lifecycle_state = "interrupted" at 2026-05-20T10:32:14Z"],
+              evidence: [
+                'root AgentRequest.lifecycle_state = "interrupted" at 2026-05-20T10:32:14Z',
+              ],
             },
           },
         ],

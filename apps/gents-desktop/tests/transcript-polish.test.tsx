@@ -114,7 +114,9 @@ const interruptEvidence = {
   source: "requestInterrupt",
   confidence: "direct",
   at: "2026-09-23T03:03:34Z",
-  evidence: ["root AgentRequest.lifecycle_state = "interrupted" at 2026-09-23T03:03:34Z"],
+  evidence: [
+    'root AgentRequest.lifecycle_state = "interrupted" at 2026-09-23T03:03:34Z',
+  ],
 };
 
 describe("file edit diff", () => {
@@ -489,7 +491,7 @@ describe("stop", () => {
     fireEvent.click(within(notice).getByRole("button", { name: "Details" }));
     expect(
       within(notice).getByText(
-        "root AgentRequest.lifecycle_state = "interrupted" at 2026-09-23T03:03:34Z",
+        'root AgentRequest.lifecycle_state = "interrupted" at 2026-09-23T03:03:34Z',
       ),
     ).toBeInTheDocument();
     expect(
