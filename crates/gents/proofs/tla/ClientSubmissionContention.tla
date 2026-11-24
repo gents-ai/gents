@@ -1,6 +1,7 @@
 ---- MODULE ClientSubmissionContention ----
 \* lean: TransactionReplay.disposition, Identity.Configuration.clientSignedWriteMayRetry
 \* crates: gents-session, gents-store
+\* models: TransactionFence.a_bound_session_stays_bound
 \* A User's optimistic chat send racing its session's active turn.
 \*
 \* Client (Lean `ClientOptimisticSend`): the client picks the request
@@ -40,12 +41,27 @@
 \* transport may fail a send before it reaches the runtime, held or not.
 \* `Timeout` is the client deadline `CHAT_SEND_DEADLINE_MS`.
 \*
+\* A submission into a session whose relationships are already published
+\* (`PublishedBinding`) reads the session's binding, its requester and Agent,
+\* before the transaction (`bound_published_session`), and the transaction
+\* reads only the Agent. The Agent's refreshes then never abort it. That read
+\* is current at commit because a bound session stays bound, whatever its
+\* other writers commit (Lean `TransactionFence.a_bound_session_stays_bound`:
+\* `requester_did` and `agent_did` are `@immutable`, `relationships_pending`
+\* only goes from true to false, and no path deletes a session, which the
+\* `gents` structure test `a_session_binding_is_never_rewritten` and
+\* `session_custody` hold). So `binding` changes only under `BindingChanges`,
+\* the RED that breaks that premise. Without `PublishedBinding` the
+\* transaction reads the session, and a binding change, a write to the
+\* session, aborts it like any refresh.
+\*
 \* `Publications` bounds the Agent's session refreshes that land inside one
 \* attempt series, and `MaxSends` bounds the person's retries.
 \* REDs: `RetryFreshId` retries under a new identity, which duplicates the turn
 \* when the first send landed after its reply was lost; `PayloadLost` lets the
 \* client drop the payload of an unconfirmed message, which leaves a failed
-\* message with no Retry.
+\* message with no Retry; `BindingChanges` lets a published session's binding
+\* change, which commits a request under the binding it no longer has.
 EXTENDS Naturals, Sequences, FiniteSets, LeanDecision_TransactionReplay,
         LeanDecision_Identity_Configuration
 
@@ -59,7 +75,9 @@ CONSTANTS
   Refusals,      \* the runtime or transport may fail a send before it commits
   MaxSends,      \* sends of the one authored message (first plus retries)
   RetryFreshId,  \* RED: retry under a new request identity
-  PayloadLost    \* RED: the client may drop an unconfirmed message's payload
+  PayloadLost,   \* RED: the client may drop an unconfirmed message's payload
+  PublishedBinding, \* the submission reads the binding before its transaction
+  BindingChanges \* RED: a published session's binding may change
 
 ASSUME /\ Reserves \in BOOLEAN
        /\ Publications \in Nat
@@ -71,6 +89,8 @@ ASSUME /\ Reserves \in BOOLEAN
        /\ MaxSends \in Nat \ {0}
        /\ RetryFreshId \in BOOLEAN
        /\ PayloadLost \in BOOLEAN
+       /\ PublishedBinding \in BOOLEAN
+       /\ BindingChanges \in BOOLEAN
 
 Ids == 1..MaxSends
 
@@ -81,12 +101,18 @@ VARIABLES
   payload,   \* the client still holds the authored payload
   cur,       \* the request identity the client sends under
   sends,     \* sends begun for this authored message
-  wire,      \* sends in the runtime: [id, stage, snap, tries]
+  wire,      \* sends in the runtime: [id, stage, snap, bind, tries]
   replies,   \* replies on the way back: [id, ok]
   rows,      \* committed AgentRequest identities
-  conflictLost \* a send was lost to the turn's own writes
+  conflictLost, \* a send was lost to the turn's own writes
+  binding,   \* the session's binding (requester and Agent), by version
+  staleBinding \* a request committed under a binding the session no longer has
 
-vars == <<sessVer, agentLeft, msg, payload, cur, sends, wire, replies, rows, conflictLost>>
+vars == <<sessVer, agentLeft, msg, payload, cur, sends, wire, replies, rows, conflictLost,
+          binding, staleBinding>>
+
+\* Every action but the binding change leaves the binding alone.
+Bound == UNCHANGED <<binding, staleBinding>>
 
 Init ==
   /\ sessVer = 0
@@ -99,12 +125,14 @@ Init ==
   /\ replies = <<>>
   /\ rows = {}
   /\ conflictLost = FALSE
+  /\ binding = 0
+  /\ staleBinding = FALSE
 
 Remove(s, i) == SubSeq(s, 1, i - 1) \o SubSeq(s, i + 1, Len(s))
 
 Send(id) ==
   /\ wire' = Append(wire, [id |-> id, stage |-> IF Reserves THEN "reserving" ELSE "open",
-                           snap |-> sessVer, tries |-> 1])
+                           snap |-> sessVer, bind |-> binding, tries |-> 1])
   /\ sends' = sends + 1
 
 \* The working Agent publishes a message and refreshes the observation.
@@ -113,6 +141,16 @@ AgentPublish ==
   /\ sessVer' = sessVer + 1
   /\ agentLeft' = agentLeft - 1
   /\ UNCHANGED <<msg, payload, cur, sends, wire, replies, rows, conflictLost>>
+  /\ Bound
+
+\* RED: the session's binding changes, a write to the session document.
+BindingChange ==
+  /\ BindingChanges
+  /\ binding = 0
+  /\ binding' = 1
+  /\ sessVer' = sessVer + 1
+  /\ UNCHANGED <<agentLeft, msg, payload, cur, sends, wire, replies, rows, conflictLost,
+                 staleBinding>>
 
 \* The person sends: pending at once, the payload kept, one signed create.
 Compose ==
@@ -121,6 +159,7 @@ Compose ==
   /\ payload' = TRUE
   /\ Send(cur)
   /\ UNCHANGED <<sessVer, agentLeft, cur, replies, rows, conflictLost>>
+  /\ Bound
 
 \* A commit that aborted on the store's conflict, its signed write sent and
 \* the abort confirmed, is decided by Lean `TransactionReplay.disposition`;
@@ -137,13 +176,16 @@ ASSUME \A rebuild, remain \in BOOLEAN :
            = (remain /\ clientSignedWriteMayRetry(TRUE, TRUE, rebuild))
 
 \* A reservation commit binds the targets when the read session is unchanged,
-\* and the submission then reads it; a confirmed abort is rebuilt while
-\* attempts remain, and otherwise the send fails back to the client.
+\* and the submission then reads the session and its binding: before its
+\* transaction when the binding is published, inside it otherwise. A
+\* confirmed abort is rebuilt while attempts remain, and otherwise the send
+\* fails back to the client.
 ReserveCommit(i) ==
   LET w == wire[i] IN
   /\ w.stage = "reserving"
   /\ IF w.snap = sessVer
-       THEN /\ wire' = [wire EXCEPT ![i] = [w EXCEPT !.stage = "open", !.snap = sessVer, !.tries = 1]]
+       THEN /\ wire' = [wire EXCEPT ![i] = [w EXCEPT !.stage = "open", !.snap = sessVer,
+                                              !.bind = binding, !.tries = 1]]
             /\ UNCHANGED <<replies, conflictLost>>
        ELSE IF Rebuilds(ReserveRedrive, w)
               THEN /\ wire' = [wire EXCEPT ![i] = [w EXCEPT !.snap = sessVer, !.tries = w.tries + 1]]
@@ -152,25 +194,30 @@ ReserveCommit(i) ==
                    /\ replies' = Append(replies, [id |-> w.id, ok |-> FALSE])
                    /\ conflictLost' = TRUE
   /\ UNCHANGED <<sessVer, agentLeft, msg, payload, cur, sends, rows>>
+  /\ Bound
 
-\* The submission commits the idempotent create when the read session is
-\* unchanged; a confirmed abort is rebuilt while attempts remain.
+\* The submission commits the idempotent create when the session it read in
+\* its transaction is unchanged, or at once when it read the published
+\* binding before the transaction; a confirmed abort is rebuilt, reading the
+\* session again, while attempts remain.
 SubmitCommit(i) ==
   LET w == wire[i] IN
   /\ w.stage = "open"
-  /\ IF w.snap = sessVer
+  /\ IF PublishedBinding \/ w.snap = sessVer
        THEN /\ wire' = Remove(wire, i)
             /\ rows' = rows \cup {w.id}
             /\ replies' = Append(replies, [id |-> w.id, ok |-> TRUE])
+            /\ staleBinding' = (staleBinding \/ w.bind # binding)
             /\ UNCHANGED conflictLost
        ELSE IF Rebuilds(Redrive, w)
-              THEN /\ wire' = [wire EXCEPT ![i] = [w EXCEPT !.snap = sessVer, !.tries = w.tries + 1]]
-                   /\ UNCHANGED <<rows, replies, conflictLost>>
+              THEN /\ wire' = [wire EXCEPT ![i] = [w EXCEPT !.snap = sessVer, !.bind = binding,
+                                                     !.tries = w.tries + 1]]
+                   /\ UNCHANGED <<rows, replies, conflictLost, staleBinding>>
               ELSE /\ wire' = Remove(wire, i)
                    /\ replies' = Append(replies, [id |-> w.id, ok |-> FALSE])
                    /\ conflictLost' = TRUE
-                   /\ UNCHANGED rows
-  /\ UNCHANGED <<sessVer, agentLeft, msg, payload, cur, sends>>
+                   /\ UNCHANGED <<rows, staleBinding>>
+  /\ UNCHANGED <<sessVer, agentLeft, msg, payload, cur, sends, binding>>
 
 \* The runtime refuses a send of an identity it does not hold.
 Refuse(i) ==
@@ -179,6 +226,7 @@ Refuse(i) ==
   /\ wire' = Remove(wire, i)
   /\ replies' = Append(replies, [id |-> wire[i].id, ok |-> FALSE])
   /\ UNCHANGED <<sessVer, agentLeft, msg, payload, cur, sends, rows, conflictLost>>
+  /\ Bound
 
 \* The transport fails before the send reaches the runtime.
 TransportFail(i) ==
@@ -186,11 +234,13 @@ TransportFail(i) ==
   /\ wire' = Remove(wire, i)
   /\ replies' = Append(replies, [id |-> wire[i].id, ok |-> FALSE])
   /\ UNCHANGED <<sessVer, agentLeft, msg, payload, cur, sends, rows, conflictLost>>
+  /\ Bound
 
 LoseReply(j) ==
   /\ LostReply
   /\ replies' = Remove(replies, j)
   /\ UNCHANGED <<sessVer, agentLeft, msg, payload, cur, sends, wire, rows, conflictLost>>
+  /\ Bound
 
 \* A reply is applied even after the deadline: a committed reply confirms.
 Receive(j) ==
@@ -206,12 +256,14 @@ Receive(j) ==
                    /\ UNCHANGED payload
               ELSE UNCHANGED <<msg, payload>>
   /\ UNCHANGED <<sessVer, agentLeft, cur, sends, wire, rows, conflictLost>>
+  /\ Bound
 
 \* The client's deadline passes with no reply.
 Timeout ==
   /\ msg = "pending"
   /\ msg' = "failed"
   /\ UNCHANGED <<sessVer, agentLeft, payload, cur, sends, wire, replies, rows, conflictLost>>
+  /\ Bound
 
 \* Retry resends the kept payload under the same identity.
 Retry ==
@@ -222,12 +274,14 @@ Retry ==
   /\ cur' = IF RetryFreshId THEN cur + 1 ELSE cur
   /\ Send(cur')
   /\ UNCHANGED <<sessVer, agentLeft, payload, replies, rows, conflictLost>>
+  /\ Bound
 
 Discard ==
   /\ msg = "failed"
   /\ msg' = "discarded"
   /\ payload' = FALSE
   /\ UNCHANGED <<sessVer, agentLeft, cur, sends, wire, replies, rows, conflictLost>>
+  /\ Bound
 
 \* RED: the client drops the payload of an unconfirmed message.
 DropPayload ==
@@ -236,6 +290,7 @@ DropPayload ==
   /\ payload
   /\ payload' = FALSE
   /\ UNCHANGED <<sessVer, agentLeft, msg, cur, sends, wire, replies, rows, conflictLost>>
+  /\ Bound
 
 Runtime ==
   \/ \E i \in 1..Len(wire) : ReserveCommit(i) \/ SubmitCommit(i)
@@ -243,6 +298,7 @@ Runtime ==
 
 Next ==
   \/ AgentPublish
+  \/ BindingChange
   \/ Compose
   \/ Runtime
   \/ \E j \in 1..Len(replies) : LoseReply(j) \/ Receive(j)
@@ -260,7 +316,7 @@ Spec ==
   /\ WF_vars(Timeout)
 
 TypeOK ==
-  /\ sessVer \in 0..Publications
+  /\ sessVer \in 0..(Publications + IF BindingChanges THEN 1 ELSE 0)
   /\ agentLeft \in 0..Publications
   /\ msg \in {"none", "pending", "confirmed", "failed", "discarded"}
   /\ payload \in BOOLEAN
@@ -270,9 +326,14 @@ TypeOK ==
   /\ Len(replies) <= MaxSends
   /\ rows \subseteq Ids
   /\ conflictLost \in BOOLEAN
+  /\ binding \in 0..1
+  /\ staleBinding \in BOOLEAN
 
 \* A valid send during a turn is never lost to the turn's own writes.
 NoConflictLoss == ~conflictLost
+
+\* Every request is committed under the binding its session has.
+SubmittedUnderCurrentBinding == ~staleBinding
 
 \* No interleaving of send, lost reply, deadline and retry creates a second
 \* request for one authored message.

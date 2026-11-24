@@ -212,4 +212,79 @@ theorem reading_the_same_rows_again_adds_no_conflict (decider writer : Footprint
       cases returned.any writer.deletes.contains <;> simp
   | arrivalHead => rfl
 
+/-! ## Immutable-field fences
+
+A decision may also rest on facts no writer can change. Then no fence is
+needed: what a read outside the transaction decided is what a read inside it
+would decide at commit, whatever commits in between.
+
+External premise (the pinned schema and the writers on `main`, held by the
+structure tests `a_session_binding_is_never_rewritten` and `session_custody`):
+`AgentSession.requester_did` and `AgentSession.agent_did` are `@immutable`;
+`relationships_pending` is written only from true to false; no path deletes an
+`AgentSession`. Every other write to a session (its observation refresh, its
+title, its archive state) leaves the binding as it was. -/
+
+/-- What a client request's admission decides on in its session. -/
+structure SessionBinding where
+  requester : Nat
+  agent : Nat
+  relationshipsPending : Bool
+  deriving DecidableEq, Repr
+
+/-- The writes a session admits, by what they do to its binding. -/
+inductive SessionWrite where
+  /-- Any write that leaves the binding as it was: the working Agent's
+  observation refresh, a title, an archive. -/
+  | other
+  /-- The creator publishes the session's relationships. -/
+  | publishRelationships
+  deriving DecidableEq, Repr
+
+def SessionWrite.apply : SessionWrite → SessionBinding → SessionBinding
+  | .other, s => s
+  | .publishRelationships, s => { s with relationshipsPending := false }
+
+/-- The session after `writes`, in commit order. -/
+def SessionBinding.after (s : SessionBinding) (writes : List SessionWrite) : SessionBinding :=
+  writes.foldl (fun s w => w.apply s) s
+
+/-- The decision `bound_published_session` takes: the session is the
+request's, and its relationships are published. -/
+def SessionBinding.bound (s : SessionBinding) (requester agent : Nat) : Bool :=
+  s.requester == requester && s.agent == agent && !s.relationshipsPending
+
+theorem the_binding_fields_never_change (s : SessionBinding) (writes : List SessionWrite) :
+    (s.after writes).requester = s.requester ∧ (s.after writes).agent = s.agent := by
+  induction writes generalizing s with
+  | nil => exact ⟨rfl, rfl⟩
+  | cons w rest ih =>
+      cases w <;> simpa [SessionBinding.after, List.foldl, SessionWrite.apply] using ih _
+
+theorem published_relationships_stay_published (s : SessionBinding)
+    (writes : List SessionWrite) (h : s.relationshipsPending = false) :
+    (s.after writes).relationshipsPending = false := by
+  induction writes generalizing s with
+  | nil => exact h
+  | cons w rest ih =>
+      cases w <;> exact ih _ (by simp [SessionWrite.apply, h])
+
+/-- A session bound to a request before its transaction is bound to it at
+commit, whatever the session's other writers commit in between: reading the
+binding outside the transaction decides what a read inside it would. -/
+theorem a_bound_session_stays_bound (s : SessionBinding) (writes : List SessionWrite)
+    (requester agent : Nat) (h : s.bound requester agent = true) :
+    (s.after writes).bound requester agent = true := by
+  obtain ⟨hr, ha⟩ := the_binding_fields_never_change s writes
+  simp only [SessionBinding.bound, Bool.and_eq_true, beq_iff_eq, Bool.not_eq_true'] at h ⊢
+  exact ⟨⟨hr ▸ h.1.1, ha ▸ h.1.2⟩, published_relationships_stay_published s writes h.2⟩
+
+/-- Without the premise the read outside goes stale: a write that re-pends
+the relationships, or changes the Agent, unbinds a session that was bound. -/
+theorem a_rewritable_binding_can_go_stale :
+    let s : SessionBinding := ⟨0, 0, false⟩
+    s.bound 0 0 = true ∧ ({ s with relationshipsPending := true } : SessionBinding).bound 0 0 = false ∧
+      ({ s with agent := 1 } : SessionBinding).bound 0 0 = false := by
+  decide
+
 end TransactionFence

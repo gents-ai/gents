@@ -1,0 +1,4 @@
+---- MODULE MCClientSubmissionContentionPublishedBinding ----
+EXTENDS ClientSubmissionContention
+
+====
