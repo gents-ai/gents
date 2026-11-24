@@ -1,11 +1,9 @@
 use std::collections::BTreeSet;
-use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
 use futures::StreamExt;
 use serde_json::{json, Map, Value};
-use tokio::sync::Semaphore;
 
 use gents_documents::InferenceBackend;
 use gents_pack::plugin::model_binding::{ModelEndpoint, ModelProfileVisibility};
@@ -196,7 +194,6 @@ impl Refusal {
 pub struct Session {
     endpoint: ModelEndpoint,
     client: reqwest::Client,
-    limiter: Arc<Semaphore>,
     failed_rounds: u32,
     requests_sent: usize,
     answer_bytes: usize,
@@ -212,7 +209,6 @@ impl Session {
             .build()
             .context("building the model client")?;
         Ok(Self {
-            limiter: Arc::clone(&endpoint.limiter),
             endpoint,
             client,
             failed_rounds: 0,
@@ -302,9 +298,14 @@ impl Session {
         let body = serde_json::to_vec(&body)
             .map_err(|_| "the model request could not be encoded".to_owned())?;
         let wall = tokio::time::Instant::from_std(deadline);
-        let _permit = match tokio::time::timeout_at(wall, self.limiter.acquire()).await {
+        let _permit = match tokio::time::timeout_at(wall, endpoint.admission.admit()).await {
             Ok(Ok(permit)) => permit,
-            Ok(Err(_)) => return Err("the model endpoint is not available".to_owned()),
+            Ok(Err(gents_inference::admission::BackendCallRefused::QueueFull)) => {
+                return Err("the model endpoint is busy; this request was not sent".to_owned())
+            }
+            Ok(Err(gents_inference::admission::BackendCallRefused::Closed)) => {
+                return Err("the model endpoint is not available".to_owned())
+            }
             Err(_) => return Err("the model request timed out".to_owned()),
         };
         let mut runtime_key = None;
