@@ -32,7 +32,7 @@ pub enum SessionInterruptRefusal {
 pub enum SessionInterruptError {
     #[error(transparent)]
     Refused(#[from] SessionInterruptRefusal),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Store(#[from] anyhow::Error),
 }
 
