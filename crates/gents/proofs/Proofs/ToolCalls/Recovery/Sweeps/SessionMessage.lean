@@ -4,8 +4,10 @@ namespace Recovery
 
 open ToolExecution
 
-/-! A session-message row settles on its caused request's terminal, or fails
-closed when it cannot name that request (`ToolRecoveryCause.causedRequestUnbound`).
+/-! A session-message row settles once the lineage it caused is quiet, on the
+terminal of the lineage request that ran last (`LineageReturn.decide`), or
+fails closed when it cannot name the request it caused
+(`ToolRecoveryCause.causedRequestUnbound`).
 A caused request lives on the calling runtime (`observeCaused`), so its terminal
 is read in that runtime's own store; no peer replication is awaited. -/
 
