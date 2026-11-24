@@ -121,12 +121,23 @@ impl HomeStatement {
     /// no other signature of that key is taken for one.
     pub fn signing_payload(&self) -> Vec<u8> {
         let version = self.version.to_string();
-        let (authentication, worker, deployment) = match &self.client_authentication {
-            ClientAuthentication::Local => ("local", "", String::new()),
-            ClientAuthentication::Vera { worker, deployment } => {
-                ("vera", worker.as_str(), deployment.to_string())
-            }
-            ClientAuthentication::Unavailable => ("unavailable", "", String::new()),
+        let (authentication, worker, deployment, publisher) = match &self.client_authentication {
+            ClientAuthentication::Local => ("local", "", String::new(), None),
+            ClientAuthentication::Vera {
+                worker,
+                deployment,
+                publisher_node,
+            } => (
+                if publisher_node.is_some() {
+                    "vera-shared"
+                } else {
+                    "vera"
+                },
+                worker.as_str(),
+                deployment.to_string(),
+                publisher_node.as_deref(),
+            ),
+            ClientAuthentication::Unavailable => ("unavailable", "", String::new(), None),
         };
         let (reading, audience_worker, audience_deployment, genesis) =
             match &self.delegation_audience {
@@ -156,7 +167,9 @@ impl HomeStatement {
                 genesis.unwrap_or_default(),
                 if provider_time.is_some() { "1" } else { "0" },
                 provider_time.as_deref().unwrap_or_default(),
-            ],
+            ]
+            .into_iter()
+            .chain(publisher),
         )
     }
 
@@ -183,7 +196,7 @@ pub enum UnsignedHomeStatus {
 #[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
 pub enum HomeAttestation {
     Signed {
-        statement: HomeStatement,
+        statement: Box<HomeStatement>,
         /// Unpadded base64url.
         signature: String,
     },
@@ -195,7 +208,7 @@ pub enum HomeAttestation {
 impl HomeAttestation {
     pub fn signed(statement: HomeStatement, signature: &[u8]) -> Self {
         Self::Signed {
-            statement,
+            statement: Box::new(statement),
             signature: base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(signature),
         }
     }
@@ -239,7 +252,7 @@ impl HomeAttestation {
             .decode(signature)
             .map_err(|_| HomeStatusRefusal::Malformed)?;
         if verify(node, &statement.signing_payload(), &signature) {
-            Ok(statement)
+            Ok(*statement)
         } else {
             Err(HomeStatusRefusal::BadSignature)
         }
@@ -267,4 +280,33 @@ pub enum HomeStatusRefusal {
     /// (`Identity.HeldAudience.reconcile`).
     #[error("the home's signed status contradicts itself; update Gents on the home")]
     Contradictory,
+}
+
+#[cfg(test)]
+mod household_tests {
+    use super::*;
+
+    #[test]
+    fn shared_household_selection_is_signed() {
+        let nonce = HomeNonce::from_bytes([7; 32]);
+        let mut status = serde_json::json!({
+            "node_did": "did:key:device",
+            "client_authentication": {"kind": "vera", "worker": "worker", "deployment": 9},
+        });
+        let original = HomeStatement::of_status(&status, &nonce);
+        status["client_authentication"]["publisher_node"] = Value::Null;
+        assert_eq!(HomeStatement::of_status(&status, &nonce), original);
+        assert!(serde_json::to_value(&original.client_authentication)
+            .unwrap()
+            .get("publisher_node")
+            .is_none());
+        status["client_authentication"]["publisher_node"] = "device-node".into();
+        let shared = HomeStatement::of_status(&status, &nonce).signing_payload();
+        assert_ne!(shared, original.signing_payload());
+        status["client_authentication"]["publisher_node"] = "another-device-node".into();
+        assert_ne!(
+            HomeStatement::of_status(&status, &nonce).signing_payload(),
+            shared
+        );
+    }
 }

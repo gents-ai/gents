@@ -8,6 +8,20 @@ use super::{ConfigAccess, ConfigClientError, GraphqlEndpoint, Result};
 use crate::local::document_acp::{home_policy_ids, provider_of, DocumentAcp};
 
 impl GraphqlEndpoint {
+    /// Bind the setup endpoint to the schema selected by its local node.
+    pub fn with_local_home_schema(
+        self,
+        node: &defra_node::Node,
+    ) -> std::result::Result<Self, crate::node_extension::ExtensionError> {
+        if let Some(bound) =
+            crate::node_extension::attached::<crate::local::document_acp::BoundPolicyIds>(node)
+        {
+            self.with_extension(bound)
+        } else {
+            Ok(self)
+        }
+    }
+
     /// The provider of the runtime this endpoint reaches: as its attested
     /// status reports how clients authenticate to it, or, for an endpoint
     /// opened with a fixed authentication, as the delegation audience its
@@ -35,11 +49,43 @@ impl GraphqlEndpoint {
 
     /// The IDs the built-in policies have in the home this endpoint reaches.
     pub async fn home_policy_ids(&self) -> Result<&'static HomePolicyIds> {
+        if matches!(
+            self.runtime_authentication().await?,
+            ClientAuthentication::Vera {
+                publisher_node: Some(_),
+                ..
+            }
+        ) {
+            return Ok(HomePolicyIds::embedded_vera_transport_v2());
+        }
+        if let Some(ids) = self
+            .extensions
+            .get::<crate::local::document_acp::BoundPolicyIds>()
+        {
+            return Ok(ids.ids());
+        }
         Ok(home_policy_ids(self.home_provider().await?))
     }
 }
 
 impl ConfigAccess {
+    /// The serving runtime's registered Node for publisher-bound transport creates.
+    pub async fn transport_publisher_node(&self) -> Result<Option<String>> {
+        match self {
+            Self::Local(local) => {
+                crate::local::document_acp::transport_publisher_node(local.node())
+                    .map_err(|_| ConfigClientError::SharedDeviceAdmission)
+            }
+            Self::Graphql(endpoint) => match endpoint.runtime_authentication().await? {
+                ClientAuthentication::Local => Ok(None),
+                ClientAuthentication::Vera { publisher_node, .. } => Ok(publisher_node),
+                ClientAuthentication::Unavailable => {
+                    Err(ConfigClientError::RuntimeAuthenticationUnavailable)
+                }
+            },
+        }
+    }
+
     /// The provider of the home this access works against.
     pub async fn home_provider(&self) -> Result<DocumentAcp> {
         match self {
@@ -51,6 +97,9 @@ impl ConfigAccess {
     /// The IDs the built-in policies have in the home this access works
     /// against.
     pub async fn home_policy_ids(&self) -> Result<&'static HomePolicyIds> {
-        Ok(home_policy_ids(self.home_provider().await?))
+        match self {
+            Self::Graphql(endpoint) => endpoint.home_policy_ids().await,
+            Self::Local(local) => Ok(crate::local::document_acp::node_policy_ids(local.node())),
+        }
     }
 }

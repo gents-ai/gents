@@ -332,7 +332,11 @@ impl DirectoryStore for GraphqlDirectoryStore {
 
     async fn upsert_directory_entry(&self, entry: &DirectoryEntry) -> Result<()> {
         let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
-        let mutation = upsert_directory_entry_mutation(entry, &now);
+        let mutation = upsert_directory_entry_mutation(
+            entry,
+            &now,
+            &crate::p2p_reconcile::publisher_field(&self.node)?,
+        );
         Ok(
             gents_store::config_client::ConfigAccess::write_local_response(
                 &self.node,
@@ -358,7 +362,7 @@ impl DirectoryStore for GraphqlDirectoryStore {
     }
 }
 
-fn upsert_directory_entry_mutation(entry: &DirectoryEntry, now: &str) -> String {
+fn upsert_directory_entry_mutation(entry: &DirectoryEntry, now: &str, publisher: &str) -> String {
     let node_did = escape_graphql_string(&entry.node_did);
     let directory_key =
         escape_graphql_string(&directory_entry_key(&entry.source_did, &entry.node_did));
@@ -375,7 +379,7 @@ fn upsert_directory_entry_mutation(entry: &DirectoryEntry, now: &str) -> String 
             upsert_NodeDirectoryEntry(
                 filter: {{ directory_key: {{ _eq: "{directory_key}" }} }},
                 add: {{
-                    directory_key: "{directory_key}",
+                    {publisher} directory_key: "{directory_key}",
                     node_did: "{node_did}",
                     source_did: "{source_did}",
                     display_name: "{display_name}",
