@@ -271,5 +271,5 @@ fn transcript_citation_capture_is_scoped_to_the_trial_session() {
         .collect();
     assert_eq!(captures.len(), 1);
     assert_eq!(captures[0]["filter"]["session_id"]["_eq"], "$session");
-    assert_eq!(captures[0]["filter"]["sequence"]["_eq"], 1);
+    assert_eq!(captures[0]["filter"]["sequence"]["_eq"], 2);
 }

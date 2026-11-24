@@ -43,7 +43,7 @@
                 "capture": "source_headers",
                 "source_match": {
                   "field": "sequence",
-                  "equals": 1
+                  "equals": 2
                 },
                 "field": "_docID",
                 "target_capture": "source_headers",
@@ -71,7 +71,7 @@
               "_eq": "$evaluator"
             },
             "sequence": {
-              "_eq": 1
+              "_eq": 2
             }
           },
           "fields": [
