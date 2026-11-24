@@ -117,7 +117,7 @@ impl Tool for UpdateGoalTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Edit the active goal's objective or token budget, or mark it complete or blocked. Omit status when editing; edits apply only while the goal is active, and a refusal says how that goal can run again. Completion requires the objective to be achieved; blocked requires the same condition across at least three consecutive goal turns.".to_string(),
+            description: "Edit the active goal's objective or token budget, or mark it complete or blocked. Omit status when editing; edits apply only while the goal is active, and a refusal says how that goal can run again. Completion requires the objective to be achieved; blocked requires the identical reason in consecutive goal turns (3 by default).".to_string(),
             parameters: json!({
                 "type": "object",
                 "additionalProperties": false,
