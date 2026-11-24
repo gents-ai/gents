@@ -1,0 +1,506 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  # Every branch, not just `main`. The work ships as a stack, so every
+  # PR but the bottom one targets another PR's branch; restricting the
+  # trigger to `main` meant CI never ran on any of them.
+  pull_request:
+
+  schedule:
+    # Nightly at 07:00 UTC - drives the long-running stress/soak jobs.
+    - cron: '0 7 * * *'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # The profile written for CI: a slower, noisier host gets a looser
+  # slow-timeout than a workstation, and one retry so a genuinely flaky
+  # test is reported as flaky rather than as a failure. See
+  # `.config/nextest.toml`.
+  NEXTEST_PROFILE: ci
+  RUSTFLAGS: -D warnings
+
+# Every `run` step goes through `bash -eo pipefail` rather than
+# GitHub's default `bash -e`. Without `pipefail` a step like
+# `just cov-summary | tee summary.txt` reports `tee`'s exit status,
+# so a recipe that died with "command not found" still concluded
+# green and published an empty report.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+
+  perf-tools:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: python3 -m unittest discover -s tools/perf-report -p 'test_*.py' -v
+      - name: Build and exercise the collector
+        run: |
+          cargo build --bench collect --locked --message-format=json > "$RUNNER_TEMP/collect-build.jsonl"
+          python3 tools/perf-report/test_collect.py --build-log "$RUNNER_TEMP/collect-build.jsonl" -v
+
+  # All three desktop and server hosts. Windows is not a formality here:
+  # it is the only one of the three without `rustix`, so its file
+  # locking, directory sync and positioned reads take different code in
+  # `src/env/std_env.rs`, and nothing else in the matrix exercises them.
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            profile: ci
+          - os: macos-latest
+            profile: ci
+          # Windows runs its own nextest profile, which drops the long
+          # concurrency and corruption soaks. See `.config/nextest.toml`
+          # for what it drops and why: the soaks test engine logic that
+          # is identical on every platform, while this leg exists for the
+          # code only Windows runs.
+          - os: windows-latest
+            profile: windows
+    runs-on: ${{ matrix.os }}
+    env:
+      NEXTEST_PROFILE: ${{ matrix.profile }}
+    # Windows is the slow one: it serves an fsync about two orders of
+    # magnitude slower than a Linux tmpfs, and the `ci` nextest profile
+    # retries a failure once, so one slow test can cost twice. Exceeding
+    # this reports as a cancelled job, which reads like someone pressed a
+    # button rather than like a budget being hit.
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+      - uses: extractions/setup-just@v2
+      # `just test` runs the doc tests under coreutils `timeout`, which
+      # macOS does not ship.
+      - if: runner.os == 'macOS'
+        run: brew install coreutils
+      - run: just test
+      # `regolith::testing` is behind a feature no default build has. Its
+      # tests run on one host: the checks are plain Rust with nothing a
+      # platform changes, and the build they need is a second build of the
+      # whole library, which the slower hosts would pay for nothing.
+      - if: matrix.os == 'ubuntu-latest'
+        run: just test-testing
+
+
+  # Every job below carries a `timeout-minutes` a few times its measured
+  # run time, so one that hangs is cancelled in minutes and named, where
+  # GitHub's default would hold a runner for six hours.
+  clippy:
+    runs-on: ubuntu-latest
+    # Measured at 35 s.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: extractions/setup-just@v2
+      - run: just lint
+
+
+  fmt:
+    runs-on: ubuntu-latest
+    # Measured at 13 s.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: extractions/setup-just@v2
+      - run: just fmt
+
+
+  doc:
+    runs-on: ubuntu-latest
+    # Measured at 30 s.
+    timeout-minutes: 15
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: extractions/setup-just@v2
+      - run: just doc
+
+
+  alloc-budget:
+    runs-on: ubuntu-latest
+    # Measured at 45 s.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Exits non-zero the moment a hot path allocates more per
+      # operation than its budget.
+      - run: cargo bench --bench allocs
+
+  # Model-checks the arena memtable's publication protocol, the flush
+  # and compaction version handoffs, and the engine's read horizon under
+  # every interleaving loom can reach. The models live in
+  # `src/engine/loom_model/`; `--cfg loom` is what swaps the memtable's
+  # atomics for loom's instrumented ones. Cheap enough to run on every
+  # pull request: both profiles together are under four minutes.
+  #
+  # Both profiles run, and neither is redundant. Release explores the
+  # larger search on the biggest model. Debug is where the skip list's
+  # single-writer guard (invariant S2) exists at all, because it is a
+  # `debug_assert`, so the calibration that proves the guard fires on an
+  # unserialized insert only runs there.
+
+
+  # Model-checks the arena memtable's publication protocol, the flush
+  # and compaction version handoffs, and the engine's read horizon under
+  # every interleaving loom can reach. The models live in
+  # `src/engine/loom_model/`; `--cfg loom` is what swaps the memtable's
+  # atomics for loom's instrumented ones. Cheap enough to run on every
+  # pull request: both profiles together are under four minutes.
+  #
+  # Both profiles run, and neither is redundant. Release explores the
+  # larger search on the biggest model. Debug is where the skip list's
+  # single-writer guard (invariant S2) exists at all, because it is a
+  # `debug_assert`, so the calibration that proves the guard fires on an
+  # unserialized insert only runs there.
+  msrv:
+    runs-on: ubuntu-latest
+    # Measured at 35 s.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.99
+      - uses: Swatinem/rust-cache@v2
+      - uses: extractions/setup-just@v2
+      - run: just msrv
+
+  # wasm32-wasip1 is a supported target, not a target that merely
+  # compiles. This job builds the probe and runs the whole database
+  # lifecycle under wasmtime with a host preopen - open, put, get,
+  # delete, batch, scan, snapshot, iterate, compact, close, reopen,
+  # read back - and the probe exits non-zero on the first byte that
+  # does not match what it wrote. The sustained phase then writes past
+  # the L0 stop trigger with a 32 KiB memtable and no explicit
+  # compaction, which is the case that wedges when nothing compacts on
+  # the calling thread.
+
+
+  deny:
+    runs-on: ubuntu-latest
+    # Measured at 25 s.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+
+
+  coverage:
+    runs-on: ubuntu-latest
+    # Instrumented builds run several times slower than the gate, so the
+    # job carries its own ceiling rather than inheriting the workflow's.
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: extractions/setup-just@v2
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: taiki-e/install-action@nextest
+      - name: Run coverage
+        run: just cov-summary | tee coverage-summary.txt
+      - name: Export coverage report
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: cargo llvm-cov report --lcov --output-path lcov.info --ignore-filename-regex '(^|/)tools/'
+      - name: Upload coverage report
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          disable_search: true
+          fail_ci_if_error: true
+          files: lcov.info
+          use_oidc: true
+      - name: Publish coverage summary
+        run: |
+          {
+            echo "## Coverage"
+            echo ""
+            echo '```'
+            cat coverage-summary.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Soft-warn when line coverage drops below 90%
+        run: |
+          # Pulls the percentage off the TOTAL row of `cargo llvm-cov`'s
+          # summary table. The line-coverage column is the 10th field
+          # (Filename, Regions, Missed, Cover, Functions, Missed, Cover,
+          # Lines, Missed, Cover). Soft gate - emits an annotation but
+          # never fails the job.
+          total=$(awk '/^TOTAL/ {gsub("%", "", $10); print $10}' coverage-summary.txt)
+          if [ -z "$total" ]; then
+            echo "::warning::could not parse line-coverage percentage from coverage-summary.txt"
+            exit 0
+          fi
+          awk -v t="$total" 'BEGIN { exit !(t+0 < 90) }' \
+            && echo "::warning::line coverage $total% is below the 90% soft floor" \
+            || echo "line coverage $total% ≥ 90% ✓"
+
+  # Miri over the modules that carry the crate's `unsafe`: the arena's
+  # chunk layout and bump arithmetic, the skip list's node layout and
+  # publication, the memtable's arena-backed slices, and the block
+  # decoder. Interpreted execution is orders of magnitude slower than
+  # native, so this runs on the nightly schedule rather than per pull
+  # request. Two things are scaled down under `cfg(miri)` in the tests
+  # themselves, with every assertion left intact: the two spinning-reader
+  # stress tests are `#[ignore]`d in favour of an interpreter-sized
+  # equivalent, and the arena's multi-megabyte fills use a smaller
+  # budget.
+
+
+  # A second full run of the workspace, in a release build and one test at
+  # a time with its output shown (`just test-slow`). No test is unlocked by
+  # it: the stress and soak tests are in the ordinary run too. Runs on the
+  # nightly schedule, manual dispatch, or direct pushes to `main`, never on
+  # PRs.
+  nightly-stress:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: extractions/setup-just@v2
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+      - name: Whole workspace in release, one test at a time
+        run: just test-slow
+
+  # The five `regolith::sync` loom models whose three threads all contend
+  # for one lock or semaphore, at preemption bound 2. The model-checking
+  # workflow runs them at bound 1 on every change. At bound 2 each runs a
+  # smaller scenario of its own and takes 2 s to 6 minutes on a workstation,
+  # so they run here, nightly, one job per model. The limit is per model;
+  # the recipe stops the run itself, as a failure, at 15 minutes. A model
+  # that reaches it must be made smaller, not given more time.
+  loom-sync-deep:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        model:
+          - mutex_excludes_and_loses_no_wakeup_at_bound_2
+          - a_cancelled_mutex_waiter_racing_the_handoff_loses_nothing_at_bound_2
+          - a_semaphore_never_hands_out_more_permits_than_it_has_at_bound_2
+          - an_upgradable_read_upgrades_while_readers_and_a_writer_contend_at_bound_2
+          - a_cancelled_rwlock_writer_racing_the_last_reader_loses_nothing_at_bound_2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: extractions/setup-just@v2
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Loom ${{ matrix.model }}
+        run: just loom-sync-deep ${{ matrix.model }}
+
+  # Durability, split out from `test` because it fails for different
+  # reasons and is worth reading on its own: crash recovery, power loss,
+  # the fault shim, the lifecycle sweep and the MVCC invariants.
+
+
+  # Fuzz targets, smoke-run for a bounded time so a harness that stopped
+  # building is caught. Finding new crashes is the nightly job's work,
+  # not a gate on a PR.
+  fuzz:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - fuzz_wal_decoder
+          - fuzz_sst_decoder
+          - fuzz_block_decoder
+          - fuzz_manifest_decoder
+          - fuzz_range_tombstone_decoder
+          - fuzz_writebatch
+          - fuzz_api_ops
+    steps:
+      - uses: actions/checkout@v4
+      - uses: extractions/setup-just@v2
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-fuzz --locked
+      - name: Fuzz ${{ matrix.target }}
+        run: just fuzz ${{ matrix.target }} 300
+
+  # Elle consistency checking. Its own job because it needs a JVM and the
+  # elle-cli distribution, and because it fails for a reason nothing else
+  # does: a history whose dependency graph has a cycle.
+  #
+  # elle-cli is not vendored (37 MB), so the job fetches a pinned release.
+
+
+  # The performance artifact: one self-contained HTML page per commit on
+  # main, keyed by its sha and downloadable from the run.
+  #
+  # Last because it depends on everything above passing: publishing a
+  # perf page for a build whose tests failed invites reading numbers off
+  # a broken engine. Retention is 30 runs' worth of days rather than a
+  # count, which is the only retention GitHub offers; the prune step
+  # below deletes older ones explicitly so the count is what was asked
+  # for rather than what the calendar happened to leave.
+  # Each family on its own runner. A sweep that runs every benchmark in
+  # one job takes as long as the sum of them and reports nothing until
+  # the slowest finishes; split, the wall clock is the slowest single
+  # family and a failure names which one.
+  bench:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [test, clippy, fmt, doc, deny, perf-tools]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        family:
+          - point_read
+          - write_buffered
+          - write_durable
+          - scan
+          - scan_stream
+          - batch
+          - large_value
+          - transaction
+          - scan_commit
+          - append
+          - read_rules
+          - txn_callbacks
+          - sync
+          - memory
+          - size
+          - allocs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: extractions/setup-just@v2
+      - name: Refuse to measure a busy runner
+        id: guard
+        run: just loadguard
+        continue-on-error: true
+      - name: Run ${{ matrix.family }}
+        env:
+          REGOLITH_BENCH_OUT: ${{ github.workspace }}/bench-${{ matrix.family }}.jsonl
+        run: cargo bench --bench ${{ matrix.family }}
+      - name: Keep the benchmark runner's trust and provenance
+        run: >-
+          python3 tools/perf-report/stamp.py bench-${{ matrix.family }}.jsonl
+          --guard '${{ steps.guard.outcome }}'
+          --command cargo bench --bench ${{ matrix.family }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-${{ matrix.family }}
+          path: bench-${{ matrix.family }}.jsonl
+          if-no-files-found: error
+          retention-days: 7
+
+  # Assemble every family into one run document, file it alongside every
+  # earlier run, and publish the dashboard that reads the whole set.
+  #
+  # The run documents are the artifact, not a rendered page. A page
+  # regenerated per run shows one run and loses the comparison the
+  # moment it is replaced; keeping the documents is what lets the
+  # dashboard plot a metric across every run ever recorded.
+  perf-site:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [bench]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bench-*
+          path: bench-artifacts
+          merge-multiple: true
+      - name: Assemble the run document
+        run: |
+          set -euo pipefail
+          cat bench-artifacts/*.jsonl > bench-out.jsonl
+          REGOLITH_BENCH_OUT="$PWD/bench-out.jsonl" \
+            cargo bench --bench collect -- \
+              --out "run-${GITHUB_SHA::12}.json" \
+              --commit "${GITHUB_SHA}" --label main
+      - name: Fetch the runs already published
+        run: |
+          set -euo pipefail
+          mkdir -p site
+          # `keep_files` on the publish step preserves what is already
+          # there, so only this run's document has to be produced here.
+          #
+          # The dashboard publishes as `perf.html`, never as `index.html`:
+          # `index.html` is the project landing page, maintained on the
+          # gh-pages branch, and `keep_files` is what keeps it alive across
+          # publishes. Writing `site/index.html` here would overwrite it.
+          cp tools/perf-site/perf.html site/perf.html
+      - name: Fetch the existing history
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          git fetch origin gh-pages --depth=1
+          git --work-tree=site checkout origin/gh-pages -- runs 2>/dev/null || true
+      - name: File this run
+        run: python3 tools/perf-site/publish.py "run-${GITHUB_SHA::12}.json" site
+      # Refuse to publish a dashboard that would drop a family it
+      # collected. A blank section is not an error to the browser, so
+      # without this the job stays green and the site goes quiet.
+      - name: Refuse to publish anything that would replace the landing page
+        run: |
+          set -euo pipefail
+          if [ -e site/index.html ]; then
+            echo "site/index.html was staged for publish." >&2
+            echo "index.html is the landing page on gh-pages; publishing one" >&2
+            echo "here would overwrite it. The dashboard is site/perf.html." >&2
+            exit 1
+          fi
+      - name: Check the page renders every collected family
+        run: node tools/perf-site/render_check.mjs site
+      - name: Publish
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./site
+          publish_branch: gh-pages
+          keep_files: true
+          commit_message: "perf: record run ${{ github.sha }}"
+      - name: Link
+        run: |
+          {
+            echo "## Performance dashboard"
+            echo ""
+            echo "https://${GITHUB_REPOSITORY%%/*}.github.io/${GITHUB_REPOSITORY##*/}/perf.html"
+          } >> "$GITHUB_STEP_SUMMARY"

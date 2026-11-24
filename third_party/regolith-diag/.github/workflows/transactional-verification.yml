@@ -1,0 +1,74 @@
+name: Transactional Verification
+
+# Split into its own workflow so it carries its own status badge. A
+# badge is per workflow, not per job, so a suite whose result the README
+# advertises has to be a workflow of its own.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # The profile written for CI: a slower, noisier host gets a looser
+  # slow-timeout than a workstation, and one retry so a genuinely flaky
+  # test is reported as flaky rather than as a failure. See
+  # `.config/nextest.toml`.
+  NEXTEST_PROFILE: ci
+  RUSTFLAGS: -D warnings
+
+# Every `run` step goes through `bash -eo pipefail` rather than
+# GitHub's default `bash -e`. Without `pipefail` a step like
+# `just cov-summary | tee summary.txt` reports `tee`'s exit status,
+# so a recipe that died with "command not found" still concluded
+# green and published an empty report.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+
+  # Elle consistency checking. Its own job because it needs a JVM and the
+  # elle-cli distribution, and because it fails for a reason nothing else
+  # does: a history whose dependency graph has a cycle.
+  #
+  # elle-cli is not vendored (37 MB), so the job fetches a pinned release.
+  elle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: extractions/setup-just@v2
+      - name: Fetch elle-cli
+        run: |
+          set -euo pipefail
+          v=0.1.7
+          curl -fsSL -o /tmp/elle-cli.zip \
+            "https://github.com/ligurio/elle-cli/releases/download/${v}/elle-cli-bin-${v}.zip"
+          unzip -q -o /tmp/elle-cli.zip -d /tmp/elle-cli
+          find /tmp/elle-cli -name '*.jar' -exec cp {} harness/elle/elle-cli.jar \;
+          test -s harness/elle/elle-cli.jar
+      - name: Every isolation level regolith claims
+        run: just elle-matrix
+
+  # The performance artifact: one self-contained HTML page per commit on
+  # main, keyed by its sha and downloadable from the run.
+  #
+  # Last because it depends on everything above passing: publishing a
+  # perf page for a build whose tests failed invites reading numbers off
+  # a broken engine. Retention is 30 runs' worth of days rather than a
+  # count, which is the only retention GitHub offers; the prune step
+  # below deletes older ones explicitly so the count is what was asked
+  # for rather than what the calendar happened to leave.
+  # Each family on its own runner. A sweep that runs every benchmark in
+  # one job takes as long as the sum of them and reports nothing until
+  # the slowest finishes; split, the wall clock is the slowest single
+  # family and a failure names which one.

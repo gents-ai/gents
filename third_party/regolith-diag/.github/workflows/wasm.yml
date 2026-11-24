@@ -1,0 +1,113 @@
+name: WASM
+
+# Split into its own workflow so it carries its own status badge. A
+# badge is per workflow, not per job, so a suite whose result the README
+# advertises has to be a workflow of its own.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # The profile written for CI: a slower, noisier host gets a looser
+  # slow-timeout than a workstation, and one retry so a genuinely flaky
+  # test is reported as flaky rather than as a failure. See
+  # `.config/nextest.toml`.
+  NEXTEST_PROFILE: ci
+  RUSTFLAGS: -D warnings
+
+# Every `run` step goes through `bash -eo pipefail` rather than
+# GitHub's default `bash -e`. Without `pipefail` a step like
+# `just cov-summary | tee summary.txt` reports `tee`'s exit status,
+# so a recipe that died with "command not found" still concluded
+# green and published an empty report.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+
+  # wasm32-wasip1 is a supported target, not a target that merely
+  # compiles. This job builds the probe and runs the whole database
+  # lifecycle under wasmtime with a host preopen - open, put, get,
+  # delete, batch, scan, snapshot, iterate, compact, close, reopen,
+  # read back - and the probe exits non-zero on the first byte that
+  # does not match what it wrote. The sustained phase then writes past
+  # the L0 stop trigger with a 32 KiB memtable and no explicit
+  # compaction, which is the case that wedges when nothing compacts on
+  # the calling thread.
+  wasm-wasip1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+      - uses: Swatinem/rust-cache@v2
+      # Installs the current wasmtime release. The numbers in this
+      # job's summary were first measured against 47.0.3.
+      - uses: bytecodealliance/actions/wasmtime/setup@v1
+      - name: Build the probe for wasm32-wasip1
+        run: cargo build --release -p regolith-wasm-probe --target wasm32-wasip1
+      - name: Full lifecycle under wasmtime
+        run: |
+          set -euo pipefail
+          d=$(mktemp -d)
+          wasmtime run --dir="$d::/data" \
+            target/wasm32-wasip1/release/regolith-wasm-probe.wasm -- \
+            --profile embedded --records 5000 --sustained 20000 \
+            --probe-host --report-memory | tee wasip1-probe.txt
+          rm -rf "$d"
+      - name: Publish the wasm linear-memory high-water mark
+        run: |
+          {
+            echo "## wasm32-wasip1"
+            echo ""
+            echo '```'
+            cat wasip1-probe.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Tier A embedded: Linux-class targets with std (Cortex-A boards,
+  # ESP32-S3 under esp-idf). These compile today, and nothing stopped
+  # them regressing - a new `cfg(unix)` dependency or a
+  # `target_os = "linux"` assumption would break them silently between
+  # releases. Checking the examples too keeps the embedded measuring
+  # harness itself cross-compilable.
+
+
+  # Browser wasm. `wasm-wasip1` above covers the wasi target, which has a
+  # real `std::fs`; this covers `wasm32-unknown-unknown`, which has no
+  # filesystem at all and reaches storage through OPFS. OPFS's
+  # `createSyncAccessHandle` only exists inside a Web Worker, so there is
+  # no way to exercise it without a real browser.
+  wasm-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: extractions/setup-just@v2
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Read the locked wasm-bindgen version
+        id: bindgen
+        run: |
+          bindgen_version=$(awk '/^name = "wasm-bindgen"$/ { found = 1; next } found && /^version = / { gsub(/"/, "", $3); print $3; exit }' Cargo.lock)
+          test -n "$bindgen_version"
+          echo "version=$bindgen_version" >> "$GITHUB_OUTPUT"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@${{ steps.bindgen.outputs.version }}
+      - uses: jetli/wasm-pack-action@v0.4.0
+      - name: OPFS round trip in headless Firefox
+        run: just wasm-browser
+
+  # Fuzz targets, smoke-run for a bounded time so a harness that stopped
+  # building is caught. Finding new crashes is the nightly job's work,
+  # not a gate on a PR.

@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# Run TLC from proofs/tla: ./tools/tlc -config MC_RepeatableRead_Green.cfg RepeatableRead.tla
+#
+# The jar is git-ignored and fetched on first use, pinned by version and
+# SHA-256 so every run checks the same tool CI refers to. Use
+# `--fetch-only` to download it without running a model.
+set -euo pipefail
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Use the immutable stable release rather than the rolling v1.8.0 pre-release,
+# whose asset is rebuilt in place. Upstream publishes SHA-1
+# bee4a54f3ee3d4afc347c3240ec2d9e93b075104 for this exact jar; this wrapper
+# pins the stronger locally-computed SHA-256 below.
+TLA_VERSION="${TLA_VERSION:-1.7.4}"
+TLA_SHA256="${TLA_SHA256:-936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88}"
+JAR="$DIR/tla2tools.jar"
+
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    echo "error: neither sha256sum nor shasum found; cannot verify the jar." >&2
+    exit 1
+  fi
+}
+
+fetch_jar() {
+  local url tmp got
+  url="https://github.com/tlaplus/tlaplus/releases/download/v${TLA_VERSION}/tla2tools.jar"
+  tmp="$(mktemp)"
+  echo "fetching tla2tools ${TLA_VERSION}" >&2
+  if ! curl -fsSL -o "$tmp" "$url"; then
+    rm -f "$tmp"
+    echo "error: failed to download $url" >&2
+    exit 1
+  fi
+  got="$(sha256_of "$tmp")"
+  if [ "$got" != "$TLA_SHA256" ]; then
+    rm -f "$tmp"
+    echo "error: checksum mismatch for tla2tools ${TLA_VERSION}" >&2
+    echo "       expected $TLA_SHA256" >&2
+    echo "       got      $got" >&2
+    exit 1
+  fi
+  mv "$tmp" "$JAR"
+  chmod 0644 "$JAR"
+}
+
+# An existing jar is verified too: a truncated or swapped file must fail loudly
+# rather than produce a misleading model-checking verdict.
+if [ -f "$JAR" ]; then
+  if [ "$(sha256_of "$JAR")" != "$TLA_SHA256" ]; then
+    echo "warning: $JAR does not match the pinned checksum; re-fetching" >&2
+    rm -f "$JAR"
+    fetch_jar
+  fi
+else
+  fetch_jar
+fi
+
+if [ "${1:-}" = "--fetch-only" ]; then
+  echo "tla2tools ${TLA_VERSION}: $JAR"
+  exit 0
+fi
+
+# Resolve java: prefer JAVA env var, then JAVA_HOME, then Homebrew, then PATH.
+# On macOS the /usr/bin/java stub shows a dialog instead of running; bypass it
+# there only, since on Linux /usr/bin/java is the normal distro location.
+if [ -n "${JAVA:-}" ]; then
+  : # use caller-supplied JAVA
+elif [ -n "${JAVA_HOME:-}" ] && [ -x "$JAVA_HOME/bin/java" ]; then
+  JAVA="$JAVA_HOME/bin/java"
+elif [ -x /opt/homebrew/opt/java/bin/java ]; then
+  JAVA=/opt/homebrew/opt/java/bin/java
+elif [ -x /usr/local/opt/java/bin/java ]; then
+  JAVA=/usr/local/opt/java/bin/java
+elif command -v java >/dev/null 2>&1 &&
+     { [ "$(uname -s)" != Darwin ] || [ "$(command -v java)" != /usr/bin/java ]; }; then
+  JAVA=java
+else
+  echo "error: no usable Java found. Install a JDK or set JAVA=/path/to/java." >&2
+  if [ "$(uname -s)" = Darwin ]; then
+    echo "       (macOS /usr/bin/java is a stub and is intentionally not used; 'brew install java' also works.)" >&2
+  fi
+  exit 1
+fi
+
+# The JVM flags: TLC's own advice for a run that takes every core, unless
+# the caller sizes the JVM itself (TLC_JVM_FLAGS; `just tla` gives each of
+# its one-worker runs a serial collector).
+# shellcheck disable=SC2086
+exec "$JAVA" ${TLC_JVM_FLAGS:--XX:+UseParallelGC} -cp "$JAR" tlc2.TLC "$@"

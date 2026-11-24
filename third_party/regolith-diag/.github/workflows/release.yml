@@ -1,0 +1,141 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run — run the full pipeline without publishing'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+env:
+  CARGO_TERM_COLOR: always
+  # The profile written for CI: a slower, noisier host gets a looser
+  # slow-timeout than a workstation, and one retry so a genuinely flaky
+  # test is reported as flaky rather than as a failure. See
+  # `.config/nextest.toml`.
+  NEXTEST_PROFILE: ci
+  RUSTFLAGS: -D warnings
+
+permissions:
+  contents: write
+
+# Every `run` step goes through `bash -eo pipefail` rather than
+# GitHub's default `bash -e`. Without `pipefail` a step like
+# `just cov-summary | tee summary.txt` reports `tee`'s exit status,
+# so a recipe that died with "command not found" still concluded
+# green and published an empty report.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # Each job carries a `timeout-minutes`, so one that hangs is cancelled
+  # and named, where GitHub's default would hold a runner for six hours.
+  gate:
+    runs-on: ubuntu-latest
+    # The test job's work on one runner: the tests take about ten
+    # minutes there, the rest about two.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt, llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+
+      # nextest, not `cargo test`: a wedged test fails on the profile's
+      # slow-timeout instead of holding the job until its limit.
+      - name: Test
+        run: cargo nextest run
+
+      # nextest cannot run doc tests, so they run under a hard limit, the
+      # one `just test` gives them.
+      - name: Doc tests
+        run: |
+          timeout 5m cargo test --doc || {
+            code=$?
+            [ "$code" -ne 124 ] || echo "::error::the doc tests did not finish within 5 minutes and were stopped"
+            exit "$code"
+          }
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Format
+        run: cargo fmt -- --check
+
+      - name: Doc
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --no-deps
+
+      - name: Deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+
+  publish:
+    needs: gate
+    runs-on: ubuntu-latest
+    # Runs only on a release tag, so it is not measured on pull requests:
+    # `cargo publish` packages the crate and builds it once to verify it,
+    # a few minutes of work.
+    timeout-minutes: 20
+    if: >-
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
+      || (github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run == 'false')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Verify tag matches Cargo.toml version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          cargo_version=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          if [ "$tag" != "$cargo_version" ]; then
+            echo "::error::Tag v$tag does not match Cargo.toml version $cargo_version"
+            exit 1
+          fi
+
+      - name: Publish to crates.io
+        run: cargo publish --token "${{ secrets.CRATES_IO_TOKEN }}"
+
+  github-release:
+    needs: publish
+    runs-on: ubuntu-latest
+    # A log of the commits since the last tag and one API call: seconds.
+    timeout-minutes: 10
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate release notes from commits
+        id: notes
+        run: |
+          prev_tag=$(git tag --sort=-v:refname | grep '^v' | sed -n '2p')
+          if [ -z "$prev_tag" ]; then
+            log=$(git log --oneline)
+          else
+            log=$(git log --oneline "$prev_tag"..HEAD)
+          fi
+          {
+            echo "body<<RELEASE_EOF"
+            echo "$log"
+            echo "RELEASE_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          body: ${{ steps.notes.outputs.body }}
+          generate_release_notes: true

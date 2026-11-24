@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc c3e9ae763f92c57490843081b48ad35ee6ee3bc0384bc374f3d5f47325e38f3b # shrinks to history = [], members = [Txn(GenTxn { snapshot_at: 0, reads: [], writes: [([99], Put(0))], blind: false }), Txn(GenTxn { snapshot_at: 0, reads: [([99], false)], writes: [], blind: false })]
+cc 8bb09bec503a4220d2450263c399e4416e3811963f84cd299bb70ba01e0a59fa # shrinks to history = [], members = [Txn(GenTxn { snapshot_at: 0, reads: [], writes: [([98], Put(1))], blind: false }), Txn(GenTxn { snapshot_at: 0, reads: [], writes: [([98], Put(0))], blind: false })]

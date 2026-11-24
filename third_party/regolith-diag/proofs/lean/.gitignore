@@ -1,0 +1,2 @@
+# Lake's build output: the compiled proofs, rebuilt by `lake build`.
+.lake/

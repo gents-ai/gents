@@ -1,0 +1,101 @@
+# Test-runner settings shared by local runs and CI.
+#
+# nextest runs each test in its own process. That matters here for two
+# reasons: a test that wedges cannot take the rest of the binary with
+# it, and a test that assumes it owns its process (the crash harness
+# re-executes itself) behaves the same way locally and in CI.
+
+[profile.default]
+# A test that stops making progress must fail, not hang. `cargo test`
+# has no such bound: a deadlocked test holds the job until the whole
+# workflow times out, which reports a scheduling problem instead of the
+# defect. Terminating after two periods turns that into a named failure.
+slow-timeout = { period = "60s", terminate-after = 5 }
+# A test that fails because a sibling saturated the machine is noise;
+# one that fails twice in a row is not.
+retries = 0
+failure-output = "immediate-final"
+status-level = "fail"
+
+[profile.ci]
+inherits = "default"
+# CI runners are slower and noisier than a workstation, so the bound is
+# looser, but it is still a bound.
+slow-timeout = { period = "120s", terminate-after = 5 }
+retries = 1
+final-status-level = "flaky"
+
+# Windows leg of the test matrix.
+#
+# Windows is in the matrix for the code only it runs: `src/env/std_env.rs`
+# takes different paths for positioned reads and directory sync, there is
+# no `rustix`, `src/env/db_lock.rs` has a whole separate implementation,
+# and the filesystem has semantics no unix has, notably that a file
+# unlinked while a handle is open stays delete-pending under its own name.
+# Those are worth a matrix leg.
+#
+# What is not worth one is re-running the long concurrency and corruption
+# soaks. Their subject is engine logic, which is identical on every
+# platform and already covered by the ubuntu and macos legs, and their
+# cost is dominated by durable operations that this runner serves about
+# two orders of magnitude slower than a Linux tmpfs. Together they were
+# most of a 45 minute job.
+#
+# Everything else still runs here: the corruption, recovery, lifecycle and
+# public-API tests, less the sweeps and soaks the filter names one by one.
+# Those sit in binaries whose other tests do run here, and each took five
+# seconds or more on a Linux nvme disk, where a durable operation costs a
+# fraction of what it costs this runner.
+#
+# THE STANDING RULE: a heavy test does not run on Windows. "Heavy" means a
+# soak, a hammer, a multi-second concurrency or corruption sweep, or anything
+# whose cost is dominated by durable operations rather than by the logic it
+# checks. Such a test belongs in a binary whose name starts with
+# `adversarial_`, `adv_`, `soak_` or `heavy_`, which this filter drops by
+# construction, so a new one is excluded without anyone remembering to edit
+# the list below. Name it otherwise and it must be listed explicitly.
+#
+# The reason is not that Windows matters less. It is that this leg exists for
+# the code only Windows runs, and a soak's subject is engine logic that is
+# identical everywhere and already covered twice.
+[profile.windows]
+inherits = "ci"
+default-filter = """
+    not (
+        binary(/^(adversarial_|adv_|soak_|heavy_)/)
+        or binary(mvcc_invariants)
+        or binary(read_view_hammer)
+        or binary(read_view_chaos_workload)
+        or binary(scan_read_horizon_ordering)
+        or binary(group_commit_and_arena_memtable)
+        or binary(sstable_metadata_scan_get_agreement)
+        or binary(resource_limits)
+        or test(=writer_compactor_contention_soak)
+        or test(=snapshot_never_observes_a_torn_batch)
+        or test(/^engine::block_cache::adversarial::/)
+        or test(=rate_limiter::tests::ten_mb_through_one_mbps_takes_at_least_nine_seconds)
+        or test(=every_publisher_of_the_read_view_running_at_once_stays_live)
+        or test(=every_bit_flip_in_the_manifest_stops_replay_without_inventing_data)
+        or test(=every_bit_flip_in_an_sstable_is_caught_or_harmless)
+        or test(=compaction_preserves_latest_values)
+        or test(=delete_then_compact_hides_key)
+        or test(=no_resurrection_across_reopen)
+        or test(=scan_returns_all_keys_sorted)
+        or test(=sums_that_fold_read_as_the_model_does)
+        or test(=sums_that_cannot_fold_read_as_the_model_does)
+        or test(=appends_keep_their_order)
+        or test(=committed_transactions_equal_the_same_transactions_run_in_commit_order)
+        or test(=every_read_is_the_newest_version_and_every_snapshot_repeats)
+        or test(=engine::commit::range_rule::tests::a_range_reports_a_write_exactly_when_one_landed_in_it)
+        or test(=engine::commit::terminator::tests::landed_above_matches_the_write_log_across_flushes_and_compactions)
+        or test(=engine::commit::read_rules::tests::the_projected_walk_matches_the_write_log)
+        or test(=every_view_publisher_racing_readers_loses_no_write_with_a_worker)
+        or test(=every_view_publisher_racing_readers_loses_no_write_without_a_worker)
+        or test(=compact_step_racing_workers_and_compact_range_loses_nothing)
+        or test(=concurrent_writers_with_zero_workers_never_return_busy)
+        or test(=level_style_zero_workers_survives_the_stop_trigger)
+        or test(=many_workers_keep_every_level_a_single_sorted_run)
+        or test(=has_and_get_size_never_disagree_with_get)
+        or test(=engine::manifest::legacy_overlap_tests::a_torn_repair_batch_is_replayed_whole_or_repaired_again)
+    )
+"""

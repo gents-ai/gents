@@ -1,0 +1,9 @@
+tools/tla2tools.jar
+states/
+*.out
+*.toolbox/
+
+# TLC writes an error-trace spec next to the model whenever one violates its
+# invariant, so a `just tla` run leaves one pair per RED model behind.
+*_TTrace_*.tla
+*_TTrace_*.bin

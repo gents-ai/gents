@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 4e69cc094b77d7958f3a50236515eb69dc4bcf346d5dcc783d996534b4b50162 # shrinks to setup = [Merge, Put(1), Flush, Merge, Flush, Put(2), Flush, Merge, Flush], floor_at = 10, blind = false, candidate = Put(2)

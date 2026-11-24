@@ -1,0 +1,38 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Test artifacts
+*.profraw
+*.profdata
+
+# Documentation
+/book/
+# Local planning docs: the repo rule in CLAUDE.md forbids a docs/ tree in-tree
+/docs/
+
+# Bench output: a bench run without REGOLITH_BENCH_OUT writes families here
+/bench-out/
+
+# Environment
+.env
+.env.local
+
+# Claude (user-specific)
+.claude/
+fuzz/target/
+fuzz/corpus/
+fuzz/artifacts/
+
+# Python bytecode caches, produced by running the perf-report scripts.
+__pycache__/
+*.pyc

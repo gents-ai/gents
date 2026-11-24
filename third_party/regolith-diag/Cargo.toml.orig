@@ -1,0 +1,280 @@
+[workspace]
+members = [
+    ".",
+    "tools/regolith-bench",
+    "tools/regolith-stress",
+    "tools/regolith-wasm-probe",
+    "tools/regolith-ycsb",
+]
+resolver = "2"
+
+[package]
+name = "regolith"
+version = "0.2.5"
+edition = "2024"
+authors = [
+    "Ivan Vercenco <ivan@source.network>",
+    "Theo Bulut <theo@source.network>"
+]
+rust-version = "1.99"
+license = "Apache-2.0 OR MIT"
+description = "ACID, performance oriented, embedded key-value database engine for edge systems"
+repository = "https://github.com/sourcenetwork/regolith"
+homepage = "https://github.com/sourcenetwork/regolith"
+readme = "README.md"
+keywords = ["database", "key-value", "lsm-tree", "storage", "embedded"]
+categories = ["database-implementations"]
+
+[features]
+fuzzing = []
+# `regolith::testing`: property checks a caller runs in its own test suite
+# against its own trait implementations. Not built for wasm, which has no
+# `proptest`.
+testing = ["dep:proptest"]
+# Atomics for a target with no hardware compare-and-swap, such as
+# `thumbv6m-none-eabi`. `portable-atomic` then implements the missing
+# operations inside a critical section. The *binary* must also depend
+# on `critical-section` and select a platform implementation; a
+# library cannot choose one on the integrator's behalf.
+critical-section = ["portable-atomic/critical-section"]
+
+# `--cfg loom` swaps the memtable's atomics and locks for loom's mocks
+# (see `src/engine/sync.rs`). Declaring it keeps `unexpected_cfgs` quiet
+# in the ordinary build without turning the lint off.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
+
+[dependencies]
+kovan = "0.2.5"
+kovan-map = "0.2.5"
+kovan-queue = "0.2.5"
+kovan-channel = "0.2.5"
+
+# `fallback` supplies `AtomicU64` on 32-bit targets that have no
+# 64-bit atomic instruction; `require-cas` turns a target with no
+# compare-and-swap into a named compile error pointing at the
+# `critical-section` feature above. See `src/portability.rs`.
+portable-atomic = { version = "1", default-features = false, features = [
+    "fallback",
+    "require-cas",
+] }
+lz4_flex = "0.11"
+snap = "1"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+tracing = "0.1"
+thiserror = "1.0"
+
+# Encryption at rest (`Options::key_provider`). AES-256-GCM-SIV from
+# RustCrypto: pure Rust, with AES-NI/CLMUL (x86) and the ARMv8 crypto
+# extensions detected at run time, and constant-time software AES
+# elsewhere (wasm32, armv7). `zeroize` wipes a cached key schedule when
+# it drops; `getrandom` draws each frame's nonce from the OS.
+aes-gcm-siv = { version = "0.12", default-features = false, features = ["aes", "zeroize"] }
+zeroize = "1"
+getrandom = "0.4"
+
+[target.'cfg(any(unix, target_os = "wasi"))'.dependencies]
+rustix = { version = "1.1", features = ["fs"] }
+
+# `sync_file_range`, which rustix does not wrap: the log's early writeback
+# (`LogFile::start_writeback`). Already in the tree through getrandom.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+proptest = { version = "1", optional = true }
+
+[target.'cfg(loom)'.dependencies]
+loom = "0.7"
+
+[target.'cfg(loom)'.dev-dependencies]
+loom = "0.7"
+
+# Browser wasm only. `wasm32-wasip1` has a working `std::fs` under a host
+# preopen and needs none of this; `wasm32-unknown-unknown` has no
+# filesystem at all and reaches storage through OPFS.
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+# The browser has no OS randomness call; `wasm_js` reaches
+# `crypto.getRandomValues` instead.
+getrandom = { version = "0.4", features = ["wasm_js"] }
+
+[dev-dependencies]
+tempfile = "3.8"
+
+
+# The OPFS tests are `wasm_bindgen_test` functions driven by a real
+# browser; there is no other way to reach `navigator.storage`.
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies]
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+wasm-bindgen-test = "0.3"
+
+# Neither of these builds for wasm: `proptest` pulls in `wait-timeout`,
+# which has no wasm implementation, and `criterion` pulls in `rayon`,
+# which refuses to build for wasi outright. Cargo builds every
+# dev-dependency of the package before any example or test target,
+# whether or not that target uses it, so leaving either unconditional
+# makes `cargo build --example --target wasm32-*` fail before it
+# reaches any regolith code. The property tests and the benchmarks they
+# back live in `tests/` and `benches/` and only ever run on the host.
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+proptest = "1"
+
+# `tests/sync_no_syscall.rs` installs a seccomp filter around the
+# `regolith::sync` hot loops; seccomp is Linux-only.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+libc = "0.2"
+
+# The test suite is compute-bound: compaction merges, checksums, bloom
+# hashing and skip-list walks, driven millions of times by the
+# adversarial and property tests. Unoptimized those dominate the gate's
+# wall clock while proving nothing extra, so the dev profile carries
+# enough optimization to make the suite tractable and keeps every check
+# that makes a debug build worth running.
+#
+# `debug-assertions` and `overflow-checks` stay on deliberately: the skip
+# list's single-writer invariant (S2) and the arena's bounds checks are
+# `debug_assert`-backed, so turning them off would silently remove the
+# thing several of these tests exist to catch.
+[profile.dev]
+opt-level = 1
+debug-assertions = true
+overflow-checks = true
+
+# Dependencies are compiled once and never stepped through. Compression,
+# hashing and the reclamation machinery are all in this set.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+[profile.bench]
+opt-level = 3
+
+[[bench]]
+name = "allocs"
+harness = false
+
+[[bench]]
+name = "point_read"
+harness = false
+
+[[bench]]
+name = "write_durable"
+harness = false
+
+[[bench]]
+name = "write_buffered"
+harness = false
+
+[[bench]]
+name = "scan"
+harness = false
+
+[[bench]]
+name = "scan_stream"
+harness = false
+
+[[bench]]
+name = "batch"
+harness = false
+
+[[bench]]
+name = "transaction"
+harness = false
+
+[[bench]]
+name = "append"
+harness = false
+
+[[bench]]
+name = "txn_callbacks"
+harness = false
+
+[[bench]]
+name = "scan_commit"
+harness = false
+
+[[bench]]
+name = "read_rules"
+harness = false
+
+[[bench]]
+name = "large_value"
+harness = false
+
+[[bench]]
+name = "memory"
+harness = false
+
+[[bench]]
+name = "wal_replay"
+harness = false
+
+[[bench]]
+name = "open_recovery"
+harness = false
+
+[[bench]]
+name = "soak"
+harness = false
+
+[[bench]]
+name = "size"
+harness = false
+
+[[bench]]
+name = "collect"
+harness = false
+
+[[bench]]
+name = "sync"
+harness = false
+
+[[bench]]
+name = "group_commit"
+harness = false
+
+[[bench]]
+name = "commit_nowait"
+harness = false
+
+[[bench]]
+name = "ingest"
+harness = false
+
+[[bench]]
+name = "cf_drop"
+harness = false
+
+[[bench]]
+name = "io_queue"
+harness = false
+
+[[bench]]
+name = "encryption"
+harness = false
+
+[[bench]]
+name = "per_core"
+harness = false
+
+[[bench]]
+name = "per_core_reads"
+harness = false
+
+[[bench]]
+name = "tables"
+harness = false
+
+[[bench]]
+name = "merge_commit"
+harness = false

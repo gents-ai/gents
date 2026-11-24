@@ -1,0 +1,781 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>regolith performance</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Funnel+Display:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#000; --panel:#0a0c0a; --line:#1c211c; --ink:#e8ece8; --mute:#7d857d;
+  --green:#06b250; --red:#e0503a; --amber:#c08a2e;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--ink)}
+body{font-family:"Funnel Display",system-ui,sans-serif;font-size:15px;line-height:1.45}
+code,.mono,td.num{font-family:"JetBrains Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums}
+header{padding:22px 26px;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:16px;align-items:center}
+h1{font-size:19px;font-weight:700;margin:0;letter-spacing:-.01em}
+h2{font-size:15px;font-weight:600;margin:26px 26px 10px;letter-spacing:.02em;text-transform:uppercase;color:var(--mute)}
+main{padding-bottom:60px}
+.controls{margin-left:auto;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+label{font-size:12px;color:var(--mute);display:block;margin-bottom:3px}
+select{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:6px;
+  padding:6px 9px;font-family:"JetBrains Mono",monospace;font-size:12px;min-width:210px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:14px;padding:0 26px;
+  align-items:start}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;
+  cursor:zoom-in;position:relative}
+.card:hover{border-color:#2a322a}
+/* A long table is the reason a column used to run off the screen. It scrolls
+   inside its own card instead, and the cap lifts when the card is zoomed. */
+.card .scroll{max-height:46vh;overflow:auto}
+.card::after{content:"expand";position:absolute;top:12px;right:14px;font-size:10px;
+  letter-spacing:.05em;text-transform:uppercase;color:var(--mute);opacity:0;transition:opacity .12s}
+.card:hover::after{opacity:.75}
+/* Zoomed: one card fills the viewport, with nothing else competing for it. */
+.card.zoomed{position:fixed;inset:18px;z-index:50;overflow:auto;cursor:zoom-out;
+  box-shadow:0 24px 80px rgba(0,0,0,.7)}
+.card.zoomed .scroll{max-height:none}
+.card.zoomed::after{content:"close  esc";opacity:.75}
+.zoom-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.74);z-index:40}
+/* A section that fails to draw says so in place of itself, because a blank
+   page reads as "nothing to report" rather than as a defect. */
+.card.broken{border-color:#3a2118}
+.card.broken .note{color:var(--red)}
+.card h3{margin:0 0 3px;font-size:14px;font-weight:600}
+.note{margin:0 0 12px;font-size:12px;color:var(--mute);line-height:1.4}
+.headline{font-size:26px;font-weight:700;letter-spacing:-.02em;margin:2px 0 10px}
+.headline small{font-size:13px;font-weight:400;color:var(--mute)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--mute);
+  font-weight:500;padding:6px 8px;border-bottom:1px solid var(--line)}
+td{padding:6px 8px;border-bottom:1px solid var(--line)}
+td.num{text-align:right}
+tr:last-child td{border-bottom:none}
+.up{color:var(--green)} .down{color:var(--red)} .flat{color:var(--mute)}
+.pill{display:inline-block;font-size:10px;padding:1px 7px;border-radius:99px;margin-left:7px;
+  vertical-align:middle;border:1px solid var(--line);color:var(--mute);text-transform:uppercase;letter-spacing:.04em}
+.pill.clean{color:var(--green);border-color:#0b3a1f}
+.pill.contaminated{color:var(--amber);border-color:#3a2f0b}
+.pill.absent{color:var(--mute)}
+.pill.per-entry{color:var(--ink);border-color:var(--line)}
+.bar{height:9px;border-radius:99px;background:#141814;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--green)}
+.bar i.regress{background:var(--red)}
+.scroll{overflow-x:auto}
+.empty{padding:26px;color:var(--mute);font-size:13px}
+svg{display:block;width:100%;height:auto}
+.legend{display:flex;gap:14px;font-size:11px;color:var(--mute);margin-top:8px}
+.legend b{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;vertical-align:middle}
+</style>
+<header>
+  <h1>regolith performance</h1>
+  <div class="controls">
+    <div><label for="cur">This run</label><select id="cur"></select></div>
+    <div><label for="base">Compared with</label><select id="base"></select></div>
+    <div><label for="thresh">Highlight changes over</label>
+      <select id="thresh"><option value="1">1%</option><option value="3">3%</option>
+      <option value="5">5%</option><option value="10">10%</option>
+      <option value="15" selected>15%</option><option value="20">20%</option>
+      <option value="25">25%</option><option value="30">30%</option></select></div>
+  </div>
+</header>
+<main id="main"><div class="empty">Loading runs...</div></main>
+<script>
+const GREEN="#06b250", RED="#e0503a", DIM="#333833";
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+function fmt(n,unit){
+  if(n===null||n===undefined||Number.isNaN(n))return"n/a";
+  const a=Math.abs(n);
+  if(unit==="%")return n.toFixed(2)+"%";
+  if(a>=1e9)return (n/1e9).toFixed(2)+"B";
+  if(a>=1e6)return (n/1e6).toFixed(2)+"M";
+  if(a>=1e4)return (n/1e3).toFixed(1)+"k";
+  if(a>=100)return Math.round(n).toLocaleString();
+  return (Math.round(n*100)/100).toString();
+}
+// Which direction is an improvement is carried on the row, because it
+// cannot be read off the name: "MiB/s" is a rate to maximise and "MiB"
+// is a footprint to minimise, and both contain "mib". The regex is the
+// fallback for rows that predate the explicit flag.
+const LOWER_BETTER=/rss|size|\bmib\b|\bkib\b|bytes|latency|alloc/i;
+// A family the collector marked `absent` writes its parts as stub objects
+// rather than empty arrays, and `for...of` over one throws. A throw inside
+// `draw` used to leave the page on "Loading runs..." forever, which reads as
+// "no data yet" rather than as the defect it is.
+const arr=v=>Array.isArray(v)?v:[];
+function delta(cur,base,name,unit,lower){
+  if(base===null||base===undefined||cur===null||cur===undefined||!base)return null;
+  const pct=100*(cur-base)/Math.abs(base);
+  const down=lower===undefined?LOWER_BETTER.test(name+" "+(unit||"")):!!lower;
+  return {pct, good:down? pct<0 : pct>0};
+}
+function pill(t){return t?`<span class="pill ${esc(t)}">${esc(t)}</span>`:""}
+
+function lineChart(series,{w=560,h=230,xlab="threads",ylab=""}={}){
+  const all=series.flatMap(s=>s.pts);
+  if(!all.length)return `<p class="note">not measured yet</p>`;
+  const xs=all.map(p=>p[0]), ys=all.map(p=>p[1]);
+  const x0=Math.min(...xs), x1=Math.max(...xs)||1;
+  const y1=Math.max(...ys)||1;
+  const L=54,R=12,T=12,B=30;
+  const px=v=>L+(x1===x0?0:(v-x0)/(x1-x0))*(w-L-R);
+  const py=v=>T+(1-v/y1)*(h-T-B);
+  let g="";
+  for(let i=0;i<=4;i++){
+    const v=y1*i/4, y=py(v);
+    g+=`<line x1="${L}" x2="${w-R}" y1="${y}" y2="${y}" stroke="#141814"/>`
+      +`<text x="${L-8}" y="${y+4}" fill="#7d857d" font-size="10" text-anchor="end">${fmt(v)}</text>`;
+  }
+  let body="";
+  for(const s of series){
+    if(!s.pts.length)continue;
+    const p=[...s.pts].sort((a,b)=>a[0]-b[0]);
+    const d=p.map((q,i)=>`${i?"L":"M"}${px(q[0]).toFixed(1)},${py(q[1]).toFixed(1)}`).join("");
+    body+=`<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.thick?2.2:1.4}"
+      ${s.dash?'stroke-dasharray="4 3"':""}/>`;
+    body+=p.map(q=>`<circle cx="${px(q[0]).toFixed(1)}" cy="${py(q[1]).toFixed(1)}" r="${s.thick?2.6:2}" fill="${s.color}"/>`).join("");
+  }
+  const ticks=[...new Set(xs)].sort((a,b)=>a-b).slice(0,12)
+    .map(v=>`<text x="${px(v).toFixed(1)}" y="${h-10}" fill="#7d857d" font-size="10" text-anchor="middle">${v}</text>`).join("");
+  const leg=series.filter(s=>s.pts.length)
+    .map(s=>`<span><b style="background:${s.color}"></b>${esc(s.name)}</span>`).join("");
+  return `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="${esc(ylab||xlab)}">${g}${body}${ticks}
+    <text x="${w-R}" y="${h-10}" fill="#7d857d" font-size="10" text-anchor="end">${esc(xlab)}</text></svg>
+    <div class="legend">${leg}</div>`;
+}
+
+function bars(rows,unit,threshold){
+  if(!rows.length)return `<p class="note">not measured yet</p>`;
+  const max=Math.max(...rows.map(r=>Math.abs(r.cur||0)),1);
+  return `<div class="scroll"><table><thead><tr><th>${esc(unit?"":"item")}</th>
+    <th class="num">baseline</th><th class="num">this run</th><th class="num">delta</th><th style="width:34%"></th></tr></thead><tbody>`
+    + rows.map(r=>{
+        const u=r.unit===undefined?unit:r.unit;
+        const d=delta(r.cur,r.base,r.name,u,r.lower);
+        const cls=!d?"flat":Math.abs(d.pct)<threshold?"flat":d.good?"up":"down";
+        const txt=!d?"":(d.pct>0?"+":"")+d.pct.toFixed(1)+"%";
+        const regress=d&&!d.good&&Math.abs(d.pct)>=threshold;
+        return `<tr><td>${esc(r.name)}</td>
+          <td class="num">${fmt(r.base,u)}</td>
+          <td class="num">${fmt(r.cur,u)}</td>
+          <td class="num ${cls}">${txt}</td>
+          <td><div class="bar"><i class="${regress?"regress":""}" style="width:${(100*Math.abs(r.cur||0)/max).toFixed(1)}%"></i></div></td></tr>`;
+      }).join("")
+    + `</tbody></table></div>`;
+}
+
+function card(title,note,body,trust){
+  return `<div class="card"><h3>${esc(title)}${pill(trust)}</h3>
+    ${note?`<p class="note">${esc(note)}</p>`:""}${body}</div>`;
+}
+
+// ---- reading a run document -------------------------------------------
+//
+// Every comparable scalar a run document holds, in one place. The
+// overview table, the trend chart and each section's cards all read
+// through this, so they cannot disagree about what a metric is called,
+// what unit it carries, or which direction is an improvement. Anything
+// the benches record and this does not name is a metric that silently
+// never reaches the page, which is the failure this exists to prevent.
+
+function scalars(doc){
+  const out=[], m=doc?.metrics||{}, w=m.throughput?.workloads||{};
+  const add=(key,name,value,unit,lower)=>{
+    if(typeof value==="number"&&Number.isFinite(value))
+      out.push({key,name,value,unit,lower});
+  };
+
+  add("read.hot","read, hot cache",w.read?.hot_cache_ops_per_s,"ops/s",false);
+  add("read.cold","read, cold cache",w.read?.cold_cache_ops_per_s,"ops/s",false);
+  add("read.scaling","read scaling 1 to 8",w.read?.scaling_1_to_8,"x",false);
+  for(const r of w.read?.threads||[])
+    add(`read.t${r.threads}`,`read at ${r.threads} threads`,r.ops_per_s,"ops/s",false);
+
+  for(const nm of ["buffered_write","durable_write"]){
+    const label=nm.replace("_"," ");
+    for(const r of arr(w[nm]?.by_threads))
+      add(`${nm}.t${r.threads}`,`${label} at ${r.threads} threads`,r.ops_per_sec_median,"ops/s",false);
+  }
+
+  add("scan.stream","scan stream rate",w.scan?.stream_mib_per_s,"MiB/s",false);
+
+  add("scan_stream.peak","streaming scan peak bytes",m.scan_stream?.stream_peak_bytes,"B",true);
+  add("scan_stream.peak_materialized","materializing scan peak bytes",m.scan_stream?.materialize_peak_bytes,"B",true);
+  add("scan_stream.peak_ratio","materialized over streamed peak",m.scan_stream?.peak_ratio,"x",true);
+  add("scan_stream.page_peak","first page peak bytes",m.scan_stream?.page_peak_bytes,"B",true);
+
+  for(const r of arr(w.batch?.by_batch_size))
+    add(`batch.b${r.batch_ops}`,`batch of ${r.batch_ops}`,r.median,"ops/s",false);
+  add("batch.bulk","bulk load",w.batch?.bulk_load?.median,"MiB/s",false);
+
+  for(const r of arr(w.large_value?.sizes)){
+    add(`lv.put${r.value_mib}`,`large value put, ${r.value_mib} MiB`,r.put_mib_per_s,"MiB/s",false);
+    add(`lv.get${r.value_mib}`,`large value get, ${r.value_mib} MiB`,r.get_mib_per_s,"MiB/s",false);
+  }
+
+  const rss=m.rss||{};
+  add("rss.baseline","baseline RSS",rss.baseline_rss_kib,"KiB",true);
+  for(const r of arr(rss.shard_sweep))
+    add(`rss.shard${r.shard_bits}`,`RSS at ${r.requested_shards} cache shards`,r.rss_kib,"KiB",true);
+  for(const r of arr(rss.write_sweep))
+    add(`rss.write${r.written_mib}`,`RSS after writing ${r.written_mib} MiB`,r.rss_kib,"KiB",true);
+  add("rss.replay","RSS replaying the WAL",rss.wal_replay?.replay_rss_kib,"KiB",true);
+  add("rss.replay_open","WAL replay open time",rss.wal_replay?.open_s,"s",true);
+  add("rss.replay_ratio","replay RSS over log size",rss.wal_replay?.peak_over_log,"x",true);
+  for(const r of rss.open_floor||[])
+    if(r.opened&&r.usable) add(`rss.floor${r.scale_bytes}`,`open floor at ${fmtBytes(r.scale_bytes)}`,r.rss_kib,"KiB",true);
+  add("rss.embedded_empty","embedded profile, empty",rss.embedded?.empty_rss_kib,"KiB",true);
+  add("rss.embedded","embedded profile, loaded",rss.embedded?.rss_kib,"KiB",true);
+  for(const s of rss.soaks||[]){
+    const n=s.label||s.variant||"soak";
+    add(`rss.soak.${n}.end`,`${n} soak, RSS at end`,s.rss_end_mib,"MiB",true);
+    add(`rss.soak.${n}.peak`,`${n} soak, peak RSS`,s.rss_peak_mib,"MiB",true);
+  }
+
+  for(const f of m.binary_size?.families||[])
+    if(f.available!==false) add(`size.${f.name}`,`${f.name} binary`,f.regolith_kib,"KiB",true);
+
+  for(const c of m.isolation?.matrix||[]){
+    const n=`${c.flavor} / ${c.isolation}`;
+    add(`iso.${c.flavor}.${c.isolation}.unc`,`${n}, uncontended`,c.uncontended_commits_per_s,"commits/s",false);
+    add(`iso.${c.flavor}.${c.isolation}.con`,`${n}, contended`,c.contended_commits_per_s,"commits/s",false);
+  }
+
+  for(const c of m.correctness?.matrix||[]){
+    const n=`${c.flavor} / ${c.isolation}`;
+    add(`ok.${c.flavor}.${c.isolation}.survival`,`${n}, increments surviving`,
+        c.correctness?.survival_pct_median,"%",false);
+  }
+
+  for(const p of m.allocs?.paths||[])
+    add(`allocs.${p.path}`,`${p.path}`,p.achieved,"allocs/op",true);
+
+  for(const [family,data] of Object.entries(m.timings||{}))
+    for(const row of data.rows||[])
+      add(`timing.${family}.${row.key}`,`${family}: ${row.name}`,row.median,row.unit,!row.higher_is_better);
+
+  return out;
+}
+
+function fmtBytes(n){
+  if(!Number.isFinite(n))return String(n);
+  if(n>=1<<30)return (n/(1<<30)).toFixed(1)+" GiB";
+  if(n>=1<<20)return (n/(1<<20)).toFixed(0)+" MiB";
+  if(n>=1024)return (n/1024).toFixed(0)+" KiB";
+  return n+" B";
+}
+
+/// Join this run's scalars to the baseline's by key, so every row on the
+/// page is a comparison rather than a lone number.
+function compare(cur,base){
+  const bmap={};
+  for(const s of scalars(base)) bmap[s.key]=s.value;
+  return scalars(cur).map(s=>({name:s.name,cur:s.value,base:bmap[s.key],
+                               unit:s.unit,lower:s.lower,key:s.key}));
+}
+
+/// Two chart series, this run against the chosen baseline, over the same
+/// x/y fields of a list the benches recorded.
+function pair(curArr,baseArr,xk,yk){
+  const pts=a=>(a||[]).filter(r=>r&&Number.isFinite(r[xk])&&Number.isFinite(r[yk]))
+                      .map(r=>[r[xk],r[yk]]);
+  return [{name:"baseline",color:DIM,dash:true,pts:pts(baseArr)},
+          {name:"this run",color:GREEN,thick:true,pts:pts(curArr)}];
+}
+
+/// Rows for `bars`, matching each of this run's entries to the baseline
+/// entry with the same identity.
+function rows(curArr,baseArr,idf,valf,namef,unit,lower){
+  const bmap={};
+  for(const b of baseArr||[]) bmap[idf(b)]=valf(b);
+  return (curArr||[]).filter(c=>Number.isFinite(valf(c)))
+    .map(c=>({name:namef(c),cur:valf(c),base:bmap[idf(c)],unit,lower}));
+}
+
+/// A card that says why it is empty instead of vanishing. A section that
+/// disappears when its family was not collected is indistinguishable
+/// from one that was never written.
+function gap(title,why){
+  return card(title,why,`<p class="note" style="margin:0">not measured in this run</p>`,"absent");
+}
+
+function throughputSection(cur,base,threshold){
+  const w=cur?.metrics?.throughput?.workloads||{}, b=base?.metrics?.throughput?.workloads||{};
+  if(!Object.keys(w).length)return "";
+  const cards=[];
+
+  cards.push(w.read
+    ? card("Point read",
+        `${fmt(w.read.keys)} keys of ${w.read.value_bytes} B. Hot cache against cold, then scaling across threads.`,
+        `<div class="headline">${fmt(w.read.hot_cache_ops_per_s)} <small>ops/s hot</small>
+         <small>&nbsp;${fmt(w.read.cold_cache_ops_per_s)} cold</small>
+         <small>&nbsp;${(w.read.scaling_1_to_8||0).toFixed(2)}x over 1 to 8 threads</small></div>`
+        +lineChart(pair(w.read.threads,b.read?.threads,"threads","ops_per_s"),{ylab:"ops/s"})
+        +bars(rows(w.read.threads,b.read?.threads,r=>r.threads,r=>r.ops_per_s,
+                   r=>`${r.threads} threads`,"ops/s",false),"",threshold),
+        w.read.trust)
+    : gap("Point read","the point_read family"));
+
+  for(const [key,title,note] of [
+      ["buffered_write","Buffered write","No fsync per write. The OS decides when it reaches the platter."],
+      ["durable_write","Durable write","fsync per write. What a commit actually costs."]]){
+    const c=w[key], bb=b[key];
+    cards.push(c
+      ? card(title,`${note} ${c.value_bytes} B values, ${c.stability||""}.`,
+          lineChart(pair(c.by_threads,bb?.by_threads,"threads","ops_per_sec_median"),{ylab:"ops/s"})
+          +bars(rows(c.by_threads,bb?.by_threads,r=>r.threads,r=>r.ops_per_sec_median,
+                     r=>`${r.threads} threads`,"ops/s",false),"",threshold),
+          c.trust)
+      : gap(title,`the ${key} family`));
+  }
+
+  cards.push(w.scan
+    ? card("Scan",
+        `${fmt(w.scan.keys)} keys of ${w.scan.value_bytes} B, ${fmtBytes(w.scan.scanned_bytes)} streamed in ${w.scan.wall_s}s.`,
+        `<div class="headline">${fmt(w.scan.stream_mib_per_s)} <small>MiB/s</small></div>`
+        +bars([{name:"stream rate",cur:w.scan.stream_mib_per_s,base:b.scan?.stream_mib_per_s,unit:"MiB/s",lower:false},
+               {name:"working set",cur:w.scan.working_set_bytes,base:b.scan?.working_set_bytes,unit:"B",lower:true}],"",threshold),
+        w.scan.trust)
+    : gap("Scan","the scan family"));
+
+  cards.push(w.batch
+    ? card("Write batch",
+        `${w.batch.value_bytes} B values. Throughput against batch size, and a bulk load with the closing flush included.`,
+        lineChart(pair(w.batch.by_batch_size,b.batch?.by_batch_size,"batch_ops","median"),{xlab:"ops per batch",ylab:"ops/s"})
+        +bars(rows(w.batch.by_batch_size,b.batch?.by_batch_size,r=>r.batch_ops,r=>r.median,
+                   r=>`${r.batch_ops} ops per batch`,"ops/s",false)
+              .concat(w.batch.bulk_load?[{name:`bulk load, ${w.batch.bulk_load.payload_mib} MiB`,
+                 cur:w.batch.bulk_load.median,base:b.batch?.bulk_load?.median,unit:"MiB/s",lower:false}]:[]),
+              "",threshold),
+        w.batch.trust)
+    : gap("Write batch","the batch family"));
+
+  cards.push(w.large_value
+    ? card("Large values",
+        `${w.large_value.compression} compression, ceiling ${w.large_value.default_max_value_mib} MiB. ${w.large_value.gib_note||""}`,
+        lineChart([...pair(w.large_value.sizes,b.large_value?.sizes,"value_mib","put_mib_per_s"),
+                   {name:"get, this run",color:"#6fae8c",pts:(w.large_value.sizes||[]).map(r=>[r.value_mib,r.get_mib_per_s])}],
+                  {xlab:"value MiB",ylab:"MiB/s"})
+        +bars(rows(w.large_value.sizes,b.large_value?.sizes,r=>r.value_mib,r=>r.put_mib_per_s,
+                   r=>`put ${r.value_mib} MiB`,"MiB/s",false)
+              .concat(rows(w.large_value.sizes,b.large_value?.sizes,r=>r.value_mib,r=>r.get_mib_per_s,
+                   r=>`get ${r.value_mib} MiB`,"MiB/s",false)),"",threshold),
+        w.large_value.trust)
+    : gap("Large values","the large_value family"));
+
+  return `<h2>Throughput</h2><div class="grid">${cards.join("")}</div>`;
+}
+
+function isolationSection(cur,base,threshold){
+  const ci=cur?.metrics?.isolation||{}, cells=ci.matrix||[];
+  if(!cells.length)return "";
+  const bmap={};
+  for(const c of (base?.metrics?.isolation?.matrix)||[]) bmap[c.flavor+"/"+c.isolation]=c;
+  const mk=(key,unit)=>cells.map(c=>({
+    name:`${c.flavor} / ${c.isolation}`, cur:c[key],
+    base:(bmap[c.flavor+"/"+c.isolation]||{})[key]}));
+  const levels=[...new Set(cells.map(c=>c.isolation))];
+  const flavors=[...new Set(cells.map(c=>c.flavor))];
+  const idx=l=>levels.indexOf(l)+1;
+  const series=flavors.map((f,i)=>({
+    name:f,color:i?GREEN:DIM,thick:!!i,
+    pts:cells.filter(c=>c.flavor===f).map(c=>[idx(c.isolation),c.contended_commits_per_s])}));
+  return `<h2>Transaction isolation</h2><div class="grid">
+    ${card("Uncontended commits/s",
+        "One writer per key. What the level costs when nothing is racing.",
+        bars(mk("uncontended_commits_per_s"),"",threshold),ci.trust)}
+    ${card("Contended commits/s",
+        "Every thread on one key. What the level costs when everything is racing.",
+        bars(mk("contended_commits_per_s"),"",threshold))}
+    ${card("Conflict rate",
+        "Share of attempts the level refused. A stricter level refuses more, and that refusal is the work it is doing.",
+        bars(mk("conflict_rate_pct"),"%",threshold))}
+    ${card("Cost of strictness",
+        "Contended throughput across "+levels.join(" -> ")+", left to right.",
+        lineChart(series,{xlab:levels.join("  |  "),ylab:"commits/s"}))}
+  </div>`;
+}
+
+function timingSection(cur,base){
+  const names=["transaction","scan_commit","append","read_rules","txn_callbacks","sync"];
+  const current=cur?.metrics?.timings||{}, previous=base?.metrics?.timings||{};
+  const cards=[...new Set([...names,...Object.keys(current),...Object.keys(previous)])].map(name=>{
+    const family=current[name]||{}, old=new Map((previous[name]?.rows||[]).map(row=>[row.key,row]));
+    const rows=(family.rows||[]).map(row=>{
+      const range=row.invalid_reason||(Number.isFinite(row.min)&&Number.isFinite(row.max)
+        ? `${fmt(row.min)} to ${fmt(row.max)}` : "not recorded");
+      return `<tr><td>${esc(row.name)}</td><td class="num">${fmt(old.get(row.key)?.median)}</td>`
+        +`<td class="num">${fmt(row.median)}</td><td>${esc(row.unit)}</td><td>${esc(range)}</td></tr>`;
+    });
+    return rows.length ? card(name.replaceAll("_"," "),
+      "Point estimates without an observed range cannot establish a performance change.",
+      `<table><thead><tr><th>Workload</th><th>Baseline</th><th>This run</th><th>Unit</th><th>Observed range</th></tr></thead>`
+      +`<tbody>${rows.join("")}</tbody></table>`,family.trust) : gap(name,name+" timing measurements");
+  });
+  return `<h2>Transaction and mechanism timings</h2><div class="grid">${cards.join("")}</div>`;
+}
+
+function correctnessSection(cur,base,threshold){
+  const c=cur?.metrics?.correctness||{}, cells=c.matrix||[];
+  if(!cells.length)return "";
+  const bcells=base?.metrics?.correctness?.matrix||[];
+  const id=x=>x.flavor+"/"+x.isolation, nm=x=>`${x.flavor} / ${x.isolation}`;
+  const sum=(x,k)=>(x.correctness?.runs||[]).reduce((a,r)=>a+(r.attempts?.[k]||0),0);
+  const lost=cells.filter(x=>(x.correctness?.survival_pct_min??100)<100);
+  return `<h2>Transaction correctness</h2><div class="grid">
+    ${card("Increments that survived",
+      lost.length
+        ? `${lost.length} level(s) lost an increment: ${lost.map(nm).join(", ")}. Anything under 100% is a lost update.`
+        : `Every level kept every increment across ${cells[0].correctness?.runs?.length||0} runs of ${cells[0].correctness?.threads||0} threads. 100% is the only passing number.`,
+      bars(rows(cells,bcells,id,x=>x.correctness?.survival_pct_median,nm,"%",false),"",threshold),
+      c.trust)}
+    ${card("What the level refused",
+      "Commits against the attempts it turned away. A stricter level refuses more, and the refusals are the work it is doing.",
+      bars(cells.map(x=>({name:nm(x)+", commits",cur:sum(x,"commits"),
+                          base:(bcells.find(y=>id(y)===id(x))?(bcells.find(y=>id(y)===id(x)).correctness?.runs||[]).reduce((a,r)=>a+(r.attempts?.commits||0),0):undefined),
+                          unit:"",lower:false}))
+           .concat(cells.map(x=>({name:nm(x)+", conflicts",cur:sum(x,"conflicts"),base:undefined,unit:"",lower:undefined}))),
+           "",threshold),
+      c.trust)}
+    ${card("Commits per second by level",
+      "The throughput the transaction bench saw while proving the level correct, uncontended against contended.",
+      bars(rows(cells,bcells,id,x=>x.throughput?.uncontended_commits_per_s?.median,x=>nm(x)+", uncontended","commits/s",false)
+           .concat(rows(cells,bcells,id,x=>x.throughput?.contended_commits_per_s?.median,x=>nm(x)+", contended","commits/s",false)),
+           "",threshold),
+      c.trust)}</div>`;
+}
+function rssSection(cur,base,threshold){
+  const c=cur?.metrics?.rss||{}, b=base?.metrics?.rss||{};
+  const has=k=>Array.isArray(c[k])?c[k].length:c[k]!=null;
+  if(!["soaks","shard_sweep","write_sweep","wal_replay","open_floor","embedded"].some(has))return "";
+  const cards=[];
+
+  if((c.shard_sweep||[]).length)
+    cards.push(card("Cache shards",
+      `Block cache pinned at ${fmtBytes(c.pinned_cache_bytes)} while the shard count sweeps. Baseline process RSS is ${fmt(c.baseline_rss_kib)} KiB, so what matters is the column above it.`,
+      lineChart(pair(c.shard_sweep,b.shard_sweep,"requested_shards","rss_kib"),{xlab:"cache shards",ylab:"KiB"})
+      +bars(rows(c.shard_sweep,b.shard_sweep,r=>r.shard_bits,r=>r.over_baseline_kib,
+                 r=>`${r.requested_shards} shards, over baseline`,"KiB",true),"",threshold),
+      c.trust));
+
+  if((c.write_sweep||[]).length)
+    cards.push(card("RSS against bytes written",
+      "The question a memory budget asks: does resident memory track the write volume, or the configured buffers.",
+      lineChart(pair(c.write_sweep,b.write_sweep,"written_mib","rss_kib"),{xlab:"MiB written",ylab:"KiB"})
+      +bars(rows(c.write_sweep,b.write_sweep,r=>r.written_mib,r=>r.rss_kib,
+                 r=>`after ${r.written_mib} MiB`,"KiB",true),"",threshold),
+      c.trust));
+
+  if(c.wal_replay)
+    cards.push(card("WAL replay after a crash",
+      `Killed with SIGKILL after ${c.wal_replay.written_mib} MiB, then reopened. The log was ${fmtBytes(c.wal_replay.log_bytes)}${c.wal_replay.first_key_present?" and the first key came back":""}.`,
+      bars([{name:"replay RSS",cur:c.wal_replay.replay_rss_kib,base:b.wal_replay?.replay_rss_kib,unit:"KiB",lower:true},
+            {name:"peak over log size",cur:c.wal_replay.peak_over_log,base:b.wal_replay?.peak_over_log,unit:"x",lower:true},
+            {name:"open time",cur:c.wal_replay.open_s,base:b.wal_replay?.open_s,unit:"s",lower:true}],"",threshold),
+      c.trust));
+
+  if((c.open_floor||[]).length){
+    const usable=(c.open_floor||[]).filter(r=>r.opened&&r.usable);
+    const refused=(c.open_floor||[]).filter(r=>!(r.opened&&r.usable));
+    cards.push(card("Open floor",
+      refused.length
+        ? `The smallest configuration that opens and serves. ${refused.length} smaller one(s) refused: ${refused.map(r=>fmtBytes(r.scale_bytes)).join(", ")}.`
+        : "The smallest configuration that opens and serves.",
+      bars(rows(usable,(b.open_floor||[]).filter(r=>r.opened&&r.usable),
+                r=>r.scale_bytes,r=>r.rss_kib,r=>fmtBytes(r.scale_bytes),"KiB",true),"",threshold),
+      c.trust));
+  }
+
+  if(c.embedded)
+    cards.push(card("Embedded profile",
+      `Nominal budget ${fmt(c.embedded.nominal_kib)} KiB, then ${c.embedded.written_mib} MiB written into it.`,
+      bars([{name:"empty",cur:c.embedded.empty_rss_kib,base:b.embedded?.empty_rss_kib,unit:"KiB",lower:true},
+            {name:"loaded",cur:c.embedded.rss_kib,base:b.embedded?.rss_kib,unit:"KiB",lower:true},
+            {name:"peak",cur:c.embedded.peak_kib,base:b.embedded?.peak_kib,unit:"KiB",lower:true}],"",threshold),
+      c.trust));
+
+  const soaks=c.soaks||[];
+  if(soaks.length){
+    const series=soaks.map((s,i)=>({name:s.label||s.variant||("soak "+i),
+      color:i?GREEN:DIM,thick:!!i,
+      pts:(s.samples_t_rss_ops||[]).filter(r=>Array.isArray(r)&&r.length>=2).map(r=>[r[0],r[1]])}));
+    cards.push(card("RSS over a sustained workload",c.workload||"",
+      lineChart(series,{xlab:"seconds",ylab:"MiB"})
+      +bars(rows(soaks,b.soaks,s=>s.label||s.variant,s=>s.rss_peak_mib??s.rss_end_mib,
+                 s=>`${s.label||s.variant} peak RSS`,"MiB",true),"",threshold),
+      c.trust));
+  }else{
+    cards.push(gap("RSS over a sustained workload",
+      "The soak family. It is a long-running harness and is not in the bench matrix, so a scheduled run has to record it."));
+  }
+
+  return `<h2>Resident memory</h2><div class="grid">${cards.join("")}</div>`;
+}
+
+function sizeSection(cur,base,threshold){
+  const c=cur?.metrics?.binary_size||{}, fams=c.families||[];
+  if(!fams.length)return "";
+  const bfam=base?.metrics?.binary_size?.families||[];
+  const built=fams.filter(f=>f.available!==false);
+  const missing=fams.filter(f=>f.available===false);
+  const note=[c.surface?`Surface linked: ${c.surface}.`:"",c.profile?`Built ${c.profile}.`:"",
+    missing.length?`Not built here: ${missing.map(f=>f.name+(f.reason?" ("+f.reason+")":"")).join(", ")}.`:""]
+    .filter(Boolean).join(" ");
+  return `<h2>Binary size</h2><div class="grid">
+    ${card("regolith's own contribution",
+        note||"Linked size minus the same program without regolith. Lower is better.",
+        bars(rows(built,bfam,f=>f.name,f=>f.regolith_kib,f=>f.name,"KiB",true),"",threshold),
+        c.trust)}
+    ${card("Linked against baseline",
+        "The whole binary next to the empty program it is measured against, so the contribution above can be checked.",
+        bars(rows(built,bfam,f=>f.name,f=>f.linked_bytes,f=>f.name+" linked","B",true)
+             .concat(rows(built,bfam,f=>f.name,f=>f.baseline_bytes,f=>f.name+" baseline","B",true)),
+             "",threshold),
+        c.trust)}</div>`;
+}
+
+function allocsSection(cur,base,threshold){
+  const ca=cur?.metrics?.allocs||{}, paths=ca.paths||[];
+  if(!paths.length)return "";
+  const bmap={};
+  for(const p of (base?.metrics?.allocs?.paths)||[]) bmap[p.path]=p.achieved;
+  const rows=paths.map(p=>({name:p.path,cur:p.achieved,base:bmap[p.path]}));
+  const over=paths.filter(p=>p.met===false);
+  const note=over.length
+    ? over.length+" path(s) over budget: "+over.map(p=>p.path).join(", ")
+    : "Every path is inside its budget. Lower is better.";
+  const budgets=paths.map(p=>({name:p.path,cur:p.budget,base:null}));
+  return `<h2>Allocations per operation</h2><div class="grid">${card("measured",
+    note, bars(rows,"allocs/op",threshold), ca.trust)}${card("budget",
+    "The ceiling each path is gated against, for reference against the measured column.",
+    bars(budgets,"allocs/op",threshold), ca.trust)}</div>`;
+}
+
+function scanStreamSection(cur,base,threshold){
+  const c=cur?.metrics?.scan_stream||{}, b=base?.metrics?.scan_stream||{};
+  if(c.stream_peak_bytes===undefined)return "";
+  // Rate is not the story. The two APIs walk the same bytes at close to the
+  // same speed; what differs is how much a caller has to hold to do it, so
+  // the headline is the ratio between the two peaks.
+  return `<h2>Streaming scan</h2><div class="grid">`
+    +card("Peak live bytes",
+      `${fmt(c.keys)} keys of ${c.value_bytes} B. A materializing scan builds the whole `
+      +`${fmtBytes(c.scanned_bytes)} before the caller sees a row; a streaming scan hands them `
+      +`over as it walks. Lower is better.`,
+      `<div class="headline">${fmt(c.peak_ratio)}<small> x more held to materialize</small></div>`
+      +bars([{name:"streamed",cur:c.stream_peak_bytes,base:b.stream_peak_bytes,unit:"B",lower:true},
+             {name:"materialized",cur:c.materialize_peak_bytes,base:b.materialize_peak_bytes,unit:"B",lower:true},
+             {name:`first ${c.page} rows, streamed`,cur:c.page_peak_bytes,base:b.page_peak_bytes,unit:"B",lower:true}],
+            "",threshold),
+      c.trust)
+    +`</div>`;
+}
+
+function trendSection(all){
+  // The reason the history is kept: one run answers "is this fast", the
+  // series answers "when did this change".
+  const byKey={}, names={};
+  for(const r of all){
+    const t=Date.parse(r.doc?.run?.timestamp||"")||0;
+    for(const s of scalars(r.doc)){
+      (byKey[s.key]=byKey[s.key]||[]).push([t,s.value]);
+      names[s.key]={name:s.name,unit:s.unit};
+    }
+  }
+  const keys=Object.keys(byKey).filter(k=>byKey[k].length>0).sort();
+  if(!keys.length)return "";
+  if(!keys.includes(TREND_METRIC))
+    TREND_METRIC=keys.find(k=>k==="read.hot")||keys[0];
+  const pts=[...byKey[TREND_METRIC]].sort((a,b)=>a[0]-b[0]);
+  const x0=pts.length?pts[0][0]:0;
+  const series=[{name:names[TREND_METRIC].name,color:GREEN,thick:true,
+    pts:pts.map(q=>[(q[0]-x0)/86400000,q[1]])}];
+  const opts=keys.map(k=>`<option value="${esc(k)}"${k===TREND_METRIC?" selected":""}>${esc(names[k].name)}</option>`).join("");
+  const picker=`<p class="note" style="margin:0 0 10px">
+    <label for="trendmetric" style="display:inline;margin-right:6px">Metric</label>
+    <select id="trendmetric">${opts}</select></p>`;
+  return `<h2>Trend across every recorded run</h2><div class="grid">
+    ${card(names[TREND_METRIC].name+(names[TREND_METRIC].unit?" ("+names[TREND_METRIC].unit+")":""),
+      `${pts.length} of ${all.length} run(s) on file recorded this metric. A step in this line is where the change happened.`,
+      picker+lineChart(series,{xlab:"days since first run",ylab:names[TREND_METRIC].unit||"",w:1100,h:280}))}</div>`;
+}
+
+function overview(cur,base,threshold){
+  // No verdict. This page exists to show what the numbers did, and a
+  // pass/fail badge only hides the shape of the change behind a word.
+  const all=compare(cur,base);
+  const r=cur?.run||{};
+  const guard=r.loadguard?.passed;
+  // A family whose entries each carry their own trust has none of its
+  // own. Rendering that as `absent` would report a gap over data that
+  // was collected, so it is named for what it is.
+  const famTrust=v=>{
+    if(typeof v.trust==="string")return v.trust;
+    const body=Object.keys(v).filter(k=>!["trust","trust_note","unit","note"].includes(k));
+    return body.length?"per-entry":"absent";
+  };
+  const fams=Object.entries(cur?.metrics||{})
+    .filter(([,v])=>v&&typeof v==="object")
+    .map(([k,v])=>`<tr><td>${esc(k.replace(/_/g," "))}</td><td class="num">${pill(famTrust(v))}</td></tr>`)
+    .join("");
+  const meta=`<table><tbody>
+    <tr><td>commit</td><td class="num">${esc((r.commit||"").slice(0,12))}</td></tr>
+    <tr><td>label</td><td class="num">${esc(r.label||"")}</td></tr>
+    <tr><td>recorded</td><td class="num">${esc(r.timestamp||"")}</td></tr>
+    <tr><td>toolchain</td><td class="num">${esc(r.toolchain||"")}</td></tr>
+    <tr><td>load guard</td><td class="num ${guard===false?"down":""}">${guard===false?"did not pass":guard===true?"passed":"n/a"}</td></tr>
+    <tr><td>metrics compared</td><td class="num">${all.filter(x=>x.base!=null).length} of ${all.length}</td></tr>
+  </tbody></table>`;
+  const warn=guard===false?`<p class="note" style="color:var(--amber)">The load guard did not pass, so the timings on this run were taken on a busy machine and are not comparable.</p>`:"";
+  return `<div class="grid" style="padding-top:16px">
+    ${card("This run","",meta+warn)}
+    ${card("What each family reported",
+      "Every family the collector knows about. `absent` means the family was not collected in this run, never that it measured zero.",
+      `<table><tbody>${fams}</tbody></table>`)}
+    ${card("Every number, side by side",
+      base
+        ? "Every scalar this run recorded, against the run selected above. Direction is carried per metric, so the delta column already knows whether higher or lower is the improvement."
+        : "Every scalar this run recorded. Pick a run to compare with to fill the baseline column.",
+      bars(all,"",threshold))}
+  </div>`;
+}
+
+let RUNS=[];
+let TREND_METRIC=null;
+
+// The controls are meaningless with nothing to select, and a pair of
+// empty dropdowns reads as a broken page rather than an empty one.
+function showControls(on){ document.querySelector(".controls").style.display = on ? "" : "none"; }
+
+function emptyState(title, detail){
+  showControls(false);
+  return `<div class="grid" style="padding-top:16px">
+    ${card(title, detail,
+      `<p class="note" style="margin:0">Once a run is published this page shows, for every
+       recorded run and against any other run you pick:</p>
+       <table><tbody>
+         <tr><td>Throughput</td><td class="num">read, write, scan, batch and large values</td></tr>
+         <tr><td>Transaction isolation</td><td class="num">commits/s and conflict rate per level</td></tr>
+         <tr><td>Transaction correctness</td><td class="num">increments surviving, per level</td></tr>
+         <tr><td>Resident memory</td><td class="num">shard and write sweeps, WAL replay, open floor, embedded</td></tr>
+         <tr><td>Binary size</td><td class="num">regolith's own contribution, per artifact</td></tr>
+         <tr><td>Allocations</td><td class="num">per-operation counts against their budgets</td></tr>
+         <tr><td>Trend</td><td class="num">any metric across every run on file</td></tr>
+       </tbody></table>`)}
+    ${card("How a run gets here","",
+      `<p class="note" style="margin:0 0 10px">The <code>bench</code> matrix runs each family on
+       its own runner and uploads its results. <code>perf-site</code> merges them into one run
+       document, files it under <code>runs/</code> beside every earlier run, and republishes this
+       page. The documents are the artifact; this page is only a reader over them.</p>
+       <p class="note" style="margin:0">Nothing is rendered from a run that does not exist, so an
+       empty page here means no run has been published, not that a run measured zero.</p>`)}
+  </div>`;
+}
+
+async function boot(){
+  let manifest;
+  try{
+    const r=await fetch("runs/index.json",{cache:"no-store"});
+    if(!r.ok) throw new Error(r.status);
+    manifest=await r.json();
+  }catch(e){
+    $("#main").innerHTML=emptyState("No runs published yet",
+      "This page reads the run documents under runs/. There are none yet.");
+    return;
+  }
+  const list=manifest.runs||[];
+  if(!list.length){
+    $("#main").innerHTML=emptyState("The run index is empty",
+      "runs/index.json exists but lists no runs, so there is nothing to plot.");
+    return;
+  }
+  RUNS=(await Promise.all(list.map(async m=>{
+    try{ return {meta:m, doc:await (await fetch("runs/"+m.file,{cache:"no-store"})).json()}; }
+    catch(e){ return null; }
+  }))).filter(Boolean);
+  if(!RUNS.length){
+    $("#main").innerHTML=emptyState("Every run document failed to load",
+      `The index lists ${list.length} run(s), but none of the files could be read.`);
+    return;
+  }
+  showControls(true);
+  const opt=r=>`<option value="${esc(r.meta.file)}">${esc((r.meta.commit||"").slice(0,10))} ${esc(r.meta.label||"")} ${esc((r.meta.timestamp||"").slice(0,16))}</option>`;
+  $("#cur").innerHTML=RUNS.map(opt).join("");
+  $("#base").innerHTML=`<option value="">(none)</option>`+RUNS.map(opt).join("");
+  if(RUNS.length>1)$("#base").value=RUNS[1].meta.file;
+  for(const el of ["#cur","#base","#thresh"])$(el).addEventListener("change",draw);
+  zoomable();
+  draw();
+}
+/// Draw one section, or a card saying why it could not be drawn.
+///
+/// One malformed family used to throw out of `draw` and leave the page on
+/// "Loading runs..." forever. A dashboard that silently shows nothing is worse
+/// than one that shows a broken panel, because only the second one is
+/// obviously wrong.
+function section(name,build){
+  try{ return build(); }
+  catch(e){
+    return `<h2>${esc(name)}</h2><div class="grid"><div class="card broken">`
+      +`<h3>${esc(name)} failed to draw</h3>`
+      +`<p class="note">${esc(String(e&&e.message||e))}</p>`
+      +`<p class="note">The run document is on file; this section could not read it. `
+      +`Every other section on this page still drew.</p></div></div>`;
+  }
+}
+
+function draw(){
+  const cur=RUNS.find(r=>r.meta.file===$("#cur").value)?.doc;
+  const base=RUNS.find(r=>r.meta.file===$("#base").value)?.doc||null;
+  const th=parseFloat($("#thresh").value);
+  $("#main").innerHTML=
+     section("Overview",()=>overview(cur,base,th))
+    +section("Throughput",()=>throughputSection(cur,base,th))
+    +section("Transaction isolation",()=>isolationSection(cur,base,th))
+    +section("Transaction and mechanism timings",()=>timingSection(cur,base))
+    +section("Transaction correctness",()=>correctnessSection(cur,base,th))
+    +section("Resident memory",()=>rssSection(cur,base,th))
+    +section("Binary size",()=>sizeSection(cur,base,th))
+    +section("Allocations per operation",()=>allocsSection(cur,base,th))
+    +section("Streaming scan",()=>scanStreamSection(cur,base,th))
+    +section("Trend",()=>trendSection(RUNS));
+  // Re-attached after every redraw: the picker lives inside the markup
+  // that redraw replaces.
+  const tm=$("#trendmetric");
+  if(tm)tm.addEventListener("change",e=>{TREND_METRIC=e.target.value;draw();});
+}
+
+/// Click a panel to fill the viewport with it, escape or click again to
+/// return. Delegated from the document, so it survives every redraw, and it
+/// keeps its hands off the controls inside a card.
+function zoomable(){
+  const backdrop=document.createElement("div");
+  backdrop.className="zoom-backdrop";
+  backdrop.hidden=true;
+  document.body.appendChild(backdrop);
+  const close=()=>{
+    for(const el of document.querySelectorAll(".card.zoomed")) el.classList.remove("zoomed");
+    backdrop.hidden=true;
+  };
+  backdrop.addEventListener("click",close);
+  document.addEventListener("keydown",e=>{ if(e.key==="Escape") close(); });
+  document.addEventListener("click",e=>{
+    // A select, link or button inside a card is doing its own job.
+    if(e.target.closest("select,option,a,button,input")) return;
+    const card=e.target.closest(".card");
+    if(!card) return;
+    const wasZoomed=card.classList.contains("zoomed");
+    close();
+    if(!wasZoomed){
+      card.classList.add("zoomed");
+      backdrop.hidden=false;
+      card.scrollTop=0;
+    }
+  });
+}
+boot();
+</script>

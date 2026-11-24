@@ -1,0 +1,57 @@
+# Configuration for cargo-deny. See https://embarkstudios.github.io/cargo-deny/
+# for the full schema.
+#
+# Regolith ships under `Apache-2.0 OR MIT` so any dependency that uses a
+# weakly-copyleft or proprietary license would force consumers of
+# the crate into a compatibility headache. The allow-list below is
+# the conventional FOSS set plus `Unicode-*` variants that unicode-ident
+# and friends ship with.
+
+[advisories]
+# Fail on any active RUSTSEC advisory for a dependency in the
+# lockfile. Yanked crates also produce warnings via cargo's own
+# resolver; `cargo deny` surfaces them here so they're one
+# consolidated signal.
+yanked = "warn"
+ignore = []
+
+[licenses]
+# Only allow licenses we've vetted as compatible with our
+# `Apache-2.0 OR MIT` crate license. Anything outside this set
+# blocks the CI job until either the dependency is dropped or
+# this list is deliberately widened.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "Zlib",
+    "Unicode-3.0",
+]
+confidence-threshold = 0.8
+
+[bans]
+# Duplicate versions of the same crate bloat the binary without
+# obvious benefit. Keep this as a CI gate so dependency drift is
+# resolved deliberately instead of accumulating in the lockfile.
+multiple-versions = "deny"
+# Wildcard version requirements are a footgun — they float the
+# tree in ways the lockfile can't constrain. Allow them
+# internally (for path dependencies) but warn on external crates.
+wildcards = "allow"
+# proptest 1.11 (the newest) pulls getrandom 0.3 through rand 0.9 and
+# getrandom 0.4 through tempfile 3.27. The opt-in `testing` feature makes
+# proptest a normal dependency, so `--all-features` sees both. cargo-deny
+# warns once a skip no longer matches; drop these entries then.
+skip = [
+    { crate = "getrandom@0.3.4", reason = "proptest pulls two getrandom versions" },
+    { crate = "r-efi@5.3.0", reason = "getrandom 0.3 on UEFI, through proptest" },
+]
+
+[sources]
+# Only trust crates.io. Git and local registries require an
+# explicit allow entry to land.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

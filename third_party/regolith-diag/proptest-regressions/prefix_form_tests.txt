@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc c703b1b6003b0f55ecafa245a6736990b207f835507a9f4e980c58568d324f0b # shrinks to extractor = Fixed(0), trigger = 2, table_size = 1, batches = [([(0, [97], Some(0))], FlushOldForm)], seeks = [(0, [])]
+cc a2a01d0934aa23d68ec0efb359343ec48630f89da3c5f476629ea63f12870343 # shrinks to extractor = Fixed(1), trigger = 2, table_size = 1, batches = [([(2, [98, 98], Some(0))], FlushAndCompact)], seeks = [(2, [98])]

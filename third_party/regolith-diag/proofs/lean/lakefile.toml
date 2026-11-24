@@ -1,0 +1,12 @@
+# The Lean proofs behind regolith's TLA+ models. Plain Lean 4 core, no
+# dependencies, so `lake build` needs no network and finishes in seconds.
+name = "Regolith"
+defaultTargets = ["Regolith"]
+
+# A warning fails the build: a proof left open with a placeholder only
+# warns, and it must never pass as proved.
+[leanOptions]
+warningAsError = true
+
+[[lean_lib]]
+name = "Regolith"

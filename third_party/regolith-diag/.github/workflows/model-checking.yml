@@ -1,0 +1,196 @@
+name: Concurrency Model Checking
+
+# Split into its own workflow so it carries its own status badge. A
+# badge is per workflow, not per job, so a suite whose result the README
+# advertises has to be a workflow of its own.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # The profile written for CI: a slower, noisier host gets a looser
+  # slow-timeout than a workstation, and one retry so a genuinely flaky
+  # test is reported as flaky rather than as a failure. See
+  # `.config/nextest.toml`.
+  NEXTEST_PROFILE: ci
+  RUSTFLAGS: -D warnings
+
+# Every `run` step goes through `bash -eo pipefail` rather than
+# GitHub's default `bash -e`. Without `pipefail` a step like
+# `just cov-summary | tee summary.txt` reports `tee`'s exit status,
+# so a recipe that died with "command not found" still concluded
+# green and published an empty report.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+
+  # Loom model checking. Exhaustive over the C11 interleavings the
+  # memtable's publication protocol and the read horizon permit, which
+  # no amount of stress testing covers. Both profiles run: the skip
+  # list's single-writer guard is a `debug_assert`, so its calibration
+  # only exists in a debug build.
+  loom:
+    runs-on: ubuntu-latest
+    # Every recipe of `just loom-all` is meant to take under 10 minutes in
+    # all; each stops its own run, as a failure, at 10.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: extractions/setup-just@v2
+      - name: Loom models, release and debug
+        run: just loom-all
+
+  # TLA+ model of what commit validation covers at each isolation level,
+  # checked against the Merkle-DAG CRDT workload `RepeatableRead` exists for,
+  # and the storage-engine models: the L0 input set of compact_range, one
+  # view per batch read, ingest publication and WAL rotation. The green
+  # and the red configurations both run: a red one going green would mean
+  # the model stopped telling the fix from the defect.
+  #
+  # Every row runs in one job. The suite is bounded by its configurations,
+  # not by more runners: each row is sized to finish in under a minute on one
+  # TLC worker and is stopped, as a failure, at two (`just tla`), and the
+  # recipe runs as many rows side by side as the runner has cores. The whole
+  # suite is meant to take under 10 minutes on four cores, so the job has 15.
+  tla:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: extractions/setup-just@v2
+      # Every line of a model, a configuration and a Lean proof carries a
+      # plain-words comment above it, with no file left out. A shell script
+      # with nothing to install; it runs first because it takes a second and
+      # one uncommented line fails the job.
+      - name: Every proof line carries a comment
+        run: just proofs-comments
+      - name: TLA+ models, every green and red configuration
+        run: just tla
+
+  # The Lean proofs beside the TLA+ models: each module proves for every
+  # size what a model checks for a few. Plain Lean 4 core, no dependencies.
+  # The toolchain pinned in proofs/lean/lean-toolchain and the build output
+  # are cached together, so a run that changes no proof rebuilds nothing.
+  lean:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: extractions/setup-just@v2
+      - name: Cache the Lean toolchain and build output
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.elan
+            proofs/lean/.lake
+          key: lean-${{ runner.os }}-${{ hashFiles('proofs/lean/lean-toolchain') }}-${{ hashFiles('proofs/lean/**/*.lean', 'proofs/lean/lakefile.toml', 'proofs/lean/lake-manifest.json') }}
+          restore-keys: |
+            lean-${{ runner.os }}-${{ hashFiles('proofs/lean/lean-toolchain') }}-
+      # The installer script is pinned by tag and checksum, as the TLC jar
+      # is; the proofs are checked by the toolchain lean-toolchain pins.
+      - name: Install elan and the pinned Lean toolchain
+        run: |
+          if [ ! -x "$HOME/.elan/bin/elan" ]; then
+            curl -sSfL -o elan-init.sh \
+              https://raw.githubusercontent.com/leanprover/elan/v4.2.3/elan-init.sh
+            echo "a620ff1641616222c8d37c54845492004bb84d6877cdbc944dd65c1aa685bf53  elan-init.sh" \
+              | sha256sum -c -
+            sh elan-init.sh -y --default-toolchain none --no-modify-path
+            rm elan-init.sh
+          fi
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+          "$HOME/.elan/bin/elan" toolchain install "$(cat proofs/lean/lean-toolchain)"
+      - name: Lean proofs, built and audited
+        run: just lean
+
+  # The read-view chaos workload at full size. `cargo test` runs a smaller
+  # default so the ordinary gate stays fast; this job is what covers
+  # the full one.
+
+
+  # Miri over the modules that carry the crate's `unsafe`: the arena's
+  # chunk layout and bump arithmetic, the skip list's node layout and
+  # publication, the memtable's arena-backed slices, the block decoder,
+  # and `regolith::sync`'s waiter nodes, lists and pools. And those of the
+  # commit pipeline: the ring's cells and the slot that holds its tip
+  # (`commit::ring`), the allocations a thread keeps between commits
+  # (`commit::spare`), the cell a value is taken out of once (`take`), the
+  # step and the version store on it (`version_store`, whose tests are the
+  # step's), the positional log and its gate (`wal_log`, `wal_gate`), the
+  # stack, the parked list and the job the queues are built on
+  # (`io::stack`, `io::parked`, `io::job`), the in-memory log with the
+  # append it rests on (`env::mem_log`, two tests of `env::mem_file`), and
+  # a transaction's callbacks kept in place and the first four abort
+  # callbacks a claim holds (`transaction::in_place`,
+  # `transaction::first_four`).
+  # Interpreted execution is orders of magnitude slower than native, so
+  # the tests that would not finish are scaled down under `cfg(miri)` in
+  # the tests themselves, with every assertion left intact: the two
+  # spinning-reader stress tests are `#[ignore]`d in favour of an
+  # interpreter-sized equivalent, the arena's multi-megabyte fills use a
+  # smaller budget, the `regolith::sync` loops run tens of rounds, not
+  # thousands, the range-tombstone tests append 40 and 100 tombstones
+  # under their readers, not thousands, and probe every seventh key after
+  # an append, and the ring, the version store, the skip list and the
+  # in-memory log race a handful of operations a thread, not hundreds.
+  #
+  # A test listed here keeps off the file system: miri does not sync a
+  # directory, which every durable write to a real file ends with. The
+  # version store's tests keep their manifest in the in-memory Env, and the
+  # positional log's run over the in-memory Env, whose log is this crate's
+  # own lock-free code, and natively over the file system too.
+  #
+  # Measured at 39 minutes for the 271 tests on a workstation
+  # shared with other work; the limit is three times that. A run that
+  # passes it means a test was added at native size; size it as above.
+  miri:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      # Kovan's flag set, run the way kovan's own CI runs it, because
+      # `kovan-queue` backs the arena's chunk pool. Each flag is there
+      # for something miri cannot model rather than for a defect:
+      # `tree-borrows` because miri's default Stacked Borrows model
+      # rejects the pointer provenance a deferred-reclamation scheme
+      # uses, `ignore-leaks` because such a scheme defers frees by
+      # design and may legitimately still hold retired entries at exit,
+      # `permissive-provenance` for its int-to-pointer tagged pointers,
+      # and `+cmpxchg16b` for its double-width CAS, which miri cannot
+      # emulate in doctests - hence `--lib` only.
+      #
+      # Measured on this tree: regolith's own modules also pass under miri's
+      # bare defaults, the arena tests that exercise `kovan-queue`'s ring
+      # included. These flags are headroom against kovan's internals, not
+      # cover for anything here, and a finding that originates inside
+      # kovan does not block this crate.
+      MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-permissive-provenance -Zmiri-ignore-leaks -Zmiri-tree-borrows
+      RUSTFLAGS: -C target-feature=+cmpxchg16b -D warnings
+      PROPTEST_CASES: '4'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - uses: Swatinem/rust-cache@v2
+      # Stopped ten minutes under the job's limit, so a run that does not
+      # finish fails with a message rather than as a cancelled job. Measured
+      # at 49 minutes for 189 tests on a workstation at load 60 to 380; the
+      # 290 tests of the list below took 30 minutes on the CI runner.
+      - run: |
+          timeout 110m cargo miri test --lib -- --test-threads=1 engine::arena:: engine::skiplist:: engine::memtable:: engine::block:: slice::tests:: sync:: engine::commit::ring:: engine::commit::spare:: engine::take:: engine::version_store:: engine::wal_log:: engine::wal_gate:: engine::io::stack:: engine::io::parked:: engine::io::job:: transaction::in_place:: transaction::first_four:: env::mem_log:: env::mem_file::tests::an_append_at env::mem_file::tests::two_appends_at || {
+            code=$?
+            [ "$code" -ne 124 ] || echo "::error::miri did not finish within 110 minutes and was stopped"
+            exit "$code"
+          }

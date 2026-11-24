@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc a67bded27f617d41efe4e237d2fe27a5cc686f2f749c249fdd221111f66c58f0 # shrinks to case = CrashCase { syncs: [false, false, true, false], close: false, keep: 4, fates: [Intact, Intact, Intact, Intact, Intact, Intact, Intact, Intact, Intact, Intact], rot: true, seed: 0 }
+cc 624c42239a3f44e401e9f2a2779ea4aadc9a28f471f8bfe00c71775958a7bc62 # shrinks to case = CrashCase { syncs: [true], close: false, keep: 0, fates: [Intact, Intact, Intact, Intact, Intact, Intact, Intact, Intact, Intact, Intact], rot: true, seed: 0 }

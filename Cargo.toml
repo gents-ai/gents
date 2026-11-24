@@ -258,6 +258,7 @@ rig-core = { git = "https://github.com/jackzampolin/rig", rev = "b12a51c9c544e1b
 # aborting the process when an earlier driver panic poisons their mutex.
 # See third_party/README.md, defradb.rs#1090, and gents#634.
 noq = { path = "third_party/noq" }
+regolith = { path = "third_party/regolith-diag" }
 # Temporary: the Vera crates DefraDB's embedded node is built from, at the
 # revision its vera-node is pinned to, until Vera publishes them.
 vera-acp = { git = "https://github.com/sourcenetwork/vera.rs", rev = "9ce122f9a24c5cdb3a66aa9d5daf8df920539550" }
