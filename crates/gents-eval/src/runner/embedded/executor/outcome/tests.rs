@@ -318,22 +318,22 @@ async fn a_trigger_error_from_before_the_stage_is_not_read() {
 
 #[test]
 fn stage_outcomes_match_the_lean_model() {
-    gents_lean_vocab::families::eval_stage_outcome::replay::<FireFailure, OutcomeKind, ProviderReason>(
-        |input| {
-            stage_outcome(
-                input.ended_by_backend,
-                input.request,
-                input.stated,
-                input.triggers_read.then_some(input.failures.as_slice()),
-            )
-            .map(
-                |(kind, provider_reason)| {
-                    gents_lean_vocab::families::eval_stage_outcome::StageFailure {
-                        kind,
-                        provider_reason,
-                    }
-                },
-            )
-        },
-    );
+    gents_lean_vocab::families::eval_stage_outcome::replay::<
+        FireFailure,
+        OutcomeKind,
+        ProviderReason,
+    >(|input| {
+        stage_outcome(
+            input.ended_by_backend,
+            input.request,
+            input.stated,
+            input.triggers_read.then_some(input.failures.as_slice()),
+        )
+        .map(|(kind, provider_reason)| {
+            gents_lean_vocab::families::eval_stage_outcome::StageFailure {
+                kind,
+                provider_reason,
+            }
+        })
+    });
 }
