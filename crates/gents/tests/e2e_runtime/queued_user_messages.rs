@@ -9,7 +9,8 @@ use crate::support::interrupt::{spawn_runtime, BootedAgent};
 use crate::support::live_inference::{
     bind_target, live_target, wait_for_request_terminal, InferenceTarget,
 };
-use crate::support::{test_db, TestDb};
+use crate::support::trial_store;
+use gents_store::test_support::TestStore;
 
 #[derive(Clone)]
 struct Gate {
@@ -71,7 +72,7 @@ impl Drop for HeldTurn {
 }
 
 pub(crate) async fn boot_held_turn(
-    db: &TestDb,
+    db: &TestStore,
     actors: &RequestActors,
     target: &InferenceTarget,
 ) -> (BootedAgent, HeldTurn) {
@@ -88,7 +89,7 @@ pub(crate) async fn boot_held_turn(
     let built = gents::Gents::builder()
         .node(db.node.clone())
         .identity(db.node_identity.clone())
-        .backend_admission(db.home.backend_admission())
+        .backend_admission(db.backend_admission())
         .default_agent_did(actors.agent_did())
         .agent(actors.agent_did())
         .identity_binding(actors.fixture.binding.clone())
@@ -112,7 +113,7 @@ pub(crate) async fn boot_held_turn(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn messages_queued_behind_a_busy_turn_run_as_separate_turns_in_order() {
     let target = live_target().await;
-    let db = test_db("live-queued-user-messages").await;
+    let db = trial_store("live-queued-user-messages").await;
     let actors = bind_target(&db, &target).await;
     let (runtime, held) = boot_held_turn(&db, &actors, &target).await;
     let mut documents = Vec::new();

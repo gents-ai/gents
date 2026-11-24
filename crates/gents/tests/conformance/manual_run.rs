@@ -2,7 +2,7 @@ use gents_session::request::lifecycle::write_manual_agent_request;
 use gents_store::graphql::escape_graphql_string;
 use serde_json::Value;
 
-use crate::support::{managed_agent, test_db};
+use crate::support::{managed_agent, trial_store};
 
 fn actor(did: &str) -> identity::Did {
     identity::Did::new(did.to_owned()).expect("fixture creator DID")
@@ -10,7 +10,7 @@ fn actor(did: &str) -> identity::Did {
 
 /// Manual requests are Agent-owned rows; they are read as that Agent.
 fn agent_access(
-    db: &crate::support::TestDb,
+    db: &gents_store::test_support::TestStore,
     agent: &dyn gents_store::identity::NodeIdentity,
 ) -> gents_store::config_client::ConfigAccess {
     gents_store::config_client::ConfigAccess::local_managed_agent(
@@ -68,7 +68,7 @@ async fn count_manual_agent_requests(access: &gents_store::config_client::Config
 
 #[tokio::test]
 async fn manual_run_exposes_manual_event_and_node_scope() {
-    let db = test_db("manual-run-event-scope").await;
+    let db = trial_store("manual-run-event-scope").await;
     let agent = managed_agent(&db).await;
 
     let doc_id = write_manual_agent_request(
@@ -104,7 +104,7 @@ async fn manual_run_exposes_manual_event_and_node_scope() {
 
 #[tokio::test]
 async fn manual_run_render_failure_materializes_no_request() {
-    let db = test_db("manual-run-render-err").await;
+    let db = trial_store("manual-run-render-err").await;
     let agent = managed_agent(&db).await;
 
     let error = write_manual_agent_request(

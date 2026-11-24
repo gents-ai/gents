@@ -9,10 +9,11 @@ use gents_session::request::lifecycle::{
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
 
-use crate::support::{self, test_db, TestDb};
+use crate::support::{self, trial_store};
+use gents_store::test_support::TestStore;
 
 pub(super) async fn enqueue_owned(
-    db: &TestDb,
+    db: &TestStore,
     fixture: &support::ManagedAgentFixture,
     session: &str,
     id: &str,
@@ -31,7 +32,7 @@ pub(super) async fn enqueue_owned(
 }
 
 async fn submit_edit(
-    db: &TestDb,
+    db: &TestStore,
     fixture: &support::ManagedAgentFixture,
     session_id: &str,
     edit: PendingQueueEdit,
@@ -40,7 +41,7 @@ async fn submit_edit(
 }
 
 async fn submit_edit_inner(
-    db: &TestDb,
+    db: &TestStore,
     fixture: &support::ManagedAgentFixture,
     session_id: &str,
     edit: PendingQueueEdit,
@@ -111,7 +112,7 @@ pub(super) async fn row_as(fixture: &support::ManagedAgentFixture, doc: &str) ->
     rows[0].clone()
 }
 
-async fn install_review_skill(db: &TestDb, fixture: &support::ManagedAgentFixture) {
+async fn install_review_skill(db: &TestStore, fixture: &support::ManagedAgentFixture) {
     use gents_documents::apply_desired_state_plan;
     use gents_documents::{
         read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
@@ -144,7 +145,7 @@ async fn install_review_skill(db: &TestDb, fixture: &support::ManagedAgentFixtur
 
 #[tokio::test]
 async fn signed_queue_edit_reorders_preserves_slots_and_cancels_atomically() {
-    let db = test_db("signed-queue-management").await;
+    let db = trial_store("signed-queue-management").await;
     let fixture = support::managed_agent_fixture(&db).await;
     let did = db.node_identity.did();
     let access = fixture.access.clone();
@@ -285,7 +286,7 @@ async fn signed_queue_edit_reorders_preserves_slots_and_cancels_atomically() {
 
 #[tokio::test]
 async fn stale_queue_snapshot_rejects_edit_without_mutating_signed_requests() {
-    let db = test_db("stale-queue-management").await;
+    let db = trial_store("stale-queue-management").await;
     let fixture = support::managed_agent_fixture(&db).await;
     let did = db.node_identity.did();
     let access = fixture.access.clone();
@@ -345,7 +346,7 @@ async fn stale_queue_snapshot_rejects_edit_without_mutating_signed_requests() {
 
 #[tokio::test]
 async fn invalid_edited_attachment_does_not_supersede_the_original() {
-    let db = test_db("invalid-edited-attachment").await;
+    let db = trial_store("invalid-edited-attachment").await;
     let fixture = support::managed_agent_fixture(&db).await;
     let original = enqueue_owned(
         &db,
@@ -388,7 +389,7 @@ async fn queue_edit_skill_context_matches_the_lean_model() {
     let cases =
         gents_lean_vocab::families::queue_edit_skill_context_edit::cases::<String, String>();
     for (index, case) in cases.iter().enumerate() {
-        let db = test_db(&format!("queue-edit-skill-context-{index}")).await;
+        let db = trial_store(&format!("queue-edit-skill-context-{index}")).await;
         let fixture = support::managed_agent_fixture(&db).await;
         match case.input.context_skill_ids.as_slice() {
             [] => {}
@@ -448,7 +449,7 @@ async fn queue_edit_skill_context_matches_the_lean_model() {
 
 #[tokio::test]
 async fn authored_edit_keeps_queue_slot_and_retains_new_attachment_bytes() {
-    let db = test_db("authored-queue-edit").await;
+    let db = trial_store("authored-queue-edit").await;
     let fixture = support::managed_agent_fixture(&db).await;
     let did = db.node_identity.did();
     let original = enqueue_owned(
@@ -513,7 +514,7 @@ async fn authored_edit_keeps_queue_slot_and_retains_new_attachment_bytes() {
 
 #[tokio::test]
 async fn authored_edit_changes_allowed_skills_without_losing_queue_position() {
-    let db = test_db("allowed-edited-skill").await;
+    let db = trial_store("allowed-edited-skill").await;
     let fixture = support::managed_agent_fixture(&db).await;
     let did = db.node_identity.did();
     let access = fixture.access.clone();
@@ -566,7 +567,7 @@ async fn authored_edit_changes_allowed_skills_without_losing_queue_position() {
 
 #[tokio::test]
 async fn signed_pending_replacement_authenticates_delivery_and_each_position_field() {
-    let db = test_db("queue-signature-tampering").await;
+    let db = trial_store("queue-signature-tampering").await;
     let fixture = support::managed_agent_fixture(&db).await;
     let _did = db.node_identity.did();
     let access = fixture.access.clone();
@@ -666,7 +667,7 @@ async fn signed_pending_replacement_authenticates_delivery_and_each_position_fie
 
 #[tokio::test]
 async fn explicit_steering_prioritizes_one_message_without_losing_other_queued_input() {
-    let db = test_db("explicit-pending-steer").await;
+    let db = trial_store("explicit-pending-steer").await;
     let fixture = support::managed_agent_fixture(&db).await;
     let did = db.node_identity.did();
     let session = "explicit-pending-steer-session";

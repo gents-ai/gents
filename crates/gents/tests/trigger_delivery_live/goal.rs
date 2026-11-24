@@ -132,9 +132,7 @@ impl Drop for Gate {
 async fn goal_task_waits_for_claim_and_emits_only_after_model_completion() -> Result<()> {
     let lanes = delivery_lanes().await?;
     let artifacts = tokio::task::spawn_blocking(|| artifact_directory("goal")).await??;
-    let home =
-        gents::runtime::embedded::EmbeddedHome::create_retained(&artifacts.join("home")).await?;
-    let db = support::test_db_from_home(home);
+    let db = support::trial_store_at(&artifacts.join("home")).await;
     let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
     let owner = identity.did().to_owned();
     let (fixture, agents) = configure(&db, &lanes).await?;

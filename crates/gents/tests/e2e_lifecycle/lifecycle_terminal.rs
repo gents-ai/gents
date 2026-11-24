@@ -1,13 +1,13 @@
 use gents_session::request::lifecycle::ClaimOutcome;
 use gents_session::request::lifecycle::RequestTerminalOutcome;
 
-use crate::support::test_db;
+use crate::support::trial_store;
 
 #[tokio::test]
 async fn stale_completion_leaves_the_newer_session_observation_as_modelled() {
     let cases = gents_lean_vocab::families::session_stale_completion_observation::cases::<String>();
     for (index, case) in cases.iter().enumerate() {
-        let db = test_db(&format!("lifecycle-stale-complete-{index}")).await;
+        let db = trial_store(&format!("lifecycle-stale-complete-{index}")).await;
         let actors = crate::support::agent_requests::RequestActors::new(&db).await;
         let session_id = "session-stale";
         let first_doc_id = actors

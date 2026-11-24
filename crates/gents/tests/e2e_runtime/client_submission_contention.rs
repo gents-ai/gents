@@ -16,7 +16,7 @@ use gents_store::identity::NodeIdentity;
 
 use crate::support::agent_requests::{canonical_now, RequestActors};
 use crate::support::commit_race_proxy::{is_commit, CommitRaceProxy, ProxyHook};
-use crate::support::test_db;
+use crate::support::trial_store;
 
 const SESSION: &str = "contended-client-session";
 
@@ -67,7 +67,7 @@ async fn rename_agent(actors: &RequestActors, name: String) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn reservation_rebuilds_after_a_concurrent_agent_write() {
-    let db = test_db("client-submission-contention").await;
+    let db = trial_store("client-submission-contention").await;
     let actors = Arc::new(RequestActors::new(&db).await);
     let node_did = db.node_identity.did().to_owned();
     let user = &actors.fixture.user;
@@ -90,7 +90,7 @@ async fn reservation_rebuilds_after_a_concurrent_agent_write() {
             })
         })
     };
-    let proxy = CommitRaceProxy::spawn(db.client_endpoint(), hook).await;
+    let proxy = CommitRaceProxy::spawn(db.graphql_endpoint(), hook).await;
     let contended = proxy.client_access(user);
     let request = AgentRequestCreate::base(
         RequestPurpose::Normal,

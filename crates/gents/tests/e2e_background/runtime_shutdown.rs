@@ -4,7 +4,7 @@ use crate::support::accepted_turn::{
 };
 use crate::support::fixtures::configure_agent_tools_as;
 use crate::support::live_inference::wait_for_request_terminal;
-use crate::support::test_db;
+use crate::support::trial_store;
 use gents_inference::test_support::scripted_backend::StreamChunk;
 use gents_protocol::tool_call::CancelCause;
 use gents_store::graphql::escape_graphql_string;
@@ -26,7 +26,7 @@ struct ToolCallRow {
 }
 
 struct AcceptedBackgroundTurn {
-    db: crate::support::TestDb,
+    db: gents_store::test_support::TestStore,
     fixture: crate::support::ManagedAgentFixture,
     runtime: AcceptedTurnRuntime,
     session_id: String,
@@ -38,7 +38,7 @@ async fn boot_background_turn(
     test_name: &str,
     accepted_chunks: Vec<StreamChunk>,
 ) -> AcceptedBackgroundTurn {
-    let db = test_db(test_name).await;
+    let db = trial_store(test_name).await;
     let fixture = crate::support::managed_agent_fixture(&db).await;
     let agent_identity = fixture.agent.clone();
     let agent_did = agent_identity.did();
@@ -96,7 +96,7 @@ async fn boot_background_turn(
         db.node.clone(),
         identity,
         gents::DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
+            backend_admission: Some(db.backend_admission()),
             tool_ceiling: gents_tools::surface::ToolCeiling::readonly(),
             ..Default::default()
         },

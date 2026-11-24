@@ -18,15 +18,16 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use crate::support::mock_subscription::MockUpdateSubscriptionSource;
-use crate::support::{test_db, TestDb};
+use crate::support::trial_store;
 use gents_store::test_support::snapshot_reader::SnapshotReader;
+use gents_store::test_support::TestStore;
 use gents_store::test_support::STALL_CEILING;
 
 const SESSION: &str = "goal-session";
 const RESCAN: Duration = Duration::from_millis(20);
 
 async fn goal_creation_actors(
-    db: &TestDb,
+    db: &TestStore,
 ) -> (gents_store::identity::KeyIdentity, Arc<dyn NodeIdentity>) {
     let fixture = crate::support::managed_agent_fixture(db).await;
     let admin = ConfigAccess::local_as(db.node.clone(), db.node_identity.did().parse().unwrap());
@@ -83,7 +84,7 @@ fn snapshot(local_did: &str, agent_did: &str) -> Arc<ActiveRuntimeSnapshot> {
 }
 
 async fn publish_node_readiness_for_agent(
-    db: &TestDb,
+    db: &TestStore,
     process_state: gents_protocol::row::NodeReadinessProcessState,
     behavior: Option<gents_protocol::row::AgentReadinessUnavailableReason>,
     agent_did: &str,
@@ -158,7 +159,7 @@ async fn publish_node_readiness_for_agent(
 }
 
 async fn source_for_agent(
-    db: &TestDb,
+    db: &TestStore,
     agent_identity: &Arc<dyn NodeIdentity>,
 ) -> (GoalSource, watch::Sender<Arc<ActiveRuntimeSnapshot>>) {
     publish_node_readiness_for_agent(
@@ -172,7 +173,7 @@ async fn source_for_agent(
 }
 
 fn agent_snapshot(
-    db: &TestDb,
+    db: &TestStore,
     agent_identity: &Arc<dyn NodeIdentity>,
 ) -> Arc<ActiveRuntimeSnapshot> {
     let node =
@@ -189,7 +190,7 @@ fn agent_snapshot(
 }
 
 fn unready_source_for_agent(
-    db: &TestDb,
+    db: &TestStore,
     agent_identity: &Arc<dyn NodeIdentity>,
 ) -> (GoalSource, watch::Sender<Arc<ActiveRuntimeSnapshot>>) {
     let (tx, rx) = watch::channel(agent_snapshot(db, agent_identity));
@@ -218,7 +219,7 @@ struct GoalBackgroundHandoff {
 }
 
 async fn boot_goal_background_handoff_with_plans(
-    db: &TestDb,
+    db: &TestStore,
     fixture: &crate::support::ManagedAgentFixture,
     request_id: &str,
     child_plans: Vec<gents_inference::test_support::scripted_backend::StreamPlan>,
@@ -294,7 +295,7 @@ async fn boot_goal_background_handoff_with_plans(
         db.node.clone(),
         identity,
         gents::DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
+            backend_admission: Some(db.backend_admission()),
             tool_ceiling: gents_tools::surface::ToolCeiling::readonly(),
             ..Default::default()
         },
@@ -364,7 +365,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
 
     let objective = "Respect the budget even when execution fails";
     for terminal in ["failed", "dead"] {
-        let db = test_db(&format!("goal-budget-after-{terminal}")).await;
+        let db = trial_store(&format!("goal-budget-after-{terminal}")).await;
         let fixture = crate::support::managed_agent_fixture(&db).await;
         let agent_identity = fixture.agent.clone();
         let access = ConfigAccess::local_managed_agent(
@@ -622,7 +623,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
 mod control_failure;
 
 async fn goal_fixture_request_with_state(
-    db: &TestDb,
+    db: &TestStore,
     user: &gents_store::identity::KeyIdentity,
     agent: &Arc<dyn NodeIdentity>,
     request_id: &str,
@@ -633,7 +634,7 @@ async fn goal_fixture_request_with_state(
 }
 
 async fn goal_fixture_request_with_state_at(
-    db: &TestDb,
+    db: &TestStore,
     user: &gents_store::identity::KeyIdentity,
     agent: &Arc<dyn NodeIdentity>,
     request_id: &str,
@@ -645,7 +646,7 @@ async fn goal_fixture_request_with_state_at(
 }
 
 async fn goal_fixture_request_in_session_at(
-    db: &TestDb,
+    db: &TestStore,
     user: &gents_store::identity::KeyIdentity,
     agent: &Arc<dyn NodeIdentity>,
     session: &str,
@@ -708,7 +709,7 @@ async fn goal_fixture_request_in_session_at(
 }
 
 async fn reserve_goal_session(
-    db: &TestDb,
+    db: &TestStore,
     user: &gents_store::identity::KeyIdentity,
     agent: &Arc<dyn NodeIdentity>,
     session: &str,
@@ -848,7 +849,7 @@ async fn publish_owned_terminal_activity(
 }
 
 async fn goal_recovery_actors(
-    db: &TestDb,
+    db: &TestStore,
     request_id: &str,
     state: &str,
 ) -> (
