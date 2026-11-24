@@ -1,4 +1,4 @@
-import { expect, gotoHarness, test } from "./desktopTest";
+import { expect, framesDrawn, gotoHarness, scrollAtRest, test } from "./desktopTest";
 
 test("scrolling up a long session does not wait at the top for each page", async ({
   page,
@@ -417,4 +417,69 @@ test("a page landing mid-wheel keeps the wheel's whole travel", async ({
   console.log(`wheel travel ${travel} px, writes ${JSON.stringify(writes)}`);
   expect(travel).toBeGreaterThan(540);
   expect(travel).toBeLessThan(660);
+});
+
+test("each wheel keeps its whole travel while frames come further apart than the rest", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    testInfo.project.name !== "webkit-desktop",
+    "WebKit animates a wheel over frames and drops the rest of it on a write",
+  );
+  await page.setViewportSize({ width: 1500, height: 900 });
+  await gotoHarness(page, "mobile-performance");
+  await page.locator('[data-testid="session-session-large"]').click();
+  const panel = page.getByTestId("transcript-panel");
+  await panel.getByText("stream-start").last().waitFor();
+  await page.evaluate(() => window.__GENTS_MOBILE_PERFORMANCE__!.holdOlderPages());
+  const scroller = page.locator('[data-slot="scroll-area-viewport"][data-following]');
+  await scroller.hover();
+
+  /* the row under the reading line, then that same row by its key: rows the
+     wheel brings into view measure as they are drawn and the owner puts the
+     reader's row back, so the row moves only as far as the wheels carry it */
+  const reader = await panel.evaluate((node) => {
+    const view = node.closest<HTMLElement>('[data-slot="scroll-area-viewport"]')!;
+    const top = view.getBoundingClientRect().top;
+    const row = Array.from(
+      view.querySelectorAll<HTMLElement>("[data-timeline-key]"),
+    ).find((r) => r.getBoundingClientRect().bottom > top + 72)!;
+    return {
+      key: row.dataset.timelineKey!,
+      offset: Math.round(row.getBoundingClientRect().top - top),
+    };
+  });
+
+  /* a loaded page: each frame takes longer than the view's rest time, so a
+     wheel's animated scroll is still under way when that time has passed */
+  await page.evaluate(() => {
+    const loaded = window as unknown as { __loaded: boolean };
+    loaded.__loaded = true;
+    const frame = () => {
+      if (!loaded.__loaded) return;
+      const until = performance.now() + 200;
+      while (performance.now() < until);
+      requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
+  });
+  for (let i = 0; i < 6; i += 1) {
+    await page.mouse.wheel(0, -120);
+    await framesDrawn(page, 1);
+  }
+  await page.evaluate(() => {
+    (window as unknown as { __loaded: boolean }).__loaded = false;
+  });
+  await scrollAtRest(scroller);
+
+  const travel =
+    (await panel.evaluate((node, key) => {
+      const view = node.closest<HTMLElement>('[data-slot="scroll-area-viewport"]')!;
+      const row = view.querySelector<HTMLElement>(`[data-timeline-key="${key}"]`)!;
+      return Math.round(
+        row.getBoundingClientRect().top - view.getBoundingClientRect().top,
+      );
+    }, reader.key)) - reader.offset;
+  expect(travel).toBeGreaterThan(660);
+  expect(travel).toBeLessThan(780);
 });
