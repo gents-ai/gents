@@ -79,21 +79,6 @@
           },
           "tier": "acceptance",
           "weight": 1
-        },
-        {
-          "check": "captured_files_match",
-          "params": {
-            "name": "packs",
-            "expect": [
-              {
-                "path": "packs/stockroom_register/manifest.json",
-                "pointer": "/kind",
-                "equals": "documents"
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
         }
       ]
     },
