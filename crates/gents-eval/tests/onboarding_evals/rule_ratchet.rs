@@ -11,7 +11,7 @@ use serde_json::Value;
 use super::registry::{definition, fixtures, repo, suites, Suite};
 use super::rules::{findings, Rule, Subject};
 
-const README: &str = "crates/gents/tests/fixtures/configurator_evals/README.md";
+const RULES: &str = "crates/gents/tests/fixtures/configurator_evals/AGENTS.md";
 const CELL_AGENT: &str = "engineer";
 const ENGINEER_CONTEXT_ID: &str = "engineer-context";
 const ENGINEER_TOOLS_ID: &str = "engineer-tools";
@@ -285,7 +285,7 @@ fn cases_break_the_eval_rules_only_as_open_lists_and_open_only_shrinks() {
         .collect();
     assert!(
         added.is_empty(),
-        "these cases break the rules in {README} (\"Rules for eval cases\") more often than OPEN in {} allows; change them to keep the rules. A route the prompt itself asks for takes a route_reason on its tool_calls_expected check.\n{}",
+        "these cases break the rules in {RULES} (\"Rules for eval cases\") more often than OPEN in {} allows; change them to keep the rules. A route the prompt itself asks for takes a route_reason on its tool_calls_expected check.\n{}",
         file!(),
         added.join("\n")
     );
@@ -299,7 +299,7 @@ fn cases_break_the_eval_rules_only_as_open_lists_and_open_only_shrinks() {
         .collect();
     assert!(
         shrunk == open,
-        "cases break the rules in {README} less often than OPEN says; it only shrinks, so replace its five lists in {} with:\n\n{}",
+        "cases break the rules in {RULES} less often than OPEN says; it only shrinks, so replace its five lists in {} with:\n\n{}",
         file!(),
         render(&shrunk)
     );
