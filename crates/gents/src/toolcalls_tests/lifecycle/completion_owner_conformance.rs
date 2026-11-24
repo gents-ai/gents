@@ -546,7 +546,10 @@ async fn drive_redrive(
     assert_eq!(source["request_hop"].as_u64(), Some(source_depth));
     assert_eq!(source["deadline"].as_str(), source_deadline.as_deref());
     assert_eq!(source["caused_by_parent_request_id"], parent);
-    assert_eq!(source["caused_by_parent_request_doc_id"], parent_doc.as_str());
+    assert_eq!(
+        source["caused_by_parent_request_doc_id"],
+        parent_doc.as_str()
+    );
     assert_eq!(source["retry_count"].as_u64(), Some(source_retry_count));
     let successor = requests
         .iter()

@@ -30,11 +30,12 @@ async fn node() -> (Arc<EmbeddedNode>, ConfigAccess) {
 async fn client_signed_node() -> (Arc<EmbeddedNode>, ConfigAccess, tempfile::TempDir) {
     let root = tempfile::tempdir().unwrap();
     let key = root.path().join("probe.key");
-    let identity =
-        tokio::task::spawn_blocking(move || crate::identity::KeyIdentity::load_or_create(key, None))
-            .await
-            .unwrap()
-            .unwrap();
+    let identity = tokio::task::spawn_blocking(move || {
+        crate::identity::KeyIdentity::load_or_create(key, None)
+    })
+    .await
+    .unwrap()
+    .unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
     let node = Arc::new(
@@ -272,7 +273,8 @@ async fn a_unique_index_conflicts_a_blind_insert_and_the_rebuild_fails_on_the_in
         &blind,
         write(
             &node,
-            r#"mutation { create_UniqueIsolationProbe(input: {key: "k", n: 2}) { _docID } }"#.into(),
+            r#"mutation { create_UniqueIsolationProbe(input: {key: "k", n: 2}) { _docID } }"#
+                .into(),
         ),
     )
     .await;
@@ -285,7 +287,12 @@ async fn a_unique_index_conflicts_a_blind_insert_and_the_rebuild_fails_on_the_in
         "{observed:?}"
     );
     assert_eq!(
-        stored(&node, "{ UniqueIsolationProbe { n } }", "UniqueIsolationProbe").await,
+        stored(
+            &node,
+            "{ UniqueIsolationProbe { n } }",
+            "UniqueIsolationProbe"
+        )
+        .await,
         vec![json!({"n": 2})]
     );
     node.shutdown().await.unwrap();
@@ -318,7 +325,9 @@ async fn read_a_write_b(owner: Owner, selector: &'static str) -> Observed {
         let b = b.clone();
         Box::pin(async move {
             let found = txn.execute(&read).await?;
-            let n = rows(&found, "IsolationProbe")[0]["n"].as_i64().unwrap_or(-1);
+            let n = rows(&found, "IsolationProbe")[0]["n"]
+                .as_i64()
+                .unwrap_or(-1);
             txn.execute(&format!(
                 "mutation {{ update_IsolationProbe(docID: \"{b}\", input: {{n: {}}}) {{ _docID }} }}",
                 n + 10
@@ -386,7 +395,12 @@ async fn set_read_then_member_changes(owner: Owner, change: &'static str) -> Obs
     };
     let a = create(&node, "IsolationProbe", r#"{key: "a", grp: "g", n: 1}"#).await;
     create(&node, "IsolationProbe", r#"{key: "b", grp: "g", n: 1}"#).await;
-    let c = create(&node, "IsolationProbe", r#"{key: "c", grp: "summary", n: 0}"#).await;
+    let c = create(
+        &node,
+        "IsolationProbe",
+        r#"{key: "c", grp: "summary", n: 0}"#,
+    )
+    .await;
     let concurrent = match change {
         "leave" => format!(
             "mutation {{ update_IsolationProbe(docID: \"{a}\", input: {{grp: \"other\"}}) {{ _docID }} }}"
@@ -451,7 +465,10 @@ async fn a_filtered_set_read_conflicts_when_a_member_is_deleted() {
 }
 
 /// T1 reads document A by `selector` and writes `t1_writes` of A; T2 writes A.n.
-async fn same_document_writers(selector: &'static str, t1_writes: &'static str) -> (Observed, Value) {
+async fn same_document_writers(
+    selector: &'static str,
+    t1_writes: &'static str,
+) -> (Observed, Value) {
     let (node, access) = node().await;
     let a = create(&node, "IsolationProbe", r#"{key: "a", n: 1, m: 1}"#).await;
     let read = match selector {
@@ -517,7 +534,12 @@ async fn a_filtered_read_then_write_of_one_field_conflicts_with_a_concurrent_wri
 #[tokio::test]
 async fn a_filtered_update_conflicts_with_a_concurrent_move_out_of_its_filter() {
     let (node, access) = node().await;
-    let a = create(&node, "IsolationProbe", r#"{key: "a", grp: "queued", n: 1, m: 1}"#).await;
+    let a = create(
+        &node,
+        "IsolationProbe",
+        r#"{key: "a", grp: "queued", n: 1, m: 1}"#,
+    )
+    .await;
     let claim = decider(|txn, _| {
         Box::pin(async move {
             txn.execute(
@@ -592,7 +614,8 @@ async fn a_count_below_a_limit_does_not_conflict_with_a_concurrent_insert() {
     node.shutdown().await.unwrap();
 }
 
-const ARRIVAL_HEAD: &str = r#"{ _documentArrivals(collection: "IsolationProbe", limit: 1) { head } }"#;
+const ARRIVAL_HEAD: &str =
+    r#"{ _documentArrivals(collection: "IsolationProbe", limit: 1) { head } }"#;
 
 #[tokio::test]
 async fn an_arrival_head_read_does_not_conflict_with_a_concurrent_insert() {
@@ -632,7 +655,12 @@ async fn an_arrival_head_read_does_not_conflict_with_a_concurrent_insert() {
 async fn an_arrival_head_read_does_not_conflict_with_a_concurrent_update() {
     let (node, access) = node().await;
     let a = create(&node, "IsolationProbe", r#"{key: "a", grp: "g", n: 1}"#).await;
-    let c = create(&node, "IsolationProbe", r#"{key: "c", grp: "summary", n: 0}"#).await;
+    let c = create(
+        &node,
+        "IsolationProbe",
+        r#"{key: "c", grp: "summary", n: 0}"#,
+    )
+    .await;
     let decide = decider(move |txn, _| {
         let c = c.clone();
         Box::pin(async move {
@@ -723,7 +751,13 @@ async fn absent_point_read_then_create(owner: Owner) -> (Observed, String, Strin
         }
     };
     let absent = id_of_create(&node, INPUT).await;
-    assert!(stored(&node, &format!("{{ IsolationProbe(docID: \"{absent}\") {{ n }} }}"), "IsolationProbe").await.is_empty());
+    assert!(stored(
+        &node,
+        &format!("{{ IsolationProbe(docID: \"{absent}\") {{ n }} }}"),
+        "IsolationProbe"
+    )
+    .await
+    .is_empty());
     let b = create(&node, "IsolationProbe", r#"{key: "b", n: 1, m: 1}"#).await;
     let read = format!("{{ IsolationProbe(docID: \"{absent}\") {{ n }} }}");
     let decide = decider(move |txn, _| {
@@ -770,10 +804,15 @@ async fn a_read_only_transaction_commits_over_a_concurrent_write_of_what_it_read
     let a = create(&node, "IsolationProbe", r#"{key: "a", n: 1, m: 1}"#).await;
     let reader = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
     let read = format!("{{ IsolationProbe(docID: \"{a}\") {{ n }} }}");
-    assert_eq!(rows(&reader.execute(&read).await.unwrap(), "IsolationProbe")[0]["n"], 1);
+    assert_eq!(
+        rows(&reader.execute(&read).await.unwrap(), "IsolationProbe")[0]["n"],
+        1
+    );
     write(
         &node,
-        format!("mutation {{ update_IsolationProbe(docID: \"{a}\", input: {{n: 5}}) {{ _docID }} }}"),
+        format!(
+            "mutation {{ update_IsolationProbe(docID: \"{a}\", input: {{n: 5}}) {{ _docID }} }}"
+        ),
     )
     .await;
     reader.commit().await.unwrap();
@@ -801,7 +840,10 @@ async fn a_signed_create_takes_an_id_only_its_signer_can_derive() {
             .await
             .unwrap(),
     );
-    ConfigAccess::local(Arc::clone(&node)).add_collection(SDL).await.unwrap();
+    ConfigAccess::local(Arc::clone(&node))
+        .add_collection(SDL)
+        .await
+        .unwrap();
     let runtime = ConfigAccess::local_as(node.clone(), identity::Did::new(root.did()).unwrap());
     let mut signers = Vec::new();
     for _ in 0..2 {
@@ -838,7 +880,10 @@ async fn a_signed_create_takes_an_id_only_its_signer_can_derive() {
     }
     let first = signed_create(&signers[0]).await.unwrap();
     let second = signed_create(&signers[1]).await.unwrap();
-    assert_ne!(first, second, "another signer's identical create takes another id");
+    assert_ne!(
+        first, second,
+        "another signer's identical create takes another id"
+    );
     let again = signed_create(&signers[0]).await;
     assert!(
         again.is_err(),

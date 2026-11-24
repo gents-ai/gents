@@ -97,7 +97,10 @@ pub async fn read_in_txn(
         .pointer(&format!("/data/{COLLECTION}"))
         .and_then(serde_json::Value::as_array)
         .context("interrupt marker lookup omitted rows")?;
-    anyhow::ensure!(rows.len() <= 1, "session has more than one interrupt marker");
+    anyhow::ensure!(
+        rows.len() <= 1,
+        "session has more than one interrupt marker"
+    );
     let Some(doc_id) = rows.first().and_then(|row| row["_docID"].as_str()) else {
         return Ok(None);
     };
@@ -198,4 +201,3 @@ pub async fn bump_in_txn(
         interrupted_at: Some(at.to_owned()),
     }))
 }
-

@@ -715,13 +715,12 @@ async fn recover_expired_generation_with_access_and_facts(
                     };
                     let reply_preview =
                         validate_selection(&mut reader, &headers, &row, &selection).await?;
-                    let target_state = if crate::request::interrupt::row_interrupted_in_txn(txn, &row)
-                        .await?
-                    {
-                        RequestLifecycleState::Interrupted
-                    } else {
-                        RequestLifecycleState::Failed
-                    };
+                    let target_state =
+                        if crate::request::interrupt::row_interrupted_in_txn(txn, &row).await? {
+                            RequestLifecycleState::Interrupted
+                        } else {
+                            RequestLifecycleState::Failed
+                        };
                     if expected_outcome.is_some_and(|expected| target_state != expected) {
                         return Err(RecoverySelectionRejected.into());
                     }

@@ -366,8 +366,12 @@ impl RequestActors {
     }
 
     pub async fn interrupt_request_session_at(&self, doc_id: &str, at: &str) {
-        gents_session::test_support::interrupt_session_of_request_as(&self.agent_access, doc_id, at)
-            .await;
+        gents_session::test_support::interrupt_session_of_request_as(
+            &self.agent_access,
+            doc_id,
+            at,
+        )
+        .await;
     }
 
     /// Patches request fields as the working Agent, the only actor that

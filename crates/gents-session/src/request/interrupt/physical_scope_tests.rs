@@ -183,6 +183,9 @@ async fn a_second_marker_for_an_existing_session_is_refused() {
         ))
         .await
         .unwrap();
-    assert_eq!(markers["data"]["AgentSessionInterrupt"], json!([{"generation": 0}]));
+    assert_eq!(
+        markers["data"]["AgentSessionInterrupt"],
+        json!([{"generation": 0}])
+    );
     node.shutdown().await.unwrap();
 }

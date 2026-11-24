@@ -793,8 +793,11 @@ pub(super) async fn drain_wakeups_never_interrupts_foreign_replica() {
     .await
     .unwrap()
     .unwrap();
-    let mut lifecycle =
-        gents_session::request::lifecycle::RequestLifecycle::new_with_node_did(db.node.clone(), wake, 60);
+    let mut lifecycle = gents_session::request::lifecycle::RequestLifecycle::new_with_node_did(
+        db.node.clone(),
+        wake,
+        60,
+    );
     lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
     assert_eq!(
         lifecycle.claim_with_identity().await.unwrap(),

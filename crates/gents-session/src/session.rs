@@ -17,10 +17,10 @@ pub use archive::set_session_archived_on;
 mod compaction_entries;
 mod control;
 pub mod fork;
-pub mod interrupt_marker;
 #[cfg(test)]
 mod fork_publication_tests;
 mod history;
+pub mod interrupt_marker;
 #[cfg(test)]
 mod model_test_support;
 pub mod observations;

@@ -61,9 +61,11 @@ async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues(
         async fn row(node: &Arc<EmbeddedNode>, doc: &str) -> Value {
             let doc = escape_graphql_string(doc);
             let response = fixture_agent_access(node, FIXTURE_AGENT_NONCE)
-            .execute(&format!("{{AgentRequest(filter:{{_docID:{{_eq:\"{doc}\"}}}}){{lifecycle_state}}}}"))
-            .await
-            .unwrap();
+                .execute(&format!(
+                    "{{AgentRequest(filter:{{_docID:{{_eq:\"{doc}\"}}}}){{lifecycle_state}}}}"
+                ))
+                .await
+                .unwrap();
             response["data"]["AgentRequest"][0].clone()
         }
         /// The session `(owner, session)` and its interrupt marker, created by
@@ -171,18 +173,20 @@ async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues(
             .unwrap();
         assert_eq!(interrupted_at(&node, &foreign_parent).await, None);
         for doc in [&own, &user] {
-            let request = gents_session::request::binding::load_agent_request_by_doc_id_with_access(
-                &fixture_agent_access(&node, FIXTURE_AGENT_NONCE),
-                doc,
-            )
-            .await
-            .unwrap()
-            .unwrap();
-            let mut lifecycle = gents_session::request::lifecycle::RequestLifecycle::new_with_node_did(
-                node.clone(),
-                request,
-                60,
-            );
+            let request =
+                gents_session::request::binding::load_agent_request_by_doc_id_with_access(
+                    &fixture_agent_access(&node, FIXTURE_AGENT_NONCE),
+                    doc,
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            let mut lifecycle =
+                gents_session::request::lifecycle::RequestLifecycle::new_with_node_did(
+                    node.clone(),
+                    request,
+                    60,
+                );
             lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
             assert_ne!(
                 lifecycle.claim_with_identity().await.unwrap(),
@@ -296,6 +300,10 @@ async fn logical_interrupt_latches_only_as_the_signed_working_agent() {
     interrupt_request(&node, agent.as_ref(), "logical-latch")
         .await
         .unwrap();
-    assert_eq!(state().await, "interrupted", "a pending request is interrupted before its claim");
+    assert_eq!(
+        state().await,
+        "interrupted",
+        "a pending request is interrupted before its claim"
+    );
     node.shutdown().await.expect("shut down test node");
 }

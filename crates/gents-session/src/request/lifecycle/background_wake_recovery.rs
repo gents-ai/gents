@@ -372,14 +372,13 @@ async fn redrive_in_transaction(
     let queue_key = eligible_queue_key(candidate, pin)?.context("wake became ineligible")?;
     let node_did = required_str(candidate.node_did.as_deref(), "node_did")?;
     let session_id = required_str(candidate.session_id.as_deref(), "session_id")?;
-    let marker =
-        crate::session::interrupt_marker::read_for_session_in_txn(
-            txn,
-            node_did,
-            session_id,
-            candidate.requester_did.as_deref(),
-        )
-            .await?;
+    let marker = crate::session::interrupt_marker::read_for_session_in_txn(
+        txn,
+        node_did,
+        session_id,
+        candidate.requester_did.as_deref(),
+    )
+    .await?;
     for row in agent_request_rows(data, "pending")?.iter().filter(|row| {
         row_queue(row)
             .and_then(automated_queue_key)

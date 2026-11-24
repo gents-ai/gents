@@ -525,10 +525,12 @@ pub async fn interrupt(
         Ok(RequestInterrupt::Interrupted { at, already }) => Ok(receipt(at, already)),
         Ok(RequestInterrupt::InterruptedBeforeClaim) => Ok(receipt(None, false)),
         Ok(RequestInterrupt::Settled) => Ok(receipt(None, true)),
-        Err(SessionInterruptError::Refused(refusal)) => Err(RequestOperationError::InterruptRefused {
-            request_id: target.request_id.clone(),
-            reason: refusal.to_string(),
-        }),
+        Err(SessionInterruptError::Refused(refusal)) => {
+            Err(RequestOperationError::InterruptRefused {
+                request_id: target.request_id.clone(),
+                reason: refusal.to_string(),
+            })
+        }
         Err(SessionInterruptError::Store(error)) => Err(RequestOperationError::passthrough(error)),
     }
 }

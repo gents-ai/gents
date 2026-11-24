@@ -783,8 +783,11 @@ async fn production_request_writers_only_reach_contracted_edges() {
                     let _ = lifecycle.claim().await;
                 }
                 "claim_after_interrupt" => {
-                    gents_session::test_support::interrupt_request_doc(&actors.agent_access, &doc_id)
-                        .await;
+                    gents_session::test_support::interrupt_request_doc(
+                        &actors.agent_access,
+                        &doc_id,
+                    )
+                    .await;
                     let _ = lifecycle.claim().await;
                 }
                 "admission_reject" => {

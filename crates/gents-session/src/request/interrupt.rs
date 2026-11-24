@@ -92,8 +92,8 @@ pub async fn interrupt_session_in_txn(
         return Ok(Err(refused()));
     };
     crate::request::hooks::points::session_halt(txn, node_did, session_id).await?;
-    let active_request_id = active_session_request_in_txn(txn, session_id, node_did, requester_did)
-        .await?;
+    let active_request_id =
+        active_session_request_in_txn(txn, session_id, node_did, requester_did).await?;
     Ok(Ok(SessionInterrupted {
         generation: bumped.generation,
         interrupted_at: bumped.interrupted_at.unwrap_or_default(),
@@ -278,20 +278,25 @@ async fn interrupt_request_matching_in_txn(
     match state {
         Some(state) if state.is_terminal() => Ok(Ok(RequestInterrupt::Settled)),
         Some(RequestLifecycleState::Pending) => {
-            interrupt_pending_in_txn(txn, physical, node_did, request_id, "interrupted before claim")
-                .await?;
+            interrupt_pending_in_txn(
+                txn,
+                physical,
+                node_did,
+                request_id,
+                "interrupted before claim",
+            )
+            .await?;
             crate::request::hooks::points::session_halt(txn, node_did, session_id).await?;
             Ok(Ok(RequestInterrupt::InterruptedBeforeClaim))
         }
         _ => {
-            let Some(marker) =
-                interrupt_marker::read_for_session_in_txn(
-                    txn,
-                    node_did,
-                    session_id,
-                    row["requester_did"].as_str(),
-                )
-                .await?
+            let Some(marker) = interrupt_marker::read_for_session_in_txn(
+                txn,
+                node_did,
+                session_id,
+                row["requester_did"].as_str(),
+            )
+            .await?
             else {
                 return Ok(Err(SessionInterruptRefusal::NoMarker {
                     session_id: session_id.to_owned(),
@@ -658,7 +663,7 @@ impl WatchedRequest {
                         &self.session_id,
                         self.requester_did.as_deref(),
                     )
-                        .await
+                    .await
                 })
             })
             .await;
@@ -682,7 +687,7 @@ impl WatchedRequest {
                         self.requester_did.as_deref(),
                         self.recorded,
                     )
-                        .await
+                    .await
                 })
             })
             .await;

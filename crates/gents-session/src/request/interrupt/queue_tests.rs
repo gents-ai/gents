@@ -104,10 +104,17 @@ async fn claim_pending(fixture: &QueueFixture) {
         .await
         .unwrap()
         .unwrap();
-        let mut lifecycle = RequestLifecycle::new_with_node_did(fixture.db.node.clone(), request, 60);
-        lifecycle.bind_managed_agent(fixture.agent.as_ref()).unwrap();
+        let mut lifecycle =
+            RequestLifecycle::new_with_node_did(fixture.db.node.clone(), request, 60);
+        lifecycle
+            .bind_managed_agent(fixture.agent.as_ref())
+            .unwrap();
         let outcome = lifecycle.claim_with_identity().await.unwrap();
-        assert_ne!(outcome, ClaimOutcome::Claimed, "the parent is still running");
+        assert_ne!(
+            outcome,
+            ClaimOutcome::Claimed,
+            "the parent is still running"
+        );
     }
 }
 
@@ -652,7 +659,10 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
             .unwrap()
             .unwrap();
         assert!(
-            matches!(interrupted, RequestInterrupt::Interrupted { already: false, .. }),
+            matches!(
+                interrupted,
+                RequestInterrupt::Interrupted { already: false, .. }
+            ),
             "{interrupted:?}"
         );
         if let Some(entry) = after_commit {
@@ -1152,7 +1162,8 @@ async fn an_interrupt_commits_over_concurrent_claims_wakes_and_terminals() {
             .unwrap()
         })
         .collect::<Vec<_>>();
-    let first = enqueue_generated_wake(&fixture.agent_access, &node, &parent, &case, &wakes[0]).await;
+    let first =
+        enqueue_generated_wake(&fixture.agent_access, &node, &parent, &case, &wakes[0]).await;
     let published = std::sync::Mutex::new(Vec::new());
     let agent_access = fixture.agent_access.clone();
     let lifecycle = &mut fixture._lifecycle;
@@ -1203,7 +1214,12 @@ async fn a_request_whose_requester_is_not_its_sessions_is_refused() {
         client,
         agent,
         ..
-    } = unclaimed_fixture("requester-mismatch", "1".into(), "requester-mismatch".into()).await;
+    } = unclaimed_fixture(
+        "requester-mismatch",
+        "1".into(),
+        "requester-mismatch".into(),
+    )
+    .await;
     let mut spec = crate::request::lifecycle::RequestSpec::new(
         gents_protocol::request_admission::RequestPurpose::Normal,
         RequestIdentity {
@@ -1230,7 +1246,7 @@ async fn a_request_whose_requester_is_not_its_sessions_is_refused() {
             .await
             .map(|_| ())
             .map_err(anyhow::Error::from),
-        Err(error) => Err(anyhow::Error::from(error)),
+        Err(error) => Err(error),
     };
     assert!(submitted.is_err(), "{submitted:?}");
     let rows = db

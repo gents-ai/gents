@@ -580,7 +580,9 @@ async fn background_completion_transaction_attempt(
         {
             crate::request::interrupt::interrupt_pending_in_txn(
                 txn,
-                row.doc_id.as_deref().context("pending wake is missing _docID")?,
+                row.doc_id
+                    .as_deref()
+                    .context("pending wake is missing _docID")?,
                 &parent.node_did,
                 &row.request_id,
                 crate::request::interrupt::INTERRUPT_DRAIN_REASON,

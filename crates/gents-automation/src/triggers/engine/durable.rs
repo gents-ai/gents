@@ -345,10 +345,7 @@ pub(crate) async fn stage_fire_receipt(
 /// its owner admits again on a fresh read: the budget count in the same
 /// transaction is never stale at commit (Lean
 /// `Triggers.FireBudget.concurrent_admission_preserves_bound`).
-async fn next_fire_sequence(
-    txn: &ConfigApplyTxn<'_>,
-    identity: &FireIdentity,
-) -> Result<i64> {
+async fn next_fire_sequence(txn: &ConfigApplyTxn<'_>, identity: &FireIdentity) -> Result<i64> {
     use gents_protocol::document_query::{
         fields::trigger_fire as fields, Direction, Filter, Query, Selection,
     };

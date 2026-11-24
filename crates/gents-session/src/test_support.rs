@@ -738,7 +738,6 @@ pub async fn interrupt_request_doc(
     .unwrap()
 }
 
-
 /// Interrupts the session of the request `request_doc_id` at `at` for a
 /// fixture that wrote the request itself: the request records the marker's
 /// generation as a claim would, and the marker is bumped as the interrupt
@@ -817,7 +816,10 @@ pub async fn interrupt_session_of_request_as(
 
 /// Records on a request the fixture wrote as running the generation of its
 /// session's marker, as its claim would.
-pub async fn record_claim_generation(node: &std::sync::Arc<defra_node::Node>, request_doc_id: &str) {
+pub async fn record_claim_generation(
+    node: &std::sync::Arc<defra_node::Node>,
+    request_doc_id: &str,
+) {
     let doc = gents_store::graphql::escape_graphql_string(request_doc_id);
     let root = node
         .node_identity_did()

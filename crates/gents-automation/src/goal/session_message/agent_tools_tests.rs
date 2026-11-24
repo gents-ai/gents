@@ -169,10 +169,13 @@ async fn interrupt_delivery_latches_only_the_prepublication_head() {
             })
             .await
             .unwrap();
-        let response = owner(&message).execute(&format!(
-            r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
-            escape_graphql_string(&target.session_id),
-        )).await.unwrap();
+        let response = owner(&message)
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+                escape_graphql_string(&target.session_id),
+            ))
+            .await
+            .unwrap();
         let rows = response["data"]["AgentRequest"].as_array().unwrap();
         let old = rows
             .iter()

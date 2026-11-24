@@ -2362,9 +2362,8 @@ async fn input_committed_during_the_natural_finish_runs_as_the_next_turn() {
                     .write("test.input_during_natural_finish", &mutation)
                     .await
                     .unwrap();
-                *late_doc_id.lock().unwrap() = Some(
-                    gents_store::graphql::created_doc_id(&response, "AgentRequest").unwrap(),
-                );
+                *late_doc_id.lock().unwrap() =
+                    Some(gents_store::graphql::created_doc_id(&response, "AgentRequest").unwrap());
             },
         )
         .await;
@@ -2378,7 +2377,10 @@ async fn input_committed_during_the_natural_finish_runs_as_the_next_turn() {
     );
     let late_doc_id = late_doc_id.into_inner().unwrap().unwrap();
     let late_row = request_row(&access, &late_doc_id).await;
-    assert_eq!(late_row.lifecycle_state, Some(RequestLifecycleState::Pending));
+    assert_eq!(
+        late_row.lifecycle_state,
+        Some(RequestLifecycleState::Pending)
+    );
     let signed = access
         .execute(&format!(
             r#"{{ AgentRequest(docID: "{}") {{ {} }} }}"#,

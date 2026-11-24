@@ -109,10 +109,7 @@ pub(super) fn render_request_show_text(
         lines.push(format!("  cause: {}", cancel.cause));
         lines.push(format!(
             "  interrupted_at: {}",
-            cancel
-                .interrupted_at
-                .as_deref()
-                .unwrap_or("unknown")
+            cancel.interrupted_at.as_deref().unwrap_or("unknown")
         ));
     }
 

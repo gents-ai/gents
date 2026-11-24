@@ -440,13 +440,14 @@ async fn interrupt_request_follows_the_lean_drain_model() {
             Err(error) if error.to_string().contains("missing") => "missing".to_owned(),
             Err(error) => panic!("interrupt failed for an unmodeled reason: {error:#}"),
         };
-        let latched = gents_session::request::interrupt::request_interrupted_at_by_doc_id_with_access(
-            &actors.agent_access,
-            &parent_doc,
-        )
-        .await
-        .unwrap()
-        .is_some();
+        let latched =
+            gents_session::request::interrupt::request_interrupted_at_by_doc_id_with_access(
+                &actors.agent_access,
+                &parent_doc,
+            )
+            .await
+            .unwrap()
+            .is_some();
         for (row, (_, doc)) in case.input.rows.iter().zip(&request_ids) {
             if !row.foreign {
                 claim_own_pending(&actors, doc).await;
@@ -539,7 +540,10 @@ async fn claim_own_pending(actors: &support::agent_requests::RequestActors, doc:
     let origin = ExecutionOrigin::from_persisted(request.execution_origin.as_deref())
         .expect("fixture execution origin");
     let mut lifecycle = actors.lifecycle(request, 60, origin, "drain-backend");
-    let outcome = lifecycle.claim_with_identity().await.expect("claim own pending row");
+    let outcome = lifecycle
+        .claim_with_identity()
+        .await
+        .expect("claim own pending row");
     assert_ne!(
         outcome,
         gents_session::request::lifecycle::ClaimOutcome::Claimed,

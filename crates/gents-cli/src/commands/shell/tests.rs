@@ -323,7 +323,9 @@ impl ChatNode {
             r#"mutation {{ create_AgentSession(input: {{ session_id: "{id}", node_did: "{OWNER}", requester_did: "{OWNER}", agent_did: "{agent}", created_at: "{at}" }}) {{ _docID }} }}"#
         ))
         .await;
-        let doc = created["create_AgentSession"][0]["_docID"].as_str().unwrap();
+        let doc = created["create_AgentSession"][0]["_docID"]
+            .as_str()
+            .unwrap();
         self.run(&format!(
             r#"mutation {{ create_AgentSessionInterrupt(input: {{ session_doc_id: "{doc}", session_id: "{id}", node_did: "{OWNER}", generation: 0 }}) {{ _docID }} }}"#
         ))
@@ -340,8 +342,11 @@ impl ChatNode {
                 escape_graphql_string(row.session_id.as_deref().unwrap())
             ))
             .await;
-        let current = marker["AgentSessionInterrupt"][0]["generation"].as_i64().unwrap();
-        row.interrupt_generation.is_some_and(|recorded| recorded < current)
+        let current = marker["AgentSessionInterrupt"][0]["generation"]
+            .as_i64()
+            .unwrap();
+        row.interrupt_generation
+            .is_some_and(|recorded| recorded < current)
     }
 
     /// The runtime's request `id` in `session`, in `state`, on agent `a`.

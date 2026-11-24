@@ -270,16 +270,17 @@ impl DefraWatcher {
                     }
                 }
                 Some(RequestLifecycleState::WaitingForBackend) => {
-                    let interrupted =
-                        match crate::request::interrupt::row_interrupted_with_access(access, row)
-                            .await
-                        {
-                            Ok(interrupted) => interrupted,
-                            Err(error) => {
-                                tracing::warn!(request_doc_id = %doc, %error, "could not read the session's interrupt marker");
-                                continue;
-                            }
-                        };
+                    let interrupted = match crate::request::interrupt::row_interrupted_with_access(
+                        access, row,
+                    )
+                    .await
+                    {
+                        Ok(interrupted) => interrupted,
+                        Err(error) => {
+                            tracing::warn!(request_doc_id = %doc, %error, "could not read the session's interrupt marker");
+                            continue;
+                        }
+                    };
                     let expired = row
                         .deadline
                         .as_deref()
