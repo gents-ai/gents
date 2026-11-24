@@ -20,7 +20,7 @@ pub(crate) struct ServedHome {
     pub(crate) home: PathBuf,
     pub(crate) graphql: String,
     pub(crate) node_did: String,
-    _model: MockModelEndpoint,
+    _model: gents_inference::test_support::scripted_backend::ScriptedBackend,
     _serve: ServeProcess,
 }
 
@@ -31,7 +31,11 @@ impl ServedHome {
             let home = tempdir.path().join("home");
             fs::create_dir_all(&home)?;
             let model_name = format!("mock-job-cli-{}", Uuid::new_v4().simple());
-            let model = MockModelEndpoint::start(&model_name)?;
+            let model = gents_inference::test_support::scripted_backend::ScriptedBackend::builder(
+                &model_name,
+            )
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
             let port = allocate_port()?;
             let graphql = graphql_url(port);
             let node_name = format!("cli-job-{}", Uuid::new_v4().simple());

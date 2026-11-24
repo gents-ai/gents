@@ -136,18 +136,21 @@ pub struct RunningDesktop {
     pub core: Arc<ClientRuntime>,
     pub runtime: gents::client_test_support::ServedRuntimeHome,
     pub lead: gents_protocol::agent_identity::AgentIdentityBinding,
-    pub provider: gents::support::streaming_backend::MockStreamingBackend,
+    pub provider: gents_inference::test_support::scripted_backend::ScriptedBackend,
     running: Option<gents::runtime::embedded::RunningRuntime>,
     _directory: TempDir,
 }
 
 impl RunningDesktop {
-    pub async fn start(plans: Vec<gents::support::streaming_backend::StreamPlan>) -> Self {
-        let provider = gents::support::streaming_backend::MockStreamingBackend::start_with_plans(
-            SCRIPTED_MODEL,
-            plans,
-        )
-        .unwrap();
+    pub async fn start(
+        plans: Vec<gents_inference::test_support::scripted_backend::StreamPlan>,
+    ) -> Self {
+        let provider =
+            gents_inference::test_support::scripted_backend::ScriptedBackend::start_with_plans(
+                SCRIPTED_MODEL,
+                plans,
+            )
+            .unwrap();
         let directory = tempfile::tempdir().unwrap();
         let core = Arc::new(
             ClientRuntime::start_with_paths_and_options(
@@ -319,7 +322,7 @@ impl ProvenanceFixture {
 }
 
 pub async fn provenance_fixture() -> ProvenanceFixture {
-    use gents::support::streaming_backend::{
+    use gents_inference::test_support::scripted_backend::{
         StreamChunk, StreamPlan, StreamResponse, StreamScript,
     };
 

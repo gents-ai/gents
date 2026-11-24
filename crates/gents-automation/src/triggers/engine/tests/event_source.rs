@@ -553,7 +553,7 @@ fn configured_event_agent(node_did: &str) -> Arc<ResolvedAgent> {
 }
 
 /// A node whose identity, Node row and Agent match `configured_event_agent`.
-/// The returned `TestDb` keeps the node running.
+/// The returned store keeps the node running.
 async fn configured_event_node() -> gents_store::test_support::TestStore {
     let db = crate::triggers::callback::test_node_builder("event-source").await;
     crate::triggers::callback::seed_test_agent(&db.node, db.node_identity.did()).await;

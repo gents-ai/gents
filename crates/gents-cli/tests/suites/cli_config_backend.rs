@@ -12,7 +12,10 @@ async fn config_backend_discover_models_supports_explicit_probe() -> Result<()> 
     let home = tempdir.path().join("home");
     fs::create_dir_all(&home)?;
     let model = format!("discover-model-{}", Uuid::new_v4().simple());
-    let endpoint = MockModelEndpoint::start(&model)?;
+    let endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let output = run_cli_json(
         &home,
         &[
@@ -40,7 +43,10 @@ async fn config_backend_set_accepts_canonical_document_and_supports_discovery() 
     let home = tempdir.path().join("home");
     fs::create_dir_all(&home)?;
     let model = format!("backend-model-{}", Uuid::new_v4().simple());
-    let endpoint = MockModelEndpoint::start(&model)?;
+    let endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let port = allocate_port()?;
     let graphql = graphql_url(port);
     let init = run_init_json(

@@ -36,7 +36,10 @@ async fn config_apply_sigkill_mid_apply_leaves_db_unchanged() -> Result<()> {
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("mock-rb-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let port = allocate_port()?;
     let graphql = graphql_url(port);
     let agent_name = format!("cli-rollback-{}", Uuid::new_v4().simple());

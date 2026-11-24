@@ -4,8 +4,8 @@ use crate::support::accepted_turn::{
 };
 use crate::support::fixtures::configure_agent_tools_as;
 use crate::support::live_inference::wait_for_request_terminal;
-use crate::support::streaming_backend::StreamChunk;
 use crate::support::test_db;
+use gents_inference::test_support::scripted_backend::StreamChunk;
 use gents_protocol::tool_call::CancelCause;
 use gents_store::graphql::escape_graphql_string;
 use gents_store::test_support::rows_when;
@@ -146,7 +146,7 @@ where
 fn finish_dynamic_turn(turn: &AcceptedBackgroundTurn) {
     turn.runtime.backend.enqueue_response(
         &turn.prompt,
-        crate::support::streaming_backend::StreamResponse::completes(
+        gents_inference::test_support::scripted_backend::StreamResponse::completes(
             &turn.prompt,
             ["parent complete"],
         ),
@@ -214,7 +214,7 @@ async fn runtime_shutdown_terminates_a_spawned_background_process() {
     turn.runtime.backend.enable_dynamic_followups(prompt);
     turn.runtime.backend.enqueue_response(
         prompt,
-        crate::support::streaming_backend::StreamResponse::streams(
+        gents_inference::test_support::scripted_backend::StreamResponse::streams(
             prompt,
             vec![StreamChunk::tool_call(
                 "meta-bg-shutdown",
@@ -238,7 +238,10 @@ async fn runtime_shutdown_terminates_a_spawned_background_process() {
     );
     turn.runtime.backend.enqueue_response(
         prompt,
-        crate::support::streaming_backend::StreamResponse::completes(prompt, ["started"]),
+        gents_inference::test_support::scripted_backend::StreamResponse::completes(
+            prompt,
+            ["started"],
+        ),
     );
     crate::support::accepted_turn::enqueue_managed_accepted_request(
         &turn.db,

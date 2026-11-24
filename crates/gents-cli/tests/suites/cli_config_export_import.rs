@@ -12,7 +12,10 @@ async fn config_export_writes_one_canonical_bundle() -> Result<()> {
     let root = tempdir.path().join("export");
     fs::create_dir_all(&home)?;
     let model = format!("export-model-{}", Uuid::new_v4().simple());
-    let endpoint = MockModelEndpoint::start(&model)?;
+    let endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let init = run_init_json(
         &home,
         &[
