@@ -12,6 +12,7 @@ use crate::backend_provider::BackendProviderKind;
 use crate::openai_wire::OpenAiWireApi;
 use crate::provider_input::ProviderInputCounter;
 use crate::session_hook::NoopSessionHook;
+use crate::test_support::fixed_tool::FixedTool;
 use crate::test_support::scripted_provider::{Reply, ScriptedProvider, Step};
 use crate::tool::{BoxFuture, ToolDefinition, ToolError};
 
@@ -149,32 +150,6 @@ impl Echo {
     }
 }
 
-struct Rebound;
-impl ToolDyn for Rebound {
-    fn hidden(&self) -> bool {
-        false
-    }
-    fn name(&self) -> String {
-        "rebound".into()
-    }
-    fn definition<'a>(&'a self, _: String) -> BoxFuture<'a, ToolDefinition> {
-        Box::pin(async {
-            ToolDefinition {
-                name: "rebound".into(),
-                description: "rebound".into(),
-                parameters: serde_json::json!({"type":"object"}),
-            }
-        })
-    }
-    fn call<'a>(
-        &'a self,
-        _: String,
-        _context: &'a crate::tool::ToolCallEnvelope,
-    ) -> BoxFuture<'a, Result<String, ToolError>> {
-        Box::pin(async { Ok("REBOUND".into()) })
-    }
-}
-
 impl ToolDyn for Echo {
     fn hidden(&self) -> bool {
         false
@@ -205,7 +180,7 @@ impl ToolDyn for Echo {
                         calls: self.calls.clone(),
                         staged: self.staged.clone(),
                     }) as Box<dyn ToolDyn>,
-                    Box::new(Rebound),
+                    Box::new(FixedTool::new("rebound", "REBOUND")),
                 ]),
                 preamble: None,
                 configuration_guard: None,

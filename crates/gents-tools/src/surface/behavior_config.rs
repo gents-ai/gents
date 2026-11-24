@@ -657,12 +657,11 @@ impl AgentToolSurfaceConfig {
         active_agent_dids: &RapidHashSet<String>,
         plugins: &dyn crate::plugin_host::PluginHost,
     ) -> Result<ToolSurface> {
-        let mut agent_tools = self.agent_tools.clone();
-        agent_tools.targets.retain(|target| {
-            target.target_node_did != own_node_did || active_agent_dids.contains(&target.agent_did)
-        });
-        self.resolve_with_agent_tools(node, own_node_did, plugins, agent_tools)
-            .await
+        let mut surface = self
+            .resolve_with_agent_tools(node, own_node_did, plugins, self.agent_tools.clone())
+            .await?;
+        surface.retain_agent_targets(own_node_did, active_agent_dids);
+        Ok(surface)
     }
 
     #[cfg(test)]

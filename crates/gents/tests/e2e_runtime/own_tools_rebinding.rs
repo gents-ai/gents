@@ -1,15 +1,13 @@
 use std::sync::Arc;
 
-use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-use gents_store::collection::Collection;
 use gents_store::identity::NodeIdentity;
 use serde_json::{json, Value};
 
 use crate::support::accepted_turn::boot_prepared_accepted_turn;
 use crate::support::live_inference::request_terminal_rows;
 use crate::support::signed_mailbox::{prepare_signed_mailbox_turn, SignedMailboxTurn};
-use crate::support::streaming_backend::{StreamChunk, StreamResponse};
 use crate::support::test_db;
+use gents_inference::test_support::scripted_backend::{StreamChunk, StreamResponse};
 
 const BACKEND_ID: &str = "own-tools-backend";
 const MODEL: &str = "own-tools-model";
@@ -34,72 +32,81 @@ fn receipt(body: &Value, call_id: &str) -> Value {
     serde_json::from_str(message["content"].as_str().unwrap()).unwrap()
 }
 
-/// Two agent targets: `me` starts the Engineer itself, `helper` a disabled
-/// Agent the runtime does not run.
+/// The Engineer's config call outside any request, as it runs before boot.
+async fn configure(tools: &[Box<dyn gents_loop::tool::ToolDyn>], call: Value) -> Value {
+    let config = tools
+        .iter()
+        .find(|tool| tool.name() == gents_protocol::tool_names::CONFIG_TOOL_NAME)
+        .unwrap();
+    let text = config
+        .call(
+            call.to_string(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{call}: {error:#}"));
+    serde_json::from_str(&text).unwrap()
+}
+
+/// The Engineer, holding the Node administration init gives the default
+/// Agent, creates two helper agents and an agent target for each: `writer`
+/// runs, `helper` it disables.
 async fn seed_agent_targets(db: &crate::support::TestDb, turn: &SignedMailboxTurn) {
     let node_did = turn.node_did.clone();
-    let binding = gents_store::identity::provision_agent_identity_authorized(
-        &db.node,
-        db.node_identity.as_ref(),
-        &turn.user.did().parse().unwrap(),
-    )
-    .await
-    .unwrap();
-    let helper =
-        gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
-    let target = |id: &str, name: &str, agent: &str| {
-        json!({"node_did": node_did, "target_id": id, "target_node_did": node_did,
-            "agent_did": agent, "name": name})
-    };
-    let documents = vec![
-        (
-            Collection::Tools,
-            json!({"node_did": node_did, "tools_id": "helper-tools"}),
-        ),
-        (
-            Collection::AgentContext,
-            json!({"node_did": node_did, "context_id": "helper-context", "tools_id": "helper-tools"}),
-        ),
-        (
-            Collection::Agent,
-            json!({"node_did": node_did, "agent_did": helper.did(),
-                "creation_nonce": binding.creation_nonce, "context_id": "helper-context",
-                "inference_profile_id": format!("{}:profile", turn.agent.did()), "enabled": false}),
-        ),
-        (
-            Collection::AgentTarget,
-            target("me-target", "me", turn.agent.did()),
-        ),
-        (
-            Collection::AgentTarget,
-            target("helper-target", "helper", helper.did()),
-        ),
-    ];
-    let plan = DesiredStateApplyPlan::new(
-        documents
-            .into_iter()
-            .map(|(collection, value)| DesiredStateApplyDocument {
-                collection,
-                add: value.clone(),
-                update: value,
-            })
-            .collect(),
-    )
-    .unwrap();
+    let engineer = turn.agent.did().to_owned();
     turn.client
-        .transact_write("test.own_tools.agent_targets", |txn| {
-            let plan = &plan;
+        .transact_write("test.own_tools.node_administration", |txn| {
+            let (node_did, engineer) = (&node_did, &engineer);
             Box::pin(async move {
-                gents_documents::apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &gents_inference::resolved::ProviderProfilePolicy,
-                )
-                .await
+                gents_documents::grant_node_administration(txn, node_did, engineer).await
             })
         })
         .await
         .unwrap();
+    let tools = gents_tools::builtin::self_config::build_runtime_self_config_tools(
+        Arc::default(),
+        db.node.clone(),
+        turn.agent.clone(),
+        db.node_identity.clone(),
+        &gents_tools::surface::SelfConfigToolConfig {
+            enabled: true,
+            agent_did: engineer.clone(),
+            categories: gents_documents::patch::SELF_CONFIG_CATEGORIES
+                .iter()
+                .map(|category| category.to_string())
+                .collect(),
+            no_lockout: true,
+            ..Default::default()
+        },
+        Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::default()),
+        Arc::new(gents_automation::triggers::task_run::TaskRuns),
+    )
+    .await
+    .unwrap();
+    let profile = format!("{engineer}:profile");
+    for (name, enabled) in [("writer", true), ("helper", false)] {
+        let created = configure(
+            &tools,
+            json!({"argv": ["agent", "create"], "options": {
+                "display-name": name, "system-prompt": "Help.", "profile": profile}}),
+        )
+        .await;
+        let agent_did = created["agent_did"].as_str().unwrap().to_owned();
+        if !enabled {
+            configure(
+                &tools,
+                json!({"argv": ["agent", "update"], "target_id": agent_did,
+                    "set": {"enabled": false}}),
+            )
+            .await;
+        }
+        configure(
+            &tools,
+            json!({"argv": ["agent-target", "create"], "target_id": format!("{name}-target"),
+                "set": {"agent_did": agent_did, "name": name}}),
+        )
+        .await;
+    }
 }
 
 fn offered(body: &Value) -> Vec<String> {
@@ -112,11 +119,11 @@ fn offered(body: &Value) -> Vec<String> {
 }
 
 /// The Engineer, holding the policy-delegate set init issues the default
-/// Agent, turns on Goal creation, turns off the sessions tool and selects two
-/// agent targets in its own Tools, then creates a Goal in the same request:
-/// the turn after the config call is sent the new toolset and its
-/// `create_goal` call runs. The receipt names what the next turn gained, and
-/// the target whose agent does not run as waiting rather than in effect.
+/// Agent, turns on Goal creation, turns off the sessions tool and selects the
+/// targets of the agents it created in its own Tools, then creates a Goal in
+/// the same request: the turn after the config call is sent the new toolset
+/// and its `create_goal` call runs. The receipt names what the next turn
+/// gained, and the target whose agent does not run as waiting, not in effect.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_agent_calls_a_tool_it_granted_itself_in_the_same_request() {
     let db = test_db("own-tools-rebinding").await;
@@ -129,7 +136,7 @@ async fn an_agent_calls_a_tool_it_granted_itself_in_the_same_request() {
                 "enable_goal_tools": true,
                 "enable_goal_creation": true,
             },
-            "agents": {"enabled": true, "target_ids": ["me-target", "helper-target"]},
+            "agents": {"enabled": true, "target_ids": ["writer-target", "helper-target"]},
         },
     });
     let (prepared, turn) = prepare_signed_mailbox_turn(
@@ -218,10 +225,10 @@ async fn an_agent_calls_a_tool_it_granted_itself_in_the_same_request() {
             "later turns have the rebound toolset: {:?}",
             offered(body)
         );
-        assert_eq!(agent_new_targets(body), Some(json!(["me"])));
+        assert_eq!(agent_new_targets(body), Some(json!(["writer"])));
     }
     let next_turn = &receipt(after, "call-grant")["next_turn"];
-    for name in [create_goal, "agent_new agent=me"] {
+    for name in [create_goal, "agent_new", "agent_new agent=writer"] {
         assert!(
             next_turn["added"]
                 .as_array()
