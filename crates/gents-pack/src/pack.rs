@@ -260,7 +260,10 @@ pub fn is_distributable_asset_path(path: &str) -> bool {
     asset_path::is_distributable_asset(path) && asset_path::has_canonical_asset_spelling(path)
 }
 
-pub(crate) fn open_pack_asset(root: &std::path::Path, path: &str) -> Result<std::fs::File> {
+pub(crate) fn open_pack_asset(
+    root: &gents_fs_runner::beneath::RootDir,
+    path: &str,
+) -> Result<std::fs::File> {
     asset_path::open_pack_asset(root, path)
 }
 

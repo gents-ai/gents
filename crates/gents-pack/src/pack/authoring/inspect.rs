@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use gents_fs_runner::beneath::{Access, Intent, Located};
 use serde_json::json;
 
 use crate::pack::archive::read_pack;
@@ -6,8 +7,17 @@ use crate::pack::{load_pack_authoring_config, PackInstallOptions, PackManifest};
 
 pub const PREVIEW_OWNER: &str = "did:key:zPackShowPlaceholder";
 
+/// Verifies the built pack a path names, read through the handle of the
+/// directory it was resolved in.
 pub fn verify_pack_file(path: &std::path::Path) -> Result<crate::pack::archive::PackHeader> {
-    let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    verify_located_pack(&Located::at(path, Intent::Existing)?)
+}
+
+pub fn verify_located_pack(pack: &Located) -> Result<crate::pack::archive::PackHeader> {
+    let path = pack.path();
+    let file = pack
+        .open(Access::Read)
+        .with_context(|| format!("opening {}", path.display()))?;
     read_pack(
         std::io::BufReader::new(file),
         crate::pack::archive::Bounds::default(),

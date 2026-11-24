@@ -4,12 +4,13 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Out-of-process native filesystem runner for Gents"
+description = "Filesystem access beneath a Gents tool root, and its out-of-process runner"
 autotests = false
 
 [features]
 # The traversal blocker race tests use, in process and through the runner's
-# hidden `--block-*` flags. Enabled only from dev-dependencies.
+# hidden `--block-*` flags, and the lookup hook of the beneath-root resolver.
+# Enabled only from dev-dependencies.
 test-fixtures = []
 
 [[test]]
@@ -23,7 +24,14 @@ ignore = "0.4"
 regex = "1"
 serde.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["fs"] }
 
 [dev-dependencies]
 gents-fs-runner = { path = ".", features = ["test-fixtures"] }
+gents-lean-vocab.workspace = true
+rustix = { version = "1", features = ["fs"] }
+tempfile = "3"
 

@@ -5,7 +5,6 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use std::fs::Metadata;
 use std::path::{Path, PathBuf};
 
 mod inventory;
@@ -343,8 +342,8 @@ struct Scanner {
 
 struct SourceScan {
     input: DiscoverySourceRoot,
-    root: PathBuf,
-    root_metadata: Metadata,
+    /// The source root, held, with no link followed beneath it.
+    held: gents_fs_runner::beneath::RootDir,
     observed_files: usize,
     observed_bytes: u64,
     emitted_items: usize,

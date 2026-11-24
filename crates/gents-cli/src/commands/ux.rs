@@ -71,7 +71,10 @@ async fn preview(args: UxPreviewArgs) -> Result<()> {
 }
 
 fn lint(args: UxLintArgs) -> Result<()> {
-    let findings = gents_pack::plugin::ux::lint_file(&args.file)?;
+    let findings = gents_pack::plugin::ux::lint_file(&gents_fs_runner::beneath::Located::at(
+        &args.file,
+        gents_fs_runner::beneath::Intent::Existing,
+    )?)?;
     crate::print_json(&serde_json::json!({
         "file": args.file,
         "admitted": findings.is_empty(),

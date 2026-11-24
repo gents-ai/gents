@@ -1,10 +1,13 @@
+use std::fs::File;
+use std::io::Read as _;
 use std::path::Path;
 
 use anyhow::Result;
 
-use crate::context::RunnerContext;
+use crate::beneath::{Access, ChildKind, Intent, Located};
+use crate::context::{HeldDir, RunnerContext};
 use crate::model::{Collected, GrepMatch};
-use crate::traversal::common::{admit_next, sorted_children, Admitted, Sweep, WalkState};
+use crate::traversal::common::{admit_next, descend, sorted_children, Admitted, Sweep, WalkState};
 
 const MAX_GREP_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const BINARY_SNIFF_BYTES: usize = 4096;
@@ -56,7 +59,7 @@ pub(crate) struct CollectedGrep {
 
 pub(crate) fn collect_grep_matches(
     context: &RunnerContext,
-    path: &Path,
+    target: &Located,
     pattern: &str,
     case_sensitive: bool,
     max_matches: usize,
@@ -65,23 +68,28 @@ pub(crate) fn collect_grep_matches(
     let mut sweep = Sweep::new(walk);
     let mut file_stats = GrepFileStats::default();
     let needle = Needle::new(pattern, case_sensitive);
-    let path_is_dir = path.is_dir();
-    let traversal_root = if path_is_dir {
-        path
+    let path = target.path();
+    let traversal_root = if target.is_dir() {
+        path.clone()
     } else {
-        path.parent().unwrap_or(path)
+        path.parent().unwrap_or(&path).to_path_buf()
     };
     let scan = GrepScan {
         context,
-        traversal_root,
+        traversal_root: &traversal_root,
         needle: &needle,
         max_matches,
     };
-    if path_is_dir {
-        collect_grep_matches_inner(&scan, path, &mut sweep, &mut file_stats)?;
+    if target.is_dir() {
+        let dir = HeldDir {
+            fd: target.open_dir()?,
+            path: path.clone(),
+        };
+        collect_grep_matches_inner(&scan, &dir, &mut sweep, &mut file_stats)?;
     } else {
-        sweep.walk.admit_entry(context, path);
-        grep_file(&scan, path, &mut sweep, &mut file_stats, true)?;
+        sweep.walk.admit_entry(context, &path);
+        let file = target.open(Access::Read).ok();
+        grep_file(&scan, &path, file, &mut sweep, &mut file_stats, true)?;
     }
     let bytes_read = sweep.walk.bytes_read();
     Ok(CollectedGrep {
@@ -101,39 +109,62 @@ struct GrepScan<'a> {
 
 fn collect_grep_matches_inner(
     scan: &GrepScan<'_>,
-    dir: &Path,
+    dir: &HeldDir,
     sweep: &mut Sweep<GrepMatch>,
     file_stats: &mut GrepFileStats,
 ) -> Result<()> {
-    let pushed = sweep.ignores.push_dir(dir);
+    let pushed = sweep.ignores.push_dir(scan.context, &dir.path);
     for entry in sorted_children(scan.context, dir, &mut sweep.walk)? {
         if sweep.truncated || sweep.walk.exhausted() {
             break;
         }
-        let (path, is_dir) = match admit_next(
+        let (path, kind) = match admit_next(
             scan.context,
             scan.traversal_root,
+            dir,
             &entry,
             &mut sweep.walk,
             &sweep.ignores,
         ) {
             Admitted::Skip => continue,
             Admitted::Stop => break,
-            Admitted::Entry { path, is_dir } => (path, is_dir),
+            Admitted::Entry { path, kind } => (path, kind),
         };
-        if is_dir {
-            collect_grep_matches_inner(scan, &path, sweep, file_stats)?;
-            continue;
-        }
-        grep_file(scan, &path, sweep, file_stats, false)?;
+        let file = match kind {
+            ChildKind::Directory => {
+                if let Some(child) = descend(scan.context, dir, &path) {
+                    collect_grep_matches_inner(scan, &child, sweep, file_stats)?;
+                }
+                continue;
+            }
+            ChildKind::File => scan
+                .context
+                .root()
+                .child_file(&dir.fd, &dir.path, &entry.name),
+            ChildKind::Link => linked_file(scan.context, &path),
+            ChildKind::Other => continue,
+        };
+        grep_file(scan, &path, file, sweep, file_stats, false)?;
     }
     sweep.ignores.pop(pushed);
     Ok(())
 }
 
+/// The regular file a link in the walk leads to, resolved again beneath the
+/// root; `None` when it leads out of the root or to no regular file.
+fn linked_file(context: &RunnerContext, path: &Path) -> Option<File> {
+    let below = context.below_root(path)?;
+    context
+        .root()
+        .locate_relative(below, Intent::Existing)
+        .and_then(|located| located.open(Access::Read))
+        .ok()
+}
+
 fn grep_file(
     scan: &GrepScan<'_>,
     path: &Path,
+    file: Option<File>,
     sweep: &mut Sweep<GrepMatch>,
     file_stats: &mut GrepFileStats,
     explicit_file: bool,
@@ -141,7 +172,10 @@ fn grep_file(
     if sweep.walk.skips_default_ignored(scan.traversal_root, path) {
         return Ok(());
     }
-    let Ok(file_metadata) = std::fs::metadata(path) else {
+    let Some(mut file) = file else {
+        return Ok(());
+    };
+    let Ok(file_metadata) = file.metadata() else {
         return Ok(());
     };
     if !explicit_file && file_metadata.len() > MAX_GREP_FILE_BYTES {
@@ -154,9 +188,10 @@ fn grep_file(
     {
         return Ok(());
     }
-    let Ok(bytes) = std::fs::read(path) else {
+    let mut bytes = Vec::new();
+    if file.read_to_end(&mut bytes).is_err() {
         return Ok(());
-    };
+    }
     let sniff = &bytes[..bytes.len().min(BINARY_SNIFF_BYTES)];
     if sniff.contains(&0) {
         file_stats.skipped_binary_files += 1;

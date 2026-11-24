@@ -1,6 +1,6 @@
 use super::*;
+use gents_fs_runner::beneath::{BeneathError, ChildKind};
 use serde_json::Value;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 impl Scanner {
@@ -65,22 +65,11 @@ impl Scanner {
             }
             return;
         }
-        if !source_root_unchanged(source) {
-            source.partial = true;
-            self.warning(
-                DiscoveryNoticeCode::FileChanged,
-                Some(&source.input.source_id),
-                Some(&path_string(relative)),
-                "selected source root changed during skill inspection",
-                None,
-                None,
-            );
-            return;
-        }
-        let metadata = match reject_symlink_components(&source.root, relative) {
-            Ok(Some(metadata)) => metadata,
-            Ok(None) => return,
-            Err(SafePathError::Symlink) => {
+        let directory = match source.held.subdir(relative) {
+            Ok(directory) => directory,
+            Err(error) if error.is_not_found() => return,
+            Err(BeneathError::NotADirectory { .. }) => return,
+            Err(BeneathError::Loop { .. } | BeneathError::Outside { .. }) => {
                 source.partial = true;
                 self.warning(
                     DiscoveryNoticeCode::SymlinkRejected,
@@ -92,7 +81,7 @@ impl Scanner {
                 );
                 return;
             }
-            Err(SafePathError::Io) => {
+            Err(_) => {
                 source.partial = true;
                 self.warning(
                     DiscoveryNoticeCode::ReadFailed,
@@ -105,10 +94,7 @@ impl Scanner {
                 return;
             }
         };
-        if !metadata.is_dir() {
-            return;
-        }
-        let entries = match fs::read_dir(source.root.join(relative)) {
+        let entries = match directory.entries() {
             Ok(entries) => entries,
             Err(_) => {
                 source.partial = true;
@@ -123,7 +109,7 @@ impl Scanner {
                 return;
             }
         };
-        let mut paths = Vec::new();
+        let mut children = Vec::new();
         for entry in entries {
             source.directory_entries += 1;
             if source.directory_entries > self.limits.max_directory_entries {
@@ -138,51 +124,27 @@ impl Scanner {
                 );
                 break;
             }
-            if let Ok(entry) = entry {
-                paths.push(entry.path());
-            }
+            children.push(entry);
         }
-        let directory_stable = reject_symlink_components(&source.root, relative)
-            .ok()
-            .flatten()
-            .is_some_and(|after| metadata_same_file(&metadata, &after));
-        if !directory_stable || !source_root_unchanged(source) {
-            source.partial = true;
-            self.warning(
-                DiscoveryNoticeCode::FileChanged,
-                Some(&source.input.source_id),
-                Some(&path_string(relative)),
-                "skill directory changed during inspection and its entries were discarded",
-                None,
-                None,
-            );
-            return;
-        }
-        paths.sort();
-        for path in paths {
-            let Ok(child) = path.strip_prefix(&source.root) else {
-                continue;
-            };
-            let child = child.to_path_buf();
-            let Ok(metadata) = fs::symlink_metadata(&path) else {
-                source.partial = true;
-                continue;
-            };
-            if metadata.file_type().is_symlink() {
-                source.partial = true;
-                self.warning(
-                    DiscoveryNoticeCode::SymlinkRejected,
-                    Some(&source.input.source_id),
-                    Some(&path_string(&child)),
-                    "symlinked skill path was not inspected",
-                    None,
-                    None,
-                );
-            } else if metadata.is_dir() {
-                self.collect_skill_manifests(source, &child, depth + 1, manifests);
-            } else if metadata.is_file() && path.file_name().is_some_and(|name| name == "SKILL.md")
-            {
-                manifests.push(child);
+        for entry in children {
+            let child = relative.join(&entry.name);
+            match entry.kind {
+                ChildKind::Link => {
+                    source.partial = true;
+                    self.warning(
+                        DiscoveryNoticeCode::SymlinkRejected,
+                        Some(&source.input.source_id),
+                        Some(&path_string(&child)),
+                        "symlinked skill path was not inspected",
+                        None,
+                        None,
+                    );
+                }
+                ChildKind::Directory => {
+                    self.collect_skill_manifests(source, &child, depth + 1, manifests);
+                }
+                ChildKind::File if entry.name == "SKILL.md" => manifests.push(child),
+                ChildKind::File | ChildKind::Other => {}
             }
         }
     }

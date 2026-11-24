@@ -57,6 +57,7 @@ import Proofs.Conformance.RequestRepairScope
 import Proofs.Conformance.InterruptRequestDrain
 import Proofs.Conformance.RootCandidates
 import Proofs.Conformance.ToolRoot
+import Proofs.Conformance.PathNamespace
 import Proofs.Conformance.MCPHealthShutdown
 import Proofs.Conformance.DatastoreWrite
 import Proofs.Conformance.LspConsent

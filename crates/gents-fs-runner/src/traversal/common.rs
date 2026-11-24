@@ -3,7 +3,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
-use crate::context::RunnerContext;
+use crate::beneath::{BeneathError, Child, ChildKind, Intent};
+use crate::context::{HeldDir, RunnerContext};
 use crate::model::{Collected, WalkStats, DEFAULT_IGNORED_NAMES};
 
 pub(crate) struct WalkLimits {
@@ -154,30 +155,23 @@ impl WalkState {
 
 pub(super) fn sorted_children(
     context: &RunnerContext,
-    dir: &Path,
+    dir: &HeldDir,
     walk: &mut WalkState,
-) -> Result<Vec<std::fs::DirEntry>> {
+) -> Result<Vec<Child>> {
     #[cfg(feature = "test-fixtures")]
     if let Some(blocker) = context.blocker() {
-        blocker.block(dir);
+        blocker.block(&dir.path);
     }
-    let read_dir = match std::fs::read_dir(dir) {
-        Ok(read_dir) => read_dir,
-        Err(error) if should_skip_io_error(&error) => return Ok(Vec::new()),
+    let mut children = match context.root().children(&dir.fd, &dir.path, |collected| {
+        walk.dir_scan_should_stop(context, &dir.path, collected)
+    }) {
+        Ok(children) => children,
+        Err(BeneathError::Io { source, .. }) if should_skip_io_error(&source) => {
+            return Ok(Vec::new())
+        }
         Err(error) => return Err(error.into()),
     };
-    let mut children = Vec::new();
-    for entry in read_dir {
-        if walk.dir_scan_should_stop(context, dir, children.len()) {
-            break;
-        }
-        match entry {
-            Ok(entry) => children.push(entry),
-            Err(error) if should_skip_io_error(&error) => continue,
-            Err(error) => return Err(error.into()),
-        }
-    }
-    children.sort_by_key(|entry| entry.file_name());
+    children.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(children)
 }
 
@@ -190,13 +184,25 @@ impl GitignoreStack {
         Self { stack: Vec::new() }
     }
 
-    pub(crate) fn push_dir(&mut self, dir: &Path) -> usize {
-        let file = dir.join(".gitignore");
-        if !file.is_file() {
+    /// Reads the directory's `.gitignore` by handle beneath the root.
+    pub(crate) fn push_dir(&mut self, context: &RunnerContext, dir: &Path) -> usize {
+        let Some(below) = context.below_root(dir) else {
             return 0;
-        }
+        };
+        let Ok(text) = context
+            .root()
+            .locate_relative(&below.join(".gitignore"), Intent::Existing)
+            .and_then(|located| located.read())
+        else {
+            return 0;
+        };
+        let file = dir.join(".gitignore");
         let mut builder = ignore::gitignore::GitignoreBuilder::new(dir);
-        builder.add(&file);
+        for line in String::from_utf8_lossy(&text).lines() {
+            if builder.add_line(Some(file.clone()), line).is_err() {
+                return 0;
+            }
+        }
         match builder.build() {
             Ok(matcher) => {
                 self.stack.push(matcher);
@@ -229,29 +235,47 @@ pub(super) enum Admitted {
     Stop,
     Entry {
         path: std::path::PathBuf,
-        is_dir: bool,
+        kind: ChildKind,
     },
+}
+
+impl Admitted {
+    pub(super) fn is_dir(kind: ChildKind) -> bool {
+        kind == ChildKind::Directory
+    }
 }
 
 pub(super) fn admit_next(
     context: &RunnerContext,
     traversal_root: &Path,
-    entry: &std::fs::DirEntry,
+    dir: &HeldDir,
+    entry: &Child,
     walk: &mut WalkState,
     ignores: &GitignoreStack,
 ) -> Admitted {
-    let path = entry.path();
-    let Ok(file_type) = entry.file_type() else {
-        return Admitted::Skip;
-    };
-    let is_dir = file_type.is_dir();
+    let path = dir.path.join(&entry.name);
+    let is_dir = entry.kind == ChildKind::Directory;
     if walk.skips_default_ignored(traversal_root, &path) || ignores.is_ignored(&path, is_dir) {
         return Admitted::Skip;
     }
     if !walk.admit_entry(context, &path) {
         return Admitted::Stop;
     }
-    Admitted::Entry { path, is_dir }
+    Admitted::Entry {
+        path,
+        kind: entry.kind,
+    }
+}
+
+/// The child directory `path` of `dir`, held by handle; `None` when it is no
+/// longer a directory there.
+pub(super) fn descend(context: &RunnerContext, dir: &HeldDir, path: &Path) -> Option<HeldDir> {
+    let name = path.file_name()?;
+    let fd = context.root().child_dir(&dir.fd, &dir.path, name)?;
+    Some(HeldDir {
+        fd: std::sync::Arc::new(fd),
+        path: path.to_path_buf(),
+    })
 }
 
 fn should_skip_io_error(error: &std::io::Error) -> bool {

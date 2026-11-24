@@ -76,35 +76,36 @@ impl ConfigCommandTool {
             let file = self
                 .authoring_paths("ux preview PATH", false)
                 .await
-                .and_then(|context| context.resolve_existing_file(plugin))
+                .and_then(|context| context.locate_existing_file(plugin))
                 .with_context(|| {
                     format!(
                         "no ux plugin or page {plugin:?}, and it is not a plugin.js this agent may read: a draft path is read inside your effective tool root with file tools granted. [\"ux\",\"list\"] names the installed plugins and pages"
                     )
                 })?;
-            Some(file.to_string_lossy().into_owned())
+            Some(file)
         };
-        let target = match page {
-            Some(page) => preview::PreviewTarget::page(&page)?,
-            None => {
-                preview::resolve_target(
-                    home,
-                    draft.as_deref().unwrap_or(plugin),
-                    |namespace, name| async move {
-                        let coordinate = format!("{namespace}/{name}");
-                        let record = self.plugins.resolve(&coordinate, None)?;
-                        let outcome = self
-                            .plugins
-                            .call_outcome(&record, producer_input(), &self.envelope)
-                            .await?;
-                        anyhow::ensure!(
-                            matches!(outcome.verdict, PluginVerdict::Success),
-                            "the ux producer {coordinate} did not succeed: {}",
-                            outcome.diagnostics
-                        );
-                        Ok(outcome.output)
-                    },
-                )
+        let target = match (page, draft) {
+            (Some(page), _) => preview::PreviewTarget::page(&page)?,
+            (None, Some(draft)) => {
+                tokio::task::spawn_blocking(move || preview::draft_target(&draft))
+                    .await
+                    .context("the ux preview draft read did not finish")??
+            }
+            (None, None) => {
+                preview::resolve_target(home, plugin, |namespace, name| async move {
+                    let coordinate = format!("{namespace}/{name}");
+                    let record = self.plugins.resolve(&coordinate, None)?;
+                    let outcome = self
+                        .plugins
+                        .call_outcome(&record, producer_input(), &self.envelope)
+                        .await?;
+                    anyhow::ensure!(
+                        matches!(outcome.verdict, PluginVerdict::Success),
+                        "the ux producer {coordinate} did not succeed: {}",
+                        outcome.diagnostics
+                    );
+                    Ok(outcome.output)
+                })
                 .await?
             }
         };
