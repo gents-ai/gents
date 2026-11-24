@@ -213,7 +213,10 @@ fn resolve_backend_api_key_errors_when_env_var_named_but_unset() {
 fn inference_backend_validation_preserves_defaults_and_rejects_invalid_values() {
     let backend = base_backend();
     backend.validate().unwrap();
-    assert_eq!(backend.effective_max_concurrent(), 1);
+    assert_eq!(
+        backend.effective_max_concurrent(),
+        gents_documents::inference_defaults::DEFAULT_MAX_CONCURRENT
+    );
     assert_eq!(backend.effective_max_queue_depth(), 100);
     let mut backend = backend;
     backend.max_queue_depth = Some(0);
@@ -488,7 +491,10 @@ async fn scoped_backend_replacement_preserves_observations_and_resets_defaults()
         serde_json::to_value(&loaded)?,
         serde_json::to_value(&replacement)?
     );
-    assert_eq!(loaded.effective_max_concurrent(), 1);
+    assert_eq!(
+        loaded.effective_max_concurrent(),
+        gents_documents::inference_defaults::DEFAULT_MAX_CONCURRENT
+    );
     assert_eq!(loaded.effective_max_queue_depth(), 100);
     let observed = lookup_backend_observation_for_runtime(&node, owner, &backend.backend_id)
         .await?
