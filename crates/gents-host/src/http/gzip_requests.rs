@@ -67,19 +67,35 @@ async fn inflate(request: Request) -> Result<Request, StatusCode> {
     let compressed = axum::body::to_bytes(body, LIMIT)
         .await
         .map_err(|_| StatusCode::PAYLOAD_TOO_LARGE)?;
+    let inflated = tokio::task::spawn_blocking(move || inflate_bytes(&compressed))
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)??;
+    parts.headers.remove(header::CONTENT_ENCODING);
+    parts
+        .headers
+        .insert(header::CONTENT_LENGTH, inflated.len().into());
+    Ok(Request::from_parts(parts, Body::from(inflated)))
+}
+
+/// A gzip body of up to [`LIMIT`] is tens of milliseconds of codec work, so
+/// it runs on the blocking pool, never on a runtime worker.
+fn inflate_bytes(compressed: &[u8]) -> Result<Vec<u8>, StatusCode> {
     let mut inflated = Vec::new();
-    flate2::read::GzDecoder::new(compressed.as_ref())
+    flate2::read::GzDecoder::new(compressed)
         .take(LIMIT as u64 + 1)
         .read_to_end(&mut inflated)
         .map_err(|_| StatusCode::BAD_REQUEST)?;
     if inflated.len() > LIMIT {
         return Err(StatusCode::PAYLOAD_TOO_LARGE);
     }
-    parts.headers.remove(header::CONTENT_ENCODING);
-    parts
-        .headers
-        .insert(header::CONTENT_LENGTH, inflated.len().into());
-    Ok(Request::from_parts(parts, Body::from(inflated)))
+    Ok(inflated)
+}
+
+/// Runs on the blocking pool, like [`inflate_bytes`].
+fn deflate(bytes: &[u8]) -> Option<Vec<u8>> {
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    encoder.write_all(bytes).ok()?;
+    encoder.finish().ok()
 }
 
 async fn compress(response: Response) -> Response {
@@ -97,8 +113,12 @@ async fn compress(response: Response) -> Response {
     let Ok(bytes) = axum::body::to_bytes(body, LIMIT).await else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
-    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
-    let Ok(compressed) = encoder.write_all(&bytes).and_then(|()| encoder.finish()) else {
+    let plain = bytes.clone();
+    let Some(compressed) = tokio::task::spawn_blocking(move || deflate(&plain))
+        .await
+        .ok()
+        .flatten()
+    else {
         return Response::from_parts(parts, Body::from(bytes));
     };
     parts
@@ -265,6 +285,47 @@ mod tests {
         assert!(response.headers().get(header::CONTENT_ENCODING).is_none());
         assert_eq!(response.json::<serde_json::Value>().await.unwrap(), answer);
         assert_eq!(*seen.answers.lock().unwrap(), vec![None]);
+    }
+
+    /// While a large body is inflated or a large answer gzipped, the runtime
+    /// thread serves its other tasks: on a single-threaded runtime, a task
+    /// polled after the codec starts still runs before the codec finishes.
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_codec_leaves_the_runtime_thread_free() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let large = br#"{"data":"#.repeat(1 << 17);
+        let free = AtomicBool::new(false);
+        let request = Request::builder()
+            .header(header::CONTENT_ENCODING, "gzip")
+            .body(Body::from(deflate(&large).unwrap()))
+            .unwrap();
+        let ((inflated, free_while_inflating), ()) = tokio::join!(
+            biased;
+            async { (inflate(request).await, free.load(Ordering::SeqCst)) },
+            async { free.store(true, Ordering::SeqCst) },
+        );
+        assert!(free_while_inflating, "inflating held the runtime thread");
+        let inflated = axum::body::to_bytes(inflated.unwrap().into_body(), LIMIT)
+            .await
+            .unwrap();
+        assert_eq!(inflated.as_ref(), large.as_slice());
+
+        free.store(false, Ordering::SeqCst);
+        let response = Response::builder()
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(large.clone()))
+            .unwrap();
+        let ((compressed, free_while_compressing), ()) = tokio::join!(
+            biased;
+            async { (compress(response).await, free.load(Ordering::SeqCst)) },
+            async { free.store(true, Ordering::SeqCst) },
+        );
+        assert!(free_while_compressing, "gzipping held the runtime thread");
+        assert_eq!(compressed.headers()[header::CONTENT_ENCODING], "gzip");
+        let compressed = axum::body::to_bytes(compressed.into_body(), LIMIT)
+            .await
+            .unwrap();
+        assert_eq!(inflate_bytes(&compressed).unwrap(), large);
     }
 
     #[tokio::test]

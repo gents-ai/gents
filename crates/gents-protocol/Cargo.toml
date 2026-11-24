@@ -18,10 +18,11 @@ path = "tests/integration.rs"
 # module (message, row, canonical, ...) is native/guest agnostic and always on.
 [features]
 default = ["native"]
-native = ["dep:reqwest", "dep:flate2"]
+native = ["dep:reqwest", "dep:flate2", "dep:bytes", "tokio/rt"]
 typescript = ["dep:ts-rs"]
 
 [dependencies]
+bytes = { workspace = true, optional = true }
 flate2 = { version = "1", optional = true }
 url = "2"
 regex = "1"

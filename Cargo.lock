@@ -7182,6 +7182,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "bs58",
+ "bytes",
  "chrono",
  "ciborium",
  "flate2",

@@ -181,16 +181,16 @@ pub(super) async fn execute_graphql_async_with_tx(
             Some(variables) => serde_json::json!({ "query": query, "variables": variables }),
             None => serde_json::json!({ "query": query }),
         };
-        let encoded = serde_json::to_vec(&body).unwrap_or_default();
+        let encoded = bytes::Bytes::from(serde_json::to_vec(&body).unwrap_or_default());
+        let compressed = match encoding.filter(|encoding| encoding.gzip_body(encoded.len())) {
+            Some(_) => gzip(encoded.clone()).await,
+            None => None,
+        };
         let mut request = client
             .post(graphql)
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .header(reqwest::header::ACCEPT_ENCODING, "gzip");
-        request = match encoding
-            .is_some_and(|encoding| encoding.gzip_body(encoded.len()))
-            .then(|| gzip(&encoded))
-            .flatten()
-        {
+        request = match compressed {
             Some(compressed) => request
                 .header(reqwest::header::CONTENT_ENCODING, "gzip")
                 .body(compressed),
@@ -289,7 +289,7 @@ pub(super) async fn execute_graphql_async_with_tx(
         /* a plain answer decodes as before; only a gzipped one is inflated here */
         let read = if names_gzip(response.headers().get(reqwest::header::CONTENT_ENCODING)) {
             match response.bytes().await {
-                Ok(bytes) => Ok(inflate_json(graphql, &bytes)?),
+                Ok(bytes) => Ok(inflate_json(graphql, bytes).await?),
                 Err(error) => Err(error),
             }
         } else {
@@ -482,25 +482,40 @@ fn names_gzip(value: Option<&reqwest::header::HeaderValue>) -> bool {
         })
 }
 
+/// `bytes` gzipped. A body of megabytes is tens of milliseconds of codec
+/// work, so it runs on the blocking pool, never on a runtime worker.
 #[cfg(feature = "native")]
-fn gzip(bytes: &[u8]) -> Option<Vec<u8>> {
-    use std::io::Write as _;
-    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
-    encoder.write_all(bytes).ok()?;
-    encoder.finish().ok()
+async fn gzip(bytes: bytes::Bytes) -> Option<Vec<u8>> {
+    tokio::task::spawn_blocking(move || {
+        use std::io::Write as _;
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        encoder.write_all(&bytes).ok()?;
+        encoder.finish().ok()
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
-/// The JSON of a response body the host gzipped.
+/// The JSON of a response body the host gzipped, inflated and parsed on the
+/// blocking pool like [`gzip`].
 #[cfg(feature = "native")]
-fn inflate_json(graphql: &str, bytes: &[u8]) -> Result<serde_json::Value> {
-    let failed = |source: std::io::Error| GraphqlError::DecodeContent {
+async fn inflate_json(graphql: &str, bytes: bytes::Bytes) -> Result<serde_json::Value> {
+    tokio::task::spawn_blocking(move || -> std::io::Result<serde_json::Value> {
+        let mut inflated = Vec::new();
+        std::io::Read::read_to_end(
+            &mut flate2::read::GzDecoder::new(bytes.as_ref()),
+            &mut inflated,
+        )?;
+        Ok(serde_json::from_slice(&inflated)?)
+    })
+    .await
+    .map_err(std::io::Error::other)
+    .and_then(|inflated| inflated)
+    .map_err(|source| GraphqlError::DecodeContent {
         graphql: graphql.to_owned(),
         source,
-    };
-    let mut inflated = Vec::new();
-    std::io::Read::read_to_end(&mut flate2::read::GzDecoder::new(bytes), &mut inflated)
-        .map_err(failed)?;
-    serde_json::from_slice(&inflated).map_err(|error| failed(error.into()))
+    })
 }
 
 #[cfg(all(test, feature = "native"))]
@@ -521,11 +536,43 @@ mod request_encoding_tests {
         });
     }
 
-    #[test]
-    fn a_gzipped_answer_is_inflated() {
-        let body = br#"{"data":{"Agent":[]}}"#;
-        let value = inflate_json("graphql", &gzip(body).unwrap()).unwrap();
+    #[tokio::test]
+    async fn a_gzipped_answer_is_inflated() {
+        let body = bytes::Bytes::from_static(br#"{"data":{"Agent":[]}}"#);
+        let value = inflate_json("graphql", gzip(body.clone()).await.unwrap().into())
+            .await
+            .unwrap();
         assert_eq!(value, serde_json::json!({"data": {"Agent": []}}));
-        assert!(inflate_json("graphql", body).is_err());
+        assert!(inflate_json("graphql", body).await.is_err());
+    }
+
+    /// While a large body is gzipped or a large answer inflated, the runtime
+    /// thread serves its other tasks: on a single-threaded runtime, a task
+    /// polled after the codec starts still runs before the codec finishes.
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_codec_leaves_the_runtime_thread_free() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let answer =
+            serde_json::json!({ "data": { "Agent": [{ "_docID": "b".repeat(1 << 20) }] } });
+        let large = bytes::Bytes::from(serde_json::to_vec(&answer).unwrap());
+        let free = AtomicBool::new(false);
+        let ((compressed, free_while_compressing), ()) = tokio::join!(
+            biased;
+            async { (gzip(large).await, free.load(Ordering::SeqCst)) },
+            async { free.store(true, Ordering::SeqCst) },
+        );
+        assert!(free_while_compressing, "gzipping held the runtime thread");
+
+        free.store(false, Ordering::SeqCst);
+        let ((inflated, free_while_inflating), ()) = tokio::join!(
+            biased;
+            async {
+                let inflated = inflate_json("graphql", compressed.unwrap().into()).await;
+                (inflated, free.load(Ordering::SeqCst))
+            },
+            async { free.store(true, Ordering::SeqCst) },
+        );
+        assert!(free_while_inflating, "inflating held the runtime thread");
+        assert_eq!(inflated.unwrap(), answer);
     }
 }
