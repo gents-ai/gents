@@ -335,12 +335,12 @@ async fn materialized_request_session_is_selectable_and_matches_lean() {
                 requester_did: None,
                 trigger_doc_id: None,
             },
-            None,
-            None,
+            Default::default(),
             Some(agent.as_ref()),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .request;
         let mut routed = request(Some(agent.did()), &enqueued.session_id);
         routed.node_did = node_did;
         routed.requester_did = Some(agent.did().to_owned());

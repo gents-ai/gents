@@ -2522,3 +2522,95 @@ async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
         }
     }
 }
+
+/// Two ReadWrite admissions of one workspace, the second committing inside the
+/// first's open transaction (after its first write, before its commit): both
+/// write the workspace's `binding_revision`, so the first aborts at its commit,
+/// runs again over the second's binding and is refused. One writer is bound.
+#[tokio::test]
+async fn concurrent_exclusive_admissions_of_one_workspace_bind_one_writer() {
+    use gents_session::request::lifecycle::materialize::{
+        write_pending_agent_request_with_identity, PendingAgentRequest, PendingRequestIdentity,
+    };
+    let (db, _user, _client_access, behavior) =
+        signed_materializer_agent("workspace-admission-race").await;
+    let node = db.node.clone();
+    let agent_did = behavior.agent_did.clone();
+    let owner = behavior.node_did().to_owned();
+    let access = agent_access(&node, &behavior);
+    publish_workspace_for_agent(&access, "ws-race", &owner, &agent_did).await;
+    let lineage = gents_session::request::lifecycle::WorkspaceLineage {
+        workspace_id: Some("ws-race".into()),
+        workspace_owner_node_did: Some(owner.clone()),
+        workspace_authority: Some("readWrite".into()),
+        workspace_seal_hash: None,
+    };
+    let mut requests = Vec::new();
+    for request_id in ["writer-a", "writer-b"] {
+        let written = write_pending_agent_request_with_identity(
+            &node,
+            agent_did.parse().unwrap(),
+            PendingAgentRequest {
+                node_did: &owner,
+                agent_did: &agent_did,
+                content: "patch",
+                execution_origin: gents_session::request::lifecycle::ExecutionOrigin::Interactive,
+                trigger_lineage: gents_session::request::lifecycle::TriggerLineage {
+                    trigger_id: None,
+                    trigger_kind: Some("manual".into()),
+                    source_doc_id: None,
+                    correlation: None,
+                    trigger_context: None,
+                },
+                conversation_title: Some("writer"),
+                workspace_lineage: Some(&lineage),
+                requester_did: None,
+                trigger_doc_id: None,
+            },
+            PendingRequestIdentity {
+                request_id: Some(request_id),
+                ..Default::default()
+            },
+            Some(behavior.agent_identity.as_ref()),
+        )
+        .await
+        .unwrap();
+        requests.push(written.request);
+    }
+    let admit = |index: usize| {
+        gents_session::workspace::materialize_workspace_binding(
+            &node,
+            &requests[index].request_id,
+            &requests[index].doc_id,
+            behavior.agent_identity.as_ref(),
+            &lineage,
+        )
+    };
+    let second = Mutex::new(None);
+    let (first, paused) =
+        gents_store::config_client::ConfigApplyTxn::with_concurrent_write_before_commit(
+            admit(0),
+            async { *second.lock().unwrap() = Some(admit(1).await) },
+        )
+        .await;
+    assert!(paused, "the first admission wrote before its commit");
+    second
+        .into_inner()
+        .unwrap()
+        .expect("the second admission ran inside the first's transaction")
+        .expect("the second admission commits first");
+    let refused = first.expect_err("the first admission is refused over the second's binding");
+    assert!(
+        refused
+            .to_string()
+            .contains("unique Active ReadWrite binding already exists"),
+        "{refused:#}"
+    );
+    let response = access
+        .execute(r#"{ WorkspaceBinding(filter: {workspace_id: {_eq: "ws-race"}}) { request_id authority lifecycle_state } }"#)
+        .await
+        .unwrap();
+    let bindings = response["data"]["WorkspaceBinding"].as_array().unwrap();
+    assert_eq!(bindings.len(), 1, "{bindings:?}");
+    assert_eq!(bindings[0]["request_id"], "writer-b");
+}
