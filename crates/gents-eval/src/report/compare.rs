@@ -277,13 +277,15 @@ fn paired_trials(baseline: &CellReport, candidate: &CellReport) -> Vec<PairedTri
     trials.into_values().collect()
 }
 
-pub const COMPARED_FIGURES: [&str; 6] = [
+pub const COMPARED_FIGURES: [&str; 8] = [
     "first_request_prompt_tokens",
     "first_request_tool_schema_estimate",
     "input_tokens",
     "output_tokens",
     "model_turns",
     "wall_ms",
+    "first_request_first_token_ms",
+    "median_first_token_ms",
 ];
 
 /// Medians over each side's passing trials, which can be different cases;

@@ -8,6 +8,7 @@ use chrono::{DateTime, FixedOffset};
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::report::subject::median;
 use crate::{
     CallTotals, FirstRequest, PromptEstimate, SubjectUsage, ToolCallSplit, ToolCount, TrialUsage,
 };
@@ -47,6 +48,8 @@ pub(in crate::runner::embedded) struct CallRow {
     pub(in crate::runner::embedded) started_at: Option<String>,
     #[serde(default)]
     pub(in crate::runner::embedded) ended_at: Option<String>,
+    #[serde(default)]
+    pub(in crate::runner::embedded) first_token_at: Option<String>,
     #[serde(default)]
     pub(in crate::runner::embedded) prompt_tokens: Option<u64>,
     #[serde(default)]
@@ -108,6 +111,7 @@ pub(in crate::runner::embedded) async fn home_rows(access: &ConfigAccess) -> Res
                 .field(call::CALL_SEQ)
                 .field(call::STARTED_AT)
                 .field(call::ENDED_AT)
+                .field(call::FIRST_TOKEN_AT)
                 .field(call::PROMPT_TOKENS)
                 .field(call::COMPLETION_TOKENS)
                 .field(call::CACHED_INPUT_TOKENS)
@@ -235,6 +239,11 @@ pub(in crate::runner::embedded) fn subject_usage(
         .iter()
         .filter(|tool| is_own(&tool.request_doc_id) && tool.spawned_by_tool_call_doc_id.is_none())
         .collect();
+    let mut first_tokens: Vec<u64> = turns
+        .iter()
+        .filter_map(|call| first_token_ms(call))
+        .collect();
+    first_tokens.sort_unstable();
     let first_doc = stage_request_ids.first().and_then(|first| {
         requests
             .iter()
@@ -264,7 +273,15 @@ pub(in crate::runner::embedded) fn subject_usage(
                 .filter(|tool| tool.plugin_parent_tool_call_doc_id.is_none())
                 .map(|tool| (tool.started_at.as_deref(), tool.completed_at.as_deref())),
         ),
+        median_first_token_ms: median(&first_tokens),
     })
+}
+
+/// Lean `Runtime.EvalUsage.firstTokenMs`.
+fn first_token_ms(call: &CallRow) -> Option<u64> {
+    let started = DateTime::parse_from_rfc3339(call.started_at.as_deref()?).ok()?;
+    let token = DateTime::parse_from_rfc3339(call.first_token_at.as_deref()?).ok()?;
+    u64::try_from((token - started).num_milliseconds().max(0)).ok()
 }
 
 fn first_request(turns: &[&CallRow], request_doc_id: &str) -> Option<FirstRequest> {
@@ -274,6 +291,7 @@ fn first_request(turns: &[&CallRow], request_doc_id: &str) -> Option<FirstReques
         .min_by_key(|call| call.call_seq)?;
     Some(FirstRequest {
         prompt_tokens: first.prompt_tokens,
+        first_token_ms: first_token_ms(first),
         estimate: first
             .context_accounting_json
             .as_deref()

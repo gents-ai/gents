@@ -40,6 +40,7 @@ fn rows(home: &family::Home) -> HomeRows {
                 call_seq: Some(i64::try_from(call.seq).unwrap()),
                 started_at: at(call.started),
                 ended_at: at(call.ended),
+                first_token_at: at(call.first_token),
                 prompt_tokens: call.input,
                 completion_tokens: call.output,
                 cached_input_tokens: call.cached,
@@ -99,7 +100,14 @@ fn generated_trial_charges_match_lean() {
             subject: subject_usage(&rows, &home.session, &stages).map(|subject| family::Subject {
                 requests: subject.requests,
                 first_request: subject.first_request.is_some(),
-                first_prompt_tokens: subject.first_request.and_then(|first| first.prompt_tokens),
+                first_prompt_tokens: subject
+                    .first_request
+                    .as_ref()
+                    .and_then(|first| first.prompt_tokens),
+                first_request_first_token_ms: subject
+                    .first_request
+                    .and_then(|first| first.first_token_ms),
+                median_first_token_ms: subject.median_first_token_ms,
                 turns: totals(subject.turns),
                 compaction: totals(subject.compaction),
                 direct: count(subject.tool_calls.direct),

@@ -14,12 +14,15 @@ pub struct SubjectUsage {
     /// dispatch to the provider.
     pub model_ms: Option<u64>,
     pub tool_ms: Option<u64>,
+    /// Over the turns that streamed a token (Lean `Runtime.EvalUsage.firstTokenMs`).
+    pub median_first_token_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FirstRequest {
     pub prompt_tokens: Option<u64>,
     pub estimate: Option<PromptEstimate>,
+    pub first_token_ms: Option<u64>,
 }
 
 /// A rendered request's `context_accounting_json` components: the

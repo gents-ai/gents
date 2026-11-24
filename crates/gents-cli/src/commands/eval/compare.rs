@@ -175,6 +175,7 @@ mod tests {
             first_request: Some(gents::eval::FirstRequest {
                 prompt_tokens: Some(first),
                 estimate: None,
+                first_token_ms: Some(input / 2),
             }),
             turns: gents::eval::CallTotals {
                 calls: input / 100,
@@ -194,6 +195,7 @@ mod tests {
                 ..Default::default()
             },
             wall_ms: Some(input * 10),
+            median_first_token_ms: Some(input / 4),
             ..Default::default()
         }
     }
@@ -230,10 +232,10 @@ mod tests {
 
         let shown = eval(&fixture, &["show", "r1"]).await.unwrap();
         assert_eq!(
-            row(&shown, "baseline", 11),
+            row(&shown, "baseline", 13),
             vec![
                 "baseline", "evidence", "12", "900", "-", "1000", "100", "10", "0/1/2", "0/0/1",
-                "10.0s"
+                "10.0s", "500ms", "250ms"
             ],
             "no trial recorded a first-request estimate: {shown}"
         );
@@ -245,6 +247,7 @@ mod tests {
             "subject first_request prompt_tokens 500 estimate -",
             "subject tools direct 0 (0 failed) script 1 (0 failed) inside_script 2 (1 failed)",
             "subject wall 6.0s model - tool -",
+            "subject first_token first_request 300ms median 150ms",
         ] {
             assert!(trial.lines().any(|line| line == expected), "{expected:?} in\n{trial}");
         }
@@ -255,6 +258,10 @@ mod tests {
         assert_eq!(
             row(&compared, "input_tokens", 6),
             vec!["input_tokens", "1000", "600", "-400", "12", "-400"]
+        );
+        assert_eq!(
+            row(&compared, "median_first_token_ms", 6),
+            vec!["median_first_token_ms", "250", "150", "-100", "12", "-100"]
         );
         assert_eq!(
             row(&compared, "first_request_tool_schema_estimate", 6),
