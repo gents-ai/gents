@@ -100,6 +100,12 @@
     {
       "stage_id": "use",
       "prompt": "Add bin A-01 to the stockroom register: 40 hex bolts.",
+      "settle": true,
+      "continuation": {
+        "prompt": "Is bin A-01 in the register now?",
+        "max": 1,
+        "until": "bins"
+      },
       "checks": [
         {
           "check": "captured_fields_match",

@@ -114,6 +114,12 @@
     {
       "stage_id": "use",
       "prompt": "Use the parts desk to request 3 from bin B-12 for Dana.",
+      "settle": true,
+      "continuation": {
+        "prompt": "Did the request for bin B-12 go in?",
+        "max": 1,
+        "until": "requests"
+      },
       "checks": [
         {
           "check": "captured_fields_match",
