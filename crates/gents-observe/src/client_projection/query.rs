@@ -43,7 +43,6 @@ pub use document_patches::fetch_doc_patch;
 #[cfg(test)]
 pub(crate) use document_patches::supports_doc_patch_collection;
 pub(crate) use document_patches::{is_transcript_content_collection, OBSERVED_COLLECTIONS};
-pub(crate) use request_closure::close_request_rows_on;
 pub use session_transcript::{
     load_session_compaction_entries_on, load_session_context_store_on,
     load_session_diagnostics_store_on, load_session_transcript_page_on,
