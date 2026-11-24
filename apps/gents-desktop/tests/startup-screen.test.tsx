@@ -1,6 +1,6 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
   DesktopApiAdapter,
@@ -11,6 +11,8 @@ import type {
 
 import App from "../src/App";
 import { StartupScreen } from "../src/components/StartupScreen";
+import { setTimingForTests } from "../src/hooks/timing";
+import { projectStartupGate } from "../src/lib/startupGate";
 import { renderIn, testApp } from "./app-fixture";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 import { deferred } from "./deferred";
@@ -97,9 +99,10 @@ function bridge(
 }
 
 describe("desktop startup screen", () => {
-  it("explains an unreadable saved node config and offers a retry", async () => {
-    const app = testApp();
-    renderIn(app, <StartupScreen configurationPending initConfigStatus="unreadable" />);
+  it("explains an unreadable saved node config and offers a retry", () => {
+    const refreshed = vi.fn(async () => snapshot(true, true));
+    const app = testApp({ api: { fetchDesktopSnapshot: refreshed } });
+    renderIn(app, <StartupScreen gate="unreadable" />);
 
     expect(screen.getByTestId("startup-configuration-pending")).toHaveTextContent(
       "Unable to read saved node settings",
@@ -108,7 +111,9 @@ describe("desktop startup screen", () => {
       "The saved node settings could not be read. Try again to reload them.",
     );
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+  });
 
+  it("offers to connect a desktop the terminal-made node does not know", async () => {
     const served = {
       state: "running" as const,
       autoStart: true,
@@ -123,40 +128,27 @@ describe("desktop startup screen", () => {
       runtimeBooting: false,
       error: null,
     };
-    let paired = false;
     let nodeState: "stopped" | "running" = "stopped";
     const enrollManagedServer = vi
       .fn<() => Promise<void>>()
       .mockRejectedValueOnce(new Error("CLI client identity is unavailable"))
-      .mockImplementation(async () => {
-        paired = true;
-      });
+      .mockImplementation(async () => {});
     const fetchDesktopSnapshot = vi.fn(async () => snapshot(true, true));
     const terminalMade = testApp({
       api: {
-        managedServerStatus: vi.fn(async () => ({
-          ...served,
-          state: nodeState,
-          pairingReady: paired,
-        })),
+        managedServerStatus: vi.fn(async () => ({ ...served, state: nodeState })),
         enrollManagedServer,
         fetchDesktopSnapshot,
       },
     });
-    const pending = renderIn(
-      terminalMade,
-      <StartupScreen configurationPending initConfigStatus="configured" />,
-    );
+    const pending = renderIn(terminalMade, <StartupScreen gate="not_connected" />);
     const shown = within(pending.container);
 
     expect(shown.getByTestId("startup-configuration-pending")).toHaveTextContent(
-      "Loading saved node settings",
+      "This desktop is not connected to your node",
     );
     expect(await shown.findByTestId("startup-connect-blocked")).toHaveTextContent(
       "The node on this computer is not running. Start it in a terminal with `gents runtime server`, then choose Try again.",
-    );
-    expect(shown.getByTestId("startup-configuration-pending")).toHaveTextContent(
-      "This desktop is not connected to your node",
     );
 
     nodeState = "running";
@@ -176,11 +168,6 @@ describe("desktop startup screen", () => {
     await userEvent.click(connect);
     await waitFor(() => expect(fetchDesktopSnapshot).toHaveBeenCalledTimes(reads + 1));
     expect(enrollManagedServer).toHaveBeenCalledTimes(2);
-    await waitFor(() =>
-      expect(shown.getByTestId("startup-configuration-pending")).toHaveTextContent(
-        "Loading saved node settings",
-      ),
-    );
   });
 
   it("names local-agent observation instead of misreporting a configuration read", async () => {
@@ -499,5 +486,202 @@ describe("desktop startup screen", () => {
       expect(screen.getByTestId("setup-screen")).toBeInTheDocument();
     });
     expect(fetchDesktopSnapshot).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("startup waits on this device's saved settings, never on a node", () => {
+  afterEach(() => setTimingForTests(null));
+
+  const runningNode = (pairingReady: boolean): ManagedServerStatus => ({
+    state: "running",
+    autoStart: true,
+    nodeName: "Forge",
+    nodeDid: deployment.nodeDid,
+    graphql: deployment.graphql,
+    effectiveToolCeiling: null,
+    effectiveToolRoot: null,
+    suggestedToolRoot: "/Users/test",
+    pairingReady,
+    approvalRequired: false,
+    runtimeBooting: false,
+    error: null,
+  });
+
+  /* this desktop's local node: init.json is read, but the node's own
+     configuration is not, since the node has not answered yet */
+  function unansweredLocal(): DesktopClientSnapshot {
+    const running = snapshot(true, true);
+    return {
+      bootstrap: { ...running.bootstrap, initNodeDid: deployment.nodeDid },
+      client: {
+        ...running.client!,
+        operatorConfigAuthoritativeNodeDids: [],
+        deployments: [{ ...deployment, runtimeConnection: "connecting" }],
+      },
+    };
+  }
+
+  function withLocalNode(
+    fetchDesktopSnapshot: DesktopApiAdapter["fetchDesktopSnapshot"],
+    managedServerStatus: () => Promise<ManagedServerStatus>,
+  ) {
+    const base = bridge(
+      fetchDesktopSnapshot,
+      vi.fn(async () => unansweredLocal()),
+    );
+    return {
+      ...base,
+      supportsManagedServer: true,
+      api: { ...base.api, managedServerStatus, startManagedServer: vi.fn() },
+    };
+  }
+
+  it("shows the shell once saved settings are read, with the node still connecting", async () => {
+    render(
+      <App
+        bridge={withLocalNode(
+          vi.fn(async () => unansweredLocal()),
+          vi.fn(async () => runningNode(true)),
+        )}
+      />,
+    );
+
+    expect(await screen.findByTestId("app-shell")).toBeInTheDocument();
+    expect(screen.queryByText("Loading saved node settings")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("startup-configuration-pending"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByTestId("startup-screen")).not.toBeInTheDocument();
+    expect(screen.getAllByText(/Connecting/).length).toBeGreaterThan(0);
+  });
+
+  it("shows the shell when the local node's status cannot be read", async () => {
+    render(
+      <App
+        bridge={withLocalNode(
+          vi.fn(async () => unansweredLocal()),
+          vi.fn(async () => {
+            throw new Error("status unavailable");
+          }),
+        )}
+      />,
+    );
+
+    expect(await screen.findByTestId("app-shell")).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("startup-configuration-pending"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows the shell for a saved remote node that is still connecting", async () => {
+    const remote: DesktopClientSnapshot = {
+      bootstrap: {
+        ...bootstrap,
+        initConfigStatus: "absent",
+        initNodeName: null,
+        initNodeDid: null,
+        nodeHomeExists: false,
+        savedRuntimes: [savedPeer],
+      },
+      client: {
+        ...snapshot(false, true).client!,
+        deployments: [{ ...deployment, runtimeConnection: "connecting" }],
+      },
+    };
+    render(
+      <App
+        bridge={bridge(
+          vi.fn(async () => remote),
+          vi.fn(async () => remote),
+        )}
+      />,
+    );
+
+    expect(await screen.findByTestId("app-shell")).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("startup-configuration-pending"),
+    ).not.toBeInTheDocument();
+    expect(screen.getAllByText(/Connecting/).length).toBeGreaterThan(0);
+  });
+
+  it("names a settings read that never answers and retries it", async () => {
+    setTimingForTests({ configurationReadTimeoutMs: 50 });
+    const fetchDesktopSnapshot = vi
+      .fn<DesktopApiAdapter["fetchDesktopSnapshot"]>()
+      .mockReturnValueOnce(new Promise(() => {}))
+      .mockResolvedValue(snapshot(false, false));
+    render(
+      <App
+        bridge={bridge(
+          fetchDesktopSnapshot,
+          vi.fn(async () => snapshot(false, true)),
+        )}
+      />,
+    );
+
+    expect(await screen.findByTestId("startup-retry")).toBeInTheDocument();
+    expect(screen.getByTestId("startup-screen")).toHaveTextContent(
+      "Saved connections could not be read",
+    );
+    expect(screen.getByTestId("startup-screen")).toHaveTextContent(
+      "did not finish within",
+    );
+
+    await userEvent.click(screen.getByTestId("startup-retry"));
+    expect(await screen.findByTestId("setup-screen")).toBeInTheDocument();
+    expect(fetchDesktopSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("lands a settings read that answers after startup gave up on it", async () => {
+    setTimingForTests({ configurationReadTimeoutMs: 50 });
+    const late = deferred<DesktopClientSnapshot>();
+    render(
+      <App
+        bridge={bridge(
+          vi.fn(() => late.promise),
+          vi.fn(async () => snapshot(false, true)),
+        )}
+      />,
+    );
+
+    expect(await screen.findByTestId("startup-retry")).toBeInTheDocument();
+    late.resolve(snapshot(false, false));
+    expect(await screen.findByTestId("setup-screen")).toBeInTheDocument();
+    expect(screen.queryByTestId("startup-retry")).not.toBeInTheDocument();
+  });
+});
+
+describe("projectStartupGate", () => {
+  const node = (state: ManagedServerStatus["state"], pairingReady: boolean) =>
+    ({ state, pairingReady }) as ManagedServerStatus;
+
+  it("shows the shell once first run settles", () => {
+    expect(projectStartupGate(true, "configured", null)).toBe("shell");
+    expect(projectStartupGate(true, "unreadable", null)).toBe("shell");
+  });
+
+  it("names settings that cannot be read", () => {
+    expect(projectStartupGate(false, "unreadable", null)).toBe("unreadable");
+  });
+
+  it("offers the connect to a desktop the local node does not know", () => {
+    expect(projectStartupGate(false, "configured", node("stopped", false))).toBe(
+      "not_connected",
+    );
+    expect(projectStartupGate(false, "configured", node("running", false))).toBe(
+      "not_connected",
+    );
+  });
+
+  it("waits on the node's configuration in the shell, never on a loading screen", () => {
+    expect(projectStartupGate(false, "configured", node("running", true))).toBe(
+      "shell",
+    );
+    expect(projectStartupGate(false, "configured", node("stopped", true))).toBe(
+      "shell",
+    );
+    expect(projectStartupGate(false, "configured", null)).toBe("shell");
+    expect(projectStartupGate(false, "absent", null)).toBe("shell");
+    expect(projectStartupGate(false, null, null)).toBe("shell");
   });
 });

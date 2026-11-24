@@ -26,6 +26,7 @@ import { useManagedServerTrayControls } from "./hooks/useManagedServerTrayContro
 import { useMobileBackSwipe } from "./hooks/useMobileBackSwipe";
 import { useMobileVisualViewport } from "./hooks/useMobileVisualViewport";
 import { useNativeWindowReadiness } from "./hooks/useNativeWindowReadiness";
+import { projectStartupGate } from "./lib/startupGate";
 import {
   isMobileTauriShell,
   isWindowsTauriShell,
@@ -216,7 +217,7 @@ function AppReactions({ app, bridge }: { app: DesktopApp; bridge: DesktopBridge 
 }
 
 export function AppBody() {
-  const { actions } = useApp();
+  const { actions, stores } = useApp();
   const route = useRoute();
   const history = useHistory();
   useHistoryInputs(history);
@@ -231,10 +232,26 @@ export function AppBody() {
   const hasLocalNode = useFleet((state) =>
     fleetNodes(state).some((node) => isLocalNode(node, homeDid)),
   );
-  useNativeWindowReadiness(startup.phase === "ready" && firstRun.settled);
-  useOutsideLinks(
-    startup.phase === "ready" && firstRun.settled && firstRun.phase !== "active",
+  const localNode = stores.localServer.use.status();
+  const gate = projectStartupGate(
+    firstRun.settled,
+    firstRun.initConfigStatus,
+    localNode,
   );
+  /* a first run waiting on the node's configuration watches the node, so a
+     desktop the node does not know is offered the connect */
+  const waitsOnNode =
+    startup.phase === "ready" &&
+    !firstRun.settled &&
+    firstRun.initConfigStatus === "configured";
+  const { watchLocalServer } = actions;
+  useEffect(
+    () => (waitsOnNode ? watchLocalServer() : undefined),
+    [waitsOnNode, watchLocalServer],
+  );
+  const shellShown = startup.phase === "ready" && gate === "shell";
+  useNativeWindowReadiness(shellShown);
+  useOutsideLinks(shellShown && firstRun.phase !== "active");
 
   const titlebar = (
     <div className="titlebar-drag-region" data-tauri-drag-region>
@@ -287,14 +304,11 @@ export function AppBody() {
     );
   }
 
-  if (!firstRun.settled) {
+  if (gate !== "shell") {
     return (
       <>
         {titlebar}
-        <StartupScreen
-          configurationPending
-          initConfigStatus={firstRun.initConfigStatus}
-        />
+        <StartupScreen gate={gate} />
       </>
     );
   }

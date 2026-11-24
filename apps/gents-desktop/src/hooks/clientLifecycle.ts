@@ -76,6 +76,9 @@ export function createClientLifecycle({
       fleet.getState() === fleetBefore &&
       equal(withoutDeployments(before), withoutDeployments(next));
     if (!unchanged) client.setState({ snapshot: shareUnchanged(before, next) });
+    /* a read that answers after startup gave up on it still settles startup */
+    if (client.getState().startupPhase === "configuration-error")
+      setStartupPhase("loading-configuration");
     resolveStartupPhase(next);
     recover();
   });
@@ -106,8 +109,35 @@ export function createClientLifecycle({
     if (phase !== client.getState().startupPhase) setStartupPhase(phase);
   }
 
+  /** While startup waits on it, the read of this device's saved settings is
+      bounded: past the timeout startup shows the wait as an error with a
+      retry rather than loading forever, and a late answer still lands. */
   async function refreshSnapshot() {
     const publish = publication.begin();
+    const read = readSnapshot(publish);
+    if (client.getState().startupPhase !== "loading-configuration") return read;
+    const limit = timingConfig().configurationReadTimeoutMs;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const answered = await Promise.race([
+      read.then(() => true),
+      new Promise<false>((resolve) => {
+        timer = setTimeout(() => resolve(false), limit);
+      }),
+    ]);
+    clearTimeout(timer);
+    if (
+      !answered &&
+      publish.isCurrent() &&
+      client.getState().startupPhase === "loading-configuration"
+    ) {
+      setError(
+        `Reading this device’s saved settings did not finish within ${Math.round(limit / 1000)} seconds.`,
+      );
+      setStartupPhase("configuration-error");
+    }
+  }
+
+  async function readSnapshot(publish: ReturnType<typeof publication.begin>) {
     try {
       const next = await api.fetchDesktopSnapshot();
       if (publish.publish(next)) {
