@@ -312,7 +312,6 @@ async fn editor_recovers_blocked_and_limited_goals_without_submitting_the_draft(
     copy_editor_evidence(temp.path(), "editor-goal-recovery-canonical.json")
 }
 
-#[cfg(feature = "editor-e2e")]
 /// Releases the reply every request not answered otherwise waits on.
 const PROVIDER_GATE: &str = "provider";
 /// Releases the Goal continuation after a steered reply.
@@ -395,6 +394,7 @@ fn provider_reply(
     )
 }
 
+#[cfg(feature = "editor-e2e")]
 fn copy_editor_evidence(root: &Path, name: &str) -> Result<()> {
     let artifacts = std::fs::read_to_string(root.join("editor-artifacts-path"))?;
     let artifacts = std::fs::canonicalize(artifacts)?;
