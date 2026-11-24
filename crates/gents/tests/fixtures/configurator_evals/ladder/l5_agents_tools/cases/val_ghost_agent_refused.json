@@ -77,7 +77,7 @@
           "params": {
             "any": [
               {
-                "matches": "(?i)(not (found|exist|available)|missing|could ?n[o']t find|can ?n[o']t find|unable to find|no (such )?(assistant|agent)|does ?n[o']t exist|did ?n[o']t find)"
+                "matches": "(?i)(not (found|exist|available|there|present|on this node)|missing|(could|can|did|does|is) ?n[o'\u2019]t (find|exist|there|present|here|on)|cannot find|unable to find|no (such )?(assistant|agent)|no harbou?r clerk|there is no|no match)"
               }
             ]
           },
