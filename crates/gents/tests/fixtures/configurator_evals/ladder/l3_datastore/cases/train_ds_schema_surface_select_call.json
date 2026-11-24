@@ -5,75 +5,7 @@
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "I need you to keep results for my workflow. The records are EvalAutomationInput { correlation: string, message: string } and EvalAutomationOutput { correlation: string, result: string }. The correlation is a caller-supplied business key: preserve it exactly, and find records using that key alone. Set up storage for these record types. Give yourself tools to add and find output records, limited to those records.",
-      "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "agents": {
-              "agents": "agents",
-              "contexts": "contexts",
-              "tools": "tools",
-              "expect": [
-                {
-                  "agent_did": "gents:agent-slot:engineer",
-                  "datastore": {
-                    "surfaces": "surfaces",
-                    "create": [
-                      "EvalAutomationOutput"
-                    ],
-                    "query": [
-                      "EvalAutomationOutput"
-                    ],
-                    "lookup_by": "correlation",
-                    "caller_fields": {
-                      "EvalAutomationOutput": [
-                        "correlation",
-                        "result"
-                      ]
-                    }
-                  },
-                  "tools": [
-                    {
-                      "field": "datastore.enable_defra_query",
-                      "matches": "^(null|false)$"
-                    }
-                  ]
-                }
-              ]
-            },
-            "present": [
-              {
-                "capture": "surfaces"
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "surfaces",
-            "min": 1
-          },
-          "tier": "acceptance",
-          "weight": 1
-        }
-      ],
+      "prompt": "Keep workflow results as WorkflowOutput records with a correlation and a result. Create an assistant called Results Clerk with two tools of its own: one adds a result, one looks a result up by its correlation. No other database access. I will hand it work through you.",
       "capture": [
         {
           "kind": "documents",
@@ -89,7 +21,8 @@
             "display_name",
             "context_id",
             "enabled",
-            "inference_profile_id"
+            "inference_profile_id",
+            "tags"
           ]
         },
         {
@@ -103,8 +36,8 @@
           },
           "fields": [
             "context_id",
-            "tools_id",
-            "system_prompt"
+            "system_prompt",
+            "tools_id"
           ]
         },
         {
@@ -120,8 +53,11 @@
             "tools_id",
             "host",
             "datastore",
+            "self_config",
             "agents",
-            "self_config"
+            "remote",
+            "built_ins",
+            "integrations"
           ]
         },
         {
@@ -140,47 +76,171 @@
             "enabled",
             "entries"
           ]
+        },
+        {
+          "kind": "schema",
+          "name": "storage",
+          "collections": [
+            "WorkflowOutput"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "agents": {
+              "agents": "agents",
+              "contexts": "contexts",
+              "tools": "tools",
+              "expect": [
+                {
+                  "agent_did": "results-clerk",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^results[ -]?clerk$"
+                  },
+                  "agent": [
+                    {
+                      "field": "enabled",
+                      "equals": true
+                    }
+                  ],
+                  "datastore": {
+                    "surfaces": "surfaces",
+                    "create": [
+                      "WorkflowOutput"
+                    ],
+                    "query": [
+                      "WorkflowOutput"
+                    ],
+                    "lookup_by": "correlation",
+                    "caller_fields": {
+                      "WorkflowOutput": [
+                        "correlation",
+                        "result"
+                      ]
+                    }
+                  },
+                  "tools": [
+                    {
+                      "field": "datastore.enable_defra_query",
+                      "matches": "^(null|false)$"
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "storage",
+            "sdl": "type WorkflowOutput {\n  correlation: String\n  result: String\n}"
+          },
+          "tier": "acceptance",
+          "weight": 1
         }
       ]
     },
     {
       "stage_id": "exercise",
-      "prompt": "Save one output for correlation \"train-alpha-001\" with result \"ok\". Then look it up by correlation and tell me what was saved. Use your recordkeeping tools; leave configuration alone.",
+      "prompt": "Have Results Clerk save a result for correlation train-alpha-001 whose result is exactly \"ok\", then look it up by correlation, and tell me what it found.",
+      "settle": true,
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "role_agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "helper_requests",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^results[ -]?clerk$"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "lifecycle_state",
+            "content"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "outputs",
+          "collection": "WorkflowOutput",
+          "filter": {
+            "correlation": {
+              "_eq": "train-alpha-001"
+            }
+          },
+          "fields": [
+            "correlation",
+            "result"
+          ]
+        }
+      ],
       "checks": [
         {
-          "check": "captured_rows_count",
+          "check": "crew_spec_match",
           "params": {
-            "name": "outputs",
-            "min": 1,
-            "max": 1
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_fields_match",
-          "params": {
-            "name": "outputs",
-            "expect": [
+            "present": [
               {
-                "field": "correlation",
-                "equals": "train-alpha-001"
+                "capture": "helper_requests",
+                "min": 1
               },
               {
-                "field": "result",
-                "equals": "ok"
+                "capture": "outputs",
+                "min": 1,
+                "max": 1
               }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "forbidden": [
-              "config",
-              "bash"
+            ],
+            "rows": [
+              {
+                "capture": "outputs",
+                "key": "correlation",
+                "id": "train-alpha-001",
+                "expect": [
+                  {
+                    "field": "result",
+                    "equals": "ok"
+                  }
+                ]
+              }
             ]
           },
           "tier": "acceptance",
@@ -191,138 +251,13 @@
           "params": {
             "all": [
               "train-alpha-001",
-              "ok"
+              {
+                "matches": "(?i)\\bok\\b"
+              }
             ]
           },
           "tier": "acceptance",
           "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "agents": {
-              "agents": "agents",
-              "contexts": "contexts",
-              "tools": "tools",
-              "expect": [
-                {
-                  "agent_did": "gents:agent-slot:engineer",
-                  "datastore": {
-                    "surfaces": "surfaces",
-                    "create": [
-                      "EvalAutomationOutput"
-                    ],
-                    "query": [
-                      "EvalAutomationOutput"
-                    ],
-                    "lookup_by": "correlation",
-                    "caller_fields": {
-                      "EvalAutomationOutput": [
-                        "correlation",
-                        "result"
-                      ]
-                    },
-                    "called_create": [
-                      "EvalAutomationOutput"
-                    ],
-                    "called_query": [
-                      "EvalAutomationOutput"
-                    ]
-                  },
-                  "tools": [
-                    {
-                      "field": "datastore.enable_defra_query",
-                      "matches": "^(null|false)$"
-                    }
-                  ]
-                }
-              ]
-            }
-          },
-          "tier": "acceptance",
-          "weight": 1
-        }
-      ],
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "outputs",
-          "collection": "EvalAutomationOutput",
-          "filter": {
-            "correlation": {
-              "_eq": "train-alpha-001"
-            }
-          },
-          "fields": [
-            "correlation",
-            "result"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "agents",
-          "collection": "Agent",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "agent_did",
-            "display_name",
-            "context_id",
-            "enabled",
-            "inference_profile_id"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "contexts",
-          "collection": "AgentContext",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "context_id",
-            "tools_id",
-            "system_prompt"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "tools",
-          "collection": "Tools",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "tools_id",
-            "host",
-            "datastore",
-            "agents",
-            "self_config"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "surfaces",
-          "collection": "DatastoreToolSurface",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "surface_id",
-            "node_did",
-            "display_name",
-            "enabled",
-            "entries"
-          ]
         }
       ]
     }

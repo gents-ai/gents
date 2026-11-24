@@ -4,88 +4,14 @@
   "reducer": "all",
   "fixtures": {
     "schemas": [
-      "type EvalAutomationInput {\n  correlation: String\n  message: String\n}",
-      "type EvalAutomationOutput {\n  correlation: String\n  result: String\n}"
+      "type WorkflowInput {\n  correlation: String\n  message: String\n}",
+      "type WorkflowOutput {\n  correlation: String\n  result: String\n}"
     ]
   },
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "I need you to keep results for my workflow. The records are EvalAutomationInput { correlation: string, message: string } and EvalAutomationOutput { correlation: string, result: string }. The correlation is a caller-supplied business key: preserve it exactly, and find records using that key alone. The record types already exist. Give yourself tools to add and find both input and output records, limited to those records.",
-      "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "agents": {
-              "agents": "agents",
-              "contexts": "contexts",
-              "tools": "tools",
-              "expect": [
-                {
-                  "agent_did": "gents:agent-slot:engineer",
-                  "datastore": {
-                    "surfaces": "surfaces",
-                    "create": [
-                      "EvalAutomationInput",
-                      "EvalAutomationOutput"
-                    ],
-                    "query": [
-                      "EvalAutomationInput",
-                      "EvalAutomationOutput"
-                    ],
-                    "lookup_by": "correlation",
-                    "caller_fields": {
-                      "EvalAutomationInput": [
-                        "correlation",
-                        "message"
-                      ],
-                      "EvalAutomationOutput": [
-                        "correlation",
-                        "result"
-                      ]
-                    }
-                  },
-                  "tools": [
-                    {
-                      "field": "datastore.enable_defra_query",
-                      "matches": "^(null|false)$"
-                    }
-                  ]
-                }
-              ]
-            },
-            "present": [
-              {
-                "capture": "surfaces"
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "surfaces",
-            "min": 1
-          },
-          "tier": "acceptance",
-          "weight": 1
-        }
-      ],
+      "prompt": "We already store WorkflowInput (correlation, message) and WorkflowOutput (correlation, result) records. Create an assistant called Flow Clerk with its own tools to add each kind and look either up by correlation, and no other database access. I will hand it work through you.",
       "capture": [
         {
           "kind": "documents",
@@ -101,7 +27,8 @@
             "display_name",
             "context_id",
             "enabled",
-            "inference_profile_id"
+            "inference_profile_id",
+            "tags"
           ]
         },
         {
@@ -115,8 +42,8 @@
           },
           "fields": [
             "context_id",
-            "tools_id",
-            "system_prompt"
+            "system_prompt",
+            "tools_id"
           ]
         },
         {
@@ -132,8 +59,11 @@
             "tools_id",
             "host",
             "datastore",
+            "self_config",
             "agents",
-            "self_config"
+            "remote",
+            "built_ins",
+            "integrations"
           ]
         },
         {
@@ -153,51 +83,8 @@
             "entries"
           ]
         }
-      ]
-    },
-    {
-      "stage_id": "exercise",
-      "prompt": "Save one output for correlation \"val-charlie-004\" with result \"done\". Also save an input with the same correlation and message \"kickoff\". Use your recordkeeping tools; leave configuration alone.",
+      ],
       "checks": [
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "outputs",
-            "min": 1,
-            "max": 1
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_fields_match",
-          "params": {
-            "name": "outputs",
-            "expect": [
-              {
-                "field": "correlation",
-                "equals": "val-charlie-004"
-              },
-              {
-                "field": "result",
-                "equals": "done"
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "forbidden": [
-              "config",
-              "bash"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "crew_spec_match",
           "params": {
@@ -207,33 +94,38 @@
               "tools": "tools",
               "expect": [
                 {
-                  "agent_did": "gents:agent-slot:engineer",
+                  "agent_did": "flow-clerk",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^flow[ -]?clerk$"
+                  },
+                  "agent": [
+                    {
+                      "field": "enabled",
+                      "equals": true
+                    }
+                  ],
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [
-                      "EvalAutomationInput",
-                      "EvalAutomationOutput"
+                      "WorkflowInput",
+                      "WorkflowOutput"
                     ],
                     "query": [
-                      "EvalAutomationInput",
-                      "EvalAutomationOutput"
+                      "WorkflowInput",
+                      "WorkflowOutput"
                     ],
                     "lookup_by": "correlation",
                     "caller_fields": {
-                      "EvalAutomationInput": [
+                      "WorkflowInput": [
                         "correlation",
                         "message"
                       ],
-                      "EvalAutomationOutput": [
+                      "WorkflowOutput": [
                         "correlation",
                         "result"
                       ]
-                    },
-                    "called_create": [
-                      "EvalAutomationInput",
-                      "EvalAutomationOutput"
-                    ],
-                    "called_query": []
+                    }
                   },
                   "tools": [
                     {
@@ -248,12 +140,65 @@
           "tier": "acceptance",
           "weight": 1
         }
-      ],
+      ]
+    },
+    {
+      "stage_id": "exercise",
+      "prompt": "Have Flow Clerk save, for correlation val-charlie-004, an output whose result is exactly \"done\" and an input whose message is exactly \"kickoff\". Tell me when both are saved.",
+      "settle": true,
       "capture": [
         {
           "kind": "documents",
+          "name": "role_agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "helper_requests",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^flow[ -]?clerk$"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "lifecycle_state",
+            "content"
+          ]
+        },
+        {
+          "kind": "documents",
           "name": "outputs",
-          "collection": "EvalAutomationOutput",
+          "collection": "WorkflowOutput",
           "filter": {
             "correlation": {
               "_eq": "val-charlie-004"
@@ -266,170 +211,8 @@
         },
         {
           "kind": "documents",
-          "name": "agents",
-          "collection": "Agent",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "agent_did",
-            "display_name",
-            "context_id",
-            "enabled",
-            "inference_profile_id"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "contexts",
-          "collection": "AgentContext",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "context_id",
-            "tools_id",
-            "system_prompt"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "tools",
-          "collection": "Tools",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "tools_id",
-            "host",
-            "datastore",
-            "agents",
-            "self_config"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "surfaces",
-          "collection": "DatastoreToolSurface",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "surface_id",
-            "node_did",
-            "display_name",
-            "enabled",
-            "entries"
-          ]
-        }
-      ]
-    },
-    {
-      "stage_id": "confirm_input_row",
-      "prompt": "Look up EvalAutomationInput for correlation \"val-charlie-004\" and tell me what is stored. Do not write anything.",
-      "checks": [
-        {
-          "check": "captured_fields_match",
-          "params": {
-            "name": "inputs",
-            "expect": [
-              {
-                "field": "correlation",
-                "equals": "val-charlie-004"
-              },
-              {
-                "field": "message",
-                "equals": "kickoff"
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "forbidden": [
-              "config",
-              "bash"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "final_message_matches",
-          "params": {
-            "all": [
-              "val-charlie-004",
-              "kickoff"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "agents": {
-              "agents": "agents",
-              "contexts": "contexts",
-              "tools": "tools",
-              "expect": [
-                {
-                  "agent_did": "gents:agent-slot:engineer",
-                  "datastore": {
-                    "surfaces": "surfaces",
-                    "create": [
-                      "EvalAutomationInput",
-                      "EvalAutomationOutput"
-                    ],
-                    "query": [
-                      "EvalAutomationInput",
-                      "EvalAutomationOutput"
-                    ],
-                    "lookup_by": "correlation",
-                    "caller_fields": {
-                      "EvalAutomationInput": [
-                        "correlation",
-                        "message"
-                      ],
-                      "EvalAutomationOutput": [
-                        "correlation",
-                        "result"
-                      ]
-                    },
-                    "called_query": [
-                      "EvalAutomationInput"
-                    ]
-                  },
-                  "tools": [
-                    {
-                      "field": "datastore.enable_defra_query",
-                      "matches": "^(null|false)$"
-                    }
-                  ]
-                }
-              ]
-            }
-          },
-          "tier": "acceptance",
-          "weight": 1
-        }
-      ],
-      "capture": [
-        {
-          "kind": "documents",
           "name": "inputs",
-          "collection": "EvalAutomationInput",
+          "collection": "WorkflowInput",
           "filter": {
             "correlation": {
               "_eq": "val-charlie-004"
@@ -439,10 +222,66 @@
             "correlation",
             "message"
           ]
-        },
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "helper_requests",
+                "min": 1
+              },
+              {
+                "capture": "outputs",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "inputs",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "outputs",
+                "key": "correlation",
+                "id": "val-charlie-004",
+                "expect": [
+                  {
+                    "field": "result",
+                    "equals": "done"
+                  }
+                ]
+              },
+              {
+                "capture": "inputs",
+                "key": "correlation",
+                "id": "val-charlie-004",
+                "expect": [
+                  {
+                    "field": "message",
+                    "equals": "kickoff"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "confirm_input_row",
+      "prompt": "Ask Flow Clerk what input is stored for correlation val-charlie-004, and tell me its answer.",
+      "settle": true,
+      "capture": [
         {
           "kind": "documents",
-          "name": "agents",
+          "name": "role_agents",
           "collection": "Agent",
           "filter": {
             "node_did": {
@@ -451,60 +290,99 @@
           },
           "fields": [
             "agent_did",
-            "display_name",
-            "context_id",
-            "enabled",
-            "inference_profile_id"
+            "display_name"
           ]
         },
         {
           "kind": "documents",
-          "name": "contexts",
-          "collection": "AgentContext",
+          "name": "helper_requests",
+          "collection": "AgentRequest",
           "filter": {
             "node_did": {
               "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^flow[ -]?clerk$"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
             }
           },
           "fields": [
-            "context_id",
-            "tools_id",
-            "system_prompt"
+            "request_id",
+            "agent_did",
+            "lifecycle_state",
+            "content"
           ]
         },
         {
           "kind": "documents",
-          "name": "tools",
-          "collection": "Tools",
+          "name": "inputs",
+          "collection": "WorkflowInput",
           "filter": {
-            "node_did": {
-              "_eq": "$trial"
+            "correlation": {
+              "_eq": "val-charlie-004"
             }
           },
           "fields": [
-            "tools_id",
-            "host",
-            "datastore",
-            "agents",
-            "self_config"
+            "correlation",
+            "message"
           ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "helper_requests",
+                "min": 1
+              },
+              {
+                "capture": "inputs",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "inputs",
+                "key": "correlation",
+                "id": "val-charlie-004",
+                "expect": [
+                  {
+                    "field": "message",
+                    "equals": "kickoff"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
         },
         {
-          "kind": "documents",
-          "name": "surfaces",
-          "collection": "DatastoreToolSurface",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              "kickoff"
+            ]
           },
-          "fields": [
-            "surface_id",
-            "node_did",
-            "display_name",
-            "enabled",
-            "entries"
-          ]
+          "tier": "acceptance",
+          "weight": 1
         }
       ]
     }

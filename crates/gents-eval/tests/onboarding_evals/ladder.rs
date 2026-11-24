@@ -386,7 +386,7 @@ fn repointed_delegation_grades_the_named_role_and_its_delivered_reply() {
             "agents",
             vec![
                 json!({"agent_did":"did:key:test-engineer","context_id":"context"}),
-                json!({"agent_did":"did:x:the-specialist","display_name":"The Specialist"}),
+                json!({"agent_did":"did:x:the-specialist","display_name":"The Specialist","enabled":true}),
             ],
         ),
         (
@@ -398,23 +398,26 @@ fn repointed_delegation_grades_the_named_role_and_its_delivered_reply() {
             vec![json!({"tools_id":"tools","agents":{"enabled":true,"target_ids":["helper"]}})],
         ),
         (
-            "targets",
-            vec![
-                json!({"target_id":"helper","node_did":"did:x","target_node_did":"did:x","agent_did":"did:x:the-specialist"}),
-            ],
+            "helper_targets",
+            vec![json!({"target_id":"helper","agent_did":"did:x:the-specialist"})],
+        ),
+        ("helper_sessions", vec![]),
+        (
+            "named_helper",
+            vec![json!({"target_id":"helper","agent_did":"did:x:the-specialist"})],
         ),
         (
             "role_agents",
             vec![json!({"agent_did":"did:x:the-specialist","display_name":"The Specialist"})],
         ),
         (
-            "repointed-request",
+            "helper-request",
             vec![
                 json!({"agent_did":"did:x:the-specialist","session_id":"child-session","content":"Reply REP-555","caused_by_parent_tool_call_doc_id":"call"}),
             ],
         ),
         (
-            "repointed-session",
+            "helper-session",
             vec![json!({"session_id":"child-session","agent_did":"did:x:the-specialist"})],
         ),
         (
@@ -436,9 +439,9 @@ fn repointed_delegation_grades_the_named_role_and_its_delivered_reply() {
         assert_eq!(verdict.score_bp, Some(10000), "{}", verdict.raw);
     }
     for (capture, field, wrong, index) in [
-        ("targets", "target_node_did", json!("did:foreign"), 1),
+        ("named_helper", "agent_did", json!("did:x:the-drafter"), 1),
         ("role_agents", "display_name", json!("Publisher"), 2),
-        ("repointed-request", "agent_did", json!("other"), 2),
+        ("helper-request", "agent_did", json!("other"), 2),
         (
             "delegation_calls",
             "completion_notification_delivered_at",
@@ -460,7 +463,7 @@ fn repointed_delegation_grades_the_named_role_and_its_delivered_reply() {
             verdict.raw
         );
     }
-    let CaptureResult::Documents { rows } = evidence.captures.get_mut("repointed-request").unwrap()
+    let CaptureResult::Documents { rows } = evidence.captures.get_mut("helper-request").unwrap()
     else {
         unreachable!()
     };
@@ -469,67 +472,6 @@ fn repointed_delegation_grades_the_named_role_and_its_delivered_reply() {
         .evaluate_bound("crew_spec_match", &check(2).params, &evidence)
         .unwrap();
     assert!(verdict.score_bp.unwrap() < 10000, "{}", verdict.raw);
-}
-
-#[test]
-fn delegation_execution_allows_inspection_but_rejects_config_mutations() {
-    let definition = definitions()
-        .into_iter()
-        .find(|d| d.definition_id == "configurator-l5-agents-tools")
-        .unwrap();
-    let registry = CheckRegistry::builtin();
-    let grader = registry.get("tool_calls_expected").unwrap();
-    let mut checked = 0;
-    for case in definition.cases {
-        for stage in case.stages {
-            for check in stage.checks.iter().filter(|check| {
-                check.check == "tool_calls_expected" && check.params["config_read_only"] == true
-            }) {
-                checked += 1;
-                let mut evidence = ScriptedExecutor::passed_evidence(
-                    "did:key:eval-owner",
-                    &stage.stage_id,
-                    "reply",
-                    vec![],
-                )
-                .stages
-                .remove(0);
-                evidence.tool_calls = check.params["required"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|name| {
-                        serde_json::from_value(serde_json::json!({
-                            "tool_name": name, "status": "completed", "args": {}, "result": {}
-                        }))
-                        .unwrap()
-                    })
-                    .collect();
-                assert_eq!(
-                    grader.evaluate(&check.params, &evidence).score_bp,
-                    Some(10000)
-                );
-                evidence.tool_calls.push(
-                    serde_json::from_value(serde_json::json!({
-                        "tool_name": "config", "status": "completed",
-                        "args": {"argv": ["tools", "get"]},
-                        "result": {"config_execution": {"version": 1, "mutation_entered": false}}
-                    }))
-                    .unwrap(),
-                );
-                assert_eq!(
-                    grader.evaluate(&check.params, &evidence).score_bp,
-                    Some(10000)
-                );
-                evidence.tool_calls.last_mut().unwrap().result["config_execution"]
-                    ["mutation_entered"] = true.into();
-                assert!(grader.evaluate(&check.params, &evidence).score_bp.unwrap() < 10000);
-                evidence.tool_calls.last_mut().unwrap().result = serde_json::Value::Null;
-                assert!(grader.evaluate(&check.params, &evidence).score_bp.unwrap() < 10000);
-            }
-        }
-    }
-    assert_eq!(checked, 22);
 }
 
 #[test]

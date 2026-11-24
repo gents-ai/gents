@@ -4,9 +4,31 @@
   "coverage": [
     "context and tool selection",
     "least privilege",
-    "protected Engineer",
     "in-place edits",
     "reentry",
-    "restore a prompt in place"
+    "restore a prompt in place",
+    "the agent does its job"
+  ],
+  "subject_fixtures": [
+    {
+      "name": "returns-desk-templates",
+      "why": "Two instruction templates the node already holds, one live and one approved, so restore-desk-instructions starts from the user's request and not from a dictated setup.",
+      "documents": {
+        "contexts": [
+          {
+            "context_id": "desk-live",
+            "display_name": "Returns desk",
+            "description": "Production template",
+            "system_prompt": "Send return labels to pier two."
+          },
+          {
+            "context_id": "desk-approved",
+            "display_name": "Returns desk",
+            "description": "Signed-off template",
+            "system_prompt": "Route return labels to pier seven. Keep the carton code."
+          }
+        ]
+      }
+    }
   ]
 }

@@ -11,82 +11,7 @@
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "Create an assistant named Clerk for restock notes. Give it its own instructions and tool permissions, appropriate for its role: acknowledge incoming restock notes by SKU. It must not modify files or run shell commands. Use our existing model settings. Keep your own role and permissions unchanged. Let it read files but do not grant other capabilities. Our RestockNote records carry sku and handoff_id; handoff_id identifies each note through its processing. When a new note arrives, have Clerk acknowledge its sku. Keep the app’s standard run record so I can see whether each run succeeded or failed. Do not submit a restock note yet.",
-      "checks": [
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "agents": {
-              "agents": "agents",
-              "contexts": "contexts",
-              "tools": "tools",
-              "expect": [
-                {
-                  "agent_did": "clerk",
-                  "agent": [
-                    {
-                      "field": "display_name",
-                      "matches": "(?i)^clerk$"
-                    },
-                    {
-                      "field": "enabled",
-                      "equals": true
-                    }
-                  ],
-                  "context": [
-                    {
-                      "field": "system_prompt",
-                      "matches": "(?i)(restock|sku)"
-                    }
-                  ],
-                  "tools": [
-                    {
-                      "field": "host.files.mode",
-                      "equals": "ReadOnly"
-                    },
-                    {
-                      "field": "host.bash.mode",
-                      "matches": "^(Off|null)$"
-                    },
-                    {
-                      "field": "self_config.enable_self_config",
-                      "matches": "^(null|false)$"
-                    },
-                    {
-                      "field": "agents.enabled",
-                      "matches": "^(null|false)$"
-                    },
-                    {
-                      "field": "datastore.enable_defra_query",
-                      "matches": "^(null|false)$"
-                    },
-                    {
-                      "field": "datastore.datastore_tool_surface_ids",
-                      "matches": "^(null|\\[\\])$"
-                    }
-                  ],
-                  "source_match": {
-                    "field": "display_name",
-                    "matches": "(?i)^clerk$"
-                  }
-                }
-              ]
-            }
-          },
-          "tier": "acceptance",
-          "weight": 5
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "agents",
-            "min": 2,
-            "max": 2
-          },
-          "tier": "acceptance",
-          "weight": 1
-        }
-      ],
+      "prompt": "Create an assistant called Clerk that acknowledges incoming restock notes by SKU; it may read files but nothing more. Whenever a new RestockNote record arrives, have Clerk acknowledge its sku, and keep a record of whether each run succeeded. Do not add a note yet.",
       "capture": [
         {
           "kind": "documents",
@@ -141,6 +66,71 @@
             "integrations"
           ]
         }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "agents": {
+              "agents": "agents",
+              "contexts": "contexts",
+              "tools": "tools",
+              "expect": [
+                {
+                  "agent_did": "clerk",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^clerk$"
+                  },
+                  "agent": [
+                    {
+                      "field": "display_name",
+                      "matches": "(?i)^clerk$"
+                    },
+                    {
+                      "field": "enabled",
+                      "equals": true
+                    }
+                  ],
+                  "context": [
+                    {
+                      "field": "system_prompt",
+                      "matches": "(?i)(restock|sku)"
+                    }
+                  ],
+                  "tools": [
+                    {
+                      "field": "host.files.mode",
+                      "equals": "ReadOnly"
+                    },
+                    {
+                      "field": "host.bash.mode",
+                      "matches": "^(Off|null)$"
+                    },
+                    {
+                      "field": "self_config.enable_self_config",
+                      "matches": "^(null|false)$"
+                    },
+                    {
+                      "field": "agents.enabled",
+                      "matches": "^(null|false)$"
+                    },
+                    {
+                      "field": "datastore.enable_defra_query",
+                      "matches": "^(null|false)$"
+                    },
+                    {
+                      "field": "datastore.datastore_tool_surface_ids",
+                      "matches": "^(null|\\[\\])$"
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
       ]
     },
     {
@@ -154,42 +144,20 @@
       },
       "checks": [
         {
-          "check": "captured_fields_match",
-          "params": {
-            "name": "clerk_requests",
-            "min_rows": 1,
-            "max_rows": 1,
-            "expect": [
-              {
-                "field": "lifecycle_state",
-                "equals": "completed"
-              },
-              {
-                "field": "caused_by_trigger_id",
-                "matches": ".+"
-              },
-              {
-                "field": "content",
-                "contains": "A-100"
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 3
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "clerk_outcomes",
-            "min": 1,
-            "max": 1
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
           "check": "crew_spec_match",
           "params": {
+            "present": [
+              {
+                "capture": "clerk_requests",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "clerk_outcomes",
+                "min": 1,
+                "max": 1
+              }
+            ],
             "links": [
               {
                 "capture": "clerk_fires",
@@ -282,6 +250,15 @@
             },
             "purpose": {
               "_eq": "normal"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            },
+            "content": {
+              "_like": "%A-100%"
+            },
+            "caused_by_trigger_id": {
+              "_ne": null
             }
           },
           "fields": [

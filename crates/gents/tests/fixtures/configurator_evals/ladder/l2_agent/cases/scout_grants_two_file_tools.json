@@ -2,85 +2,26 @@
   "case_id": "scout-grants-two-file-tools",
   "split": "train",
   "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "inbox/march.txt",
+        "contents": "March\nDunmore invoice D-221 is disputed: the crate count was short by four.\n"
+      },
+      {
+        "path": "inbox/april.txt",
+        "contents": "April\nKestrel order K-17 shipped complete.\n"
+      },
+      {
+        "path": "inbox/may.txt",
+        "contents": "May\nNo open items.\n"
+      }
+    ]
+  },
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "Create an assistant named Scout for finding information. Give it its own instructions and tool permissions, appropriate for its role: find relevant local files and report what they say. It must not modify files or run shell commands. Use our existing model settings. Keep your own role and permissions unchanged.",
-      "checks": [
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "agents": {
-              "agents": "agents",
-              "contexts": "contexts",
-              "tools": "tools",
-              "expect": [
-                {
-                  "agent_did": "scout",
-                  "agent": [
-                    {
-                      "field": "display_name",
-                      "matches": "(?i)^scout$"
-                    },
-                    {
-                      "field": "enabled",
-                      "equals": true
-                    }
-                  ],
-                  "context": [
-                    {
-                      "field": "system_prompt",
-                      "matches": "(?i)(find|search|scout)"
-                    }
-                  ],
-                  "tools": [
-                    {
-                      "field": "host.files.mode",
-                      "equals": "ReadOnly"
-                    },
-                    {
-                      "field": "host.bash.mode",
-                      "matches": "^(Off|null)$"
-                    },
-                    {
-                      "field": "self_config.enable_self_config",
-                      "matches": "^(null|false)$"
-                    },
-                    {
-                      "field": "agents.enabled",
-                      "matches": "^(null|false)$"
-                    },
-                    {
-                      "field": "datastore.enable_defra_query",
-                      "matches": "^(null|false)$"
-                    },
-                    {
-                      "field": "datastore.datastore_tool_surface_ids",
-                      "matches": "^(null|\\[\\])$"
-                    }
-                  ],
-                  "source_match": {
-                    "field": "display_name",
-                    "matches": "(?i)^scout$"
-                  }
-                }
-              ]
-            }
-          },
-          "tier": "acceptance",
-          "weight": 5
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "agents",
-            "min": 2,
-            "max": 2
-          },
-          "tier": "acceptance",
-          "weight": 1
-        }
-      ],
+      "prompt": "Create an assistant called Scout that finds relevant local files and reports what they say. It must not change files or run commands. Set it up so you can hand work to it.",
       "capture": [
         {
           "kind": "documents",
@@ -134,87 +75,65 @@
             "built_ins",
             "integrations"
           ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "agents": {
+              "agents": "agents",
+              "contexts": "contexts",
+              "tools": "tools",
+              "expect": [
+                {
+                  "agent_did": "scout",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^scout$"
+                  },
+                  "agent": [
+                    {
+                      "field": "display_name",
+                      "matches": "(?i)^scout$"
+                    },
+                    {
+                      "field": "enabled",
+                      "equals": true
+                    }
+                  ],
+                  "context": [
+                    {
+                      "field": "system_prompt",
+                      "matches": "(?i)(find|search|scout|locat)"
+                    }
+                  ],
+                  "tools": [
+                    {
+                      "field": "host.files.mode",
+                      "equals": "ReadOnly"
+                    },
+                    {
+                      "field": "host.bash.mode",
+                      "matches": "^(Off|null)$"
+                    },
+                    {
+                      "field": "self_config.enable_self_config",
+                      "matches": "^(null|false)$"
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          "tier": "acceptance",
+          "weight": 1
         }
       ]
     },
     {
       "stage_id": "reentry",
       "prompt": "I am back to finish setting up Scout. Check whether it already has what we agreed and finish only what is missing. I want one Scout, with the same role and permissions.",
-      "checks": [
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "agents": {
-              "agents": "agents",
-              "contexts": "contexts",
-              "tools": "tools",
-              "expect": [
-                {
-                  "agent_did": "scout",
-                  "agent": [
-                    {
-                      "field": "display_name",
-                      "matches": "(?i)^scout$"
-                    },
-                    {
-                      "field": "enabled",
-                      "equals": true
-                    }
-                  ],
-                  "context": [
-                    {
-                      "field": "system_prompt",
-                      "matches": "(?i)(find|search|scout)"
-                    }
-                  ],
-                  "tools": [
-                    {
-                      "field": "host.files.mode",
-                      "equals": "ReadOnly"
-                    },
-                    {
-                      "field": "host.bash.mode",
-                      "matches": "^(Off|null)$"
-                    },
-                    {
-                      "field": "self_config.enable_self_config",
-                      "matches": "^(null|false)$"
-                    },
-                    {
-                      "field": "agents.enabled",
-                      "matches": "^(null|false)$"
-                    },
-                    {
-                      "field": "datastore.enable_defra_query",
-                      "matches": "^(null|false)$"
-                    },
-                    {
-                      "field": "datastore.datastore_tool_surface_ids",
-                      "matches": "^(null|\\[\\])$"
-                    }
-                  ],
-                  "source_match": {
-                    "field": "display_name",
-                    "matches": "(?i)^scout$"
-                  }
-                }
-              ]
-            }
-          },
-          "tier": "acceptance",
-          "weight": 5
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "agents",
-            "min": 2,
-            "max": 2
-          },
-          "tier": "acceptance",
-          "weight": 1
-        }
-      ],
       "capture": [
         {
           "kind": "documents",
@@ -268,6 +187,171 @@
             "built_ins",
             "integrations"
           ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "agents": {
+              "agents": "agents",
+              "contexts": "contexts",
+              "tools": "tools",
+              "expect": [
+                {
+                  "agent_did": "scout",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^scout$"
+                  },
+                  "agent": [
+                    {
+                      "field": "display_name",
+                      "matches": "(?i)^scout$"
+                    },
+                    {
+                      "field": "enabled",
+                      "equals": true
+                    }
+                  ],
+                  "context": [
+                    {
+                      "field": "system_prompt",
+                      "matches": "(?i)(find|search|scout|locat)"
+                    }
+                  ],
+                  "tools": [
+                    {
+                      "field": "host.files.mode",
+                      "equals": "ReadOnly"
+                    },
+                    {
+                      "field": "host.bash.mode",
+                      "matches": "^(Off|null)$"
+                    },
+                    {
+                      "field": "self_config.enable_self_config",
+                      "matches": "^(null|false)$"
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "exercise",
+      "prompt": "Ask Scout which file under inbox/ mentions the Dunmore invoice and what it says about it. Tell me its answer.",
+      "settle": true,
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "role_agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "helper_requests",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^scout$"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "lifecycle_state",
+            "content"
+          ]
+        },
+        {
+          "kind": "file",
+          "name": "workspace",
+          "glob": "**/*"
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "helper_requests",
+                "min": 1
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?i)march"
+              },
+              {
+                "matches": "(?i)(four|\\b4\\b|short|disput)"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "workspace",
+            "expect": [
+              {
+                "path": "inbox/march.txt",
+                "sha256": "ac2c23fd8d5c1f30859aa0a2b017c35468cad4f1b858cec2b6061fb7b589aeb2"
+              },
+              {
+                "path": "inbox/april.txt",
+                "sha256": "d20b39e4b9bb0d7a11223dee67c0697c7245ff23b656aa16450fdb912e7df32d"
+              },
+              {
+                "path": "inbox/may.txt",
+                "sha256": "44de036cc5e2628abbc6d86ac588cfb82738442014e8a9392c63cc531c25e974"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
         }
       ]
     }

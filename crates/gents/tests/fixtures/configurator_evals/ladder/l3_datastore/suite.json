@@ -2,12 +2,12 @@
   "id": "l3-datastore",
   "title": "Datastore use",
   "coverage": [
+    "storage the Engineer sets up and uses",
     "caller fields",
-    "runtime fields",
-    "surface selection",
+    "a narrow recordkeeping tool for another agent",
+    "create-only and read-only tools",
     "persistence",
     "automation output",
-    "caller-keyed surfaces",
-    "read-only lookup"
+    "finishing a prepared tool"
   ]
 }

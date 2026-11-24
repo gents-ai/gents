@@ -2,85 +2,22 @@
   "case_id": "ledger-prompt-edit-in-place",
   "split": "held_out",
   "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "records/ledger-07.txt",
+        "contents": "Ledger 07\nInvoice 4417: 1,280.50 paid 2 May.\nInvoice 4418: 310.00 open.\n"
+      },
+      {
+        "path": "records/ledger-08.txt",
+        "contents": "Ledger 08\nInvoice 4502: 96.40 paid 9 June.\n"
+      }
+    ]
+  },
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "Create an assistant named Ledger for checking records. Give it its own instructions and tool permissions, appropriate for its role: read and summarize local records. It must not modify files or run shell commands. Use our existing model settings. Keep your own role and permissions unchanged.",
-      "checks": [
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "agents": {
-              "agents": "agents",
-              "contexts": "contexts",
-              "tools": "tools",
-              "expect": [
-                {
-                  "agent_did": "ledger",
-                  "agent": [
-                    {
-                      "field": "display_name",
-                      "matches": "(?i)^ledger$"
-                    },
-                    {
-                      "field": "enabled",
-                      "equals": true
-                    }
-                  ],
-                  "context": [
-                    {
-                      "field": "system_prompt",
-                      "matches": "(?i)(record|ledger)"
-                    }
-                  ],
-                  "tools": [
-                    {
-                      "field": "host.files.mode",
-                      "equals": "ReadOnly"
-                    },
-                    {
-                      "field": "host.bash.mode",
-                      "matches": "^(Off|null)$"
-                    },
-                    {
-                      "field": "self_config.enable_self_config",
-                      "matches": "^(null|false)$"
-                    },
-                    {
-                      "field": "agents.enabled",
-                      "matches": "^(null|false)$"
-                    },
-                    {
-                      "field": "datastore.enable_defra_query",
-                      "matches": "^(null|false)$"
-                    },
-                    {
-                      "field": "datastore.datastore_tool_surface_ids",
-                      "matches": "^(null|\\[\\])$"
-                    }
-                  ],
-                  "source_match": {
-                    "field": "display_name",
-                    "matches": "(?i)^ledger$"
-                  }
-                }
-              ]
-            }
-          },
-          "tier": "acceptance",
-          "weight": 5
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "agents",
-            "min": 2,
-            "max": 2
-          },
-          "tier": "acceptance",
-          "weight": 1
-        }
-      ],
+      "prompt": "Create an assistant called Ledger that reads and summarizes our local records. It must not change files or run commands. Set it up so you can hand work to it.",
       "capture": [
         {
           "kind": "documents",
@@ -135,11 +72,7 @@
             "integrations"
           ]
         }
-      ]
-    },
-    {
-      "stage_id": "edit_prompt",
-      "prompt": "One change for Ledger: require it to cite the file path for every finding. Update its existing instructions and keep the same permissions.",
+      ],
       "checks": [
         {
           "check": "crew_spec_match",
@@ -151,6 +84,122 @@
               "expect": [
                 {
                   "agent_did": "ledger",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^ledger$"
+                  },
+                  "agent": [
+                    {
+                      "field": "display_name",
+                      "matches": "(?i)^ledger$"
+                    },
+                    {
+                      "field": "enabled",
+                      "equals": true
+                    }
+                  ],
+                  "context": [
+                    {
+                      "field": "system_prompt",
+                      "matches": "(?i)(record|ledger)"
+                    }
+                  ],
+                  "tools": [
+                    {
+                      "field": "host.files.mode",
+                      "equals": "ReadOnly"
+                    },
+                    {
+                      "field": "host.bash.mode",
+                      "matches": "^(Off|null)$"
+                    },
+                    {
+                      "field": "self_config.enable_self_config",
+                      "matches": "^(null|false)$"
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "edit_prompt",
+      "prompt": "One change for Ledger: it must cite the file path for every finding. Update its existing instructions and keep its permissions as they are.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name",
+            "context_id",
+            "enabled",
+            "inference_profile_id",
+            "tags"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "contexts",
+          "collection": "AgentContext",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "context_id",
+            "system_prompt",
+            "tools_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "tools",
+          "collection": "Tools",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "tools_id",
+            "host",
+            "datastore",
+            "self_config",
+            "agents",
+            "remote",
+            "built_ins",
+            "integrations"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "agents": {
+              "agents": "agents",
+              "contexts": "contexts",
+              "tools": "tools",
+              "expect": [
+                {
+                  "agent_did": "ledger",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^ledger$"
+                  },
                   "agent": [
                     {
                       "field": "display_name",
@@ -183,46 +232,25 @@
                     {
                       "field": "self_config.enable_self_config",
                       "matches": "^(null|false)$"
-                    },
-                    {
-                      "field": "agents.enabled",
-                      "matches": "^(null|false)$"
-                    },
-                    {
-                      "field": "datastore.enable_defra_query",
-                      "matches": "^(null|false)$"
-                    },
-                    {
-                      "field": "datastore.datastore_tool_surface_ids",
-                      "matches": "^(null|\\[\\])$"
                     }
-                  ],
-                  "source_match": {
-                    "field": "display_name",
-                    "matches": "(?i)^ledger$"
-                  }
+                  ]
                 }
               ]
             }
           },
           "tier": "acceptance",
-          "weight": 5
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "agents",
-            "min": 2,
-            "max": 2
-          },
-          "tier": "acceptance",
           "weight": 1
         }
-      ],
+      ]
+    },
+    {
+      "stage_id": "exercise",
+      "prompt": "Ask Ledger what our records say about invoice 4417, and tell me its answer with the citation.",
+      "settle": true,
       "capture": [
         {
           "kind": "documents",
-          "name": "agents",
+          "name": "role_agents",
           "collection": "Agent",
           "filter": {
             "node_did": {
@@ -231,47 +259,95 @@
           },
           "fields": [
             "agent_did",
-            "display_name",
-            "context_id",
-            "enabled",
-            "inference_profile_id",
-            "tags"
+            "display_name"
           ]
         },
         {
           "kind": "documents",
-          "name": "contexts",
-          "collection": "AgentContext",
+          "name": "helper_requests",
+          "collection": "AgentRequest",
           "filter": {
             "node_did": {
               "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^ledger$"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
             }
           },
           "fields": [
-            "context_id",
-            "system_prompt",
-            "tools_id"
+            "request_id",
+            "agent_did",
+            "lifecycle_state",
+            "content"
           ]
         },
         {
-          "kind": "documents",
-          "name": "tools",
-          "collection": "Tools",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
+          "kind": "file",
+          "name": "workspace",
+          "glob": "**/*"
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "helper_requests",
+                "min": 1
+              }
+            ]
           },
-          "fields": [
-            "tools_id",
-            "host",
-            "datastore",
-            "self_config",
-            "agents",
-            "remote",
-            "built_ins",
-            "integrations"
-          ]
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "1,?280\\.50"
+              },
+              {
+                "matches": "records/ledger-07\\.txt"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "workspace",
+            "expect": [
+              {
+                "path": "records/ledger-07.txt",
+                "sha256": "5444a8d33011d7d9625ed31dff590fd10a28919426a6604f2deacfb93034e2db"
+              },
+              {
+                "path": "records/ledger-08.txt",
+                "sha256": "765615fc65a63ddaa99606ff45ab017d44273f641642d2b1c10ecc043c2a9445"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
         }
       ]
     }

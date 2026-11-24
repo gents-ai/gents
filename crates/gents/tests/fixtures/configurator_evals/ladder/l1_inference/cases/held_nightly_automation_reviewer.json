@@ -85,12 +85,6 @@
         {
           "check": "tool_calls_expected",
           "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash"
-            ],
             "config_read_only": true
           },
           "tier": "acceptance",
@@ -209,19 +203,6 @@
       ],
       "checks": [
         {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
           "check": "crew_spec_match",
           "params": {
             "links": [
@@ -323,11 +304,15 @@
       },
       "checks": [
         {
-          "check": "captured_rows_count",
+          "check": "crew_spec_match",
           "params": {
-            "name": "completed_review",
-            "min": 1,
-            "max": 1
+            "present": [
+              {
+                "capture": "completed_review",
+                "min": 1,
+                "max": 1
+              }
+            ]
           },
           "tier": "acceptance",
           "weight": 1

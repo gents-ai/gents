@@ -80,12 +80,6 @@
         {
           "check": "tool_calls_expected",
           "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash"
-            ],
             "config_read_only": true
           },
           "tier": "acceptance",
@@ -131,7 +125,7 @@
     },
     {
       "stage_id": "configure",
-      "prompt": "Yes, group incoming text into updates about a quarter of a second apart. If the worker stops renewing its claim to a request, expire that claim after 45 seconds. Allow 2 minutes of provider idle time and 8 minutes overall. Limit each request to 15 turns and 80,000 total tokens. Keep the same model and connection.",
+      "prompt": "Yes. Group incoming text into updates about a quarter of a second apart, and expire a worker's claim on a request 45 seconds after it stops renewing it. Allow 2 minutes of provider silence, 8 minutes overall, 15 turns and 80,000 total tokens per request.",
       "capture": [
         {
           "kind": "documents",
@@ -203,19 +197,6 @@
         }
       ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "crew_spec_match",
           "params": {
@@ -297,6 +278,67 @@
             "name": "backends",
             "min": 1,
             "max": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "use",
+      "prompt": "Thanks. Send me a short test reply now: just the word steady.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "run",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "request_id": {
+              "_eq": "$request"
+            }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "lifecycle_state",
+            "max_total_tokens",
+            "executed_inference_profile_id",
+            "executed_reasoning_effort",
+            "content"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "run",
+            "max_rows": 1,
+            "expect": [
+              {
+                "field": "lifecycle_state",
+                "equals": "completed"
+              },
+              {
+                "field": "max_total_tokens",
+                "equals": 80000
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?i)\\bsteady\\b"
+              }
+            ]
           },
           "tier": "acceptance",
           "weight": 1

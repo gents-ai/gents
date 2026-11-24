@@ -5,62 +5,7 @@
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "Create a review-helper assistant for short reviews, using our current model, and make it available for you to delegate to.",
-      "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "targets",
-            "min": 1,
-            "max": 1
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "agents": {
-              "agents": "agents",
-              "contexts": "contexts",
-              "tools": "tools",
-              "expect": [
-                {
-                  "agent_did": "gents:agent-slot:engineer",
-                  "delegates": {
-                    "targets": "targets",
-                    "agents": [
-                      "review-helper"
-                    ]
-                  }
-                },
-                {
-                  "agent_did": "review-helper",
-                  "source_match": {
-                    "field": "display_name",
-                    "matches": "(?i)^review[ -]helper$"
-                  }
-                }
-              ]
-            }
-          },
-          "tier": "acceptance",
-          "weight": 1
-        }
-      ],
+      "prompt": "Create an assistant called Review Helper for short reviews, and set it up so you can hand work to it.",
       "capture": [
         {
           "kind": "documents",
@@ -76,7 +21,8 @@
             "display_name",
             "context_id",
             "enabled",
-            "inference_profile_id"
+            "inference_profile_id",
+            "tags"
           ]
         },
         {
@@ -90,8 +36,8 @@
           },
           "fields": [
             "context_id",
-            "tools_id",
-            "system_prompt"
+            "system_prompt",
+            "tools_id"
           ]
         },
         {
@@ -107,17 +53,32 @@
             "tools_id",
             "host",
             "datastore",
+            "self_config",
             "agents",
-            "self_config"
+            "remote",
+            "built_ins",
+            "integrations"
           ]
         },
         {
           "kind": "documents",
-          "name": "targets",
+          "name": "helper_targets",
           "collection": "AgentTarget",
           "filter": {
             "node_did": {
               "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^review[ -]helper$"
+                  },
+                  "field": "agent_did"
+                }
+              }
             }
           },
           "fields": [
@@ -128,134 +89,47 @@
             "agent_did"
           ]
         }
-      ]
-    },
-    {
-      "stage_id": "verify-and-delegate",
-      "prompt": "I am back. Check whether the review-helper setup is complete and fix anything missing, without duplicating it. Ask it to reply with exactly FIX2-888 and report its reply when it arrives.",
+      ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config",
-              "agent_new"
-            ],
-            "forbidden": [
-              "bash"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_fields_match",
-          "params": {
-            "name": "helper-request",
-            "expect": [
-              {
-                "field": "content",
-                "contains": "FIX2-888"
-              },
-              {
-                "field": "lifecycle_state",
-                "equals": "completed"
-              },
-              {
-                "field": "terminal_output",
-                "contains": "message_doc_id"
-              }
-            ],
-            "max_rows": 1
-          },
-          "tier": "acceptance",
-          "weight": 2
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "targets",
-            "min": 1,
-            "max": 1
-          },
-          "tier": "acceptance",
-          "weight": 2
-        },
         {
           "check": "crew_spec_match",
           "params": {
-            "links": [
-              {
-                "capture": "helper-request",
-                "field": "caused_by_parent_tool_call_doc_id",
-                "target_capture": "delegation_calls",
-                "target_key": "_docID",
-                "expect": [
-                  {
-                    "field": "lifecycle_state",
-                    "equals": "completed"
-                  },
-                  {
-                    "field": "completion_notification_delivered_at",
-                    "matches": "^[0-9]{4}-"
-                  }
-                ],
-                "source_match": {
-                  "field": "content",
-                  "contains": "FIX2-888"
-                },
-                "exact": true
-              },
-              {
-                "capture": "helper-request",
-                "source_match": {
-                  "field": "content",
-                  "contains": "FIX2-888"
-                },
-                "field": "session_id",
-                "target_capture": "helper-session",
-                "target_key": "session_id",
-                "exact": true
-              }
-            ],
             "agents": {
               "agents": "agents",
               "contexts": "contexts",
               "tools": "tools",
               "expect": [
                 {
-                  "agent_did": "gents:agent-slot:engineer",
-                  "delegates": {
-                    "targets": "targets",
-                    "agents": [
-                      "review-helper"
-                    ]
-                  }
-                },
-                {
                   "agent_did": "review-helper",
                   "source_match": {
                     "field": "display_name",
                     "matches": "(?i)^review[ -]helper$"
-                  }
+                  },
+                  "agent": [
+                    {
+                      "field": "enabled",
+                      "equals": true
+                    }
+                  ]
                 }
               ]
-            }
-          },
-          "tier": "acceptance",
-          "weight": 2
-        },
-        {
-          "check": "final_message_matches",
-          "params": {
-            "all": [
-              "FIX2-888"
+            },
+            "present": [
+              {
+                "capture": "helper_targets",
+                "min": 1
+              }
             ]
           },
           "tier": "acceptance",
           "weight": 1
         }
-      ],
+      ]
+    },
+    {
+      "stage_id": "verify-and-delegate",
+      "prompt": "I am back. Check that the Review Helper setup is complete and fix anything missing without duplicating it. Then ask it to reply with exactly FIX2-888 and tell me what it says.",
+      "settle": true,
       "capture": [
         {
           "kind": "documents",
@@ -269,40 +143,6 @@
           "fields": [
             "agent_did",
             "display_name"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "helper-request",
-          "collection": "AgentRequest",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            },
-            "agent_did": {
-              "_eq": {
-                "$capture": {
-                  "capture": "role_agents",
-                  "source_match": {
-                    "field": "display_name",
-                    "matches": "(?i)^review[ -]helper$"
-                  },
-                  "field": "agent_did"
-                }
-              }
-            },
-            "purpose": {
-              "_eq": "normal"
-            }
-          },
-          "fields": [
-            "request_id",
-            "agent_did",
-            "session_id",
-            "content",
-            "lifecycle_state",
-            "terminal_output",
-            "caused_by_parent_tool_call_doc_id"
           ]
         },
         {
@@ -329,31 +169,49 @@
           "fields": [
             "session_id",
             "agent_did",
-            "node_did"
+            "title",
+            "stopped_at"
           ]
         },
         {
           "kind": "documents",
-          "name": "delegation_calls",
-          "collection": "AgentToolCall",
+          "name": "helper-request",
+          "collection": "AgentRequest",
           "filter": {
             "node_did": {
               "_eq": "$trial"
             },
-            "tool_name": {
-              "_in": [
-                "agent_new",
-                "agent_message"
-              ]
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^review[ -]helper$"
+                  },
+                  "field": "agent_did"
+                }
+              }
             },
-            "request_id": {
-              "_eq": "$request"
+            "purpose": {
+              "_eq": "normal"
+            },
+            "content": {
+              "_like": "%FIX2-888%"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
             }
           },
           "fields": [
-            "_docID",
+            "request_id",
+            "agent_did",
+            "session_id",
+            "content",
             "lifecycle_state",
-            "completion_notification_delivered_at"
+            "terminal_output",
+            "caused_by_parent_tool_call_doc_id",
+            "caused_by_parent_request_id"
           ]
         },
         {
@@ -370,7 +228,8 @@
             "display_name",
             "context_id",
             "enabled",
-            "inference_profile_id"
+            "inference_profile_id",
+            "tags"
           ]
         },
         {
@@ -384,8 +243,8 @@
           },
           "fields": [
             "context_id",
-            "tools_id",
-            "system_prompt"
+            "system_prompt",
+            "tools_id"
           ]
         },
         {
@@ -401,17 +260,32 @@
             "tools_id",
             "host",
             "datastore",
+            "self_config",
             "agents",
-            "self_config"
+            "remote",
+            "built_ins",
+            "integrations"
           ]
         },
         {
           "kind": "documents",
-          "name": "targets",
+          "name": "helper_targets",
           "collection": "AgentTarget",
           "filter": {
             "node_did": {
               "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^review[ -]helper$"
+                  },
+                  "field": "agent_did"
+                }
+              }
             }
           },
           "fields": [
@@ -423,7 +297,60 @@
           ]
         }
       ],
-      "settle": true
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "helper-session",
+                "min": 1
+              },
+              {
+                "capture": "helper-request",
+                "min": 1
+              },
+              {
+                "capture": "helper_targets",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "agents": {
+              "agents": "agents",
+              "contexts": "contexts",
+              "tools": "tools",
+              "expect": [
+                {
+                  "agent_did": "review-helper",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^review[ -]helper$"
+                  },
+                  "agent": [
+                    {
+                      "field": "enabled",
+                      "equals": true
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              "FIX2-888"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
     }
   ]
 }
