@@ -2906,7 +2906,7 @@ async fn goal_backed_submission_rejects_a_matching_terminal_goal_without_publish
         SESSION,
         Some("Already terminal"),
         Some(GoalStatus::Complete),
-        Some(crate::goal::initial_goal_budget(None)),
+        None,
         None,
     )
     .await

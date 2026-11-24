@@ -463,11 +463,10 @@ async fn stage_goal_and_claim_typed(
         .await?;
     }
 
-    let goal_budget = initial_goal_budget(token_budget);
     if let Some(goal) = goals.first().cloned() {
         if !goals.iter().all(|candidate| {
             candidate.objective.trim() == objective
-                && candidate.token_budget == goal_budget
+                && candidate.token_budget == token_budget
                 && candidate.pinned_limits() == limits
         }) {
             return Err(CreateGoalForSessionError::Conflict);
@@ -495,7 +494,7 @@ async fn stage_goal_and_claim_typed(
             "requester_did": session.session.requester_did,
             "objective": objective,
             "status": status.as_str(),
-            "token_budget": goal_budget,
+            "token_budget": token_budget,
             "tokens_used": 0,
             "token_usage_baseline": baseline,
             "assignment_root_request_doc_id": first_request_doc_id,
@@ -522,7 +521,7 @@ async fn stage_goal_and_claim_typed(
             node_did: node_did.to_string(),
             objective: objective.to_string(),
             status: status.as_str().to_string(),
-            token_budget: goal_budget,
+            token_budget,
             tokens_used: Some(0),
             token_usage_baseline: Some(baseline),
             assignment_root_request_doc_id: first_request_doc_id.map(str::to_owned),
@@ -750,7 +749,7 @@ async fn create_goal_for_session_inner(
                 .map_err(CreateGoalForSessionError::Storage)?;
             if let Some(existing) = existing {
                 if existing.objective.trim() == start.objective
-                    && existing.token_budget == initial_goal_budget(token_budget)
+                    && existing.token_budget == token_budget
                     && existing.pinned_limits() == requested_fingerprint.limits
                     && claim == Some(requested_fingerprint.clone())
                 {

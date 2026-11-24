@@ -26,10 +26,6 @@ pub struct GoalSnapshot {
     pub updated_at: Option<String>,
 }
 
-/// Lean `Goals.defaultTokenBudget`: the charged-token budget of a Goal whose
-/// creator names none.
-pub const DEFAULT_GOAL_TOKEN_BUDGET: i64 = 1_000_000;
-
 /// The limit a Goal pins when it is created: a Task's
 /// `goal_max_infrastructure_retries`. Unset is the controller default. Goals
 /// the model creates with goal tools, and Goals a person starts, have no Task

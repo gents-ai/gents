@@ -21,8 +21,8 @@ def validMaxInfrastructureRetries : Option Int → Bool
 /-- The creation claim pins the Goal's retry limit beside the budget, so a
 replay that asks for another limit conflicts instead of returning a Goal that
 keeps the earlier one. An unset limit is the `Goals` default; only a Task sets
-it. The claim records the budget as requested; the Goal starts with
-`Goals.initialBudget` of it. -/
+it. The claim records the budget as requested, and the Goal starts with exactly
+that budget; none requested is no ceiling. -/
 structure Fingerprint where
   owner : Did
   session : SessionId

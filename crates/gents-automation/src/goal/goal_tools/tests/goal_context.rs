@@ -187,7 +187,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                     "agent_did":identity.did(), "creator_did":identity.did(), "requester_did":identity.did(),
                     "parent_linked":true, "objective":"Original caller goal",
                     "status":version.status.as_str(), "assignment_root_request_doc_id":assignment.root.map(|root| &roots[&root]),
-                    "token_budget":crate::goal::initial_goal_budget(None), "tokens_used":317, "token_usage_baseline":0, "active_time_seconds":23,
+                    "tokens_used":317, "token_usage_baseline":0, "active_time_seconds":23,
                     "continuation_sequence":0, "updated_at":"2026-10-21T00:00:00Z"});
                 let doc = documents.get(&id).cloned();
                 let created = agent_access.transact_write("test.goal_tool_history", |txn| {

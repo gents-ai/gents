@@ -76,33 +76,22 @@ unattended Goal from repeatedly consuming resources when the underlying failure
 persists. A Goal pins the limit it was created with. -/
 def maxInfrastructureRetries : Nat := 2
 
-/-- Charged tokens (`chargedTokens`: prompt tokens not read from cache, plus
-output) a new Goal may spend when its creator names no budget. Premise: the
-repository holds no per-trial distribution for Goal runs; the configurator
-evals average 359k stage input tokens per trial across their suites, the goal
-cases name 1.2M budgets, and the run that motivated a default spent about
-1.2M. The default sits near three times the mean trial, so ordinary runs never
-reach it and a looping run stops within one default's spend. A person raises
-or lifts it per Goal. -/
-def defaultTokenBudget : Nat := 1000000
-
-/-- The budget a new Goal starts with: the one its creator named, else
-`defaultTokenBudget`. A Goal with no budget is one a person lifted. -/
-def initialBudget (requested : Option Nat) : Option Nat :=
-  some (requested.getD defaultTokenBudget)
-
-theorem every_new_goal_has_a_budget (requested : Option Nat) :
-    (initialBudget requested).isSome := rfl
-
-/-- A Goal's budget is reached when its charged tokens reach its token budget;
-an absent budget is lifted. Goal usage counts the Goal session's normal and
+/-- A Goal's budget is reached when its charged tokens (`chargedTokens`: prompt
+tokens not read from cache, plus output) reach its token budget. A Goal's
+budget is exactly the one set for it: by the person who creates or edits it,
+by the Task that fires it, or by the Agent for its own Goal. No budget is
+supplied by default (owner's decision), so a Goal with no budget, never set or
+lifted, has no token ceiling. Goal usage counts the Goal session's normal and
 access-review requests and excludes title work, so this reads only what goal
 usage already counts. -/
 def budgetReached (tokenBudget : Option Nat) (tokensUsed : Nat) : Bool :=
   tokenBudget.any (· ≤ tokensUsed)
 
-theorem lifted_budget_is_never_reached (tokensUsed : Nat) :
+theorem unset_budget_is_never_reached (tokensUsed : Nat) :
     budgetReached none tokensUsed = false := rfl
+
+theorem set_budget_is_reached_exactly_at_it (budget tokensUsed : Nat) :
+    budgetReached (some budget) tokensUsed = decide (budget ≤ tokensUsed) := rfl
 
 def step? (state : State) (action : Action) : Option State :=
   match action with

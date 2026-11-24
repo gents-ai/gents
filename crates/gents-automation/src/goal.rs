@@ -113,7 +113,7 @@ pub use load::{load_canonical_goal, load_canonical_goal_in_txn, load_goals_for_s
 pub use question_wait::awaiting_goal_question_ids;
 pub use state::{
     apply_operator_status_transition, decide_goal_continuation, goal_budget_reached,
-    initial_goal_budget, GoalAction, GoalDecision, GoalRequestTerminal, GoalState,
+    GoalAction, GoalDecision, GoalRequestTerminal, GoalState,
 };
 pub(crate) use task_fire::task_goal_fire_key;
 pub use task_fire::{

@@ -134,7 +134,7 @@ fn verify_goal_creation_claim_cross_check(
         goal.node_did == node_did
             && goal.session_id == session_id
             && goal.objective.trim() == expected_claim.objective
-            && goal.token_budget == initial_goal_budget(token_budget)
+            && goal.token_budget == token_budget
             && goal.pinned_limits() == limits
             && claim_goal_id == goal.goal_id
             && claim == expected_claim,

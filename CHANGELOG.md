@@ -27,14 +27,16 @@ source consistency checks, not a separate runtime compatibility version.
   `consecutive_blocked_audits`, `last_blocked_request_id`,
   `last_blocked_reason` and `blocked_audit_threshold` fields, the creation
   claim's and Task fire's threshold, and Task `goal_blocked_audit_threshold`.
-- Breaking: every new Goal has a token budget. A Goal whose creator names none
-  gets 1,000,000 charged tokens. Reaching it runs one wrap-up turn, in which
-  the Agent is told to summarize what is done, what remains and what it would
-  do next, and then pauses the Goal as `budget_limited`. A person raises the
-  budget with `goal set --token-budget` or lifts it with
-  `--clear-token-budget` (also while the Goal is blocked or budget-limited) and
-  resumes it. A Task fire whose Goal pauses records that pause as the fire's
-  outcome; the Goal stays resumable.
+- A Goal with a token budget pauses when it reaches it. A Goal has a budget
+  only when one is set (by the person creating or editing it, the Task that
+  fires it, or the Agent for its own Goal); there is no default budget, and a
+  Goal without one has no token ceiling. Reaching it runs one wrap-up turn, in
+  which the Agent is told to summarize what is done, what remains and what it
+  would do next, and then pauses the Goal as `budget_limited`. A person raises
+  the budget with `goal set --token-budget` or lifts it with
+  `--clear-token-budget` (also while the Goal is blocked or budget-limited)
+  and resumes it. A Task fire whose Goal pauses records that pause as the
+  fire's outcome; the Goal stays resumable.
 - Task `goal_max_infrastructure_retries` (non-negative, default 2) sets the
   infrastructure retry limit of the Goals a Task creates. Every Goal a Task
   creates pins it, including Task messages to an Agent. A Task that sets it

@@ -146,8 +146,6 @@ fn generated_goal_budget_cases_fence_budget_reached() {
         let used = i64::try_from(case.tokens_used).expect("modeled usage fits i64");
         gents_lean_vocab::families::contracts_goal_budget::GoalBudgetOutput {
             reached: crate::goal::goal_budget_reached(budget, used),
-            initial: crate::goal::initial_goal_budget(budget)
-                .map(|budget| u64::try_from(budget).expect("budgets are positive")),
         }
     });
 }

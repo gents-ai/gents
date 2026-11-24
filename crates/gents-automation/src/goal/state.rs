@@ -145,15 +145,10 @@ impl GoalState {
     }
 }
 
-/// Lean `Goals.budgetReached`: charged tokens reached the token budget; an
-/// absent budget is lifted.
+/// Lean `Goals.budgetReached`: charged tokens reached the token budget; a
+/// Goal without a budget has no ceiling.
 pub fn goal_budget_reached(token_budget: Option<i64>, tokens_used: i64) -> bool {
     token_budget.is_some_and(|budget| budget <= tokens_used)
-}
-
-/// Lean `Goals.initialBudget`: the budget a new Goal starts with.
-pub fn initial_goal_budget(requested: Option<i64>) -> Option<i64> {
-    Some(requested.unwrap_or(gents_protocol::goal::DEFAULT_GOAL_TOKEN_BUDGET))
 }
 
 pub fn decide_goal_continuation(facts: GoalContinuationFacts) -> GoalDecision {

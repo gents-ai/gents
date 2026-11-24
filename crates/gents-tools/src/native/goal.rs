@@ -64,7 +64,7 @@ impl Tool for CreateGoalTool {
                         "type": "integer",
                         "minimum": 1,
                         "maximum": i64::MAX,
-                        "description": format!("Optional positive charged-token budget for the goal; omitted, it is {}. Reaching it pauses the goal after one wrap-up turn.", gents_protocol::goal::DEFAULT_GOAL_TOKEN_BUDGET)
+                        "description": "Optional positive charged-token budget for the goal. Omit it to create an uncapped goal; there is no default cap. Reaching a budget pauses the goal after one wrap-up turn."
                     }
                 },
                 "required": ["objective"]
@@ -209,7 +209,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_goal_help_states_the_default_budget_and_its_pause() {
+    async fn create_goal_help_states_omitted_budget_is_uncapped_and_a_budget_pauses() {
         let tools = build_goal_tools(true);
         let create = tools
             .iter()
@@ -219,9 +219,10 @@ mod tests {
         let budget = &definition.parameters["properties"]["token_budget"];
         let description = budget["description"].as_str().expect("budget description");
         assert!(
-            description.contains(&gents_protocol::goal::DEFAULT_GOAL_TOKEN_BUDGET.to_string())
+            description.contains("uncapped")
+                && description.contains("no default cap")
                 && description.contains("pauses the goal"),
-            "create_goal budget help must name the default budget and that reaching it pauses the goal, got: {description}"
+            "create_goal budget help must say an omitted budget is uncapped with no default cap and that reaching a budget pauses the goal, got: {description}"
         );
         assert_eq!(
             budget["required"],

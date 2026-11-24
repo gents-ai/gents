@@ -294,22 +294,11 @@ pub async fn admit_start_in_txn(
                 token_budget: token_budget.map(i128::from),
                 limits: gents_protocol::goal::GoalLimits::default(),
             };
-            // A claim records the budget as requested; a Goal holds the
-            // budget it started with (`initial_goal_budget` of the request).
-            let started = |fingerprint: GoalCreationFingerprint| GoalCreationFingerprint {
-                token_budget: crate::goal::initial_goal_budget(
-                    fingerprint
-                        .token_budget
-                        .and_then(|budget| i64::try_from(budget).ok()),
-                )
-                .map(i128::from),
-                ..fingerprint
-            };
             let recorded =
                 match load_goal_creation_claim_for_key_in_txn(txn, node_did, session_id, claim_key)
                     .await?
                 {
-                    Some(claim) => Some(started(claim)),
+                    Some(claim) => Some(claim),
                     None => existing.as_ref().map(|goal| GoalCreationFingerprint {
                         owner: node_did.to_owned(),
                         session: session_id.to_owned(),
@@ -318,7 +307,6 @@ pub async fn admit_start_in_txn(
                         limits: goal.pinned_limits(),
                     }),
                 };
-            let requested = started(requested);
             let claim = match recorded {
                 None => GoalClaim::None,
                 Some(recorded) if recorded == requested => GoalClaim::Same,

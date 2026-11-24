@@ -347,7 +347,7 @@ export function TaskEditor({
         <NumberRow
           id={id("budget")}
           label="Goal token budget"
-          description="Optional positive whole number; blank uses 1,000,000. Needs an objective."
+          description="Optional positive whole number; blank leaves the goal unlimited. Needs an objective."
           value={d.draft.goalTokenBudget}
           error={d.problems.goalTokenBudget}
           onChange={(v) => d.set("goalTokenBudget", v)}

@@ -612,7 +612,7 @@ impl TaskGoalAssignment {
             fire.goal_token_budget.is_none_or(|budget| budget > 0),
             "Task Goal budget must be positive"
         );
-        let budget = initial_goal_budget(fire.goal_token_budget);
+        let budget = fire.goal_token_budget;
         let max_infrastructure_retries = fire.goal_max_infrastructure_retries;
         let baseline = || {
             usage

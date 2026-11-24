@@ -351,11 +351,9 @@ structure GoalBudgetInput where
   tokensUsed : Nat
   deriving Lean.ToJson
 
-/-- `Goals.budgetReached` and `Goals.initialBudget`: when a Goal's charged
-tokens reach its budget, and the budget a new Goal starts with. -/
+/-- `Goals.budgetReached`: whether a Goal's charged tokens reached its budget. -/
 structure GoalBudgetOutput where
   reached : Bool
-  initial : Option Nat
   deriving Lean.ToJson
 
 @[conformance_family]
@@ -364,13 +362,9 @@ def goalBudget : Family GoalBudgetInput GoalBudgetOutput where
     [ { name := "under_budget", tokenBudget := some 1000, tokensUsed := 999 }
     , { name := "at_budget", tokenBudget := some 1000, tokensUsed := 1000 }
     , { name := "over_budget", tokenBudget := some 1000, tokensUsed := 1001 }
-    , { name := "lifted_budget", tokenBudget := none, tokensUsed := 5000000 }
-    , { name := "default_budget_unspent", tokenBudget := none, tokensUsed := 0 }
-    , { name := "default_budget_reached", tokenBudget := some Goals.defaultTokenBudget,
-        tokensUsed := Goals.defaultTokenBudget } ]
-  model := fun i =>
-    { reached := Goals.budgetReached i.tokenBudget i.tokensUsed
-    , initial := Goals.initialBudget i.tokenBudget }
+    , { name := "unset_budget_unspent", tokenBudget := none, tokensUsed := 0 }
+    , { name := "unset_budget_heavily_spent", tokenBudget := none, tokensUsed := 5000000 } ]
+  model := fun i => { reached := Goals.budgetReached i.tokenBudget i.tokensUsed }
 
 structure GoalCreateCase where
   name : String

@@ -590,10 +590,7 @@ async fn queued_task_goal_changes_only_when_its_request_claims() {
                 assigned.assignment_root_request_doc_id.as_deref(),
                 Some(assigned_doc_id.as_str())
             );
-            assert_eq!(
-                assigned.token_budget,
-                crate::goal::initial_goal_budget(task_budget)
-            );
+            assert_eq!(assigned.token_budget, task_budget);
             assert_eq!(
                 assigned.parsed_status(),
                 Some(gents_protocol::goal_status::GoalStatus::Active)
