@@ -1,7 +1,6 @@
 use super::support::*;
 use crate::test_support::running_runtime::{AgentRuntimeHome, BootedRuntime};
 use gents_inference::test_support::scripted_backend::{ScriptedBackend, StreamScript};
-use gents_store::identity::NodeIdentity;
 use gents_store::test_support::read_when_changed;
 use gents_store::test_support::snapshot_reader::SnapshotReader as _;
 use std::collections::BTreeSet;
