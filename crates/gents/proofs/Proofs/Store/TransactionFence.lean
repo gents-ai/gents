@@ -154,4 +154,24 @@ theorem a_unique_index_fences_twin_arrivals (first second : Doc) (value : Unique
     fencedAgainst (arrival first [value]) (arrival second [value]) = true :=
   a_named_fence_fences _ _ (.uniqueIndex value) (by simp [Fence.holds, arrival, Footprint.empty])
 
+/-- What a production transaction that reads by filter, list, count or order
+and then writes names as the fence its decision rests on: a fence the store
+validates (`Fence`: a common write, a point read or a unique index), a single
+writer (no second decider runs: one lease holder, one in-process lock, one
+owner), or idempotence (a decision taken on a stale read is harmless, because
+what it missed is decided again where it lands). The structure rule
+`every_range_read_then_write_names_its_fence` asks every such transaction for
+one, by these names. -/
+inductive DeclaredFence where
+  | store (fence : Fence)
+  | singleWriter
+  | idempotent
+  deriving DecidableEq, Repr
+
+/-- A declared store fence orders the decider against the writer it names. -/
+theorem a_declared_store_fence_fences (decider writer : Footprint) (fence : Fence)
+    (h : fence.holds decider writer = true) :
+    fencedAgainst decider writer = true :=
+  a_named_fence_fences decider writer fence h
+
 end TransactionFence
