@@ -119,7 +119,7 @@ async fn claim_pending(fixture: &QueueFixture) {
 }
 
 struct UnclaimedFixture {
-    db: gents_inference::test_support::TestDb,
+    db: gents_store::test_support::TestStore,
     user: gents_store::identity::KeyIdentity,
     client: ConfigAccess,
     agent: Arc<dyn NodeIdentity>,

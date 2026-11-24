@@ -2368,9 +2368,13 @@ async fn lean_periodic_renewal_waits_for_abandoned_native_operation_before_next_
 /// gate admits it as the next turn.
 #[tokio::test]
 async fn input_committed_during_the_natural_finish_runs_as_the_next_turn() {
-    let (node, _dir, identity, agent) = test_node().await;
+    let (node, home, identity, agent) = test_node().await;
     let access = agent_access(&node, &identity, &agent);
-    let mut lifecycle = owner(&node, &identity, &agent).await;
+    let mut lifecycle = ClaimedRequest::self_signed(&home, &agent)
+        .backend("lease-test")
+        .drive(Stage::Executing)
+        .await
+        .lifecycle;
     let agent_identity = agent_identity(&identity, &agent);
     let writer = crate::request::streaming::DefraStreamWriter::new_managed(
         node.clone(),
