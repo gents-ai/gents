@@ -1,7 +1,6 @@
 use futures::StreamExt as _;
 use rig::client::CompletionClient as _;
-use rig::completion::{CompletionModel as _, CompletionRequest};
-use rig::one_or_many::OneOrMany;
+use rig::completion::CompletionModel;
 use rig::streaming::StreamedAssistantContent;
 
 use super::*;
@@ -21,28 +20,6 @@ async fn complete(endpoint: String, marker: &'static str) -> reqwest::Response {
         .send()
         .await
         .unwrap()
-}
-
-fn request(tool: bool) -> CompletionRequest {
-    CompletionRequest {
-        model: None,
-        preamble: Some("system preamble".to_owned()),
-        chat_history: OneOrMany::one(rig::message::Message::user("hello")),
-        documents: Vec::new(),
-        tools: tool
-            .then(|| rig::completion::ToolDefinition {
-                name: "lookup".to_owned(),
-                description: "Look up a test value".to_owned(),
-                parameters: json!({ "type": "object", "properties": {} }),
-            })
-            .into_iter()
-            .collect(),
-        temperature: None,
-        max_tokens: Some(64),
-        tool_choice: None,
-        additional_params: None,
-        output_schema: None,
-    }
 }
 
 /// What a production client's stream yielded: its text and the names of the
@@ -75,6 +52,26 @@ where
     Ok(streamed)
 }
 
+/// Streams one completion through `model`, offering one tool when `tool`.
+async fn stream<M>(model: M, tool: bool) -> Result<Streamed, String>
+where
+    M: CompletionModel,
+{
+    let mut request = model
+        .completion_request("hello")
+        .preamble("system preamble".to_owned())
+        .max_tokens(64);
+    if tool {
+        request = request.tool(rig::completion::ToolDefinition {
+            name: "lookup".to_owned(),
+            description: "Look up a test value".to_owned(),
+            parameters: json!({ "type": "object", "properties": {} }),
+        });
+    }
+    let stream = request.stream().await.map_err(|error| error.to_string())?;
+    collect(stream).await
+}
+
 async fn chat(backend: &ScriptedBackend, tool: bool) -> Result<Streamed, String> {
     let client = build_openai_chat_completions_client(
         "key",
@@ -82,12 +79,7 @@ async fn chat(backend: &ScriptedBackend, tool: bool) -> Result<Streamed, String>
         ProviderHttpClient::default(),
     )
     .unwrap();
-    let stream = client
-        .completion_model("model")
-        .stream(request(tool))
-        .await
-        .map_err(|error| error.to_string())?;
-    collect(stream).await
+    stream(client.completion_model("model"), tool).await
 }
 
 async fn responses(backend: &ScriptedBackend, tool: bool) -> Result<Streamed, String> {
@@ -98,12 +90,7 @@ async fn responses(backend: &ScriptedBackend, tool: bool) -> Result<Streamed, St
         Default::default(),
     )
     .unwrap();
-    let stream = client
-        .completion_model("model")
-        .stream(request(tool))
-        .await
-        .map_err(|error| error.to_string())?;
-    collect(stream).await
+    stream(client.completion_model("model"), tool).await
 }
 
 #[tokio::test]
