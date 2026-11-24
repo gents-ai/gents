@@ -12,7 +12,17 @@ use crate::backends::registry::{
 
 use super::oauth::OAuthProbeContext;
 use super::probe::{probe_selected_backends, ProbeCycleOutcome, ProbeEnv, ProbeSchedule};
-use super::{BackendHealthMap, BackendProberOptions};
+use super::{AdmittedCallProgress, BackendHealthMap, BackendProberOptions};
+
+/// What a scheduled cycle runs under: the schedule choosing the backends due
+/// (with whether the interval fired), shutdown, and the progress of the calls
+/// admitted to each backend.
+#[derive(Default)]
+pub(super) struct CycleControl<'a> {
+    pub(super) schedule: Option<(&'a mut ProbeSchedule, bool)>,
+    pub(super) cancel: Option<&'a CancellationToken>,
+    pub(super) progress: Option<&'a dyn AdmittedCallProgress>,
+}
 
 pub async fn run_backend_probe_cycle(
     node: Arc<EmbeddedNode>,
@@ -21,7 +31,15 @@ pub async fn run_backend_probe_cycle(
     options: &BackendProberOptions,
     node_did: &str,
 ) -> ProbeCycleOutcome {
-    run_scheduled_backend_probe_cycle(node, client, health_map, options, node_did, None, None).await
+    run_scheduled_backend_probe_cycle(
+        node,
+        client,
+        health_map,
+        options,
+        node_did,
+        CycleControl::default(),
+    )
+    .await
 }
 
 pub(super) async fn run_scheduled_backend_probe_cycle(
@@ -30,9 +48,13 @@ pub(super) async fn run_scheduled_backend_probe_cycle(
     health_map: &BackendHealthMap,
     options: &BackendProberOptions,
     node_did: &str,
-    schedule: Option<(&mut ProbeSchedule, bool)>,
-    cancel: Option<&CancellationToken>,
+    control: CycleControl<'_>,
 ) -> ProbeCycleOutcome {
+    let CycleControl {
+        schedule,
+        cancel,
+        progress,
+    } = control;
     if cancel.is_some_and(CancellationToken::is_cancelled) {
         return ProbeCycleOutcome::default();
     }
@@ -61,6 +83,7 @@ pub(super) async fn run_scheduled_backend_probe_cycle(
             health_map,
             options,
             cancel,
+            progress,
         },
         Some(OAuthProbeContext {
             node: node.clone(),
@@ -107,6 +130,7 @@ pub fn spawn_backend_prober(
     health_events_tx: mpsc::Sender<()>,
     cancel: CancellationToken,
     node_did: String,
+    progress: Arc<dyn AdmittedCallProgress>,
 ) -> tokio::task::JoinHandle<()> {
     let backend_collection =
         gents_store::subscription_source::collection_ids(&node, ["InferenceBackendMetadata"])
@@ -118,7 +142,6 @@ pub fn spawn_backend_prober(
     tokio::spawn(async move {
         let client = match reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
-            .timeout(options.probe_timeout)
             .build()
         {
             Ok(client) => client,
@@ -153,8 +176,11 @@ pub fn spawn_backend_prober(
                 &health_map,
                 &options,
                 &node_did,
-                Some((&mut schedule, periodic)),
-                Some(&cancel),
+                CycleControl {
+                    schedule: Some((&mut schedule, periodic)),
+                    cancel: Some(&cancel),
+                    progress: Some(progress.as_ref()),
+                },
             )
             .await;
             if !outcome.flipped.is_empty() {

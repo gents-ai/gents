@@ -1,8 +1,10 @@
 use super::*;
 use crate::test_support::scripted_backend::ScriptedBackend;
+use rig::completion::CompletionModel as _;
 
 struct CycleFixture {
     db: gents_store::test_support::TestStore,
+    binding: gents_protocol::agent_identity::AgentIdentityBinding,
     _user_identity: gents_store::identity::KeyIdentity,
     user: gents_store::config_client::ConfigAccess,
     runtime: gents_store::config_client::ConfigAccess,
@@ -15,13 +17,14 @@ impl CycleFixture {
             gents_store::node_extension::Extensions::none(),
         )
         .await;
-        let _binding = crate::test_support::default_agent(&signed_home).await;
+        let binding = crate::test_support::default_agent(&signed_home).await;
         let (db, user_identity, user) = signed_home.into_parts();
         let runtime =
             crate::auth::credential::runtime_credential_access(&db.node, db.node_identity.did())
                 .unwrap();
         Self {
             db,
+            binding,
             _user_identity: user_identity,
             user,
             runtime,
@@ -156,6 +159,7 @@ async fn spawned_prober_observes_a_new_backend_before_the_next_periodic_tick() {
         events,
         cancel.clone(),
         initial.node_did.clone(),
+        Arc::new(crate::admission::AdmissionRegistry::new(node.clone())),
     ));
     fixture.wait_for_promotion(&initial).await;
     let initial_health = health.get(&initial.backend_id).await.unwrap();
@@ -515,6 +519,7 @@ async fn probe_shutdown_cancels_pending_backend_without_pruning_or_failure() {
         events,
         cancel.clone(),
         pending.node_did.clone(),
+        Arc::new(crate::admission::AdmissionRegistry::new(node.clone())),
     );
     tokio::time::timeout(Duration::from_secs(2), started.notified())
         .await
@@ -637,6 +642,7 @@ async fn cycle_retention_matches_the_lean_model() {
                 health_map: &health,
                 options: &options,
                 cancel: Some(&cancel),
+                progress: None,
             },
             None,
             None,
@@ -730,8 +736,10 @@ async fn scheduled_cycles_match_the_lean_trace() {
                 &health,
                 &options,
                 fixture.db.node_identity.did(),
-                Some((&mut schedule, step.periodic)),
-                None,
+                super::super::prober::CycleControl {
+                    schedule: Some((&mut schedule, step.periodic)),
+                    ..Default::default()
+                },
             )
             .await;
             let mut probed = health
@@ -781,4 +789,340 @@ async fn scheduled_cycles_match_the_lean_trace() {
         case.check(observations);
         node.shutdown().await.expect("node shutdown");
     }
+}
+
+impl CycleFixture {
+    async fn agent_signer(&self) -> gents_store::identity::ManagedAgentSigner {
+        let signer = gents_store::identity::resolve_agent_identity(
+            self.db.node_identity.as_ref(),
+            &self.binding,
+        )
+        .unwrap()
+        .managed_agent_signer()
+        .unwrap();
+        crate::admission::tests::grant_test_agent(&self.db, &signer).await;
+        signer
+    }
+
+    /// Opens or closes `backend`'s admission as the runtime does from its
+    /// measured health.
+    async fn reconcile_admission(
+        &self,
+        registry: &crate::admission::AdmissionRegistry,
+        backend: &InferenceBackend,
+        health: &BackendHealthMap,
+    ) {
+        let config = crate::admission::BackendAdmissionConfig::from_backend(
+            backend,
+            &self.observation(backend).await,
+        )
+        .unwrap()
+        .with_measured_unhealthy(health.measured_blocks_routing(&backend.backend_id).await);
+        registry.reconcile(
+            1,
+            &rapidhash::RapidHashMap::from_iter([(backend.backend_id.clone(), config)]),
+        );
+    }
+}
+
+/// A model whose calls for `request_id` are admitted to `backend` and sent to
+/// the scripted backend through the production provider client.
+async fn admitted_model(
+    fixture: &CycleFixture,
+    signer: &gents_store::identity::ManagedAgentSigner,
+    registry: &crate::admission::AdmissionRegistry,
+    backend: &InferenceBackend,
+    request_id: &str,
+) -> impl rig::completion::CompletionModel + Send + Sync + 'static {
+    use gents_loop::provider_call::ForCall;
+    use rig::client::CompletionClient;
+    let request =
+        crate::admission::tests::seeded_request(&fixture.db.node, signer, request_id).await;
+    let provider = crate::llm::rig_compat::providers::build_openai_chat_completions_client(
+        "key",
+        &backend.endpoint,
+        crate::clients::provider_http::ProviderHttpClient::new(
+            crate::clients::provider_http::ProviderHttpClient::credential_client().unwrap(),
+        ),
+    )
+    .unwrap()
+    .completion_model("test-model");
+    let mut model = crate::admission::AdmittedCompletionModel::new(
+        provider,
+        registry.clone(),
+        "test-slot-connection",
+        gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT,
+    );
+    model.agent_signer = Some(signer.clone());
+    model.for_call(&gents_loop::provider_call::ProviderCall {
+        admission: Some(
+            gents_loop::provider_call::admission::AdmissionCallContext::for_request(
+                &request,
+                signer.did(),
+                &backend.backend_id,
+            ),
+        ),
+        ..Default::default()
+    })
+}
+
+async fn stream_to_end<M>(model: M, prompt: &str) -> Result<(), rig::completion::CompletionError>
+where
+    M: rig::completion::CompletionModel,
+{
+    use futures::StreamExt;
+    let mut stream = model.completion_request(prompt).stream().await?;
+    while let Some(item) = stream.next().await {
+        item?;
+    }
+    Ok(())
+}
+
+/// One probe cycle whose models request the backend holds: once the `nth`
+/// held probe has arrived, `during` runs inside the probe's window, and the
+/// paused clock then carries the probe to its deadline.
+async fn probe_held_models<F>(
+    node: &Arc<defra_node::Node>,
+    backends: &[InferenceBackend],
+    env: ProbeEnv<'_>,
+    models: &crate::test_support::scripted_backend::HeldCall<'_>,
+    nth: usize,
+    during: F,
+) where
+    F: std::future::Future<Output = ()>,
+{
+    let client = reqwest::Client::new();
+    let cycle = probe_selected_backends(node, &client, backends, env, None, None);
+    tokio::pin!(cycle);
+    tokio::select! {
+        biased;
+        () = models.entered_times(nth) => {}
+        _ = &mut cycle => panic!("probe {nth} ended before its models request arrived"),
+    }
+    during.await;
+    tokio::time::pause();
+    cycle.await;
+    tokio::time::resume();
+}
+
+fn probe_env<'a>(
+    health: &'a BackendHealthMap,
+    options: &'a BackendProberOptions,
+    registry: &'a crate::admission::AdmissionRegistry,
+) -> ProbeEnv<'a> {
+    ProbeEnv {
+        now: Utc::now(),
+        health_map: health,
+        options,
+        cancel: None,
+        progress: Some(registry),
+    }
+}
+
+/// A backend busy streaming a call admitted to it answers its models endpoint
+/// slower than the probe waits; probes that time out while that call receives
+/// response items leave it healthy, and the call queued behind it is admitted.
+#[tokio::test]
+async fn a_busy_backend_whose_models_probes_time_out_stays_routable() {
+    use crate::test_support::scripted_backend::StreamScript;
+    use futures::StreamExt;
+    let fixture = CycleFixture::new().await;
+    let node = fixture.db.node.clone();
+    let scripted = ScriptedBackend::start(
+        "test-model",
+        vec![StreamScript::paused(
+            "busy-call",
+            ["one", "two", "three", "four"],
+        )],
+    )
+    .unwrap();
+    let backend = fixture.backend("busy", scripted.endpoint().to_owned());
+    fixture.seed(&backend, "healthy").await;
+    let backends = vec![backend.clone()];
+    let (health, options) = (BackendHealthMap::new(), BackendProberOptions::default());
+    let registry = crate::admission::AdmissionRegistry::new(node.clone());
+    let signer = fixture.agent_signer().await;
+    probe_selected_backends(
+        &node,
+        &reqwest::Client::new(),
+        &backends,
+        probe_env(&health, &options, &registry),
+        None,
+        None,
+    )
+    .await;
+    fixture
+        .reconcile_admission(&registry, &backend, &health)
+        .await;
+
+    let busy = admitted_model(&fixture, &signer, &registry, &backend, "req-busy").await;
+    let mut stream = busy.completion_request("busy-call").stream().await.unwrap();
+    let queued_model = admitted_model(&fixture, &signer, &registry, &backend, "req-queued").await;
+    let queued = tokio::spawn(stream_to_end(queued_model, "queued call"));
+    crate::admission::tests::wait_for_request_call_state(&node, &signer, "req-queued", "queued")
+        .await;
+
+    let models = scripted.hold_models();
+    for nth in 1..=3 {
+        probe_held_models(
+            &node,
+            &backends,
+            probe_env(&health, &options, &registry),
+            &models,
+            nth,
+            async {
+                stream.next().await.unwrap().unwrap();
+            },
+        )
+        .await;
+    }
+    let snapshot = health.get("busy").await.unwrap();
+    assert_eq!(
+        (snapshot.state, snapshot.failure_count),
+        (BackendHealthState::Healthy, 0)
+    );
+
+    fixture
+        .reconcile_admission(&registry, &backend, &health)
+        .await;
+    scripted.release("busy-call");
+    while let Some(item) = stream.next().await {
+        item.unwrap();
+    }
+    queued.await.unwrap().unwrap();
+}
+
+/// With no call admitted to it, a backend whose models probes time out is
+/// demoted at the third, as failed probes demote it.
+#[tokio::test]
+async fn models_probes_timing_out_with_no_call_in_flight_demote_at_the_threshold() {
+    let fixture = CycleFixture::new().await;
+    let node = fixture.db.node.clone();
+    let scripted = ScriptedBackend::start("test-model", Vec::new()).unwrap();
+    let backend = fixture.backend("idle", scripted.endpoint().to_owned());
+    fixture.seed(&backend, "healthy").await;
+    let backends = vec![backend.clone()];
+    let (health, options) = (BackendHealthMap::new(), BackendProberOptions::default());
+    let registry = crate::admission::AdmissionRegistry::new(node.clone());
+    probe_selected_backends(
+        &node,
+        &reqwest::Client::new(),
+        &backends,
+        probe_env(&health, &options, &registry),
+        None,
+        None,
+    )
+    .await;
+    fixture
+        .reconcile_admission(&registry, &backend, &health)
+        .await;
+
+    let models = scripted.hold_models();
+    for (nth, state) in [
+        (1, BackendHealthState::Degraded),
+        (2, BackendHealthState::Degraded),
+        (3, BackendHealthState::Unhealthy),
+    ] {
+        probe_held_models(
+            &node,
+            &backends,
+            probe_env(&health, &options, &registry),
+            &models,
+            nth,
+            async {},
+        )
+        .await;
+        let snapshot = health.get("idle").await.unwrap();
+        assert_eq!(
+            (snapshot.state, snapshot.failure_count),
+            (state, u32::try_from(nth).unwrap())
+        );
+    }
+}
+
+/// A call admitted before an outage stalls with the backend's models
+/// endpoint; the probes demote the backend, the call queued behind it ends as
+/// `BackendGone`, and the stalled call still finishes by its own response.
+#[tokio::test]
+async fn a_call_in_flight_across_an_outage_finishes_after_its_backend_is_demoted() {
+    use crate::test_support::scripted_backend::{StreamChunk, StreamScript};
+    use futures::StreamExt;
+    let fixture = CycleFixture::new().await;
+    let node = fixture.db.node.clone();
+    let scripted = ScriptedBackend::start(
+        "test-model",
+        vec![StreamScript::paused_before(
+            "stalled-call",
+            vec![StreamChunk::text("late answer")],
+        )],
+    )
+    .unwrap();
+    let backend = fixture.backend("outage", scripted.endpoint().to_owned());
+    fixture.seed(&backend, "healthy").await;
+    let backends = vec![backend.clone()];
+    let (health, options) = (BackendHealthMap::new(), BackendProberOptions::default());
+    let registry = crate::admission::AdmissionRegistry::new(node.clone());
+    let signer = fixture.agent_signer().await;
+    probe_selected_backends(
+        &node,
+        &reqwest::Client::new(),
+        &backends,
+        probe_env(&health, &options, &registry),
+        None,
+        None,
+    )
+    .await;
+    fixture
+        .reconcile_admission(&registry, &backend, &health)
+        .await;
+
+    let stalled = admitted_model(&fixture, &signer, &registry, &backend, "req-stalled").await;
+    let mut stream = stalled
+        .completion_request("stalled-call")
+        .stream()
+        .await
+        .unwrap();
+    let queued_model = admitted_model(&fixture, &signer, &registry, &backend, "req-behind").await;
+    let queued = tokio::spawn(stream_to_end(queued_model, "queued call"));
+    crate::admission::tests::wait_for_request_call_state(&node, &signer, "req-behind", "queued")
+        .await;
+
+    let models = scripted.hold_models();
+    for nth in 1..=3 {
+        probe_held_models(
+            &node,
+            &backends,
+            probe_env(&health, &options, &registry),
+            &models,
+            nth,
+            async {},
+        )
+        .await;
+    }
+    assert!(health.measured_blocks_routing("outage").await);
+
+    fixture
+        .reconcile_admission(&registry, &backend, &health)
+        .await;
+    let gone = queued
+        .await
+        .unwrap()
+        .expect_err("a demoted backend admits no queued call");
+    assert!(gone.to_string().contains("BackendGone"), "{gone}");
+
+    scripted.release("stalled-call");
+    let mut text = String::new();
+    while let Some(item) = stream.next().await {
+        if let rig::streaming::StreamedAssistantContent::Text(chunk) = item.unwrap() {
+            text.push_str(&chunk.text);
+        }
+    }
+    assert_eq!(text, "late answer");
+    crate::admission::tests::wait_for_request_call_state(
+        &node,
+        &signer,
+        "req-stalled",
+        "completed",
+    )
+    .await;
 }
