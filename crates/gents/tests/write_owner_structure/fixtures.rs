@@ -18,8 +18,6 @@ const FIXTURE_NAMES: &[&str] = &[
     "test_db",
     "spawn_runtime",
     "node_builder",
-    "MockModelEndpoint",
-    "FakeLlm",
     "managed_agent",
     "ManagedAgentFixture",
     "test_identity",

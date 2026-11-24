@@ -1,21 +1,25 @@
 use rapidhash::{RapidHashMap, RapidHashSet};
 use std::collections::VecDeque;
-use std::convert::Infallible;
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use axum::extract::State;
+use axum::extract::{ConnectInfo, State};
 use axum::http::{header, HeaderMap, StatusCode, Uri};
-use axum::response::sse::{Event, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
-use futures::StreamExt as _;
 use gents_store::test_support::STALL_CEILING;
-use serde_json::json;
+use serde_json::{json, Value};
 use tokio::sync::{oneshot, Notify};
 
-#[derive(Clone, Debug)]
+mod listener;
+mod wire;
+
+use listener::{PeerAddr, TrackedListener};
+use wire::Wire;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StreamChunk {
     Text(String),
     Reasoning(String),
@@ -48,24 +52,25 @@ impl StreamChunk {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StreamScript {
     marker: String,
     chunks: Vec<StreamChunk>,
-    pause_before_chunks: bool,
-    pause_after_chunks: bool,
+    /// The stream waits for the marker's release before this chunk.
+    pause_at: Option<usize>,
 }
 
 impl StreamScript {
+    /// Streams `chunks`, then waits for the marker's release before ending.
     pub fn paused(
         marker: impl Into<String>,
         chunks: impl IntoIterator<Item = &'static str>,
     ) -> Self {
+        let chunks: Vec<_> = chunks.into_iter().map(StreamChunk::text).collect();
         Self {
             marker: marker.into(),
-            chunks: chunks.into_iter().map(StreamChunk::text).collect(),
-            pause_before_chunks: false,
-            pause_after_chunks: true,
+            pause_at: Some(chunks.len()),
+            chunks,
         }
     }
 
@@ -73,34 +78,44 @@ impl StreamScript {
         marker: impl Into<String>,
         chunks: impl IntoIterator<Item = &'static str>,
     ) -> Self {
-        Self {
-            marker: marker.into(),
-            chunks: chunks.into_iter().map(StreamChunk::text).collect(),
-            pause_before_chunks: false,
-            pause_after_chunks: false,
-        }
+        Self::streams(marker, chunks.into_iter().map(StreamChunk::text).collect())
     }
 
     pub fn streams(marker: impl Into<String>, chunks: Vec<StreamChunk>) -> Self {
         Self {
             marker: marker.into(),
             chunks,
-            pause_before_chunks: false,
-            pause_after_chunks: false,
+            pause_at: None,
         }
     }
 
+    /// Opens the stream, then waits for the marker's release before any chunk.
     pub fn paused_before(marker: impl Into<String>, chunks: Vec<StreamChunk>) -> Self {
         Self {
             marker: marker.into(),
             chunks,
-            pause_before_chunks: true,
-            pause_after_chunks: false,
+            pause_at: Some(0),
         }
+    }
+
+    /// Chunks streamed after the pause, once the marker is released.
+    pub fn then(mut self, chunks: Vec<StreamChunk>) -> Self {
+        self.chunks.extend(chunks);
+        self
     }
 
     fn ends_with_tool_call(&self) -> bool {
         matches!(self.chunks.last(), Some(StreamChunk::ToolCall { .. }))
+    }
+
+    fn text(&self) -> String {
+        self.chunks
+            .iter()
+            .filter_map(|chunk| match chunk {
+                StreamChunk::Text(text) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect()
     }
 }
 
@@ -151,11 +166,22 @@ impl StreamPlan {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StreamResponse {
     Stream(StreamScript),
-    HoldHeaders(StreamScript),
-    HttpStatus { status: u16, body: String },
+    /// Answered with `then` once `gate` is released; failing or closing the
+    /// gate ends the call before its response starts.
+    Held {
+        gate: String,
+        then: Box<StreamResponse>,
+    },
+    HttpStatus {
+        status: u16,
+        body: String,
+    },
+    /// The server closes the connection the request arrived on without
+    /// answering, as a server whose idle timeout fires as a request arrives.
+    Disconnect,
 }
 
 impl StreamResponse {
@@ -170,29 +196,59 @@ impl StreamResponse {
         StreamResponse::Stream(StreamScript::streams(marker, chunks))
     }
 
-    pub fn service_unavailable(message: impl Into<String>) -> Self {
-        StreamResponse::HttpStatus {
-            status: StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-            body: error_body(&message.into()),
-        }
+    /// One streamed text reply.
+    pub fn text(text: impl Into<String>) -> Self {
+        Self::streams(REPLY_MARKER, vec![StreamChunk::text(text)])
     }
 
-    pub fn bad_request(body: impl Into<String>) -> Self {
+    /// One streamed call to `name`.
+    pub fn tool_call(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        arguments: impl Into<String>,
+    ) -> Self {
+        Self::streams(
+            REPLY_MARKER,
+            vec![StreamChunk::tool_call(id, name, arguments)],
+        )
+    }
+
+    pub fn status(status: u16, body: impl Into<String>) -> Self {
         StreamResponse::HttpStatus {
-            status: StatusCode::BAD_REQUEST.as_u16(),
+            status,
             body: body.into(),
         }
     }
 
-    fn not_found() -> Self {
-        StreamResponse::HttpStatus {
-            status: StatusCode::NOT_FOUND.as_u16(),
-            body: r#"{"error":"not found"}"#.to_owned(),
+    pub fn service_unavailable(message: impl Into<String>) -> Self {
+        Self::status(
+            StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+            error_body(&message.into()),
+        )
+    }
+
+    pub fn bad_request(body: impl Into<String>) -> Self {
+        Self::status(StatusCode::BAD_REQUEST.as_u16(), body)
+    }
+
+    /// This response, sent once `gate` is released.
+    pub fn after(self, gate: impl Into<String>) -> Self {
+        StreamResponse::Held {
+            gate: gate.into(),
+            then: Box::new(self),
         }
+    }
+
+    fn not_found() -> Self {
+        Self::status(StatusCode::NOT_FOUND.as_u16(), r#"{"error":"not found"}"#)
     }
 }
 
-/// What the backend answers to a completion no plan scripts.
+const REPLY_MARKER: &str = "__reply__";
+const DEFAULT_REPLY: &str = "mock response";
+const MODELS_GATE: &str = "__models__";
+
+/// What the backend answers to a completion no responder or plan scripts.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Unscripted {
     /// A short streamed reply.
@@ -202,6 +258,10 @@ pub enum Unscripted {
     Refuse,
     /// Never answered while the backend lives.
     Hold,
+    /// Answers as a reasoning model: a tool-bearing request gets a reasoning
+    /// item and a call to its first tool, and once that call's output arrives,
+    /// a reasoning item and a reply.
+    ReasoningToolTurn,
 }
 
 /// How a held completion ends once the test lets it go.
@@ -221,9 +281,12 @@ pub struct RecordedRequest {
     pub body: String,
 }
 
+type Responder = Arc<dyn Fn(&Value) -> Option<StreamResponse> + Send + Sync>;
+
 pub struct ScriptedBackendBuilder {
-    model_name: String,
+    models: Vec<String>,
     plans: Vec<StreamPlan>,
+    responder: Option<Responder>,
     unscripted: Unscripted,
     usage: bool,
     bearer: Option<String>,
@@ -239,6 +302,29 @@ impl ScriptedBackendBuilder {
     pub fn plans(mut self, plans: Vec<StreamPlan>) -> Self {
         self.plans.extend(plans);
         self
+    }
+
+    /// The model ids `/v1/models` lists after the first.
+    pub fn models(mut self, models: &[&str]) -> Self {
+        self.models
+            .extend(models.iter().map(|model| (*model).to_owned()));
+        self
+    }
+
+    /// Answers each completion `respond` returns a response for, before any
+    /// plan; it sees the parsed request body.
+    pub fn respond(
+        mut self,
+        respond: impl Fn(&Value) -> Option<StreamResponse> + Send + Sync + 'static,
+    ) -> Self {
+        self.responder = Some(Arc::new(respond));
+        self
+    }
+
+    /// Answers every completion with `text`.
+    pub fn replies(self, text: &str) -> Self {
+        let text = text.to_owned();
+        self.respond(move |_| Some(StreamResponse::text(text.clone())))
     }
 
     pub fn unscripted(mut self, unscripted: Unscripted) -> Self {
@@ -260,35 +346,44 @@ impl ScriptedBackendBuilder {
 
     pub fn start(self) -> anyhow::Result<ScriptedBackend> {
         let stop = Arc::new(AtomicBool::new(false));
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+        listener.set_nonblocking(true)?;
+        let port = listener.local_addr()?.port();
+        let connections = listener::Connections::default();
         let state = Arc::new(StreamingState {
-            model_name: self.model_name,
+            models: self.models,
             plans: self.plans,
+            responder: self.responder,
             unscripted: self.unscripted,
             usage: self.usage,
             bearer: self.bearer,
             stop: stop.clone(),
+            connections: connections.clone(),
             inner: Mutex::new(StreamingStateInner::default()),
             notify: Notify::new(),
         });
         let app = Router::new()
             .route("/v1/models", get(handle_models))
             .route("/models", get(handle_models))
+            .route("/v1/models-v2", get(handle_models))
+            .route("/models-v2", get(handle_models))
             .route("/v1/key", get(handle_key))
             .route("/key", get(handle_key))
             .route("/v1/chat/completions", post(handle_chat))
             .route("/chat/completions", post(handle_chat))
             .route("/v1/messages", post(handle_messages))
             .route("/messages", post(handle_messages))
+            .route("/v1/responses", post(handle_responses))
+            .route("/responses", post(handle_responses))
             .fallback(handle_fallback)
-            .with_state(state.clone());
+            .with_state(state.clone())
+            .into_make_service_with_connect_info::<PeerAddr>();
 
-        let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
-        listener.set_nonblocking(true)?;
-        let port = listener.local_addr()?.port();
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let (stopped_tx, stopped_rx) = oneshot::channel::<()>();
         std::thread::Builder::new()
             .name("scripted-backend".to_owned())
             .spawn(move || {
@@ -296,32 +391,37 @@ impl ScriptedBackendBuilder {
                     let Ok(listener) = tokio::net::TcpListener::from_std(listener) else {
                         return;
                     };
+                    let listener = TrackedListener::new(listener, connections);
                     tokio::select! {
                         _ = axum::serve(listener, app) => {}
                         _ = shutdown_rx => {}
                     }
                 });
+                drop(runtime);
+                let _ = stopped_tx.send(());
             })?;
 
         Ok(ScriptedBackend {
             endpoint: format!("http://127.0.0.1:{port}/v1"),
             state,
             shutdown: Some(shutdown_tx),
+            stopped: Some(stopped_rx),
         })
     }
 }
 
 /// The one model-provider double: an HTTP server speaking the OpenAI chat
-/// completions and Claude Messages wires, answering each completion from the
-/// plan whose marker it carries. The runtime reaches it through the production
-/// backend client, so no production seam stands in for the provider. It serves
-/// from a thread and runtime of its own, so a test that blocks its thread on a
-/// spawned process is still answered; dropping it stops the server and its
-/// open connections.
+/// completions, OpenAI Responses and Claude Messages wires, answering each
+/// completion from its responder, else the plan whose marker it carries. The
+/// runtime reaches it through the production backend client, so no production
+/// seam stands in for the provider. It serves from a thread and runtime of its
+/// own, so a test that blocks its thread on a spawned process is still
+/// answered; dropping it stops the server and its open connections.
 pub struct ScriptedBackend {
     endpoint: String,
     state: Arc<StreamingState>,
     shutdown: Option<oneshot::Sender<()>>,
+    stopped: Option<oneshot::Receiver<()>>,
 }
 
 /// A completion the backend holds before answering: [`Self::entered`]
@@ -347,16 +447,16 @@ impl HeldCall<'_> {
             })
             .await;
         if entered.is_none() {
-            panic!("no completion carrying {marker} arrived within {STALL_CEILING:?}");
+            panic!("no request carrying {marker} arrived within {STALL_CEILING:?}");
         }
     }
 
-    /// Answers the held completion with its script.
+    /// Answers the held request with its script.
     pub fn release(&self) {
         self.backend.state.release(&self.marker, Release::Complete);
     }
 
-    /// Fails the held completion with `status`; a stream already under way
+    /// Fails the held request with `status`; a stream already under way
     /// carries the failure as its last event.
     pub fn fail(&self, status: u16, message: &str) {
         self.backend.state.release(
@@ -368,7 +468,7 @@ impl HeldCall<'_> {
         );
     }
 
-    /// Ends the held completion's stream with no terminal event.
+    /// Ends the held request's stream with no terminal event.
     pub fn close(&self) {
         self.backend.state.release(&self.marker, Release::Close);
     }
@@ -377,8 +477,9 @@ impl HeldCall<'_> {
 impl ScriptedBackend {
     pub fn builder(model_name: &str) -> ScriptedBackendBuilder {
         ScriptedBackendBuilder {
-            model_name: model_name.to_owned(),
+            models: vec![model_name.to_owned()],
             plans: Vec::new(),
+            responder: None,
             unscripted: Unscripted::default(),
             usage: true,
             bearer: None,
@@ -397,6 +498,15 @@ impl ScriptedBackend {
         &self.endpoint
     }
 
+    /// Stops the server and returns once its port no longer accepts.
+    pub async fn shutdown(mut self) {
+        let stopped = self.stopped.take();
+        drop(self);
+        if let Some(stopped) = stopped {
+            let _ = stopped.await;
+        }
+    }
+
     /// Holds every completion carrying `marker` before its response starts,
     /// until the returned call ends it.
     pub fn hold(&self, marker: &str) -> HeldCall<'_> {
@@ -407,7 +517,13 @@ impl ScriptedBackend {
         }
     }
 
-    /// Lets the paused script or held call for `marker` complete.
+    /// Holds every `/v1/models` request until the returned call ends it.
+    pub fn hold_models(&self) -> HeldCall<'_> {
+        self.hold(MODELS_GATE)
+    }
+
+    /// Lets the paused script, gated response or held call for `marker`
+    /// complete, now and for every later request it gates.
     pub fn release(&self, marker: &str) {
         self.state.release(marker, Release::Complete);
     }
@@ -458,7 +574,7 @@ impl ScriptedBackend {
         self.state.notify.notify_waiters();
     }
 
-    pub fn observed_completion_bodies(&self) -> Vec<serde_json::Value> {
+    pub fn observed_completion_bodies(&self) -> Vec<Value> {
         self.state.lock().completion_bodies.clone()
     }
 
@@ -469,7 +585,7 @@ impl ScriptedBackend {
     /// The completions issued for requests' own turns. A session-title audit
     /// is its own auxiliary request racing the request that opened the
     /// session, so its completion has no fixed position among them.
-    pub fn observed_turn_completion_bodies(&self) -> Vec<serde_json::Value> {
+    pub fn observed_turn_completion_bodies(&self) -> Vec<Value> {
         self.observed_completion_bodies()
             .into_iter()
             .filter(|body| !body_is_session_title(body))
@@ -507,12 +623,14 @@ impl Drop for ScriptedBackend {
 }
 
 struct StreamingState {
-    model_name: String,
+    models: Vec<String>,
     plans: Vec<StreamPlan>,
+    responder: Option<Responder>,
     unscripted: Unscripted,
     usage: bool,
     bearer: Option<String>,
     stop: Arc<AtomicBool>,
+    connections: listener::Connections,
     inner: Mutex<StreamingStateInner>,
     notify: Notify,
 }
@@ -521,7 +639,7 @@ struct StreamingState {
 struct StreamingStateInner {
     chunk_counts: RapidHashMap<String, usize>,
     request_counts: RapidHashMap<String, usize>,
-    completion_bodies: Vec<serde_json::Value>,
+    completion_bodies: Vec<Value>,
     recorded: Vec<RecordedRequest>,
     releases: RapidHashMap<String, Release>,
     held: RapidHashSet<String>,
@@ -537,6 +655,10 @@ impl StreamingState {
 
     fn stopped(&self) -> bool {
         self.stop.load(Ordering::Relaxed)
+    }
+
+    fn model_name(&self) -> &str {
+        &self.models[0]
     }
 
     /// Resolves with the first value `ready` yields, re-checking on each
@@ -578,8 +700,10 @@ impl StreamingState {
         }
     }
 
-    fn record(&self, method: &str, uri: &Uri, headers: &HeaderMap, body: &str) {
-        self.lock().recorded.push(RecordedRequest {
+    /// Records the request; returns its position in the request log, from 1.
+    fn record(&self, method: &str, uri: &Uri, headers: &HeaderMap, body: &str) -> usize {
+        let mut inner = self.lock();
+        inner.recorded.push(RecordedRequest {
             method: method.to_owned(),
             path: uri.path().to_owned(),
             headers: headers
@@ -593,7 +717,10 @@ impl StreamingState {
                 .collect(),
             body: body.to_owned(),
         });
+        let ordinal = inner.recorded.len();
+        drop(inner);
         self.notify.notify_waiters();
+        ordinal
     }
 
     fn authorized(&self, headers: &HeaderMap) -> bool {
@@ -605,14 +732,17 @@ impl StreamingState {
         })
     }
 
-    fn record_completion_body(&self, body: &str) {
-        let value = serde_json::from_str::<serde_json::Value>(body)
-            .unwrap_or_else(|_| json!({ "__unparsed__": body }));
-        self.lock().completion_bodies.push(value);
+    fn record_completion_body(&self, body: &Value) {
+        self.lock().completion_bodies.push(body.clone());
         self.notify.notify_waiters();
     }
 
-    async fn unscripted_response(&self, script: StreamScript) -> StreamResponse {
+    async fn unscripted_response(
+        &self,
+        script: StreamScript,
+        body: &Value,
+        ordinal: usize,
+    ) -> StreamResponse {
         match self.unscripted {
             Unscripted::Reply => StreamResponse::Stream(script),
             Unscripted::Refuse => StreamResponse::not_found(),
@@ -620,16 +750,23 @@ impl StreamingState {
                 self.wait_for(|_| None::<()>).await;
                 StreamResponse::not_found()
             }
+            Unscripted::ReasoningToolTurn => wire::reasoning_tool_turn(body, ordinal)
+                .map_or(StreamResponse::Stream(script), StreamResponse::Stream),
         }
     }
 
-    async fn next_response(&self, body: &str) -> StreamResponse {
-        if request_is_session_title(body) {
+    async fn next_response(&self, raw: &str, body: &Value, ordinal: usize) -> StreamResponse {
+        if body_is_session_title(body) {
             return self
-                .unscripted_response(StreamScript::completes("__session_title__", ["mock-title"]))
+                .unscripted_response(
+                    StreamScript::completes("__session_title__", ["mock-title"]),
+                    body,
+                    ordinal,
+                )
                 .await;
         }
-        let matching_plans = match matching_plans(&self.plans, body) {
+        let default = || StreamScript::completes("__default__", [DEFAULT_REPLY]);
+        let matching_plans = match matching_plans(&self.plans, raw, body) {
             Ok(plans) => plans,
             Err(diagnostic) => return StreamResponse::bad_request(diagnostic),
         };
@@ -654,12 +791,7 @@ impl StreamingState {
                     return response;
                 }
             }
-            return self
-                .unscripted_response(StreamScript::completes(
-                    "__default__",
-                    ["mock streamed response"],
-                ))
-                .await;
+            return self.unscripted_response(default(), body, ordinal).await;
         };
 
         let response_index = self.reserve_response_index(&plan.marker);
@@ -688,29 +820,37 @@ impl StreamingState {
             .get(response_index)
             .or_else(|| plan.responses.last())
             .cloned()
-            .unwrap_or_else(|| {
-                StreamResponse::Stream(StreamScript::completes(
-                    "__default__",
-                    ["mock streamed response"],
-                ))
-            })
+            .unwrap_or_else(|| StreamResponse::Stream(default()))
     }
 
-    /// The held marker the completion carries, counted as an entry to it.
+    /// The held marker the request carries, counted as an entry to it.
     fn enter_hold(&self, body: &str) -> Option<String> {
-        if request_is_session_title(body) {
-            return None;
-        }
         let mut inner = self.lock();
         let marker = inner
             .held
             .iter()
+            .filter(|marker| marker.as_str() != MODELS_GATE)
             .find(|marker| body.contains(marker.as_str()))
             .cloned()?;
         *inner.held_entries.entry(marker.clone()).or_default() += 1;
         drop(inner);
         self.notify.notify_waiters();
         Some(marker)
+    }
+
+    /// Whether `/v1/models` is held, counting this request as an entry.
+    fn enter_models_hold(&self) -> bool {
+        let mut inner = self.lock();
+        if !inner.held.contains(MODELS_GATE) {
+            return false;
+        }
+        *inner
+            .held_entries
+            .entry(MODELS_GATE.to_owned())
+            .or_default() += 1;
+        drop(inner);
+        self.notify.notify_waiters();
+        true
     }
 
     fn reserve_response_index(&self, marker: &str) -> usize {
@@ -762,19 +902,15 @@ fn error_body(message: &str) -> String {
     json!({ "error": { "message": message, "type": "server_error" } }).to_string()
 }
 
-fn request_is_session_title(body: &str) -> bool {
-    serde_json::from_str::<serde_json::Value>(body).is_ok_and(|body| body_is_session_title(&body))
-}
-
 const SESSION_TITLE_PROMPT: &str = "Generate concise conversation titles.";
 
-fn body_is_session_title(body: &serde_json::Value) -> bool {
+fn body_is_session_title(body: &Value) -> bool {
     let system_message = body
         .get("messages")
-        .and_then(serde_json::Value::as_array)
+        .and_then(Value::as_array)
         .and_then(|messages| messages.first())
         .is_some_and(|message| {
-            message.get("role").and_then(serde_json::Value::as_str) == Some("system")
+            message.get("role").and_then(Value::as_str) == Some("system")
                 && message
                     .get("content")
                     .is_some_and(|content| content.to_string().contains(SESSION_TITLE_PROMPT))
@@ -785,24 +921,23 @@ fn body_is_session_title(body: &serde_json::Value) -> bool {
     body.get("tools").is_none() && (system_message || system_field)
 }
 
-fn current_authored_user_input(body: &str) -> Result<String, String> {
-    let body = serde_json::from_str::<serde_json::Value>(body)
-        .map_err(|error| format!("invalid mock provider request JSON: {error}"))?;
+fn current_authored_user_input(body: &Value) -> Result<String, String> {
+    if body.get("__unparsed__").is_some() {
+        return Err("invalid mock provider request JSON".to_string());
+    }
     body.get("messages")
-        .and_then(serde_json::Value::as_array)
+        .and_then(Value::as_array)
         .ok_or_else(|| "mock provider request is missing messages array".to_string())?
         .iter()
         .rev()
-        .filter(|message| message.get("role").and_then(serde_json::Value::as_str) == Some("user"))
+        .filter(|message| message.get("role").and_then(Value::as_str) == Some("user"))
         .find_map(|message| match message.get("content")? {
-            serde_json::Value::String(text) => Some(text.clone()),
-            serde_json::Value::Array(blocks) => {
+            Value::String(text) => Some(text.clone()),
+            Value::Array(blocks) => {
                 let text = blocks
                     .iter()
-                    .filter(|block| {
-                        block.get("type").and_then(serde_json::Value::as_str) == Some("text")
-                    })
-                    .filter_map(|block| block.get("text").and_then(serde_json::Value::as_str))
+                    .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
+                    .filter_map(|block| block.get("text").and_then(Value::as_str))
                     .collect::<Vec<_>>()
                     .join("\n");
                 (!text.is_empty()).then_some(text)
@@ -812,7 +947,11 @@ fn current_authored_user_input(body: &str) -> Result<String, String> {
         .ok_or_else(|| "mock provider request has no authored user input".to_string())
 }
 
-fn matching_plans<'a>(plans: &'a [StreamPlan], body: &str) -> Result<Vec<&'a StreamPlan>, String> {
+fn matching_plans<'a>(
+    plans: &'a [StreamPlan],
+    raw: &str,
+    body: &Value,
+) -> Result<Vec<&'a StreamPlan>, String> {
     let current_input = current_authored_user_input(body);
     let current_matches = plans
         .iter()
@@ -844,16 +983,14 @@ fn matching_plans<'a>(plans: &'a [StreamPlan], body: &str) -> Result<Vec<&'a Str
     }
     Ok(plans
         .iter()
-        .find(|plan| {
-            matches!(plan.selector, PlanSelector::WholeBody) && body.contains(&plan.marker)
-        })
+        .find(|plan| matches!(plan.selector, PlanSelector::WholeBody) && raw.contains(&plan.marker))
         .into_iter()
         .collect())
 }
 
 fn matching_dynamic_markers(
     markers: &RapidHashSet<String>,
-    body: &str,
+    body: &Value,
 ) -> Result<Vec<String>, String> {
     if markers.is_empty() {
         return Ok(Vec::new());
@@ -872,15 +1009,15 @@ fn matching_dynamic_markers(
     Ok(matched)
 }
 
-fn request_is_streaming(body: &str) -> bool {
-    serde_json::from_str::<serde_json::Value>(body)
-        .ok()
-        .and_then(|value| value.get("stream").and_then(serde_json::Value::as_bool))
-        .unwrap_or(false)
-}
-
 fn json_response(status: StatusCode, body: String) -> Response {
     (status, [(header::CONTENT_TYPE, "application/json")], body).into_response()
+}
+
+fn http_status(status: u16, body: String) -> Response {
+    json_response(
+        StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+        body,
+    )
 }
 
 fn unauthorized() -> Response {
@@ -892,6 +1029,7 @@ fn unauthorized() -> Response {
 
 async fn handle_models(
     State(state): State<Arc<StreamingState>>,
+    ConnectInfo(peer): ConnectInfo<PeerAddr>,
     uri: Uri,
     headers: HeaderMap,
 ) -> Response {
@@ -899,9 +1037,31 @@ async fn handle_models(
     if !state.authorized(&headers) {
         return unauthorized();
     }
+    if state.enter_models_hold() {
+        match state.released(MODELS_GATE).await {
+            Some(Release::Complete) => {}
+            Some(Release::Fail { status, message }) => {
+                return http_status(status, error_body(&message));
+            }
+            Some(Release::Close) | None => {
+                state.connections.close(peer.0);
+                return wire::closed_stream();
+            }
+        }
+    }
+    let data = state
+        .models
+        .iter()
+        .map(|model| json!({ "id": model }))
+        .collect::<Vec<_>>();
+    let models = state
+        .models
+        .iter()
+        .map(|model| json!({ "model": model, "name": model }))
+        .collect::<Vec<_>>();
     json_response(
         StatusCode::OK,
-        format!(r#"{{"data":[{{"id":"{}"}}]}}"#, state.model_name),
+        json!({ "data": data, "models": models }).to_string(),
     )
 }
 
@@ -920,415 +1080,131 @@ async fn handle_key(
     )
 }
 
-#[derive(Clone, Copy)]
-enum Wire {
-    ChatCompletions,
-    Messages,
-}
-
 async fn handle_chat(
     State(state): State<Arc<StreamingState>>,
+    ConnectInfo(peer): ConnectInfo<PeerAddr>,
     uri: Uri,
     headers: HeaderMap,
     body: String,
 ) -> Response {
-    handle_completion(state, Wire::ChatCompletions, uri, headers, body).await
+    let request = Request {
+        wire: Wire::ChatCompletions,
+        peer: peer.0,
+    };
+    handle_completion(state, request, uri, headers, body).await
 }
 
 async fn handle_messages(
     State(state): State<Arc<StreamingState>>,
+    ConnectInfo(peer): ConnectInfo<PeerAddr>,
     uri: Uri,
     headers: HeaderMap,
     body: String,
 ) -> Response {
-    handle_completion(state, Wire::Messages, uri, headers, body).await
+    let request = Request {
+        wire: Wire::Messages,
+        peer: peer.0,
+    };
+    handle_completion(state, request, uri, headers, body).await
+}
+
+async fn handle_responses(
+    State(state): State<Arc<StreamingState>>,
+    ConnectInfo(peer): ConnectInfo<PeerAddr>,
+    uri: Uri,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    let request = Request {
+        wire: Wire::Responses,
+        peer: peer.0,
+    };
+    handle_completion(state, request, uri, headers, body).await
+}
+
+#[derive(Clone, Copy)]
+struct Request {
+    wire: Wire,
+    peer: SocketAddr,
 }
 
 async fn handle_completion(
     state: Arc<StreamingState>,
-    wire: Wire,
+    request: Request,
     uri: Uri,
     headers: HeaderMap,
-    body: String,
+    raw: String,
 ) -> Response {
-    state.record("POST", &uri, &headers, &body);
+    let ordinal = state.record("POST", &uri, &headers, &raw);
     if !state.authorized(&headers) {
         return unauthorized();
     }
+    let body =
+        serde_json::from_str::<Value>(&raw).unwrap_or_else(|_| json!({ "__unparsed__": raw }));
     state.record_completion_body(&body);
-    if let Some(marker) = state.enter_hold(&body) {
-        match state.released(&marker).await {
-            Some(Release::Complete) => {}
-            Some(Release::Fail { status, message }) => {
-                return http_status(status, error_body(&message));
+    let streaming = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
+    let title = body_is_session_title(&body);
+    if !title {
+        if let Some(marker) = state.enter_hold(&raw) {
+            match state.released(&marker).await {
+                Some(Release::Complete) => {}
+                Some(Release::Fail { status, message }) => {
+                    return http_status(status, error_body(&message));
+                }
+                Some(Release::Close) | None => return wire::closed_stream(),
             }
-            Some(Release::Close) | None => return closed_stream(),
         }
     }
-    if !request_is_streaming(&body) {
-        let fallback = StreamScript::completes("__complete__", ["mock-title"]);
-        return match state.unscripted_response(fallback).await {
-            StreamResponse::HttpStatus { status, body } => http_status(status, body),
-            _ => json_response(StatusCode::OK, complete_reply(&state, wire)),
-        };
+    let response = match state.responder.as_ref().and_then(|respond| respond(&body)) {
+        Some(response) => response,
+        None if streaming => state.next_response(&raw, &body, ordinal).await,
+        None => {
+            let fallback = StreamScript::completes("__complete__", ["mock-title"]);
+            state.unscripted_response(fallback, &body, ordinal).await
+        }
+    };
+    let reply = wire::Reply {
+        wire: request.wire,
+        streaming,
+        ordinal,
+    };
+    answer(state, request, reply, response).await
+}
+
+async fn answer(
+    state: Arc<StreamingState>,
+    request: Request,
+    reply: wire::Reply,
+    response: StreamResponse,
+) -> Response {
+    let mut response = response;
+    loop {
+        match response {
+            StreamResponse::Stream(script) => return wire::stream(script, state, reply),
+            StreamResponse::Held { gate, then } => match state.released(&gate).await {
+                Some(Release::Complete) => response = *then,
+                Some(Release::Fail { status, message }) => {
+                    return http_status(status, error_body(&message));
+                }
+                Some(Release::Close) | None => return wire::closed_stream(),
+            },
+            StreamResponse::HttpStatus { status, body } => return http_status(status, body),
+            StreamResponse::Disconnect => {
+                state.connections.close(request.peer);
+                return wire::closed_stream();
+            }
+        }
     }
-    match state.next_response(&body).await {
-        StreamResponse::Stream(script) => streaming_response(script, state, wire),
-        StreamResponse::HoldHeaders(script) => match state.released(&script.marker).await {
-            Some(Release::Fail { status, message }) => http_status(status, error_body(&message)),
-            Some(Release::Complete) => streaming_response(script, state, wire),
-            Some(Release::Close) | None => closed_stream(),
-        },
-        StreamResponse::HttpStatus { status, body } => http_status(status, body),
-    }
 }
 
-fn closed_stream() -> Response {
-    Sse::new(futures::stream::empty::<Result<Event, Infallible>>()).into_response()
-}
-
-fn http_status(status: u16, body: String) -> Response {
-    json_response(
-        StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-        body,
-    )
-}
-
-async fn handle_fallback() -> Response {
+async fn handle_fallback(
+    State(state): State<Arc<StreamingState>>,
+    uri: Uri,
+    headers: HeaderMap,
+) -> Response {
+    state.record("OTHER", &uri, &headers, "");
     json_response(StatusCode::NOT_FOUND, r#"{"error":"not found"}"#.to_owned())
 }
 
-/// The non-streamed reply every unscripted completion receives.
-fn complete_reply(state: &StreamingState, wire: Wire) -> String {
-    let mut reply = match wire {
-        Wire::ChatCompletions => json!({
-            "id": "chatcmpl-title",
-            "object": "chat.completion",
-            "created": 1_710_000_000_u64,
-            "model": state.model_name,
-            "choices": [{
-                "index": 0,
-                "finish_reason": "stop",
-                "message": {
-                    "role": "assistant",
-                    "content": "mock-title",
-                    "refusal": null,
-                    "reasoning": null
-                }
-            }],
-            "usage": { "prompt_tokens": 4, "completion_tokens": 1, "total_tokens": 5 }
-        }),
-        Wire::Messages => json!({
-            "id": "msg_scripted",
-            "type": "message",
-            "role": "assistant",
-            "model": state.model_name,
-            "content": [{ "type": "text", "text": "mock-title" }],
-            "stop_reason": "end_turn",
-            "stop_sequence": null,
-            "usage": { "input_tokens": 4, "output_tokens": 1 }
-        }),
-    };
-    if !state.usage {
-        if let Some(reply) = reply.as_object_mut() {
-            reply.remove("usage");
-        }
-    }
-    reply.to_string()
-}
-
-fn streaming_response(script: StreamScript, state: Arc<StreamingState>, wire: Wire) -> Response {
-    #[derive(Clone, Copy)]
-    enum Phase {
-        Start,
-        AwaitInitialRelease,
-        Chunk(usize),
-        AwaitRelease,
-        Finish,
-        Finished,
-    }
-
-    let init = (Phase::Start, script, state);
-    let stream = futures::stream::unfold(init, move |(phase, script, state)| async move {
-        let mut phase = phase;
-        loop {
-            match phase {
-                Phase::Start => {
-                    let next = if script.pause_before_chunks {
-                        Phase::AwaitInitialRelease
-                    } else {
-                        Phase::Chunk(0)
-                    };
-                    let events = start_events(&state, wire);
-                    if events.is_empty() {
-                        phase = next;
-                        continue;
-                    }
-                    return Some((events, (next, script, state)));
-                }
-                Phase::AwaitInitialRelease | Phase::AwaitRelease => {
-                    let after = if matches!(phase, Phase::AwaitInitialRelease) {
-                        Phase::Chunk(0)
-                    } else {
-                        Phase::Finish
-                    };
-                    match state.released(&script.marker).await {
-                        Some(Release::Complete) => phase = after,
-                        Some(Release::Fail { message, .. }) => {
-                            return Some((
-                                error_events(wire, &message),
-                                (Phase::Finished, script, state),
-                            ));
-                        }
-                        Some(Release::Close) | None => return None,
-                    }
-                }
-                Phase::Chunk(index) => {
-                    if state.stopped() {
-                        return None;
-                    }
-                    if index < script.chunks.len() {
-                        let events = chunk_events(wire, index, &script.chunks[index]);
-                        state.record_chunk(&script.marker);
-                        return Some((events, (Phase::Chunk(index + 1), script, state)));
-                    }
-                    phase = if script.pause_after_chunks {
-                        Phase::AwaitRelease
-                    } else {
-                        Phase::Finish
-                    };
-                }
-                Phase::Finish => {
-                    let events = finish_events(&state, wire, &script);
-                    return Some((events, (Phase::Finished, script, state)));
-                }
-                Phase::Finished => return None,
-            }
-        }
-    })
-    .flat_map(|events| futures::stream::iter(events.into_iter().map(Ok::<Event, Infallible>)));
-
-    Sse::new(stream).into_response()
-}
-
-fn data(value: serde_json::Value) -> Event {
-    Event::default().data(value.to_string())
-}
-
-fn named(name: &str, value: serde_json::Value) -> Event {
-    Event::default().event(name).data(value.to_string())
-}
-
-fn start_events(state: &StreamingState, wire: Wire) -> Vec<Event> {
-    match wire {
-        Wire::ChatCompletions => Vec::new(),
-        Wire::Messages => {
-            let mut message = json!({
-                "id": "msg_scripted",
-                "type": "message",
-                "role": "assistant",
-                "model": state.model_name,
-                "content": [],
-                "stop_reason": null,
-                "stop_sequence": null,
-                "usage": { "input_tokens": 8, "output_tokens": 0 }
-            });
-            if !state.usage {
-                if let Some(message) = message.as_object_mut() {
-                    message.remove("usage");
-                }
-            }
-            vec![named(
-                "message_start",
-                json!({ "type": "message_start", "message": message }),
-            )]
-        }
-    }
-}
-
-fn chunk_events(wire: Wire, index: usize, chunk: &StreamChunk) -> Vec<Event> {
-    match wire {
-        Wire::ChatCompletions => vec![data(chat_chunk(index, chunk))],
-        Wire::Messages => {
-            let (block, delta) = match chunk {
-                StreamChunk::Text(text) => (
-                    json!({ "type": "text", "text": "" }),
-                    vec![json!({ "type": "text_delta", "text": text })],
-                ),
-                StreamChunk::Reasoning(reasoning) => (
-                    json!({ "type": "thinking", "thinking": "" }),
-                    vec![
-                        json!({ "type": "thinking_delta", "thinking": reasoning }),
-                        json!({ "type": "signature_delta", "signature": "scripted" }),
-                    ],
-                ),
-                StreamChunk::ToolCall {
-                    id,
-                    name,
-                    arguments,
-                } => (
-                    json!({ "type": "tool_use", "id": id, "name": name, "input": {} }),
-                    vec![json!({ "type": "input_json_delta", "partial_json": arguments })],
-                ),
-            };
-            let mut events = vec![named(
-                "content_block_start",
-                json!({ "type": "content_block_start", "index": index, "content_block": block }),
-            )];
-            events.extend(delta.into_iter().map(|delta| {
-                named(
-                    "content_block_delta",
-                    json!({ "type": "content_block_delta", "index": index, "delta": delta }),
-                )
-            }));
-            events.push(named(
-                "content_block_stop",
-                json!({ "type": "content_block_stop", "index": index }),
-            ));
-            events
-        }
-    }
-}
-
-fn chat_chunk(index: usize, chunk: &StreamChunk) -> serde_json::Value {
-    let delta = match chunk {
-        StreamChunk::Text(content) => json!({ "content": content, "tool_calls": [] }),
-        StreamChunk::Reasoning(reasoning) => {
-            json!({ "content": null, "reasoning_content": reasoning, "tool_calls": [] })
-        }
-        StreamChunk::ToolCall {
-            id,
-            name,
-            arguments,
-        } => json!({
-            "content": null,
-            "tool_calls": [{
-                "index": index,
-                "id": id,
-                "type": "function",
-                "function": { "name": name, "arguments": arguments }
-            }]
-        }),
-    };
-    json!({
-        "choices": [{ "delta": delta, "finish_reason": null }],
-        "usage": null
-    })
-}
-
-fn finish_events(state: &StreamingState, wire: Wire, script: &StreamScript) -> Vec<Event> {
-    match wire {
-        Wire::ChatCompletions => {
-            let mut events = Vec::new();
-            if state.usage {
-                events.push(data(json!({
-                    "choices": [],
-                    "usage": { "prompt_tokens": 8, "completion_tokens": 3, "total_tokens": 11 }
-                })));
-            }
-            events.push(Event::default().data("[DONE]"));
-            events
-        }
-        Wire::Messages => {
-            let stop_reason = if script.ends_with_tool_call() {
-                "tool_use"
-            } else {
-                "end_turn"
-            };
-            let mut delta = json!({
-                "type": "message_delta",
-                "delta": { "stop_reason": stop_reason, "stop_sequence": null },
-                "usage": { "output_tokens": 3 }
-            });
-            if !state.usage {
-                if let Some(delta) = delta.as_object_mut() {
-                    delta.remove("usage");
-                }
-            }
-            vec![
-                named("message_delta", delta),
-                named("message_stop", json!({ "type": "message_stop" })),
-            ]
-        }
-    }
-}
-
-fn error_events(wire: Wire, message: &str) -> Vec<Event> {
-    match wire {
-        Wire::ChatCompletions => vec![data(
-            json!({ "error": { "message": message, "type": "server_error" } }),
-        )],
-        Wire::Messages => vec![named(
-            "error",
-            json!({ "type": "error", "error": { "type": "api_error", "message": message } }),
-        )],
-    }
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    async fn complete(endpoint: String, marker: &'static str) -> reqwest::Response {
-        reqwest::Client::new()
-            .post(format!("{endpoint}/chat/completions"))
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(
-                json!({ "stream": true, "messages": [{ "role": "user", "content": marker }] })
-                    .to_string(),
-            )
-            .send()
-            .await
-            .unwrap()
-    }
-
-    #[tokio::test]
-    async fn a_held_call_ends_as_the_test_ends_it() {
-        let backend = ScriptedBackend::builder("model")
-            .without_usage()
-            .start()
-            .unwrap();
-
-        let released = backend.hold("released-call");
-        let call = tokio::spawn(complete(backend.endpoint().to_owned(), "released-call"));
-        released.entered().await;
-        released.release();
-        let body = call.await.unwrap().text().await.unwrap();
-        assert!(body.contains("mock streamed response"), "{body}");
-        assert!(body.contains("[DONE]"), "{body}");
-        assert!(!body.contains("prompt_tokens"), "usage is off: {body}");
-
-        let failed = backend.hold("failed-call");
-        let call = tokio::spawn(complete(backend.endpoint().to_owned(), "failed-call"));
-        failed.entered().await;
-        failed.fail(503, "provider unavailable");
-        let response = call.await.unwrap();
-        assert_eq!(response.status().as_u16(), 503);
-        assert!(response
-            .text()
-            .await
-            .unwrap()
-            .contains("provider unavailable"));
-
-        let closed = backend.hold("closed-call");
-        let call = tokio::spawn(complete(backend.endpoint().to_owned(), "closed-call"));
-        closed.entered().await;
-        closed.close();
-        let body = call.await.unwrap().text().await.unwrap();
-        assert!(
-            !body.contains("[DONE]"),
-            "a closed stream has no terminal event: {body}"
-        );
-    }
-
-    #[tokio::test]
-    async fn usage_is_reported_unless_turned_off() {
-        let backend = ScriptedBackend::start("model", Vec::new()).unwrap();
-        let body = complete(backend.endpoint().to_owned(), "any")
-            .await
-            .text()
-            .await
-            .unwrap();
-        assert!(body.contains("prompt_tokens"), "{body}");
-    }
-}
+mod tests;

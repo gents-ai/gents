@@ -17,8 +17,8 @@ use gents_tools::surface::ToolCeiling;
 use serde_json::{json, Value};
 
 use crate::support::fixtures::bind_default_agent_backend;
-use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::{install_managed_agent, load_managed_fixture_user, test_p2p_db, TestDb};
+use gents_inference::test_support::scripted_backend::ScriptedBackend;
 use gents_p2p::test_support::enrollment::{
     authorize_enrollment_generation, authorize_enrollment_peer, wait_for_peer_identity,
     EnrollmentGeneration,
@@ -913,8 +913,8 @@ async fn application_documents_replicate_only_after_each_node_opts_in() {
     let identity_a = db_a.node_identity.clone();
     let identity_b = db_b.node_identity.clone();
 
-    let mock_a = MockModelEndpoint::start("default").unwrap();
-    let mock_b = MockModelEndpoint::start("default").unwrap();
+    let mock_a = ScriptedBackend::start("default", Vec::new()).unwrap();
+    let mock_b = ScriptedBackend::start("default", Vec::new()).unwrap();
     bind_default_agent_backend(&db_a, "backend-app-collection-a", mock_a.endpoint()).await;
     bind_default_agent_backend(&db_b, "backend-app-collection-b", mock_b.endpoint()).await;
 
@@ -1254,8 +1254,8 @@ async fn authorless_overlay_is_skipped_and_control_route_stands() {
     let identity_b = db_b.node_identity.clone();
     let did_a = identity_a.did().to_string();
 
-    let mock_a = MockModelEndpoint::start("default").unwrap();
-    let mock_b = MockModelEndpoint::start("default").unwrap();
+    let mock_a = ScriptedBackend::start("default", Vec::new()).unwrap();
+    let mock_b = ScriptedBackend::start("default", Vec::new()).unwrap();
     bind_default_agent_backend(&db_a, "backend-soft-a", mock_a.endpoint()).await;
     bind_default_agent_backend(&db_b, "backend-soft-b", mock_b.endpoint()).await;
 
@@ -1464,8 +1464,8 @@ async fn document_pack_collections_pair_only_by_explicit_opt_in() {
     install_shared_fixture(&a, &archive).await;
     install_shared_fixture(&b, &archive).await;
 
-    let mock_a = MockModelEndpoint::start("default").unwrap();
-    let mock_b = MockModelEndpoint::start("default").unwrap();
+    let mock_a = ScriptedBackend::start("default", Vec::new()).unwrap();
+    let mock_b = ScriptedBackend::start("default", Vec::new()).unwrap();
     bind_default_agent_backend(&a, "fixture-a-backend", mock_a.endpoint()).await;
     bind_default_agent_backend(&b, "fixture-b-backend", mock_b.endpoint()).await;
     let (stop_a, task_a) = start_runtime(&a).await;
@@ -1564,8 +1564,8 @@ async fn application_pairing_replicates_only_while_its_author_holds_the_grant() 
         register_change_proposed_schema(&db.node).await;
         register_guarded_change_schema(&db.node).await;
     }
-    let mock_a = MockModelEndpoint::start("default").unwrap();
-    let mock_b = MockModelEndpoint::start("default").unwrap();
+    let mock_a = ScriptedBackend::start("default", Vec::new()).unwrap();
+    let mock_b = ScriptedBackend::start("default", Vec::new()).unwrap();
     bind_default_agent_backend(&db_a, "backend-authority-a", mock_a.endpoint()).await;
     bind_default_agent_backend(&db_b, "backend-authority-b", mock_b.endpoint()).await;
     let pairer_a = pairing_agent(&db_a, "authority-a").await;

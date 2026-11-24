@@ -595,7 +595,7 @@ async fn provider_headers_that_never_arrive_fail_the_attempt_and_retry() {
     assert_stall_recovered(
         marker,
         vec![
-            StreamResponse::HoldHeaders(StreamScript::completes(marker, ["never released"])),
+            StreamResponse::completes(marker, ["never released"]).after(marker),
             StreamResponse::completes(marker, ["recovered after header stall"]),
         ],
     )

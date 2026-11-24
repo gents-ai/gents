@@ -52,8 +52,10 @@ mod passive_settings;
 mod runtime_replacement;
 use crate::support;
 
-use fake_llm::{ChatAction, FakeLlm};
-use gents::support::{fake_llm, ports};
+use gents::support::ports;
+use gents_inference::test_support::scripted_backend::{
+    ScriptedBackend, StreamChunk, StreamResponse, StreamScript,
+};
 use support::Attachment;
 
 #[derive(Clone, Copy)]
@@ -311,6 +313,88 @@ async fn editor_recovers_blocked_and_limited_goals_without_submitting_the_draft(
 }
 
 #[cfg(feature = "editor-e2e")]
+/// Releases the reply every request not answered otherwise waits on.
+const PROVIDER_GATE: &str = "provider";
+/// Releases the Goal continuation after a steered reply.
+const CONTINUATION_GATE: &str = "goal-steering-continuation";
+/// Releases the profiled history journey's held reply.
+const HISTORY_GATE: &str = "history";
+/// Never released: holds the reply through the Goal journey's controls.
+const GOAL_GATE: &str = "goal";
+
+/// The scenario providers and hold files the editor journeys' provider reads.
+struct ProviderReplies<'a> {
+    goal_delivery: &'a editor_goal_delivery::Provider,
+    related: &'a editor_related_work::Provider,
+    goal_recovery: &'a editor_goal_recovery::Provider,
+    history_hold: &'a Path,
+    goal_hold: &'a Path,
+}
+
+/// The scenario's reply to `request` when it answers it, else a reply held
+/// at its gate.
+fn provider_reply(
+    request: &Value,
+    journey: Journey,
+    history: Option<editor_history::Options>,
+    activity_profile: bool,
+    replies: &ProviderReplies<'_>,
+) -> StreamResponse {
+    if journey.is_editor(scenario::IMAGES) {
+        if let Some(reply) = editor_images::reply(request) {
+            return reply;
+        }
+    }
+    if journey.is_editor(scenario::GOAL_DELIVERY) {
+        if let Some(reply) = replies.goal_delivery.reply(request) {
+            return reply;
+        }
+    }
+    if journey.is_editor(scenario::RELATED_WORK_FAILURE) {
+        if let Some(reply) = replies.related.reply(request) {
+            return reply;
+        }
+    }
+    if journey.is_editor(scenario::GOALS) {
+        if let Some(reply) = replies.goal_recovery.reply(request) {
+            return reply;
+        }
+    }
+    if activity_profile && journey.is_editor(scenario::HISTORY) {
+        if let Some(reply) = editor_command_output::reply(request) {
+            return reply;
+        }
+    }
+    if let Some(options) = history {
+        if let Some(reply) = editor_history::reply(request, options) {
+            return reply;
+        }
+    }
+    if journey.is_editor(scenario::GOAL_STEERING) && editor_steering::has_completed_reply(request) {
+        return StreamResponse::Stream(
+            StreamScript::paused(CONTINUATION_GATE, ["Goal continuation after steering"])
+                .then(vec![StreamChunk::text(" and finished.")]),
+        );
+    }
+    if journey.is_steering() && request["messages"].to_string().contains(STEERING_INPUT) {
+        return StreamResponse::text(STEERING_REPLY);
+    }
+    if matches!(journey, Journey::Goal) {
+        return StreamResponse::text("First part and final part.").after(PROVIDER_GATE);
+    }
+    let gate = if replies.history_hold.is_file() {
+        HISTORY_GATE
+    } else if replies.goal_hold.is_file() {
+        GOAL_GATE
+    } else {
+        PROVIDER_GATE
+    };
+    StreamResponse::Stream(
+        StreamScript::paused(gate, ["First part"])
+            .then(vec![StreamChunk::text(" and final part.")]),
+    )
+}
+
 fn copy_editor_evidence(root: &Path, name: &str) -> Result<()> {
     let artifacts = std::fs::read_to_string(root.join("editor-artifacts-path"))?;
     let artifacts = std::fs::canonicalize(artifacts)?;
@@ -423,20 +507,9 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             "# Project instructions fixture\nUse the current editor workspace.\n",
         )?;
     }
-    let gate = Arc::new(tokio::sync::Semaphore::new(0));
-    let (emitted, _) = tokio::sync::watch::channel(None);
-    let provider_gate = gate.clone();
-    let continuation_gate = Arc::new(tokio::sync::Semaphore::new(0));
-    let provider_continuation_gate = continuation_gate.clone();
-    let editor_goal_gate = Arc::new(tokio::sync::Semaphore::new(0));
-    let goal_provider_gate = editor_goal_gate.clone();
     let goal_provider_hold = root.join("hold-goal-provider");
-    let goal_recovery = Arc::new(editor_goal_recovery::Provider::default());
-    let provider_goal_recovery = Arc::clone(&goal_recovery);
-    let goal_delivery_provider = Arc::new(editor_goal_delivery::Provider::default());
-    let provider_goal_delivery = Arc::clone(&goal_delivery_provider);
-    let editor_history_gate = Arc::new(tokio::sync::Semaphore::new(0));
-    let history_provider_gate = editor_history_gate.clone();
+    let provider_goal_recovery = editor_goal_recovery::Provider::default();
+    let provider_goal_delivery = editor_goal_delivery::Provider::default();
     let history_provider_hold = root.join("hold-history-provider");
     let activity_profile = std::env::var("GENTS_VSCODE_ACTIVITY_PROFILE").as_deref() == Ok("1");
     ensure!(
@@ -448,89 +521,30 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         activity_profile,
     ));
     let provider_related = Arc::clone(&related_provider);
-    let provider = FakeLlm::start_with_models(
-        if journey.editor_scenario().is_some() {
-            &["editor-fixture", "editor-fixture-alternate"]
-        } else {
-            &["editor-fixture"]
-        },
-        None,
-        Arc::new(move |request| {
-            if journey.is_editor(scenario::IMAGES) {
-                if let Some(reply) = editor_images::reply(request) {
-                    return reply;
-                }
-            }
-            if journey.is_editor(scenario::GOAL_DELIVERY) {
-                if let Some(reply) = provider_goal_delivery.reply(request, &emitted) {
-                    return reply;
-                }
-            }
-            if journey.is_editor(scenario::RELATED_WORK_FAILURE) {
-                if let Some(action) = provider_related.reply(request) {
-                    return action;
-                }
-            }
-            if journey.is_editor(scenario::GOALS) {
-                if let Some(action) = provider_goal_recovery.reply(request, &emitted) {
-                    return action;
-                }
-            }
-            if activity_profile && journey.is_editor(scenario::HISTORY) {
-                if let Some(action) = editor_command_output::reply(request) {
-                    return action;
-                }
-            }
-            if let Some(options) = history {
-                if let Some(reply) = editor_history::reply(request, options) {
-                    return reply;
-                }
-            }
-            if journey.is_editor(scenario::GOAL_STEERING)
-                && editor_steering::has_completed_reply(request)
-            {
-                return ChatAction::GatedSse(
-                    vec![(
-                        Duration::ZERO,
-                        format!(
-                            "data: {}\n\n",
-                            json!({"choices":[{"delta":{"content":"Goal continuation after steering"},"finish_reason":null}],"usage":null})
-                        ),
-                    )],
-                    provider_continuation_gate.clone(),
-                    fake_llm::completion_text_sse(" and finished."),
-                    emitted.clone(),
-                );
-            }
-            if journey.is_steering() && request["messages"].to_string().contains(STEERING_INPUT) {
-                return ChatAction::Sse(fake_llm::completion_text_sse(STEERING_REPLY));
-            }
-            if matches!(journey, Journey::Goal) {
-                return ChatAction::WaitThenSse(
-                    provider_gate.clone(),
-                    fake_llm::completion_text_sse("First part and final part."),
-                );
-            }
-            ChatAction::GatedSse(
-                vec![(
-                    Duration::ZERO,
-                    format!(
-                        "data: {}\n\n",
-                        json!({"choices":[{"delta":{"content":"First part"},"finish_reason":null}],"usage":null})
-                    ),
-                )],
-                if history_provider_hold.is_file() {
-                    history_provider_gate.clone()
-                } else if goal_provider_hold.is_file() {
-                    goal_provider_gate.clone()
-                } else {
-                    provider_gate.clone()
-                },
-                fake_llm::completion_text_sse(" and final part."),
-                emitted.clone(),
-            )
-        }),
-    )?;
+    let provider = Arc::new(
+        ScriptedBackend::builder("editor-fixture")
+            .models(if journey.editor_scenario().is_some() {
+                &["editor-fixture-alternate"][..]
+            } else {
+                &[]
+            })
+            .respond(move |request| {
+                Some(provider_reply(
+                    request,
+                    journey,
+                    history,
+                    activity_profile,
+                    &ProviderReplies {
+                        goal_delivery: &provider_goal_delivery,
+                        related: &provider_related,
+                        goal_recovery: &provider_goal_recovery,
+                        history_hold: &history_provider_hold,
+                        goal_hold: &goal_provider_hold,
+                    },
+                ))
+            })
+            .start()?,
+    );
     let node_home = root.join("runtime");
     let homes = support::homes::ProcessHomes::under(root);
     let mut init = Command::new(&cli);
@@ -866,18 +880,18 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     }
     if journey.is_steering() {
         let completion_path = root.join("finish-provider");
-        let completion_gate = Arc::clone(&gate);
+        let backend = Arc::clone(&provider);
         let continuation_path = root.join("finish-goal-steer-provider");
         let _completion = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
             while !completion_path.is_file() {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
-            completion_gate.add_permits(1);
+            backend.release(PROVIDER_GATE);
             if journey.is_editor(scenario::GOAL_STEERING) {
                 while !continuation_path.is_file() {
                     tokio::time::sleep(Duration::from_millis(20)).await;
                 }
-                continuation_gate.add_permits(1);
+                backend.release(CONTINUATION_GATE);
             }
         }));
         configured_actions::seed_editor_settings(&access, node_did, agent_did).await?;
@@ -922,7 +936,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         ensure!(view["goal"]["goalId"] == receipt["goalId"]);
         tokio::time::timeout(Duration::from_secs(30), async {
             loop {
-                let captured = provider.captured_chat_requests();
+                let captured = provider.observed_completion_bodies();
                 if captured.iter().any(|request| {
                     request["messages"].as_array().is_some_and(|messages| {
                         messages.iter().any(|message| {
@@ -1013,7 +1027,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             view["goal"]
         );
     }
-    gate.add_permits(1);
+    provider.release(PROVIDER_GATE);
     let expected_reply = if journey.is_steering() {
         STEERING_REPLY
     } else {
@@ -1110,7 +1124,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             serde_json::to_vec_pretty(&blocked)?,
         )?;
     }
-    let requests = provider.captured_chat_requests();
+    let requests = provider.observed_completion_bodies();
     if matches!(journey, Journey::Goal) {
         let expected = format!("data:image/png;base64,{}", goal_delivery::IMAGE_DATA);
         let images: Vec<_> = requests
@@ -1190,11 +1204,12 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 }))?,
             )?;
         }
+        let backend = Arc::clone(&provider);
         let _completion = options.profile.then(|| {
             tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
                 loop {
                     if completion_path.is_file() {
-                        editor_history_gate.add_permits(1);
+                        backend.release(HISTORY_GATE);
                         break;
                     }
                     tokio::time::sleep(Duration::from_millis(20)).await;
@@ -1251,7 +1266,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                     .editor_scenario()
                     .expect("related-work editor scenario")
             ),
-            related_provider.release_when_requested(root),
+            related_provider.release_when_requested(root, &provider),
         );
         if let Err(error) = result {
             let snapshot = client.snapshot(id).await;
@@ -1309,11 +1324,11 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             .await;
         id += 1;
         let release = root.join("finish-recovered-goal-provider");
-        let held = Arc::clone(&goal_recovery);
+        let held = Arc::clone(&provider);
         let _release = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
             loop {
                 if release.is_file() {
-                    held.release();
+                    held.release(editor_goal_recovery::GATE);
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(20)).await;
@@ -1330,7 +1345,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         .await;
         std::fs::write(
             root.join("editor-goal-recovery-provider.json"),
-            serde_json::to_vec_pretty(&provider.captured_chat_requests())?,
+            serde_json::to_vec_pretty(&provider.observed_completion_bodies())?,
         )?;
         #[cfg(feature = "editor-e2e")]
         if root.join("editor-artifacts-path").is_file() {
@@ -1357,11 +1372,11 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     if journey.is_editor(scenario::GOAL_DELIVERY) {
         editor_goal_delivery::prepare(root)?;
         let finish = root.join("finish-delivery-goal");
-        let held = Arc::clone(&goal_delivery_provider);
+        let held = Arc::clone(&provider);
         let release = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
             loop {
                 if finish.is_file() {
-                    held.release();
+                    held.release(editor_goal_delivery::GATE);
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(20)).await;
