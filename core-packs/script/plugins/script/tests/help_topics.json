@@ -1,0 +1,9 @@
+{
+  "input": {
+    "help": "topics"
+  },
+  "expect": {
+    "help": "topics",
+    "text": "Call with {\"help\": \"<topic>\"} for one of these topics:\n- tools: listing, describing and batching tool calls, and their errors\n- files: reading files as data and writing them\n- runs: starting a run and waiting for its result\n- background: running a script in the background\n"
+  }
+}

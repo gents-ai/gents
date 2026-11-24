@@ -1,0 +1,45 @@
+{
+  "input": {
+    "script": "return await wait({ok: true, tool_call_id: 'spawned:p-1', status: 'running'}, {timeout_ms: 4500});"
+  },
+  "tools": {
+    "definitions": [
+      {
+        "name": "wait_process",
+        "description": "Waits for a process.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "tool_call_id": {
+              "type": "string"
+            },
+            "timeout_secs": {
+              "type": "integer"
+            }
+          }
+        }
+      }
+    ],
+    "calls": [
+      {
+        "tool_name": "wait_process",
+        "arguments": {
+          "tool_call_id": "spawned:p-1",
+          "timeout_secs": 5
+        },
+        "result": {
+          "ok": true,
+          "tool_call_id": "spawned:p-1",
+          "status": "completed",
+          "result": "done"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "ok": true,
+    "tool_call_id": "spawned:p-1",
+    "status": "completed",
+    "result": "done"
+  }
+}
