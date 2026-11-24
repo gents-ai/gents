@@ -25,7 +25,11 @@
           "params": {
             "present": [
               {
-                "capture": "children",
+                "capture": "finished",
+                "min": 1
+              },
+              {
+                "capture": "helpers",
                 "min": 1,
                 "max": 1
               }
@@ -33,10 +37,8 @@
             "links": [
               {
                 "capture": "finished",
-                "source_match": {
-                  "field": "job_pin",
-                  "matches": "\"handle\"\\s*:\\s*\"late-desk\""
-                },
+                "key": "lifecycle_state",
+                "id": "completed",
                 "field": "_docID",
                 "target_capture": "segments",
                 "target_key": "source.tool_call_doc_id",
@@ -88,6 +90,11 @@
             },
             "lifecycle_state": {
               "_eq": "completed"
+            },
+            "job_pin": {
+              "handle": {
+                "_eq": "late-desk"
+              }
             }
           },
           "fields": [
@@ -98,19 +105,24 @@
         },
         {
           "kind": "documents",
-          "name": "children",
-          "collection": "AgentSession",
+          "name": "helpers",
+          "collection": "AgentRequest",
           "filter": {
             "node_did": {
               "_eq": "$trial"
             },
             "session_id": {
               "_like": "job-session:%"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
             }
           },
           "fields": [
+            "request_id",
             "session_id",
-            "agent_did"
+            "lifecycle_state",
+            "caused_by_parent_tool_call_doc_id"
           ]
         },
         {
