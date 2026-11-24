@@ -70,7 +70,9 @@ impl AgentRuntimeHome {
     }
 
     /// Rewrites the Agent's backend document as its User, probed healthy; a
-    /// change to what the Agent's slot is built from restages the slot.
+    /// change to what the Agent's slot is built from restages the slot. The
+    /// User's write rebuilds on a conflict, as a client's configuration apply
+    /// does: the running runtime records its probes on the same backend.
     pub async fn bind_backend(&self, endpoint: &str, max_concurrent: i64) {
         self.write_backend(
             endpoint,
@@ -115,7 +117,7 @@ impl AgentRuntimeHome {
         .unwrap();
         self.home
             .user_access
-            .transact_write("test.running_runtime.backend", |txn| {
+            .transact_signed_conflict_rebuild("test.running_runtime.backend", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
                     gents_documents::apply_desired_state_plan(
