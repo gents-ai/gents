@@ -971,7 +971,7 @@ async fn subscription_probe_preserves_typed_refresh_rejections() {
                 Utc::now() - chrono::Duration::minutes(1),
             )
             .await;
-            let mut backend = oauth_backend(kind, provider, &models.endpoint().to_owned());
+            let mut backend = oauth_backend(kind, provider, models.endpoint());
             backend.node_did = did.clone();
             oauth_backend_configuration(&user_access, &backend).await;
             let (url, server) = one_shot_token_server(status, body).await;
