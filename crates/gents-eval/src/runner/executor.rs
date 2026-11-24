@@ -41,6 +41,9 @@ pub struct TrialSpec {
     /// Core packs installed on the subject before its first stage.
     #[serde(default)]
     pub core_packs: Vec<String>,
+    /// Core packs of `core_packs` then turned on as an explicit enable does.
+    #[serde(default)]
+    pub enabled_core_packs: Vec<String>,
     pub stages: Vec<StageSpec>,
     pub trial_dir: PathBuf,
     pub script_key: Option<ScriptKey>,
@@ -76,6 +79,7 @@ impl TrialSpec {
             fixtures: TrialFixtures::default(),
             host_bash: false,
             core_packs: Vec::new(),
+            enabled_core_packs: Vec::new(),
             stages: Vec::new(),
             trial_dir: PathBuf::new(),
             script_key: None,

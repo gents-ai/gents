@@ -88,6 +88,14 @@ pub(crate) enum EvalCommand {
         after_help = EVAL_INIT_AFTER_HELP
     )]
     Init(EvalInitArgs),
+    #[command(
+        about = "Write the Engineer `gents init --engineer` makes as an eval subject pack",
+        long_about = "Write the Engineer `gents init --engineer` makes on a fresh home as an \
+                      eval subject pack: its prompt, its Tools document, its self-config grant, \
+                      its mailbox surface and its own AgentTarget, from the code init runs. A \
+                      trial installs the definition's core packs on it as init installs them."
+    )]
+    Subject(EvalSubjectArgs),
 }
 
 impl EvalCommand {
@@ -116,7 +124,7 @@ impl EvalCommand {
             Self::Watch(args) => &args.scope,
             Self::Gc(args) => &args.scope,
             Self::Init(args) => &args.scope,
-            Self::Checks(_) => &NO_SCOPE,
+            Self::Checks(_) | Self::Subject(_) => &NO_SCOPE,
         }
     }
 }
@@ -309,6 +317,33 @@ pub(crate) struct EvalChecksArgs {
     /// when any check is unknown or its params are refused.
     #[arg(long, value_name = "FILE|-", conflicts_with = "json")]
     pub(crate) validate_case: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct EvalSubjectArgs {
+    /// Directory to write the subject pack into; it must not exist yet.
+    #[arg(long)]
+    pub(crate) out: PathBuf,
+    /// How the Engineer runs commands: `off` turns host bash off, as an
+    /// embedded trial requires; `unrestricted` keeps bash and background
+    /// processes as init sets them, for trials inside the eval container.
+    #[arg(long, value_enum, default_value_t = CommandExecutionArg::Off)]
+    pub(crate) command_execution: CommandExecutionArg,
+    /// A suite directory whose `suite.json` names the fixtures to layer on
+    /// the Engineer; each only adds to it.
+    #[arg(long)]
+    pub(crate) suite: Option<PathBuf>,
+    /// Start from this subject pack directory instead of the Engineer init
+    /// makes; command execution `off` still turns its Engineer's bash off.
+    #[arg(long)]
+    pub(crate) from: Option<PathBuf>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CommandExecutionArg {
+    Off,
+    Unrestricted,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

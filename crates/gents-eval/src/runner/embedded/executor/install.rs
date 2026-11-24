@@ -259,13 +259,14 @@ pub(super) async fn install(
 }
 
 /// Leaves each of the subject's core packs on its agent as `gents init`
-/// leaves them on the Engineer, through the same owner, from `archives`. The
-/// evaluator is the trial node's init User, so it holds the store and signs
-/// the wire, as init's User does; the trial's runtime has not started, so
-/// this is init's route through the home's own store (Lean
-/// `Pack.CorePacks.enableRoute` with nothing serving the home). A failure
-/// leaves the trial with no evidence, which grades as infrastructure, and
-/// the next attempt starts from a fresh home.
+/// leaves them on the Engineer, through the same owner, from `archives`,
+/// then turns on each of its enabled core packs as `gents config pack
+/// starter --enable` does. The evaluator is the trial node's init User, so
+/// it holds the store and signs the wire, as init's User does; the trial's
+/// runtime has not started, so this is init's route through the home's own
+/// store (Lean `Pack.CorePacks.enableRoute` with nothing serving the home).
+/// A failure leaves the trial with no evidence, which grades as
+/// infrastructure, and the next attempt starts from a fresh home.
 async fn install_core_packs(
     spec: &TrialSpec,
     home: &EmbeddedHome,
@@ -274,7 +275,7 @@ async fn install_core_packs(
     archives: gents::core_packs::Archives<'_>,
 ) -> Result<()> {
     use gents::core_packs::{apply, resolve, Consent, CorePackTarget};
-    use gents_pack::pack::core_packs::{init_wiring, CorePack};
+    use gents_pack::pack::core_packs::{enabled_wiring, init_wiring, CorePack};
     use gents_pack::pack::plugin_wire::{HeldUser, WireSigners};
 
     if spec.core_packs.is_empty() {
@@ -305,6 +306,14 @@ async fn install_core_packs(
         apply(&target, &source, init_wiring(pack), Consent::Init)
             .await
             .with_context(|| format!("installing core pack {coordinate} on the trial subject"))?;
+    }
+    for coordinate in &spec.enabled_core_packs {
+        let pack = CorePack::of_coordinate(coordinate)
+            .with_context(|| format!("{coordinate} is not a core pack"))?;
+        let source = resolve(home.path(), pack, archives, None).await?;
+        apply(&target, &source, enabled_wiring(pack), Consent::Explicit)
+            .await
+            .with_context(|| format!("enabling core pack {coordinate} on the trial subject"))?;
     }
     Ok(())
 }
