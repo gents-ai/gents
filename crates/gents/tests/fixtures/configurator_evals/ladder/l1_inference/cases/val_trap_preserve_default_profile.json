@@ -286,7 +286,7 @@
     },
     {
       "stage_id": "use",
-      "prompt": "Thanks. First research question: which planet has the most known moons?",
+      "prompt": "Thanks. Before the first research session, a quick check: what is 9 times 12?",
       "capture": [
         {
           "kind": "documents",
@@ -354,7 +354,7 @@
           "params": {
             "all": [
               {
-                "matches": "(?i)saturn"
+                "matches": "\\b108\\b"
               }
             ]
           },
