@@ -6,6 +6,7 @@ mod root_grants;
 mod settle;
 mod stage;
 mod submit;
+pub(super) mod usage;
 
 use rapidhash::{HashMapExt, RapidHashMap};
 use std::path::{Path, PathBuf};
@@ -22,6 +23,7 @@ use self::evidence::{anchor, home_usage_with_access, session_requests_with_acces
 use self::install::install;
 use self::outcome::{outcome_kind, provider_reason};
 use self::stage::{run_stages, StageEnv};
+use self::usage::{home_charge, home_rows, subject_usage};
 use crate::runner::embedded::home::{boot_runtime, EmbeddedHome};
 use crate::runner::embedded::live::LiveObserver;
 use crate::runner::embedded::observe::{
@@ -206,17 +208,24 @@ impl EmbeddedExecutor {
                 "eval trial runtime did not shut down cleanly"
             );
         }
-        let usage = match home.client_access(&spec.evaluator_did) {
-            Ok(access) => home_usage_with_access(&access).await,
+        let rows = match home.client_access(&spec.evaluator_did) {
+            Ok(access) => home_rows(&access).await,
             Err(error) => Err(error),
         };
         close(home).await;
-        let usage = match usage {
-            Ok(usage) => usage,
+        let rows = match rows {
+            Ok(rows) => rows,
             Err(error) => return infrastructure(&spec.trial_id, locator, &error),
         };
+        let stage_requests: Vec<&str> = stages
+            .iter()
+            .filter_map(|stage| stage.request_id.as_deref())
+            .collect();
+        let subject_usage = subject_usage(&rows, &locator.session_id, &stage_requests);
         let anchor = anchor(&stages);
-        TrialEvidence::new(locator, stages, usage, anchor)
+        let mut evidence = TrialEvidence::new(locator, stages, home_charge(&rows).usage, anchor);
+        evidence.subject_usage = subject_usage;
+        evidence
     }
 }
 

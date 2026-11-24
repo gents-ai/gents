@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::outcome::{classify, EvidenceClass, OutcomeKind, ProviderReason};
+use super::subject::SubjectUsage;
 use gents_documents::{EvalSplit, EvalTier};
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
@@ -120,7 +121,8 @@ pub struct Anchor {
     pub inference_calls: u32,
 }
 
-/// A missing total is `None`, never zero.
+/// Every inference call in the trial home but its title audit's (Lean
+/// `Runtime.EvalUsage.homeUsage`). A missing total is `None`, never zero.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrialUsage {
     pub input_tokens: Option<u64>,
@@ -135,6 +137,8 @@ pub struct TrialCompletion {
     pub anchor: Anchor,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject_usage: Option<SubjectUsage>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -742,6 +746,7 @@ mod tests {
                 inference_calls: 0,
             },
             evidence_digest: None,
+            subject_usage: None,
         };
         complete_trial(access, owner, "trial-3", &nothing_ran)
             .await
