@@ -71,6 +71,18 @@ async fn persist_request(
         )
         .await
         .unwrap();
+        access
+            .transact_write("test.output_obligation.session_marker", |txn| {
+                let (doc, node_did, session) = (&doc, &create.node_did, &create.session_id);
+                Box::pin(async move {
+                    gents_session::session::interrupt_marker::create_in_txn(
+                        txn, doc, node_did, session,
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap();
         doc
     } else {
         assert_eq!(rows.len(), 1);

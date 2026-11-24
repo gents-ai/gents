@@ -929,7 +929,10 @@ mod tests {
         let home = EmbeddedHome::create_temp("observe-unsettled")
             .await
             .unwrap();
-        for state in ["pending", "processing"] {
+        // The deadline interrupt ends a pending request before its claim and
+        // passes a processing one's claim; the observation reports the state
+        // it read, which the interrupt did not make terminal evidence.
+        for (state, after) in [("pending", "interrupted"), ("processing", "processing")] {
             let case = cases
                 .iter()
                 .find(|case| {
@@ -955,7 +958,7 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
-            assert_eq!(stored.lifecycle_state.as_deref(), Some(state));
+            assert_eq!(stored.lifecycle_state.as_deref(), Some(after));
             assert!(observed.interrupted_on_deadline);
             assert_eq!(
                 serde_json::to_value(&observed).unwrap()["terminal_state"],
@@ -1127,7 +1130,10 @@ mod tests {
         .await
         .unwrap();
         assert!(observed.interrupted_on_deadline);
-        assert_eq!(observed.terminal_state, None);
+        assert_eq!(
+            observed.terminal_state.map(|state| state.as_str()),
+            Some("interrupted")
+        );
         let request_id = gents_store::graphql::escape_graphql_string("req-stuck");
         let query = format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ lifecycle_state }} }}"#

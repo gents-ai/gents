@@ -503,9 +503,11 @@ pub async fn request_interrupted_at_in_txn(
     )
 }
 
-/// [`request_interrupted_at_in_txn`] for a request in `state`: one that
-/// settled other than interrupted was not active at an interrupt that passes
-/// its record later (`InterruptGeneration.observedInterrupted`).
+/// When a request in `state` was interrupted, as a reader reports it
+/// (`InterruptGeneration.observedInterrupted`): an unsettled request once the
+/// marker passes its claim; one settled as interrupted always, at the
+/// marker's time when a generation passed its claim and at its terminal time
+/// when it was interrupted before its claim; one settled otherwise never.
 pub async fn observed_interrupted_at_in_txn(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
@@ -513,11 +515,20 @@ pub async fn observed_interrupted_at_in_txn(
     requester_did: Option<&str>,
     state: Option<RequestLifecycleState>,
     recorded: Option<i64>,
+    terminalized_at: Option<&str>,
 ) -> Result<Option<String>> {
-    if interrupt_marker::settled_otherwise(state) {
-        return Ok(None);
-    }
-    request_interrupted_at_in_txn(txn, node_did, session_id, requester_did, recorded).await
+    use interrupt_marker::Settlement;
+    let passed =
+        || request_interrupted_at_in_txn(txn, node_did, session_id, requester_did, recorded);
+    Ok(match interrupt_marker::settlement(state) {
+        Settlement::Otherwise => None,
+        Settlement::Unsettled => passed().await?,
+        Settlement::Interrupted => Some(
+            passed()
+                .await?
+                .unwrap_or_else(|| terminalized_at.unwrap_or_default().to_owned()),
+        ),
+    })
 }
 
 /// Whether the session's interrupt passed the generation `row` recorded,
@@ -537,6 +548,7 @@ pub async fn row_interrupted_in_txn(
         row.requester_did.as_deref(),
         row.lifecycle_state,
         row.interrupt_generation,
+        row.terminalized_at.as_deref(),
     )
     .await?
     .is_some())
@@ -564,7 +576,7 @@ pub async fn request_interrupted_at_by_doc_id_with_access(
         "interrupt fetch requires a physical request document id"
     );
     let query = format!(
-        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ node_did session_id requester_did lifecycle_state interrupt_generation }} }}"#,
+        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ node_did session_id requester_did lifecycle_state interrupt_generation terminalized_at }} }}"#,
         escape_graphql_string(request_doc_id)
     );
     access
@@ -586,6 +598,7 @@ pub async fn request_interrupted_at_by_doc_id_with_access(
                     row["requester_did"].as_str(),
                     RequestLifecycleState::parse_opt(row["lifecycle_state"].as_str()),
                     row["interrupt_generation"].as_i64(),
+                    row["terminalized_at"].as_str(),
                 )
                 .await
             })

@@ -16,7 +16,7 @@ pub async fn observe_request_interrupted_at_with_access(
 ) -> Result<ScopedInterruptObservation> {
     let filter = super::scoped_request_filter(request_id, node_did, requester_did)?;
     let query = format!(
-        r#"{{ AgentRequest(filter: {{{filter}}}, limit: 2) {{ _docID node_did session_id requester_did lifecycle_state interrupt_generation }} }}"#
+        r#"{{ AgentRequest(filter: {{{filter}}}, limit: 2) {{ _docID node_did session_id requester_did lifecycle_state interrupt_generation terminalized_at }} }}"#
     );
     access
         .transact_readonly("interrupt.observe_scoped_request", |txn| {
@@ -50,6 +50,7 @@ pub async fn observe_request_interrupted_at_with_access(
                         row["lifecycle_state"].as_str(),
                     ),
                     row["interrupt_generation"].as_i64(),
+                    row["terminalized_at"].as_str(),
                 )
                 .await?;
                 Ok(ScopedInterruptObservation {

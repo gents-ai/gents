@@ -38,24 +38,42 @@ claim recorded. -/
 def runningInterrupted (recorded current : Generation) : Bool :=
   decide (recorded < current)
 
-/-- What a reader reports of a request. A request that settled other than
-interrupted was not active at an interrupt that passes its record later, so
-it is not interrupted: the marker counts the session's interrupts, and only
-the request a generation covered at its commit is interrupted by it. A
-running request's terminal reads the marker by id, so it settles knowing
-every interrupt that committed first. -/
-def observedInterrupted (settledOtherwise : Bool) (recorded current : Generation) : Bool :=
-  !settledOtherwise && runningInterrupted recorded current
+/-- How a request a reader observes has settled. -/
+inductive Settlement where
+  | unsettled
+  | interrupted
+  | otherwise
+  deriving DecidableEq, Repr
+
+/-- What a reader reports of a request. An unsettled request is interrupted
+once the marker passes what its claim recorded. A request that settled as
+interrupted was interrupted, whether a generation passed its claim or it was
+interrupted before its claim. A request that settled otherwise was not active
+at an interrupt that passes its record later: the marker counts the session's
+interrupts, and only the request a generation covered at its commit is
+interrupted by it. A running request's terminal reads the marker by id, so it
+settles knowing every interrupt that committed first. -/
+def observedInterrupted (settlement : Settlement) (recorded : Option Generation)
+    (current : Generation) : Bool :=
+  match settlement with
+  | .unsettled => recorded.any (runningInterrupted · current)
+  | .interrupted => true
+  | .otherwise => false
 
 /-- A request that completed before an interrupt is not reported interrupted
 by it. -/
 theorem settled_before_the_interrupt_is_not_interrupted (g : Generation) :
-    observedInterrupted true g (bump g) = false := by
-  simp [observedInterrupted]
+    observedInterrupted .otherwise (some g) (bump g) = false := rfl
+
+/-- A request interrupted before its claim recorded no generation and is
+reported interrupted. -/
+theorem interrupted_before_claim_is_interrupted (current : Generation) :
+    observedInterrupted .interrupted none current = true := rfl
 
 /-- An unsettled request reads exactly as the running decision. -/
 theorem unsettled_reads_the_running_decision (recorded current : Generation) :
-    observedInterrupted false recorded current = runningInterrupted recorded current := by
+    observedInterrupted .unsettled (some recorded) current =
+      runningInterrupted recorded current := by
   simp [observedInterrupted]
 
 inductive WakeAtClaim where

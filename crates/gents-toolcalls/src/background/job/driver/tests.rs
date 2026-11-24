@@ -1393,7 +1393,7 @@ async fn idle(driver: &JobDriver) {
 /// A child request of `step`'s row that is still processing.
 /// A live child of the job row, created by the job's Agent as a spawn is.
 async fn live_child(step: &Stepper, node_did: &str) -> String {
-    insert_as(
+    let doc = insert_as(
         &step.job.access,
         "AgentRequest",
         json!({
@@ -1412,7 +1412,9 @@ async fn live_child(step: &Stepper, node_did: &str) -> String {
             "caused_by_parent_request_doc_id": "parent-doc",
         }),
     )
-    .await
+    .await;
+    gents_session::test_support::record_running_request_as(&step.job.access, &doc).await;
+    doc
 }
 
 #[tokio::test]

@@ -856,3 +856,68 @@ pub async fn record_claim_generation(
     .await
     .unwrap();
 }
+
+/// For a request a fixture wrote as running, as the actor of `access`:
+/// creates its session with the session's marker when the fixture wrote
+/// none, and records the marker's generation on the request, as its claim
+/// would have.
+pub async fn record_running_request_as(
+    access: &gents_store::config_client::ConfigAccess,
+    request_doc_id: &str,
+) {
+    let doc = gents_store::graphql::escape_graphql_string(request_doc_id);
+    access
+        .transact_write("test.record_running_request", |txn| {
+            let doc = &doc;
+            Box::pin(async move {
+                let row = txn
+                    .execute(&format!(
+                        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}) {{ node_did session_id requester_did agent_did created_at }} }}"#
+                    ))
+                    .await?["data"]["AgentRequest"][0]
+                    .clone();
+                let (node_did, session_id) = (
+                    row["node_did"].as_str().unwrap_or_default(),
+                    row["session_id"].as_str().unwrap_or_default(),
+                );
+                let session_doc = match gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
+                    txn, node_did, session_id,
+                )
+                .await?
+                {
+                    Some(session) => session.doc_id,
+                    None => {
+                        let created = txn
+                            .execute_with_variables(
+                                "mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }",
+                                &serde_json::json!({"input": {
+                                    "node_did": node_did, "session_id": session_id,
+                                    "requester_did": row["requester_did"], "agent_did": row["agent_did"],
+                                    "created_at": row["created_at"],
+                                }}),
+                            )
+                            .await?;
+                        gents_store::graphql::created_doc_id(&created, "AgentSession")?
+                    }
+                };
+                let marker = match crate::session::interrupt_marker::read_in_txn(txn, &session_doc).await? {
+                    Some(marker) => marker,
+                    None => {
+                        crate::session::interrupt_marker::create_in_txn(txn, &session_doc, node_did, session_id)
+                            .await?;
+                        crate::session::interrupt_marker::read_in_txn(txn, &session_doc)
+                            .await?
+                            .ok_or_else(|| anyhow::anyhow!("fixture marker disappeared"))?
+                    }
+                };
+                txn.execute(&format!(
+                    r#"mutation {{ update_AgentRequest(docID: "{doc}", input: {{ interrupt_generation: {} }}) {{ _docID }} }}"#,
+                    marker.generation
+                ))
+                .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await
+        .unwrap();
+}
