@@ -165,6 +165,7 @@ import Proofs.Conformance.ClientSessionDeliveryCases
 import Proofs.Clients.ClientShell.OptimisticSend
 import Proofs.Conformance.ClientChatReadinessCases
 import Proofs.Conformance.ClientSyncHealthCases
+import Proofs.Conformance.LineageRereadCases
 import Proofs.Conformance.AccessReview
 import Proofs.Conformance.BackendWake
 import Proofs.Conformance.OperatorPaths
