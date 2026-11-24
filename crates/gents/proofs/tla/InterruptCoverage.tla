@@ -1,7 +1,7 @@
 ---- MODULE InterruptCoverage ----
 \* lean: none
 \* crates: gents-session
-\* models: SessionQueue.InterruptGeneration.bump, SessionQueue.InterruptGeneration.runningInterrupted, SessionQueue.InterruptGeneration.wakeAtClaim, SessionQueue.InterruptGeneration.only_marker_and_session_writers_abort_an_interrupt, TransactionFence.fencedAgainst
+\* models: SessionQueue.InterruptGeneration.bump, SessionQueue.InterruptGeneration.runningInterrupted, SessionQueue.InterruptGeneration.wakeAtClaim, SessionQueue.InterruptGeneration.only_another_interrupt_aborts_an_interrupt, SessionQueue.InterruptGeneration.an_interrupt_lost_to_another_is_passed_by_it, TransactionFence.fencedAgainst
 \* An interrupt of a session racing the claim of its pending request, the
 \* wakes published into it, and the writes a running turn makes.
 \*
@@ -15,13 +15,16 @@
 \* (Lean `InterruptGeneration`). A row that recorded nothing is never
 \* compared.
 \*
-\* `InterruptReads`: the marker's access check reads the session document
-\* (the marker's read and update are the session's), so every write of the
-\* session document aborts an open attempt: claims, wakes and `OtherWrites`
-\* (terminals, titles, stops). The interrupt runs at most `Attempts` attempts
-\* (`TRANSACT_CONFLICT_MAX_RETRIES` + 1); it commits while fewer session
-\* writes land during its attempts than it has attempts. Requests' own rows,
-\* which renewals write, are read by no session interrupt.
+\* The interrupt runs at most `Attempts` attempts
+\* (`TRANSACT_CONFLICT_MAX_RETRIES` + 1). In production it reads only its
+\* marker, found by the session key the marker carries, so claims, wakes and
+\* `OtherWrites` (terminals, titles, stops: writes of the session document)
+\* commit beside it, and only `OtherInterrupts` (other interrupts of the
+\* session, which bump the marker) abort an attempt; each such interrupt
+\* passes the generation the lost attempt read. `InterruptReads` is the
+\* safeguard removed: the interrupt reads the session document, so every
+\* write of it aborts an open attempt. Requests' own rows, which renewals
+\* write, are read by no session interrupt.
 \*
 \* Covered: the request active at the interrupt's commit and the wakes
 \* pending at it. A request claimed and a wake published after the commit
@@ -29,13 +32,13 @@
 EXTENDS Integers, FiniteSets
 
 CONSTANTS
-  Wakes, Requests, OtherWrites, Attempts,
+  Wakes, Requests, OtherWrites, OtherInterrupts, Attempts,
   ClaimReadsMarker, WakeReadsMarker, InterruptReads
 
 None == -1
 NoRequest == "none"
 
-ASSUME /\ OtherWrites \in Nat /\ Attempts \in Nat \ {0}
+ASSUME /\ OtherWrites \in Nat /\ OtherInterrupts \in Nat /\ Attempts \in Nat \ {0}
        /\ ClaimReadsMarker \in BOOLEAN /\ WakeReadsMarker \in BOOLEAN
        /\ InterruptReads \in BOOLEAN
 
@@ -43,6 +46,7 @@ VARIABLES
   gen,          \* the marker's generation
   sessionVer,   \* version of the session document
   others,       \* other session writes still to land
+  rivals,       \* other interrupts of the session still to land
   istate,       \* "idle" | "open" | "done" | "failed"
   iread,        \* <<generation, session version>> the open attempt read
   attempts,     \* interrupt attempts aborted
@@ -55,11 +59,11 @@ VARIABLES
   coveredWakes, \* wakes pending at the interrupt's commit
   later         \* rows committed after the interrupt's commit
 
-vars == <<gen, sessionVer, others, istate, iread, attempts, wakeSeen, wakeRec,
+vars == <<gen, sessionVer, others, rivals, istate, iread, attempts, wakeSeen, wakeRec,
           claimSeen, claimRec, active, coveredReq, coveredWakes, later>>
 
 Init ==
-  /\ gen = 0 /\ sessionVer = 0 /\ others = OtherWrites
+  /\ gen = 0 /\ sessionVer = 0 /\ others = OtherWrites /\ rivals = OtherInterrupts
   /\ istate = "idle" /\ iread = <<0, 0>> /\ attempts = 0
   /\ wakeSeen = [w \in Wakes |-> None] /\ wakeRec = [w \in {} |-> None]
   /\ claimSeen = [r \in Requests |-> None] /\ claimRec = [r \in {} |-> None]
@@ -72,7 +76,7 @@ AfterCommit(x) == IF istate = "done" THEN later \cup {x} ELSE later
 WakeRead(w) ==
   /\ w \notin DOMAIN wakeRec /\ wakeSeen[w] = None
   /\ wakeSeen' = [wakeSeen EXCEPT ![w] = gen]
-  /\ UNCHANGED <<gen, sessionVer, others, istate, iread, attempts, wakeRec,
+  /\ UNCHANGED <<gen, sessionVer, others, rivals, istate, iread, attempts, wakeRec,
                  claimSeen, claimRec, active, coveredReq, coveredWakes, later>>
 
 WakeCommit(w) ==
@@ -85,13 +89,13 @@ WakeCommit(w) ==
             /\ sessionVer' = sessionVer + 1
             /\ later' = AfterCommit(w)
             /\ UNCHANGED wakeSeen
-  /\ UNCHANGED <<gen, others, istate, iread, attempts, claimSeen, claimRec,
+  /\ UNCHANGED <<gen, others, rivals, istate, iread, attempts, claimSeen, claimRec,
                  active, coveredReq, coveredWakes>>
 
 ClaimRead(r) ==
   /\ r \notin DOMAIN claimRec /\ active = NoRequest /\ claimSeen[r] = None
   /\ claimSeen' = [claimSeen EXCEPT ![r] = gen]
-  /\ UNCHANGED <<gen, sessionVer, others, istate, iread, attempts, wakeSeen,
+  /\ UNCHANGED <<gen, sessionVer, others, rivals, istate, iread, attempts, wakeSeen,
                  wakeRec, claimRec, active, coveredReq, coveredWakes, later>>
 
 ClaimCommit(r) ==
@@ -105,17 +109,22 @@ ClaimCommit(r) ==
             /\ sessionVer' = sessionVer + 1
             /\ later' = AfterCommit(r)
             /\ UNCHANGED claimSeen
-  /\ UNCHANGED <<gen, others, istate, iread, attempts, wakeSeen, wakeRec,
+  /\ UNCHANGED <<gen, others, rivals, istate, iread, attempts, wakeSeen, wakeRec,
                  coveredReq, coveredWakes>>
 
 OtherWrite ==
   /\ others > 0 /\ others' = others - 1 /\ sessionVer' = sessionVer + 1
-  /\ UNCHANGED <<gen, istate, iread, attempts, wakeSeen, wakeRec, claimSeen,
+  /\ UNCHANGED <<gen, rivals, istate, iread, attempts, wakeSeen, wakeRec, claimSeen,
                  claimRec, active, coveredReq, coveredWakes, later>>
+
+OtherInterrupt ==
+  /\ istate # "done" /\ rivals > 0 /\ rivals' = rivals - 1 /\ gen' = gen + 1
+  /\ UNCHANGED <<sessionVer, others, istate, iread, attempts, wakeSeen, wakeRec,
+                 claimSeen, claimRec, active, coveredReq, coveredWakes, later>>
 
 Begin ==
   /\ istate = "idle" /\ istate' = "open" /\ iread' = <<gen, sessionVer>>
-  /\ UNCHANGED <<gen, sessionVer, others, attempts, wakeSeen, wakeRec,
+  /\ UNCHANGED <<gen, sessionVer, others, rivals, attempts, wakeSeen, wakeRec,
                  claimSeen, claimRec, active, coveredReq, coveredWakes, later>>
 
 Aborted == \/ iread[1] # gen
@@ -125,7 +134,7 @@ Abort ==
   /\ istate = "open" /\ Aborted
   /\ attempts' = attempts + 1
   /\ istate' = IF attempts + 1 >= Attempts THEN "failed" ELSE "idle"
-  /\ UNCHANGED <<gen, sessionVer, others, iread, wakeSeen, wakeRec, claimSeen,
+  /\ UNCHANGED <<gen, sessionVer, others, rivals, iread, wakeSeen, wakeRec, claimSeen,
                  claimRec, active, coveredReq, coveredWakes, later>>
 
 Commit ==
@@ -133,13 +142,13 @@ Commit ==
   /\ istate' = "done" /\ gen' = gen + 1
   /\ coveredReq' = active
   /\ coveredWakes' = DOMAIN wakeRec
-  /\ UNCHANGED <<sessionVer, others, iread, attempts, wakeSeen, wakeRec,
+  /\ UNCHANGED <<sessionVer, others, rivals, iread, attempts, wakeSeen, wakeRec,
                  claimSeen, claimRec, active, later>>
 
 Next ==
   \/ \E w \in Wakes : WakeRead(w) \/ WakeCommit(w)
   \/ \E r \in Requests : ClaimRead(r) \/ ClaimCommit(r)
-  \/ OtherWrite \/ Begin \/ Abort \/ Commit
+  \/ OtherWrite \/ OtherInterrupt \/ Begin \/ Abort \/ Commit
 
 Spec == Init /\ [][Next]_vars /\ WF_vars(Begin) /\ WF_vars(Abort) /\ WF_vars(Commit)
 
@@ -159,6 +168,10 @@ LaterArrivalsAreNewTurns ==
 
 \* No interleaving of claims, wakes and other writes makes the interrupt fail.
 InterruptNotPrevented == istate # "failed"
+
+\* An interrupt that fails lost every attempt to another interrupt of the
+\* session, whose generation passes what the lost attempts read.
+OnlyInterruptsDefeatAnInterrupt == istate = "failed" => gen >= Attempts
 
 InterruptCommits == <>(istate = "done")
 ====

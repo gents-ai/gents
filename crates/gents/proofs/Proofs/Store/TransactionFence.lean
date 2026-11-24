@@ -10,7 +10,8 @@ External premise (the pinned DefraDB; evidenced by the `gents-store` tests in
 `txn_owner_tests::defradb_refuses_a_concurrent_duplicate_after_read_then_insert`):
 a transaction aborts at commit when a transaction that committed after it
 began wrote a document it read by document id (`docID:`, `docIDs:`, or a
-`_docID` equality filter), wrote a document it also writes, inserted a value
+`_docID` equality filter) or found by an equality filter on every field of a
+unique index, wrote a document it also writes, inserted a value
 of a unique index it also inserts, or deleted a document its filtered read
 returned. Nothing else a filtered, listed, counted, ordered or arrival-head
 read returned or did not return is validated: an insert into the range, a
@@ -35,17 +36,21 @@ structure Footprint where
 
 def Footprint.empty : Footprint := ⟨[], [], [], [], []⟩
 
-/-- How a transaction reads. A filtered, listed, counted or ordered read
-records the documents it returned; an arrival-head read records nothing the
-store validates. -/
+/-- How a transaction reads. A read by document id, or by equality on every
+field of a unique index (which the store answers from that index), records
+the document it found as read by id; a filtered, listed, counted or ordered
+read records the documents it returned; an arrival-head read records nothing
+the store validates. -/
 inductive Read where
   | byDocId (doc : Doc)
+  | byUniqueKey (doc : Doc)
   | filtered (returned : List Doc)
   | arrivalHead
   deriving DecidableEq, Repr
 
 def Footprint.read (f : Footprint) : Read → Footprint
   | .byDocId doc => { f with pointReads := doc :: f.pointReads }
+  | .byUniqueKey doc => { f with pointReads := doc :: f.pointReads }
   | .filtered returned => { f with scanned := returned ++ f.scanned }
   | .arrivalHead => f
 
@@ -121,6 +126,14 @@ theorem a_filtered_read_does_not_fence_an_arrival (decider : Footprint) (returne
       decide_eq_false_iff_not]
     exact fun hu => h_unique x hu hx
   · intro x _; simp
+
+/-- A read by a unique key is a read by id of the document it found: a later
+write of that document aborts the reader. -/
+theorem a_unique_key_read_is_a_point_read (decider writer : Footprint) (doc : Doc)
+    (h : writer.writes.contains doc = true) :
+    fencedAgainst (decider.read (.byUniqueKey doc)) writer = true := by
+  have h_mem : doc ∈ writer.writes := by simpa using h
+  simp [fencedAgainst, conflicts, Footprint.read, h_mem]
 
 /-- Reading the arrival head adds nothing the store validates. -/
 theorem an_arrival_head_read_fences_nothing (decider writer : Footprint) :
