@@ -178,10 +178,6 @@
               {
                 "field": "results",
                 "contains": "Ernest J. King"
-              },
-              {
-                "field": "results",
-                "contains": "King served as Chief of Naval Operations and Commander in Chief of the United States Fleet during World War II. He established the Tenth Fleet as an antisubmarine command in 1943, coordinating the Atlantic campaign against U-boats and allocating forces to protect shipping."
               }
             ]
           },
@@ -194,7 +190,8 @@
             "all": [
               {
                 "matches": "(?i)\\bKing\\b"
-              }
+              },
+              "Tenth Fleet"
             ]
           },
           "tier": "acceptance",

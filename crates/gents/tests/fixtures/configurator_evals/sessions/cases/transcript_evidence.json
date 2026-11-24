@@ -5,7 +5,7 @@
   "stages": [
     {
       "stage_id": "record",
-      "prompt": "Incident note for later: the upload retry keeps its checkpoint until the server acknowledges the batch.",
+      "prompt": "For the record: the upload retry keeps its checkpoint until the server acknowledges the batch.",
       "checks": [
         {
           "check": "final_message_matches",
@@ -23,7 +23,7 @@
     },
     {
       "stage_id": "investigate",
-      "prompt": "What did I tell you earlier about upload retries? Quote the checkpoint rule, and give me the ID of the message it's in so I can link to it.",
+      "prompt": "What did I tell you earlier about upload retries? Quote the rule, and give me the ID of the chat message where I said it, so I can link to it.",
       "checks": [
         {
           "check": "final_message_matches",

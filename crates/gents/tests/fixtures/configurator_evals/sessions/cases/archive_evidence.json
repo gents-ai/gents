@@ -5,7 +5,7 @@
   "stages": [
     {
       "stage_id": "record",
-      "prompt": "Deploy note for later: the rollout pauses at the first failing health check and leaves the previous image pinned.",
+      "prompt": "For the record: the rollout pauses at the first failing health check and leaves the previous image pinned.",
       "checks": [
         {
           "check": "final_message_matches",
@@ -23,7 +23,7 @@
     },
     {
       "stage_id": "investigate",
-      "prompt": "What did we decide about a rollout that hits a failing health check? Quote the rule, and give me the ID of the message it's in so I can link to it.",
+      "prompt": "What did I tell you earlier about a rollout that hits a failing health check? Quote the rule, and give me the ID of the chat message where I said it, so I can link to it.",
       "checks": [
         {
           "check": "final_message_matches",
