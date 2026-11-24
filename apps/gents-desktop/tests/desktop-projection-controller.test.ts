@@ -179,6 +179,26 @@ describe("createProjectionController", () => {
     expect(refreshSnapshot).toHaveBeenCalledTimes(1);
   });
 
+  /* a store update for a tracked turn owes the session list a read once the
+     turn ends; a session read requested beside it covers the update's delta,
+     and must pay that read too when it finds the turn ended */
+  it("refreshes the fleet when a delta merged into a session read observes terminal completion", async () => {
+    const refreshSnapshot = vi.fn(async () => {});
+    const refreshSession = vi.fn(
+      async () => ({ turnState: "completed" }) as DesktopSessionSnapshot,
+    );
+    const projection = controller({
+      refreshSnapshot,
+      refreshSession,
+      readSessionUpdate: async () => 0,
+    });
+    const session = projection.request("session");
+    const delta = projection.request("sessionDelta");
+    await Promise.all([session, delta]);
+    expect(refreshSession).toHaveBeenCalledTimes(1);
+    expect(refreshSnapshot).toHaveBeenCalledTimes(1);
+  });
+
   it("refreshes the index once after a terminal session event projection", async () => {
     const refreshSnapshot = vi.fn(async () => {});
     const refreshSession = vi.fn(async () => {

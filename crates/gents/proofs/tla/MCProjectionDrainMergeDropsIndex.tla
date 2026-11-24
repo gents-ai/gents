@@ -1,0 +1,4 @@
+---- MODULE MCProjectionDrainMergeDropsIndex ----
+EXTENDS ProjectionDrain
+
+====
