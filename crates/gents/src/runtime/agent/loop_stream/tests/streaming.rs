@@ -5,11 +5,8 @@ async fn loop_terminal_follows_the_lean_model() {
     for case in gents_lean_vocab::families::completion_retry_output_obligation_loop_terminal::cases::<
         String,
     >() {
-        let (db, _user, _user_access, binding) = gents_inference::test_support::signed_test_node(
-            "unmet-output-obligation",
-            gents_automation::lifecycle_hooks::composition(),
-        )
-        .await;
+        let db = gents_documents::test_support::SignedHome::start("unmet-output-obligation", gents_automation::lifecycle_hooks::composition()).await;
+        let binding = gents_inference::test_support::default_agent(&db).await;
         let node = db.node.clone();
         let actor = identity::Did::new(&binding.agent_did).unwrap();
         let model = scripted(vec![

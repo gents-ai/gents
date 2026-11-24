@@ -223,11 +223,13 @@ fn install_plugin(
 /// A hook bound to the job tool `workflow`, whose installed plugin answers
 /// every step 0 with `output`.
 async fn step0(output: Value, options: Options) -> Step0 {
-    let (db, user, owner, caller_binding) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "plugin-job-dispatch",
         gents_session::test_support::no_lifecycle_plugins(),
     )
     .await;
+    let caller_binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, owner) = signed_home.into_parts();
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let caller =

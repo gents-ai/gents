@@ -31,8 +31,10 @@ async fn live_agent(
     db: gents_store::test_support::TestStore,
     root: &KeyIdentity,
 ) -> (gents_store::test_support::TestStore, Arc<dyn NodeIdentity>) {
-    let (db, _user, _access, binding) =
-        gents_inference::test_support::signed_test_node_from_db(db, "output-obligation").await;
+    let signed_home =
+        gents_documents::test_support::SignedHome::enroll(db, "output-obligation").await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, _access) = signed_home.into_parts();
     let agent = gents_store::identity::resolve_agent_identity(root, &binding).unwrap();
     (db, agent)
 }

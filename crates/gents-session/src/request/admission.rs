@@ -2017,8 +2017,9 @@ mod tests {
                 crate::test_support::no_lifecycle_plugins(),
             )
             .await;
-            let (db, _user, user, binding) =
-                gents_inference::test_support::signed_test_node_from_db(db, name).await;
+            let signed_home = gents_documents::test_support::SignedHome::enroll(db, name).await;
+            let binding = gents_inference::test_support::default_agent(&signed_home).await;
+            let (db, _user, user) = signed_home.into_parts();
             let runtime = db.node_identity.clone();
             let agent =
                 gents_store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();

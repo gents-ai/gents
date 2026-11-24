@@ -96,11 +96,13 @@ async fn rows(access: &ConfigAccess, query: &str) -> Value {
 
 #[tokio::test]
 async fn a_plugin_built_on_the_node_exports_as_the_packs_plugin_and_runs_where_it_installs() {
-    let (origin, _user, access, worker) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "pack-export-plugin",
         gents_session::test_support::no_lifecycle_plugins(),
     )
     .await;
+    let worker = gents_inference::test_support::default_agent(&signed_home).await;
+    let (origin, _user, access) = signed_home.into_parts();
     let owner = origin.node_identity.did().to_owned();
     let tools_id = format!("{}:tools", worker.agent_did);
     let source = "module.exports = (input) => ({ n: input.n * 2 });\n";
@@ -203,12 +205,12 @@ async fn a_plugin_built_on_the_node_exports_as_the_packs_plugin_and_runs_where_i
     let (bytes, _) = pack_dir(&report.dir).unwrap();
     let archive = PackArchive::from_bytes(&bytes).unwrap();
 
-    let (second, second_user, second_access) =
-        gents_inference::test_support::signed_test_node_without_agent(
-            "pack-export-plugin-second",
-            gents_session::test_support::no_lifecycle_plugins(),
-        )
-        .await;
+    let (second, second_user, second_access) = gents_documents::test_support::SignedHome::start(
+        "pack-export-plugin-second",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await
+    .into_parts();
     let second_owner = second.node_identity.did().to_owned();
     apply(
         &second_access,

@@ -146,11 +146,12 @@ mod tests {
     async fn serving_accounts_reads_backends_and_accounts() -> Result<()> {
         // Only a User changes an account, so the fixture writes through the
         // enrolled User's client access on a protected node.
-        let (db, _user, access) = crate::test_support::signed_test_node_without_agent(
+        let (db, _user, access) = gents_documents::test_support::SignedHome::start(
             "serving-accounts",
             gents_store::node_extension::Extensions::none(),
         )
-        .await;
+        .await
+        .into_parts();
         let did = db.node_identity.did();
         let oauth = |account_ref: Option<&str>| BackendAuth::NodeOAuth {
             account_ref: account_ref.map(str::to_owned),
@@ -238,11 +239,12 @@ mod tests {
         use crate::auth::credential::{set_account_enabled, store_sign_in, AccountState};
         // Only a User changes an account, so the fixture writes through the
         // enrolled User's client access on a protected node.
-        let (db, user, access) = crate::test_support::signed_test_node_without_agent(
+        let (db, user, access) = gents_documents::test_support::SignedHome::start(
             "agent-accounts",
             gents_store::node_extension::Extensions::none(),
         )
-        .await;
+        .await
+        .into_parts();
         let did = db.node_identity.did();
         let spec = crate::backends::setup::connection_spec(
             crate::backends::setup::InferenceProviderId::Anthropic,

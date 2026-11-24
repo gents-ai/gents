@@ -275,11 +275,13 @@ async fn verified_signer_as_user(
 async fn user_title_update_is_signed_on_authenticated_http() -> anyhow::Result<()> {
     use gents_store::identity::NodeIdentity;
     let title = "renamed";
-    let (db, user, access, binding) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "http-user-title",
         crate::test_support::no_lifecycle_plugins(),
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, access) = signed_home.into_parts();
     let node_did = db.node_identity.did();
     crate::request::lifecycle::build_signed_reserved_client_request(
         &access,
@@ -345,11 +347,13 @@ async fn user_rename_rebuilds_after_confirmed_http_commit_conflict() -> anyhow::
     };
     use gents_store::identity::NodeIdentity;
 
-    let (db, user, access, binding) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "http-user-title-conflict",
         crate::test_support::no_lifecycle_plugins(),
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, access) = signed_home.into_parts();
     let node_did = db.node_identity.did();
     let session_id = "http-title-conflict-session";
     crate::request::lifecycle::build_signed_reserved_client_request(
@@ -536,11 +540,13 @@ async fn title_observation_uses_selected_agent_session_access() {
         .unwrap();
     }
 
-    let (db, user, owner, first) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "title-observation",
         crate::test_support::no_lifecycle_plugins(),
     )
     .await;
+    let first = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, owner) = signed_home.into_parts();
     let user_did = user.did().to_owned();
     let second = gents_store::identity::provision_agent_identity_authorized(
         &db.node,
