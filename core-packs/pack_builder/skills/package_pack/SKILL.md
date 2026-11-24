@@ -19,7 +19,7 @@ A pack carries an app to another node, or back to this one, in one install. Make
 
 `pack search` and `pack get` show what a pack holds before you install it. `pack preview install` lists what it creates and what its plugins ask for. Install binds inference slots as `--inference-slot NAME=PROFILE_ID`. You can install any pack yourself.
 
-Installing a plugin does not select it. Add it to the Tools of each agent that needs it, then use a fresh request: changes apply to later requests only.
+Installing a plugin does not select it. Add it to the Tools of each agent that needs it, then call it: changes apply to later turns only.
 
 ## Change a pack
 

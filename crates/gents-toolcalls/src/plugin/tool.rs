@@ -326,11 +326,11 @@ impl PluginTool {
             ),
             "tool_calls" => (
                 format!("your Tools do not select {coordinate} with tool_calls: true"),
-                format!("read [\"tools\",\"get\"], add {{\"plugin\":\"{coordinate}\",\"tool_calls\":true}} to integrations.plugins with [\"tools\",\"update\"], then run it again in a fresh request"),
+                format!("read [\"tools\",\"get\"], add {{\"plugin\":\"{coordinate}\",\"tool_calls\":true}} to integrations.plugins with [\"tools\",\"update\"], then run it again in your next turn"),
             ),
             "job_calls" => (
                 "plugin run serves no job: a job's steps run from its own tool call".to_owned(),
-                format!("select {coordinate} with `job` in integrations.plugins through [\"tools\",\"update\"], then call the tool `{name}` in a fresh request"),
+                format!("select {coordinate} with `job` in integrations.plugins through [\"tools\",\"update\"], then call the tool `{name}` in your next turn"),
             ),
             "model_calls" => (
                 "the plugin has no usable model binding".to_owned(),

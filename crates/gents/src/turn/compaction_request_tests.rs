@@ -213,6 +213,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         structured_output: None,
         tool_choice: None,
         configuration_guard: None,
+        tool_rebinding: None,
         on_rendered_request: None,
         turn_compactor: None,
         active_reduction_keys: Vec::new(),

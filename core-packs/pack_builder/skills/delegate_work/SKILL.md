@@ -30,4 +30,4 @@ It sees only what you send. Tell it:
 - What not to touch.
 - What to report: what it did, what it checked, what failed.
 
-Start one with `agent_new`; the `engineer` target is a copy of you. For a narrower helper, create an agent and an agent target and add it to your own Tools, which applies from your next request. Tell the user what you added. Run independent helpers at the same time, and never let two write the same file. When one reports, confirm the result with one read or run before building on it.
+Start one with `agent_new`; the `engineer` target is a copy of you. For a narrower helper, create an agent and an agent target and add it to your own Tools, which applies from your next turn. Tell the user what you added. Run independent helpers at the same time, and never let two write the same file. When one reports, confirm the result with one read or run before building on it.

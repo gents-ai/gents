@@ -21,6 +21,8 @@ pub mod background_executions;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod fixtures;
 pub mod persistence;
+mod tool_bindings;
+pub use tool_bindings::HookToolBindings;
 #[cfg(test)]
 pub(crate) mod tests;
 
@@ -207,16 +209,12 @@ pub struct DefraSessionHook {
     pub effect_tool_calls: Arc<Mutex<RapidHashMap<String, (ToolCallLifecycle, String)>>>,
     pub effect_lifecycles: Arc<Mutex<RapidHashMap<String, ToolCallLifecycle>>>,
     selected_loop_tools: Arc<Mutex<Option<SharedLoopTools>>>,
-    background_tool_registry: BackgroundToolRegistry,
+    tool_bindings: tool_bindings::SharedToolBindings,
     background_executions: BackgroundExecutionRegistry,
     background_live_outputs: BackgroundLiveOutputState,
     operator_tool_root: Option<PathBuf>,
-    remote_tools: Option<gents_documents::RemoteTools>,
-    goal_tools_enabled: bool,
-    goal_creation_enabled: bool,
     session_goals: Arc<dyn gents_session::session::message::SessionMessageGoals>,
     goal_tools: Arc<dyn persistence::goal_tools::GoalTools>,
-    pub job_tools: RapidHashMap<String, crate::background::job::JobBinding>,
     /// The runtime's job driver, whose handles step 0 of a job tool runs on.
     pub job_driver: Option<Arc<crate::background::job::driver::JobDriver>>,
     output_obligation_gate: Option<Arc<dyn OutputObligationCheck>>,
@@ -345,7 +343,8 @@ impl DefraSessionHook {
                     && recorded_arguments == args,
                 "plugin effect dispatch does not match its admitted input"
             );
-            return Ok(lifecycle.with_background_limit(self.background_tool_registry.limit()));
+            return Ok(lifecycle
+                .with_background_limit(self.tool_bindings().background_tool_registry.limit()));
         }
         let registered = self
             .state
@@ -395,7 +394,8 @@ impl DefraSessionHook {
                 && accepted.tool_name == tool_name,
             "accepted tool binding does not match registered provider dispatch identity"
         );
-        let selected = self
+        let bindings = self.tool_bindings();
+        let selected = bindings
             .remote_tools
             .as_ref()
             .and_then(|remote| selected_remote_identity(tool_name, args, remote));
@@ -408,7 +408,7 @@ impl DefraSessionHook {
             await_mode,
         )?
         .with_selected_tool_identity(selected)
-        .with_background_limit(self.background_tool_registry.limit()))
+        .with_background_limit(bindings.background_tool_registry.limit()))
     }
 
     #[cfg(any(test, feature = "test-fixtures"))]
@@ -446,16 +446,12 @@ impl DefraSessionHook {
             effect_tool_calls: Arc::new(Mutex::new(RapidHashMap::new())),
             effect_lifecycles: Arc::new(Mutex::new(RapidHashMap::new())),
             selected_loop_tools: Default::default(),
-            background_tool_registry: BackgroundToolRegistry::default(),
+            tool_bindings: Default::default(),
             background_executions,
             background_live_outputs,
             operator_tool_root: None,
-            remote_tools: None,
-            goal_tools_enabled: false,
-            goal_creation_enabled: false,
             session_goals: Arc::new(gents_session::session::message::NoSessionMessageGoals),
             goal_tools: Arc::new(persistence::goal_tools::NoGoalTools),
-            job_tools: RapidHashMap::new(),
             job_driver: None,
             output_obligation_gate: None,
             steering_input_source: None,
@@ -543,16 +539,12 @@ impl DefraSessionHook {
             effect_tool_calls: Arc::new(Mutex::new(RapidHashMap::new())),
             effect_lifecycles: Arc::new(Mutex::new(RapidHashMap::new())),
             selected_loop_tools: Default::default(),
-            background_tool_registry: BackgroundToolRegistry::default(),
+            tool_bindings: Default::default(),
             background_executions,
             background_live_outputs,
             operator_tool_root: None,
-            remote_tools: None,
-            goal_tools_enabled: false,
-            goal_creation_enabled: false,
             session_goals: Arc::new(gents_session::session::message::NoSessionMessageGoals),
             goal_tools: Arc::new(persistence::goal_tools::NoGoalTools),
-            job_tools: RapidHashMap::new(),
             job_driver: None,
             output_obligation_gate: None,
             steering_input_source: None,
@@ -560,9 +552,21 @@ impl DefraSessionHook {
         })
     }
 
-    pub fn with_background_tool_registry(mut self, registry: BackgroundToolRegistry) -> Self {
-        self.background_tool_registry = registry;
+    pub fn with_background_tool_registry(self, registry: BackgroundToolRegistry) -> Self {
+        self.tool_bindings
+            .edit(|bindings| bindings.background_tool_registry = registry);
         self
+    }
+
+    /// The bindings of the toolset the request's current turn runs with.
+    pub fn tool_bindings(&self) -> Arc<HookToolBindings> {
+        self.tool_bindings.current()
+    }
+
+    /// Replaces the bindings at a turn boundary, with the toolset they came
+    /// with (`gents_loop::loop_stream::ToolRebinding`).
+    pub fn rebind_tools(&self, bindings: HookToolBindings) {
+        self.tool_bindings.replace(bindings);
     }
 
     pub fn with_background_execution_registry(
@@ -580,12 +584,14 @@ impl DefraSessionHook {
     }
 
     pub fn with_goal_tool_authority(
-        mut self,
+        self,
         goal_tools_enabled: bool,
         goal_creation_enabled: bool,
     ) -> Self {
-        self.goal_tools_enabled = goal_tools_enabled;
-        self.goal_creation_enabled = goal_tools_enabled && goal_creation_enabled;
+        self.tool_bindings.edit(|bindings| {
+            *bindings = std::mem::take(bindings)
+                .with_goal_tool_authority(goal_tools_enabled, goal_creation_enabled)
+        });
         self
     }
 
@@ -609,10 +615,11 @@ impl DefraSessionHook {
 
     /// Bind the Agent's job tools for their owning dispatch path.
     pub fn with_job_tools(
-        mut self,
+        self,
         job_tools: RapidHashMap<String, crate::background::job::JobBinding>,
     ) -> Self {
-        self.job_tools = job_tools;
+        self.tool_bindings
+            .edit(|bindings| bindings.job_tools = job_tools);
         self
     }
 
@@ -765,8 +772,9 @@ impl DefraSessionHook {
         self.state.lock().await.request_deadline_at = deadline_at;
     }
 
-    pub fn with_remote_tools(mut self, tools: Option<gents_documents::RemoteTools>) -> Self {
-        self.remote_tools = tools;
+    pub fn with_remote_tools(self, tools: Option<gents_documents::RemoteTools>) -> Self {
+        self.tool_bindings
+            .edit(|bindings| bindings.remote_tools = tools);
         self
     }
 

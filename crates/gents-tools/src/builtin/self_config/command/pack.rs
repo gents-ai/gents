@@ -42,7 +42,7 @@ impl ConfigCommandTool {
                     "plugin": argv[1],
                     "selection": json!({"plugin":argv[1],"digest":record.digest}),
                     "next_call": json!({"argv":["tools","get"]}),
-                    "guidance": "Read the target Tools document and preserve its other integration settings and plugin entries. Explicitly update integrations.plugins with the pinned selection, then read tools get and effective config get for resolved readback. Start a fresh request to call the tool; installation alone does not expose it to the current request.",
+                    "guidance": "Read the target Tools document and preserve its other integration settings and plugin entries. Explicitly update integrations.plugins with the pinned selection, then read tools get and effective config get for resolved readback. Call the tool from your next turn; installation alone does not expose it.",
                     "installed": record,
                 }.pretty()
             }
