@@ -109,8 +109,9 @@ class HostileRun(unittest.TestCase):
                   {"eval_definitions": [{"definition_id": f"{suite}-definition", "cases": ["./cases/a.json"]}]})
             write(fixtures / f"ladder/{suite}/cases/a.json", {"case_id": f"{suite}-case", "split": "train"})
         self.config = {"name": "hostile", "image": "gents-eval:abc", "suites": ["s1"], "splits": ["train"],
-                       "trials": 1, "per_replica": 1, "seed_base": 1000, "command_execution": "unrestricted",
-                       "replicas": ["replica-a"], "limits": {"disk": "1m", "trial_secs": 60}}
+                       "trials": 1, "per_replica": 1, "per_trial": 1, "seed_base": 1000,
+                       "command_execution": "unrestricted", "replicas": ["replica-a"],
+                       "limits": {"disk": "1m", "trial_secs": 60}}
         write(self.run_dir / "run.json", self.config)
 
     def test_a_case_id_that_is_not_a_plain_name_is_refused_before_any_mount(self):
@@ -123,7 +124,8 @@ class HostileRun(unittest.TestCase):
 
     def test_names_that_reach_docker_must_be_plain(self):
         for key, value in (("name", "a,b"), ("image", "gents eval"), ("suites", ["s1,dst=/"]),
-                           ("limits", {"disk": "1g,uid=0", "trial_secs": 60}), ("command_execution", "yes")):
+                           ("limits", {"disk": "1g,uid=0", "trial_secs": 60}), ("command_execution", "yes"),
+                           ("per_trial", 0), ("per_trial", "2")):
             write(self.run_dir / "run.json", {**self.config, key: value})
             with self.assertRaises(ValueError, msg=key):
                 orchestrate.Run(self.run_dir)

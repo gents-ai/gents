@@ -15,6 +15,7 @@ directories only, within size and count limits. Nothing the trial wrote is
 ever written through, followed or used as a host path: it is read with
 O_NOFOLLOW from that export and validated. The model is reached through a
 relay socket opened for the attempt alone, on a replica checked just before.
+The trial makes the run's `per_trial` model calls at once.
 A slot is done once an attempt exited 0 with a valid result; `run` again
 continues every other slot.
 """
@@ -311,6 +312,9 @@ class Run:
         if self.config["command_execution"] not in COMMAND_EXECUTION:
             raise ValueError(f"command_execution must be one of {sorted(COMMAND_EXECUTION)}")
         size_bytes(self.config["limits"]["disk"])
+        per_trial = self.config["per_trial"]
+        if not isinstance(per_trial, int) or isinstance(per_trial, bool) or per_trial < 1:
+            raise ValueError(f"per_trial {per_trial!r} must be a positive number of calls")
         self.replicas = [Replica(self.dir, name) for name in self.config["replicas"]]
         self.stopping = threading.Event()
         self.running = {}
@@ -429,6 +433,7 @@ class Run:
         timeout = int(limits["trial_secs"])
         environment = {"HOME": "/eval/user", "NVIDIA_VISIBLE_DEVICES": "void", "GENTS_EVAL_TARGET": replica.name}
         environment["GENTS_EVAL_COMMAND_EXECUTION"] = self.config["command_execution"]
+        environment["GENTS_EVAL_PER_TRIAL"] = str(self.config["per_trial"])
         if self.config["command_execution"] == "unrestricted":
             environment["GENTS_EVAL_ALLOW_HOST_BASH"] = "1"
         uid, gid = os.getuid(), os.getgid()
@@ -592,7 +597,8 @@ class Run:
             pending = [slot_id for slot_id in slots if not self.done(slot_id)]
             log(f"run {self.name}: {len(slots)} slots, {len(pending)} to run on "
                 f"{', '.join(r.name for r in self.replicas)} x {self.config['per_replica']}, "
-                f"at most {self.config.get('max_running') or 'one per worker'} at once")
+                f"at most {self.config.get('max_running') or 'one per worker'} at once, "
+                f"{self.config['per_trial']} call(s) per trial")
             work = queue.Queue()
             for slot_id in pending:
                 work.put(slot_id)
