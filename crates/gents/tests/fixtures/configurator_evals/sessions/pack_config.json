@@ -3,7 +3,7 @@
   "eval_definitions": [
     {
       "definition_id": "engineer-sessions",
-      "comparability_version": 11,
+      "comparability_version": 10,
       "title": "Engineer session investigation",
       "subject": {
         "kind": "agent",

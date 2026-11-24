@@ -3,7 +3,7 @@
   "eval_definitions": [
     {
       "definition_id": "engineer-datastore",
-      "comparability_version": 5,
+      "comparability_version": 4,
       "title": "Application datastore: reads, durable writes and who may do which",
       "subject": {
         "kind": "agent",
