@@ -76,9 +76,6 @@ export function createClientLifecycle({
       fleet.getState() === fleetBefore &&
       equal(withoutDeployments(before), withoutDeployments(next));
     if (!unchanged) client.setState({ snapshot: shareUnchanged(before, next) });
-    /* a read that answers after startup gave up on it still settles startup */
-    if (client.getState().startupPhase === "configuration-error")
-      setStartupPhase("loading-configuration");
     resolveStartupPhase(next);
     recover();
   });
@@ -111,7 +108,10 @@ export function createClientLifecycle({
 
   /** While startup waits on it, the read of this device's saved settings is
       bounded: past the timeout startup shows the wait as an error with a
-      retry rather than loading forever, and a late answer still lands. */
+      retry rather than loading forever. A late answer is kept, and startup
+      stays on the error until the person retries (Lean
+      `ClientSnapshotObservation.observeStartup` keeps `configuration-error`
+      through a snapshot). */
   async function refreshSnapshot() {
     const publish = publication.begin();
     const read = readSnapshot(publish);

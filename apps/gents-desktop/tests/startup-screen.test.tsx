@@ -632,22 +632,30 @@ describe("startup waits on this device's saved settings, never on a node", () =>
     expect(fetchDesktopSnapshot).toHaveBeenCalledTimes(2);
   });
 
-  it("lands a settings read that answers after startup gave up on it", async () => {
+  it("keeps the error and its retry when a settings read answers after startup gave up on it", async () => {
     setTimingForTests({ configurationReadTimeoutMs: 50 });
     const late = deferred<DesktopClientSnapshot>();
+    const fetchDesktopSnapshot = vi
+      .fn()
+      .mockImplementationOnce(() => late.promise)
+      .mockResolvedValue(snapshot(false, false));
     render(
       <App
         bridge={bridge(
-          vi.fn(() => late.promise),
+          fetchDesktopSnapshot,
           vi.fn(async () => snapshot(false, true)),
         )}
       />,
     );
 
     expect(await screen.findByTestId("startup-retry")).toBeInTheDocument();
-    late.resolve(snapshot(false, false));
+    /* startup gave up: a late answer leaves the error and its retry in place */
+    await act(async () => late.resolve(snapshot(false, false)));
+    expect(screen.getByTestId("startup-retry")).toBeInTheDocument();
+    expect(screen.queryByTestId("setup-screen")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId("startup-retry"));
     expect(await screen.findByTestId("setup-screen")).toBeInTheDocument();
-    expect(screen.queryByTestId("startup-retry")).not.toBeInTheDocument();
   });
 });
 
