@@ -61,7 +61,7 @@ async fn delegation_case_capture_excludes_session_title_requests() {
         ConfigAccess::write_local(
             &home.node,
             "eval.test.normal_request_capture",
-            &format!(r#"mutation {{ create_AgentRequest(input: {{request_id: "{purpose}", purpose: "{purpose}", node_did: "{did}", agent_did: "{did}:research-helper", content: "TRAIN-111"}}) {{ _docID }} }}"#),
+            &format!(r#"mutation {{ create_AgentRequest(input: {{request_id: "{purpose}", purpose: "{purpose}", node_did: "{did}", agent_did: "{did}:research-helper", content: "TRAIN-111", lifecycle_state: "completed"}}) {{ _docID }} }}"#),
         )
         .await
         .unwrap();

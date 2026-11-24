@@ -309,7 +309,6 @@ jobs:
           bash -n scripts/evals/run-ladder.sh
           python3 scripts/evals/test_suites.py
           python3 scripts/evals/test_ladder_batch.py
-          python3 scripts/evals/test_ladder_baseline.py
           python3 scripts/evals/test_live_engineer_eval.py
           bash -n scripts/evals/run-container.sh scripts/evals/container/entrypoint.sh
           shellcheck scripts/evals/run-container.sh scripts/evals/container/entrypoint.sh

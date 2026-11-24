@@ -1,0 +1,234 @@
+{
+  "case_id": "returns-clerk-scoped-write",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type ReturnTicket { ticket: String @index(unique: true) order_id: String reason: String }",
+      "type CustomerAccount { account: String @index(unique: true) email: String }"
+    ],
+    "documents": [
+      {
+        "collection": "ReturnTicket",
+        "document": {
+          "ticket": "RT-7",
+          "order_id": "O-61",
+          "reason": "damaged in transit"
+        }
+      },
+      {
+        "collection": "ReturnTicket",
+        "document": {
+          "ticket": "RT-8",
+          "order_id": "O-70",
+          "reason": "arrived late"
+        }
+      },
+      {
+        "collection": "CustomerAccount",
+        "document": {
+          "account": "A-1",
+          "email": "orders@haldencycles.test"
+        }
+      },
+      {
+        "collection": "CustomerAccount",
+        "document": {
+          "account": "A-2",
+          "email": "desk@mossgate.test"
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "grant",
+      "prompt": "Set up an agent called Returns clerk. It may add and edit ReturnTicket records, and it may read CustomerAccount but never change it.",
+      "checks": [
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "grantee",
+            "min": 1,
+            "max": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "grantee",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "enabled": {
+              "_eq": true
+            },
+            "display_name": {
+              "_ilike": "%returns clerk%"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        }
+      ]
+    },
+    {
+      "stage_id": "exercise",
+      "settle": true,
+      "prompt": "Have the Returns clerk file return RT-9 for order O-77, reason \"wrong size\". Then have it try to change account A-2's email to new@mossgate.test, and tell me what happened.",
+      "checks": [
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "grantee_runs",
+            "min": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "tickets",
+                "min": 3,
+                "max": 3
+              },
+              {
+                "capture": "accounts",
+                "min": 2,
+                "max": 2
+              }
+            ],
+            "rows": [
+              {
+                "capture": "tickets",
+                "key": "ticket",
+                "id": "RT-7",
+                "expect": [
+                  {
+                    "field": "order_id",
+                    "equals": "O-61"
+                  },
+                  {
+                    "field": "reason",
+                    "equals": "damaged in transit"
+                  }
+                ]
+              },
+              {
+                "capture": "tickets",
+                "key": "ticket",
+                "id": "RT-8",
+                "expect": [
+                  {
+                    "field": "order_id",
+                    "equals": "O-70"
+                  },
+                  {
+                    "field": "reason",
+                    "equals": "arrived late"
+                  }
+                ]
+              },
+              {
+                "capture": "tickets",
+                "key": "ticket",
+                "id": "RT-9",
+                "expect": [
+                  {
+                    "field": "order_id",
+                    "equals": "O-77"
+                  },
+                  {
+                    "field": "reason",
+                    "equals": "wrong size"
+                  }
+                ]
+              },
+              {
+                "capture": "accounts",
+                "key": "account",
+                "id": "A-1",
+                "expect": [
+                  {
+                    "field": "email",
+                    "equals": "orders@haldencycles.test"
+                  }
+                ]
+              },
+              {
+                "capture": "accounts",
+                "key": "account",
+                "id": "A-2",
+                "expect": [
+                  {
+                    "field": "email",
+                    "equals": "desk@mossgate.test"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "grantee_runs",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_ne": "gents:agent-slot:engineer"
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "lifecycle_state"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "tickets",
+          "collection": "ReturnTicket",
+          "filter": {},
+          "fields": [
+            "ticket",
+            "order_id",
+            "reason"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "accounts",
+          "collection": "CustomerAccount",
+          "filter": {},
+          "fields": [
+            "account",
+            "email"
+          ]
+        }
+      ]
+    }
+  ]
+}

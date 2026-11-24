@@ -87,6 +87,7 @@ fn request(launching: &Launching, pack: &Path, run_id: &str) -> RunRequest {
         source_commit: "0deb7659c".into(),
         source_dirty: false,
         runs_dir: launching.runs_dir(),
+        divergences: None,
         captures: Vec::new(),
     }
 }

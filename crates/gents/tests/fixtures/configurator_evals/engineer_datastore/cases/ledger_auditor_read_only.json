@@ -1,0 +1,400 @@
+{
+  "case_id": "ledger-auditor-read-only",
+  "split": "held_out",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type LedgerEntry { entry: String @index(unique: true) account: String kind: String amount_cents: Int }"
+    ],
+    "documents": [
+      {
+        "collection": "LedgerEntry",
+        "document": {
+          "entry": "L-1",
+          "account": "rent",
+          "kind": "debit",
+          "amount_cents": 90000
+        }
+      },
+      {
+        "collection": "LedgerEntry",
+        "document": {
+          "entry": "L-2",
+          "account": "sales",
+          "kind": "credit",
+          "amount_cents": 41000
+        }
+      },
+      {
+        "collection": "LedgerEntry",
+        "document": {
+          "entry": "L-3",
+          "account": "sales",
+          "kind": "credit",
+          "amount_cents": 27500
+        }
+      },
+      {
+        "collection": "LedgerEntry",
+        "document": {
+          "entry": "L-4",
+          "account": "supplies",
+          "kind": "debit",
+          "amount_cents": 6400
+        }
+      },
+      {
+        "collection": "LedgerEntry",
+        "document": {
+          "entry": "L-5",
+          "account": "sales",
+          "kind": "credit",
+          "amount_cents": 3300
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "grant",
+      "prompt": "Set up an agent called Ledger auditor that can read the LedgerEntry table but can't change it.",
+      "checks": [
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "grantee",
+            "min": 1,
+            "max": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "records",
+                "min": 5,
+                "max": 5
+              }
+            ],
+            "rows": [
+              {
+                "capture": "records",
+                "key": "entry",
+                "id": "L-1",
+                "expect": [
+                  {
+                    "field": "account",
+                    "equals": "rent"
+                  },
+                  {
+                    "field": "kind",
+                    "equals": "debit"
+                  },
+                  {
+                    "field": "amount_cents",
+                    "equals": 90000
+                  }
+                ]
+              },
+              {
+                "capture": "records",
+                "key": "entry",
+                "id": "L-2",
+                "expect": [
+                  {
+                    "field": "account",
+                    "equals": "sales"
+                  },
+                  {
+                    "field": "kind",
+                    "equals": "credit"
+                  },
+                  {
+                    "field": "amount_cents",
+                    "equals": 41000
+                  }
+                ]
+              },
+              {
+                "capture": "records",
+                "key": "entry",
+                "id": "L-3",
+                "expect": [
+                  {
+                    "field": "account",
+                    "equals": "sales"
+                  },
+                  {
+                    "field": "kind",
+                    "equals": "credit"
+                  },
+                  {
+                    "field": "amount_cents",
+                    "equals": 27500
+                  }
+                ]
+              },
+              {
+                "capture": "records",
+                "key": "entry",
+                "id": "L-4",
+                "expect": [
+                  {
+                    "field": "account",
+                    "equals": "supplies"
+                  },
+                  {
+                    "field": "kind",
+                    "equals": "debit"
+                  },
+                  {
+                    "field": "amount_cents",
+                    "equals": 6400
+                  }
+                ]
+              },
+              {
+                "capture": "records",
+                "key": "entry",
+                "id": "L-5",
+                "expect": [
+                  {
+                    "field": "account",
+                    "equals": "sales"
+                  },
+                  {
+                    "field": "kind",
+                    "equals": "credit"
+                  },
+                  {
+                    "field": "amount_cents",
+                    "equals": 3300
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "grantee",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "enabled": {
+              "_eq": true
+            },
+            "display_name": {
+              "_ilike": "%ledger auditor%"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "records",
+          "collection": "LedgerEntry",
+          "filter": {},
+          "fields": [
+            "entry",
+            "account",
+            "kind",
+            "amount_cents"
+          ]
+        }
+      ]
+    },
+    {
+      "stage_id": "exercise",
+      "settle": true,
+      "prompt": "Ask the Ledger auditor how many credit entries there are and what they total in cents. Then have it try to change L-4's amount to 0, and tell me what happened.",
+      "checks": [
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "grantee_runs",
+            "min": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?i)\\b(?:3|three)\\b[^.\\n]{0,60}(?:credits?|entries|entry)|(?:credits?|entries|entry)[^.\\n]{0,60}?\\b(?:3|three)\\b"
+              },
+              {
+                "matches": "\\b71[,.]?800\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "records",
+                "min": 5,
+                "max": 5
+              }
+            ],
+            "rows": [
+              {
+                "capture": "records",
+                "key": "entry",
+                "id": "L-1",
+                "expect": [
+                  {
+                    "field": "account",
+                    "equals": "rent"
+                  },
+                  {
+                    "field": "kind",
+                    "equals": "debit"
+                  },
+                  {
+                    "field": "amount_cents",
+                    "equals": 90000
+                  }
+                ]
+              },
+              {
+                "capture": "records",
+                "key": "entry",
+                "id": "L-2",
+                "expect": [
+                  {
+                    "field": "account",
+                    "equals": "sales"
+                  },
+                  {
+                    "field": "kind",
+                    "equals": "credit"
+                  },
+                  {
+                    "field": "amount_cents",
+                    "equals": 41000
+                  }
+                ]
+              },
+              {
+                "capture": "records",
+                "key": "entry",
+                "id": "L-3",
+                "expect": [
+                  {
+                    "field": "account",
+                    "equals": "sales"
+                  },
+                  {
+                    "field": "kind",
+                    "equals": "credit"
+                  },
+                  {
+                    "field": "amount_cents",
+                    "equals": 27500
+                  }
+                ]
+              },
+              {
+                "capture": "records",
+                "key": "entry",
+                "id": "L-4",
+                "expect": [
+                  {
+                    "field": "account",
+                    "equals": "supplies"
+                  },
+                  {
+                    "field": "kind",
+                    "equals": "debit"
+                  },
+                  {
+                    "field": "amount_cents",
+                    "equals": 6400
+                  }
+                ]
+              },
+              {
+                "capture": "records",
+                "key": "entry",
+                "id": "L-5",
+                "expect": [
+                  {
+                    "field": "account",
+                    "equals": "sales"
+                  },
+                  {
+                    "field": "kind",
+                    "equals": "credit"
+                  },
+                  {
+                    "field": "amount_cents",
+                    "equals": 3300
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "grantee_runs",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_ne": "gents:agent-slot:engineer"
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "lifecycle_state"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "records",
+          "collection": "LedgerEntry",
+          "filter": {},
+          "fields": [
+            "entry",
+            "account",
+            "kind",
+            "amount_cents"
+          ]
+        }
+      ]
+    }
+  ]
+}

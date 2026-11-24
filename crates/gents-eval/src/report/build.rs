@@ -34,6 +34,10 @@ pub struct EvalReport {
     /// Set by `report::store` from the run's frozen copy when the installed
     /// definition no longer digests to it; `build` never sets it.
     pub definition_changed: bool,
+    /// Set by `report::store` from the run's directory; `None` for a run
+    /// frozen before runs recorded them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub divergences: Option<Vec<crate::runner::divergence::Divergence>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -296,6 +300,7 @@ pub fn build(
             origin.split,
         ),
         definition_changed: false,
+        divergences: None,
     })
 }
 

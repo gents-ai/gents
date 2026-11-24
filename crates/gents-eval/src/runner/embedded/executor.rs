@@ -229,6 +229,90 @@ impl EmbeddedExecutor {
     }
 }
 
+#[cfg(any(test, feature = "test-fixtures"))]
+pub struct InstalledSubject {
+    pub home: EmbeddedHome,
+    pub agent_did: String,
+    pub evaluator_did: String,
+    pub tool_ceiling: ToolCeiling,
+}
+
+/// Installs a subject exactly as a trial does before its first stage, for
+/// tests above this crate that hold it to what a product home holds.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub async fn install_subject_for_tests(
+    pack_dir: &Path,
+    agent_slot: &str,
+    core_packs: &[String],
+    enabled_core_packs: &[String],
+    archives: gents::core_packs::Archives<'_>,
+    host_bash: bool,
+    isolation: Isolation,
+) -> Result<InstalledSubject> {
+    use crate::runner::executor::{InferenceBinding, TrialFixtures};
+    use gents_pack::pack::digest_declared_assets;
+
+    let (manifest, assets) = install::read_pack(pack_dir)?;
+    let pack_digest = digest_declared_assets(&manifest, |path| {
+        assets
+            .get(path)
+            .map(Vec::as_slice)
+            .with_context(|| format!("pack has no asset {path:?}"))
+    })?;
+    let mut home = EmbeddedHome::create_temp("subject").await?;
+    let evaluator = Arc::new(gents_store::identity::KeyIdentity::load_or_create(
+        home.path().join("evaluator.key"),
+        None,
+    )?);
+    let evaluator_did = gents_store::identity::NodeIdentity::did(evaluator.as_ref()).to_owned();
+    let capability = evaluator.client_signing_capability()?;
+    home.set_evaluator(evaluator, capability);
+    let trial_dir = home.path().join("trial");
+    let workspace = workspace_dir(&trial_dir);
+    std::fs::create_dir_all(&workspace)?;
+    let spec = TrialSpec {
+        trial_id: "subject".to_owned(),
+        pack_dir: pack_dir.to_owned(),
+        pack_digest,
+        agent_slot: agent_slot.to_owned(),
+        evaluator_did: evaluator_did.clone(),
+        inference: InferenceBinding {
+            profile: serde_json::json!({
+                "profile_id": "subject-profile",
+                "backend_id": "subject-backend",
+                "model_name": "subject-model",
+            }),
+            backend: serde_json::json!({
+                "backend_id": "subject-backend",
+                "name": "Subject backend",
+                "provider_kind": "OpenAiCompatible",
+                "endpoint": "http://127.0.0.1:1/v1",
+                "auth": {"kind": "unauthenticated"},
+            }),
+            sampling: None,
+            execution: None,
+            retry_policy: None,
+            seed: 0,
+        },
+        fixtures: TrialFixtures::default(),
+        host_bash,
+        core_packs: core_packs.to_vec(),
+        enabled_core_packs: enabled_core_packs.to_vec(),
+        stages: Vec::new(),
+        trial_dir,
+        script_key: None,
+        progress: Default::default(),
+        review: Default::default(),
+    };
+    let agent_did = install(&spec, &home, &workspace, archives).await?;
+    Ok(InstalledSubject {
+        tool_ceiling: trial_tool_ceiling(&workspace, host_bash, isolation),
+        home,
+        agent_did,
+        evaluator_did,
+    })
+}
+
 /// The process ceiling of an embedded trial. Bash is capped at
 /// `WorkspaceWrite`, so no grant an agent holds can write outside the trial
 /// root. A contained trial's bash runs unsandboxed, as the Linux Engineer's

@@ -129,6 +129,11 @@ pub(crate) async fn dispatch(command: EvalCommand, runtime: tokio::runtime::Hand
         let mut out = stdout.lock();
         return checks::checks(&CheckRegistry::builtin(), args, &mut out);
     }
+    if let EvalCommand::Subject(args) = &command {
+        let stdout = std::io::stdout();
+        let mut out = stdout.lock();
+        return subject::write(args, &mut out);
+    }
     if let EvalCommand::Init(args) = &command {
         init::preflight(args).await?;
     }
@@ -203,6 +208,7 @@ pub(crate) async fn execute(
         }
         EvalCommand::Gc(args) => manage::gc(ctx, &args, out).await,
         EvalCommand::Checks(args) => checks::checks(deps.registry, &args, out),
+        EvalCommand::Subject(args) => subject::write(&args, out),
         EvalCommand::Init(args) => init::run(ctx, &args, deps, out).await,
     };
     result.map_err(surface_refusal)
@@ -423,6 +429,7 @@ mod inspect;
 pub(crate) mod manage;
 pub(crate) mod render;
 mod run;
+pub(crate) mod subject;
 #[cfg(test)]
 pub(crate) mod testing;
 mod watch;

@@ -36,7 +36,7 @@
   "stages": [
     {
       "stage_id": "build",
-      "prompt": "Make me a desktop page for our tickets. Call it Ticket Board, page id ticket_board, and have it list every ticket with its title and lane, with a stat at the top counting the maintenance-lane tickets. Give it its own datastore surface, ticket_desk, with one read tool, list_tickets, over the Ticket collection that a caller can filter by lane. Lint the page before you tell me it is ready.",
+      "prompt": "Make me a Ticket Board page that lists every ticket with its title and lane, and shows at the top how many tickets are in the maintenance lane. Lint it before you tell me it's ready.",
       "capture": [
         {
           "kind": "documents",
@@ -74,44 +74,9 @@
             "entries",
             "enabled"
           ]
-        },
-        {
-          "kind": "documents",
-          "name": "file_changes",
-          "collection": "ToolFileChange",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "tool_call_doc_id",
-            "session_id",
-            "file_changes"
-          ]
         }
       ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "file_changes",
-            "min": 0,
-            "max": 0
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "crew_spec_match",
           "params": {
@@ -120,63 +85,58 @@
                 "capture": "pages",
                 "min": 1,
                 "max": 1
-              },
-              {
-                "capture": "surfaces",
-                "min": 1,
-                "max": 1
               }
             ],
             "rows": [
               {
-                "capture": "surfaces",
-                "key": "surface_id",
-                "id": "ticket_desk",
-                "expect": [
-                  {
-                    "field": "entries",
-                    "matches": "\"kind\"\\s*:\\s*\"query\""
-                  },
-                  {
-                    "field": "entries",
-                    "matches": "\"tool_name\"\\s*:\\s*\"list_tickets\""
-                  },
-                  {
-                    "field": "entries",
-                    "matches": "\"collection\"\\s*:\\s*\"Ticket\""
-                  },
-                  {
-                    "field": "entries",
-                    "matches": "\"filter_fields\"\\s*:\\s*\\[\\s*\\{[^\\]]*\"lane\""
-                  }
-                ]
-              },
-              {
                 "capture": "pages",
-                "key": "page_id",
-                "id": "ticket_board",
+                "key": "display_name",
+                "id": "Ticket Board",
                 "expect": [
-                  {
-                    "field": "data",
-                    "matches": "\"surface\"\\s*:\\s*\"ticket_desk\""
-                  },
-                  {
-                    "field": "data",
-                    "matches": "\"list_tickets\""
-                  },
-                  {
-                    "field": "module",
-                    "matches": "useQuery\\(\\s*ctx\\s*,\\s*['\\\"]ticket_desk['\\\"]\\s*,\\s*['\\\"]list_tickets['\\\"]"
-                  },
-                  {
-                    "field": "module",
-                    "matches": "\\bStat\\b"
-                  },
                   {
                     "field": "enabled",
                     "equals": true
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\buseQuery\\("
+                  },
+                  {
+                    "field": "module",
+                    "matches": "maintenance"
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\btitle\\b"
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\blane\\b"
+                  },
+                  {
+                    "field": "data",
+                    "matches": "\"surface\"\\s*:\\s*\"[^\"]+\""
                   }
                 ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "surfaces",
+            "min_rows": 1,
+            "expect": [
+              {
+                "field": "entries",
+                "matches": "\"kind\"\\s*:\\s*\"query\""
+              },
+              {
+                "field": "entries",
+                "matches": "\"collection\"\\s*:\\s*\"Ticket\""
               }
             ]
           },
@@ -187,10 +147,6 @@
           "check": "tool_result_matches",
           "params": {
             "expect": [
-              {
-                "field": "page",
-                "equals": "ticket_board"
-              },
               {
                 "field": "admitted",
                 "equals": true

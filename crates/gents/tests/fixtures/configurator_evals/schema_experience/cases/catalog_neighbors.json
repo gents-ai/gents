@@ -5,16 +5,7 @@
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "Our product matching prototype already produces three-number vectors; don't generate embeddings. Create CatalogItem with sku and label as text, and coordinates as a list of Float32 values. Add an exact FLAT vector index with three dimensions and Euclidean distance. The catalog is small, so exact answers matter more than scaling right now.",
-      "capture": [
-        {
-          "kind": "schema",
-          "name": "schema",
-          "collections": [
-            "CatalogItem"
-          ]
-        }
-      ],
+      "prompt": "Our matching prototype gives every product a three-number vector. Set up CatalogItem with sku and label (text) and coordinates (the vector), indexed for exact straight-line distance. The catalog is small, so exact answers matter more than speed. The items are coming next.",
       "checks": [
         {
           "check": "schema_matches",
@@ -24,19 +15,125 @@
           },
           "tier": "acceptance",
           "weight": 1
-        },
+        }
+      ],
+      "capture": [
         {
-          "check": "tool_calls_expected",
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "CatalogItem"
+          ]
+        }
+      ]
+    },
+    {
+      "stage_id": "use",
+      "settle": true,
+      "continuation": {
+        "prompt": "OK, go ahead.",
+        "max": 1,
+        "until": "loaded"
+      },
+      "prompt": "Add NUT-1 \"hex nut\" [1, 0, 0], BOLT-2 \"hex bolt\" [0.9, 0.1, 0], GEAR-3 \"spur gear\" [0, 1, 0] and BELT-4 \"drive belt\" [0, 0, 1]. Which item is closest to [0.86, 0.14, 0]?",
+      "checks": [
+        {
+          "check": "crew_spec_match",
           "params": {
-            "required": [
-              "schema"
+            "present": [
+              {
+                "capture": "items",
+                "min": 4,
+                "max": 4
+              }
             ],
-            "forbidden": [
-              "bash"
+            "rows": [
+              {
+                "capture": "items",
+                "key": "sku",
+                "id": "NUT-1",
+                "expect": [
+                  {
+                    "field": "label",
+                    "equals": "hex nut"
+                  }
+                ]
+              },
+              {
+                "capture": "items",
+                "key": "sku",
+                "id": "BOLT-2",
+                "expect": [
+                  {
+                    "field": "label",
+                    "equals": "hex bolt"
+                  }
+                ]
+              },
+              {
+                "capture": "items",
+                "key": "sku",
+                "id": "GEAR-3",
+                "expect": [
+                  {
+                    "field": "label",
+                    "equals": "spur gear"
+                  }
+                ]
+              },
+              {
+                "capture": "items",
+                "key": "sku",
+                "id": "BELT-4",
+                "expect": [
+                  {
+                    "field": "label",
+                    "equals": "drive belt"
+                  }
+                ]
+              }
             ]
           },
           "tier": "acceptance",
           "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?i)BOLT-2|hex bolt"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "items",
+          "collection": "CatalogItem",
+          "filter": {},
+          "fields": [
+            "sku",
+            "label",
+            "coordinates"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "loaded",
+          "collection": "CatalogItem",
+          "filter": {
+            "sku": {
+              "_eq": "BELT-4"
+            }
+          },
+          "fields": [
+            "sku"
+          ]
         }
       ]
     }

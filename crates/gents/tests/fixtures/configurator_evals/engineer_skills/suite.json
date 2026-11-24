@@ -2,11 +2,59 @@
   "id": "engineer-skills",
   "title": "Engineer skills",
   "coverage": [
-    "load the build-planning skill before building",
     "follow a domain skill to its answer",
     "pick the matching sibling skill",
-    "diagnose and pack guidance from shipped skills",
-    "no skill for an unrelated question"
+    "plan and write done-checks before building",
+    "diagnose without changes, then set up an automation that runs",
+    "a deduplicating collection, then a feed loaded into it",
+    "a one-off answer with nothing built"
   ],
-  "subject": "engineer_full"
+  "subject_fixtures": [
+    {
+      "name": "four-task-skills",
+      "why": "Four skills a user wrote for their own work, attached to the Engineer's Context beside the core packs' skills.",
+      "documents": {
+        "skills": [
+          {
+            "name": "courier-window",
+            "display_name": "Courier window",
+            "description": "Route courier arrivals at the depot to the right queue.",
+            "instructions": "# Courier window\n\nRoute each courier arrival at the depot by what it is, its seal, its weight and its arrival hour (24-hour clock). Apply the first rule that matches, in this order:\n\n1. A parcel goes to Loading Bay 2. An envelope over 500 g is handled as a parcel.\n2. A broken seal goes to Red Desk. A resealed envelope counts as broken.\n3. An envelope marked priority goes to Blue Annex at any hour.\n4. An intact envelope arriving at hour 18 or later goes to Blue Annex.\n5. Any other envelope goes to Green Gate.",
+            "skill_id": "courier-window"
+          },
+          {
+            "name": "archive-retention",
+            "display_name": "Archive retention",
+            "description": "Determine how long the records office keeps each document.",
+            "instructions": "# Archive retention\n\nThe records office keeps:\n\n- signed maps for 36 months;\n- unsigned maps for 14 months;\n- calendars for 5 months;\n- ledgers for 84 months.\n\nSigned status changes the period only for maps. A record under legal hold is kept until the hold is lifted: report its retention as \"hold\" instead of a number of months. Laboratory records are not kept by the records office.",
+            "skill_id": "archive-retention"
+          },
+          {
+            "name": "specimen-log-retention",
+            "display_name": "Specimen log retention",
+            "description": "Determine how long the laboratory keeps specimen logs and bench sheets.",
+            "instructions": "# Specimen log retention\n\nThe laboratory keeps:\n\n- specimen logs for 30 months, or 60 months when the specimen was sent out for external testing;\n- bench sheets for 9 months, or 18 months when a bench sheet records a failed control;\n- instrument printouts for 3 months.\n\nRecords-office documents follow the archive retention guide instead.",
+            "skill_id": "specimen-log-retention"
+          },
+          {
+            "name": "ferry-reimbursement",
+            "display_name": "Ferry settlement",
+            "description": "Calculate the amount reimbursable on a staff travel claim.",
+            "instructions": "# Ferry settlement\n\n1. Subtract any rebate from the paid amount; that is the net cost.\n2. For ferry travel, reimburse the smaller of the net cost and 51 units.\n3. Tram travel is limited to 18 units.\n4. A claim filed more than 30 days after travel is reimbursed at half the amount from step 2 or 3, rounded down.",
+            "skill_id": "ferry-reimbursement"
+          }
+        ]
+      },
+      "engineer": {
+        "context": {
+          "skill_ids": [
+            "courier-window",
+            "archive-retention",
+            "specimen-log-retention",
+            "ferry-reimbursement"
+          ]
+        }
+      }
+    }
+  ]
 }

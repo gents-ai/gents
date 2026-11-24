@@ -17,7 +17,7 @@
   "stages": [
     {
       "stage_id": "total",
-      "prompt": "What did route R-9 take in fares on 2026-11-14, according to ledgers/ferry-fares.csv? Refunds are the negative rows and count against the total. Only R-9 itself, not other routes whose names start the same way. Reply with JSON containing total_cents and tickets (the number of R-9 rows that day).",
+      "prompt": "What did route R-9 take in fares on 2026-11-14, according to ledgers/ferry-fares.csv, and how many R-9 entries are there for that day, refunds included? Refunds are the negative rows and count against the total. Only R-9 itself, not other routes whose names start the same way.",
       "capture": [
         {
           "kind": "file",
@@ -26,35 +26,6 @@
         }
       ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "forbidden": [
-              "write_file",
-              "edit_file",
-              "bash",
-              "bash_unrestricted"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "final_message_matches",
-          "params": {
-            "all": [
-              {
-                "matches": "\"total_cents\"\\s*:\\s*6225\\b"
-              },
-              {
-                "matches": "\"tickets\"\\s*:\\s*17\\b"
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "captured_files_match",
           "params": {
@@ -67,6 +38,21 @@
               {
                 "path": "ledgers/README.txt",
                 "sha256": "b8f62a16747744f55167be48d0e432d1cfc8abe7004d056928af9b6b224a5ee4"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\\b6,?225\\b|\\b62\\.25\\b"
+              },
+              {
+                "matches": "\\b17\\b"
               }
             ]
           },

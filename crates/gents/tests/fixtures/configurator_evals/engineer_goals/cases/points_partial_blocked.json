@@ -25,8 +25,67 @@
   "stages": [
     {
       "stage_id": "goal",
+      "prompt": "Make it a goal with a 500,000-token budget: write points.json mapping each member id in members/ to their spend times their tier's multiplier from tiers/multipliers.json. Platinum's multiplier isn't announced yet and only I can get it, so leave out anyone you can't score and don't guess. Do what you can, tell me once in my inbox what's missing, and mark the goal blocked.",
       "settle": true,
-      "prompt": "Set a goal for this session with a token budget of 1200000: write points.json mapping each member id in members/ to their spend times their tier's multiplier from tiers/multipliers.json. The platinum multiplier hasn't been announced yet and only I can get it, so leave any member you can't score out of points.json and don't guess a multiplier. Do what you can now; for the rest, tell me once through my inbox and mark the goal blocked.",
+      "checks": [
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "goal",
+            "expect": [
+              {
+                "field": "token_budget",
+                "equals": 500000
+              },
+              {
+                "field": "status",
+                "equals": "blocked"
+              }
+            ],
+            "min_rows": 1,
+            "max_rows": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "visible",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "notice",
+                "min": 1,
+                "max": 1
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "points",
+            "expect": [
+              {
+                "path": "points.json",
+                "pointer": "",
+                "equals": {
+                  "m-1": 120,
+                  "m-2": 50
+                }
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
       "capture": [
         {
           "kind": "documents",
@@ -42,6 +101,7 @@
             "objective",
             "status",
             "token_budget",
+            "tokens_used",
             "completion_evidence",
             "blocked_reason"
           ]
@@ -99,81 +159,6 @@
           "kind": "file",
           "name": "points",
           "glob": "points.json"
-        }
-      ],
-      "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "create_goal",
-              "file_mailbox_item"
-            ],
-            "forbidden": [
-              "bash",
-              "bash_unrestricted"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_fields_match",
-          "params": {
-            "name": "goal",
-            "expect": [
-              {
-                "field": "token_budget",
-                "equals": 1200000
-              },
-              {
-                "field": "status",
-                "equals": "blocked"
-              }
-            ],
-            "min_rows": 1,
-            "max_rows": 1
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "present": [
-              {
-                "capture": "visible",
-                "min": 1,
-                "max": 1
-              },
-              {
-                "capture": "notice",
-                "min": 1,
-                "max": 1
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_files_match",
-          "params": {
-            "name": "points",
-            "expect": [
-              {
-                "path": "points.json",
-                "pointer": "",
-                "equals": {
-                  "m-1": 120,
-                  "m-2": 50
-                }
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
         }
       ]
     }

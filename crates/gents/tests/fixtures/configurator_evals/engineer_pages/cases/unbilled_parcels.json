@@ -6,75 +6,31 @@
     "files": [
       {
         "path": "shipments.csv",
-        "contents": "pid,state\nR18,shipped\nR29,packed\nR31,shipped\nR42,shipped\nR54,shipped\n"
+        "contents": "pid,state\nR10,packed\nR11,shipped\nR12,shipped\nR13,shipped\nR14,packed\nR15,shipped\nR16,shipped\nR17,packed\nR18,shipped\nR19,shipped\nR20,shipped\nR21,returned\nR22,shipped\nR23,shipped\nR24,shipped\nR25,shipped\nR26,shipped\nR27,shipped\nR28,shipped\nR29,shipped\nR30,packed\nR31,shipped\nR32,shipped\nR33,shipped\nR34,shipped\nR35,returned\nR36,shipped\nR37,shipped\nR38,shipped\nR39,shipped\nR40,shipped\nR41,shipped\nR42,shipped\nR43,shipped\nR44,shipped\nR45,shipped\nR46,shipped\nR47,shipped\nR48,packed\nR49,shipped\nR50,shipped\nR51,packed\nR52,shipped\nR53,shipped\nR54,shipped\nR55,packed\nR56,shipped\nR57,returned\nR58,packed\nR59,shipped\nR60,shipped\nR61,shipped\nR62,shipped\nR63,shipped\nR64,returned\nR65,packed\nR66,packed\nR67,shipped\nR68,shipped\nR69,shipped\n"
       },
       {
         "path": "invoices.csv",
-        "contents": "parcel,invoice,status\nR18,IC12,issued\nR42,IC34,void\nR88,IC53,issued\n"
+        "contents": "parcel,invoice,status\nR56,IC142,paid\nR36,IC122,void\nR43,IC131,issued\nR55,IC154,issued\nR13,IC104,issued\nR49,IC136,issued\nR20,IC109,issued\nR26,IC114,paid\nR11,IC101,void\nR91,IC157,issued\nR88,IC156,issued\nR33,IC120,issued\nR19,IC108,issued\nR15,IC105,paid\nR30,IC153,issued\nR69,IC150,paid\nR18,IC107,paid\nR41,IC129,issued\nR49,IC135,void\nR59,IC143,paid\nR12,IC103,issued\nR60,IC144,issued\nR42,IC130,paid\nR37,IC123,void\nR69,IC149,void\nR32,IC119,issued\nR63,IC146,paid\nR29,IC117,paid\nR53,IC139,void\nR16,IC106,issued\nR65,IC155,issued\nR61,IC145,paid\nR28,IC116,paid\nR50,IC137,issued\nR31,IC118,paid\nR67,IC147,paid\nR54,IC141,paid\nR38,IC125,void\nR47,IC134,paid\nR14,IC151,issued\nR68,IC148,issued\nR22,IC110,paid\nR38,IC126,issued\nR46,IC133,paid\nR53,IC140,paid\nR23,IC111,paid\nR27,IC115,issued\nR11,IC102,issued\nR40,IC128,issued\nR24,IC112,issued\nR52,IC138,issued\nR37,IC124,issued\nR34,IC121,issued\nR44,IC132,paid\nR17,IC152,issued\nR39,IC127,issued\nR25,IC113,void\n"
       }
     ]
   },
   "stages": [
     {
       "stage_id": "query",
-      "prompt": "Use SQL over shipments.csv and invoices.csv to find the shipped parcels that have not been billed; a void invoice does not count. Reply with one JSON object whose unbilled key lists their IDs in order.",
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "file_changes",
-          "collection": "ToolFileChange",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "tool_call_doc_id",
-            "session_id",
-            "file_changes"
-          ]
-        }
-      ],
+      "prompt": "How many shipped parcels in shipments.csv haven't been billed yet, and which ones? The invoices are in invoices.csv; a void invoice doesn't count.",
       "checks": [
         {
-          "check": "tool_calls_expected",
+          "check": "captured_files_match",
           "params": {
-            "required": [
-              "data_tables"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "file_changes",
-            "min": 0,
-            "max": 0
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_result_matches",
-          "params": {
+            "name": "inputs",
             "expect": [
               {
-                "field": "row_count",
-                "equals": 3
+                "path": "shipments.csv",
+                "sha256": "a29970befaaa9a8c2a525698662278aa7a93ae6e9bdb0c7d200abf17567dd6ef"
               },
               {
-                "field": "rows",
-                "contains": "R31"
-              },
-              {
-                "field": "rows",
-                "contains": "R42"
-              },
-              {
-                "field": "rows",
-                "contains": "R54"
+                "path": "invoices.csv",
+                "sha256": "15377f53b95c87cf7bce4d0aaa8c3e773eeb544b9edfd2983b934ebe29bec043"
               }
             ]
           },
@@ -86,12 +42,31 @@
           "params": {
             "all": [
               {
-                "matches": "\"unbilled\"\\s*:\\s*\\[\\s*\"R31\"\\s*,\\s*\"R42\"\\s*,\\s*\"R54\"\\s*\\]"
+                "matches": "\\bR25\\b"
+              },
+              {
+                "matches": "\\bR36\\b"
+              },
+              {
+                "matches": "\\bR45\\b"
+              },
+              {
+                "matches": "\\bR62\\b"
+              },
+              {
+                "matches": "(?i)\\b(4|four)\\b[^.\\n]{0,40}\\bparcels?|\\bparcels?[^.\\n]{0,60}\\b(4|four)\\b"
               }
             ]
           },
           "tier": "acceptance",
           "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "file",
+          "name": "inputs",
+          "glob": "*.csv"
         }
       ]
     }

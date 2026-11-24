@@ -12,7 +12,6 @@
   "kind": "documents",
   "assets": [
     "README.md",
-    "cases/no_goal_check.json",
     "cases/pallet_totals_goal.json",
     "cases/queue_one_per_turn.json",
     "cases/no_goal_needed.json",

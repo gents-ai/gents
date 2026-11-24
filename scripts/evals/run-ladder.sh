@@ -4,7 +4,7 @@
 #   scripts/evals/run-ladder.sh [SUITE|all|list] [TRIALS] [CONCURRENCY]
 #       [--backend TARGET | --target TARGET] [--trials N] [--concurrency N]
 #
-# `all` runs L1-L5 and the configuration-only capstone.
+# `all` runs L1-L5 and the capstone.
 # Defaults: 3 trials per case; global trial cap floor(4 / PER_TRIAL); train + validation.
 # The cap covers active trials across all runs, not every provider/background call.
 # Held-out cases run only with GENTS_EVAL_SPLITS=held_out.
@@ -21,12 +21,19 @@
 # GENTS_EVAL_WEB_PORT: local dashboard port (default 9495).
 # GENTS_BIN: existing gents binary; otherwise builds this checkout.
 # GENTS_EVAL_SHA: commit label for run ids when the tree has no .git.
-# GENTS_EVAL_SUBJECT: subject pack directory every selected suite runs as, sessions
-#   and factory-setup included; select one suite to override only its subject.
+# Every suite runs the Engineer this checkout's `gents init --engineer` makes, written by
+#   `gents utils eval subject`, with the fixtures its suite.json declares; each trial
+#   installs every core pack, so the binary must carry them (`make core-packs` first).
+# GENTS_EVAL_SUBJECT: subject pack directory every selected suite runs instead; select
+#   one suite to override only its subject.
 # GENTS_EVAL_DEFINITION_SOURCE: definition directory every selected suite applies.
-# GENTS_EVAL_COMMAND_EXECUTION: off (default) or unrestricted, the mode every
-#   subject's Engineer runs commands in; unrestricted holds only inside an
+# GENTS_EVAL_COMMAND_EXECUTION: off (default: no bash, no background processes) or
+#   unrestricted (the bash and background processes init gives the Engineer), the mode
+#   every subject's Engineer runs commands in; unrestricted holds only inside an
 #   isolating container (scripts/evals/run-container.sh).
+# Before the batch starts and after it ends, a block says how the launch differs from a
+#   production node running the shipped Engineer (each run records it in report.json), or
+#   one plain line when it does not.
 # Suites are the suite.json files under the eval fixtures (scripts/evals/suites.py);
 # scripts/evals/matrix.json holds the default list `all` runs.
 set -euo pipefail
@@ -106,9 +113,11 @@ if not splits or len(splits) != len(set(splits)) or any(s not in {"train", "vali
     sys.exit("GENTS_EVAL_SPLITS must contain distinct train, validation or held_out splits")
 PYVALIDATESPLITS
 
+BUILT_HERE=0
 if [ -n "${GENTS_BIN:-}" ]; then
   GENTS=$GENTS_BIN
 else
+  BUILT_HERE=1
   echo "building gents at $SHA ..." >&2
   BUILD_SOURCE=$(git -C "$ROOT" rev-parse HEAD)
   BUILD_REF=$(git -C "$ROOT" rev-parse --abbrev-ref HEAD)
@@ -220,6 +229,9 @@ echo "profile $PROFILE_ID: $MODEL, reasoning $REASONING, temperature ${TEMPERATU
 
 STAMP=$(python3 -c 'import datetime,uuid; print(datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S-%f") + "-" + uuid.uuid4().hex[:8])')
 PLAN="$EVAL_HOME/batch-$STAMP.json"
+DIVERGENCES="$EVAL_HOME/divergences-$STAMP.json"
+GENTS_BIN="$GENTS" GENTS_EVAL_BUILT=$BUILT_HERE python3 "$SUITES" launcher-divergences "$DIVERGENCES"
+RECEIPTS=()
 PLAN_DRAFT="$PLAN.tmp"
 printf '{"runs":[]}\n' >"$PLAN_DRAFT"
 WATCH=${GENTS_EVAL_WATCH:-auto}
@@ -235,7 +247,8 @@ fi
 for level in "${SELECTED[@]}"; do
   SUITE_PATH=$(python3 "$SUITES" field "$level" path)
   DEFINITION_ID=$(python3 "$SUITES" field "$level" definition_id)
-  RUN_SUBJECT=$(python3 "$SUITES" prepare-subject "$level" "$EVAL_HOME/subjects-$SHA/$level")
+  RUN_SUBJECT=$(GENTS_BIN="$GENTS" python3 "$SUITES" prepare-subject "$level" "$EVAL_HOME/subjects-$SHA/$level")
+  RECEIPTS+=("$RUN_SUBJECT.receipt.json")
   DEFINITION="$EVAL_HOME/definitions/$level"
   rm -rf "$DEFINITION" && mkdir -p "$EVAL_HOME/definitions" && cp -R "${GENTS_EVAL_DEFINITION_SOURCE:-$FIXTURES/$SUITE_PATH}" "$DEFINITION"
   python3 - "$DEFINITION/pack_config.json" "$DEFAULT_AGENT_DID" "$DID" "$COMMAND_EXECUTION" <<'PYDEFINITION'
@@ -248,65 +261,6 @@ for definition in config["eval_definitions"]:
     definition["subject"]["host_bash"] = mode == "unrestricted"
 json.dump(config, open(path, "w"), indent=2)
 PYDEFINITION
-  python3 - "$DEFINITION" "$RUN_SUBJECT" <<'PYENGINEERBASELINE'
-import json, pathlib, sys
-root, subject = map(pathlib.Path, sys.argv[1:])
-config = json.loads((subject / "pack_config.json").read_text())
-engineers = [agent for agent in config.get("agents", []) if agent.get("agent_slot") == "engineer"]
-if len(engineers) == 1:
-    contexts = [context for context in config.get("contexts", []) if context.get("context_id") == engineers[0].get("context_id")]
-    tools = [tool for tool in config.get("tools", []) if len(contexts) == 1 and tool.get("tools_id") == contexts[0].get("tools_id")]
-    if len(tools) == 1:
-        definition = json.loads((root / "pack_config.json").read_text())
-        for evaluation in definition.get("eval_definitions", []):
-            for relative in evaluation.get("cases", []):
-                path = root / relative
-                case = json.loads(path.read_text())
-                changed = False
-                for stage in case.get("stages", []):
-                    captures = {capture.get("name"): capture for capture in stage.get("capture", [])}
-                    for check in stage.get("checks", []):
-                        group = check.get("params", {}).get("agents", {})
-                        if check.get("check") != "crew_spec_match" or not isinstance(group, dict):
-                            continue
-                        if not all(captures.get(group.get(key), {}).get("collection") == collection
-                                   and captures.get(group.get(key), {}).get("filter") == {"node_did": {"_eq": "$trial"}}
-                                   for key, collection in [("agents", "Agent"), ("contexts", "AgentContext"), ("tools", "Tools")]):
-                            continue
-                        for expected in group.get("expect", []):
-                            if expected.get("agent_did") != "gents:agent-slot:engineer" or not any(
-                                item.get("field") == "tools_id" and item.get("equals") == tools[0]["tools_id"]
-                                for item in expected.get("context", [])
-                            ):
-                                continue
-                            for assertion in expected.get("tools", []):
-                                if "equals" not in assertion:
-                                    continue
-                                value = tools[0]
-                                for part in assertion["field"].split("."):
-                                    value = value.get(part) if isinstance(value, dict) else None
-                                if assertion["equals"] == value:
-                                    continue
-                                # Frozen case expectations predate the shipped grant; each may be restaged only to it.
-                                pre_policy = ["node", "agent", "tools", "profile", "backend", "mcp_service", "automation"]
-                                known_baselines = {
-                                    "built_ins": ([None], {"enable_schema_tool": True}),
-                                    "self_config.self_config_categories": (
-                                        [["agent", "tools", "profile", "node", "backend", "mcp_service", "automation"], pre_policy],
-                                        pre_policy + ["policy"],
-                                    ),
-                                }
-                                baseline = known_baselines.get(assertion["field"])
-                                if baseline is None or assertion["equals"] not in baseline[0] or value != baseline[1]:
-                                    raise ValueError(
-                                        f"{path}: unexpected Engineer invariant mismatch for {assertion['field']}: "
-                                        f"expected {assertion['equals']!r}, input {value!r}"
-                                    )
-                                assertion["equals"] = value
-                                changed = True
-                if changed:
-                    path.write_text(json.dumps(case, indent=2) + "\n")
-PYENGINEERBASELINE
   apply_config "$DEFINITION"
   for split in $SPLITS; do
     if ! python3 - "$DEFINITION" "$split" <<'PYSPLIT'
@@ -321,13 +275,14 @@ PYSPLIT
 == $level ($split): $TRIALS trials per case, $TRIAL_CONCURRENCY trials at once, $PER_TRIAL call(s) per trial, $MODEL at $ENDPOINT, command execution $COMMAND_EXECUTION
 watch:  $GENTS utils eval watch $RUN_ID --home $EVAL_HOME
 EOF
-    python3 - "$PLAN_DRAFT" "$DEFINITION_ID" "$RUN_SUBJECT" "$PROFILE_ID" "$split" "$TRIALS" "$TRIAL_CONCURRENCY" "$RUN_ID" <<'PYPLAN'
+    python3 - "$PLAN_DRAFT" "$DEFINITION_ID" "$RUN_SUBJECT" "$PROFILE_ID" "$split" "$TRIALS" "$TRIAL_CONCURRENCY" "$RUN_ID" "$DIVERGENCES" <<'PYPLAN'
 import json, pathlib, sys
 path = pathlib.Path(sys.argv[1])
-definition, subject, profile, split, trials, concurrency, run_id = sys.argv[2:]
+definition, subject, profile, split, trials, concurrency, run_id, divergences = sys.argv[2:]
 plan = json.loads(path.read_text())
 args = [definition, "--cell", f"engineer={subject}:engineer", "--profile", f"engineer={profile}",
-        "--split", split, "--trials", trials, "--concurrency", concurrency, "--run-id", run_id]
+        "--split", split, "--trials", trials, "--concurrency", concurrency, "--run-id", run_id,
+        "--divergences", divergences]
 if any(run["args"][run["args"].index("--run-id") + 1] == run_id for run in plan["runs"]):
     sys.exit(f"duplicate run id: {run_id}")
 plan["runs"].append({"args": args})
@@ -344,6 +299,7 @@ if not plan["runs"]:
 os.link(source, destination)
 source.unlink()
 PYFINALPLAN
+python3 "$SUITES" banner "$DIVERGENCES" "${RECEIPTS[@]}" >&2
 BATCH_LOG="$EVAL_HOME/batch-$STAMP.log"
 FIRST_RUN_ID=$(python3 -c 'import json,sys; a=json.load(open(sys.argv[1]))["runs"][0]["args"]; print(a[a.index("--run-id")+1])' "$PLAN")
 echo "saved batch plan: $PLAN" >&2
@@ -367,6 +323,7 @@ status=0
 wait "$BATCH_PID" || status=$?
 trap - INT
 if [ "$status" != 0 ]; then tail -n 20 "$BATCH_LOG" >&2; fi
+python3 "$SUITES" banner "$DIVERGENCES" "${RECEIPTS[@]}" >&2
 echo "resume saved batch: $GENTS utils eval batch --plan $PLAN --concurrency $TRIAL_CONCURRENCY --home $EVAL_HOME" >&2
 echo "saved plan: $PLAN; inspect each run with $GENTS utils eval show <run-id> --home $EVAL_HOME" >&2
 echo "the eval home stays served on $PORT; stop it with: kill \$(cat $EVAL_HOME/server.pid)" >&2

@@ -162,6 +162,8 @@ core-packs:
 		(cd core-packs && "$$tool" config pack build "$$pack" --out "$$out/gents.$$pack.pack") || exit 1; \
 		"$$tool" config pack verify "$$out/gents.$$pack.pack" || exit 1; \
 	done; \
+	printf '%s%s\n' "$$(git rev-parse HEAD:core-packs 2>/dev/null || echo unknown)" \
+		"$$(git status --porcelain -- core-packs 2>/dev/null | grep -q . && echo -dirty)" > "$$out/SOURCE"; \
 	cd "$(CORE_PACKS_DIR)" && sha256sum $(addprefix gents.,$(addsuffix .pack,$(CORE_PACKS))) > SHA256SUMS-core-packs.txt
 	@ls -l "$(CORE_PACKS_DIR)"
 

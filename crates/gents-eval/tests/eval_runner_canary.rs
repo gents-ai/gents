@@ -1230,6 +1230,7 @@ async fn canary_request(endpoint: &str, run_id: &str) -> (Canary, RunRequest) {
             },
         ],
         runs_dir: canary.runs_dir(),
+        divergences: None,
     };
     (canary, request)
 }

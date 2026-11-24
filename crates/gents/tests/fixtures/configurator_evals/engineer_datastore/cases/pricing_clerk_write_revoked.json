@@ -1,0 +1,384 @@
+{
+  "case_id": "pricing-clerk-write-revoked",
+  "split": "validation",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type PriceEntry { sku: String @index(unique: true) price_cents: Int }"
+    ],
+    "documents": [
+      {
+        "collection": "PriceEntry",
+        "document": {
+          "sku": "SKU-1",
+          "price_cents": 1200
+        }
+      },
+      {
+        "collection": "PriceEntry",
+        "document": {
+          "sku": "SKU-2",
+          "price_cents": 1500
+        }
+      },
+      {
+        "collection": "PriceEntry",
+        "document": {
+          "sku": "SKU-3",
+          "price_cents": 2100
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "grant",
+      "prompt": "Set up an agent called Pricing clerk that can read and edit PriceEntry records.",
+      "checks": [
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "grantee",
+            "min": 1,
+            "max": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "grantee",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "enabled": {
+              "_eq": true
+            },
+            "display_name": {
+              "_ilike": "%pricing clerk%"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        }
+      ]
+    },
+    {
+      "stage_id": "use",
+      "settle": true,
+      "prompt": "Have the Pricing clerk set the price of SKU-2 to 1450 cents.",
+      "checks": [
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "grantee_runs",
+            "min": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "prices",
+                "min": 3,
+                "max": 3
+              }
+            ],
+            "rows": [
+              {
+                "capture": "prices",
+                "key": "sku",
+                "id": "SKU-1",
+                "expect": [
+                  {
+                    "field": "price_cents",
+                    "equals": 1200
+                  }
+                ]
+              },
+              {
+                "capture": "prices",
+                "key": "sku",
+                "id": "SKU-2",
+                "expect": [
+                  {
+                    "field": "price_cents",
+                    "equals": 1450
+                  }
+                ]
+              },
+              {
+                "capture": "prices",
+                "key": "sku",
+                "id": "SKU-3",
+                "expect": [
+                  {
+                    "field": "price_cents",
+                    "equals": 2100
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "grantee_runs",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_ne": "gents:agent-slot:engineer"
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "lifecycle_state"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "prices",
+          "collection": "PriceEntry",
+          "filter": {},
+          "fields": [
+            "sku",
+            "price_cents"
+          ]
+        }
+      ]
+    },
+    {
+      "stage_id": "revoke",
+      "prompt": "From now on the Pricing clerk may only look at prices, not change them.",
+      "checks": [
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "grantee",
+            "min": 1,
+            "max": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "prices",
+                "min": 3,
+                "max": 3
+              }
+            ],
+            "rows": [
+              {
+                "capture": "prices",
+                "key": "sku",
+                "id": "SKU-1",
+                "expect": [
+                  {
+                    "field": "price_cents",
+                    "equals": 1200
+                  }
+                ]
+              },
+              {
+                "capture": "prices",
+                "key": "sku",
+                "id": "SKU-2",
+                "expect": [
+                  {
+                    "field": "price_cents",
+                    "equals": 1450
+                  }
+                ]
+              },
+              {
+                "capture": "prices",
+                "key": "sku",
+                "id": "SKU-3",
+                "expect": [
+                  {
+                    "field": "price_cents",
+                    "equals": 2100
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "grantee",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "enabled": {
+              "_eq": true
+            },
+            "display_name": {
+              "_ilike": "%pricing clerk%"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "prices",
+          "collection": "PriceEntry",
+          "filter": {},
+          "fields": [
+            "sku",
+            "price_cents"
+          ]
+        }
+      ]
+    },
+    {
+      "stage_id": "exercise",
+      "settle": true,
+      "prompt": "Ask the Pricing clerk what SKU-3 costs now. Then have it try to set SKU-3 to 999 cents, and tell me what happened.",
+      "checks": [
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "grantee_runs",
+            "min": 2
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\\b2[,.]?100\\b|\\b21(?:\\.00)?\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "prices",
+                "min": 3,
+                "max": 3
+              }
+            ],
+            "rows": [
+              {
+                "capture": "prices",
+                "key": "sku",
+                "id": "SKU-1",
+                "expect": [
+                  {
+                    "field": "price_cents",
+                    "equals": 1200
+                  }
+                ]
+              },
+              {
+                "capture": "prices",
+                "key": "sku",
+                "id": "SKU-2",
+                "expect": [
+                  {
+                    "field": "price_cents",
+                    "equals": 1450
+                  }
+                ]
+              },
+              {
+                "capture": "prices",
+                "key": "sku",
+                "id": "SKU-3",
+                "expect": [
+                  {
+                    "field": "price_cents",
+                    "equals": 2100
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "grantee_runs",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_ne": "gents:agent-slot:engineer"
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "lifecycle_state"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "prices",
+          "collection": "PriceEntry",
+          "filter": {},
+          "fields": [
+            "sku",
+            "price_cents"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -27,18 +27,18 @@ dictates 1,619 characters of JSON and asks for "one config call".
 
 A check never forbids a tool or prescribes a call the prompt did not ask for.
 
-Violation: `sessions/cases/count_closed.json` asks how many closed sessions
-carry a tag, and its check forbids `query` and `config`, which the prompt never
-mentions.
+Violation: none in the suites rewritten so far. `sessions/cases/count_closed.json`
+asked how many closed sessions carry a tag, and its check forbade `query` and
+`config`, which the prompt never mentioned.
 
 ### 4. If it was set up, make it run
 
 A case that builds something has a later stage that uses it and checks that it
 worked.
 
-Violation: `schema_experience/cases/help_center_search.json` creates
-`HelpArticle` with full-text indexes, and no stage adds an article or searches
-for one.
+Violation: none in the suites rewritten so far.
+`schema_experience/cases/help_center_search.json` created `HelpArticle` with
+full-text indexes, and no stage added an article or searched for one.
 
 ### 5. Exercise every tool the Engineer has
 
@@ -62,9 +62,10 @@ unchanged.
 
 If the case is ambiguous or stricter than its prompt, fix the case.
 
-Violation: `factory_setup/definition/cases/factory_setup.json` fails a setup
-that takes more than 400 tool calls, a limit neither its prompt nor the file it
-points to sets.
+Violation: none known in the suites rewritten so far.
+`factory_setup/definition/cases/factory_setup.json` failed a setup that took
+more than 400 tool calls, a limit neither its prompt nor the file it points to
+set.
 
 ## How the rules are checked
 
@@ -80,14 +81,16 @@ every case of every suite, and each finding cites its rule:
   of a `tool_calls_expected` check without a `route_reason` saying why the
   prompt asks for that route.
 - 4: the first stage that grades configuration it built (`schema_matches`, or
-  `crew_spec_match` over configuration documents) when no later stage grades a
-  run: a final message, a tool result, a handoff, a file, or rows of a
-  collection that is not configuration.
+  `crew_spec_match` over configuration documents unless it only checks that
+  none were made) when no later stage grades a run (a final message, a tool
+  result, a handoff, a file, or rows of a collection that is not
+  configuration) and the stage itself grades no tool result, no handoff and no
+  such rows being there.
 
-Rule 1 is checked only inside cases. That every suite runs the same default
-Engineer is not checked yet: suites still run different subjects, some with
-`preset_self_config` or a `subject_patch.json`, and a separate change makes them
-one. A suite with no rule 1 finding may still run a different Engineer.
+Rule 1 is checked here only inside cases. That every suite runs the same default
+Engineer is held elsewhere: `gents utils eval subject` writes the one subject
+from init's own code, a suite's `subject_fixtures` may only add to it, and the
+tests beside that command refuse a fixture that changes or drops anything.
 
 Rules 5, 6 and 7 need judgment; review holds cases to them.
 

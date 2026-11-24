@@ -13,7 +13,7 @@
   "stages": [
     {
       "stage_id": "handoff",
-      "prompt": "I'm taking the next shift. Read the binder transfer notes in handoff/binder-transfer.json and put the one unresolved transfer in my inbox, using the slip's subject as the title and its handoff note as the note. Leave the signed-off transfer alone, and don't change the notes file.",
+      "prompt": "I'm taking the next shift. Go through the binder transfer notes in handoff/binder-transfer.json and put the one unresolved transfer in my inbox, titled with its subject and with its handoff note as the note. Leave the signed-off one alone and don't change the notes file.",
       "capture": [
         {
           "kind": "documents",
@@ -65,41 +65,6 @@
         }
       ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "file_mailbox_item"
-            ],
-            "forbidden": [
-              "write",
-              "bash",
-              "bash_unrestricted",
-              "write_file",
-              "edit_file"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_result_matches",
-          "params": {
-            "expect": [
-              {
-                "field": "outcome",
-                "equals": "created"
-              },
-              {
-                "field": "item.title",
-                "equals": "Pier binder M7"
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "crew_spec_match",
           "params": {

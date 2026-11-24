@@ -207,6 +207,7 @@ async fn run_split(
         run_id: Some(run_id.to_owned()),
         max_infra_retries: 1,
         registry: None,
+        divergences: None,
         json: false,
         host_bash: Default::default(),
         scope: EvalScopeArgs::default(),

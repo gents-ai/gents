@@ -58,7 +58,6 @@ IMAGE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$")
 SPLITS = {"train", "validation", "held_out"}
 COMMAND_EXECUTION = {"off", "unrestricted"}
 FIXTURES = str(registry.FIXTURES)
-ENGINEER_SUBJECT = "ladder/engineer_subject"
 
 
 class Untrusted(Exception):
@@ -182,7 +181,7 @@ def validated_report(report, case_id):
         trial = next((s for s in cell["slots"] if isinstance(s, dict) and s.get("case_id") == case_id), None)
     except (KeyError, IndexError, TypeError, AttributeError):
         raise Untrusted("report.json does not have a cell with counts, usage and slots") from None
-    entry = {"counts": counts, **usage}
+    entry = {"counts": counts, **usage, "divergences": validated_divergences(report["report"].get("divergences"))}
     if trial is not None:
         klass = trial.get("class")
         entry["class"] = klass if klass in ("pass", "fail", "unknown", "not_evidence", "abandoned", "planned") else None
@@ -193,6 +192,20 @@ def validated_report(report, case_id):
             if isinstance(verdict, dict)
         ]
     return entry
+
+
+def validated_divergences(divergences):
+    """A report's divergences, or None for a report that records none."""
+    if divergences is None:
+        return None
+    if not isinstance(divergences, list) or len(divergences) > 256:
+        raise Untrusted("report.json divergences is not a list")
+    found = []
+    for item in divergences:
+        if not isinstance(item, dict) or item.get("severity") not in ("narrows", "adds"):
+            raise Untrusted("report.json has a divergence that is not narrows or adds")
+        found.append({key: relay.clipped(str(item[key])) for key in ("severity", "kind", "cell", "detail") if item.get(key) is not None})
+    return found
 
 
 class BoundedReader:
@@ -323,14 +336,12 @@ class Run:
         return override if override.is_dir() else self.source(FIXTURES, suite["path"])
 
     def suite_view(self, suite):
-        """The fixtures one suite's trials see: its definition and subjects only."""
+        """The fixtures one suite's trials see: its own directory only; its subject is generated in the container."""
         view = self.dir / "suites" / suite["id"]
         if not view.exists():
             staging = view.with_name(view.name + ".tmp")
             shutil.rmtree(staging, ignore_errors=True)
-            wanted = {ENGINEER_SUBJECT, suite["subject"], suite["path"]}
-            for relative in sorted(wanted):
-                shutil.copytree(self.source(FIXTURES, relative), staging / relative, symlinks=True)
+            shutil.copytree(self.source(FIXTURES, suite["path"]), staging / suite["path"], symlinks=True)
             os.replace(staging, view)
         return view
 
@@ -637,6 +648,13 @@ def summarize(run, slots):
         totals[key] = sum(entry.get("class") == key for entry in entries)
     for key in ("input_tokens", "output_tokens"):
         totals[key] = sum(entry.get(key) or 0 for entry in entries)
+    divergences = []
+    for entry in entries:
+        divergences += [item for item in entry.get("divergences") or [] if item not in divergences]
+    unrecorded = sum(entry["state"] == "done" and entry.get("divergences") is None for entry in entries)
+    if unrecorded:
+        divergences.append({"severity": "narrows", "kind": "divergences_unrecorded",
+                            "detail": f"{unrecorded} slot(s) ran an image whose runs do not record how they differ from a production node"})
     host_bash = run.config["command_execution"] == "unrestricted"
     summary = {
         "run": run.name, "image": run.config["image"], "image_commit": run.config.get("image_commit"),
@@ -649,10 +667,12 @@ def summarize(run, slots):
             "no host bash: the trial's file tools were confined to its workspace, so only its runner and "
             "grader wrote result.json and report.json"
         ),
-        "written_at": now(), "totals": totals, "slots": entries,
+        "divergences": divergences, "written_at": now(), "totals": totals, "slots": entries,
     }
     dump(run.dir / "summary.json", summary)
-    lines = [f"results: {summary['results']}",
+    reported = any(entry["state"] == "done" for entry in entries)
+    lines = [registry.banner(divergences) if reported else "divergences: not known until a slot finishes",
+             f"results: {summary['results']}",
              f"{'slot':<64} {'state':<10} {'class':<12} {'score':>6} {'in tok':>8} {'out tok':>8}"]
     for entry in entries:
         score = entry.get("score_bp")

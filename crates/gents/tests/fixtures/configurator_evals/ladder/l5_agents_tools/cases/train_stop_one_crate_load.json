@@ -5,83 +5,7 @@
   "stages": [
     {
       "stage_id": "hire",
-      "prompt": "Create Load Tally, a local helper that totals crate counts. Use our current model, give it its own instructions with no tool permissions, and make it available for you to delegate to. Set this up without sending a message yet.",
-      "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash",
-              "agent_new"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "targets",
-            "min": 1,
-            "max": 1
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "agents": {
-              "agents": "agents",
-              "contexts": "contexts",
-              "tools": "tools",
-              "expect": [
-                {
-                  "agent_did": "gents:agent-slot:engineer",
-                  "delegates": {
-                    "targets": "targets",
-                    "agents": [
-                      "load-tally"
-                    ]
-                  }
-                },
-                {
-                  "agent_did": "load-tally",
-                  "source_match": {
-                    "field": "display_name",
-                    "matches": "(?i)^load[ -]?tally$"
-                  },
-                  "agent": [
-                    {
-                      "field": "enabled",
-                      "equals": true
-                    }
-                  ],
-                  "tools": [
-                    {
-                      "field": "self_config.enable_self_config",
-                      "matches": "^(null|false)$"
-                    },
-                    {
-                      "field": "agents.enabled",
-                      "matches": "^(null|false)$"
-                    },
-                    {
-                      "field": "host.bash.mode",
-                      "matches": "^(null|Off)$"
-                    }
-                  ]
-                }
-              ]
-            }
-          },
-          "tier": "acceptance",
-          "weight": 1
-        }
-      ],
+      "prompt": "Create Load Tally, a helper that totals crate counts. Give it its own instructions and no tool access, and set it up so you can hand work to it. Do not message it yet.",
       "capture": [
         {
           "kind": "documents",
@@ -97,7 +21,8 @@
             "display_name",
             "context_id",
             "enabled",
-            "inference_profile_id"
+            "inference_profile_id",
+            "tags"
           ]
         },
         {
@@ -111,8 +36,8 @@
           },
           "fields": [
             "context_id",
-            "tools_id",
-            "system_prompt"
+            "system_prompt",
+            "tools_id"
           ]
         },
         {
@@ -128,17 +53,32 @@
             "tools_id",
             "host",
             "datastore",
+            "self_config",
             "agents",
-            "self_config"
+            "remote",
+            "built_ins",
+            "integrations"
           ]
         },
         {
           "kind": "documents",
-          "name": "targets",
+          "name": "helper_targets",
           "collection": "AgentTarget",
           "filter": {
             "node_did": {
               "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^load[ -]?tally$"
+                  },
+                  "field": "agent_did"
+                }
+              }
             }
           },
           "fields": [
@@ -148,140 +88,102 @@
             "target_node_did",
             "agent_did"
           ]
+        },
+        {
+          "kind": "documents",
+          "name": "helper_sessions",
+          "collection": "AgentSession",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^load[ -]?tally$"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            }
+          },
+          "fields": [
+            "session_id",
+            "agent_did",
+            "title",
+            "stopped_at"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "agents": {
+              "agents": "agents",
+              "contexts": "contexts",
+              "tools": "tools",
+              "expect": [
+                {
+                  "agent_did": "load-tally",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^load[ -]?tally$"
+                  },
+                  "agent": [
+                    {
+                      "field": "enabled",
+                      "equals": true
+                    }
+                  ],
+                  "tools": [
+                    {
+                      "field": "host.files.mode",
+                      "matches": "^(null|Off)$"
+                    },
+                    {
+                      "field": "host.bash.mode",
+                      "matches": "^(null|Off)$"
+                    },
+                    {
+                      "field": "self_config.enable_self_config",
+                      "matches": "^(null|false)$"
+                    },
+                    {
+                      "field": "agents.enabled",
+                      "matches": "^(null|false)$"
+                    },
+                    {
+                      "field": "datastore.enable_defra_query",
+                      "matches": "^(null|false)$"
+                    }
+                  ]
+                }
+              ]
+            },
+            "present": [
+              {
+                "capture": "helper_targets",
+                "min": 1
+              },
+              {
+                "capture": "helper_sessions",
+                "max": 0
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
         }
       ]
     },
     {
       "stage_id": "dispatch",
       "prompt": "Give Load Tally two separate conversations. PIER-34 has 12 red crates and 9 blue. VALE-85 has 7 red and 10 blue. Send each conversation only its own load, then give me one line per load ID with its total once the answers arrive.",
-      "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "agent_new"
-            ],
-            "forbidden": [
-              "bash"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "jobs",
-            "min": 2,
-            "max": 2
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "present": [
-              {
-                "capture": "sessions",
-                "min": 2,
-                "max": 2
-              },
-              {
-                "capture": "starts",
-                "min": 2,
-                "max": 2
-              }
-            ],
-            "links": [
-              {
-                "capture": "jobs",
-                "source_match": {
-                  "field": "content",
-                  "contains": "PIER-34"
-                },
-                "field": "caused_by_parent_tool_call_doc_id",
-                "target_capture": "starts",
-                "target_key": "_docID",
-                "exact": true,
-                "expect": [
-                  {
-                    "field": "lifecycle_state",
-                    "equals": "completed"
-                  },
-                  {
-                    "field": "completion_notification_delivered_at",
-                    "matches": "^[0-9]{4}-"
-                  }
-                ]
-              },
-              {
-                "capture": "jobs",
-                "source_match": {
-                  "field": "content",
-                  "contains": "PIER-34"
-                },
-                "field": "session_id",
-                "target_capture": "sessions",
-                "target_key": "session_id",
-                "exact": true,
-                "expect": []
-              },
-              {
-                "capture": "jobs",
-                "source_match": {
-                  "field": "content",
-                  "contains": "VALE-85"
-                },
-                "field": "caused_by_parent_tool_call_doc_id",
-                "target_capture": "starts",
-                "target_key": "_docID",
-                "exact": true,
-                "expect": [
-                  {
-                    "field": "lifecycle_state",
-                    "equals": "completed"
-                  },
-                  {
-                    "field": "completion_notification_delivered_at",
-                    "matches": "^[0-9]{4}-"
-                  }
-                ]
-              },
-              {
-                "capture": "jobs",
-                "source_match": {
-                  "field": "content",
-                  "contains": "VALE-85"
-                },
-                "field": "session_id",
-                "target_capture": "sessions",
-                "target_key": "session_id",
-                "exact": true,
-                "expect": []
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "final_message_matches",
-          "params": {
-            "all": [
-              {
-                "matches": "(?is)PIER-34[^\\n]{0,40}\\b21\\b"
-              },
-              {
-                "matches": "(?is)VALE-85[^\\n]{0,40}\\b17\\b"
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        }
-      ],
+      "settle": true,
       "capture": [
         {
           "kind": "documents",
@@ -328,7 +230,8 @@
             "content",
             "lifecycle_state",
             "terminal_output",
-            "caused_by_parent_tool_call_doc_id"
+            "caused_by_parent_tool_call_doc_id",
+            "caused_by_parent_request_id"
           ]
         },
         {
@@ -355,19 +258,23 @@
           "fields": [
             "session_id",
             "agent_did",
+            "title",
             "stopped_at"
           ]
         },
         {
           "kind": "documents",
-          "name": "starts",
+          "name": "delegation_calls",
           "collection": "AgentToolCall",
           "filter": {
             "node_did": {
               "_eq": "$trial"
             },
             "tool_name": {
-              "_eq": "agent_new"
+              "_in": [
+                "agent_new",
+                "agent_message"
+              ]
             },
             "request_id": {
               "_eq": "$request"
@@ -375,47 +282,437 @@
           },
           "fields": [
             "_docID",
+            "tool_name",
             "lifecycle_state",
             "completion_notification_delivered_at"
           ]
         }
       ],
-      "settle": true
-    },
-    {
-      "stage_id": "retire_one",
-      "prompt": "Stop the PIER-34 conversation. Then send ADD-6 to the existing VALE-85 conversation: six more crates arrived there. Give me its revised total when it answers.",
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "agent_stop",
-              "agent_message"
-            ],
-            "forbidden": [
-              "bash",
-              "agent_new"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "sessions",
-            "min": 2,
-            "max": 2
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "crew_spec_match",
           "params": {
             "present": [
+              {
+                "capture": "jobs",
+                "min": 2,
+                "max": 2
+              },
+              {
+                "capture": "sessions",
+                "min": 2,
+                "max": 2
+              }
+            ],
+            "links": [
+              {
+                "capture": "jobs",
+                "source_match": {
+                  "field": "content",
+                  "contains": "PIER-34"
+                },
+                "field": "caused_by_parent_tool_call_doc_id",
+                "target_capture": "delegation_calls",
+                "target_key": "_docID",
+                "exact": true,
+                "expect": [
+                  {
+                    "field": "lifecycle_state",
+                    "equals": "completed"
+                  },
+                  {
+                    "field": "completion_notification_delivered_at",
+                    "matches": "^[0-9]{4}-"
+                  }
+                ]
+              },
+              {
+                "capture": "jobs",
+                "source_match": {
+                  "field": "content",
+                  "contains": "PIER-34"
+                },
+                "field": "session_id",
+                "target_capture": "sessions",
+                "target_key": "session_id",
+                "exact": true,
+                "expect": []
+              },
+              {
+                "capture": "jobs",
+                "source_match": {
+                  "field": "content",
+                  "contains": "VALE-85"
+                },
+                "field": "caused_by_parent_tool_call_doc_id",
+                "target_capture": "delegation_calls",
+                "target_key": "_docID",
+                "exact": true,
+                "expect": [
+                  {
+                    "field": "lifecycle_state",
+                    "equals": "completed"
+                  },
+                  {
+                    "field": "completion_notification_delivered_at",
+                    "matches": "^[0-9]{4}-"
+                  }
+                ]
+              },
+              {
+                "capture": "jobs",
+                "source_match": {
+                  "field": "content",
+                  "contains": "VALE-85"
+                },
+                "field": "session_id",
+                "target_capture": "sessions",
+                "target_key": "session_id",
+                "exact": true,
+                "expect": []
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?is)PIER-34[^\\n]{0,40}\\b21\\b"
+              },
+              {
+                "matches": "(?is)VALE-85[^\\n]{0,40}\\b17\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "retire_one",
+      "prompt": "Stop the PIER-34 conversation. Then send ADD-6 to the existing VALE-85 conversation: six more crates arrived there. Give me its revised total when it answers.",
+      "settle": true,
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "role_agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "sessions",
+          "collection": "AgentSession",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^load[ -]?tally$"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            }
+          },
+          "fields": [
+            "session_id",
+            "agent_did",
+            "title",
+            "stopped_at"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "stopped_session",
+          "collection": "AgentSession",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^load[ -]?tally$"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "stopped_at": {
+              "_ne": null
+            }
+          },
+          "fields": [
+            "session_id",
+            "agent_did",
+            "title",
+            "stopped_at"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "live_session",
+          "collection": "AgentSession",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^load[ -]?tally$"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "stopped_at": {
+              "_eq": null
+            }
+          },
+          "fields": [
+            "session_id",
+            "agent_did",
+            "title",
+            "stopped_at"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "stopped_opened",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^load[ -]?tally$"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "session_id": {
+              "_eq": {
+                "$capture": {
+                  "capture": "stopped_session",
+                  "source_match": {
+                    "field": "session_id",
+                    "matches": ".+"
+                  },
+                  "field": "session_id"
+                }
+              }
+            },
+            "caused_by_parent_request_id": {
+              "_ne": "$request"
+            }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "session_id",
+            "content",
+            "lifecycle_state",
+            "terminal_output",
+            "caused_by_parent_tool_call_doc_id",
+            "caused_by_parent_request_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "live_opened",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^load[ -]?tally$"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "session_id": {
+              "_eq": {
+                "$capture": {
+                  "capture": "live_session",
+                  "source_match": {
+                    "field": "session_id",
+                    "matches": ".+"
+                  },
+                  "field": "session_id"
+                }
+              }
+            },
+            "caused_by_parent_request_id": {
+              "_ne": "$request"
+            }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "session_id",
+            "content",
+            "lifecycle_state",
+            "terminal_output",
+            "caused_by_parent_tool_call_doc_id",
+            "caused_by_parent_request_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "live_followups",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^load[ -]?tally$"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "session_id": {
+              "_eq": {
+                "$capture": {
+                  "capture": "live_session",
+                  "source_match": {
+                    "field": "session_id",
+                    "matches": ".+"
+                  },
+                  "field": "session_id"
+                }
+              }
+            },
+            "caused_by_parent_request_id": {
+              "_eq": "$request"
+            }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "session_id",
+            "content",
+            "lifecycle_state",
+            "terminal_output",
+            "caused_by_parent_tool_call_doc_id",
+            "caused_by_parent_request_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "stopped_followups",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^load[ -]?tally$"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "session_id": {
+              "_eq": {
+                "$capture": {
+                  "capture": "stopped_session",
+                  "source_match": {
+                    "field": "session_id",
+                    "matches": ".+"
+                  },
+                  "field": "session_id"
+                }
+              }
+            },
+            "caused_by_parent_request_id": {
+              "_eq": "$request"
+            }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "session_id",
+            "content",
+            "lifecycle_state",
+            "terminal_output",
+            "caused_by_parent_tool_call_doc_id",
+            "caused_by_parent_request_id"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "sessions",
+                "min": 2,
+                "max": 2
+              },
               {
                 "capture": "stopped_session",
                 "min": 1,
@@ -425,10 +722,6 @@
                 "capture": "live_session",
                 "min": 1,
                 "max": 1
-              },
-              {
-                "capture": "stops",
-                "min": 1
               },
               {
                 "capture": "live_followups",
@@ -492,313 +785,7 @@
           "tier": "acceptance",
           "weight": 1
         }
-      ],
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "role_agents",
-          "collection": "Agent",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "agent_did",
-            "display_name"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "sessions",
-          "collection": "AgentSession",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            },
-            "agent_did": {
-              "_eq": {
-                "$capture": {
-                  "capture": "role_agents",
-                  "source_match": {
-                    "field": "display_name",
-                    "matches": "(?i)^load[ -]?tally$"
-                  },
-                  "field": "agent_did"
-                }
-              }
-            }
-          },
-          "fields": [
-            "session_id",
-            "agent_did",
-            "stopped_at"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "stopped_session",
-          "collection": "AgentSession",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            },
-            "agent_did": {
-              "_eq": {
-                "$capture": {
-                  "capture": "role_agents",
-                  "source_match": {
-                    "field": "display_name",
-                    "matches": "(?i)^load[ -]?tally$"
-                  },
-                  "field": "agent_did"
-                }
-              }
-            },
-            "stopped_at": {
-              "_ne": null
-            }
-          },
-          "fields": [
-            "session_id",
-            "stopped_at"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "live_session",
-          "collection": "AgentSession",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            },
-            "agent_did": {
-              "_eq": {
-                "$capture": {
-                  "capture": "role_agents",
-                  "source_match": {
-                    "field": "display_name",
-                    "matches": "(?i)^load[ -]?tally$"
-                  },
-                  "field": "agent_did"
-                }
-              }
-            },
-            "stopped_at": {
-              "_eq": null
-            }
-          },
-          "fields": [
-            "session_id",
-            "stopped_at"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "stopped_opened",
-          "collection": "AgentRequest",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            },
-            "agent_did": {
-              "_eq": {
-                "$capture": {
-                  "capture": "role_agents",
-                  "source_match": {
-                    "field": "display_name",
-                    "matches": "(?i)^load[ -]?tally$"
-                  },
-                  "field": "agent_did"
-                }
-              }
-            },
-            "purpose": {
-              "_eq": "normal"
-            },
-            "session_id": {
-              "_eq": {
-                "$capture": {
-                  "capture": "stopped_session",
-                  "source_match": {
-                    "field": "session_id",
-                    "matches": ".+"
-                  },
-                  "field": "session_id"
-                }
-              }
-            },
-            "caused_by_parent_request_id": {
-              "_ne": "$request"
-            }
-          },
-          "fields": [
-            "request_id",
-            "session_id",
-            "content"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "live_opened",
-          "collection": "AgentRequest",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            },
-            "agent_did": {
-              "_eq": {
-                "$capture": {
-                  "capture": "role_agents",
-                  "source_match": {
-                    "field": "display_name",
-                    "matches": "(?i)^load[ -]?tally$"
-                  },
-                  "field": "agent_did"
-                }
-              }
-            },
-            "purpose": {
-              "_eq": "normal"
-            },
-            "session_id": {
-              "_eq": {
-                "$capture": {
-                  "capture": "live_session",
-                  "source_match": {
-                    "field": "session_id",
-                    "matches": ".+"
-                  },
-                  "field": "session_id"
-                }
-              }
-            },
-            "caused_by_parent_request_id": {
-              "_ne": "$request"
-            }
-          },
-          "fields": [
-            "request_id",
-            "session_id",
-            "content"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "live_followups",
-          "collection": "AgentRequest",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            },
-            "agent_did": {
-              "_eq": {
-                "$capture": {
-                  "capture": "role_agents",
-                  "source_match": {
-                    "field": "display_name",
-                    "matches": "(?i)^load[ -]?tally$"
-                  },
-                  "field": "agent_did"
-                }
-              }
-            },
-            "purpose": {
-              "_eq": "normal"
-            },
-            "session_id": {
-              "_eq": {
-                "$capture": {
-                  "capture": "live_session",
-                  "source_match": {
-                    "field": "session_id",
-                    "matches": ".+"
-                  },
-                  "field": "session_id"
-                }
-              }
-            },
-            "caused_by_parent_request_id": {
-              "_eq": "$request"
-            }
-          },
-          "fields": [
-            "request_id",
-            "session_id",
-            "content",
-            "lifecycle_state",
-            "caused_by_parent_tool_call_doc_id"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "stopped_followups",
-          "collection": "AgentRequest",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            },
-            "agent_did": {
-              "_eq": {
-                "$capture": {
-                  "capture": "role_agents",
-                  "source_match": {
-                    "field": "display_name",
-                    "matches": "(?i)^load[ -]?tally$"
-                  },
-                  "field": "agent_did"
-                }
-              }
-            },
-            "purpose": {
-              "_eq": "normal"
-            },
-            "session_id": {
-              "_eq": {
-                "$capture": {
-                  "capture": "stopped_session",
-                  "source_match": {
-                    "field": "session_id",
-                    "matches": ".+"
-                  },
-                  "field": "session_id"
-                }
-              }
-            },
-            "caused_by_parent_request_id": {
-              "_eq": "$request"
-            }
-          },
-          "fields": [
-            "request_id",
-            "session_id",
-            "content",
-            "lifecycle_state",
-            "caused_by_parent_tool_call_doc_id"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "stops",
-          "collection": "AgentToolCall",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            },
-            "tool_name": {
-              "_eq": "agent_stop"
-            },
-            "request_id": {
-              "_eq": "$request"
-            }
-          },
-          "fields": [
-            "_docID",
-            "lifecycle_state"
-          ]
-        }
-      ],
-      "settle": true
+      ]
     }
   ]
 }

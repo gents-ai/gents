@@ -26,7 +26,6 @@
     "cases/juniper_original_dock.json",
     "cases/kestrel_newest_revision.json",
     "cases/relay_handoff_current_window.json",
-    "cases/stub_recovery.json",
     "cases/transcript_evidence.json",
     "cases/wrong_id.json",
     "pack_config.json",

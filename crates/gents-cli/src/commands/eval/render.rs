@@ -7,6 +7,7 @@ use gents_eval::report::{
     CaseView, CheckDiff, Comparison, EvalReport, SideTrial, SlotClass, SlotCounts, SlotReport,
     SlotScore, StageDiff, SubjectSpend,
 };
+use gents_eval::runner::divergence::{Divergence, Severity};
 use gents_eval::runner::{
     is_fresh, EvidenceRecord, GoalEntry, LiveSnapshot, Progress, RunView, ToolTally, SCHEMAS_GOAL,
     STALE_WINDOW,
@@ -47,7 +48,55 @@ pub(crate) fn counts_inline(counts: &SlotCounts) -> String {
     )
 }
 
+/// Every report opens by saying whether the run tests the Engineer a
+/// production node runs, and how it does not.
+fn divergence_banner(divergences: Option<&[Divergence]>, out: &mut dyn Write) -> io::Result<()> {
+    let Some(divergences) = divergences else {
+        return writeln!(
+            out,
+            "divergences: not recorded; this run was frozen before runs recorded how they differ from a production node"
+        );
+    };
+    if divergences.is_empty() {
+        return writeln!(
+            out,
+            "divergences: none; the subject and conditions are the Engineer `gents init --engineer` makes, as a production node runs it"
+        );
+    }
+    let narrows = divergences
+        .iter()
+        .filter(|divergence| divergence.severity == Severity::Narrows)
+        .count();
+    let rule = "!".repeat(78);
+    writeln!(out, "{rule}")?;
+    writeln!(
+        out,
+        "!! NOT THE SHIPPED ENGINEER: {narrows} difference(s) that remove, narrow or replace what it ships, {} addition(s)",
+        divergences.len() - narrows
+    )?;
+    let mut sorted: Vec<&Divergence> = divergences.iter().collect();
+    sorted.sort_by(|a, b| (a.severity, &a.cell, &a.kind).cmp(&(b.severity, &b.cell, &b.kind)));
+    for divergence in sorted {
+        let severity = match divergence.severity {
+            Severity::Narrows => "NARROWS",
+            Severity::Adds => "ADDS",
+        };
+        let cell = divergence
+            .cell
+            .as_deref()
+            .map(|cell| format!("[{cell}] "))
+            .unwrap_or_default();
+        writeln!(
+            out,
+            "!! {severity:<7} {cell}{}: {}",
+            divergence.kind, divergence.detail
+        )?;
+    }
+    writeln!(out, "{rule}")
+}
+
 pub(crate) fn report_table(report: &EvalReport, out: &mut dyn Write) -> io::Result<()> {
+    divergence_banner(report.divergences.as_deref(), out)?;
     let run = &report.run;
     writeln!(
         out,

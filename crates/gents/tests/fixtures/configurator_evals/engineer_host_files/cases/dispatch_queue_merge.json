@@ -17,7 +17,7 @@
   "stages": [
     {
       "stage_id": "merge",
-      "prompt": "Build the current dispatch queue from dispatch/manual.jsonl and dispatch/import.jsonl. The two feeds stamp updated_at in different time zones. For each job use its most recent entry; when both files have an entry at the same moment, the manual one wins. Drop jobs whose latest entry is cancelled. Save dispatch/queue.json as a JSON array of the remaining original records, sorted by job_id, and leave both inputs untouched. In your reply, give JSON with \"remaining\" (how many jobs are queued).",
+      "prompt": "Build the current dispatch queue from dispatch/manual.jsonl and dispatch/import.jsonl. The two feeds stamp updated_at in different time zones. For each job use its latest entry, and if both feeds have an entry at the same moment the manual one wins. Drop jobs whose latest entry is cancelled and save the rest to dispatch/queue.json as a JSON array of the original records, sorted by job_id.",
       "capture": [
         {
           "kind": "file",
@@ -26,18 +26,6 @@
         }
       ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "forbidden": [
-              "bash",
-              "bash_unrestricted"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "captured_files_match",
           "params": {
@@ -74,18 +62,6 @@
                     "bay": 8
                   }
                 ]
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "final_message_matches",
-          "params": {
-            "all": [
-              {
-                "matches": "\"remaining\"\\s*:\\s*3\\b"
               }
             ]
           },

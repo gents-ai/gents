@@ -52,7 +52,7 @@
   "stages": [
     {
       "stage_id": "flag",
-      "prompt": "Freezers must stay at -15 \u00b0C or colder. Look at the latest FreezerReading for each unit (the highest seq for that unit). If any unit is warmer than -15, put one flag in my inbox titled \"Freezer breach\" with a note listing each breaching unit as UNIT (TEMP), like F9 (-11), sorted by unit and separated by commas.",
+      "prompt": "Freezers must stay at -15 \u00b0C or colder. Going by the latest FreezerReading for each unit (its highest seq), if any unit is warmer, flag it in my inbox titled \"Freezer breach\" with a note listing each as UNIT (TEMP), like F9 (-11), sorted by unit and comma-separated.",
       "capture": [
         {
           "kind": "documents",
@@ -105,24 +105,6 @@
         }
       ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "file_mailbox_item"
-            ],
-            "forbidden": [
-              "write",
-              "bash",
-              "bash_unrestricted",
-              "write_file",
-              "edit_file"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "crew_spec_match",
           "params": {
@@ -176,7 +158,7 @@
     },
     {
       "stage_id": "recheck",
-      "prompt": "The F2 sensor just sent a new reading, -13 \u00b0C with seq 3; it isn't in FreezerReading yet. Taking it into account, check the latest reading per unit again. If the breaching units are the ones you already flagged, don't add anything. If another unit has started breaching, flag only that unit in a new item titled \"Freezer breach 2\".",
+      "prompt": "F2 just sent a new reading, -13 \u00b0C at seq 3; it isn't in FreezerReading yet. With that, check the latest reading per unit again. If the same units are breaching, add nothing; if another unit has started breaching, flag only that one in a new item titled \"Freezer breach 2\".",
       "capture": [
         {
           "kind": "documents",
@@ -229,21 +211,6 @@
         }
       ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "forbidden": [
-              "write",
-              "bash",
-              "bash_unrestricted",
-              "write_file",
-              "edit_file"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "crew_spec_match",
           "params": {

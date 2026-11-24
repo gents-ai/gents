@@ -2,109 +2,10 @@
   "case_id": "held-ds-surface-on-new-agent",
   "split": "held_out",
   "reducer": "all",
-  "fixtures": {
-    "schemas": [
-      "type EvalAutomationInput {\n  correlation: String\n  message: String\n}",
-      "type EvalAutomationOutput {\n  correlation: String\n  result: String\n}"
-    ]
-  },
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "I need you to keep results for my workflow. The records are EvalAutomationInput { correlation: string, message: string } and EvalAutomationOutput { correlation: string, result: string }. The correlation is a caller-supplied business key: preserve it exactly, and find records using that key alone. The record types already exist. Give yourself a tool to add output records, with no ability to read stored records or access other collections. Also create an assistant named Held Out Writer, using our current model, with the same ability to add output records and no read access.",
-      "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "agents": {
-              "agents": "agents",
-              "contexts": "contexts",
-              "tools": "tools",
-              "expect": [
-                {
-                  "agent_did": "gents:agent-slot:engineer",
-                  "datastore": {
-                    "surfaces": "surfaces",
-                    "create": [
-                      "EvalAutomationOutput"
-                    ],
-                    "query": [],
-                    "lookup_by": "correlation",
-                    "caller_fields": {
-                      "EvalAutomationOutput": [
-                        "correlation",
-                        "result"
-                      ]
-                    }
-                  },
-                  "tools": [
-                    {
-                      "field": "datastore.enable_defra_query",
-                      "matches": "^(null|false)$"
-                    }
-                  ]
-                },
-                {
-                  "agent_did": "held-out-writer",
-                  "datastore": {
-                    "surfaces": "surfaces",
-                    "create": [
-                      "EvalAutomationOutput"
-                    ],
-                    "query": [],
-                    "lookup_by": "correlation",
-                    "caller_fields": {
-                      "EvalAutomationOutput": [
-                        "correlation",
-                        "result"
-                      ]
-                    }
-                  },
-                  "tools": [
-                    {
-                      "field": "datastore.enable_defra_query",
-                      "matches": "^(null|false)$"
-                    }
-                  ],
-                  "source_match": {
-                    "field": "display_name",
-                    "matches": "(?i)^held[ -]out[ -]writer$"
-                  }
-                }
-              ]
-            },
-            "present": [
-              {
-                "capture": "surfaces"
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "surfaces",
-            "min": 1
-          },
-          "tier": "acceptance",
-          "weight": 1
-        }
-      ],
+      "prompt": "Keep workflow results as WorkflowOutput records with a correlation and a result. Create an assistant called Night Writer whose one tool adds such a record: no reading, changing or deleting stored records, and no other collections. I will hand it work through you.",
       "capture": [
         {
           "kind": "documents",
@@ -120,7 +21,8 @@
             "display_name",
             "context_id",
             "enabled",
-            "inference_profile_id"
+            "inference_profile_id",
+            "tags"
           ]
         },
         {
@@ -134,8 +36,8 @@
           },
           "fields": [
             "context_id",
-            "tools_id",
-            "system_prompt"
+            "system_prompt",
+            "tools_id"
           ]
         },
         {
@@ -151,8 +53,11 @@
             "tools_id",
             "host",
             "datastore",
+            "self_config",
             "agents",
-            "self_config"
+            "remote",
+            "built_ins",
+            "integrations"
           ]
         },
         {
@@ -171,52 +76,16 @@
             "enabled",
             "entries"
           ]
+        },
+        {
+          "kind": "schema",
+          "name": "storage",
+          "collections": [
+            "WorkflowOutput"
+          ]
         }
-      ]
-    },
-    {
-      "stage_id": "exercise",
-      "prompt": "Save one output for correlation \"held-zeta-008\" with result \"verified\". Use your recordkeeping tools; leave configuration alone.",
+      ],
       "checks": [
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "outputs",
-            "min": 1,
-            "max": 1
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_fields_match",
-          "params": {
-            "name": "outputs",
-            "expect": [
-              {
-                "field": "correlation",
-                "equals": "held-zeta-008"
-              },
-              {
-                "field": "result",
-                "equals": "verified"
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "forbidden": [
-              "config",
-              "bash"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "crew_spec_match",
           "params": {
@@ -226,24 +95,29 @@
               "tools": "tools",
               "expect": [
                 {
-                  "agent_did": "gents:agent-slot:engineer",
+                  "agent_did": "night-writer",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^night[ -]?writer$"
+                  },
+                  "agent": [
+                    {
+                      "field": "enabled",
+                      "equals": true
+                    }
+                  ],
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [
-                      "EvalAutomationOutput"
+                      "WorkflowOutput"
                     ],
                     "query": [],
-                    "lookup_by": "correlation",
                     "caller_fields": {
-                      "EvalAutomationOutput": [
+                      "WorkflowOutput": [
                         "correlation",
                         "result"
                       ]
-                    },
-                    "called_create": [
-                      "EvalAutomationOutput"
-                    ],
-                    "called_query": []
+                    }
                   },
                   "tools": [
                     {
@@ -257,13 +131,75 @@
           },
           "tier": "acceptance",
           "weight": 1
+        },
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "storage",
+            "sdl": "type WorkflowOutput {\n  correlation: String\n  result: String\n}"
+          },
+          "tier": "acceptance",
+          "weight": 1
         }
-      ],
+      ]
+    },
+    {
+      "stage_id": "exercise",
+      "prompt": "Have Night Writer save a record for correlation held-zeta-008 whose result is exactly \"verified\". Then check the record yourself and tell me what is stored.",
+      "settle": true,
       "capture": [
         {
           "kind": "documents",
+          "name": "role_agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "helper_requests",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^night[ -]?writer$"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "lifecycle_state",
+            "content"
+          ]
+        },
+        {
+          "kind": "documents",
           "name": "outputs",
-          "collection": "EvalAutomationOutput",
+          "collection": "WorkflowOutput",
           "filter": {
             "correlation": {
               "_eq": "held-zeta-008"
@@ -273,72 +209,50 @@
             "correlation",
             "result"
           ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "helper_requests",
+                "min": 1
+              },
+              {
+                "capture": "outputs",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "outputs",
+                "key": "correlation",
+                "id": "held-zeta-008",
+                "expect": [
+                  {
+                    "field": "result",
+                    "equals": "verified"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
         },
         {
-          "kind": "documents",
-          "name": "agents",
-          "collection": "Agent",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              "held-zeta-008",
+              "verified"
+            ]
           },
-          "fields": [
-            "agent_did",
-            "display_name",
-            "context_id",
-            "enabled",
-            "inference_profile_id"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "contexts",
-          "collection": "AgentContext",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "context_id",
-            "tools_id",
-            "system_prompt"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "tools",
-          "collection": "Tools",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "tools_id",
-            "host",
-            "datastore",
-            "agents",
-            "self_config"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "surfaces",
-          "collection": "DatastoreToolSurface",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "surface_id",
-            "node_did",
-            "display_name",
-            "enabled",
-            "entries"
-          ]
+          "tier": "acceptance",
+          "weight": 1
         }
       ]
     }

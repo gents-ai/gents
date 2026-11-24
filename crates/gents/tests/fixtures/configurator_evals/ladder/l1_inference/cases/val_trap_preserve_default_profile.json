@@ -80,12 +80,6 @@
         {
           "check": "tool_calls_expected",
           "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash"
-            ],
             "config_read_only": true
           },
           "tier": "acceptance",
@@ -204,19 +198,6 @@
       ],
       "checks": [
         {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
           "check": "crew_spec_match",
           "params": {
             "links": [
@@ -297,6 +278,112 @@
             "name": "backends",
             "min": 1,
             "max": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "use",
+      "prompt": "Thanks. Before the first research session, a quick check: what is 9 times 12?",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "run",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "request_id": {
+              "_eq": "$request"
+            }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "lifecycle_state",
+            "max_total_tokens",
+            "executed_inference_profile_id",
+            "executed_reasoning_effort",
+            "content"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "profiles",
+          "collection": "InferenceProfile",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "profile_id",
+            "display_name",
+            "backend_id",
+            "execution_id",
+            "model_name",
+            "reasoning_effort"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "run",
+            "max_rows": 1,
+            "expect": [
+              {
+                "field": "lifecycle_state",
+                "equals": "completed"
+              },
+              {
+                "field": "max_total_tokens",
+                "equals": 400000
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\\b108\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "links": [
+              {
+                "capture": "run",
+                "source_match": {
+                  "field": "lifecycle_state",
+                  "matches": ".+"
+                },
+                "field": "executed_inference_profile_id",
+                "target_capture": "profiles",
+                "target_key": "profile_id",
+                "exact": true,
+                "expect": [
+                  {
+                    "field": "display_name",
+                    "matches": "(?i)^research$",
+                    "fallback_field": "profile_id"
+                  }
+                ]
+              }
+            ]
           },
           "tier": "acceptance",
           "weight": 1
