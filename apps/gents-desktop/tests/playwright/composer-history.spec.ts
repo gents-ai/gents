@@ -2,7 +2,14 @@ import { expect, gotoHarness, openChat, test, type Page } from "./desktopTest";
 
 const field = (page: Page) => page.getByRole("textbox", { name: "Message" });
 const history = (page: Page) => page.getByTestId("composer-history");
-const commandChips = (page: Page) => page.locator('[data-slot="command-chip"]');
+/* the composer's own chips: a message just sent shows its skill as a chip in
+   the transcript too, until the session's read brings the stored message */
+const commandChips = (page: Page) => field(page).locator('[data-slot="command-chip"]');
+
+/* a send's turn is shown ended once the session's read brings it, which
+   starts after the projection's burst window; until then Enter sends nothing */
+const turnEnded = (page: Page) =>
+  expect(page.getByTestId("activity-status")).toHaveCount(0);
 
 async function sendTwo(page: Page) {
   await gotoHarness(page);
@@ -13,6 +20,7 @@ async function sendTwo(page: Page) {
   const transcript = page.getByTestId("transcript-panel");
   await expect(transcript).toContainText("first message");
   await expect(field(page)).toHaveText("");
+  await turnEnded(page);
   /* the new chat becomes its session's page, and the composer its own */
   await field(page).click();
   await page.keyboard.type("please /host");
@@ -22,6 +30,7 @@ async function sendTwo(page: Page) {
   await page.keyboard.press("Enter");
   await expect(transcript).toContainText("please /host-diagnostics now");
   await expect(field(page)).toHaveText("");
+  await turnEnded(page);
 }
 
 test("↑ in an empty composer steps back through the session's messages, and ↓ forward", async ({
