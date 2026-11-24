@@ -15,7 +15,7 @@ pub(super) fn fixtures() -> PathBuf {
         .join("tests/fixtures/configurator_evals")
 }
 
-fn repo() -> PathBuf {
+pub(super) fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
