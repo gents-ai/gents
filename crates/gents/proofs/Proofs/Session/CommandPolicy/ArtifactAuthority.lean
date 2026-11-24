@@ -111,7 +111,7 @@ theorem spawned_never_escalates {k : SpawnKind} {m out : ExecutionMode}
     · contradiction
 
 theorem artifact_requires_sandbox (support : RuntimeSupport) (sandbox : SandboxKind)
-    (program : String) (h : selectSandbox support .artifactWrite program = .selected sandbox) :
+    (h : selectSandbox support .artifactWrite = .selected sandbox) :
     support.workspaceWriteSandboxEnforced = true ∧ sandbox = .macosSeatbelt := by
   cases support with
   | mk enforced =>
