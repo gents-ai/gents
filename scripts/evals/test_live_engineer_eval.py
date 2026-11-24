@@ -172,9 +172,9 @@ class LiveEngineerEvalTests(unittest.TestCase):
         sys.path.insert(0, str(SOURCE / "scripts/evals"))
         import suites
         for suite in suites.suites(SOURCE):
-            for relative in [suite["path"], suite["subject"]]:
-                if not (self.root / "repo" / suites.FIXTURES / relative).exists():
-                    shutil.copytree(SOURCE / suites.FIXTURES / relative, self.root / "repo" / suites.FIXTURES / relative)
+            relative = suite["path"]
+            if not (self.root / "repo" / suites.FIXTURES / relative).exists():
+                shutil.copytree(SOURCE / suites.FIXTURES / relative, self.root / "repo" / suites.FIXTURES / relative)
         self.assertTrue((self.root / "repo" / MAILBOX / "suite.json").is_file())
         (scripts / "fake_ladder.py").write_text(FAKE_LADDER)
         (scripts / "run-ladder.sh").write_text('exec "$PYTHON" "$(dirname "$0")/fake_ladder.py" "$@"\n')
@@ -356,7 +356,10 @@ class LiveEngineerEvalTests(unittest.TestCase):
         verdict = self.result()
         self.assertTrue(verdict["stopped_at_deadline"])
         self.assertEqual(self.records()[-1]["argv"][:1], ["stop"])
-        self.assertIn("1 of 10 trials did not finish with a grade", verdict["reason"])
+        import suites
+        registry = suites.matrix(SOURCE)
+        contained = sum(suite["id"] not in registry["default"] for suite in registry["suites"])
+        self.assertIn(f"1 of {contained} trials did not finish with a grade", verdict["reason"])
 
     def run_full(self, *arguments, **environment):
         return self.drive("run", "--scope", "ladder", "--out", str(self.out), "--gents", str(self.gents),
