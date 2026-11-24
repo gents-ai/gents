@@ -109,9 +109,9 @@ class HostileRun(unittest.TestCase):
                   {"eval_definitions": [{"definition_id": f"{suite}-definition", "cases": ["./cases/a.json"]}]})
             write(fixtures / f"ladder/{suite}/cases/a.json", {"case_id": f"{suite}-case", "split": "train"})
         self.config = {"name": "hostile", "image": "gents-eval:abc", "suites": ["s1"], "splits": ["train"],
-                       "trials": 1, "per_replica": 1, "per_trial": 1, "seed_base": 1000,
+                       "trials": 1, "per_replica": 1, "per_trial": 1, "cpuset_pool": "off", "seed_base": 1000,
                        "command_execution": "unrestricted", "replicas": ["replica-a"],
-                       "limits": {"disk": "1m", "trial_secs": 60}}
+                       "limits": {"cpus": "4", "disk": "1m", "trial_secs": 60}}
         write(self.run_dir / "run.json", self.config)
 
     def test_a_case_id_that_is_not_a_plain_name_is_refused_before_any_mount(self):
@@ -125,12 +125,26 @@ class HostileRun(unittest.TestCase):
     def test_names_that_reach_docker_must_be_plain(self):
         for key, value in (("name", "a,b"), ("image", "gents eval"), ("suites", ["s1,dst=/"]),
                            ("limits", {"disk": "1g,uid=0", "trial_secs": 60}), ("command_execution", "yes"),
-                           ("per_trial", 0), ("per_trial", "2")):
+                           ("cpuset_pool", "4-7 --privileged"), ("cpuset_pool", "7-4"), ("per_trial", 0),
+                           ("per_trial", "2")):
             write(self.run_dir / "run.json", {**self.config, key: value})
             with self.assertRaises(ValueError, msg=key):
                 orchestrate.Run(self.run_dir)
         with self.assertRaises(ValueError):
             orchestrate.mount_path("/data/runs/a,dst=/etc")
+
+    def test_each_running_attempt_has_its_own_cpu_slice_from_the_pool(self):
+        write(self.run_dir / "run.json", {**self.config, "cpuset_pool": "4-13"})
+        run = orchestrate.Run(self.run_dir)
+        self.assertEqual(run.cpuset_slices(), ["4,5,6,7", "8,9,10,11"])
+        run.config["cpuset_pool"] = "auto"
+        run.docker = lambda *args: "10\n"
+        self.assertEqual(run.cpuset_slices(), ["4,5,6,7"])
+        run.docker = lambda *args: "6\n"
+        with self.assertRaises(ValueError):
+            run.cpuset_slices()
+        run.config["cpuset_pool"] = "off"
+        self.assertIsNone(run.cpuset_slices())
 
     def test_a_suite_sees_only_its_own_fixtures(self):
         slots, suites = orchestrate.Run(self.run_dir).plan()

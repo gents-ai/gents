@@ -15,17 +15,24 @@ directories only, within size and count limits. Nothing the trial wrote is
 ever written through, followed or used as a host path: it is read with
 O_NOFOLLOW from that export and validated. The model is reached through a
 relay socket opened for the attempt alone, on a replica checked just before.
-The trial makes the run's `per_trial` model calls at once.
+The trial makes the run's `per_trial` model calls at once. Unless the run's
+`cpuset_pool` is off, each attempt runs on its own slice of ceil(cpus) CPUs
+from that pool (`auto`: every docker host CPU from RESERVED_CPUS up), because
+gents pins its database threads to fixed CPU numbers and concurrent trials
+sharing the host's CPUs pile onto the same cores; no more attempts run at once
+than the pool has slices.
 A slot is done once an attempt exited 0 with a valid result; `run` again
 continues every other slot.
 """
 
 import argparse
 import asyncio
+import contextlib
 import datetime
 import errno
 import hashlib
 import json
+import math
 import os
 import pathlib
 import queue
@@ -54,6 +61,7 @@ RESULT_BYTES = 64 * 1024
 REPORT_BYTES = 32 * 1024 * 1024
 HEALTH_RETRY_SECS = 30
 HEALTH_CHECKS = 10
+RESERVED_CPUS = 4
 ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 IMAGE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$")
 SPLITS = {"train", "validation", "held_out"}
@@ -100,6 +108,20 @@ def size_bytes(text):
     if not match:
         raise ValueError(f"{text!r} is not a size like 512m or 2g")
     return int(match.group(1)) * 1024 ** " kmgt".index(match.group(2) or " ")
+
+
+def cpu_list(text):
+    """The CPUs a list like 4-7,12 names, in order."""
+    text = str(text)
+    if not re.fullmatch(r"[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*", text):
+        raise ValueError(f"cpuset pool {text!r} is not auto, off or a CPU list like 4-47")
+    cpus = set()
+    for part in text.split(","):
+        low, _, high = part.partition("-")
+        if int(high or low) < int(low):
+            raise ValueError(f"cpuset pool {text!r} has the descending range {part}")
+        cpus.update(range(int(low), int(high or low) + 1))
+    return sorted(cpus)
 
 
 def mount_path(path):
@@ -315,13 +337,14 @@ class Run:
         per_trial = self.config["per_trial"]
         if not isinstance(per_trial, int) or isinstance(per_trial, bool) or per_trial < 1:
             raise ValueError(f"per_trial {per_trial!r} must be a positive number of calls")
+        if self.config["cpuset_pool"] not in ("auto", "off"):
+            cpu_list(self.config["cpuset_pool"])
         self.replicas = [Replica(self.dir, name) for name in self.config["replicas"]]
         self.stopping = threading.Event()
         self.running = {}
         self.tries = {}
         self.lock = threading.Lock()
-        workers = len(self.replicas) * self.config["per_replica"]
-        self.admission = threading.BoundedSemaphore(self.config.get("max_running") or workers)
+        self.cpusets = None
 
     def docker(self, *args, **kwargs):
         return subprocess.run(["docker", *args], check=True, text=True, capture_output=True, **kwargs).stdout
@@ -412,7 +435,35 @@ class Run:
             self.running[slot_id] = name
             return True
 
-    def run_slot(self, slot_id, replica, relays, suite):
+    def cpuset_slices(self):
+        """The run's CPU slices, one for each attempt running at once, or None when its pool is off."""
+        pool = self.config["cpuset_pool"]
+        if pool == "off":
+            return None
+        if pool == "auto":
+            cpus = list(range(RESERVED_CPUS, int(self.docker("info", "--format", "{{.NCPU}}"))))
+        else:
+            cpus = cpu_list(pool)
+        width = math.ceil(float(self.config["limits"]["cpus"]))
+        slices = [",".join(map(str, cpus[at:at + width])) for at in range(0, len(cpus) - width + 1, width)]
+        if not slices:
+            raise ValueError(f"cpuset pool {pool} ({len(cpus)} CPUs) has no slice of {width} for one trial; "
+                             "start the run with --cpuset-pool off or a CPU list")
+        return slices
+
+    @contextlib.contextmanager
+    def cpuset(self):
+        """A slice no other attempt holds: admission lets no more attempts run than there are slices."""
+        if self.cpusets is None:
+            yield None
+            return
+        cpus = self.cpusets.get_nowait()
+        try:
+            yield cpus
+        finally:
+            self.cpusets.put(cpus)
+
+    def run_slot(self, slot_id, replica, relays, suite, cpus):
         slot = self.dir / "slots" / slot_id
         control = slot / "control"
         logs = self.dir / "logs" / slot_id
@@ -447,6 +498,7 @@ class Run:
             "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
             "--cpus", str(limits["cpus"]), "--memory", limits["memory"], "--memory-swap", limits["memory"],
             "--pids-limit", str(limits["pids"]), "--ulimit", "nofile=65536:65536",
+            *(["--cpuset-cpus", cpus] if cpus else []),
             *[part for key, value in environment.items() for part in ("--env", f"{key}={value}")],
             "--mount", f"type=bind,src={mount_path(control)},dst=/slot,readonly",
             "--mount", f"type=bind,src={mount_path(sockets)},dst=/relay,readonly",
@@ -458,7 +510,7 @@ class Run:
         if not self.register(slot_id, name):
             return
         append(logs / "attempts.jsonl", {"event": "started", "attempt": attempt, "replica": replica.name,
-                                         "container": name, "at": now()})
+                                         "container": name, "cpuset": cpus, "at": now()})
         log(f"{slot_id}: attempt {attempt} on {replica.name} ({name})")
         relays.start(socket_path, replica, logs / "relay.jsonl")
         status, outcome, export = None, "exited", None
@@ -549,7 +601,8 @@ class Run:
                     tries = self.tries[slot_id]
                 try:
                     spec = load(self.dir / "slots" / slot_id / "control" / "slot.json")
-                    self.run_slot(slot_id, replica, relays, suites[spec["suite"]])
+                    with self.cpuset() as cpus:
+                        self.run_slot(slot_id, replica, relays, suites[spec["suite"]], cpus)
                     state = self.state(slot_id).get("state")
                 except Exception as error:  # noqa: BLE001 - a slot's failure must not stop its replica's other slots
                     log(f"{slot_id}: launcher error {error!r}")
@@ -595,10 +648,18 @@ class Run:
         try:
             slots, suites = self.plan()
             pending = [slot_id for slot_id in slots if not self.done(slot_id)]
+            workers = len(self.replicas) * self.config["per_replica"]
+            slices = self.cpuset_slices()
+            at_once = min(workers, self.config.get("max_running") or workers, len(slices) if slices else workers)
+            self.admission = threading.BoundedSemaphore(at_once)
+            if slices:
+                self.cpusets = queue.Queue()
+                for cpus in slices:
+                    self.cpusets.put(cpus)
             log(f"run {self.name}: {len(slots)} slots, {len(pending)} to run on "
                 f"{', '.join(r.name for r in self.replicas)} x {self.config['per_replica']}, "
-                f"at most {self.config.get('max_running') or 'one per worker'} at once, "
-                f"{self.config['per_trial']} call(s) per trial")
+                f"at most {at_once} at once, {self.config['per_trial']} call(s) per trial, "
+                f"cpusets {' '.join(slices) if slices else 'off'}")
             work = queue.Queue()
             for slot_id in pending:
                 work.put(slot_id)
