@@ -63,8 +63,8 @@ impl gents_loop::tool::Tool for LoadSkillTool {
     async fn definition(&self, _prompt: String) -> gents_loop::tool::ToolDefinition {
         gents_loop::tool::ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Load a skill's full instructions by name (or skill_id), then follow \
-                them for the task. Choose a skill from the Skills catalog in your system prompt."
+            description: "Load a skill's instructions by name or skill_id and follow them. Load \
+                the catalog entry matching the task before acting or reading tool help."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",

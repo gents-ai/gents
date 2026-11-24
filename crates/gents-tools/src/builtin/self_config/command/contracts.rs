@@ -186,7 +186,7 @@ pub fn help_patch_contracts(resource: Option<&str>) -> Value {
             patch_contract(
                 SelfConfigTarget::EventSource,
                 json!({
-                    "display_name":"string|null","source_collection":"installed collection name","event_kind":"created|null; default created","filter":"string|null; a GraphQL filter object literal with unquoted keys","correlation_field":"GraphQL field name|null","group":"{expected_count?:positive integer|{source_field:string},timeout_secs?:positive integer,min_count?:positive integer}|null","workspace_authority":"canonical workspace authority object|null","tags":"array<string>; default []"
+                    "display_name":"string|null","source_collection":"installed collection name","event_kind":"created|null; default created","filter":"string|null; a GraphQL filter object literal with unquoted keys; a repeated key keeps only the last, so use _and","correlation_field":"GraphQL field name|null","group":"{expected_count?:positive integer|{source_field:string},timeout_secs?:positive integer,min_count?:positive integer}|null","workspace_authority":"canonical workspace authority object|null","tags":"array<string>; default []"
                 }),
             ),
         ],
