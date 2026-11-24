@@ -12,6 +12,7 @@ pub enum ToolsRebinding {
     Rebound {
         added: Vec<String>,
         removed: Vec<String>,
+        waiting: Vec<WaitingItem>,
     },
     /// The agent cannot run with the committed Tools; the request keeps its
     /// tools.
@@ -19,6 +20,14 @@ pub enum ToolsRebinding {
     /// No generation holding the change was activated within the wait; the
     /// request keeps its tools.
     Unpublished,
+}
+
+/// A tool or agent target the committed Tools select that the next turn still
+/// lacks, and why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WaitingItem {
+    pub name: String,
+    pub reason: String,
 }
 
 /// The running request's own toolset, rebound after its config call commits

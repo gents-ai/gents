@@ -78,4 +78,41 @@ theorem an_unrunnable_change_keeps_the_admitted_tools
     (visible versionsCurrent expired : Bool) :
     answer .unavailable visible versionsCurrent expired = .keep := rfl
 
+/-- What an adopted toolset changed about one tool or agent target, as the
+config call's receipt reports it. -/
+inductive Change where
+  /-- The next turn can call it; the request's toolset did not have it. -/
+  | added
+  /-- The next turn no longer has it, because the Tools no longer select it. -/
+  | removed
+  /-- The Tools select it but the adopted toolset leaves it out. -/
+  | waiting
+  | unchanged
+  deriving DecidableEq, Repr
+
+/-- The receipt's account of one tool or agent target: `held` by the request's
+toolset before the commit, `selected` by the committed Tools, `offered` by the
+adopted toolset. Resolution withholds a local agent target whose agent the
+generation does not run (an agent that is disabled, or waiting on a grant), so
+a selected target can be missing from a toolset a fresh request would claim.
+The receipt names such a target as waiting, with its agent's reason, and never
+reports it in effect; a held target that is withheld waits too, since the
+Tools still select it. -/
+def change (held selected offered : Bool) : Change :=
+  if offered then (if held then .unchanged else .added)
+  else if selected then .waiting
+  else if held then .removed else .unchanged
+
+theorem only_an_offered_item_is_reported_in_effect (held selected offered : Bool)
+    (h : change held selected offered = .added) : offered = true := by
+  cases held <;> cases selected <;> cases offered <;> simp_all [change]
+
+theorem a_selected_item_the_toolset_leaves_out_waits (held : Bool) :
+    change held true false = .waiting := by
+  cases held <;> rfl
+
+theorem a_selected_item_is_never_reported_removed (held offered : Bool) :
+    change held true offered ≠ .removed := by
+  cases held <;> cases offered <;> simp [change]
+
 end RuntimeReconcile.ToolRebinding

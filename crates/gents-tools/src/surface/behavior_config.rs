@@ -557,6 +557,7 @@ impl AgentToolSurfaceConfig {
         );
 
         ToolSurface {
+            withheld_agent_targets: Vec::new(),
             hidden_tool_names: self.hidden_tool_names.clone(),
             host_tools: self.host_tools.clone(),
             root_execution_guard: self.root_execution_guard.clone(),

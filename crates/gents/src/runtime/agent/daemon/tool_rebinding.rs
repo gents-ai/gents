@@ -11,6 +11,8 @@ use gents_tools::tools_rebinding::{OwnToolsRebinding, ToolsRebinding};
 
 use crate::runtime::agent::runtime::slot_tools::{ActiveSnapshots, SlotTools};
 
+mod receipt;
+
 /// How long a config call that committed its own Tools waits for a
 /// generation holding the change: the watcher starts reconciling within its
 /// debounce ceiling, and a second ceiling covers resolving and activating
@@ -56,13 +58,15 @@ fn answer(
 pub(in crate::runtime::agent) struct RebindingSource {
     pub(in crate::runtime::agent) tool_runtime: ToolRuntimeContext,
     pub(in crate::runtime::agent) active_snapshots: ActiveSnapshots,
+    /// The agent targets the slot's `agent_new` offers.
+    pub(in crate::runtime::agent) agent_targets: Vec<String>,
 }
 
 /// The generation a request's current toolset was built from.
 struct Bound {
     generation: u64,
     configuration: ResolvedConfiguration,
-    tool_names: Vec<String>,
+    held: receipt::Held,
 }
 
 struct Staged {
@@ -89,6 +93,10 @@ impl RequestToolRebinding {
         tools: &[Box<dyn ToolDyn>],
         request: ToolRequestContext,
     ) -> Self {
+        let held = receipt::Held {
+            tools: advertised(tools),
+            targets: source.agent_targets.clone(),
+        };
         Self {
             source,
             agent_did: agent.agent_did.clone(),
@@ -96,7 +104,7 @@ impl RequestToolRebinding {
             bound: tokio::sync::Mutex::new(Bound {
                 generation,
                 configuration: agent.configuration.clone(),
-                tool_names: advertised(tools),
+                held,
             }),
             staged: std::sync::Mutex::new(None),
         }
@@ -179,9 +187,8 @@ impl RequestToolRebinding {
                 }
             }
         };
-        let names = advertised(&tools.loop_tools);
-        let added = difference(&names, &bound.tool_names);
-        let removed = difference(&bound.tool_names, &names);
+        let adopted = receipt::Held::offered_by(advertised(&tools.loop_tools), surface);
+        let rebound = receipt::rebound(&bound.held, &adopted, surface, snapshot);
         *self
             .staged
             .lock()
@@ -208,9 +215,9 @@ impl RequestToolRebinding {
         *bound = Bound {
             generation: snapshot.generation,
             configuration: agent.configuration.clone(),
-            tool_names: names,
+            held: adopted,
         };
-        ToolsRebinding::Rebound { added, removed }
+        rebound
     }
 }
 
@@ -276,13 +283,6 @@ fn advertised(tools: &[Box<dyn ToolDyn>]) -> Vec<String> {
         .collect()
 }
 
-fn difference(of: &[String], without: &[String]) -> Vec<String> {
-    of.iter()
-        .filter(|name| !without.contains(name))
-        .cloned()
-        .collect()
-}
-
 #[cfg(test)]
 #[test]
 fn the_rebinding_answer_replays_the_lean_owner() {
@@ -290,4 +290,7 @@ fn the_rebinding_answer_replays_the_lean_owner() {
         Answer,
         Publication,
     >(|i| answer(i.publication, i.visible, i.versions_current, i.expired));
+    gents_lean_vocab::families::runtime_reconcile_tool_rebinding_change::replay::<receipt::Change>(
+        |i| receipt::change(i.held, i.selected, i.offered),
+    );
 }

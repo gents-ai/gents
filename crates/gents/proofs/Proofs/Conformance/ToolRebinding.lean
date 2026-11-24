@@ -5,8 +5,8 @@ namespace Conformance.ToolRebinding
 
 open Lean RuntimeReconcile.ToolRebinding
 
-deriving instance ToJson for Publication, Answer
+deriving instance ToJson for Publication, Answer, Change
 
-attribute [conformance_function] answer
+attribute [conformance_function] answer change
 
 end Conformance.ToolRebinding

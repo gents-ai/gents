@@ -5,6 +5,7 @@ use crate::tools_rebinding::ToolsRebinding;
 
 const IN_EFFECT: &str =
     "In effect now: your next turn can call next_turn.added and no longer has next_turn.removed.";
+const WAITING: &str = "In effect now except next_turn.waiting, which your next turn lacks until the reason given is resolved.";
 const UNRUNNABLE: &str = "Saved, but the agent cannot run with these Tools (next_turn.not_applied), so this request keeps its tools. Correct them with tools update.";
 const UNPUBLISHED: &str = "Saved; the runtime has not picked it up yet, so this request keeps its tools and the next request has the change.";
 
@@ -23,6 +24,7 @@ pub(super) fn applied(mut outcome: PatchOutcome, rebinding: ToolsRebinding) -> P
 pub(super) fn effect(rebinding: &ToolsRebinding) -> Option<&'static str> {
     match rebinding {
         ToolsRebinding::NotOwn => None,
+        ToolsRebinding::Rebound { waiting, .. } if !waiting.is_empty() => Some(WAITING),
         ToolsRebinding::Rebound { .. } => Some(IN_EFFECT),
         ToolsRebinding::Unrunnable { .. } => Some(UNRUNNABLE),
         ToolsRebinding::Unpublished => Some(UNPUBLISHED),
@@ -32,7 +34,19 @@ pub(super) fn effect(rebinding: &ToolsRebinding) -> Option<&'static str> {
 pub(super) fn next_turn(rebinding: &ToolsRebinding) -> Option<Value> {
     match rebinding {
         ToolsRebinding::NotOwn => None,
-        ToolsRebinding::Rebound { added, removed } => {
+        ToolsRebinding::Rebound {
+            added,
+            removed,
+            waiting,
+        } if !waiting.is_empty() => Some(json!({
+            "added": added,
+            "removed": removed,
+            "waiting": waiting
+                .iter()
+                .map(|item| json!({"name": item.name, "why": item.reason}))
+                .collect::<Vec<_>>(),
+        })),
+        ToolsRebinding::Rebound { added, removed, .. } => {
             Some(json!({"added": added, "removed": removed}))
         }
         ToolsRebinding::Unrunnable { reason } => Some(json!({"not_applied": reason})),

@@ -134,6 +134,9 @@ pub struct ToolSurface {
     allowed_mcp_service_ids: Vec<String>,
     remote_tools: Option<gents_documents::RemoteTools>,
     agent_tools: AgentToolConfig,
+    /// Selected local agent targets left out because the generation does not
+    /// run their agent ([`Self::retain_agent_targets`]).
+    withheld_agent_targets: Vec<AgentTargetDocument>,
     background_tools: BackgroundToolConfig,
     custom_tools: Vec<CustomToolFactory>,
     pub(crate) enable_context_budget_tool: bool,
@@ -305,13 +308,24 @@ impl ToolSurface {
         own_node_did: &str,
         active_agent_dids: &RapidHashSet<String>,
     ) {
-        self.agent_tools.targets.retain(|target| {
-            if target.target_node_did == own_node_did {
-                active_agent_dids.contains(&target.agent_did)
-            } else {
-                true
-            }
-        });
+        let (kept, withheld) = std::mem::take(&mut self.agent_tools.targets)
+            .into_iter()
+            .partition(|target| {
+                target.target_node_did != own_node_did
+                    || active_agent_dids.contains(&target.agent_did)
+            });
+        self.agent_tools.targets = kept;
+        self.withheld_agent_targets.extend(withheld);
+    }
+
+    /// The selected agent targets [`Self::agent_targets`] leaves out because
+    /// their agent does not run.
+    pub fn withheld_agent_targets(&self) -> &[AgentTargetDocument] {
+        if self.agent_tools.enabled {
+            &self.withheld_agent_targets
+        } else {
+            &[]
+        }
     }
 
     /// The names the model is shown: [`Self::tool_names`] without those

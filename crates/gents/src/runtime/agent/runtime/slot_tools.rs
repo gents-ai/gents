@@ -25,6 +25,8 @@ pub(in crate::runtime::agent) struct SlotTools {
     pub(in crate::runtime::agent) output_obligations:
         Vec<(String, gents_documents::WriteToolOutputObligation)>,
     pub(in crate::runtime::agent) root_execution_guard: Option<surface::RootExecutionGuard>,
+    /// The agent targets `agent_new` offers.
+    pub(in crate::runtime::agent) agent_targets: Vec<String>,
 }
 
 impl SlotTools {
@@ -67,6 +69,7 @@ impl SlotTools {
             ),
             output_obligations: tool_surface.output_obligations(),
             root_execution_guard: tool_surface.root_execution_guard().cloned(),
+            agent_targets: allowed_targets.into_iter().map(|(name, _)| name).collect(),
         })
     }
 }

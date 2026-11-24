@@ -224,6 +224,7 @@ impl RuntimeContext {
                     job_tools,
                     output_obligations,
                     root_execution_guard,
+                    agent_targets,
                 },
         } = worker;
         let model = Arc::new(build_admitted_model(
@@ -289,6 +290,7 @@ impl RuntimeContext {
         .with_tool_rebinding(crate::runtime::agent::daemon::RebindingSource {
             tool_runtime: self.tool_runtime.clone(),
             active_snapshots: self.active_snapshots.clone(),
+            agent_targets,
         });
         if let Some((compactor, provider_family)) = summary_compactor {
             daemon = daemon.with_compactor(compactor, provider_family);
