@@ -10,10 +10,10 @@ open Conformance.GoalOperatorResumeContracts (parentBinding)
 open Lean
 
 def limited : Snapshot :=
-  ⟨⟨.usageLimited, 0, false, false⟩, 0, none, 10, [], 37, some 1000⟩
+  ⟨⟨.usageLimited, false, false⟩, 0, none, 10, [], 37, some 1000⟩
 def request : Request := ⟨.usageLimited, 0, true, true, true, true, parentBinding⟩
 def resumed : Snapshot :=
-  ⟨⟨.active, 0, false, false⟩, 1, some 10, 20, [parentBinding], 37, some 1000⟩
+  ⟨⟨.active, false, false⟩, 1, some 10, 20, [parentBinding], 37, some 1000⟩
 def due : ResetFacts := ⟨true, some 3600, 0, 3600, true, true, true, true⟩
 def paused : Snapshot := { limited with goal := { limited.goal with status := .paused } }
 
@@ -23,7 +23,7 @@ def childBinding : Binding :=
   { parentBinding with predecessor := 20, predecessorDoc := 200, child := 40, sequence := 2 }
 def requestAgain : Request := ⟨.usageLimited, 1, true, true, true, true, childBinding⟩
 def resumedAgain : Snapshot :=
-  ⟨⟨.active, 0, false, false⟩, 2, some 20, 40, [childBinding, parentBinding], 37, some 1000⟩
+  ⟨⟨.active, false, false⟩, 2, some 20, 40, [childBinding, parentBinding], 37, some 1000⟩
 
 structure ResetCase where
   name : String
@@ -65,7 +65,6 @@ deriving instance ToJson for GoalAutomation.OperatorResume.Binding,
 
 structure SnapshotWire where
   status : Goals.Status
-  blockedAudits : Nat
   wrapupRequested : Bool
   wrapupCompleted : Bool
   sequence : Nat
@@ -77,11 +76,11 @@ structure SnapshotWire where
   deriving ToJson
 
 def SnapshotWire.ofModel (s : Snapshot) : SnapshotWire :=
-  ⟨s.goal.status, s.goal.blockedAudits, s.goal.wrapupRequested, s.goal.wrapupCompleted,
+  ⟨s.goal.status, s.goal.wrapupRequested, s.goal.wrapupCompleted,
     s.sequence, s.lastContinuedFrom, s.latestRequest, s.children, s.tokensUsed, s.tokenBudget⟩
 
 def SnapshotWire.toModel (s : SnapshotWire) : Snapshot :=
-  ⟨⟨s.status, s.blockedAudits, s.wrapupRequested, s.wrapupCompleted⟩,
+  ⟨⟨s.status, s.wrapupRequested, s.wrapupCompleted⟩,
     s.sequence, s.lastContinuedFrom, s.latestRequest, s.children, s.tokensUsed, s.tokenBudget⟩
 
 structure RequestWire where

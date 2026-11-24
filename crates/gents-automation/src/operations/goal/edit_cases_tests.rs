@@ -149,7 +149,7 @@ async fn generated_goal_edit_cases_drive_real_transactions() {
         let before = durable_rows(&access).await;
         let edit = match row.origin {
             Origin::Agent => {
-                super::set_as_working_agent(&agent_access, &observed, &input, None, "request").await
+                super::set_as_working_agent(&agent_access, &observed, &input, None).await
             }
             Origin::Client => {
                 let input = GoalSetInput {

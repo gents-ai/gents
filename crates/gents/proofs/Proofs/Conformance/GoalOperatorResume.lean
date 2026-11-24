@@ -32,10 +32,10 @@ def parentBinding : Binding :=
   ⟨1, "owner", "session", 10, 100, some "graph-correlation", some "source",
     some "context", some "workspace-authority", "full-semantic-fingerprint", 20, 1⟩
 def initial : Snapshot :=
-  ⟨⟨.paused, 2, false, false⟩, 0, none, 10, [], 37, some 1000⟩
+  ⟨⟨.paused, false, false⟩, 0, none, 10, [], 37, some 1000⟩
 def request : Request := ⟨.paused, 0, true, true, true, true, parentBinding⟩
 def published : Snapshot :=
-  ⟨⟨.active, 0, false, false⟩, 1, some 10, 20, [parentBinding], 37, some 1000⟩
+  ⟨⟨.active, false, false⟩, 1, some 10, 20, [parentBinding], 37, some 1000⟩
 def later : Snapshot :=
   { published with goal := { published.goal with status := .paused }, latestRequest := 30 }
 
@@ -75,7 +75,6 @@ deriving instance Lean.ToJson for Binding, Request, Outcome
 
 structure SnapshotWire where
   status : Goals.Status
-  blockedAudits : Nat
   wrapupRequested : Bool
   wrapupCompleted : Bool
   sequence : Nat
@@ -87,14 +86,14 @@ structure SnapshotWire where
   deriving Lean.ToJson
 
 def SnapshotWire.ofModel (s : Snapshot) : SnapshotWire :=
-  { status := s.goal.status, blockedAudits := s.goal.blockedAudits
+  { status := s.goal.status
     wrapupRequested := s.goal.wrapupRequested, wrapupCompleted := s.goal.wrapupCompleted
     sequence := s.sequence, lastContinuedFrom := s.lastContinuedFrom
     latestRequest := s.latestRequest, children := s.children, tokensUsed := s.tokensUsed
     tokenBudget := s.tokenBudget }
 
 def SnapshotWire.toModel (s : SnapshotWire) : Snapshot :=
-  { goal := { status := s.status, blockedAudits := s.blockedAudits
+  { goal := { status := s.status
               wrapupRequested := s.wrapupRequested, wrapupCompleted := s.wrapupCompleted }
     sequence := s.sequence, lastContinuedFrom := s.lastContinuedFrom
     latestRequest := s.latestRequest, children := s.children, tokensUsed := s.tokensUsed
@@ -182,7 +181,7 @@ def bindingJson (x : Binding) : String :=
   ",\"semantic_fingerprint\":" ++ jsonString x.semanticFingerprint ++
   ",\"child\":" ++ toString x.child ++ ",\"sequence\":" ++ toString x.sequence ++ "}"
 def snapshotJson (x : Snapshot) : String :=
-  "{\"status\":" ++ status x.goal.status ++ ",\"blocked_audits\":" ++ toString x.goal.blockedAudits ++
+  "{\"status\":" ++ status x.goal.status ++
   ",\"wrapup_requested\":" ++ b x.goal.wrapupRequested ++ ",\"wrapup_completed\":" ++ b x.goal.wrapupCompleted ++
   ",\"sequence\":" ++ toString x.sequence ++ ",\"last_continued_from\":" ++ n x.lastContinuedFrom ++
   ",\"latest_request\":" ++ toString x.latestRequest ++ ",\"children\":" ++ jsonArray (x.children.map bindingJson) ++

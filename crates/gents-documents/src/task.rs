@@ -64,11 +64,6 @@ pub struct Task {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub goal_token_budget: Option<i64>,
-    /// Consecutive same-condition blocked audits that block the Goal; unset is
-    /// `BLOCKED_AUDIT_THRESHOLD`. Each Goal assignment pins the value.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub goal_blocked_audit_threshold: Option<i64>,
     /// Automatic re-prompts after a Failed or Dead request; unset is
     /// `MAX_INFRASTRUCTURE_RETRIES`. Each Goal assignment pins the value.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -130,7 +125,6 @@ impl Task {
     /// The limits each Goal this Task creates or assigns pins.
     pub fn goal_limits(&self) -> gents_protocol::goal::GoalLimits {
         gents_protocol::goal::GoalLimits {
-            blocked_audit_threshold: self.goal_blocked_audit_threshold,
             max_infrastructure_retries: self.goal_max_infrastructure_retries,
         }
     }

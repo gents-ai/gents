@@ -37,9 +37,9 @@ use crate::support::interrupt::{
     BootedAgent,
 };
 use crate::support::live_inference::{bind_target, live_target, InferenceTarget};
-use crate::support::test_db;
-use crate::support::TestDb;
+use crate::support::trial_store;
 use gents_store::test_support::snapshot_reader::SnapshotReader;
+use gents_store::test_support::TestStore;
 use gents_store::test_support::STALL_CEILING;
 
 const LIVE_SAMPLING_ID: &str = "live-interrupt:live-sampling";
@@ -52,7 +52,7 @@ const MIN_VISIBLE_PREFIX_CHARS: usize = 40;
 async fn live_interrupt_mid_stream_on_openai_compatible() -> Result<()> {
     let target = live_target().await;
 
-    let db = test_db("live-openai-interrupt").await;
+    let db = trial_store("live-openai-interrupt").await;
     let (agent, actors) = boot_interrupt_agent(&db, &target).await?;
     let reader = &actors.fixture.access;
 
@@ -426,7 +426,7 @@ async fn wait_for_interrupted_terminal_row(
 }
 
 async fn boot_interrupt_agent(
-    db: &TestDb,
+    db: &TestStore,
     target: &InferenceTarget,
 ) -> Result<(BootedAgent, RequestActors)> {
     let actors = bind_target(db, target).await;
@@ -436,7 +436,7 @@ async fn boot_interrupt_agent(
         db.node.clone(),
         Arc::clone(&db.node_identity),
         DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
+            backend_admission: Some(db.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },

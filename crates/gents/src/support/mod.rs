@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use gents::defra_node::{Node as EmbeddedNode, QueryResponse};
-use gents::runtime::embedded::EmbeddedHome;
 use gents_protocol::row::AgentRequest;
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
+use gents_store::test_support::TestStore;
 use serde::Deserialize;
 
 pub mod accepted_turn;
@@ -14,14 +14,11 @@ pub mod agent_transcript;
 pub mod builder_runtime;
 pub mod canonical_reads;
 pub mod commit_race_proxy;
-pub mod fake_llm;
 
 pub mod fixtures;
-pub mod http_mock;
 pub(crate) mod identity_stubs;
 pub mod interrupt;
 pub mod live_inference;
-pub mod mock_endpoint;
 pub mod mock_subscription;
 pub mod ports;
 
@@ -52,54 +49,6 @@ pub fn materialization_identity_for(did: &str) -> Arc<dyn NodeIdentity> {
     identity_stubs::SigningStubNodeIdentity::arc(did)
 }
 
-pub struct TestDb {
-    pub home: EmbeddedHome,
-    pub node: Arc<EmbeddedNode>,
-    pub node_identity: Arc<dyn NodeIdentity>,
-    pub process_generation: u64,
-}
-
-impl TestDb {
-    pub fn data_path(&self) -> &std::path::Path {
-        self.home.path()
-    }
-
-    pub fn client_access(
-        &self,
-        identity: &dyn NodeIdentity,
-    ) -> gents_store::config_client::ConfigAccess {
-        let endpoint = self.home.graphql_endpoint();
-        gents_store::config_client::ConfigAccess::Graphql(
-            gents::runtime::lifecycle_hooks::compose_endpoint(
-                gents_store::config_client::GraphqlEndpoint::as_principal(endpoint, identity.did())
-                    .with_client_signing_capability(identity.client_signing_capability().unwrap())
-                    .unwrap()
-                    .with_client_signed_agent_creates(),
-            )
-            .unwrap(),
-        )
-    }
-
-    pub fn client_endpoint(&self) -> &str {
-        self.home.graphql_endpoint()
-    }
-
-    pub async fn simulate_process_crash(&mut self) -> anyhow::Result<()> {
-        let before = self.process_generation;
-        let stand_in = Arc::new(
-            EmbeddedNode::builder()
-                .build()
-                .await
-                .map_err(|e| anyhow::anyhow!("simulate_process_crash: stand-in node: {e}"))?,
-        );
-        drop(std::mem::replace(&mut self.node, stand_in));
-        self.home.reopen().await?;
-        self.node = self.home.node.clone();
-        self.process_generation = before + 1;
-        Ok(())
-    }
-}
-
 /// Installs a test-writer subscriber when `RUST_LOG` names a filter, so owner
 /// diagnostics are visible for a failing test; absent the variable it is inert.
 pub fn init_test_tracing() {
@@ -111,24 +60,12 @@ pub fn init_test_tracing() {
     }
 }
 
-pub fn test_db_from_home(home: EmbeddedHome) -> TestDb {
-    init_test_tracing();
-    let node = home.node.clone();
-    let node_identity = home.node_identity.clone();
-    TestDb {
-        home,
-        node,
-        node_identity,
-        process_generation: 0,
-    }
-}
-
-pub async fn managed_agent(db: &TestDb) -> Arc<dyn NodeIdentity> {
+pub async fn managed_agent(db: &TestStore) -> Arc<dyn NodeIdentity> {
     managed_agent_with_binding(db).await.0
 }
 
 pub async fn managed_agent_with_binding(
-    db: &TestDb,
+    db: &TestStore,
 ) -> (
     Arc<dyn NodeIdentity>,
     gents_protocol::agent_identity::AgentIdentityBinding,
@@ -144,8 +81,8 @@ pub struct ManagedAgentFixture {
     pub binding: gents_protocol::agent_identity::AgentIdentityBinding,
 }
 
-pub async fn managed_fixture_user(db: &TestDb) -> gents_store::identity::KeyIdentity {
-    let path = db.data_path().join("fixture-user.key");
+pub async fn managed_fixture_user(db: &TestStore) -> gents_store::identity::KeyIdentity {
+    let path = db.path().join("fixture-user.key");
     tokio::task::spawn_blocking(move || {
         gents_store::identity::KeyIdentity::load_or_create(path, None)
     })
@@ -154,8 +91,8 @@ pub async fn managed_fixture_user(db: &TestDb) -> gents_store::identity::KeyIden
     .expect("create held test user")
 }
 
-pub async fn load_managed_fixture_user(db: &TestDb) -> gents_store::identity::KeyIdentity {
-    let path = db.data_path().join("fixture-user.key");
+pub async fn load_managed_fixture_user(db: &TestStore) -> gents_store::identity::KeyIdentity {
+    let path = db.path().join("fixture-user.key");
     tokio::task::spawn_blocking(move || {
         gents_store::identity::KeyIdentity::load_existing(path, None)
     })
@@ -164,7 +101,7 @@ pub async fn load_managed_fixture_user(db: &TestDb) -> gents_store::identity::Ke
     .expect("load retained test user")
 }
 
-pub async fn managed_agent_fixture(db: &TestDb) -> ManagedAgentFixture {
+pub async fn managed_agent_fixture(db: &TestStore) -> ManagedAgentFixture {
     let user = managed_fixture_user(db).await;
     let runtime = db.node_identity.as_ref();
     assert_ne!(user.did(), runtime.did());
@@ -182,7 +119,7 @@ pub async fn managed_agent_fixture(db: &TestDb) -> ManagedAgentFixture {
 
 /// Makes the fixture User the household owner `gents init` creates: the native
 /// admin that installs packs and their collection schemas.
-pub async fn grant_household_owner(db: &TestDb, user: &gents_store::identity::KeyIdentity) {
+pub async fn grant_household_owner(db: &TestStore, user: &gents_store::identity::KeyIdentity) {
     let runtime = db.node_identity.as_ref();
     let admin = gents_store::config_client::ConfigAccess::local_as(
         db.node.clone(),
@@ -200,7 +137,7 @@ pub async fn grant_household_owner(db: &TestDb, user: &gents_store::identity::Ke
 /// The configuring User lets `caller` open sessions on `target`'s Agent (the
 /// `session_writer` relation behind `invoke`), as delegation to another Agent needs.
 pub async fn grant_agent_session_writer(
-    db: &TestDb,
+    db: &TestStore,
     access: &gents_store::config_client::ConfigAccess,
     target_agent_did: &str,
     caller_agent_did: &str,
@@ -236,7 +173,7 @@ pub async fn grant_agent_session_writer(
 }
 
 pub async fn install_managed_agent(
-    db: &TestDb,
+    db: &TestStore,
     access: &gents_store::config_client::ConfigAccess,
     user: &gents_store::identity::KeyIdentity,
     display_name: &str,
@@ -319,9 +256,9 @@ pub async fn install_managed_agent(
 /// A [`TestStore`](gents_store::test_support::TestStore) projecting what a
 /// trial home's node projects: the meta-only tool ceiling and the lifecycle
 /// hook composition.
-pub async fn trial_store(name: &str) -> gents_store::test_support::TestStore {
+pub async fn trial_store(name: &str) -> TestStore {
     init_test_tracing();
-    gents_store::test_support::TestStore::start_with_tool_policy(
+    TestStore::start_with_tool_policy(
         name,
         gents_automation::lifecycle_hooks::composition(),
         Arc::new(gents_tools::surface::ToolCeiling::meta_only()),
@@ -331,9 +268,9 @@ pub async fn trial_store(name: &str) -> gents_store::test_support::TestStore {
 
 /// A [`trial_store`] over the home at `path`, retained after the node stops,
 /// so the trial's own home owner can reopen it.
-pub async fn trial_store_at(path: &std::path::Path) -> gents_store::test_support::TestStore {
+pub async fn trial_store_at(path: &std::path::Path) -> TestStore {
     init_test_tracing();
-    gents_store::test_support::TestStore::open_at_with_tool_policy(
+    TestStore::open_at_with_tool_policy(
         path,
         gents_automation::lifecycle_hooks::composition(),
         Arc::new(gents_tools::surface::ToolCeiling::meta_only()),
@@ -342,25 +279,11 @@ pub async fn trial_store_at(path: &std::path::Path) -> gents_store::test_support
     .expect("trial store")
 }
 
-pub async fn test_db(name: &str) -> TestDb {
-    let home = EmbeddedHome::create_temp(name)
-        .await
-        .expect("embedded home");
-    test_db_from_home(home)
-}
-
-pub async fn test_db_in(tempdir: tempfile::TempDir) -> TestDb {
-    let home = EmbeddedHome::in_tempdir(tempdir, None)
-        .await
-        .expect("embedded home");
-    test_db_from_home(home)
-}
-
-pub async fn test_p2p_db(name: &str) -> TestDb {
+pub async fn test_p2p_db(name: &str) -> TestStore {
     test_p2p_db_with_admission(name, TestP2pAdmission::default()).await
 }
 
-pub async fn test_p2p_db_with_admission(name: &str, admission: TestP2pAdmission) -> TestDb {
+pub async fn test_p2p_db_with_admission(name: &str, admission: TestP2pAdmission) -> TestStore {
     let db = test_p2p_db_without_node(name, admission).await;
     install_runtime_node(&db).await;
     db
@@ -368,20 +291,15 @@ pub async fn test_p2p_db_with_admission(name: &str, admission: TestP2pAdmission)
 
 /// A P2P-enabled store whose Node document its enrolling User installs, as
 /// `managed_agent_fixture` does.
-pub async fn test_p2p_db_without_node(name: &str, admission: TestP2pAdmission) -> TestDb {
-    let tempdir = tempfile::Builder::new()
-        .prefix(&format!("gents-{name}-"))
-        .tempdir()
-        .expect("tempdir");
-    let home = EmbeddedHome::in_tempdir(
-        tempdir,
-        Some(Arc::new(move |data_path: &std::path::Path| {
-            test_p2p_config(&admission, data_path)
-        })),
+pub async fn test_p2p_db_without_node(name: &str, admission: TestP2pAdmission) -> TestStore {
+    init_test_tracing();
+    TestStore::start_configured_with_tool_policy(
+        name,
+        gents_automation::lifecycle_hooks::composition(),
+        Arc::new(move |path, builder| builder.with_p2p(test_p2p_config(&admission, path))),
+        Arc::new(gents_tools::surface::ToolCeiling::meta_only()),
     )
     .await
-    .expect("p2p embedded home");
-    test_db_from_home(home)
 }
 
 /// Enrols the fixture User and writes the runtime's Node document as that
@@ -389,7 +307,7 @@ pub async fn test_p2p_db_without_node(name: &str, admission: TestP2pAdmission) -
 /// runtime it describes. Publication and enrollment owners require exactly one
 /// visible local Node before they publish, and later fixture configuration by
 /// the same User updates this document instead of racing a second owner.
-async fn install_runtime_node(db: &TestDb) {
+async fn install_runtime_node(db: &TestStore) {
     let user = managed_fixture_user(db).await;
     gents_documents::test_support::enroll_test_user(
         &db.node,
@@ -855,7 +773,7 @@ pub async fn begin_owned_execution(
 }
 
 pub async fn complete_pending_request_with_canonical_output(
-    db: &TestDb,
+    db: &TestStore,
     row: gents_protocol::row::AgentRequestRow,
     text: &str,
 ) -> anyhow::Result<String> {
@@ -926,7 +844,7 @@ pub async fn complete_pending_request_with_canonical_output(
         db.node.clone(),
         identity,
         gents::DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
+            backend_admission: Some(db.backend_admission()),
             ..Default::default()
         },
     )

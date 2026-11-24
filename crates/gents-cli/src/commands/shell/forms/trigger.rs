@@ -227,7 +227,6 @@ pub(super) fn created(
                 "emit_outcome": false,
                 "goal_objective_template": null,
                 "goal_token_budget": null,
-                "goal_blocked_audit_threshold": null,
                 "goal_max_infrastructure_retries": null,
                 "enabled": true,
                 "output_schema_ref": null,

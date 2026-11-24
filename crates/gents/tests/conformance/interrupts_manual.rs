@@ -9,7 +9,7 @@ async fn fork_does_not_transition_parent_lifecycle_state() {
     use gents_session::session::{fork_on, ForkParams};
     use support::agent_transcript;
 
-    let db = test_db("fork-no-lifecycle-transition").await;
+    let db = trial_store("fork-no-lifecycle-transition").await;
     let actors = support::agent_requests::RequestActors::new(&db).await;
 
     let parent_session = uuid::Uuid::new_v4().to_string();
@@ -87,7 +87,7 @@ async fn canonical_session_output(
 }
 #[tokio::test]
 async fn pending_tie_break_prefers_interrupt_over_expire() {
-    let db = test_db("tie-break-pending").await;
+    let db = trial_store("tie-break-pending").await;
     let actors = support::agent_requests::RequestActors::new(&db).await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -111,7 +111,7 @@ async fn pending_tie_break_prefers_interrupt_over_expire() {
 }
 #[tokio::test]
 async fn fail_after_interrupt_latch_prefers_interrupted() {
-    let db = test_db("fail-after-interrupt-latch").await;
+    let db = trial_store("fail-after-interrupt-latch").await;
     let actors = support::agent_requests::RequestActors::new(&db).await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -161,7 +161,7 @@ async fn fail_after_interrupt_latch_prefers_interrupted() {
 
 #[tokio::test]
 async fn s8_valid_until_never_rewritten_by_transitions() {
-    let db = test_db("s8-valid-until-preserved").await;
+    let db = trial_store("s8-valid-until-preserved").await;
     let actors = support::agent_requests::RequestActors::new(&db).await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -224,7 +224,7 @@ async fn s8_valid_until_never_rewritten_by_transitions() {
 
 #[tokio::test]
 async fn manual_run_preserves_lineage_through_claim_transition() {
-    let db = test_db("manual-run-lineage-through-claim").await;
+    let db = trial_store("manual-run-lineage-through-claim").await;
     let agent = support::managed_agent(&db).await;
     let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
         db.node.clone(),
@@ -363,7 +363,7 @@ async fn interrupt_request_follows_the_lean_drain_model() {
         String,
         RequestLifecycleState,
     >() {
-        let db = test_db("interrupt-drain-wakeups").await;
+        let db = trial_store("interrupt-drain-wakeups").await;
         let actors = support::agent_requests::RequestActors::new(&db).await;
         let session_id = "interrupt-drain-session";
         let foreign =
@@ -478,7 +478,7 @@ async fn interrupt_request_follows_the_lean_drain_model() {
 /// The runtime root writes the queued replica for the fixture Agent and grants
 /// it as working Agent; only the node scope and execution origin differ.
 async fn create_pending_queue_row(
-    db: &support::TestDb,
+    db: &gents_store::test_support::TestStore,
     actors: &support::agent_requests::RequestActors,
     request_id: &str,
     session_id: &str,

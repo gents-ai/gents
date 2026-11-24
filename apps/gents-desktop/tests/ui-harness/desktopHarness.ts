@@ -1722,14 +1722,13 @@ export function createDesktopUiHarness(
             objective: "Make the import job resumable after a crash",
             status: "usage_limited",
             tokenBudget: "400000",
-            blockedAuditThreshold: "3",
             maxInfrastructureRetries: "2",
             tokensUsed: "312400",
             activeTimeSeconds: "2460",
             continuationSequence: "4",
             wrapupRequested: false,
             wrapupCompleted: false,
-            lastBlockedReason:
+            blockedReason:
               "verification_failed: the resume test still fails on the second run",
             lastFailure:
               "usage_limited: every Claude account on this node has reached its usage limit",
@@ -3134,7 +3133,6 @@ export function createDesktopUiHarness(
             emitOutcome: document.emit_outcome,
             goalObjectiveTemplate: document.goal_objective_template ?? null,
             goalTokenBudget: document.goal_token_budget ?? null,
-            goalBlockedAuditThreshold: document.goal_blocked_audit_threshold ?? null,
             goalMaxInfrastructureRetries:
               document.goal_max_infrastructure_retries ?? null,
             enabled: document.enabled ?? true,
@@ -3619,7 +3617,6 @@ export function createDesktopUiHarness(
           emitOutcome: document.emit_outcome,
           goalObjectiveTemplate: document.goal_objective_template ?? null,
           goalTokenBudget: document.goal_token_budget ?? null,
-          goalBlockedAuditThreshold: document.goal_blocked_audit_threshold ?? null,
           goalMaxInfrastructureRetries:
             document.goal_max_infrastructure_retries ?? null,
           enabled: document.enabled ?? true,
@@ -4951,7 +4948,6 @@ function createDeployment(): DeploymentView {
         promptTemplate: "Inspect this host and report health.",
         goalObjectiveTemplate: null,
         goalTokenBudget: null,
-        goalBlockedAuditThreshold: null,
         goalMaxInfrastructureRetries: null,
         emitOutcome: false,
         enabled: true,

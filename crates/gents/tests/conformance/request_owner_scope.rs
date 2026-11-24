@@ -109,10 +109,10 @@ where
 }
 
 /// A syntactically valid DID for a node this process does not run.
-fn foreign_did(db: &support::TestDb) -> String {
+fn foreign_did(db: &gents_store::test_support::TestStore) -> String {
     gents_store::identity::NodeIdentity::did(
         &gents_store::identity::KeyIdentity::load_or_create(
-            db.data_path().join("foreign-owner.key"),
+            db.path().join("foreign-owner.key"),
             None,
         )
         .unwrap(),
@@ -341,7 +341,7 @@ async fn composite_commit_count(node: &std::sync::Arc<EmbeddedNode>, doc_id: &st
 }
 
 pub(super) async fn single_claimer_watcher_never_claims_foreign_replica() {
-    let db = test_db("convergence-single-claimer").await;
+    let db = trial_store("convergence-single-claimer").await;
     let agent = support::managed_agent(&db).await;
     let owner_did = db.node_identity.did();
     let foreign = foreign_did(&db);
@@ -392,7 +392,7 @@ pub(super) async fn single_claimer_watcher_never_claims_foreign_replica() {
 }
 
 pub(super) async fn canonical_recovery_repairs_expired_request_after_terminal_write_gap() {
-    let db = test_db("convergence-terminal-repair").await;
+    let db = trial_store("convergence-terminal-repair").await;
     let agent = support::managed_agent(&db).await;
     let owner_did = db.node_identity.did();
     let request_id = "convergence-terminal-repair-request";
@@ -522,7 +522,7 @@ pub(super) async fn canonical_recovery_repairs_expired_request_after_terminal_wr
 }
 
 pub(super) async fn recover_stuck_requests_recovers_claimed_lifecycle_state() {
-    let db = test_db("convergence-recover-claimed").await;
+    let db = trial_store("convergence-recover-claimed").await;
     let agent = support::managed_agent(&db).await;
     let owner_did = db.node_identity.did();
 
@@ -567,7 +567,7 @@ pub(super) async fn recover_stuck_requests_recovers_claimed_lifecycle_state() {
 }
 
 pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
-    let db = test_db("convergence-coalesce-foreign").await;
+    let db = trial_store("convergence-coalesce-foreign").await;
     let agent = support::managed_agent(&db).await;
     let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
         db.node.clone(),
@@ -580,7 +580,7 @@ pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
     let session_id = "convergence-coalesce-foreign-session";
     let key = format!("background_completion:{session_id}");
     let foreign_identity = gents_store::identity::KeyIdentity::load_or_create(
-        db.data_path().join("foreign-owner.key"),
+        db.path().join("foreign-owner.key"),
         None,
     )
     .unwrap();
@@ -710,7 +710,7 @@ pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
 }
 
 pub(super) async fn drain_wakeups_never_interrupts_foreign_replica() {
-    let db = test_db("convergence-drain-foreign").await;
+    let db = trial_store("convergence-drain-foreign").await;
     let agent = support::managed_agent(&db).await;
     let owner_did = db.node_identity.did();
     let foreign = foreign_did(&db);

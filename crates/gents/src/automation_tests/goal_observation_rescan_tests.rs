@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 
 async fn fixture() -> Fixture {
     let before = json!({"status":"active","sequence":0,"last_continued_from":null,
-        "latest_request":10,"children":[],"blocked_audits":0,"wrapup_requested":false,
+        "latest_request":10,"children":[],"wrapup_requested":false,
         "wrapup_completed":false,"tokens_used":37,"token_budget":1000});
     Fixture::new(&before).await
 }

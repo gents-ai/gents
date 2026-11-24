@@ -6,6 +6,9 @@ use serde_json::Value;
 use super::*;
 
 pub(super) const OAUTH_CREDENTIAL_FIELDS: &str = "_docID credential_id node_did provider access_token refresh_token id_token account_id chatgpt_plan_type is_fedramp access_token_expires_at last_refresh enabled account_ref connected_at provider_account_key label";
+/// What an account listing selects: no token, which only the runtime that
+/// holds the account reads (Lean `AccountListing.summaryFields`).
+pub(super) const OAUTH_SUMMARY_FIELDS: &str = "credential_id node_did provider account_id account_email chatgpt_plan_type access_token_expires_at last_refresh enabled account_ref connected_at provider_account_key label";
 pub(super) const OAUTH_PICK_FIELDS: &str =
     "_docID credential_id node_did provider enabled account_ref connected_at provider_account_key";
 
@@ -68,6 +71,39 @@ pub(super) fn pick_row_from_value(value: Value) -> Result<OAuthCredential> {
         connected_at: parse_optional_datetime(row.connected_at, "connected_at")?,
         provider_account_key: clean_optional(row.provider_account_key),
         label: None,
+    })
+}
+
+/// The rows of a response to a query that selected [`OAUTH_SUMMARY_FIELDS`].
+pub(super) fn oauth_credential_summaries_from_response(
+    response: &Value,
+) -> Vec<Result<OAuthCredentialSummary>> {
+    gents_protocol::graphql::graphql_rows_from_response(response, "OAuthCredential")
+        .into_iter()
+        .map(summary_from_value)
+        .collect()
+}
+
+fn summary_from_value(value: Value) -> Result<OAuthCredentialSummary> {
+    let row: OAuthCredentialRow =
+        serde_json::from_value(value).context("decoding OAuthCredential row")?;
+    Ok(OAuthCredentialSummary {
+        credential_id: row.credential_id,
+        node_did: required(row.node_did, "node_did")?,
+        provider: required(row.provider, "provider")?,
+        account_id: clean_optional(row.account_id),
+        account_email: clean_optional(row.account_email),
+        chatgpt_plan_type: clean_optional(row.chatgpt_plan_type),
+        access_token_expires_at: parse_required_datetime(
+            row.access_token_expires_at,
+            "access_token_expires_at",
+        )?,
+        last_refresh: parse_optional_datetime(row.last_refresh, "last_refresh")?,
+        enabled: row.enabled.unwrap_or(true),
+        account_ref: clean_optional(row.account_ref),
+        connected_at: parse_optional_datetime(row.connected_at, "connected_at")?,
+        provider_account_key: clean_optional(row.provider_account_key),
+        label: clean_optional(row.label),
     })
 }
 
@@ -134,7 +170,7 @@ pub(super) fn oauth_credential_input_fields(
             })
             .unwrap_or_else(|| format!("{name}: null"))
     };
-    vec![
+    let mut fields = vec![
         ("node_did", field("node_did", &credential.node_did)),
         ("provider", field("provider", &credential.provider)),
         (
@@ -213,7 +249,12 @@ pub(super) fn oauth_credential_input_fields(
             "label",
             gents_protocol::graphql::nullable_string_field("label", credential.label.as_deref()),
         ),
-    ]
+    ];
+    /* tokens that show no email leave the stored one as it was */
+    if let Some(email) = token_account_email(credential) {
+        fields.push(("account_email", field("account_email", &email)));
+    }
+    fields
 }
 
 pub(super) fn render_oauth_input(fields: &[(&'static str, String)], exclude: &[&str]) -> String {
@@ -289,6 +330,7 @@ const REFRESH_FIELDS: &[&str] = &[
     "is_fedramp",
     "access_token_expires_at",
     "last_refresh",
+    "account_email",
 ];
 
 pub(super) fn refresh_update_mutation(

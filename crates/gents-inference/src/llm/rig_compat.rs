@@ -300,8 +300,11 @@ where
         while let Some(item) = inner.next().await {
             match item {
                 Ok(item) => {
-                    if let Some(guard) = guard.as_mut().filter(|_| is_token(&item)) {
-                        guard.mark_first_token();
+                    if let Some(guard) = guard.as_mut() {
+                        guard.observe_progress();
+                        if is_token(&item) {
+                            guard.mark_first_token();
+                        }
                     }
                     if let StreamedAssistantContent::Final(response) = &item {
                         let mut terminal_guard = guard

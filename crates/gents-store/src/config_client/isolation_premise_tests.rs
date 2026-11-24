@@ -380,6 +380,46 @@ async fn a_filtered_read_of_a_document_does_not_conflict_with_a_concurrent_updat
     assert_eq!(observed.attempts, 1, "{observed:?}");
 }
 
+/// T1 finds A by an equality filter on its unique key and writes document B;
+/// T2 updates A. The store answers the filter from the unique index, and the
+/// read is validated like a read of A by id (Lean
+/// `TransactionFence.a_unique_key_read_is_a_point_read`).
+#[tokio::test]
+async fn a_unique_key_filter_is_a_point_read_that_conflicts_with_a_concurrent_update() {
+    let (node, access) = node().await;
+    let a = create(&node, "UniqueIsolationProbe", r#"{key: "a", n: 1}"#).await;
+    let b = create(&node, "IsolationProbe", r#"{key: "b", n: 1, m: 1}"#).await;
+    let decide = decider(move |txn, _| {
+        let b = b.clone();
+        Box::pin(async move {
+            let found = txn
+                .execute(r#"{ UniqueIsolationProbe(filter: {key: {_eq: "a"}}, limit: 2) { n } }"#)
+                .await?;
+            let n = rows(&found, "UniqueIsolationProbe")[0]["n"]
+                .as_i64()
+                .unwrap_or(-1);
+            txn.execute(&format!(
+                "mutation {{ update_IsolationProbe(docID: \"{b}\", input: {{n: {}}}) {{ _docID }} }}",
+                n + 10
+            ))
+            .await?;
+            Ok(())
+        })
+    });
+    let observed = race(
+        &access,
+        Owner::Embedded,
+        &decide,
+        write(
+            &node,
+            format!("mutation {{ update_UniqueIsolationProbe(docID: \"{a}\", input: {{n: 5}}) {{ _docID }} }}"),
+        ),
+    )
+    .await;
+    node.shutdown().await.unwrap();
+    assert_eq!(observed.attempts, 2, "{observed:?}");
+}
+
 /// T1 reads the members of `grp = g` and writes an unrelated document C; T2
 /// changes one member as `change` names.
 async fn set_read_then_member_changes(owner: Owner, change: &'static str) -> Observed {

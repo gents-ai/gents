@@ -14,6 +14,8 @@ mod environment;
 mod error_holders;
 #[path = "write_owner_structure/executables.rs"]
 mod executables;
+#[path = "write_owner_structure/fences.rs"]
+mod fences;
 #[path = "write_owner_structure/fixtures.rs"]
 mod fixtures;
 #[path = "write_owner_structure/layers.rs"]
@@ -42,5 +44,7 @@ mod support;
 mod test_features;
 #[path = "write_owner_structure/test_layout.rs"]
 mod test_layout;
+#[path = "write_owner_structure/transaction_fences.rs"]
+mod transaction_fences;
 #[path = "write_owner_structure/where_clauses.rs"]
 mod where_clauses;

@@ -82,7 +82,7 @@ def taskFireRecovery : Family RecoveryInput RecoveryOutput where
       | .materialized => expected
       | .foreignNode => { expected with nodeDid := "other-node" }
     let decision := GoalAutomation.decideTaskFireRecovery expected ⟨observed, true, true⟩
-    let published := GoalAutomation.decideTaskPublication ⟨some "objective", none, none, none⟩ "node" "task" "fire"
+    let published := GoalAutomation.decideTaskPublication ⟨some "objective", none, none⟩ "node" "task" "fire"
     { disposition := dispositionWire decision.disposition
       recoversMaterialized := decision.recoveredRequestId.isSome &&
         decision.recoveredRequestId == published.requestId

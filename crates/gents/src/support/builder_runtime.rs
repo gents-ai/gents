@@ -7,12 +7,12 @@ use gents::{AgentBuilder, Gents, GentsBuilder};
 
 use super::agent_requests::{canonical_now, RequestActors, RequestSeed};
 use super::interrupt::{wait_for_runtime_ready, BootedAgent};
-use super::TestDb;
+use gents_store::test_support::TestStore;
 
 /// Enrols the fixture User, its Node and one Agent, then binds that Agent to
 /// `backend_id` with `max_concurrent` admission slots as the User.
 pub async fn builder_actors(
-    db: &TestDb,
+    db: &TestStore,
     backend_id: &str,
     endpoint: &str,
     model_name: &str,
@@ -34,7 +34,7 @@ pub async fn builder_actors(
 }
 
 async fn set_backend_capacity(
-    db: &TestDb,
+    db: &TestStore,
     actors: &RequestActors,
     backend_id: &str,
     max_concurrent: usize,
@@ -77,10 +77,10 @@ async fn set_backend_capacity(
 }
 
 /// A runtime builder for the test Node whose default is the fixture Agent.
-pub fn runtime_builder(db: &TestDb, actors: &RequestActors) -> GentsBuilder {
+pub fn runtime_builder(db: &TestStore, actors: &RequestActors) -> GentsBuilder {
     Gents::builder()
         .node(db.node.clone())
-        .backend_admission(db.home.backend_admission())
+        .backend_admission(db.backend_admission())
         .identity(db.node_identity.clone())
         .default_agent_did(actors.agent_did())
 }
@@ -93,7 +93,7 @@ pub fn fixture_agent(builder: GentsBuilder, actors: &RequestActors, name: &str) 
         .identity_binding(actors.fixture.binding.clone())
 }
 
-pub async fn spawn_runtime(db: &TestDb, runtime: Gents) -> BootedAgent {
+pub async fn spawn_runtime(db: &TestStore, runtime: Gents) -> BootedAgent {
     let node_did = runtime.node_did().to_string();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(runtime.run(shutdown_rx));

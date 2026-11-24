@@ -90,7 +90,7 @@ An intermittent correctness assertion (a lost update, message or stop) is a
 possible product defect until the model says otherwise.
 
 Waits follow events: subscribe to the documents watched (`rows_when` in
-`crates/gents/tests/support/live_inference.rs`) or await the owner's
+`crates/gents-store/src/test_support.rs`) or await the owner's
 notification, and fail with the last state seen once nothing changes for the
 suite-wide `STALL_CEILING`. Assert the order of events, never a per-test
 wall-clock budget.

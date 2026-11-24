@@ -180,6 +180,12 @@ impl AdmissionPermit {
 }
 
 impl StreamGuardLifecycle for AdmissionPermit {
+    fn observe_progress(&self) {
+        if let Some(permit) = &self.permit {
+            permit.record_progress();
+        }
+    }
+
     fn mark_stream_success(
         &mut self,
         usage: Option<ProviderCallUsage>,

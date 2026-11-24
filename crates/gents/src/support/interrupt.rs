@@ -98,17 +98,23 @@ pub async fn wait_for_runtime_ready_or_exit(
 /// The production runtime on the test Node's own identity, admitted through
 /// the home's backend protection, before its installed Agents are added with
 /// their identity bindings.
-pub fn managed_runtime_builder(db: &super::TestDb, default_agent_did: &str) -> gents::GentsBuilder {
+pub fn managed_runtime_builder(
+    db: &gents_store::test_support::TestStore,
+    default_agent_did: &str,
+) -> gents::GentsBuilder {
     gents::Gents::builder()
         .node(db.node.clone())
         .identity(db.node_identity.clone())
-        .backend_admission(db.home.backend_admission())
+        .backend_admission(db.backend_admission())
         .default_agent_did(default_agent_did)
         .tool_ceiling(gents_tools::surface::ToolCeiling::meta_only())
 }
 
 /// Runs a built runtime until it reports ready.
-pub async fn spawn_runtime(db: &super::TestDb, runtime: gents::Gents) -> BootedAgent {
+pub async fn spawn_runtime(
+    db: &gents_store::test_support::TestStore,
+    runtime: gents::Gents,
+) -> BootedAgent {
     let node_did = runtime.node_did().to_string();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let mut handle = tokio::spawn(runtime.run(shutdown_rx));

@@ -2,9 +2,9 @@ use crate::goal::{
     decide_goal_continuation, decide_model_goal_create, gate_goal_continuation,
     goal_continuation_materialization_step, goal_submission_step, next_goal_infrastructure_retries,
     observe_goal_agent_readiness, GoalAction, GoalAgentObservation, GoalAgentReadiness,
-    GoalAuditObservation, GoalContinuationAction, GoalContinuationFacts, GoalContinuationPhase,
-    GoalCreateDisposition, GoalCreateRequest, GoalCreationFingerprint, GoalDecision,
-    GoalFailureCause, GoalGatedDecision, GoalRequestTerminal, GoalState, GoalSubmissionState,
+    GoalContinuationAction, GoalContinuationFacts, GoalContinuationPhase, GoalCreateDisposition,
+    GoalCreateRequest, GoalCreationFingerprint, GoalDecision, GoalFailureCause, GoalGatedDecision,
+    GoalRequestTerminal, GoalState, GoalSubmissionState,
 };
 use gents_protocol::goal_status::GoalStatus;
 
@@ -92,7 +92,6 @@ fn generated_goal_transition_cases_fence_runtime_state_machine() {
     gents_lean_vocab::families::contracts_goal_transition::replay::<String, GoalStatus>(|case| {
         let pre = GoalState {
             status: case.pre_status,
-            blocked_audits: i64::try_from(case.pre_blocked_audits).expect("modeled audits fit i64"),
             wrapup_requested: case.pre_wrapup_requested,
             wrapup_completed: case.pre_wrapup_completed,
         };
@@ -101,34 +100,52 @@ fn generated_goal_transition_cases_fence_runtime_state_machine() {
             "resume" => GoalAction::Resume,
             "stop" => GoalAction::Stop,
             "complete" => GoalAction::Complete,
-            "blocked_audit_same_request" => {
-                GoalAction::BlockedAudit(GoalAuditObservation::SameRequest)
-            }
-            "blocked_audit_same_condition" => {
-                GoalAction::BlockedAudit(GoalAuditObservation::SameCondition)
-            }
-            "blocked_audit_new_condition" => {
-                GoalAction::BlockedAudit(GoalAuditObservation::NewCondition)
-            }
-            "operator_block" => GoalAction::OperatorBlock,
+            "block" => GoalAction::Block,
             "usage_limit" => GoalAction::UsageLimit,
             "budget_exhausted" => GoalAction::BudgetExhausted,
             "wrapup_finished" => GoalAction::WrapupFinished,
             "wrapup_abandoned" => GoalAction::WrapupAbandoned,
-            "clean_turn" => GoalAction::CleanTurn,
             other => panic!("unknown action {other:?} in Lean case {}", case.name),
         };
-        let stepped = pre.step_with_blocked_audit_threshold(
-            action,
-            i64::try_from(case.blocked_audit_threshold).expect("modeled threshold fits i64"),
-        );
+        let stepped = pre.step(action);
         let post = stepped.unwrap_or(pre);
         gents_lean_vocab::families::contracts_goal_transition::GoalTransitionOutput {
             accepted: stepped.is_some(),
             status: post.status,
-            blocked_audits: u64::try_from(post.blocked_audits).expect("audits are never negative"),
             wrapup_requested: post.wrapup_requested,
             wrapup_completed: post.wrapup_completed,
+        }
+    });
+}
+
+#[test]
+fn generated_goal_message_resume_cases_fence_message_resume() {
+    gents_lean_vocab::families::contracts_goal_message_resume::replay::<GoalStatus>(|case| {
+        let pre = GoalState {
+            status: case.status,
+            wrapup_requested: case.wrapup_requested,
+            wrapup_completed: case.wrapup_completed,
+        };
+        let resumed = pre.resume_on_message();
+        let post = resumed.unwrap_or(pre);
+        gents_lean_vocab::families::contracts_goal_message_resume::GoalMessageResumeOutput {
+            resumed: resumed.is_some(),
+            status: post.status,
+            wrapup_requested: post.wrapup_requested,
+            wrapup_completed: post.wrapup_completed,
+        }
+    });
+}
+
+#[test]
+fn generated_goal_budget_cases_fence_budget_reached() {
+    gents_lean_vocab::families::contracts_goal_budget::replay(|case| {
+        let budget = case
+            .token_budget
+            .map(|budget| i64::try_from(budget).expect("modeled budgets fit i64"));
+        let used = i64::try_from(case.tokens_used).expect("modeled usage fits i64");
+        gents_lean_vocab::families::contracts_goal_budget::GoalBudgetOutput {
+            reached: crate::goal::goal_budget_reached(budget, used),
         }
     });
 }
@@ -156,7 +173,6 @@ fn generated_goal_create_cases_fence_authority_and_idempotency() {
             objective_nonempty: case.objective_nonempty,
             token_budget: family_budget(case.token_budget.as_ref()),
             limits: gents_protocol::goal::GoalLimits {
-                blocked_audit_threshold: case.blocked_audit_threshold,
                 max_infrastructure_retries: case.max_infrastructure_retries,
             },
             goal_tools: case.goal_tools,
@@ -171,7 +187,6 @@ fn generated_goal_create_cases_fence_authority_and_idempotency() {
                 objective: existing.objective.clone(),
                 token_budget: family_budget(existing.token_budget.as_ref()),
                 limits: gents_protocol::goal::GoalLimits {
-                    blocked_audit_threshold: existing.blocked_audit_threshold,
                     max_infrastructure_retries: existing.max_infrastructure_retries,
                 },
             });

@@ -6,7 +6,7 @@ use gents::support::accepted_turn::{
     AcceptedTurnSpec,
 };
 use gents::support::fixtures::configure_agent_tools_as;
-use gents::support::{managed_agent_fixture, test_db};
+use gents::support::{managed_agent_fixture, trial_store};
 use gents_inference::test_support::scripted_backend::{StreamChunk, StreamPlan, StreamResponse};
 use gents_observe::client_projection::query::TranscriptWindow;
 use gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
@@ -130,7 +130,7 @@ fn automated_background(
 
 #[tokio::test]
 async fn live_background_completions_project_as_tool_attributed_activity() {
-    let db = test_db("bridge-background-projection").await;
+    let db = trial_store("bridge-background-projection").await;
     let fixture = managed_agent_fixture(&db).await;
     let agent_did = fixture.agent.did().to_owned();
     let request_id = "bridge-background-projection-request";
@@ -211,7 +211,7 @@ async fn live_background_completions_project_as_tool_attributed_activity() {
         db.node.clone(),
         identity,
         gents::DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
+            backend_admission: Some(db.backend_admission()),
             tool_ceiling: gents_tools::surface::ToolCeiling::readonly(),
             ..Default::default()
         },

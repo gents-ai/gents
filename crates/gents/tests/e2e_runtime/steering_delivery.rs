@@ -23,7 +23,7 @@ use crate::support::builder_runtime::{
 };
 use crate::support::fixtures::bind_managed_agent_backend;
 use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
-use crate::support::test_db;
+use crate::support::trial_store;
 use gents_inference::test_support::scripted_backend::{
     ScriptedBackend, StreamChunk, StreamPlan, StreamResponse, StreamScript,
 };
@@ -73,7 +73,7 @@ async fn wait_for_signed_request_terminal(access: &ConfigAccess, request_id: &st
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn steering_arriving_during_terminal_response_continues_same_physical_request() {
     let name = "steering-terminal-arrival";
-    let db = test_db(name).await;
+    let db = trial_store(name).await;
     let fixture = crate::support::managed_agent_fixture(&db).await;
     let did = db.node_identity.did();
     let user_did = fixture.user.did();
@@ -119,7 +119,7 @@ async fn steering_arriving_during_terminal_response_continues_same_physical_requ
         .unwrap();
     let agent = Gents::builder()
         .node(db.node.clone())
-        .backend_admission(db.home.backend_admission())
+        .backend_admission(db.backend_admission())
         .identity(db.node_identity.clone())
         .default_agent_did(agent_did)
         .tool_ceiling(gents_tools::surface::ToolCeiling::meta_only())
@@ -335,7 +335,7 @@ fn steering_queue(delivery: QueueDelivery, after: &str) -> RequestQueue {
 }
 
 fn held_runtime(
-    db: &crate::support::TestDb,
+    db: &gents_store::test_support::TestStore,
     actors: &RequestActors,
     entered: &Arc<Notify>,
     release: &Arc<Notify>,
@@ -356,7 +356,7 @@ fn held_runtime(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn signed_agent_steering_survives_a_forced_mid_turn_crash() {
     let name = "agent-steer-past-queue";
-    let db = test_db(name).await;
+    let db = trial_store(name).await;
     let backend = ScriptedBackend::start_with_plans(
         MODEL,
         vec![

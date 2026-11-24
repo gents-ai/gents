@@ -27,12 +27,13 @@ use crate::support::interrupt::BootedAgent;
 use crate::support::live_inference::{
     boot_live_agent_with_options, live_target, wait_for_request_terminal, LiveUser,
 };
-use crate::support::{test_db, TestDb};
+use crate::support::trial_store;
 use gents_store::test_support::rows_when;
 use gents_store::test_support::snapshot_reader::SnapshotReader;
+use gents_store::test_support::TestStore;
 
 struct LiveJobs {
-    db: TestDb,
+    db: TestStore,
     actors: JobActors,
     live: LiveUser,
     home: tempfile::TempDir,
@@ -44,7 +45,7 @@ struct LiveJobs {
 impl LiveJobs {
     async fn boot(name: &str) -> Self {
         let target = live_target().await;
-        let db = test_db(name).await;
+        let db = trial_store(name).await;
         let home = tokio::task::spawn_blocking(tempfile::tempdir)
             .await
             .unwrap()
@@ -332,7 +333,7 @@ async fn spawn_cwd_with_dotdot_symlink_or_outside_caller_cwd_fails_closed_with_n
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn job_plan_addressed_to_a_peer_agent_is_refused_and_the_turn_completes() {
     let h = LiveJobs::boot("live-job-peer-policy").await;
-    let peer = test_db("live-job-peer-target").await;
+    let peer = trial_store("live-job-peer-target").await;
     h.live
         .apply(
             "test.live_job.peer_target",

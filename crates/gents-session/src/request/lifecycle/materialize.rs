@@ -94,32 +94,49 @@ pub async fn write_pending_agent_request_with_lineage_workspace_and_conversation
         node,
         actor,
         pending,
-        request_id,
-        session_id,
+        PendingRequestIdentity {
+            request_id,
+            session_id,
+            retry_key: None,
+        },
         Some(identity),
     )
     .await
+    .map(|written| written.request)
+}
+
+/// The identities a pending request is written under. A `retry_key` makes the
+/// write idempotent: a request already holding it is returned instead.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PendingRequestIdentity<'a> {
+    pub request_id: Option<&'a str>,
+    pub session_id: Option<&'a str>,
+    pub retry_key: Option<&'a str>,
+}
+
+#[derive(Debug, Clone)]
+pub struct WrittenPendingRequest {
+    pub request: EnqueuedAgentRequest,
+    /// The request already existed under the retry key; nothing was written.
+    pub replayed: bool,
 }
 
 pub async fn write_pending_agent_request_with_identity(
     node: &std::sync::Arc<EmbeddedNode>,
     actor: ::identity::Did,
     pending: PendingAgentRequest<'_>,
-    request_id: Option<&str>,
-    session_id: Option<&str>,
+    ids: PendingRequestIdentity<'_>,
     identity: Option<&dyn gents_store::identity::NodeIdentity>,
-) -> Result<EnqueuedAgentRequest> {
-    let request_id = request_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let session_id = session_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let spec = pending_agent_request_spec(pending, &request_id, &session_id, None)?;
+) -> Result<WrittenPendingRequest> {
+    let fresh = |id: Option<&str>| {
+        id.map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
+    };
+    let request_id = fresh(ids.request_id);
+    let session_id = fresh(ids.session_id);
+    let spec = pending_agent_request_spec(pending, &request_id, &session_id, ids.retry_key)?;
     let identity = identity.context("request materialization requires a managed Agent identity")?;
     let access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
@@ -128,22 +145,73 @@ pub async fn write_pending_agent_request_with_identity(
     )?;
     let create = build_signed_request(spec, RequestSigner::Identity(identity)).await?;
     refuse_retired_reserved_cause(&create)?;
-    let doc_id = access
+    let (doc_id, replayed) = access
         .transact_write("lifecycle.materialize_pending", |txn| {
             let create = &create;
             Box::pin(async move {
+                if let Some(retry_key) = create.retry_key.as_deref() {
+                    if let Some(doc_id) =
+                        request_by_retry_key_in_txn(txn, retry_key, create).await?
+                    {
+                        return Ok((doc_id, true));
+                    }
+                }
                 super::runtime_publication::publish(txn, create)
                     .await
+                    .map(|doc_id| (doc_id, false))
                     .map_err(anyhow::Error::from)
             })
         })
         .await?;
 
-    Ok(EnqueuedAgentRequest {
-        doc_id,
-        request_id,
-        session_id,
+    Ok(WrittenPendingRequest {
+        request: EnqueuedAgentRequest {
+            doc_id,
+            request_id,
+            session_id,
+        },
+        replayed,
     })
+}
+
+/// The request already holding `retry_key`, which must be the one `create`
+/// describes. `retry_key` is a unique key, so this read is validated at commit
+/// like a read by id, and a concurrent insert of the key aborts the writer
+/// that commits second.
+async fn request_by_retry_key_in_txn(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    retry_key: &str,
+    create: &gents_protocol::request_admission::AgentRequestCreate,
+) -> Result<Option<String>> {
+    use gents_protocol::document_query::{
+        fields::agent_request as fields, Filter, Query, Selection,
+    };
+    let rendered = Query::select(
+        Selection::doc_id()
+            .field(fields::REQUEST_ID)
+            .field(fields::SESSION_ID),
+    )
+    .filter(Filter::eq(fields::RETRY_KEY, retry_key))
+    .limit(2)
+    .render();
+    let response = txn.run(&rendered).await?;
+    let rows = response
+        .pointer("/data/AgentRequest")
+        .and_then(serde_json::Value::as_array)
+        .context("retry key lookup omitted request rows")?;
+    anyhow::ensure!(rows.len() <= 1, "request retry key is not unique");
+    let Some(row) = rows.first() else {
+        return Ok(None);
+    };
+    anyhow::ensure!(
+        row["request_id"].as_str() == Some(create.request_id.as_str())
+            && row["session_id"].as_str() == Some(create.session_id.as_str()),
+        "request retry key {retry_key} names another request"
+    );
+    row["_docID"]
+        .as_str()
+        .map(|doc_id| Some(doc_id.to_owned()))
+        .context("retry key lookup returned a request without _docID")
 }
 
 pub fn pending_agent_request_spec(

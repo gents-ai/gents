@@ -1043,7 +1043,8 @@ async fn reconcile_data_plane(
         {
             continue;
         }
-        gents_store::config_client::ConfigAccess::transact_local_write(
+        let decision = store.decision_guard().await;
+        let written = gents_store::config_client::ConfigAccess::transact_local_write(
             node,
             Some(runtime.clone()),
             "p2p.upsert_enrollment_route",
@@ -1051,14 +1052,11 @@ async fn reconcile_data_plane(
                 let client_collections = &client_collections;
                 Box::pin(async move {
                     let fresh = store.load_projection_in_txn(txn).await?;
-                    let fence =
-                        exact_authorization_fence(&fresh, &route.member_did, &route.peer_id)?;
-                    anyhow::ensure!(
-                        fence
-                            .as_ref()
-                            .is_some_and(|fence| enrollment_route_matches_fence(route, fence)),
-                        "enrollment route generation changed before materialization"
-                    );
+                    if !exact_authorization_fence(&fresh, &route.member_did, &route.peer_id)?
+                        .is_some_and(|fence| enrollment_route_matches_fence(route, &fence))
+                    {
+                        return Ok(false);
+                    }
                     super::materialize_enrollment_desired_in_txn(
                         txn,
                         local_did,
@@ -1074,11 +1072,15 @@ async fn reconcile_data_plane(
                         client_collections,
                     )
                     .await?;
-                    Ok::<_, anyhow::Error>(())
+                    Ok::<_, anyhow::Error>(true)
                 })
             },
         )
         .await?;
+        drop(decision);
+        if !written && enrollment_rows.contains_key(peer_id) {
+            delete_enrollment_route(node, peer_id).await?;
+        }
     }
     for peer_id in enrollment_rows.keys() {
         if desired.contains_key(peer_id) {
@@ -1211,6 +1213,9 @@ impl EnrollmentRouteRow {
 
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod test_support;
+
+#[cfg(test)]
+mod revocation_race_tests;
 
 #[cfg(test)]
 mod tests {

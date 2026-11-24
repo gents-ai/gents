@@ -1,5 +1,5 @@
-use super::fake_llm::{ChatAction, FakeLlm};
 use anyhow::{ensure, Context, Result};
+use gents_inference::test_support::scripted_backend::{ScriptedBackend, StreamResponse};
 use gents_protocol::{request_input::RequestAttachment, request_lifecycle::RequestLifecycleState};
 use gents_store::config_client::ConfigAccess;
 use serde_json::{json, Value};
@@ -18,14 +18,13 @@ fn image_urls(request: &Value) -> Vec<&str> {
         .collect()
 }
 
-pub fn reply(request: &Value) -> Option<ChatAction> {
-    (!image_urls(request).is_empty())
-        .then(|| ChatAction::Sse(super::fake_llm::completion_text_sse(REPLY)))
+pub fn reply(request: &Value) -> Option<StreamResponse> {
+    (!image_urls(request).is_empty()).then(|| StreamResponse::text(REPLY))
 }
 
 pub async fn verify(
     access: &ConfigAccess,
-    provider: &FakeLlm,
+    provider: &ScriptedBackend,
     root: &Path,
     node: &str,
     session: &str,
@@ -136,7 +135,7 @@ pub async fn verify(
         .iter()
         .map(|image| format!("data:{};base64,{}", image.media_type, image.data))
         .collect::<Vec<_>>();
-    let requests = provider.captured_chat_requests();
+    let requests = provider.observed_completion_bodies();
     ensure!(
         requests.iter().any(|request| {
             image_urls(request) == expected.iter().map(String::as_str).collect::<Vec<_>>()

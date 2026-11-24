@@ -13,7 +13,8 @@ use gents_tools::surface::{SelfConfigProcessCeiling, SelfConfigToolConfig};
 use serde_json::{json, Value};
 
 use crate::support::agent_requests::RequestActors;
-use crate::support::{test_db, TestDb};
+use crate::support::trial_store;
+use gents_store::test_support::TestStore;
 
 fn test_plugins() -> Arc<gents_toolcalls::plugin::executor::PluginExecutor> {
     Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::default())
@@ -28,13 +29,13 @@ const SECRET: &str = "sk-secret-should-never-leak";
 /// The enrolled User configures the Node and its Agent; the self-config tool
 /// runs as that Agent's managed signer.
 struct SelfConfig {
-    db: TestDb,
+    db: TestStore,
     actors: RequestActors,
 }
 
 impl SelfConfig {
     async fn new(name: &str) -> Self {
-        let db = test_db(name).await;
+        let db = trial_store(name).await;
         let actors = RequestActors::new(&db).await;
         let fixture = Self { db, actors };
         fixture.seed().await;

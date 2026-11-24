@@ -46,7 +46,11 @@ enum PublicationChange {
 /// demoted, and a revocation applies while the store is still held. Once the
 /// installer releases, the demoted agent comes back without another event.
 async fn bounded_publication_case(change: PublicationChange) {
-    let endpoint = crate::support::mock_endpoint::MockModelEndpoint::start("default").unwrap();
+    let endpoint = gents_inference::test_support::scripted_backend::ScriptedBackend::start(
+        "default",
+        Vec::new(),
+    )
+    .unwrap();
     let fixture = plugin_runtime_fixture(
         "publication-epoch",
         "backend-publication-epoch",
@@ -169,7 +173,11 @@ async fn a_held_store_cannot_defer_a_tools_revocation_past_its_epoch() {
 
 #[tokio::test]
 async fn a_watcher_whose_home_is_replaced_stops_without_writing_into_it() {
-    let endpoint = crate::support::mock_endpoint::MockModelEndpoint::start("default").unwrap();
+    let endpoint = gents_inference::test_support::scripted_backend::ScriptedBackend::start(
+        "default",
+        Vec::new(),
+    )
+    .unwrap();
     let fixture = plugin_runtime_fixture(
         "publication-replaced-home",
         "backend-publication-replaced-home",
@@ -238,7 +246,11 @@ async fn a_watcher_whose_home_is_replaced_stops_without_writing_into_it() {
 /// through each stage and never stops, since nothing it captured is gone.
 #[tokio::test]
 async fn a_store_created_after_the_watcher_started_never_stops_it() {
-    let endpoint = crate::support::mock_endpoint::MockModelEndpoint::start("default").unwrap();
+    let endpoint = gents_inference::test_support::scripted_backend::ScriptedBackend::start(
+        "default",
+        Vec::new(),
+    )
+    .unwrap();
     let fixture = plugin_runtime_fixture(
         "publication-created-store",
         "backend-publication-created-store",
@@ -330,7 +342,11 @@ async fn a_store_created_after_the_watcher_started_never_stops_it() {
 /// comes back once the installer releases, with no configuration change.
 #[tokio::test]
 async fn a_store_held_through_startup_starts_degraded_and_recovers_on_release() {
-    let endpoint = crate::support::mock_endpoint::MockModelEndpoint::start("default").unwrap();
+    let endpoint = gents_inference::test_support::scripted_backend::ScriptedBackend::start(
+        "default",
+        Vec::new(),
+    )
+    .unwrap();
     let fixture = plugin_runtime_fixture(
         "publication-degraded-startup",
         "backend-publication-degraded-startup",
@@ -411,7 +427,11 @@ async fn a_store_held_through_startup_starts_degraded_and_recovers_on_release() 
 /// the supervisor: a parked slot's configuration matches the active one.
 #[tokio::test]
 async fn a_recovery_request_sends_an_unchanged_configuration() {
-    let endpoint = crate::support::mock_endpoint::MockModelEndpoint::start("default").unwrap();
+    let endpoint = gents_inference::test_support::scripted_backend::ScriptedBackend::start(
+        "default",
+        Vec::new(),
+    )
+    .unwrap();
     let fixture = plugin_runtime_fixture(
         "publication-recovery-wake",
         "backend-publication-recovery-wake",

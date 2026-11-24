@@ -1,5 +1,5 @@
 import Proofs.Runtime.BackendHealth.Scheduling
-import Proofs.Runtime.BackendHealth.Transition
+import Proofs.Runtime.BackendHealth.Observation
 
 /-! One probe cycle over the backends listed as enabled for this node: which
 measurements it records, which it keeps, which change routing, and which
@@ -7,18 +7,27 @@ shared documents it promotes from `unknown` to `healthy`. -/
 
 namespace Proofs.BackendHealth
 
-/-- What a cycle can learn about a listed backend. A node-OAuth backend learns
-nothing without a probe context: it is neither measured nor observed. -/
+/-- What a cycle can learn about a listed backend. A busy backend's models
+endpoint gives no answer before the deadline while a call admitted to it
+receives response items. A node-OAuth backend learns nothing without a probe
+context: it is neither measured nor observed. -/
 inductive ProbeTarget where
   | reachable
   | unreachable
+  | busy
   | nodeOauth
   deriving DecidableEq, Repr
 
-def ProbeTarget.event : ProbeTarget → Option Event
-  | .reachable => some .probeSuccess
-  | .unreachable => some .probeFail
+/-- The probe a cycle makes of the target: how it ended, and whether an
+admitted call progressed while it ran. -/
+def ProbeTarget.probe : ProbeTarget → Option (ProbeOutcome × Bool)
+  | .reachable => some (.answered, false)
+  | .unreachable => some (.failed, false)
+  | .busy => some (.timedOut, true)
   | .nodeOauth => none
+
+def ProbeTarget.event (target : ProbeTarget) : Option (Option Event) :=
+  target.probe.map fun probe => probeEvent probe.1 probe.2
 
 /-- A measurement remembers the probe inputs (`revision`) it was taken with;
 `none` is a measurement recorded without them. -/
@@ -71,19 +80,21 @@ structure Measured where
   deriving DecidableEq, Repr
 
 /-- A successful probe records a catalog and promotes a shared document whose
-status is still `unknown`; a backend that is not due keeps its measurement. -/
-def measure (entries : List Entry) (b : CycleBackend) (event : Event) (K : Threshold) :
+status is still `unknown`; a backend that is not due, or whose probe supplies
+no event, keeps its measurement. -/
+def measure (entries : List Entry) (b : CycleBackend) (event : Option Event) (K : Threshold) :
     Measured :=
   let prior := Entry.find? entries b.id
-  if b.due then
-    let recorded := recordEvent prior b.revision event K
-    { entry := some (recorded.model, some b.revision)
-      flipped := recorded.flipped
-      promotable := event == .probeSuccess && b.statusUnknown
-      catalogued := event == .probeSuccess }
-  else
-    { entry := prior.map fun p => (p.model, p.revision)
-      flipped := false, promotable := false, catalogued := false }
+  match b.due, event with
+  | true, some event =>
+      let recorded := recordEvent prior b.revision event K
+      { entry := some (recorded.model, some b.revision)
+        flipped := recorded.flipped
+        promotable := event == .probeSuccess && b.statusUnknown
+        catalogued := event == .probeSuccess }
+  | _, _ =>
+      { entry := prior.map fun p => (p.model, p.revision)
+        flipped := false, promotable := false, catalogued := false }
 
 structure CycleResult where
   entries : List Entry
@@ -140,7 +151,7 @@ theorem cycle_drops_entries_for_backends_no_longer_enabled (entries : List Entry
   obtain ⟨⟨model, revision⟩, _, he⟩ := Option.map_eq_some'.mp hentry
   refine ⟨b, hb, by rw [← he, hid], ?_⟩
   intro htarget
-  simp [htarget, ProbeTarget.event] at hev
+  simp [htarget, ProbeTarget.event, ProbeTarget.probe] at hev
 
 theorem oauth_kinds_are_skipped_without_a_probe_context (entries : List Entry)
     (backends : List CycleBackend) (K : Threshold) (id : Nat)
@@ -153,20 +164,30 @@ theorem oauth_kinds_are_skipped_without_a_probe_context (entries : List Entry)
   subst hm
   cases ht : b.target with
   | reachable => rfl
-  | unreachable =>
-      simp [ht, ProbeTarget.event] at hev
+  | unreachable | busy =>
+      simp [ht, ProbeTarget.event, ProbeTarget.probe, probeEvent] at hev
       subst hev
       simp only [measure] at hprom
-      split at hprom <;> simp at hprom
-  | nodeOauth => simp [ht, ProbeTarget.event] at hev
+      split at hprom <;> simp_all
+  | nodeOauth => simp [ht, ProbeTarget.event, ProbeTarget.probe] at hev
 
 theorem scheduled_cycles_preserve_health_across_observations_and_unrelated_edits
-    (entries : List Entry) (b : CycleBackend) (event : Event) (K : Threshold)
+    (entries : List Entry) (b : CycleBackend) (event : Option Event) (K : Threshold)
     (notDue : b.due = false) :
     measure entries b event K =
       { entry := (Entry.find? entries b.id).map fun p => (p.model, p.revision)
         flipped := false, promotable := false, catalogued := false } := by
   simp [measure, notDue]
+
+/-- A probe that supplies no event, as a busy backend's does, leaves the
+backend's measurement as it was: neither failure evidence nor a success. -/
+theorem busy_backends_keep_their_measurement (entries : List Entry) (b : CycleBackend)
+    (K : Threshold) :
+    measure entries b none K =
+      { entry := (Entry.find? entries b.id).map fun p => (p.model, p.revision)
+        flipped := false, promotable := false, catalogued := false } := by
+  rcases b with ⟨id, revision, target, statusUnknown, due⟩
+  cases due <;> rfl
 
 theorem subscription_probe_account_changes_retire_previous_measurement
     (entry : Entry) (revision : Nat) (event : Event) (K : Threshold)

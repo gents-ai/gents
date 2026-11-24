@@ -42,5 +42,7 @@ mod session_input_edit;
 #[path = "e2e_runtime/enrollment_renewal.rs"]
 mod enrollment_renewal;
 
+#[path = "e2e_runtime/goal_stop_conditions.rs"]
+mod goal_stop_conditions;
 #[path = "e2e_runtime/queued_user_turns.rs"]
 mod queued_user_turns;

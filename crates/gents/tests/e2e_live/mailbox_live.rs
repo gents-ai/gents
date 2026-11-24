@@ -20,12 +20,13 @@ use crate::support::agent_requests::{canonical_now, submit_user_request, Request
 use crate::support::live_inference::{
     bind_target, boot_live_agent, live_target, terminal_assistant_answer, wait_for_request_terminal,
 };
-use crate::support::{test_db, TestDb};
+use crate::support::trial_store;
+use gents_store::test_support::TestStore;
 
 const SESSION: &str = "live-mailbox-session";
 const REQUEST: &str = "live-mailbox-request";
 
-pub(crate) async fn configure(db: &TestDb, ask: bool) -> RequestActors {
+pub(crate) async fn configure(db: &TestStore, ask: bool) -> RequestActors {
     let target = live_target().await;
     let actors = bind_target(db, &target).await;
     let mut declaration = canonical_mailbox_write_decl();
@@ -74,7 +75,7 @@ pub(crate) async fn file(actors: &RequestActors, payload: serde_json::Value) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
-    let db = test_db("live-mailbox-filing").await;
+    let db = trial_store("live-mailbox-filing").await;
     let actors = configure(&db, false).await;
     let runtime = boot_live_agent(&db, db.node_identity.clone())
         .await
@@ -104,7 +105,7 @@ async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
         .await
         .trim()
         .is_empty());
-    let outsider_path = db.data_path().join("outsider.key");
+    let outsider_path = db.path().join("outsider.key");
     let outsider = tokio::task::spawn_blocking(move || {
         gents_store::identity::KeyIdentity::load_or_create(outsider_path, None)
     })
@@ -138,7 +139,7 @@ async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_optional_question_skip_reaches_the_asking_session() {
-    let db = test_db("live-mailbox-question").await;
+    let db = trial_store("live-mailbox-question").await;
     let actors = configure(&db, true).await;
     let runtime = boot_live_agent(&db, db.node_identity.clone())
         .await
@@ -290,7 +291,7 @@ async fn submit_answer(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_question_answered_while_its_session_is_busy_is_queued_behind_the_turn() {
-    let db = test_db("live-mailbox-busy").await;
+    let db = trial_store("live-mailbox-busy").await;
     let actors = configure(&db, true).await;
     let runtime = boot_live_agent(&db, db.node_identity.clone())
         .await

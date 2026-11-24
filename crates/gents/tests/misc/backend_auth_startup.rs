@@ -4,7 +4,7 @@ use gents::{DocumentRuntimeOptions, Gents};
 use gents_tools::surface::ToolCeiling;
 
 use crate::support::fixtures::{bind_default_agent_backend, test_agent};
-use crate::support::mock_endpoint::MockModelEndpoint;
+use gents_inference::test_support::scripted_backend::ScriptedBackend;
 
 #[tokio::test]
 async fn document_runtime_uses_backend_specific_api_key_env_var() -> Result<()> {
@@ -45,11 +45,12 @@ async fn document_runtime_uses_backend_specific_api_key_env_var() -> Result<()> 
     }
 
     let _env_guard = ENV_VAR_LOCK.lock().await;
-    let db = crate::support::test_db("startup-probe-backend-auth").await;
+    let db = crate::support::trial_store("startup-probe-backend-auth").await;
     let identity = db.node_identity.clone();
     let node = db.node.clone();
-    let mock_endpoint =
-        MockModelEndpoint::start_with_required_bearer("default", Some("backend-key"))?;
+    let mock_endpoint = ScriptedBackend::builder("default")
+        .require_bearer(Some("backend-key"))
+        .start()?;
     bind_default_agent_backend(&db, "backend-startup-auth", mock_endpoint.endpoint()).await;
 
     let user = crate::support::load_managed_fixture_user(&db).await;
@@ -67,7 +68,7 @@ async fn document_runtime_uses_backend_specific_api_key_env_var() -> Result<()> 
         node.clone(),
         identity.clone(),
         DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
+            backend_admission: Some(db.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
