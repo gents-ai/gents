@@ -230,7 +230,7 @@ impl LiveJobs {
 
     async fn child_rows(&self, row: &Value) -> Vec<Value> {
         self.live.access.execute(&format!(
-            r#"{{ AgentRequest(filter: {{caused_by_parent_tool_call_doc_id: {{_eq: "{}"}}}}) {{_docID request_id lifecycle_state failure_reason interrupt_requested_at}} }}"#,
+            r#"{{ AgentRequest(filter: {{caused_by_parent_tool_call_doc_id: {{_eq: "{}"}}}}) {{_docID request_id lifecycle_state failure_reason}} }}"#,
             escape_graphql_string(row["_docID"].as_str().unwrap()),
         )).await.unwrap()["data"]["AgentRequest"].as_array().unwrap().clone()
     }

@@ -24,7 +24,9 @@ describe("Transcript cancel cause surfacing", () => {
               source: "requestInterrupt",
               confidence: "direct",
               at: "2026-05-20T10:32:14Z",
-              evidence: ["AgentRequest.interrupt_requested_at = 2026-05-20T10:32:14Z"],
+              evidence: [
+                'root AgentRequest.lifecycle_state = "interrupted" at 2026-05-20T10:32:14Z',
+              ],
             },
           },
         ],
@@ -32,7 +34,7 @@ describe("Transcript cancel cause surfacing", () => {
     ];
     render(<MessageList timelineItems={items} />);
     expect(screen.getByText(/user cancelled/i)).toBeInTheDocument();
-    expect(screen.getByText(/AgentRequest.interrupt_requested_at/)).toBeInTheDocument();
+    expect(screen.getByText(/root AgentRequest.lifecycle_state/)).toBeInTheDocument();
   });
 
   it("does not render a badge when cancelCause is missing", () => {

@@ -97,7 +97,7 @@ fn allow_create_rejects_a_dangling_symlink_leaf() {
         .resolve_path_allow_create("notes.txt")
         .expect_err("a dangling symlink must not be treated as a creatable leaf");
     assert!(
-        error.to_string().contains("canonicalizing path ancestor"),
+        error.to_string().contains("outside the allowed tool root"),
         "{error:#}"
     );
 }

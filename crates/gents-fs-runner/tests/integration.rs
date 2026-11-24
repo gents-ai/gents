@@ -1,5 +1,8 @@
 mod support;
 
+#[path = "beneath.rs"]
+mod beneath;
+
 #[path = "gitignore_filtering.rs"]
 mod gitignore_filtering;
 #[path = "glob_prefix.rs"]

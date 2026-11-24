@@ -1,4 +1,4 @@
-type AgentToolControl @policy(id: "$household", resource: "children") {
+type AgentToolControl @policy(id: "$household", resource: "children") @index(fields: ["client_did", "intent_id"], unique: true) {
     client_did: String @index @immutable
     intent_id: String @index @immutable
     intent_json: String @immutable

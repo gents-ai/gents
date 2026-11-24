@@ -657,6 +657,7 @@ async fn install_session_fixture(
                 &json!({"input": input}), gents_protocol::schemas::AGENT_SESSION,
             ).await?;
             let doc = gents_store::graphql::created_doc_id(&response, "AgentSession")?;
+            gents_session::session::interrupt_marker::create_in_txn(txn, &doc, &session.node_did, &session.session_id).await?;
             gents_session::session::stage_session_relationships_in_txn(txn, &doc, &agent_doc, target).await?;
             for reader in readers {
                 txn.add_actor_relationship("AgentSession", &doc, "reader", reader).await?;

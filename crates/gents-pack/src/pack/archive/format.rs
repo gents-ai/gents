@@ -1,9 +1,11 @@
 use std::io::{self, BufRead, Read, Write};
+#[cfg(test)]
 use std::path::Path;
 
 use anyhow::{ensure, Context, Result};
 use flate2::bufread::GzDecoder;
 use flate2::{Compression, GzBuilder};
+use gents_fs_runner::beneath::{OpenRoot, RootDir};
 use serde::{Deserialize, Serialize};
 
 use crate::pack::core_packs::{
@@ -307,11 +309,11 @@ fn read_header(entry: &mut impl Read) -> Result<PackHeader> {
     serde_json::from_slice(&bytes).with_context(|| format!("{HEADER_ENTRY} is malformed"))
 }
 
-pub fn write_pack(dir: &Path, out: impl Write) -> Result<PackHeader> {
-    write_pack_bounded(dir, out, Bounds::default())
+pub fn write_pack(dir: impl OpenRoot, out: impl Write) -> Result<PackHeader> {
+    write_pack_bounded(&dir.open_root()?, out, Bounds::default())
 }
 
-fn write_pack_bounded(dir: &Path, out: impl Write, bounds: Bounds) -> Result<PackHeader> {
+fn write_pack_bounded(dir: &RootDir, out: impl Write, bounds: Bounds) -> Result<PackHeader> {
     write_pack_validated(dir, out, bounds, None, |manifest| {
         validate_manifest(&manifest.name, manifest)
     })
@@ -321,24 +323,38 @@ fn write_pack_bounded(dir: &Path, out: impl Write, bounds: Bounds) -> Result<Pac
 /// install of the directory pack it: a manifest that declares no
 /// `gents_version` is packed declaring `release`, the packing runtime's own,
 /// and the digest covers the manifest as packed.
-pub fn write_built_pack(dir: &Path, out: impl Write, release: &Release) -> Result<PackHeader> {
-    write_pack_validated(dir, out, Bounds::default(), Some(release), |manifest| {
-        validate_manifest(&manifest.name, manifest)
-    })
+pub fn write_built_pack(
+    dir: impl OpenRoot,
+    out: impl Write,
+    release: &Release,
+) -> Result<PackHeader> {
+    write_pack_validated(
+        &dir.open_root()?,
+        out,
+        Bounds::default(),
+        Some(release),
+        |manifest| validate_manifest(&manifest.name, manifest),
+    )
 }
 
 /// [`pack_dir`] for a pack built for a Gents release this runtime does not
 /// load: a fixture of an archive another runtime built.
 #[cfg(any(test, feature = "test-fixtures"))]
-pub fn pack_dir_for_any_interface(dir: &Path) -> Result<(Vec<u8>, PackHeader)> {
+pub fn pack_dir_for_any_interface(dir: impl OpenRoot) -> Result<(Vec<u8>, PackHeader)> {
     let mut bytes = Vec::new();
-    let header = write_pack_validated(dir, &mut bytes, Bounds::default(), None, |manifest| {
-        let current = PackManifest {
-            gents_version: None,
-            ..manifest.clone()
-        };
-        validate_manifest(&current.name, &current)
-    })?;
+    let header = write_pack_validated(
+        &dir.open_root()?,
+        &mut bytes,
+        Bounds::default(),
+        None,
+        |manifest| {
+            let current = PackManifest {
+                gents_version: None,
+                ..manifest.clone()
+            };
+            validate_manifest(&current.name, &current)
+        },
+    )?;
     Ok((bytes, header))
 }
 
@@ -362,7 +378,7 @@ fn packed_manifest<'a>(stamped: Option<&'a [u8]>, path: &str) -> Option<&'a [u8]
 }
 
 fn write_pack_validated(
-    dir: &Path,
+    dir: &RootDir,
     out: impl Write,
     bounds: Bounds,
     stamp: Option<&Release>,
@@ -450,7 +466,7 @@ fn write_pack_validated(
     ensure!(
         again.finish() == header.digest,
         "a file in {} changed while the pack was being written; build it again",
-        dir.display()
+        dir.path().display()
     );
     let counted = builder
         .into_inner()
@@ -466,7 +482,7 @@ fn write_pack_validated(
     Ok(header)
 }
 
-pub fn pack_dir(dir: &Path) -> Result<(Vec<u8>, PackHeader)> {
+pub fn pack_dir(dir: impl OpenRoot) -> Result<(Vec<u8>, PackHeader)> {
     let mut bytes = Vec::new();
     let header = write_pack(dir, &mut bytes)?;
     Ok((bytes, header))
@@ -474,13 +490,13 @@ pub fn pack_dir(dir: &Path) -> Result<(Vec<u8>, PackHeader)> {
 
 /// [`pack_dir`] as [`write_built_pack`] packs it, so a check reports the
 /// digest the build produces.
-pub fn pack_built_dir(dir: &Path, release: &Release) -> Result<(Vec<u8>, PackHeader)> {
+pub fn pack_built_dir(dir: impl OpenRoot, release: &Release) -> Result<(Vec<u8>, PackHeader)> {
     let mut bytes = Vec::new();
     let header = write_built_pack(dir, &mut bytes, release)?;
     Ok((bytes, header))
 }
 
-fn open_declared(dir: &Path, path: &str) -> Result<(std::fs::File, u64)> {
+fn open_declared(dir: &RootDir, path: &str) -> Result<(std::fs::File, u64)> {
     let file = crate::pack::open_pack_asset(dir, path).with_context(|| {
         format!(
             "the pack declares {path:?} and it is unreadable; a plugin's artifact has to be \
@@ -611,6 +627,6 @@ where
 #[cfg(test)]
 pub(super) fn write_pack_with(dir: &Path, bounds: Bounds) -> Result<(Vec<u8>, PackHeader)> {
     let mut bytes = Vec::new();
-    let header = write_pack_bounded(dir, &mut bytes, bounds)?;
+    let header = write_pack_bounded(&dir.open_root()?, &mut bytes, bounds)?;
     Ok((bytes, header))
 }

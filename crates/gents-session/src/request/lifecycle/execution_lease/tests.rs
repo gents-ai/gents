@@ -1785,7 +1785,7 @@ async fn session_interrupt_finds_parked_backend_request() {
         .unwrap();
     assert_eq!(interrupted.as_deref(), Some(request.request_id.as_str()));
     assert!(
-        crate::request::interrupt::fetch_interrupt_requested_at_by_doc_id_with_access(
+        crate::request::interrupt::request_interrupted_at_by_doc_id_with_access(
             &access,
             &request.doc_id
         )
@@ -1811,13 +1811,7 @@ async fn session_interrupt_finds_parked_backend_request() {
 #[tokio::test]
 async fn backend_park_does_not_release_lease_when_interrupted() {
     let (_node, _db, _identity, _agent, access, mut lifecycle) = parked_fixture().await;
-    let interrupted_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-    agent_update_request(
-        &access,
-        &lifecycle.request().doc_id,
-        &format!(r#"interrupt_requested_at: "{interrupted_at}""#),
-    )
-    .await;
+    crate::test_support::interrupt_request_doc(&access, &lifecycle.request().doc_id).await;
     assert!(!lifecycle.park_for_backend().await.unwrap());
     assert!(lifecycle.execution_generation().is_ok());
     assert_eq!(lifecycle.state, LocalLifecycleState::Streaming);
@@ -1905,13 +1899,7 @@ async fn parked_request_can_be_interrupted_once_without_a_live_lease() {
             .unwrap(),
         TerminalizeResult::Lost
     );
-    let interrupted_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-    agent_update_request(
-        &access,
-        &doc_id,
-        &format!(r#"interrupt_requested_at: "{interrupted_at}""#),
-    )
-    .await;
+    crate::test_support::interrupt_request_doc(&access, &doc_id).await;
     assert_eq!(
         terminalize_parked_request(&access, &doc_id, &generation, true)
             .await
@@ -1936,13 +1924,7 @@ async fn watcher_settles_interrupted_parked_work() {
     let (node, _db, identity, agent, access, mut lifecycle) = parked_fixture().await;
     let request = lifecycle.request().clone();
     assert!(lifecycle.park_for_backend().await.unwrap());
-    let interrupted_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-    agent_update_request(
-        &access,
-        &request.doc_id,
-        &format!(r#"interrupt_requested_at: "{interrupted_at}""#),
-    )
-    .await;
+    crate::test_support::interrupt_request_doc(&access, &request.doc_id).await;
     let mut watcher = crate::request::watcher::DefraWatcher::for_agents(
         node.clone(),
         &request.node_did,
@@ -2378,4 +2360,108 @@ async fn lean_periodic_renewal_waits_for_abandoned_native_operation_before_next_
         );
         case.check(views);
     }
+}
+
+/// Lean `SessionQueue.input_after_the_finish_read_is_a_later_turn`: an input
+/// that commits after the natural finish read the pending queue and before the
+/// finish commits does not refuse the finish; it stays pending and the claim
+/// gate admits it as the next turn.
+#[tokio::test]
+async fn input_committed_during_the_natural_finish_runs_as_the_next_turn() {
+    let (node, home, identity, agent) = test_node().await;
+    let access = agent_access(&node, &identity, &agent);
+    let mut lifecycle = ClaimedRequest::self_signed(&home, &agent)
+        .backend("lease-test")
+        .drive(Stage::Executing)
+        .await
+        .lifecycle;
+    let agent_identity = agent_identity(&identity, &agent);
+    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
+        node.clone(),
+        agent_identity.as_ref(),
+        Duration::ZERO,
+    )
+    .unwrap();
+    writer
+        .start_provider_attempt(
+            &lifecycle.request.doc_id,
+            0,
+            0,
+            "inference.1".parse().unwrap(),
+        )
+        .await;
+    let saved = writer
+        .publish_native_turn(
+            &lifecycle,
+            0,
+            0,
+            &gents_protocol::message::Message::assistant("saved provider response"),
+        )
+        .await
+        .unwrap();
+    let mut late = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        "late-input",
+        gents_protocol::request_admission::RequestScope::new(
+            identity.did(),
+            &agent.agent_did,
+            &agent.agent_did,
+            &lifecycle.request.session_id,
+        ),
+        "late input",
+        "interactive",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+            &agent.agent_did,
+        ),
+    );
+    crate::request::admission::sign_agent_request_create(agent_identity.as_ref(), &mut late)
+        .await
+        .unwrap();
+    let mutation = late.graphql_mutation().unwrap();
+    let late_doc_id = std::sync::Mutex::new(None);
+    let (finished, paused) =
+        gents_store::config_client::ConfigApplyTxn::with_concurrent_write_before_commit(
+            lifecycle.finish_natural_turn(&saved.message_doc_id, &[]),
+            async {
+                let response = access
+                    .write("test.input_during_natural_finish", &mutation)
+                    .await
+                    .unwrap();
+                *late_doc_id.lock().unwrap() =
+                    Some(gents_store::graphql::created_doc_id(&response, "AgentRequest").unwrap());
+            },
+        )
+        .await;
+    assert!(paused, "the late input must commit inside the finish");
+    assert!(finished.unwrap(), "the finish commits over the late input");
+    assert_eq!(
+        request_row(&access, &lifecycle.request.doc_id)
+            .await
+            .lifecycle_state,
+        Some(RequestLifecycleState::Completed)
+    );
+    let late_doc_id = late_doc_id.into_inner().unwrap().unwrap();
+    let late_row = request_row(&access, &late_doc_id).await;
+    assert_eq!(
+        late_row.lifecycle_state,
+        Some(RequestLifecycleState::Pending)
+    );
+    let signed = access
+        .execute(&format!(
+            r#"{{ AgentRequest(docID: "{}") {{ {} }} }}"#,
+            gents_store::graphql::escape_graphql_string(&late_doc_id),
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
+        ))
+        .await
+        .unwrap();
+    let signed: gents_protocol::row::AgentRequestRow =
+        serde_json::from_value(signed["data"]["AgentRequest"][0].clone()).unwrap();
+    let mut next =
+        RequestLifecycle::new_with_node_did(node.clone(), signed.try_into().unwrap(), 60);
+    next.bind_managed_agent(agent_identity.as_ref()).unwrap();
+    assert_eq!(
+        next.claim_with_identity().await.unwrap(),
+        ClaimOutcome::Claimed
+    );
 }

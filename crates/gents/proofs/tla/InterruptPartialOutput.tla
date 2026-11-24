@@ -3,7 +3,7 @@
 \* crates: gents, gents-loop, gents-session
 (***************************************************************************)
 (* Text a provider has already handed to the owned loop when its request   *)
-(* is interrupted (#3820). One provider attempt streams `Chunks` text      *)
+(* is interrupted. One provider attempt streams `Chunks` text              *)
 (* chunks to the daemon's inference drive; a requester may latch an        *)
 (* interrupt at any moment; the drive then drops the loop stream, drains   *)
 (* what it holds and the request's terminal owner records the outcome.     *)
@@ -28,7 +28,7 @@
 (*    outside the drive's select and so never cancelled: first visible     *)
 (*    text is flushed at once as an `AgentOutputSegment`, later text waits *)
 (*    for the batch deadline (`BatchFlush`, the drive's flush branch).     *)
-(*  - The interrupt latch (`interrupt.rs` `interrupt_request_matching_in_txn`) *)
+(*  - The interrupt (`interrupt.rs`: it bumps the session's marker)        *)
 (*    and its observer (`observe_request_interrupt`), which signals the     *)
 (*    drive's watch.                                                       *)
 (*  - The drive's interrupt branch, biased before the stream branch: it    *)
@@ -67,7 +67,7 @@ VARIABLES
   durable,        \* chunks covered by committed output segments
   drive,          \* "select" | "processing" | "draining" | "drained"
   cause,          \* why the drive left its select: "none" | "interrupt" | "eof"
-  latched,        \* interrupt_requested_at is committed
+  latched,        \* the session's interrupt marker passed the claim's generation
   observed,       \* the observer has signalled the drive's interrupt watch
   lifecycle,      \* "processing" | "interrupted" | "failed"
   terminalWrites  \* terminal CASes won

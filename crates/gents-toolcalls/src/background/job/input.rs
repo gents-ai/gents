@@ -1664,6 +1664,21 @@ pub(crate) mod tests {
                    "agent_did": agent_did(), "created_at": now}),
         )
         .await;
+        owner
+            .transact_write("test.job.session_marker", |txn| {
+                let session_doc = &session_doc;
+                Box::pin(async move {
+                    gents_session::session::interrupt_marker::create_in_txn(
+                        txn,
+                        session_doc,
+                        node_did(),
+                        "session-1",
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap();
         let agent_doc = doc_id_of(&owner, "Agent", "agent_did", agent_did()).await;
         owner
             .add_actor_relationship("Agent", &agent_doc, "executor", &agent_actor())

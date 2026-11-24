@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+use gents_fs_runner::beneath::{Intent, LocateTarget, Located, RootDir};
 use serde::Serialize;
 use serde_json::{json, Map, Value};
 
@@ -63,17 +64,18 @@ struct Plan {
 pub async fn export_pack(
     access: &ConfigAccess,
     node_did: &str,
-    dir: &Path,
+    dir: impl LocateTarget,
     name: &str,
     namespace: &str,
     selection: &ExportSelection,
 ) -> Result<ExportReport> {
     let name = pack_name(name);
     Names::new(&name, namespace)?;
+    let dir = dir.locate_target(Intent::Create)?;
     anyhow::ensure!(
         !dir.exists(),
         "{} already exists; pack export writes a new pack directory",
-        dir.display()
+        dir.path().display()
     );
     anyhow::ensure!(
         is_valid_pack_name(namespace),
@@ -104,15 +106,14 @@ pub async fn export_pack(
         schemas,
     };
     let owner = node_did.to_owned();
-    let target = dir.to_path_buf();
-    let written = tokio::task::spawn_blocking(move || write(&target, &owner, plan))
+    let written = tokio::task::spawn_blocking(move || write(&dir, &owner, plan))
         .await
         .context("pack export task did not finish")??;
-    let check = check_dir(&written.dir).await;
+    let check = check_dir(&written.root).await;
     Ok(ExportReport {
         pack: written.pack,
         namespace: written.namespace,
-        dir: written.dir,
+        dir: written.root.path().to_path_buf(),
         selected: written.selected,
         by_reference: written.by_reference,
         agents: written.agents,
@@ -127,7 +128,7 @@ pub async fn export_pack(
 struct Written {
     pack: String,
     namespace: String,
-    dir: PathBuf,
+    root: RootDir,
     selected: Vec<String>,
     by_reference: Vec<PulledByReference>,
     agents: BTreeMap<String, String>,
@@ -194,7 +195,7 @@ fn replace_strings(value: &mut Value, from: &str, to: &str) {
     }
 }
 
-fn write(dir: &Path, node_did: &str, plan: Plan) -> Result<Written> {
+fn write(dir: &Located, node_did: &str, plan: Plan) -> Result<Written> {
     let Plan {
         name,
         namespace,
@@ -377,7 +378,7 @@ fn write(dir: &Path, node_did: &str, plan: Plan) -> Result<Written> {
             ux: false,
         },
     )?;
-    let mut pack = PackEdit::load(&report.dir)?;
+    let mut pack = PackEdit::load(&report.root)?;
     for (relative, text) in &sidecars {
         pack.create_file(relative, text)?;
     }
@@ -416,16 +417,17 @@ fn write(dir: &Path, node_did: &str, plan: Plan) -> Result<Written> {
     }
     pack.manifest["description"] = json!(format!("{} pack, exported from a live node.", name));
     pack.save()?;
-    std::fs::write(
-        pack.dir.join("README.md"),
-        readme(&name, &config, &inference_slots, &schema_paths),
-    )
-    .context("writing README.md")?;
+    pack.root()
+        .write(
+            "README.md",
+            readme(&name, &config, &inference_slots, &schema_paths),
+        )
+        .context("writing README.md")?;
 
     Ok(Written {
         pack: name,
         namespace,
-        dir: pack.dir.clone(),
+        root: pack.root().clone(),
         selected: closure.selected,
         by_reference: closure.pulled,
         agents: agent_slots

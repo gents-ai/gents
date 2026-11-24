@@ -115,7 +115,7 @@ function requestDiagnostics(
       failureReason: null,
       createdAt: "2026-06-24T00:00:00Z",
       claimedAt: "2026-06-24T00:00:01Z",
-      interruptRequestedAt: null,
+      interruptGeneration: null,
       validUntil: null,
     },
     response: {

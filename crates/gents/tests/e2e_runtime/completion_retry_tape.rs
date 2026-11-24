@@ -797,7 +797,6 @@ async fn fetch_timeline_request(actors: &RequestActors, request_id: &str) -> Tim
                 failure_reason
                 created_at
                 retry_count
-                interrupt_requested_at
                 caused_by_parent_request_id
                 caused_by_parent_tool_call_id
             }}

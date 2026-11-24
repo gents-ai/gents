@@ -152,9 +152,13 @@ async fn run_file_action(
         .await;
     }
     let path = resolve_inbound_path(context, file).map_err(policy)?;
-    let text = std::fs::read_to_string(&path).map_err(|err| {
-        ToolError::reported_failure(FailureClass::ArgumentInvalid, err.to_string())
-    })?;
+    let text = context
+        .read_existing(&path)
+        .await
+        .and_then(|bytes| Ok(String::from_utf8(bytes)?))
+        .map_err(|err| {
+            ToolError::reported_failure(FailureClass::ArgumentInvalid, format!("{err:#}"))
+        })?;
     let uri = super::uri::path_to_file_uri(&path);
     let lang = language_id(servers, &path);
     client
@@ -296,7 +300,8 @@ async fn run_file_action(
                     .iter()
                     .any(|edit| edit.rename_from.as_ref() == Some(&path))
             {
-                let mut rename = prepare_rename(path.clone(), dest_path).map_err(policy)?;
+                let mut rename =
+                    prepare_rename(context, path.clone(), dest_path).map_err(policy)?;
                 rename.expected_hash =
                     Some(gents_session::file_contents::content_hash(text.as_bytes()));
                 prepared.push(rename);

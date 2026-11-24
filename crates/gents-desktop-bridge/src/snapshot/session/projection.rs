@@ -462,12 +462,8 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
     let retry_eligibility = project_retry_eligibility(latest_request);
     let latest_request_outcome = latest_request.and_then(|request| {
         let failure_reason = normalize_optional(request.failure_reason.as_deref());
-        let evidence = RequestEvidence {
-            interrupt_requested_at: normalize_optional(request.interrupt_requested_at.as_deref()),
-        };
         let cancel_cause = crate::cause_derivation::derive_request_cause(
             request.lifecycle_state,
-            &evidence,
             normalize_optional(request.terminalized_at.as_deref()),
         );
         (failure_reason.is_some() || cancel_cause.is_some()).then_some(RequestOutcomeView {
@@ -2151,7 +2147,10 @@ pub(super) fn project_transcript_rows(
                         .and_then(|id| requests_by_doc_id.get(id).copied());
                     let req_evidence = req_for_tool
                         .map(|r| RequestEvidence {
-                            interrupt_requested_at: r.interrupt_requested_at.clone(),
+                            interrupted_at: (r.lifecycle_state
+                                == Some(RequestLifecycleState::Interrupted))
+                            .then(|| r.terminalized_at.clone())
+                            .flatten(),
                         })
                         .unwrap_or_default();
                     let tool_evidence = ToolCallEvidence {

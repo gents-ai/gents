@@ -1754,6 +1754,7 @@ fn tools_for_package(
     enable_defra_query: bool,
     defra_query_collections: Vec<String>,
 ) -> Tools {
+    let writes = matches!(tool_package, ToolPackageArg::Write | ToolPackageArg::Yolo);
     let host = match tool_package {
         ToolPackageArg::Minimal | ToolPackageArg::Introspection => None,
         ToolPackageArg::Readonly | ToolPackageArg::Write | ToolPackageArg::Yolo => {
@@ -1780,10 +1781,7 @@ fn tools_for_package(
                         }
                         _ => None,
                     },
-                    background_enabled: matches!(
-                        tool_package,
-                        ToolPackageArg::Write | ToolPackageArg::Yolo
-                    ),
+                    background_enabled: writes,
                     ..Default::default()
                 }),
                 cli: Vec::new(),
@@ -1811,7 +1809,7 @@ fn tools_for_package(
         agents: None,
         built_ins: Some(BuiltInTools {
             enable_goal_tools: privileged.then_some(true),
-            enable_goal_creation: Some(false),
+            enable_goal_creation: Some(writes),
             enable_session_history_tool: None,
             enable_schema_tool: None,
             enable_p2p_tool: None,

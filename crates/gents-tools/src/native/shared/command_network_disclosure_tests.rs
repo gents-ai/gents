@@ -12,7 +12,11 @@ fn command_policy_effective_network_mode_matches_lean() {
                 .with_mode(i.mode)
                 .with_network_mode(i.network);
             let effective = policy.effective_network_mode();
-            if i.mode.protects_credentials() && effective == CommandNetworkMode::Disabled {
+            if matches!(
+                i.mode,
+                CommandExecutionMode::WorkspaceWrite | CommandExecutionMode::ArtifactWrite
+            ) && effective == CommandNetworkMode::Disabled
+            {
                 assert!(policy
                     .network_enforcement_disclosure()
                     .starts_with("required_at_execution:"));

@@ -69,7 +69,7 @@ async fn recover_active_requests(
                     .field(fields::REQUESTER_DID)
                     .field(fields::AGENT_DID)
                     .field(fields::SESSION_ID)
-                    .field(fields::INTERRUPT_REQUESTED_AT)
+                    .field(fields::INTERRUPT_GENERATION)
                     .field(fields::EXECUTION_GENERATION)
                     .field(fields::EXECUTION_LEASE_EXPIRES_AT),
             )

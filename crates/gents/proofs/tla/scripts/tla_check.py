@@ -755,6 +755,10 @@ def check_headers(tla=TLA, functions=None, members=None):
     problems = structure_problems(functions, members, tla)
     for problem in problems:
         print(f"tla: {problem}", file=sys.stderr)
+    specs = [path for path in tla.glob("*.tla") if not path.name.startswith("MC")]
+    configurations = list(tla.glob("MC*.cfg"))
+    print(f"tla: {len(specs)} specs and {len(configurations)} configurations checked, "
+          f"{len(problems)} problems")
     return 1 if problems else 0
 
 

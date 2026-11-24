@@ -27,6 +27,7 @@ fn request() -> AgentRequest {
         execution_lease_expires_at: None,
         execution_lease_secs: None,
         request_hop: 0,
+        interrupt_generation: None,
         caused_by_parent_request_id: None,
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,

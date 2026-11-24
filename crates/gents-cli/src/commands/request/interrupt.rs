@@ -49,7 +49,7 @@ pub(super) async fn request_interrupt(args: RequestInterruptArgs) -> Result<()> 
 
     let cause = (!receipt.already_interrupted).then(|| CancelCause::UserCancelled.as_str());
     let interrupt_landed_at = (!receipt.already_interrupted)
-        .then_some(receipt.interrupt_requested_at.as_deref())
+        .then_some(receipt.interrupted_at.as_deref())
         .flatten();
     let summary = request_interrupt_summary(
         &row,
@@ -92,7 +92,6 @@ fn request_interrupt_summary(
         "session_id": nonempty_owned(row.session_id.as_deref()),
         "lifecycle_state": lifecycle_state,
         "failure_reason": nonempty_owned(row.failure_reason.as_deref()),
-        "interrupt_requested_at": nonempty_owned(row.interrupt_requested_at.as_deref()),
         "interrupt_landed_at": interrupt_landed_at,
         "cause": cause,
         "already_interrupted": already_interrupted,

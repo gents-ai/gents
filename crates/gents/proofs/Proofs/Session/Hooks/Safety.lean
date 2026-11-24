@@ -4,8 +4,10 @@ import Proofs.Session.Hooks.Prepared
 namespace Hooks.Safety
 
 /-- The part of a running request a monitor can affect. `actor` is the DID the
-request executes under; `interrupted` is the request's interrupt latch
-(`interrupt_requested_at`) and `stopped` the session stop latch, which the
+request executes under; `interrupted` is the session's interrupt marker having
+passed the generation the request's claim recorded
+(`SessionQueue.InterruptGeneration.runningInterrupted`) and `stopped` the
+session stop latch, which the
 existing control model distinguishes (`SessionQueue.Control`). The counters
 stand for work: provider turns started, tool calls dispatched, later requests
 of the session claimed. -/
@@ -55,8 +57,8 @@ def perform (mayStop : Actor → Run → Bool) (actor : Actor) (op : StopOp) (ru
   else none
 
 /-- Core's next-action transitions. Each re-reads the latch in its own
-transaction: a new provider turn, a tool-call dispatch (the existing fence on
-`interrupt_requested_at` in `tools/call/lifecycle/delivery/dispatch.rs`,
+transaction: a new provider turn, a tool-call dispatch (the dispatch reads the
+session's interrupt marker by id in `call/lifecycle/delivery/dispatch.rs`,
 expressed as the cancellation input of `Hooks.admit`), and the claim of a
 later request of a stopped session. -/
 def startTurn (run : Run) : Option Run :=
