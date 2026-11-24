@@ -3,7 +3,7 @@
   "eval_definitions": [
     {
       "definition_id": "engineer-sessions",
-      "comparability_version": 10,
+      "comparability_version": 11,
       "title": "Engineer session investigation",
       "subject": {
         "kind": "agent",
@@ -27,7 +27,6 @@
         "./cases/transcript_evidence.json",
         "./cases/archive_evidence.json",
         "./cases/cross_agent_visible.json",
-        "./cases/stub_recovery.json",
         "./cases/kestrel_newest_revision.json",
         "./cases/juniper_original_dock.json",
         "./cases/cedar_receiving_not_recorded.json",

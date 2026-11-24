@@ -1028,28 +1028,8 @@
   },
   "stages": [
     {
-      "stage_id": "access",
-      "prompt": "I keep application records in Shipment. Enable your general read access only to Shipment, and general create/update/delete access only to Shipment if your native tools support it. Keep shell execution off and leave all other collection permissions alone. Inspect the available fields before working with records.",
-      "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        }
-      ],
-      "capture": []
-    },
-    {
       "stage_id": "read",
-      "prompt": "How many queued shipments go to Oslo? Give the exact total across the collection. Then give the second page of five, ordered by priority ascending, including each reference and priority. Do not change any records.",
+      "prompt": "How many queued shipments are going to Oslo? Then show me the second page of five, ordered by priority from the lowest, with each reference and priority.",
       "checks": [
         {
           "check": "final_message_matches",
@@ -1057,6 +1037,9 @@
             "all": [
               "73",
               "SHIP-005",
+              "SHIP-006",
+              "SHIP-007",
+              "SHIP-008",
               "SHIP-009"
             ]
           },
@@ -1069,17 +1052,6 @@
             "name": "all",
             "min": 113,
             "max": 113
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "forbidden": [
-              "bash",
-              "schema"
-            ]
           },
           "tier": "acceptance",
           "weight": 1

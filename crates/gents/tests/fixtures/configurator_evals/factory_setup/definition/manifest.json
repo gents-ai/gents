@@ -2,7 +2,7 @@
   "manifest_version": 1,
   "name": "factory_setup_eval",
   "version": "1.0.0",
-  "description": "One Engineer configures a six-role research desk on a fresh node. No workflow execution.",
+  "description": "One Engineer configures a six-role research desk on a fresh node, then runs one brief request through it.",
   "authors": [
     "gents-ai contributors"
   ],

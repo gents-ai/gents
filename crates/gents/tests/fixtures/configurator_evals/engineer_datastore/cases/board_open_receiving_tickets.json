@@ -119,150 +119,18 @@
   },
   "stages": [
     {
-      "stage_id": "access",
-      "prompt": "I keep application records in DispatchThread and DispatchChange. Enable your general read access only to those collections, with no create, update or delete access. Keep shell execution off and leave all other collection permissions alone. Inspect the available fields before working with records.",
-      "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "agents": {
-              "agents": "agents",
-              "contexts": "contexts",
-              "tools": "tools",
-              "expect": [
-                {
-                  "agent_did": "gents:agent-slot:engineer",
-                  "tools": [
-                    {
-                      "field": "host.bash.mode",
-                      "matches": "^(null|Off)$"
-                    },
-                    {
-                      "field": "datastore.write_collections",
-                      "matches": "^(null|\\[\\])$"
-                    },
-                    {
-                      "field": "datastore.defra_query_collections",
-                      "contains": "\"DispatchThread\""
-                    },
-                    {
-                      "field": "datastore.defra_query_collections",
-                      "contains": "\"DispatchChange\""
-                    }
-                  ]
-                }
-              ]
-            },
-            "present": [
-              {
-                "capture": "DispatchThread",
-                "min": 5,
-                "max": 5
-              },
-              {
-                "capture": "DispatchChange",
-                "min": 8,
-                "max": 8
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        }
-      ],
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "agents",
-          "collection": "Agent",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "agent_did",
-            "display_name",
-            "context_id"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "contexts",
-          "collection": "AgentContext",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "context_id",
-            "tools_id"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "tools",
-          "collection": "Tools",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "tools_id",
-            "host",
-            "datastore"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "DispatchThread",
-          "collection": "DispatchThread",
-          "filter": {},
-          "fields": [
-            "ticket",
-            "desk"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "DispatchChange",
-          "collection": "DispatchChange",
-          "filter": {},
-          "fields": [
-            "event",
-            "thread",
-            "ordinal",
-            "phase"
-          ]
-        }
-      ]
-    },
-    {
       "stage_id": "ask",
-      "prompt": "Which bulletin-board tickets are open for the receiving desk? A ticket's current state is the phase of its change with the greatest ordinal; storage order means nothing. Give me the count and the IDs as JSON with a numeric \"count\" and an \"ids\" array. Do not change any records.",
+      "prompt": "Which bulletin-board tickets are open for the receiving desk right now? A ticket's state is the phase of its change with the highest ordinal. How many, and which ones?",
       "checks": [
         {
-          "check": "tool_calls_expected",
+          "check": "final_message_matches",
           "params": {
-            "forbidden": [
-              "bash",
-              "schema",
-              "write"
+            "all": [
+              {
+                "matches": "(?i)\\b(?:2|two)\\b[^.\\n]{0,60}(?:tickets?|open|count|total)|(?:tickets?|open|count|total)[^.\\n]{0,60}?\\b(?:2|two)\\b"
+              },
+              "B-18",
+              "B-22"
             ]
           },
           "tier": "acceptance",
@@ -490,21 +358,6 @@
                     "equals": "open"
                   }
                 ]
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "final_message_matches",
-          "params": {
-            "all": [
-              {
-                "matches": "\"count\"\\s*:\\s*2\\b"
-              },
-              {
-                "matches": "\"ids\"\\s*:\\s*\\[\\s*(?:\"B-18\"\\s*,\\s*\"B-22\"|\"B-22\"\\s*,\\s*\"B-18\")\\s*\\]"
               }
             ]
           },

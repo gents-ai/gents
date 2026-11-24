@@ -5,17 +5,7 @@
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "Set up a guest register with Guest { name, bookings } and Booking { guest, arrives_at, leaves_at }. Name is text and the two dates are timestamps. A guest has many bookings and each booking belongs to one guest; make those links navigable both ways. Add an index on arrives_at so we can efficiently show arrivals in date order.",
-      "capture": [
-        {
-          "kind": "schema",
-          "name": "schema",
-          "collections": [
-            "Guest",
-            "Booking"
-          ]
-        }
-      ],
+      "prompt": "Set up a guest register: Guest { name, bookings } and Booking { guest, arrives_at, leaves_at }. Name is text and the two dates are timestamps. A guest has many bookings and each booking one guest, linked both ways. We list arrivals in date order, so index arrives_at.",
       "checks": [
         {
           "check": "schema_matches",
@@ -25,19 +15,114 @@
           },
           "tier": "acceptance",
           "weight": 1
-        },
+        }
+      ],
+      "capture": [
         {
-          "check": "tool_calls_expected",
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "Guest",
+            "Booking"
+          ]
+        }
+      ]
+    },
+    {
+      "stage_id": "use",
+      "settle": true,
+      "continuation": {
+        "prompt": "OK, go ahead.",
+        "max": 1,
+        "until": "loaded"
+      },
+      "prompt": "Add guest Lena Voss with bookings 2026-07-03 to 2026-07-06 and 2026-08-10 to 2026-08-12, and guest Omar Haddad with a booking 2026-07-01 to 2026-07-02. Whose arrival comes first, and whose is next?",
+      "checks": [
+        {
+          "check": "crew_spec_match",
           "params": {
-            "required": [
-              "schema"
+            "present": [
+              {
+                "capture": "guests",
+                "min": 2,
+                "max": 2
+              }
             ],
-            "forbidden": [
-              "bash"
+            "rows": [
+              {
+                "capture": "guests",
+                "key": "name",
+                "id": "Lena Voss",
+                "expect": []
+              },
+              {
+                "capture": "guests",
+                "key": "name",
+                "id": "Omar Haddad",
+                "expect": []
+              }
             ]
           },
           "tier": "acceptance",
           "weight": 1
+        },
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "bookings",
+            "min": 3,
+            "max": 3
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?is)omar.*lena"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "guests",
+          "collection": "Guest",
+          "filter": {},
+          "fields": [
+            "_docID",
+            "name"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "bookings",
+          "collection": "Booking",
+          "filter": {},
+          "fields": [
+            "arrives_at",
+            "leaves_at",
+            "_guestID"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "loaded",
+          "collection": "Guest",
+          "filter": {
+            "name": {
+              "_eq": "Omar Haddad"
+            }
+          },
+          "fields": [
+            "name"
+          ]
         }
       ]
     }

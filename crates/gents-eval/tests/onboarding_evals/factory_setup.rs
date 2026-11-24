@@ -57,9 +57,10 @@ fn the_definition_validates_and_every_check_accepts_its_params() {
         panic!("one case");
     };
     assert_eq!(case.fixtures.as_ref().unwrap().assets, ["factory"]);
-    let [stage, repair] = case.stages.as_slice() else {
-        panic!("setup and repair stages");
+    let [stage, repair, run] = case.stages.as_slice() else {
+        panic!("setup, repair and run stages");
     };
+    assert!(run.settle && run.continuation.is_some());
     assert!(stage.settle);
     assert!(stage.checks.iter().all(|check| matches!(
         check.check.as_str(),
@@ -268,7 +269,11 @@ fn capstone_disabled_roles_fail_cleanup_without_shadowing_active_roles() {
     let definition = definition();
     let registry = CheckRegistry::builtin();
     let check = registry.get("crew_spec_match").unwrap();
-    for stage in &definition.cases[0].stages {
+    for stage in definition.cases[0]
+        .stages
+        .iter()
+        .filter(|stage| stage.stage_id != "run")
+    {
         let captures = serde_json::to_value(&stage.capture).unwrap();
         let captures = captures.as_array().unwrap();
         let active = captures.iter().find(|c| c["name"] == "agents").unwrap();

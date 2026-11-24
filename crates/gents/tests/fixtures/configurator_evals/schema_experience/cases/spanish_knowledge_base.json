@@ -5,16 +5,7 @@
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "Please prepare a Spanish-language knowledge base. ManualPage has code, heading and content, all text. Codes are unique. Heading and content should each support BM25 word search using Spanish stemming. I'll hook up the search interface separately.",
-      "capture": [
-        {
-          "kind": "schema",
-          "name": "schema",
-          "collections": [
-            "ManualPage"
-          ]
-        }
-      ],
+      "prompt": "Prepare a Spanish-language knowledge base: ManualPage with code, heading and content, all text. Codes are unique. People search the heading and the content by word, in Spanish, best match first.",
       "checks": [
         {
           "check": "schema_matches",
@@ -24,21 +15,134 @@
           },
           "tier": "acceptance",
           "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "ManualPage"
+          ]
+        }
+      ]
+    },
+    {
+      "stage_id": "use",
+      "settle": true,
+      "continuation": {
+        "prompt": "OK, go ahead.",
+        "max": 1,
+        "until": "loaded"
+      },
+      "prompt": "Load the pages in manual_pages.json. Then search for \"facturas\" and tell me the code of the best match.",
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "pages",
+                "min": 3,
+                "max": 3
+              }
+            ],
+            "rows": [
+              {
+                "capture": "pages",
+                "key": "code",
+                "id": "MP-1",
+                "expect": [
+                  {
+                    "field": "heading",
+                    "equals": "Cambiar la contraseña"
+                  },
+                  {
+                    "field": "content",
+                    "equals": "Abra Ajustes, elija Seguridad y pulse Cambiar contraseña. Le enviaremos un enlace por correo."
+                  }
+                ]
+              },
+              {
+                "capture": "pages",
+                "key": "code",
+                "id": "MP-2",
+                "expect": [
+                  {
+                    "field": "heading",
+                    "equals": "Descargar una factura"
+                  },
+                  {
+                    "field": "content",
+                    "equals": "Cada factura se guarda en la sección Pagos. Pulse Descargar para obtener el documento en PDF."
+                  }
+                ]
+              },
+              {
+                "capture": "pages",
+                "key": "code",
+                "id": "MP-3",
+                "expect": [
+                  {
+                    "field": "heading",
+                    "equals": "Invitar a un compañero"
+                  },
+                  {
+                    "field": "content",
+                    "equals": "Los propietarios pueden invitar a compañeros desde la página Miembros."
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
         },
         {
-          "check": "tool_calls_expected",
+          "check": "final_message_matches",
           "params": {
-            "required": [
-              "schema"
-            ],
-            "forbidden": [
-              "bash"
+            "all": [
+              "MP-2"
             ]
           },
           "tier": "acceptance",
           "weight": 1
         }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "pages",
+          "collection": "ManualPage",
+          "filter": {},
+          "fields": [
+            "code",
+            "heading",
+            "content"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "loaded",
+          "collection": "ManualPage",
+          "filter": {
+            "code": {
+              "_eq": "MP-3"
+            }
+          },
+          "fields": [
+            "code"
+          ]
+        }
       ]
     }
-  ]
+  ],
+  "fixtures": {
+    "files": [
+      {
+        "path": "manual_pages.json",
+        "contents": "[\n  {\n    \"code\": \"MP-1\",\n    \"heading\": \"Cambiar la contraseña\",\n    \"content\": \"Abra Ajustes, elija Seguridad y pulse Cambiar contraseña. Le enviaremos un enlace por correo.\"\n  },\n  {\n    \"code\": \"MP-2\",\n    \"heading\": \"Descargar una factura\",\n    \"content\": \"Cada factura se guarda en la sección Pagos. Pulse Descargar para obtener el documento en PDF.\"\n  },\n  {\n    \"code\": \"MP-3\",\n    \"heading\": \"Invitar a un compañero\",\n    \"content\": \"Los propietarios pueden invitar a compañeros desde la página Miembros.\"\n  }\n]\n"
+      }
+    ]
+  }
 }

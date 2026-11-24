@@ -5,16 +5,7 @@
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "We're recording customer events. Please create CustomerEvent with customer (text), occurred_at (timestamp), and message (text). Our main screen shows one customer's most recent events first; add a compound index ordered first by customer, then by occurred_at descending. Different events can share the same timestamp.",
-      "capture": [
-        {
-          "kind": "schema",
-          "name": "schema",
-          "collections": [
-            "CustomerEvent"
-          ]
-        }
-      ],
+      "prompt": "We record customer events: CustomerEvent with customer (text), occurred_at (timestamp) and message (text). The main screen shows one customer's events, newest first. Add one index that serves exactly that lookup. Events can share a timestamp.",
       "checks": [
         {
           "check": "schema_matches",
@@ -24,19 +15,138 @@
           },
           "tier": "acceptance",
           "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "CustomerEvent"
+          ]
+        }
+      ]
+    },
+    {
+      "stage_id": "use",
+      "settle": true,
+      "continuation": {
+        "prompt": "OK, go ahead.",
+        "max": 1,
+        "until": "loaded"
+      },
+      "prompt": "Add these events. acme: 2026-03-01 09:00 UTC \"signed up\", 2026-03-04 15:30 UTC \"upgraded plan\", 2026-03-02 11:00 UTC \"opened ticket\". zenith: 2026-03-05 08:00 UTC \"signed up\". What are acme's two most recent events?",
+      "checks": [
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "events",
+            "min": 4,
+            "max": 4
+          },
+          "tier": "acceptance",
+          "weight": 1
         },
         {
-          "check": "tool_calls_expected",
+          "check": "crew_spec_match",
           "params": {
-            "required": [
-              "schema"
+            "present": [
+              {
+                "capture": "acme",
+                "min": 3,
+                "max": 3
+              }
             ],
-            "forbidden": [
-              "bash"
+            "rows": [
+              {
+                "capture": "acme",
+                "key": "message",
+                "id": "signed up",
+                "expect": [
+                  {
+                    "field": "customer",
+                    "equals": "acme"
+                  }
+                ]
+              },
+              {
+                "capture": "acme",
+                "key": "message",
+                "id": "upgraded plan",
+                "expect": [
+                  {
+                    "field": "customer",
+                    "equals": "acme"
+                  }
+                ]
+              },
+              {
+                "capture": "acme",
+                "key": "message",
+                "id": "opened ticket",
+                "expect": [
+                  {
+                    "field": "customer",
+                    "equals": "acme"
+                  }
+                ]
+              }
             ]
           },
           "tier": "acceptance",
           "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              "upgraded plan",
+              "opened ticket"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "events",
+          "collection": "CustomerEvent",
+          "filter": {},
+          "fields": [
+            "customer",
+            "occurred_at",
+            "message"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "acme",
+          "collection": "CustomerEvent",
+          "filter": {
+            "customer": {
+              "_eq": "acme"
+            }
+          },
+          "fields": [
+            "customer",
+            "occurred_at",
+            "message"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "loaded",
+          "collection": "CustomerEvent",
+          "filter": {
+            "customer": {
+              "_eq": "zenith"
+            }
+          },
+          "fields": [
+            "customer"
+          ]
         }
       ]
     }

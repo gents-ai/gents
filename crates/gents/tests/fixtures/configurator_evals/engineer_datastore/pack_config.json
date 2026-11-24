@@ -3,8 +3,8 @@
   "eval_definitions": [
     {
       "definition_id": "engineer-datastore",
-      "comparability_version": 4,
-      "title": "Application datastore: count, paging and durable writes",
+      "comparability_version": 5,
+      "title": "Application datastore: reads, durable writes and who may do which",
       "subject": {
         "kind": "agent",
         "inference_slots": [
@@ -29,7 +29,11 @@
         "./cases/sample_bin_placement.json",
         "./cases/rental_location_cleanup.json",
         "./cases/dispatch_active_route_assignment.json",
-        "./cases/library_hold_edition_links.json"
+        "./cases/library_hold_edition_links.json",
+        "./cases/orders_analyst_read_only.json",
+        "./cases/returns_clerk_scoped_write.json",
+        "./cases/pricing_clerk_write_revoked.json",
+        "./cases/ledger_auditor_read_only.json"
       ]
     }
   ]

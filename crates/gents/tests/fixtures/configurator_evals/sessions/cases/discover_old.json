@@ -5084,7 +5084,7 @@
   "stages": [
     {
       "stage_id": "investigate",
-      "prompt": "Find my Atlas rollout review session from last year. Tell me its session ID and whether it is closed. Use sessions to investigate past work. Include its canonical session document ID as a source citation.",
+      "prompt": "Find my Atlas rollout review session from last year. What is its session ID, and is it closed?",
       "checks": [
         {
           "check": "final_message_matches",
@@ -5100,35 +5100,18 @@
           "weight": 1
         },
         {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "sessions"
-            ],
-            "forbidden": [
-              "bash",
-              "query",
-              "config"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
           "check": "crew_spec_match",
           "params": {
             "links": [
               {
                 "capture": "source_sessions",
-                "source_match": {
-                  "field": "session_id",
-                  "equals": "launch-review"
-                },
-                "field": "_docID",
+                "key": "session_id",
+                "id": "launch-review",
+                "field": "session_id",
                 "target_capture": "source_sessions",
-                "target_key": "_docID",
+                "target_key": "session_id",
                 "reported_fields": [
-                  "_docID"
+                  "session_id"
                 ]
               }
             ]
