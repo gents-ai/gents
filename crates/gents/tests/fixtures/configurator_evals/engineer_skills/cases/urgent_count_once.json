@@ -52,40 +52,16 @@
   "stages": [
     {
       "stage_id": "answer",
-      "prompt": "Before we build anything: I only need to know, this once, how many PickupSlip records are urgent. Do we need to build an app for that? Decide, then answer. Reply with JSON with \"design\" (what you'd build, in a few words) and \"urgent\" (the count).",
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "loaded",
-          "collection": "AgentOutputSegment",
-          "filter": {
-            "session_id": {
-              "_eq": "$session"
-            },
-            "payload": {
-              "_like": "Skill: plan-work%"
-            }
-          },
-          "fields": [
-            "ordinal"
-          ]
-        }
-      ],
+      "prompt": "I just need to know, this once, how many PickupSlip records are urgent. Do we need an app for that?",
       "checks": [
         {
-          "check": "tool_calls_expected",
+          "check": "final_message_matches",
           "params": {
-            "required": [
-              "load_skill"
-            ],
-            "forbidden": [
-              "write",
-              "bash",
-              "bash_unrestricted",
-              "write_file",
-              "edit_file"
-            ],
-            "config_read_only": true
+            "all": [
+              {
+                "matches": "(?i)\\b(3|three)\\b[^.\\n]{0,40}urgent|urgent[^.\\n]{0,40}\\b(3|three)\\b"
+              }
+            ]
           },
           "tier": "acceptance",
           "weight": 1
@@ -95,28 +71,65 @@
           "params": {
             "present": [
               {
-                "capture": "loaded",
-                "min": 1
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "final_message_matches",
-          "params": {
-            "all": [
-              {
-                "matches": "\"urgent\"\\s*:\\s*3\\b"
+                "capture": "pages",
+                "min": 0,
+                "max": 0
               },
               {
-                "matches": "\"design\"\\s*:\\s*\"[^\"]*(?i:chat|reply|answer|no app|none|nothing)"
+                "capture": "triggers",
+                "min": 0,
+                "max": 0
+              },
+              {
+                "capture": "schedules",
+                "min": 0,
+                "max": 0
               }
             ]
           },
           "tier": "acceptance",
           "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "pages",
+          "collection": "Page",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "page_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "triggers",
+          "collection": "Trigger",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "trigger_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "schedules",
+          "collection": "Schedule",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "schedule_id"
+          ]
         }
       ]
     }

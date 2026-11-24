@@ -138,7 +138,7 @@ pub(super) fn build_langgraph_state_history(
                     event
                         .completion_evidence
                         .as_deref()
-                        .or(event.last_blocked_reason.as_deref())
+                        .or(event.blocked_reason.as_deref())
                         .or(event.last_failure.as_deref()),
                     context,
                 ),

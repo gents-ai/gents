@@ -7,24 +7,34 @@ use std::time::Duration;
 #[test]
 fn provider_reason_from_failure_maps_the_table() {
     assert_eq!(
-        provider_reason_from_failure("HTTP 503"),
-        Some(ProviderReason::Unavailable)
+        provider_reason_from_failure("HTTP 503")
+            .map(|stated| (stated.reason, stated.ended_by_backend)),
+        Some((ProviderReason::Unavailable, false))
     );
     assert_eq!(
-        provider_reason_from_failure("HTTP 429 rate limited"),
-        Some(ProviderReason::Unavailable)
+        provider_reason_from_failure("HTTP 429 rate limited")
+            .map(|stated| (stated.reason, stated.ended_by_backend)),
+        Some((ProviderReason::Unavailable, false))
     );
     assert_eq!(
-        provider_reason_from_failure("HTTP 408 request timeout"),
-        Some(ProviderReason::Unavailable)
+        provider_reason_from_failure("HTTP 408 request timeout")
+            .map(|stated| (stated.reason, stated.ended_by_backend)),
+        Some((ProviderReason::Unavailable, false))
     );
     assert_eq!(
-        provider_reason_from_failure("HTTP 400 context length"),
-        Some(ProviderReason::Rejected)
+        provider_reason_from_failure("HTTP 400 context length")
+            .map(|stated| (stated.reason, stated.ended_by_backend)),
+        Some((ProviderReason::Rejected, false))
     );
     assert_eq!(
-        provider_reason_from_failure("content policy"),
-        Some(ProviderReason::Rejected)
+        provider_reason_from_failure("content policy")
+            .map(|stated| (stated.reason, stated.ended_by_backend)),
+        Some((ProviderReason::Rejected, false))
+    );
+    assert_eq!(
+        provider_reason_from_failure("BackendGone")
+            .map(|stated| (stated.reason, stated.ended_by_backend)),
+        Some((ProviderReason::Unavailable, true))
     );
     assert_eq!(provider_reason_from_failure("weird"), None);
     assert_eq!(provider_reason_from_failure("model gpt-4o-500k"), None);
@@ -40,8 +50,13 @@ fn an_observation_that_failed_is_infrastructure() {
         "an observation that never returned says nothing about the subject"
     );
     assert_eq!(
-        provider_reason(Some(OutcomeKind::Infrastructure), &evidence),
-        None
+        stage_outcome(
+            false,
+            Some(OutcomeKind::Infrastructure),
+            stated_provider_reason(&evidence).map(|stated| stated.reason),
+            Some(&[])
+        ),
+        Some((OutcomeKind::Infrastructure, None))
     );
     assert_eq!(
         stage_failure_kind(None, false, false, &evidence),
@@ -82,11 +97,20 @@ fn a_lease_failure_uses_the_existing_infrastructure_outcome() {
         terminal_state: Some(RequestLifecycleState::Failed),
         session_id: Some("session".into()),
         interrupted_on_deadline: false,
+        parked_for_backend: false,
         elapsed: Duration::ZERO,
     };
     let outcome = stage_failure_kind(Some(&terminal), true, false, &evidence);
     assert_eq!(outcome, Some(expected));
-    assert_eq!(provider_reason(outcome, &evidence), None);
+    assert_eq!(
+        stage_outcome(
+            false,
+            outcome,
+            stated_provider_reason(&evidence).map(|stated| stated.reason),
+            Some(&[])
+        ),
+        Some((expected, None))
+    );
     assert_failure_class(outcome, expected, crate::EvidenceClass::NotEvidence);
 }
 
@@ -113,6 +137,7 @@ fn a_deadline_without_terminal_evidence_keeps_its_deadline_outcome() {
             terminal_state: None,
             session_id: Some("session".into()),
             interrupted_on_deadline: case["deadline"].as_bool().unwrap(),
+            parked_for_backend: false,
             elapsed: Duration::ZERO,
         };
         let expected = OutcomeKind::parse(case["outcome"].as_str().unwrap()).unwrap();
@@ -122,13 +147,6 @@ fn a_deadline_without_terminal_evidence_keeps_its_deadline_outcome() {
             "{case}"
         );
     }
-}
-
-#[test]
-fn generated_stage_outcomes_match_lean() {
-    gents_lean_vocab::families::eval_stage_outcomes::replay::<FireFailure, OutcomeKind>(|input| {
-        stage_outcome(input.request, input.triggers_read, &input.failures)
-    });
 }
 
 async fn fires(
@@ -296,4 +314,26 @@ async fn a_trigger_error_from_before_the_stage_is_not_read() {
         []
     );
     home.node.shutdown().await.expect("shutdown node");
+}
+
+#[test]
+fn stage_outcomes_match_the_lean_model() {
+    gents_lean_vocab::families::eval_stage_outcome::replay::<FireFailure, OutcomeKind, ProviderReason>(
+        |input| {
+            stage_outcome(
+                input.ended_by_backend,
+                input.request,
+                input.stated,
+                input.triggers_read.then_some(input.failures.as_slice()),
+            )
+            .map(
+                |(kind, provider_reason)| {
+                    gents_lean_vocab::families::eval_stage_outcome::StageFailure {
+                        kind,
+                        provider_reason,
+                    }
+                },
+            )
+        },
+    );
 }

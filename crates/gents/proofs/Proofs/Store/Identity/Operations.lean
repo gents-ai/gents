@@ -4,6 +4,35 @@ namespace Identity.Operations
 
 open Identity.Household
 
+/-- The parent at registration belongs to the publishing device, not the
+recipient or an identity claimed by the document body. The authority service
+must authenticate the creator, verify the selected Node's registered device,
+and check a scoped delegation when another actor publishes for that device.
+The booleans are verified facts, not fields supplied by the creator. -/
+def transportCreateAuthorized (creator publisher : DID)
+    (parentRegistered parentNamesPublisher delegation : Bool) : Bool :=
+  parentRegistered && parentNamesPublisher && (creator == publisher || delegation)
+
+theorem transport_create_needs_a_registered_publisher_parent
+    (creator publisher : DID) (names delegation : Bool) :
+    transportCreateAuthorized creator publisher false names delegation = false := by
+  simp [transportCreateAuthorized]
+
+theorem transport_create_rejects_a_different_parent
+    (creator publisher : DID) (registered delegation : Bool) :
+    transportCreateAuthorized creator publisher registered false delegation = false := by
+  simp [transportCreateAuthorized]
+
+theorem transport_create_requires_delegation_for_another_actor
+    (creator publisher : DID) (different : (creator == publisher) = false) :
+    transportCreateAuthorized creator publisher true true false = false := by
+  simp [transportCreateAuthorized, different]
+
+theorem transport_create_allows_publisher_and_delegate (publisher creator : DID) :
+    transportCreateAuthorized publisher publisher true true false = true ∧
+    transportCreateAuthorized creator publisher true true true = true := by
+  simp [transportCreateAuthorized]
+
 /-- A runtime-authored operational document has a separate publication step:
 ACP1 creates it for the authenticated runtime before the runtime attaches its
 Node parent. A field containing a Node DID does not create this relationship.
@@ -287,6 +316,7 @@ def networkProtocolResource : String → Option String
   | "AgentRequest" => some "delivered_requests"
   | "AgentRequestRetryBudget" => some "request_retry_budgets"
   | "AgentSession" => some "sessions"
+  | "AgentSessionInterrupt" => some "session_interrupts"
   | "AgentSessionGoalControl" => some "goal_controls"
   | "AgentSessionInputEdit" => some "goal_controls"
   | "AgentSessionGoalReceipt" => some "goal_receipts"

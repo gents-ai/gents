@@ -137,13 +137,12 @@ pub async fn check_home_store(home: &Path) -> Result<StoreCompatibility, StoreCo
     if !marker.try_exists().map_err(io(&marker))? {
         return Ok(refused(IncompatibleStoreKind::UnknownLineage, data));
     }
-    let provider = crate::local::document_acp::recorded(&data).map_err(|error| {
+    let ids = crate::local::document_acp::recorded_policy_ids(&data).map_err(|error| {
         StoreCompatibilityError::Check {
             path: data.clone(),
             source: Box::new(error),
         }
     })?;
-    let ids = crate::local::document_acp::home_policy_ids(provider);
     if stamped(&data, ids) {
         return Ok(StoreCompatibility::Compatible);
     }

@@ -168,12 +168,12 @@ async fn never_called(handle: tokio::task::JoinHandle<String>) {
 
 #[tokio::test]
 async fn runtime_usage_rejects_a_different_node_identity() {
-    let (db, _user, _user_access) = crate::test_support::signed_test_node_without_agent(
+    let db = gents_documents::test_support::SignedHome::start(
         "usage-owner",
         gents_store::node_extension::Extensions::none(),
     )
     .await;
-    let other = crate::test_support::test_db(
+    let other = gents_store::test_support::TestStore::start(
         "usage-foreign-owner",
         gents_store::node_extension::Extensions::none(),
     )
@@ -208,7 +208,7 @@ async fn runtime_usage_rejects_a_different_node_identity() {
 #[tokio::test]
 async fn read_codex_sends_account_header_to_the_backend_host_and_stores_endpoint_windows() {
     let cache = UsageCache::default();
-    let (db, _user, _user_access) = crate::test_support::signed_test_node_without_agent(
+    let db = gents_documents::test_support::SignedHome::start(
         "usage-observation",
         gents_store::node_extension::Extensions::none(),
     )
@@ -280,7 +280,7 @@ async fn read_codex_sends_account_header_to_the_backend_host_and_stores_endpoint
 #[tokio::test]
 async fn read_grok_sends_identity_headers_and_credits_query() {
     let cache = UsageCache::default();
-    let (db, _user, _user_access) = crate::test_support::signed_test_node_without_agent(
+    let db = gents_documents::test_support::SignedHome::start(
         "usage-observation",
         gents_store::node_extension::Extensions::none(),
     )
@@ -351,7 +351,7 @@ async fn read_grok_sends_identity_headers_and_credits_query() {
 #[tokio::test]
 async fn read_openrouter_uses_the_backend_key_and_endpoint() {
     let cache = UsageCache::default();
-    let (db, _user, _user_access) = crate::test_support::signed_test_node_without_agent(
+    let db = gents_documents::test_support::SignedHome::start(
         "usage-observation",
         gents_store::node_extension::Extensions::none(),
     )
@@ -398,7 +398,7 @@ async fn read_openrouter_uses_the_backend_key_and_endpoint() {
 #[tokio::test]
 async fn read_claude_on_refresh_sends_the_oauth_beta() {
     let cache = UsageCache::default();
-    let (db, _user, _user_access) = crate::test_support::signed_test_node_without_agent(
+    let db = gents_documents::test_support::SignedHome::start(
         "usage-observation",
         gents_store::node_extension::Extensions::none(),
     )
@@ -461,7 +461,7 @@ async fn read_claude_on_refresh_sends_the_oauth_beta() {
 #[tokio::test]
 async fn read_expired_sign_in_refreshes_through_the_owner_then_reads() {
     let cache = UsageCache::default();
-    let (db, _user, _user_access) = crate::test_support::signed_test_node_without_agent(
+    let db = gents_documents::test_support::SignedHome::start(
         "usage-observation",
         gents_store::node_extension::Extensions::none(),
     )
@@ -534,7 +534,7 @@ fn codex_bearer_refreshing_at(
 #[tokio::test]
 async fn read_guard_recent_open_is_skipped_but_refresh_reads_again() {
     let cache = UsageCache::default();
-    let (db, _user, _user_access) = crate::test_support::signed_test_node_without_agent(
+    let db = gents_documents::test_support::SignedHome::start(
         "usage-observation",
         gents_store::node_extension::Extensions::none(),
     )
@@ -630,7 +630,7 @@ async fn read_guard_recent_open_is_skipped_but_refresh_reads_again() {
 #[tokio::test]
 async fn read_guard_refresh_failure_is_sign_in_expired() {
     let cache = UsageCache::default();
-    let (db, _user, _user_access) = crate::test_support::signed_test_node_without_agent(
+    let db = gents_documents::test_support::SignedHome::start(
         "usage-observation",
         gents_store::node_extension::Extensions::none(),
     )
@@ -671,7 +671,7 @@ async fn read_guard_refresh_failure_is_sign_in_expired() {
 #[tokio::test]
 async fn read_guard_disabled_account_is_not_read() {
     let cache = UsageCache::default();
-    let (db, _user, _user_access) = crate::test_support::signed_test_node_without_agent(
+    let db = gents_documents::test_support::SignedHome::start(
         "usage-observation",
         gents_store::node_extension::Extensions::none(),
     )
@@ -826,11 +826,12 @@ fn usage_account_for_backend_follows_node_oauth() {
 #[tokio::test]
 async fn node_read_outcomes_hold_no_secrets() {
     let cache = UsageCache::default();
-    let (db, _user, user_access) = crate::test_support::signed_test_node_without_agent(
+    let (db, _user, user_access) = gents_documents::test_support::SignedHome::start(
         "usage-observation",
         gents_store::node_extension::Extensions::none(),
     )
-    .await;
+    .await
+    .into_parts();
     let node = db.node.clone();
     let did = db.node_identity.did();
     sign_in(&node, did, GROK, Utc::now() + Duration::hours(1), None).await;
@@ -886,11 +887,12 @@ fn used_u64(stored: Option<UsageObservation>, label: &str) -> Option<u64> {
 #[tokio::test]
 async fn usage_cache_runtime_replacement_follows_the_lean_model() {
     for case in gents_lean_vocab::families::usage_cache_runtime_replacement::cases() {
-        let (db, _user, _user_access) = crate::test_support::signed_test_node_without_agent(
+        let (db, _user, _user_access) = gents_documents::test_support::SignedHome::start(
             "usage-observation",
             gents_store::node_extension::Extensions::none(),
         )
-        .await;
+        .await
+        .into_parts();
         let node = db.node.clone();
         let did = db.node_identity.did();
         let cache = UsageCache::default();
@@ -980,14 +982,14 @@ fn a_write_lands_only_on_the_credential_row_it_was_read_for() {
 #[tokio::test]
 async fn usage_cache_runtime_newer_follows_the_lean_model() {
     for case in gents_lean_vocab::families::usage_cache_runtime_newer::cases() {
-        let (db, _user, _user_access) = crate::test_support::signed_test_node_without_agent(
+        let db = gents_documents::test_support::SignedHome::start(
             "usage-observation",
             gents_store::node_extension::Extensions::none(),
         )
         .await;
         let node = db.node.clone();
         let did = db.node_identity.did();
-        let other_db = crate::test_support::test_db(
+        let other_db = gents_store::test_support::TestStore::start(
             "usage-other-node",
             gents_store::node_extension::Extensions::none(),
         )
@@ -1050,11 +1052,12 @@ async fn usage_cache_runtime_newer_follows_the_lean_model() {
 #[tokio::test]
 async fn default_limits_tool_reads_live_then_uses_cache_without_exposing_credentials() {
     use gents_loop::tool::Tool;
-    let (db, _user, user_access) = crate::test_support::signed_test_node_without_agent(
+    let (db, _user, user_access) = gents_documents::test_support::SignedHome::start(
         "usage-observation",
         gents_store::node_extension::Extensions::none(),
     )
-    .await;
+    .await
+    .into_parts();
     let node = db.node.clone();
     let did = db.node_identity.did();
     let cache = Arc::new(UsageCache::default());

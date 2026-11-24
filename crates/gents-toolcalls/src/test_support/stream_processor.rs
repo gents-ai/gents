@@ -24,7 +24,7 @@ pub fn user_text_message(text: &str) -> Message {
 /// The hook and stream writer act under the Agent's managed access; reads of
 /// Agent-owned rows go through `access`, never the node identity.
 pub struct SignedRun {
-    pub db: gents_inference::test_support::TestDb,
+    pub db: gents_store::test_support::TestStore,
     pub user: gents_store::identity::KeyIdentity,
     pub node: Arc<defra_node::Node>,
     pub runtime_did: String,
@@ -41,11 +41,13 @@ pub async fn signed_run(name: &str, batch_interval: Duration) -> SignedRun {
         AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
     };
 
-    let (db, user, owner, binding) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         name,
         gents_session::test_support::no_lifecycle_plugins(),
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, owner) = signed_home.into_parts();
     let node = db.node.clone();
     let runtime_did = db.node_identity.did().to_owned();
     let agent =

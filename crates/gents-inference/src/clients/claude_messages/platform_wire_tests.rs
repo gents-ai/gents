@@ -447,3 +447,55 @@ fn a_platform_account_has_no_account_uuid_and_a_device_id_per_node_and_backend()
     assert!(a.account_uuid.is_empty());
     assert!(!a.subscriber && !a.api_key);
 }
+
+#[tokio::test]
+async fn the_scripted_backend_answers_the_messages_client() {
+    use crate::test_support::scripted_backend::{ScriptedBackend, StreamScript};
+    let _guard = lock_fixtures_for_test().await;
+    let backend = ScriptedBackend::start(
+        MODEL,
+        vec![StreamScript::completes("use echo", ["scripted ", "hello"])],
+    )
+    .unwrap();
+    let base = format!("{}/", backend.endpoint().trim_end_matches("/v1"));
+    let foundry = settings(|s| s.resource = Some("my-resource".into()));
+    let route = ClaudeRoute::platform(
+        BackendProviderKind::ClaudeFoundry,
+        &base,
+        Some(&foundry),
+        SECRET,
+    )
+    .expect("platform route");
+    let account = AccountIdentity::of_platform("did:key:z6MkPlatform", "backend-1").context(false);
+    let bearer = ApiKeyBearer::new(SECRET);
+    let stream = stream_messages_routed(
+        &Default::default(),
+        &route,
+        MODEL,
+        &echo_request(),
+        MessagesAccount {
+            context: &account,
+            bearer: &bearer,
+            usage: None,
+        },
+        RapidHashSet::new(),
+    )
+    .await
+    .expect("200");
+    futures::pin_mut!(stream);
+    let mut text = String::new();
+    let mut finished = false;
+    while let Some(item) = stream.next().await {
+        match item.expect("event") {
+            RawStreamingChoice::Message(chunk) => text.push_str(&chunk),
+            RawStreamingChoice::FinalResponse(_) => {
+                finished = true;
+                break;
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(text, "scripted hello");
+    assert!(finished, "the stream ends with the final response");
+    assert_eq!(backend.recorded_requests()[0].path, "/v1/messages");
+}

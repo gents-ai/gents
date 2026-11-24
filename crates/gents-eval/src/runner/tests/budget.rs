@@ -121,7 +121,9 @@ async fn cancelled_budget_wait_creates_no_attempt_and_does_not_leak_capacity() {
         &[],
         request.max_infra_retries,
     );
+    let provider = crate::runner::outage::ProviderGate::new(&options());
     let context = TrialContext {
+        provider: &provider,
         frozen: &frozen,
         recorder: &recorder,
         executor: &executor,
@@ -185,7 +187,9 @@ async fn stopped_budget_wait_finishes_without_waiting_for_unrelated_capacity() {
         &[],
         request.max_infra_retries,
     );
+    let provider = crate::runner::outage::ProviderGate::new(&options());
     let context = TrialContext {
+        provider: &provider,
         frozen: &frozen,
         recorder: &recorder,
         executor: &executor,

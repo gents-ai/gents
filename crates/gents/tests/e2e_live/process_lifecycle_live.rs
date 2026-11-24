@@ -13,15 +13,17 @@ use serde_json::{json, Value};
 use crate::support::fixtures::configure_agent_tools;
 use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
 use crate::support::live_inference::{
-    live_target, rows_when, wait_for_request_terminal, LiveAgentSpec, LiveUser,
+    live_target, wait_for_request_terminal, LiveAgentSpec, LiveUser,
 };
-use crate::support::{test_db, TestDb};
+use crate::support::trial_store;
+use gents_store::test_support::rows_when;
 use gents_store::test_support::snapshot_reader::SnapshotReader;
+use gents_store::test_support::TestStore;
 
 const WAIT: Duration = Duration::from_secs(240);
 
 struct Processes {
-    db: TestDb,
+    db: TestStore,
     live: LiveUser,
     runtime: Option<BootedAgent>,
     registry: BackgroundExecutionRegistry,
@@ -38,7 +40,7 @@ impl Processes {
 
     async fn with_deadline(name: &str, deadline: Option<i64>) -> Self {
         let target = live_target().await;
-        let db = test_db(name).await;
+        let db = trial_store(name).await;
         let live = LiveUser::install(&db, &target).await;
         let root = tokio::task::spawn_blocking(tempfile::tempdir)
             .await
@@ -115,7 +117,7 @@ impl Processes {
             db.node.clone(),
             db.node_identity.clone(),
             DocumentRuntimeOptions {
-                backend_admission: Some(db.home.backend_admission()),
+                backend_admission: Some(db.backend_admission()),
                 tool_ceiling: ToolCeiling::readonly_at(root.path()),
                 ..Default::default()
             },

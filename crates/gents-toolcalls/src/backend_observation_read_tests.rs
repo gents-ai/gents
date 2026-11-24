@@ -10,7 +10,7 @@ use gents_tools::builtin::defra_query::{CollectionScope, DefraQueryTool, QueryPa
 #[tokio::test]
 async fn runtime_observation_reads_do_not_wait_for_the_mutation_gate() {
     const OBSERVATION_TIMEOUT: Duration = Duration::from_secs(10);
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "backend-observation-reads",
         gents_session::test_support::no_lifecycle_plugins(),
     )

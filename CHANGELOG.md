@@ -6,15 +6,6 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
-- Task `goal_blocked_audit_threshold` (positive, default 3) and
-  `goal_max_infrastructure_retries` (non-negative, default 2) set the limits of
-  the Goals a Task creates. Every Goal a Task creates pins them, including Task
-  messages to an Agent. A Task that sets either without a goal objective is
-  rejected. Goals a person starts or the model creates keep the defaults. Goal
-  snapshots and the desktop's Goal view report both, and the desktop Tasks
-  panel edits them. A Goal's creation claim records both beside its token
-  budget, so a replayed creation that asks for other limits conflicts, as one
-  with another budget does.
 - Eval seed stages take `expect_fire` (default `true`). With `false` the stage
   passes once the trial home is quiet with nothing fired for its seed, and
   fails if anything fires. A seed nothing fires for, in a trial runtime that
@@ -27,6 +18,70 @@ source consistency checks, not a separate runtime compatibility version.
   `trigger_id`, `source_collection` or `of_seed`. Breaking: `eval checks
   --json` prints `{"checks": [...], "stage_fields": [...]}`; the text output
   lists the stage fields after the checks.
+- Breaking: every inference call records `first_token_at`, when the
+  provider streamed the call's first text, reasoning or tool-call delta;
+  response headers, keep-alives and message ids are not tokens. It is null for
+  a call that was not streamed or that failed before a token, and each retry
+  records its own. On the Claude Messages wire a tool call now streams its
+  name as a tool-call delta when its block starts. A home whose
+  `InferenceCall` predates the field is refused as an older home (exit code
+  65) and left unchanged; start a new home.
+- Eval trials report the subject's time to first token, from a call's
+  `started_at` to its `first_token_at`: `subject_usage` holds the first
+  request's (`first_request.first_token_ms`, unknown when that first call
+  streamed no token) and the median over the subject's turns that streamed
+  one (`median_first_token_ms`). `eval trial` prints both, `eval show` adds
+  their medians per cell and run, and `eval compare` shows their change on
+  passing trials.
+- The Engineer creates document access policies. `config` `policy create`
+  registers a policy it writes (resources with typed relations and union
+  permissions; names beginning `Gents` are the runtime's) as the calling
+  Agent, which needs node permission `add-dac-policy`, now in the default
+  Agent's `policy-delegate` set. The receipt gives the `@policy` line that
+  binds it to a new collection; `policy grant` and `policy revoke` change its
+  relations per document. Under `self_config_no_lockout` an Agent no longer
+  revokes its own document relations. On a home initialised earlier the
+  Engineer was issued the set without `add-dac-policy`, so `policy create`
+  is refused there.
+- Eval trials record what the subject agent itself spent, beside the
+  home-wide `usage`: each completion's `subject_usage` holds its first request's
+  prompt tokens and estimated component split (tool schemas among them), its
+  turns' input, output and cached tokens, its tool calls split into direct,
+  `script` and inside-script calls with failures, and its wall, model and tool
+  time in milliseconds. A count some call left unrecorded is null beside the
+  number of calls that left it. `eval show` reports medians and totals per
+  cell and run over the trials that are evidence and over the passing ones,
+  `eval trial` prints the trial's figures, and `eval compare` shows the
+  change on passing trials without gating on it.
+- Breaking: one blocked report pauses a Goal. When the working Agent calls
+  `update_goal` with status `blocked`, the Goal stops issuing continuation
+  turns at once and waits for its user; it is resumable, not failed. The
+  user's next message in the session resumes it, as does
+  `gents automation goal resume-request`. The reason the Agent gave is kept as
+  the Goal's `blocked_reason` for the user to read and is never compared
+  between turns. The rule that blocked a Goal only after three consecutive
+  byte-identical reasons is removed, with the Goal's
+  `consecutive_blocked_audits`, `last_blocked_request_id`,
+  `last_blocked_reason` and `blocked_audit_threshold` fields, the creation
+  claim's and Task fire's threshold, and Task `goal_blocked_audit_threshold`.
+- A Goal with a token budget pauses when it reaches it. A Goal has a budget
+  only when one is set (by the person creating or editing it, the Task that
+  fires it, or the Agent for its own Goal); there is no default budget, and a
+  Goal without one has no token ceiling. Reaching it runs one wrap-up turn, in
+  which the Agent is told to summarize what is done, what remains and what it
+  would do next, and then pauses the Goal as `budget_limited`. A person raises
+  the budget with `goal set --token-budget` or lifts it with
+  `--clear-token-budget` (also while the Goal is blocked or budget-limited)
+  and resumes it. A Task fire whose Goal pauses records that pause as the
+  fire's outcome; the Goal stays resumable.
+- Task `goal_max_infrastructure_retries` (non-negative, default 2) sets the
+  infrastructure retry limit of the Goals a Task creates. Every Goal a Task
+  creates pins it, including Task messages to an Agent. A Task that sets it
+  without a goal objective is rejected. Goals a person starts or the model
+  creates keep the default. Goal snapshots and the desktop's Goal view report
+  it, and the desktop Tasks panel edits it. A Goal's creation claim records it
+  beside its token budget, so a replayed creation that asks for another limit
+  conflicts, as one with another budget does.
 - Breaking: the successor budget of a request lineage (operator reissues and
   background wake redrives) is InferenceExecution `max_request_retries`
   (non-negative, default 3, zero allows none) instead of a value clients sign.

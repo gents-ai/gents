@@ -70,7 +70,8 @@ pub(crate) fn budget_stop_reason(trigger_id: &str, budget: u32) -> String {
 impl PreparedFire {
     /// Counts this Trigger's receipts in the budget window inside the admission
     /// transaction and returns the stop when the budget is spent. A replayed
-    /// fire spends nothing. The caller admits nothing on a stop and records it
+    /// fire spends nothing. The count is fenced by the receipt's unique
+    /// `fire_sequence` ([`stage_fire_receipt`]). The caller admits nothing on a stop and records it
     /// through [`crate::documents::stop_trigger_for_budget`].
     pub(crate) async fn stage_budget(
         &self,
@@ -142,10 +143,13 @@ pub(crate) fn fire_outcome_reason(
             && goal.session_id == fire.session_id
             && goal.assignment_request_id == fire.request_id
     })?;
-    goal_outcome_terminal(&goal.status).then(|| goal.status.clone())
+    goal_outcome_settled(&goal.status).then(|| goal.status.clone())
 }
 
-fn goal_outcome_terminal(status: &str) -> bool {
+/// Lean `Triggers.Durable.goalSettled`: the Goal ended or paused awaiting its
+/// user; the fire's outcome records which, once, and the Goal stays
+/// resumable.
+fn goal_outcome_settled(status: &str) -> bool {
     matches!(
         status,
         "complete" | "blocked" | "budget_limited" | "stopped"
@@ -253,7 +257,7 @@ pub(super) fn select_goal_outcome_binding(
             && goal.session_id == fire.session_id
             && goal.assignment_request_id == fire.request_id
     })?;
-    if goal_outcome_terminal(&retained.status) {
+    if goal_outcome_settled(&retained.status) {
         return Some(retained.clone());
     }
     Some(
@@ -327,13 +331,34 @@ pub(crate) async fn stage_fire_receipt(
     {
         return Ok(false);
     }
+    let mut input = serde_json::to_value(fire)?;
+    input["fire_sequence"] = next_fire_sequence(txn, &fire.identity).await?.into();
     txn.execute_client_signed_create(
         "mutation($input: TriggerFireMutationInputArg!) { create_TriggerFire(input: $input) { _docID } }",
-        &serde_json::json!({"input":fire}),
+        &serde_json::json!({"input": input}),
         gents_protocol::schemas::TRIGGER_FIRE,
     )
     .await?;
     Ok(true)
+}
+
+/// One past the highest `fire_sequence` of the Trigger's receipts this
+/// transaction reads. `(owner_did, trigger_id, fire_sequence)` is a unique
+/// index, so a receipt committed after that read aborts this transaction and
+/// its owner admits again on a fresh read: the budget count in the same
+/// transaction is never stale at commit (Lean
+/// `Triggers.FireBudget.concurrent_admission_preserves_bound`).
+async fn next_fire_sequence(txn: &ConfigApplyTxn<'_>, identity: &FireIdentity) -> Result<i64> {
+    let response = txn
+        .execute(&format!(
+            r#"{{ TriggerFire(filter: {{ owner_did: {{ _eq: "{owner}" }}, trigger_id: {{ _eq: "{trigger}" }} }}, order: {{ fire_sequence: DESC }}, limit: 1) {{ fire_sequence }} }}"#,
+            owner = gents_store::graphql::escape_graphql_string(&identity.owner_did),
+            trigger = gents_store::graphql::escape_graphql_string(&identity.trigger_id),
+        ))
+        .await?;
+    Ok(response["data"]["TriggerFire"][0]["fire_sequence"]
+        .as_i64()
+        .map_or(0, |highest| highest + 1))
 }
 
 pub(crate) async fn stage_session_child_relationships(
@@ -496,7 +521,7 @@ pub(crate) async fn stage_outcome_reader(
     Ok(())
 }
 
-pub(crate) const FIRE_FIELDS: &str = "fire_key owner_did trigger_id source_collection source_doc_id task_id request_id session_id goal_id goal_objective goal_token_budget goal_blocked_audit_threshold goal_max_infrastructure_retries goal_assignment_applied emit_outcome queued_serial source_handoff_id reply_session_id shard_id attempt created_at";
+pub(crate) const FIRE_FIELDS: &str = "fire_key owner_did trigger_id source_collection source_doc_id task_id request_id session_id goal_id goal_objective goal_token_budget goal_max_infrastructure_retries goal_assignment_applied emit_outcome queued_serial source_handoff_id reply_session_id shard_id attempt created_at";
 
 async fn outcome_published(txn: &ConfigApplyTxn<'_>, fire: &TriggerFire) -> Result<bool> {
     let response = {
@@ -876,11 +901,6 @@ async fn stage_task_delivery_with_receipt(
                     "Task Goal budget must be positive"
                 );
                 anyhow::ensure!(
-                    fire.goal_blocked_audit_threshold
-                        .is_none_or(|threshold| threshold > 0),
-                    "Task Goal blocked-audit threshold must be positive"
-                );
-                anyhow::ensure!(
                     fire.goal_max_infrastructure_retries
                         .is_none_or(|retries| retries >= 0),
                     "Task Goal infrastructure retry limit must not be negative"
@@ -889,7 +909,6 @@ async fn stage_task_delivery_with_receipt(
             None => anyhow::ensure!(
                 fire.goal_objective.is_none()
                     && fire.goal_token_budget.is_none()
-                    && fire.goal_blocked_audit_threshold.is_none()
                     && fire.goal_max_infrastructure_retries.is_none(),
                 "ordinary Task receipt cannot declare a Goal assignment"
             ),

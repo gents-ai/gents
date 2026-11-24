@@ -8,14 +8,15 @@ use gents_store::graphql::escape_graphql_string;
 use serde_json::json;
 
 use crate::support::live_inference::{
-    bind_target, boot_live_agent, live_target, rows_when, wait_for_request_terminal, LiveUser,
+    bind_target, boot_live_agent, live_target, wait_for_request_terminal, LiveUser,
 };
-use crate::support::test_db;
+use crate::support::trial_store;
+use gents_store::test_support::rows_when;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn admitted_live_oneshot_completes_with_its_selected_terminal_message() {
     let target = live_target().await;
-    let db = test_db("live-oneshot-admitted").await;
+    let db = trial_store("live-oneshot-admitted").await;
     let actors = bind_target(&db, &target).await;
     gents_inference::backends::registry::set_backend_probe_status_as(
         &actors.fixture.access,
@@ -29,7 +30,7 @@ async fn admitted_live_oneshot_completes_with_its_selected_terminal_message() {
         db.node.clone(),
         db.node_identity.clone(),
         DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
+            backend_admission: Some(db.backend_admission()),
             tool_ceiling: gents_tools::surface::ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -47,7 +48,7 @@ async fn admitted_live_oneshot_completes_with_its_selected_terminal_message() {
             db.node.clone(),
             agent,
             "Acknowledge this one-shot request in a short sentence. Do not call tools.",
-            &db.home.backend_admission(),
+            &db.backend_admission(),
         ),
     )
     .await
@@ -95,7 +96,7 @@ async fn admitted_live_oneshot_completes_with_its_selected_terminal_message() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn scheduled_live_fire_completes_and_persists_trigger_writeback() {
     let target = live_target().await;
-    let db = test_db("live-scheduled-fire").await;
+    let db = trial_store("live-scheduled-fire").await;
     let actors = bind_target(&db, &target).await;
     let live = LiveUser::install(&db, &target).await;
     const TASK: &str = "live-scheduled-task";

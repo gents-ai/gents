@@ -1,13 +1,7 @@
 pub mod embedded;
-pub use embedded::{
-    signed_test_node, signed_test_node_from_db, signed_test_node_without_agent,
-    signed_test_node_without_agent_from_db, test_db, test_db_as, test_db_at,
-    test_db_with_tool_policy, TestDb,
-};
+pub use embedded::default_agent;
 
-use gents_documents::test_support::{
-    ensure_test_node, set_test_default_agent_as, test_agent_documents,
-};
+use gents_documents::test_support::{ensure_test_node, set_test_default_agent_as};
 use gents_store::test_support::held_runtime_identity;
 
 /// A request with fixed identity and no execution state, for code that reads
@@ -32,6 +26,7 @@ pub fn agent_request(request_id: &str) -> gents_protocol::row::AgentRequest {
         execution_lease_expires_at: None,
         execution_lease_secs: None,
         request_hop: 0,
+        interrupt_generation: None,
         caused_by_parent_request_id: None,
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
@@ -117,34 +112,15 @@ pub async fn install_test_agent_binding_with_access(
     binding: &gents_protocol::agent_identity::AgentIdentityBinding,
     access: &gents_store::config_client::ConfigAccess,
 ) {
-    use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-    let documents = test_agent_documents(owner, display_name, binding)
-        .into_iter()
-        .map(|(collection, value)| DesiredStateApplyDocument {
-            collection,
-            add: value.clone(),
-            update: value,
-        })
-        .collect();
-    let plan = DesiredStateApplyPlan::new(documents).unwrap();
-    access
-        .transact_write("test.install_agent", |txn| {
-            let plan = &plan;
-            Box::pin(async move {
-                gents_documents::apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::resolved::ProviderProfilePolicy,
-                )
-                .await
-            })
-        })
-        .await
-        .unwrap();
-    let backend = format!("{}:backend", binding.agent_did);
-    crate::backends::registry::set_backend_probe_status_as(access, owner, &backend, "healthy")
-        .await
-        .unwrap();
+    gents_documents::test_support::install_test_agent_as(
+        access,
+        owner,
+        display_name,
+        binding,
+        &crate::resolved::ProviderProfilePolicy,
+    )
+    .await;
+    embedded::mark_backend_healthy(access, owner, binding).await;
 }
 
 /// A static-configuration agent over `identity`, with the owner's defaults.
@@ -214,3 +190,4 @@ pub fn resolved_agent(
 }
 
 pub mod document_fixtures;
+pub mod scripted_backend;

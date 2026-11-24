@@ -29,6 +29,7 @@ mod client_pack_evidence;
 pub mod client_request_input;
 pub mod client_signed_agent;
 mod device_group;
+pub(crate) use device_group::verified_publisher_node;
 pub(crate) mod transport_replica;
 pub use device_group::DeviceGroupReadError;
 pub mod runtime_access;
@@ -60,6 +61,7 @@ mod delegation;
 mod delegation_conformance;
 mod destructive_decision;
 pub mod document_decide;
+mod document_policy;
 #[cfg(test)]
 mod dormant_file_request_conformance;
 mod error;
@@ -69,6 +71,8 @@ mod graphql;
 mod held_audience;
 mod home_provider;
 pub mod home_status;
+#[cfg(test)]
+mod isolation_premise_tests;
 pub mod node_deferred_operation;
 mod node_document_publication;
 mod node_permissions;
@@ -93,6 +97,7 @@ pub mod session_children;
 mod stored_create;
 mod subscription;
 pub mod transport_publication;
+pub(crate) mod transport_sentinel;
 mod txn;
 pub mod user_write;
 #[cfg(test)]

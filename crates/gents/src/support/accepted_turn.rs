@@ -1,0 +1,568 @@
+use gents::{DocumentRuntimeOptions, Gents};
+use gents_store::identity::NodeIdentity;
+
+use super::fixtures::{bind_agent_backend, bind_selected_managed_agent_backend};
+use super::interrupt::BootedAgent;
+use gents_inference::test_support::scripted_backend::{
+    ScriptedBackend, StreamChunk, StreamPlan, StreamResponse,
+};
+
+pub struct AcceptedTurnSpec<'a> {
+    pub backend_id: &'a str,
+    pub model: &'a str,
+    pub parent_agent_did: &'a str,
+    pub configured_agent_dids: &'a [&'a str],
+    pub request_id: &'a str,
+    pub session_id: &'a str,
+    pub prompt: &'a str,
+    pub accepted_chunks: Vec<StreamChunk>,
+    pub child_plans: Vec<StreamPlan>,
+    pub valid_until: Option<&'a str>,
+    pub request_hop: Option<u32>,
+    pub request_setup: Option<RequestSetup<'a>>,
+}
+
+pub type RequestSetup<'a> =
+    Box<dyn FnOnce(&mut gents_protocol::request_admission::AgentRequestCreate) + 'a>;
+
+pub struct PreparedAcceptedTurn {
+    pub backend: ScriptedBackend,
+}
+
+pub struct AcceptedTurnRuntime {
+    pub runtime: BootedAgent,
+    pub backend: ScriptedBackend,
+}
+
+pub async fn enqueue_local_accepted_request(
+    db: &gents_store::test_support::TestStore,
+    agent_did: &str,
+    request_id: &str,
+    session_id: &str,
+    prompt: &str,
+) {
+    enqueue_local_accepted_request_until(db, agent_did, request_id, session_id, prompt, None).await;
+}
+
+pub async fn enqueue_local_accepted_request_until(
+    db: &gents_store::test_support::TestStore,
+    agent_did: &str,
+    request_id: &str,
+    session_id: &str,
+    prompt: &str,
+    valid_until: Option<&str>,
+) {
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let mut request = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        request_id,
+        gents_protocol::request_admission::RequestScope::new(
+            db.node_identity.did(),
+            db.node_identity.did(),
+            agent_did,
+            session_id,
+        ),
+        prompt,
+        "interactive",
+        now,
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+            db.node_identity.did(),
+        ),
+    );
+    request.valid_until = valid_until.map(str::to_owned);
+    gents_session::request::admission::sign_agent_request_create(
+        db.node_identity.as_ref(),
+        &mut request,
+    )
+    .await
+    .expect("sign follow-up accepted-turn request");
+    let response = db.node.execute(&request.graphql_mutation().unwrap()).await;
+    assert!(
+        !response.has_errors(),
+        "create follow-up accepted-turn request failed: {:?}",
+        response.errors
+    );
+}
+
+pub async fn enqueue_managed_accepted_request(
+    db: &gents_store::test_support::TestStore,
+    fixture: &super::ManagedAgentFixture,
+    request_id: &str,
+    session_id: &str,
+    prompt: &str,
+) {
+    enqueue_managed_accepted_request_until(db, fixture, request_id, session_id, prompt, None).await;
+}
+
+pub async fn enqueue_managed_accepted_request_until(
+    db: &gents_store::test_support::TestStore,
+    fixture: &super::ManagedAgentFixture,
+    request_id: &str,
+    session_id: &str,
+    prompt: &str,
+    valid_until: Option<&str>,
+) {
+    let node_did = db.node_identity.did();
+    let user_did = fixture.user.did();
+    let agent_did = fixture.binding.agent_did.as_str();
+    let mut request = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        request_id,
+        gents_protocol::request_admission::RequestScope::new(
+            node_did, user_did, agent_did, session_id,
+        ),
+        prompt,
+        "interactive",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user_did),
+    );
+    request.valid_until = valid_until.map(str::to_owned);
+    request.session_doc_id = Some(
+        gents_session::request::lifecycle::reserve_goal_session(&fixture.access, &request)
+            .await
+            .expect("reserve follow-up session"),
+    );
+    request.agent_doc_id = Some(
+        fixture
+            .access
+            .transact_readonly("test.followup.agent", |txn| {
+                Box::pin(async move {
+                    Ok::<_, anyhow::Error>(
+                        gents_documents::read_desired_state_record_in_txn(
+                            txn,
+                            gents_store::collection::Collection::Agent,
+                            node_did,
+                            agent_did,
+                        )
+                        .await?
+                        .expect("managed follow-up Agent")
+                        .0,
+                    )
+                })
+            })
+            .await
+            .expect("read follow-up Agent"),
+    );
+    gents_session::request::admission::sign_agent_request_create(&fixture.user, &mut request)
+        .await
+        .expect("sign follow-up as held user");
+    gents_session::request::lifecycle::submit_client_request(&fixture.access, &request)
+        .await
+        .expect("submit follow-up as held user");
+}
+
+impl AcceptedTurnRuntime {
+    pub async fn shutdown(self) {
+        self.runtime.shutdown().await;
+    }
+
+    pub async fn crash(self) {
+        self.runtime.crash().await;
+    }
+}
+
+pub async fn prepare_accepted_turn(
+    db: &gents_store::test_support::TestStore,
+    spec: AcceptedTurnSpec<'_>,
+) -> PreparedAcceptedTurn {
+    prepare_accepted_turn_as(db, db.node_identity.as_ref(), spec).await
+}
+
+pub async fn prepare_managed_accepted_turn(
+    db: &gents_store::test_support::TestStore,
+    fixture: &super::ManagedAgentFixture,
+    mut spec: AcceptedTurnSpec<'_>,
+) -> PreparedAcceptedTurn {
+    assert_eq!(spec.parent_agent_did, fixture.binding.agent_did);
+    let mut plans = vec![StreamPlan::current_authored_user(
+        spec.prompt,
+        vec![
+            StreamResponse::streams(spec.prompt, spec.accepted_chunks),
+            StreamResponse::completes(spec.prompt, ["parent complete"]),
+        ],
+    )];
+    plans.extend(
+        spec.child_plans
+            .into_iter()
+            .map(StreamPlan::with_current_authored_user),
+    );
+    let backend =
+        ScriptedBackend::start_with_plans(spec.model, plans).expect("start accepted-turn backend");
+    for agent_did in spec.configured_agent_dids {
+        bind_selected_managed_agent_backend(
+            db,
+            fixture,
+            agent_did,
+            *agent_did == spec.parent_agent_did,
+            spec.backend_id,
+            backend.endpoint(),
+            spec.model,
+        )
+        .await;
+    }
+
+    let node_did = db.node_identity.did();
+    let user_did = fixture.user.did();
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let mut request = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        spec.request_id,
+        gents_protocol::request_admission::RequestScope::new(
+            node_did,
+            user_did,
+            spec.parent_agent_did,
+            spec.session_id,
+        ),
+        spec.prompt,
+        "interactive",
+        &now,
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user_did),
+    );
+    request.valid_until = spec.valid_until.map(str::to_owned);
+    request.request_hop = spec.request_hop.unwrap_or(0);
+    if let Some(setup) = spec.request_setup.take() {
+        setup(&mut request);
+    }
+    request.session_doc_id = Some(
+        gents_session::request::lifecycle::reserve_goal_session(&fixture.access, &request)
+            .await
+            .expect("reserve accepted-turn session"),
+    );
+    request.agent_doc_id = Some(
+        fixture
+            .access
+            .transact_readonly("test.accepted_turn.agent", |txn| {
+                Box::pin(async move {
+                    Ok::<_, anyhow::Error>(
+                        gents_documents::read_desired_state_record_in_txn(
+                            txn,
+                            gents_store::collection::Collection::Agent,
+                            node_did,
+                            spec.parent_agent_did,
+                        )
+                        .await?
+                        .expect("managed accepted-turn Agent")
+                        .0,
+                    )
+                })
+            })
+            .await
+            .expect("read managed accepted-turn Agent"),
+    );
+    fixture
+        .access
+        .transact_write("test.accepted_turn.title", |txn| {
+            let now = &now;
+            Box::pin(async move {
+                gents_session::session::apply_title_in_txn(
+                    txn,
+                    node_did,
+                    Some(user_did),
+                    spec.session_id,
+                    Some("generated-title"),
+                    gents_protocol::session::SessionTitleSource::Generated,
+                    now,
+                )
+                .await
+            })
+        })
+        .await
+        .expect("set accepted-turn session title");
+    gents_session::request::admission::sign_agent_request_create(&fixture.user, &mut request)
+        .await
+        .expect("sign accepted-turn request as held user");
+    gents_session::request::lifecycle::submit_client_request(&fixture.access, &request)
+        .await
+        .expect("submit accepted-turn request as held user");
+    PreparedAcceptedTurn { backend }
+}
+
+pub async fn prepare_accepted_turn_as(
+    db: &gents_store::test_support::TestStore,
+    identity: &dyn NodeIdentity,
+    spec: AcceptedTurnSpec<'_>,
+) -> PreparedAcceptedTurn {
+    prepare_accepted_turn_with_signer(db, identity, identity, spec).await
+}
+
+pub async fn prepare_accepted_turn_with_signer(
+    db: &gents_store::test_support::TestStore,
+    identity: &dyn NodeIdentity,
+    signer: &dyn NodeIdentity,
+    mut spec: AcceptedTurnSpec<'_>,
+) -> PreparedAcceptedTurn {
+    let mut plans = vec![StreamPlan::current_authored_user(
+        spec.prompt,
+        vec![
+            StreamResponse::streams(spec.prompt, spec.accepted_chunks),
+            StreamResponse::completes(spec.prompt, ["parent complete"]),
+        ],
+    )];
+    plans.extend(
+        spec.child_plans
+            .into_iter()
+            .map(StreamPlan::with_current_authored_user),
+    );
+    let backend =
+        ScriptedBackend::start_with_plans(spec.model, plans).expect("start accepted-turn backend");
+    for agent_did in spec.configured_agent_dids {
+        bind_agent_backend(
+            db,
+            agent_did,
+            spec.backend_id,
+            backend.endpoint(),
+            spec.model,
+        )
+        .await;
+    }
+
+    let existing_session =
+        super::snapshots::fetch_session_snapshot(db.node.as_ref(), spec.session_id).await;
+    if existing_session.is_none() {
+        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let mut session = super::session_document(spec.session_id, spec.parent_agent_did, &now);
+        session.node_did = identity.did().to_string();
+        session.requester_did = Some(identity.did().to_string());
+        session.title = Some(gents_protocol::session::SessionTitle {
+            text: "generated-title".into(),
+            source: gents_protocol::session::SessionTitleSource::Generated,
+        });
+        super::create_session_document(db.node.as_ref(), &session).await;
+    } else if existing_session.is_some_and(|session| session.title.is_none()) {
+        let session_id = gents_store::graphql::escape_graphql_string(spec.session_id);
+        let title = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
+            "text": "generated-title",
+            "source": "generated"
+        }))
+        .expect("render accepted-turn fixture title");
+        let response = db
+            .node
+            .execute(&format!(
+                r#"mutation {{ update_AgentSession(filter: {{ session_id: {{ _eq: "{session_id}" }} }}, input: {{ title: {title} }}) {{ _docID }} }}"#
+            ))
+            .await;
+        assert!(
+            !response.has_errors(),
+            "prepopulate accepted-turn session title failed: {:?}",
+            response.errors
+        );
+    }
+
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let mut request = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        spec.request_id,
+        gents_protocol::request_admission::RequestScope::new(
+            identity.did(),
+            identity.did(),
+            spec.parent_agent_did,
+            spec.session_id,
+        ),
+        spec.prompt,
+        "interactive",
+        now,
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(identity.did()),
+    );
+    request.valid_until = spec.valid_until.map(str::to_owned);
+    request.request_hop = spec.request_hop.unwrap_or(0);
+    if let Some(setup) = spec.request_setup.take() {
+        setup(&mut request);
+    }
+    gents_session::request::admission::sign_agent_request_create(signer, &mut request)
+        .await
+        .expect("sign accepted-turn request");
+    let response = db.node.execute(&request.graphql_mutation().unwrap()).await;
+    assert!(
+        !response.has_errors(),
+        "create accepted-turn request failed: {:?}",
+        response.errors
+    );
+
+    PreparedAcceptedTurn { backend }
+}
+
+pub async fn boot_prepared_accepted_turn(
+    db: &gents_store::test_support::TestStore,
+    prepared: PreparedAcceptedTurn,
+    agent: Gents,
+) -> AcceptedTurnRuntime {
+    let node_did = agent.node_did().to_string();
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let mut handle = tokio::spawn(agent.run(shutdown_rx));
+    super::interrupt::wait_for_runtime_ready_or_exit(db.node.as_ref(), &node_did, &mut handle)
+        .await;
+    AcceptedTurnRuntime {
+        runtime: BootedAgent::new(shutdown_tx, handle, node_did),
+        backend: prepared.backend,
+    }
+}
+
+pub async fn boot_accepted_turn(
+    db: &gents_store::test_support::TestStore,
+    spec: AcceptedTurnSpec<'_>,
+    runtime_options: DocumentRuntimeOptions,
+) -> AcceptedTurnRuntime {
+    let prepared = prepare_accepted_turn(db, spec).await;
+    let identity: std::sync::Arc<dyn NodeIdentity> = db.node_identity.clone();
+    let agent = Gents::from_default_agent_documents(
+        db.node.clone(),
+        identity,
+        DocumentRuntimeOptions {
+            backend_admission: Some(db.backend_admission()),
+            ..runtime_options
+        },
+    )
+    .await
+    .expect("build accepted-turn runtime");
+    boot_prepared_accepted_turn(db, prepared, agent).await
+}
+
+pub async fn boot_accepted_turn_with_backend_capacity(
+    db: &gents_store::test_support::TestStore,
+    spec: AcceptedTurnSpec<'_>,
+    runtime_options: DocumentRuntimeOptions,
+    max_concurrent: usize,
+) -> AcceptedTurnRuntime {
+    boot_accepted_turn_with_backend_capacity_inner(db, spec, runtime_options, max_concurrent, None)
+        .await
+}
+
+pub async fn boot_managed_accepted_turn_with_backend_capacity(
+    db: &gents_store::test_support::TestStore,
+    fixture: &super::ManagedAgentFixture,
+    spec: AcceptedTurnSpec<'_>,
+    runtime_options: DocumentRuntimeOptions,
+    max_concurrent: usize,
+) -> AcceptedTurnRuntime {
+    use gents_documents::apply_desired_state_plan;
+    use gents_documents::{
+        read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    };
+    assert!(max_concurrent > 0);
+    let backend_id = spec.backend_id.to_owned();
+    let prepared = prepare_managed_accepted_turn(db, fixture, spec).await;
+    let did = db.node_identity.did();
+    fixture
+        .access
+        .transact_write("test.accepted_turn_backend_capacity", |txn| {
+            let backend_id = &backend_id;
+            Box::pin(async move {
+                let (_, mut backend) = read_desired_state_record_in_txn(
+                    txn,
+                    gents_store::collection::Collection::InferenceBackend,
+                    did,
+                    backend_id,
+                )
+                .await?
+                .expect("accepted-turn backend");
+                backend["max_concurrent"] = max_concurrent.into();
+                let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+                    collection: gents_store::collection::Collection::InferenceBackend,
+                    add: backend.clone(),
+                    update: backend,
+                }])?;
+                apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
+            })
+        })
+        .await
+        .expect("configure accepted-turn backend capacity");
+    let agent = Gents::from_default_agent_documents(
+        db.node.clone(),
+        db.node_identity.clone(),
+        DocumentRuntimeOptions {
+            backend_admission: Some(db.backend_admission()),
+            ..runtime_options
+        },
+    )
+    .await
+    .expect("build accepted-turn runtime");
+    boot_prepared_accepted_turn(db, prepared, agent).await
+}
+
+pub async fn boot_accepted_turn_with_backend_capacity_and_dynamic_followups(
+    db: &gents_store::test_support::TestStore,
+    spec: AcceptedTurnSpec<'_>,
+    runtime_options: DocumentRuntimeOptions,
+    max_concurrent: usize,
+    marker: &str,
+) -> AcceptedTurnRuntime {
+    boot_accepted_turn_with_backend_capacity_inner(
+        db,
+        spec,
+        runtime_options,
+        max_concurrent,
+        Some(marker),
+    )
+    .await
+}
+
+async fn boot_accepted_turn_with_backend_capacity_inner(
+    db: &gents_store::test_support::TestStore,
+    spec: AcceptedTurnSpec<'_>,
+    runtime_options: DocumentRuntimeOptions,
+    max_concurrent: usize,
+    dynamic_marker: Option<&str>,
+) -> AcceptedTurnRuntime {
+    assert!(max_concurrent > 0);
+    let backend_id = spec.backend_id.to_owned();
+    let prepared = prepare_accepted_turn(db, spec).await;
+    if let Some(marker) = dynamic_marker {
+        prepared.backend.enable_dynamic_followups(marker);
+    }
+    use gents_documents::apply_desired_state_plan;
+    use gents_documents::{
+        read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    };
+    let did = db.node_identity.did();
+    gents_store::config_client::ConfigAccess::transact_local_write(
+        &db.node,
+        None,
+        "test.accepted_turn_backend_capacity",
+        |txn| {
+            let backend_id = backend_id.clone();
+            Box::pin(async move {
+                let (_, mut backend) = read_desired_state_record_in_txn(
+                    txn,
+                    gents_store::collection::Collection::InferenceBackend,
+                    did,
+                    &backend_id,
+                )
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("accepted-turn backend {backend_id} missing"))?;
+                backend["max_concurrent"] = max_concurrent.into();
+                let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+                    collection: gents_store::collection::Collection::InferenceBackend,
+                    add: backend.clone(),
+                    update: backend,
+                }])?;
+                apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
+            })
+        },
+    )
+    .await
+    .expect("configure accepted-turn backend worker capacity");
+    let identity: std::sync::Arc<dyn NodeIdentity> = db.node_identity.clone();
+    let agent = Gents::from_default_agent_documents(
+        db.node.clone(),
+        identity,
+        DocumentRuntimeOptions {
+            backend_admission: Some(db.backend_admission()),
+            ..runtime_options
+        },
+    )
+    .await
+    .expect("build accepted-turn runtime");
+    boot_prepared_accepted_turn(db, prepared, agent).await
+}

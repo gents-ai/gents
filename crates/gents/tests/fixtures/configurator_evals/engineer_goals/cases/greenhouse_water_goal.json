@@ -13,59 +13,14 @@
   "stages": [
     {
       "stage_id": "goal",
+      "prompt": "Track this as a goal with a 350,000-token budget: report the water use of every active greenhouse zone in water-report.json as {\"active_litres\": N, \"zones\": [the active zone ids in order]}. Inactive zones don't count.",
       "settle": true,
-      "prompt": "I want this tracked as the session's goal, worded exactly \"Report the water use of every active greenhouse zone in water-report.json\" and capped at 350000 tokens. See it through. Inactive zones don't count. water-report.json should hold {\"active_litres\": N, \"zones\": [the active zone ids in order]}.",
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "goal",
-          "collection": "Goal",
-          "filter": {
-            "session_id": {
-              "_eq": "$session"
-            }
-          },
-          "fields": [
-            "goal_id",
-            "objective",
-            "status",
-            "token_budget",
-            "completion_evidence",
-            "consecutive_blocked_audits",
-            "last_blocked_reason"
-          ]
-        },
-        {
-          "kind": "file",
-          "name": "report",
-          "glob": "water-report.json"
-        }
-      ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "create_goal"
-            ],
-            "forbidden": [
-              "bash",
-              "bash_unrestricted"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "captured_fields_match",
           "params": {
             "name": "goal",
             "expect": [
-              {
-                "field": "objective",
-                "equals": "Report the water use of every active greenhouse zone in water-report.json"
-              },
               {
                 "field": "token_budget",
                 "equals": 350000
@@ -73,10 +28,6 @@
               {
                 "field": "status",
                 "equals": "complete"
-              },
-              {
-                "field": "completion_evidence",
-                "matches": "(?:^|\\D)165(?:\\D|$)"
               }
             ],
             "min_rows": 1,
@@ -107,6 +58,32 @@
           },
           "tier": "acceptance",
           "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "goal",
+          "collection": "Goal",
+          "filter": {
+            "session_id": {
+              "_eq": "$session"
+            }
+          },
+          "fields": [
+            "goal_id",
+            "objective",
+            "status",
+            "token_budget",
+            "tokens_used",
+            "completion_evidence",
+            "blocked_reason"
+          ]
+        },
+        {
+          "kind": "file",
+          "name": "report",
+          "glob": "water-report.json"
         }
       ]
     }

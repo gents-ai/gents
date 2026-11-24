@@ -56,7 +56,11 @@ pub(super) fn install_fixture_plugin(
 
 #[tokio::test]
 async fn missing_and_removed_plugins_demote_then_readmit_the_agent() {
-    let endpoint = MockModelEndpoint::start("default").unwrap();
+    let endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder("default")
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Refuse)
+            .start()
+            .unwrap();
     let fixture = plugin_runtime_fixture(
         "plugin-readmission",
         "backend-plugin-readmit",

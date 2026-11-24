@@ -1,36 +1,43 @@
+use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 
+use crate::beneath::{Intent, Located, RootDir};
 #[cfg(feature = "test-fixtures")]
 use crate::blocker::TraversalBlocker;
 
 #[derive(Clone)]
 pub(crate) struct RunnerContext {
-    root: PathBuf,
+    root: RootDir,
     base: PathBuf,
     #[cfg(feature = "test-fixtures")]
     blocker: Option<TraversalBlocker>,
 }
 
+/// A directory the walk holds, and its path for display.
+pub(crate) struct HeldDir {
+    pub(crate) fd: Arc<OwnedFd>,
+    pub(crate) path: PathBuf,
+}
+
 impl RunnerContext {
-    pub(crate) fn new_with_base(root: PathBuf, base: Option<PathBuf>) -> Result<Self> {
-        let root = std::fs::canonicalize(&root)
-            .with_context(|| format!("canonicalizing runner root {}", root.display()))?;
+    pub(crate) fn new_with_base(root: RootDir, base: Option<PathBuf>) -> Result<Self> {
         let base = match base {
             Some(base) => {
                 let base = std::fs::canonicalize(&base)
                     .with_context(|| format!("canonicalizing runner base {}", base.display()))?;
-                if !base.is_dir() || !base.starts_with(&root) {
+                if !base.is_dir() || !base.starts_with(root.path()) {
                     bail!(
                         "runner base {} is outside root {} or is not a directory",
                         base.display(),
-                        root.display()
+                        root.path().display()
                     );
                 }
                 base
             }
-            None => root.clone(),
+            None => root.path().to_path_buf(),
         };
         Ok(Self {
             root,
@@ -51,65 +58,50 @@ impl RunnerContext {
         self.blocker.as_ref()
     }
 
-    fn resolve_path(&self, path: &str) -> Result<PathBuf> {
-        let candidate = Path::new(path);
-        let resolved = if candidate.is_absolute() {
-            std::fs::canonicalize(candidate)
-                .with_context(|| format!("resolving path {}", candidate.display()))?
-        } else {
-            let joined = self.base.join(candidate);
-            std::fs::canonicalize(&joined)
-                .with_context(|| format!("resolving path {}", joined.display()))?
+    pub(crate) fn root(&self) -> &RootDir {
+        &self.root
+    }
+
+    pub(crate) fn resolve_existing_path(&self, path: Option<&str>) -> Result<Located> {
+        let requested = match path {
+            Some(path) if !path.trim().is_empty() => Path::new(path),
+            _ => self.base.as_path(),
         };
-        self.ensure_allowed(resolved)
+        Ok(self.root.locate(requested, &self.base, Intent::Existing)?)
     }
 
-    pub(crate) fn resolve_existing_path(&self, path: Option<&str>) -> Result<PathBuf> {
-        match path {
-            Some(path) if !path.trim().is_empty() => self.resolve_path(path),
-            _ => Ok(self.base.clone()),
-        }
-    }
-
-    pub(crate) fn resolve_existing_dir(&self, path: Option<&str>) -> Result<PathBuf> {
-        let resolved = self.resolve_existing_path(path)?;
-        if !resolved.is_dir() {
-            bail!("path is not a directory: {}", resolved.display());
-        }
-        Ok(resolved)
-    }
-
-    fn ensure_allowed(&self, path: PathBuf) -> Result<PathBuf> {
-        if path.starts_with(&self.root) {
-            Ok(path)
-        } else {
-            bail!(
-                "path is outside the allowed tool root {}: {}",
-                self.root.display(),
-                path.display()
-            );
-        }
+    pub(crate) fn resolve_existing_dir(&self, path: Option<&str>) -> Result<HeldDir> {
+        let located = self.resolve_existing_path(path)?;
+        Ok(HeldDir {
+            fd: located.open_dir()?,
+            path: located.path(),
+        })
     }
 
     pub(crate) fn base_dir(&self) -> &Path {
         &self.base
     }
 
-    pub(crate) fn resolve_prune_subdir(&self, components: &[&str]) -> Option<PathBuf> {
+    /// The directory the literal components name below the base, when no
+    /// link stands on the way to it.
+    pub(crate) fn resolve_prune_subdir(&self, components: &[&str]) -> Option<HeldDir> {
         let mut candidate = self.base.clone();
-        for component in components {
-            candidate.push(component);
+        candidate.extend(components);
+        let located = self
+            .root
+            .locate(&candidate, &self.base, Intent::Existing)
+            .ok()?;
+        if located.path() != candidate {
+            return None;
         }
-        let resolved = std::fs::canonicalize(&candidate).ok()?;
-        if resolved == candidate && resolved.is_dir() && resolved.starts_with(&self.root) {
-            Some(resolved)
-        } else {
-            None
-        }
+        Some(HeldDir {
+            fd: located.open_dir().ok()?,
+            path: candidate,
+        })
     }
 
     pub(crate) fn display_path(&self, path: &Path) -> String {
-        for prefix in [&self.base, &self.root] {
+        for prefix in [&self.base, &self.root.path().to_path_buf()] {
             if let Ok(relative) = path.strip_prefix(prefix) {
                 let display = relative.to_string_lossy().replace('\\', "/");
                 return if display.is_empty() {
@@ -120,5 +112,10 @@ impl RunnerContext {
             }
         }
         path.display().to_string()
+    }
+
+    /// The path of `path` below the root, for resolving it again by handle.
+    pub(crate) fn below_root<'a>(&self, path: &'a Path) -> Option<&'a Path> {
+        path.strip_prefix(self.root.path()).ok()
     }
 }

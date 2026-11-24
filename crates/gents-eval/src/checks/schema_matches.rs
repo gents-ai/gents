@@ -263,7 +263,7 @@ mod tests {
 
     #[tokio::test]
     async fn native_schema_evidence_grades_indexes_relations_and_wrong_contracts() {
-        let node_db = gents_inference::test_support::test_db(
+        let node_db = gents_store::test_support::TestStore::start(
             "native-schema-evidence-grades-indexes-re",
             gents_automation::lifecycle_hooks::composition(),
         )

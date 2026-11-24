@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use gents_fs_runner::beneath::{ChildKind, Intent, Located, OpenRoot, RootDir, Walk};
 use serde::Serialize;
 use serde_json::json;
 
@@ -39,48 +40,64 @@ pub fn build_all(
     compiler: &dyn PluginCompiler,
     out: impl Fn(&Path) -> Result<Option<PathBuf>>,
 ) -> Result<Vec<BuildReport>> {
-    let mut dirs: Vec<PathBuf> = std::fs::read_dir(root)
-        .with_context(|| format!("reading {}", root.display()))?
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
-        .filter(|path| path.is_dir() && path.join("manifest.json").is_file())
+    let held = RootDir::open(root)?;
+    let dirs: Vec<_> = held
+        .entries()?
+        .into_iter()
+        .filter(|entry| {
+            entry.kind == ChildKind::Directory
+                && held.is_file(Path::new(&entry.name).join("manifest.json"))
+        })
         .collect();
-    dirs.sort();
     anyhow::ensure!(
         !dirs.is_empty(),
         "no pack directories with a manifest.json were found under {}",
         root.display()
     );
     dirs.iter()
-        .map(|dir| {
-            build_pack(dir, compiler, out(dir)?.as_deref())
+        .map(|entry| {
+            let dir = root.join(&entry.name);
+            build_pack(&held.subdir(&entry.name)?, compiler, out(&dir)?.as_deref())
                 .with_context(|| format!("building {}", dir.display()))
         })
         .collect()
 }
 
 pub fn build_pack(
-    dir: &Path,
+    dir: impl OpenRoot,
     compiler: &dyn PluginCompiler,
     out: Option<&Path>,
 ) -> Result<BuildReport> {
-    let manifest_path = dir.join("manifest.json");
-    let manifest_bytes = std::fs::read(&manifest_path)
+    let dir = dir
+        .open_root()
+        .context("opening the pack directory that holds manifest.json")?;
+    let manifest_path = dir.path().join("manifest.json");
+    let manifest_bytes = dir
+        .read("manifest.json")
         .with_context(|| format!("reading the pack manifest at {}", manifest_path.display()))?;
     let manifest: PackManifest = serde_json::from_slice(&manifest_bytes)
         .with_context(|| format!("parsing the pack manifest at {}", manifest_path.display()))?;
 
     for plugin in &manifest.metadata.plugins {
-        build_plugin(dir, &manifest, plugin, compiler)?;
+        build_plugin(&dir, &manifest, plugin, compiler)?;
     }
-    pack_directory(dir, &manifest, out)
+    let out = out_path(&dir, &manifest, out)?;
+    pack_directory(&dir, &manifest, &Located::at(&out, Intent::Create)?, out)
 }
 
 /// Packs a directory whose plugins are already artifacts: prebuilt ones, or
-/// ones a compiler just produced.
-pub fn pack_built(dir: &Path, out: Option<&Path>) -> Result<BuildReport> {
-    let manifest = super::check::read_manifest(dir)?;
-    pack_directory(dir, &manifest, out)
+/// ones a compiler just produced. Without `out` the pack lands beside the
+/// directory.
+pub fn pack_built(dir: impl OpenRoot, out: Option<&Located>) -> Result<BuildReport> {
+    let dir = dir.open_root()?;
+    let manifest = super::check::read_manifest(&dir)?;
+    match out {
+        Some(out) => pack_directory(&dir, &manifest, out, out.path()),
+        None => {
+            let out = out_path(&dir, &manifest, None)?;
+            pack_directory(&dir, &manifest, &Located::at(&out, Intent::Create)?, out)
+        }
+    }
 }
 
 /// A pack's plugins with `source`, which only a compiler turns into artifacts.
@@ -96,15 +113,34 @@ pub fn plugins_with_source(manifest: &PackManifest) -> Vec<&str> {
 
 /// Where `pack_built` writes the pack of `dir` when given no output path.
 pub fn built_pack_path(dir: &Path, manifest: &PackManifest) -> PathBuf {
-    dir.parent().unwrap_or_else(|| Path::new(".")).join(
-        crate::pack::archive::format::pack_file_name(
-            &format!("{}/{}", manifest.metadata.namespace, manifest.name),
-            &manifest.version,
-        ),
+    dir.parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(built_pack_name(manifest))
+}
+
+/// The file name a build gives the pack of `manifest`.
+pub fn built_pack_name(manifest: &PackManifest) -> String {
+    crate::pack::archive::format::pack_file_name(
+        &format!("{}/{}", manifest.metadata.namespace, manifest.name),
+        &manifest.version,
     )
 }
 
-fn pack_directory(dir: &Path, manifest: &PackManifest, out: Option<&Path>) -> Result<BuildReport> {
+fn out_path(dir: &RootDir, manifest: &PackManifest, out: Option<&Path>) -> Result<PathBuf> {
+    Ok(match out {
+        Some(out) => out.to_path_buf(),
+        None => built_pack_path(dir.path(), manifest),
+    })
+}
+
+/// Packs `dir` into `out` through a staged sibling renamed over it in the
+/// directory `out` was resolved in; `shown` is the path the report names.
+fn pack_directory(
+    dir: &RootDir,
+    manifest: &PackManifest,
+    out: &Located,
+    shown: PathBuf,
+) -> Result<BuildReport> {
     // A file-produced UX plugin the webview would refuse never gets packed;
     // an .afb-produced one is linted when its producer runs.
     let refused: Vec<String> = crate::plugin::ux::lint_pack_dir(dir, &manifest.metadata.ux)?
@@ -123,43 +159,23 @@ fn pack_directory(dir: &Path, manifest: &PackManifest, out: Option<&Path>) -> Re
         refused.join("\n")
     );
 
-    let out_dir = match out.and_then(Path::parent) {
-        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
-        Some(_) => PathBuf::from("."),
-        None => std::path::absolute(dir)
-            .with_context(|| format!("resolving {}", dir.display()))?
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .to_path_buf(),
-    };
-    std::fs::create_dir_all(&out_dir).with_context(|| format!("creating {}", out_dir.display()))?;
-    let mut staged = tempfile::Builder::new()
-        .prefix(".building-")
-        .tempfile_in(&out_dir)
-        .with_context(|| format!("staging the pack in {}", out_dir.display()))?;
-    let header = {
-        let mut writer = std::io::BufWriter::new(staged.as_file_mut());
+    let mut packed = None;
+    out.replace_with(|file| -> Result<()> {
+        let mut writer = std::io::BufWriter::new(&mut *file);
         let header = crate::pack::archive::write_built_pack(
             dir,
             &mut writer,
             &crate::pack::core_packs::runtime_release(),
         )
-        .with_context(|| format!("packing {}", dir.display()))?;
+        .with_context(|| format!("packing {}", dir.path().display()))?;
         std::io::Write::flush(&mut writer).context("writing the pack")?;
-        header
-    };
-    let size_bytes = staged
-        .as_file()
-        .metadata()
-        .context("sizing the pack")?
-        .len();
-    let out_path = out
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| out_dir.join(header.file_name()));
-    staged
-        .persist(&out_path)
-        .map_err(|error| error.error)
-        .with_context(|| format!("writing {}", out_path.display()))?;
+        drop(writer);
+        let size_bytes = file.metadata().context("sizing the pack")?.len();
+        packed = Some((header, size_bytes));
+        Ok(())
+    })
+    .with_context(|| format!("writing {}", shown.display()))?;
+    let (header, size_bytes) = packed.context("the pack was not written")?;
 
     Ok(BuildReport {
         pack: manifest.name.clone(),
@@ -167,7 +183,7 @@ fn pack_directory(dir: &Path, manifest: &PackManifest, out: Option<&Path>) -> Re
         version: manifest.version.clone(),
         digest: header.digest,
         size_bytes,
-        out: out_path,
+        out: shown,
         plugins: manifest
             .metadata
             .plugins
@@ -186,23 +202,27 @@ fn pack_directory(dir: &Path, manifest: &PackManifest, out: Option<&Path>) -> Re
     })
 }
 
+/// Compiles one plugin's source into its artifact. The source is mirrored
+/// through held handles into `target/plugins/<name>`, the compiler runs on
+/// that staged directory by its path, and its artifact is read back through
+/// the pack's handle.
 pub fn build_plugin(
-    dir: &Path,
+    dir: impl OpenRoot,
     manifest: &PackManifest,
     plugin: &PackPlugin,
     compiler: &dyn PluginCompiler,
 ) -> Result<()> {
-    let artifact_path = dir.join(&plugin.artifact);
+    let dir = &dir.open_root()?;
+    let artifact_path = dir.path().join(&plugin.artifact);
     let Some(source) = &plugin.source else {
         anyhow::ensure!(
-            artifact_path.is_file(),
+            dir.is_file(&plugin.artifact),
             "plugin {:?} has no source and its artifact is missing: {}",
             plugin.name,
             artifact_path.display()
         );
         return Ok(());
     };
-    let source_dir = dir.join(source);
     let owner = format!("plugin {:?}", plugin.name);
     let entry = plugin_entry(&plugin.language).with_context(|| {
         format!(
@@ -211,18 +231,21 @@ pub fn build_plugin(
         )
     })?;
     anyhow::ensure!(
-        source_dir.is_dir(),
+        dir.is_dir(source),
         "{owner} declares source {source:?}, which is not a directory"
     );
+    let source = Path::new(source);
+    let source_dir = dir.subdir(source)?;
     anyhow::ensure!(
-        source_dir.join(entry).is_file(),
+        source_dir.is_file(entry),
         "{owner} has no {entry} in {}",
-        source_dir.display()
+        source_dir.path().display()
     );
-    let staged = dir.join("target").join("plugins").join(&plugin.name);
-    mirror(&source_dir, &staged)?;
+    let staged = dir.create_dir_all(Path::new("target").join("plugins").join(&plugin.name))?;
+    mirror(dir, source, &staged)?;
     write_if_changed(
-        &staged.join("afb.toml"),
+        &staged,
+        "afb.toml",
         format!(
             "[format]\nversion = \"1.0\"\n\n[package]\nname = {}\nnamespace = {}\nversion = {}\n\
              language = {}\nentry = {}\n\n[runtime]\nmin = \"0.1.0\"\n",
@@ -237,57 +260,45 @@ pub fn build_plugin(
     let manifold = plugin.manifold.clone().unwrap_or_else(|| {
         json!({"fs": "None", "net": "None", "env": "None", "crypto": false, "child_process": false})
     });
-    write_if_changed(
-        &staged.join("manifold.json"),
-        &serde_json::to_vec(&manifold)?,
-    )?;
+    write_if_changed(&staged, "manifold.json", &serde_json::to_vec(&manifold)?)?;
 
-    let stamp = staged.join("target").join("gents-build.stamp");
+    let stamp = Path::new("target").join("gents-build.stamp");
     let source_digest = format!("{} {}", compiler.builder_id(), tree_digest(&staged)?);
-    if let (Ok(recorded), Ok(artifact)) = (
-        std::fs::read_to_string(&stamp),
-        std::fs::read(&artifact_path),
-    ) {
+    if let (Ok(recorded), Ok(artifact)) =
+        (staged.read_to_string(&stamp), dir.read(&plugin.artifact))
+    {
         if recorded == format!("{source_digest} {}", sha256_hex(&artifact)) {
             return Ok(());
         }
     }
-    compiler.load_and_validate(&owner, &staged)?;
-    compiler.compile(&owner, &staged, &artifact_path)?;
-    let artifact = std::fs::read(&artifact_path)
+    compiler.load_and_validate(&owner, staged.path())?;
+    compiler.compile(&owner, staged.path(), &artifact_path)?;
+    let artifact = dir
+        .read(&plugin.artifact)
         .with_context(|| format!("reading {}", artifact_path.display()))?;
-    std::fs::create_dir_all(stamp.parent().context("stamp parent")?)?;
-    std::fs::write(&stamp, format!("{source_digest} {}", sha256_hex(&artifact)))
-        .with_context(|| format!("writing {}", stamp.display()))
+    staged
+        .write(&stamp, format!("{source_digest} {}", sha256_hex(&artifact)))
+        .with_context(|| format!("writing {}", staged.path().join(&stamp).display()))
 }
 
 pub const BUILDER_ID: &str = concat!("gents/", env!("CARGO_PKG_VERSION"));
 
-fn tree_digest(dir: &Path) -> Result<String> {
-    fn walk(root: &Path, dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
-        for entry in std::fs::read_dir(dir)? {
-            let entry = entry?;
-            if entry.file_name() == "target" && dir == root {
-                continue;
-            }
-            if entry.file_type()?.is_dir() {
-                walk(root, &entry.path(), files)?;
-            } else {
-                files.push(entry.path());
-            }
-        }
-        Ok(())
-    }
+fn tree_digest(dir: &RootDir) -> Result<String> {
     use sha2::Digest;
     let mut files = Vec::new();
-    walk(dir, dir, &mut files).with_context(|| format!("reading {}", dir.display()))?;
-    files.sort();
+    dir.walk(|entry| {
+        if entry.relative() == Path::new("target") {
+            return Ok(Walk::Skip);
+        }
+        if entry.kind() != ChildKind::Directory {
+            files.push((entry.relative().to_path_buf(), entry.read()?));
+        }
+        Ok(Walk::Enter)
+    })
+    .with_context(|| format!("reading {}", dir.path().display()))?;
+    files.sort_by(|left, right| left.0.cmp(&right.0));
     let mut hasher = sha2::Sha256::new();
-    for file in files {
-        let relative = file
-            .strip_prefix(dir)
-            .context("walked outside the plugin")?;
-        let bytes = std::fs::read(&file)?;
+    for (relative, bytes) in files {
         hasher.update(relative.to_string_lossy().as_bytes());
         hasher.update([0]);
         hasher.update((bytes.len() as u64).to_be_bytes());
@@ -319,51 +330,69 @@ fn toml_string(value: &str) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_owned())
 }
 
-fn mirror(from: &Path, to: &Path) -> Result<()> {
-    mirror_level(from, to, true)
+/// Mirrors the plugin source `source` of `pack` into `to`. Each file is read
+/// through the pack root, so a link in the source is copied as the file it
+/// resolves to beneath the pack, and one leading out of the pack is refused.
+fn mirror(pack: &RootDir, source: &Path, to: &RootDir) -> Result<()> {
+    mirror_level(pack, source, &pack.subdir(source)?, to, true)
 }
 
-fn mirror_level(from: &Path, to: &Path, top: bool) -> Result<()> {
-    std::fs::create_dir_all(to).with_context(|| format!("creating {}", to.display()))?;
+fn mirror_level(
+    pack: &RootDir,
+    relative: &Path,
+    from: &RootDir,
+    to: &RootDir,
+    top: bool,
+) -> Result<()> {
     let mut kept = std::collections::BTreeSet::new();
-    for entry in std::fs::read_dir(from).with_context(|| format!("reading {}", from.display()))? {
-        let entry = entry?;
-        let name = entry.file_name();
+    for entry in from
+        .entries()
+        .with_context(|| format!("reading {}", from.path().display()))?
+    {
+        let name = entry.name;
         if name == "target" || name.to_string_lossy().starts_with('.') {
             continue;
         }
-        let (source, target) = (entry.path(), to.join(&name));
-        if entry.file_type()?.is_dir() {
-            mirror_level(&source, &target, false)?;
+        let below = relative.join(&name);
+        if entry.kind == ChildKind::Directory {
+            mirror_level(
+                pack,
+                &below,
+                &from.subdir(&name)?,
+                &to.create_dir_all(&name)?,
+                false,
+            )?;
         } else {
-            write_if_changed(&target, &std::fs::read(&source)?)?;
+            let bytes = pack
+                .read(&below)
+                .with_context(|| format!("reading {}", pack.path().join(&below).display()))?;
+            write_if_changed(to, &name, &bytes)?;
         }
         kept.insert(name);
     }
-    for entry in std::fs::read_dir(to).with_context(|| format!("reading {}", to.display()))? {
-        let entry = entry?;
-        let name = entry.file_name();
+    for entry in to
+        .entries()
+        .with_context(|| format!("reading {}", to.path().display()))?
+    {
+        let name = entry.name;
         let generated =
             top && matches!(name.to_str(), Some("target" | "afb.toml" | "manifold.json"));
         if generated || kept.contains(&name) {
             continue;
         }
-        let path = entry.path();
-        if entry.file_type()?.is_dir() {
-            std::fs::remove_dir_all(&path)
-        } else {
-            std::fs::remove_file(&path)
-        }
-        .with_context(|| format!("removing {}", path.display()))?;
+        to.remove(&name)
+            .with_context(|| format!("removing {}", to.path().join(&name).display()))?;
     }
     Ok(())
 }
 
-fn write_if_changed(path: &Path, bytes: &[u8]) -> Result<()> {
-    if std::fs::read(path).is_ok_and(|current| current == bytes) {
+fn write_if_changed(dir: &RootDir, name: impl AsRef<Path>, bytes: &[u8]) -> Result<()> {
+    let name = name.as_ref();
+    if dir.read(name).is_ok_and(|current| current == bytes) {
         return Ok(());
     }
-    std::fs::write(path, bytes).with_context(|| format!("writing {}", path.display()))
+    dir.write(name, bytes)
+        .with_context(|| format!("writing {}", dir.path().join(name).display()))
 }
 
 #[cfg(test)]
@@ -488,7 +517,12 @@ mod tests {
         let (compiler, _) = RefusingCompiler::new();
 
         let report = build_pack(&root, &compiler, None).unwrap();
-        assert_eq!(report.out, dir.path().join("gents.plain_pack-1.0.0.pack"));
+        assert_eq!(
+            report.out,
+            std::fs::canonicalize(dir.path())
+                .unwrap()
+                .join("gents.plain_pack-1.0.0.pack")
+        );
         assert!(report.out.is_file());
     }
 
@@ -518,6 +552,50 @@ mod tests {
             !called.load(std::sync::atomic::Ordering::SeqCst),
             "a missing artifact is refused before the compiler seam is asked"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_in_a_plugin_source_mirrors_its_file_and_a_link_out_of_the_pack_is_refused() {
+        use std::os::unix::fs::symlink;
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().canonicalize().unwrap();
+        let fixtures = root.join("plugin_src/tests/fixtures");
+        std::fs::create_dir_all(fixtures.join("data")).unwrap();
+        std::fs::create_dir_all(fixtures.join("hostile")).unwrap();
+        std::fs::write(fixtures.join("data/sales.csv"), b"month,total\n").unwrap();
+        symlink("../data/sales.csv", fixtures.join("hostile/link.csv")).unwrap();
+        std::fs::create_dir_all(root.join("shared")).unwrap();
+        std::fs::write(root.join("shared/notes.txt"), b"shared").unwrap();
+        symlink(
+            "../../shared/notes.txt",
+            root.join("plugin_src/tests/notes.txt"),
+        )
+        .unwrap();
+        let held = RootDir::open(&root).unwrap();
+
+        let staged = held.create_dir_all("target/plugins/linked").unwrap();
+        mirror(&held, Path::new("plugin_src"), &staged).unwrap();
+        assert_eq!(
+            staged.read("tests/fixtures/hostile/link.csv").unwrap(),
+            b"month,total\n"
+        );
+        assert_eq!(staged.read("tests/notes.txt").unwrap(), b"shared");
+
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.txt"), b"secret").unwrap();
+        symlink(
+            outside.path().join("secret.txt"),
+            root.join("plugin_src/tests/escape.txt"),
+        )
+        .unwrap();
+        let staged = held.create_dir_all("target/plugins/escaping").unwrap();
+        let error = mirror(&held, Path::new("plugin_src"), &staged).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("outside the allowed tool root"),
+            "{error:#}"
+        );
+        assert!(staged.read("tests/escape.txt").is_err());
     }
 
     #[test]
@@ -579,9 +657,12 @@ mod tests {
         let manifest: PackManifest =
             serde_json::from_slice(&std::fs::read(root.join("manifest.json")).unwrap()).unwrap();
         let staged = root.join("target/plugins/format_check");
-        mirror(&root.join("plugin_src"), &staged).unwrap();
+        let held = RootDir::open(&root).unwrap();
+        let staged_dir = held.create_dir_all("target/plugins/format_check").unwrap();
+        mirror(&held, Path::new("plugin_src"), &staged_dir).unwrap();
         write_if_changed(
-            &staged.join("afb.toml"),
+            &staged_dir,
+            "afb.toml",
             format!(
                 "[format]\nversion = \"1.0\"\n\n[package]\nname = {}\nnamespace = {}\nversion = {}\n\
                  language = {}\nentry = {}\n\n[runtime]\nmin = \"0.1.0\"\n",
@@ -599,11 +680,12 @@ mod tests {
             json!({"fs": "None", "net": "None", "env": "None", "crypto": false, "child_process": false})
         });
         write_if_changed(
-            &staged.join("manifold.json"),
+            &staged_dir,
+            "manifold.json",
             &serde_json::to_vec(&manifold).unwrap(),
         )
         .unwrap();
-        let source_digest = format!("{BUILDER_ID} {}", tree_digest(&staged).unwrap());
+        let source_digest = format!("{BUILDER_ID} {}", tree_digest(&staged_dir).unwrap());
         let artifact = std::fs::read(root.join("plugins/format_check.afb")).unwrap();
         std::fs::create_dir_all(staged.join("target")).unwrap();
         std::fs::write(

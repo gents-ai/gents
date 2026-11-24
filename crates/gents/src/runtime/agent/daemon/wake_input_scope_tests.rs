@@ -21,7 +21,7 @@ fn goal(id: u64) -> String {
 }
 
 struct ScopeFixture {
-    db: crate::support::TestDb,
+    db: gents_store::test_support::TestStore,
     user: KeyIdentity,
     client: ConfigAccess,
     agent: Arc<dyn NodeIdentity>,
@@ -31,7 +31,13 @@ struct ScopeFixture {
 impl ScopeFixture {
     async fn new(name: &str) -> Self {
         use gents_store::config_client::NodePermission;
-        let (db, user, client, binding) = crate::test_support::root::signed_test_node(name).await;
+        let signed_home = gents_documents::test_support::SignedHome::enroll(
+            crate::support::trial_store(name).await,
+            name,
+        )
+        .await;
+        let binding = gents_inference::test_support::default_agent(&signed_home).await;
+        let (db, user, client) = signed_home.into_parts();
         let agent =
             gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
                 .unwrap();

@@ -115,7 +115,14 @@ theorem admission_crash_after_commit (state : State) (fire : Fire) :
     admitTransaction (admitTransaction state fire true) fire true =
       admitTransaction state fire true := admit_idempotent state fire
 
-def goalEnded (status : Goals.Status) : Bool :=
+/-- A Task fire's Goal has settled when it no longer runs without its user:
+it ended (`complete`, `stopped`) or it paused awaiting the user (`blocked`
+after a blocked report, `budgetLimited` at its budget). The fire's outcome
+then records how the assignment settled, once; a paused Goal stays resumable
+and a later resume or completion publishes no second outcome for the fire.
+The Task's next fire is admitted by its own concurrency mode from the
+session's requests, so a paused Goal neither holds nor releases it. -/
+def goalSettled (status : Goals.Status) : Bool :=
   status == .complete || status == .blocked || status == .budgetLimited || status == .stopped
 
 inductive OutcomeReason where
@@ -134,7 +141,7 @@ def outcomeReason (state : State) (request : Request) : Option OutcomeReason :=
     if request.terminal then some .requestTerminal else none
   else if request.assignmentReplaced then some .superseded
   else match boundGoal state request with
-    | some goal => if goalEnded goal.status then some (.goalTerminal goal.status) else none
+    | some goal => if goalSettled goal.status then some (.goalTerminal goal.status) else none
     | none => none
 
 def retainedOutcomeBinding (request : Request) (retained current : Option GoalBinding) :
@@ -143,7 +150,7 @@ def retainedOutcomeBinding (request : Request) (retained current : Option GoalBi
       goal.session == request.fire.session && goal.assignment == request.fire.identity) with
   | none => none
   | some goal =>
-    if goalEnded goal.status then some goal
+    if goalSettled goal.status then some goal
     else (current.filter fun next => next.owner == request.fire.identity.owner &&
       next.session == request.fire.session).orElse (fun _ => some goal)
 
@@ -159,7 +166,7 @@ theorem stopped_assignment_has_terminal_outcome (state : State) (request : Reque
     (replaced : request.assignmentReplaced = false) (bound : boundGoal state request = some goal)
     (stopped : goal.status = .stopped) :
     outcomeReason state request = some (.goalTerminal .stopped) := by
-  simp [outcomeReason, emit, backed, applied, replaced, bound, stopped, goalEnded]
+  simp [outcomeReason, emit, backed, applied, replaced, bound, stopped, goalSettled]
 
 theorem missing_retained_assignment_is_unknown (request : Request) (current : Option GoalBinding) :
     retainedOutcomeBinding request none current = none := rfl
@@ -167,9 +174,23 @@ theorem missing_retained_assignment_is_unknown (request : Request) (current : Op
 theorem terminal_retained_assignment_ignores_new_goal (request : Request) (goal : GoalBinding)
     (current : Option GoalBinding) (owner : goal.owner = request.fire.identity.owner)
     (session : goal.session = request.fire.session) (root : goal.assignment = request.fire.identity)
-    (ended : goalEnded goal.status = true) :
+    (ended : goalSettled goal.status = true) :
     retainedOutcomeBinding request (some goal) current = some goal := by
   simp [retainedOutcomeBinding, Option.filter, owner, session, root, ended]
+
+/-- A Goal paused awaiting its user settles the fire with that pause as its
+outcome, and the Goal stays resumable: the outcome is not a terminal state of
+the Goal. -/
+theorem paused_assignment_settles_and_stays_resumable (state : State) (request : Request)
+    (goal : GoalBinding) (emit : request.fire.emitOutcome = true)
+    (backed : request.fire.goalBacked = true) (applied : request.goalAssignmentApplied = true)
+    (replaced : request.assignmentReplaced = false) (bound : boundGoal state request = some goal)
+    (blocked : goal.status = .blocked) (pre : Goals.State) (hpre : pre.status = goal.status) :
+    outcomeReason state request = some (.goalTerminal .blocked) ∧
+      (Goals.step? pre .resume).isSome := by
+  refine ⟨?_, ?_⟩
+  · simp [outcomeReason, emit, backed, applied, replaced, bound, blocked, goalSettled]
+  · simp [Goals.step?, hpre, blocked]
 
 def outcomeDue (state : State) (request : Request) : Bool :=
   (outcomeReason state request).isSome
@@ -250,7 +271,7 @@ theorem ordinary_goal_boundary_no_outcome (state : State) (request : Request) (g
     (hg : request.fire.goalBacked = true) (ha : request.goalAssignmentApplied = true)
     (hr : request.assignmentReplaced = false) (hb : boundGoal state request = some goal)
     (hs : goal.status = .active) : outcomeDue state request = false := by
-  simp [outcomeDue, outcomeReason, hg, ha, hr, hb, hs, goalEnded]
+  simp [outcomeDue, outcomeReason, hg, ha, hr, hb, hs, goalSettled]
 
 theorem opted_out_no_outcome (state : State) (request : Request)
     (h : request.fire.emitOutcome = false) : outcomeDue state request = false := by
@@ -374,7 +395,7 @@ theorem resumable_goal_stop_has_no_outcome (state : State) (request : Request) (
     (hs : goal.status = .paused ∨ goal.status = .usageLimited) :
     outcomeDue state request = false := by
   rcases hs with hs | hs <;>
-    simp [outcomeDue, outcomeReason, hg, ha, hr, hb, goalEnded, hs]
+    simp [outcomeDue, outcomeReason, hg, ha, hr, hb, goalSettled, hs]
 
 theorem recovered_due_outcome_exactly_once (state : State) (request : Request)
     (valid : state.outcomes.Nodup) (hm : request ∈ state.requests)
@@ -439,7 +460,7 @@ structure GoalAssignment where
   deriving DecidableEq, Repr
 
 def assignGoal (previous : Option GoalAssignment) (sessionUsage : Nat) : GoalAssignment :=
-  let fresh : Goals.State := { status := .active, blockedAudits := 0, wrapupRequested := false, wrapupCompleted := false }
+  let fresh : Goals.State := { status := .active, wrapupRequested := false, wrapupCompleted := false }
   match previous with
   | none => { state := fresh, epoch := 0, usageBaseline := sessionUsage }
   | some old =>

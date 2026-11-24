@@ -34,7 +34,7 @@
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "Our archive checkout board needs an optional text field called returnSeal on ExhibitCheckout. Add the field and leave all existing checkout records and the loan ledger as they are.",
+      "prompt": "Our archive checkout board needs an optional text field called returnSeal on ExhibitCheckout. Add it and leave the existing checkouts and the loan ledger as they are.",
       "checks": [
         {
           "check": "schema_matches",
@@ -42,19 +42,6 @@
             "name": "schema",
             "sdl": "type ExhibitCheckout { caseRef: String shelf: String returnSeal: String }\ntype ExhibitLoanLedger { caseRef: String memo: String }",
             "exact_nullability": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "schema"
-            ],
-            "forbidden": [
-              "bash"
-            ]
           },
           "tier": "acceptance",
           "weight": 1
@@ -150,6 +137,120 @@
           "fields": [
             "caseRef",
             "memo"
+          ]
+        }
+      ]
+    },
+    {
+      "stage_id": "use",
+      "settle": true,
+      "continuation": {
+        "prompt": "OK, go ahead.",
+        "max": 1,
+        "until": "done"
+      },
+      "prompt": "Case EX-781 came back with seal RS-2207. Record that on its checkout.",
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "ExhibitCheckout",
+                "min": 2,
+                "max": 2
+              },
+              {
+                "capture": "ExhibitLoanLedger",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "ExhibitCheckout",
+                "key": "caseRef",
+                "id": "EX-781",
+                "expect": [
+                  {
+                    "field": "shelf",
+                    "equals": "birch"
+                  },
+                  {
+                    "field": "returnSeal",
+                    "equals": "RS-2207"
+                  }
+                ]
+              },
+              {
+                "capture": "ExhibitCheckout",
+                "key": "caseRef",
+                "id": "EX-423",
+                "expect": [
+                  {
+                    "field": "shelf",
+                    "equals": "birch"
+                  },
+                  {
+                    "field": "returnSeal",
+                    "equals": null
+                  }
+                ]
+              },
+              {
+                "capture": "ExhibitLoanLedger",
+                "key": "caseRef",
+                "id": "EX-423",
+                "expect": [
+                  {
+                    "field": "memo",
+                    "equals": "original seal signed"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "ExhibitCheckout",
+          "collection": "ExhibitCheckout",
+          "filter": {},
+          "fields": [
+            "caseRef",
+            "shelf",
+            "returnSeal"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "ExhibitLoanLedger",
+          "collection": "ExhibitLoanLedger",
+          "filter": {},
+          "fields": [
+            "caseRef",
+            "memo"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "done",
+          "collection": "ExhibitCheckout",
+          "filter": {
+            "caseRef": {
+              "_eq": "EX-781"
+            },
+            "returnSeal": {
+              "_eq": "RS-2207"
+            }
+          },
+          "fields": [
+            "caseRef",
+            "returnSeal"
           ]
         }
       ]

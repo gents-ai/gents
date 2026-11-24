@@ -20,28 +20,14 @@
   },
   "stages": [
     {
-      "stage_id": "access",
-      "prompt": "I keep application records in Shipment. Enable your general read access only to Shipment, and general create/update/delete access only to Shipment if your native tools support it. Keep shell execution off and leave all other collection permissions alone. Inspect the available fields before working with records.",
-      "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        }
-      ],
-      "capture": []
-    },
-    {
       "stage_id": "create",
-      "prompt": "Add shipment NEW-83 going to Quito, queued, priority 4. Verify the saved record using a fresh read.",
+      "settle": true,
+      "continuation": {
+        "prompt": "OK, go ahead.",
+        "max": 1,
+        "until": "new"
+      },
+      "prompt": "Add shipment NEW-83 going to Quito, queued, priority 4.",
       "checks": [
         {
           "check": "captured_rows_count",
@@ -65,18 +51,11 @@
               {
                 "field": "status",
                 "equals": "queued"
+              },
+              {
+                "field": "priority",
+                "equals": 4
               }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "forbidden": [
-              "bash",
-              "schema"
             ]
           },
           "tier": "acceptance",
@@ -104,7 +83,8 @@
     },
     {
       "stage_id": "update",
-      "prompt": "Mark only NEW-83 delivered and confirm its stored status. Keep KEEP-41 queued.",
+      "settle": true,
+      "prompt": "NEW-83 has been delivered. Update it.",
       "checks": [
         {
           "check": "captured_fields_match",
@@ -185,7 +165,8 @@
     },
     {
       "stage_id": "delete",
-      "prompt": "Remove NEW-83 because it was a practice shipment. Verify it is gone and KEEP-41 still exists.",
+      "settle": true,
+      "prompt": "NEW-83 was only a practice shipment. Remove it.",
       "checks": [
         {
           "check": "captured_rows_count",

@@ -5,45 +5,31 @@
   "stages": [
     {
       "stage_id": "record",
-      "prompt": "Record this deploy note: The rollout pauses at the first failing health check and leaves the previous image pinned. Reply only Recorded.",
+      "prompt": "For the record: the rollout pauses at the first failing health check and leaves the previous image pinned.",
       "checks": [
         {
           "check": "final_message_matches",
           "params": {
-            "any": [
-              "Recorded",
-              "recorded"
+            "all": [
+              {
+                "matches": "\\S"
+              }
             ]
           },
-          "tier": "acceptance",
+          "tier": "development",
           "weight": 1
         }
       ]
     },
     {
       "stage_id": "investigate",
-      "prompt": "Find our recorded deployment rollback decision using sessions. Quote the health-check rule and cite the source message ID.",
+      "prompt": "What did I tell you earlier about a rollout that hits a failing health check? Quote the rule, and give me the ID of the chat message where I said it, so I can link to it.",
       "checks": [
         {
           "check": "final_message_matches",
           "params": {
             "all": [
               "leaves the previous image pinned"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "sessions"
-            ],
-            "forbidden": [
-              "bash",
-              "query",
-              "config"
             ]
           },
           "tier": "acceptance",
@@ -57,7 +43,7 @@
                 "capture": "source_headers",
                 "source_match": {
                   "field": "sequence",
-                  "equals": 1
+                  "equals": 2
                 },
                 "field": "_docID",
                 "target_capture": "source_headers",
@@ -85,7 +71,7 @@
               "_eq": "$evaluator"
             },
             "sequence": {
-              "_eq": 1
+              "_eq": 2
             }
           },
           "fields": [

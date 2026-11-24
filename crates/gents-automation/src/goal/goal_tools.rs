@@ -254,7 +254,8 @@ async fn update_goal(call: &GoalToolCall<'_>) -> anyhow::Result<GoalToolReply> {
     if !context.can_write() {
         let unavailable = matches!(context.assignment, RequestAssignmentObservation::Unknown);
         let error = match context.assignment {
-                RequestAssignmentObservation::None => "the calling request has no Goal assignment",
+                RequestAssignmentObservation::None if call.can_create() => "the calling request has no Goal; call create_goal to set one",
+                RequestAssignmentObservation::None => "the calling request has no Goal, and this agent cannot create one until its Tools set built_ins.enable_goal_creation",
                 RequestAssignmentObservation::Unknown => "Goal caller attribution is unknown; continue from a verified request",
                 RequestAssignmentObservation::Assigned(_) => "the calling request's retained Goal assignment is read-only; a new request is required to work on the current Goal",
             };
@@ -307,10 +308,9 @@ async fn update_goal(call: &GoalToolCall<'_>) -> anyhow::Result<GoalToolReply> {
                 json!({"accepted": true, "status": GoalStatus::Complete.as_str()})
             }
             Some(GoalStatus::Blocked) => json!({
-                "accepted": updated.parsed_status() == Some(GoalStatus::Blocked),
+                "accepted": true,
                 "status": updated.status,
-                "consecutive_blocked_audits": updated.consecutive_blocked_audits.unwrap_or_default(),
-                "required_blocked_audits": updated.blocked_audit_threshold(),
+                "next": BLOCKED_NEXT,
             }),
             _ => json!({"accepted": true, "goal": crate::goal::snapshot(&updated, Utc::now())}),
         },
@@ -322,6 +322,9 @@ async fn update_goal(call: &GoalToolCall<'_>) -> anyhow::Result<GoalToolReply> {
     Ok(GoalToolReply::Complete(result))
 }
 
+/// What a blocked report does, as the model reads it in its reply.
+const BLOCKED_NEXT: &str = "the goal is paused and no more goal turns run; the user resumes it by answering. End this turn by telling the user what you need.";
+
 /// Writes an `update_goal` call through the Goal handler as the working
 /// Agent; a refusal becomes the tool's answer.
 async fn write_through_handler(
@@ -330,15 +333,7 @@ async fn write_through_handler(
     input: &GoalSetInput,
     obligations_unmet: Option<&str>,
 ) -> anyhow::Result<Result<crate::goal::GoalDocument, serde_json::Value>> {
-    match set_as_working_agent(
-        &call.access()?,
-        goal,
-        input,
-        obligations_unmet,
-        call.request_id(),
-    )
-    .await
-    {
+    match set_as_working_agent(&call.access()?, goal, input, obligations_unmet).await {
         Ok(updated) => Ok(Ok(updated)),
         Err(GoalOperationError::Passthrough(error)) => Err(anyhow::anyhow!(error)),
         Err(GoalOperationError::Stale) => Ok(Err(

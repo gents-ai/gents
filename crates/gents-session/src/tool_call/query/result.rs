@@ -1404,11 +1404,13 @@ mod missing_parent_test {
 
     #[tokio::test]
     async fn missing_parent_document_fails_closed() {
-        let (db, user, access, _agent) = gents_inference::test_support::signed_test_node(
+        let signed_home = gents_documents::test_support::SignedHome::start(
             "missing-effect-parent",
             crate::test_support::no_lifecycle_plugins(),
         )
         .await;
+        let _agent = gents_inference::test_support::default_agent(&signed_home).await;
+        let (db, user, access) = signed_home.into_parts();
         let missing = "bae-00000000-0000-5000-8000-000000000000";
         let error = super::load_accepted_tool_call(
             super::ReadSource::Access(&access),

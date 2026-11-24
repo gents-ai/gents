@@ -413,7 +413,9 @@ fn write_prompt(pack: &PackEdit, path: &str, source: &Path) -> Result<()> {
     let text =
         std::fs::read_to_string(source).with_context(|| format!("reading {}", source.display()))?;
     let (_, body) = gents_documents::skills::import::parse_skill_md(&text)?;
-    std::fs::write(pack.dir.join(path), body + "\n").with_context(|| format!("writing {path}"))
+    pack.root()
+        .write(path, body + "\n")
+        .with_context(|| format!("writing {path}"))
 }
 
 fn add(pack: &mut PackEdit, command: PackAddCommand) -> Result<()> {

@@ -157,29 +157,10 @@ pub fn render_manual_template(
 ) -> Result<String, ManualRenderError> {
     render_template(template, scope).map_err(|source| {
         let context = template_context(scope);
-        let mut reads: Vec<String> = parse_template_for_validation(template)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|reference| !reference.path.is_empty())
-            .map(|reference| reference.path.join("."))
-            .collect();
-        reads.sort();
-        reads.dedup();
+        let reads = template_reads(template);
         let undefined = reads
             .iter()
-            .filter(|path| {
-                let mut value = &context;
-                for segment in path.split('.') {
-                    match value {
-                        serde_json::Value::Object(fields) => match fields.get(segment) {
-                            Some(next) => value = next,
-                            None => return true,
-                        },
-                        _ => return false,
-                    }
-                }
-                false
-            })
+            .filter(|path| missing_at(&context, path).is_some())
             .cloned()
             .collect();
         ManualRenderError {
@@ -189,6 +170,51 @@ pub fn render_manual_template(
             source,
         }
     })
+}
+
+fn template_reads(template: &str) -> Vec<String> {
+    let mut reads: Vec<String> = parse_template_for_validation(template)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|reference| !reference.path.is_empty())
+        .map(|reference| reference.path.join("."))
+        .collect();
+    reads.sort();
+    reads.dedup();
+    reads
+}
+
+fn missing_at<'a>(
+    context: &'a serde_json::Value,
+    path: &str,
+) -> Option<(usize, &'a serde_json::Map<String, serde_json::Value>)> {
+    let mut value = context;
+    for (depth, segment) in path.split('.').enumerate() {
+        let serde_json::Value::Object(fields) = value else {
+            return None;
+        };
+        match fields.get(segment) {
+            Some(next) => value = next,
+            None => return Some((depth, fields)),
+        }
+    }
+    None
+}
+
+fn fire_render_error(template: &str, scope: &TemplateScope, error: TemplateError) -> String {
+    let context = template_context(scope);
+    let missing = template_reads(template).into_iter().find_map(|path| {
+        let (depth, fields) = missing_at(&context, &path)?;
+        let offered = fields.keys().cloned().collect::<Vec<_>>().join(", ");
+        let parent = path.split('.').take(depth).collect::<Vec<_>>().join(".");
+        let owner = if parent.is_empty() {
+            "the roots are".to_owned()
+        } else {
+            format!("{parent} has")
+        };
+        Some(format!("; {path} is undefined; {owner} {offered}"))
+    });
+    format!("{error}{}", missing.unwrap_or_default())
 }
 
 fn template_context(scope: &TemplateScope) -> serde_json::Value {
@@ -749,12 +775,22 @@ pub fn render_task(
     goal_limits: gents_protocol::goal::GoalLimits,
     scope: &TemplateScope,
 ) -> Result<(String, Option<String>), String> {
-    let prompt =
-        render_template(prompt_template, scope).map_err(|error| format!("template: {error}"))?;
+    let prompt = render_template(prompt_template, scope).map_err(|error| {
+        format!(
+            "template: {}",
+            fire_render_error(prompt_template, scope, error)
+        )
+    })?;
     let objective = goal_objective_template
-        .map(|template| render_template(template, scope))
-        .transpose()
-        .map_err(|error| format!("goal template: {error}"))?;
+        .map(|template| {
+            render_template(template, scope).map_err(|error| {
+                format!(
+                    "goal template: {}",
+                    fire_render_error(template, scope, error)
+                )
+            })
+        })
+        .transpose()?;
     crate::task_goal_declaration::validate_task_goal_declaration(
         objective.as_deref(),
         goal_token_budget,

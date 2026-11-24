@@ -478,3 +478,146 @@ fn a_plugin_whose_artifact_is_not_a_declared_asset_is_refused() {
         .push("plugins/format_check.afb".to_owned());
     validate_manifest("shipping_plugins", &manifest).expect("and accepted once declared");
 }
+
+/// A pack's members are untrusted. Whatever a crafted archive names after its
+/// header (an absolute path, a `..` component, a link or hard link, a device
+/// or a FIFO), reading it is refused before any member reaches the store's
+/// extraction, and nothing is written outside the store.
+#[test]
+fn a_crafted_member_is_refused_before_extraction() {
+    let (_guard, root) = fixture_pack_dir("assets_fixture");
+    let (bytes, _) = pack_dir(&root).expect("packing");
+    let entries = entries_of(&bytes);
+    let crafted = |kind: tar::EntryType, name: &[u8], link: Option<&str>| {
+        let mut header = tar::Header::new_ustar();
+        header.set_size(if kind == tar::EntryType::Regular {
+            4
+        } else {
+            0
+        });
+        header.set_mode(0o644);
+        header.set_mtime(0);
+        header.set_entry_type(kind);
+        header.as_old_mut().name[..name.len()].copy_from_slice(name);
+        if let Some(link) = link {
+            header.set_link_name(link).expect("link name");
+        }
+        header.set_cksum();
+        let mut builder = tar::Builder::new(Vec::new());
+        append_entry(
+            &mut builder,
+            HEADER_ENTRY,
+            entries[0].1.len() as u64,
+            entries[0].1.as_slice(),
+        )
+        .expect("append");
+        let body: &[u8] = if kind == tar::EntryType::Regular {
+            b"nope"
+        } else {
+            b""
+        };
+        builder
+            .append(&header, body)
+            .expect("append crafted member");
+        for (path, data) in &entries[1..] {
+            append_entry(&mut builder, path, data.len() as u64, data.as_slice()).expect("append");
+        }
+        let mut gz = GzEncoder::new(Vec::new(), Compression::default());
+        gz.write_all(&builder.into_inner().expect("tar bytes"))
+            .expect("write");
+        gz.finish().expect("finish")
+    };
+    let outside = tempfile::tempdir().unwrap();
+    let escape = outside.path().join("escape.md");
+    let escape = escape.to_str().unwrap();
+    let cases = [
+        (
+            "absolute path",
+            crafted(tar::EntryType::Regular, escape.as_bytes(), None),
+        ),
+        (
+            "parent component",
+            crafted(tar::EntryType::Regular, b"../escape.md", None),
+        ),
+        (
+            "inner parent component",
+            crafted(tar::EntryType::Regular, b"docs/../../escape.md", None),
+        ),
+        (
+            "symbolic link",
+            crafted(tar::EntryType::Symlink, b"a_link.md", Some(escape)),
+        ),
+        (
+            "hard link",
+            crafted(tar::EntryType::Link, b"a_link.md", Some("../../escape.md")),
+        ),
+        (
+            "character device",
+            crafted(tar::EntryType::Char, b"a_device.md", None),
+        ),
+        (
+            "block device",
+            crafted(tar::EntryType::Block, b"a_device.md", None),
+        ),
+        ("fifo", crafted(tar::EntryType::Fifo, b"a_fifo.md", None)),
+        (
+            "directory",
+            crafted(tar::EntryType::Directory, b"a_dir", None),
+        ),
+    ];
+    for (case, bytes) in cases {
+        let error = PackArchive::from_bytes(&bytes).expect_err(case);
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("is not a regular file")
+                || message.contains("is not a path a pack may carry"),
+            "{case}: {message}"
+        );
+        let home = tempfile::tempdir().unwrap();
+        let store = crate::pack::store::PackStore::new(home.path());
+        store
+            .import(&bytes[..], None)
+            .expect_err("the store refuses a crafted pack");
+        assert!(
+            std::fs::read_dir(outside.path()).unwrap().next().is_none(),
+            "{case}: nothing is written outside the store"
+        );
+        let mut stored = Vec::new();
+        let packs = home.path().join(gents_store::local::home::PACKS_DIR_NAME);
+        if packs.exists() {
+            for entry in walkdir_names(&packs) {
+                stored.push(entry);
+            }
+        }
+        assert!(
+            stored.iter().all(|name| name.starts_with("store")),
+            "{case}: nothing but the store directory exists: {stored:?}"
+        );
+        assert!(
+            stored
+                .iter()
+                .all(|name| !name.contains(".staging-") && !name.contains("unpacked")),
+            "{case}: no staged or unpacked member is left: {stored:?}"
+        );
+    }
+}
+
+fn walkdir_names(root: &std::path::Path) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            names.push(
+                path.strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+            if path.is_dir() {
+                pending.push(path);
+            }
+        }
+    }
+    names
+}

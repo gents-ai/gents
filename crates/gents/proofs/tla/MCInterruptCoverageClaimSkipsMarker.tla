@@ -1,0 +1,4 @@
+---- MODULE MCInterruptCoverageClaimSkipsMarker ----
+EXTENDS InterruptCoverage
+
+====

@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 use crate::runner::embedded::observe::{InferenceCallEvidence, MessageEvidence, ToolCallEvidence};
 use crate::runner::progress::StageProgress;
 use crate::runner::scripted::ScriptKey;
-use crate::{Anchor, OutcomeKind, ProviderReason, TrialUsage};
+use crate::{Anchor, OutcomeKind, ProviderReason, SubjectUsage, TrialUsage};
 use gents_documents::EvalCapture;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,6 +41,9 @@ pub struct TrialSpec {
     /// Core packs installed on the subject before its first stage.
     #[serde(default)]
     pub core_packs: Vec<String>,
+    /// Core packs of `core_packs` then turned on as an explicit enable does.
+    #[serde(default)]
+    pub enabled_core_packs: Vec<String>,
     pub stages: Vec<StageSpec>,
     pub trial_dir: PathBuf,
     pub script_key: Option<ScriptKey>,
@@ -76,6 +79,7 @@ impl TrialSpec {
             fixtures: TrialFixtures::default(),
             host_bash: false,
             core_packs: Vec::new(),
+            enabled_core_packs: Vec::new(),
             stages: Vec::new(),
             trial_dir: PathBuf::new(),
             script_key: None,
@@ -296,6 +300,10 @@ pub struct TrialEvidence {
     pub usage: TrialUsage,
     pub anchor: Anchor,
     pub evidence_digest: String,
+    /// Outside the digest: its timings differ between trials whose evidence
+    /// is the same.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject_usage: Option<SubjectUsage>,
 }
 
 impl TrialEvidence {
@@ -345,6 +353,7 @@ impl TrialEvidence {
             usage,
             anchor,
             evidence_digest,
+            subject_usage: None,
         }
     }
 
@@ -414,6 +423,13 @@ pub trait TrialExecutor: Send + Sync {
     /// their position in the session (`"0"`, `"1"`, …) and match no case's
     /// `stage_id`, and `interrupted_on_deadline` is unknowable afterwards.
     async fn recollect(&self, at: &TrialLocator, captures: &[Capture]) -> Option<TrialEvidence>;
+
+    /// Whether the provider `spec` infers on answers at all, asked after an
+    /// attempt that was not evidence and while the run waits out an outage.
+    /// An executor without a provider of its own answers `true`.
+    async fn provider_answers(&self, _spec: &TrialSpec) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]

@@ -17,10 +17,11 @@ use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
 use tokio_util::sync::CancellationToken;
 
-use crate::support::live_inference::rows_when;
-use crate::support::{self, TestDb};
+use crate::support::{self};
 use gents_p2p::test_support::enrollment::{authorize_enrollment_generation, EnrollmentGeneration};
+use gents_store::test_support::rows_when;
 use gents_store::test_support::snapshot_reader::SnapshotReader;
+use gents_store::test_support::TestStore;
 use gents_store::test_support::STALL_CEILING;
 
 struct Stop(CancellationToken);
@@ -40,7 +41,7 @@ fn enrollment_route_query(peer: &str) -> String {
     )
 }
 
-async fn enrollment_route(db: &TestDb, peer: &str) -> Vec<serde_json::Value> {
+async fn enrollment_route(db: &TestStore, peer: &str) -> Vec<serde_json::Value> {
     ConfigAccess::local(db.node.clone())
         .execute(&enrollment_route_query(peer))
         .await
@@ -50,7 +51,7 @@ async fn enrollment_route(db: &TestDb, peer: &str) -> Vec<serde_json::Value> {
         .clone()
 }
 
-async fn wait_for_route_sequence(db: &TestDb, peer: &str, sequence: i64) -> serde_json::Value {
+async fn wait_for_route_sequence(db: &TestStore, peer: &str, sequence: i64) -> serde_json::Value {
     let rows = rows_when(
         &ConfigAccess::local(db.node.clone()),
         "PeerPairingDesired",
@@ -237,7 +238,7 @@ async fn opted_in_members_renew_over_authenticated_routes() {
     let user = support::load_managed_fixture_user(&member).await;
     let user_access = ConfigAccess::Graphql(
         gents_store::config_client::GraphqlEndpoint::as_principal(
-            member.client_endpoint(),
+            member.graphql_endpoint(),
             user.did(),
         )
         .with_client_signing_capability(user.client_signing_capability().unwrap())
@@ -343,7 +344,7 @@ async fn opted_in_members_renew_over_authenticated_routes() {
 /// the current generation as the approved DID.
 async fn renewal_from_restarted_member(
     store: &GraphqlEnrollmentStore,
-    member: &TestDb,
+    member: &TestStore,
     first: &gents_protocol::enrollment::EnrollmentRequestRecord,
 ) -> bool {
     let projection = store.load_projection().await.unwrap();
@@ -364,7 +365,7 @@ async fn renewal_from_restarted_member(
         .unwrap_or_else(|| panic!("the member's loopback address {address} names no port"));
     let key = ["p2p.key", "data/p2p.key"]
         .iter()
-        .map(|relative| member.data_path().join(relative))
+        .map(|relative| member.path().join(relative))
         .find(|path| path.exists())
         .expect("the member's P2P key");
     member.node.shutdown().await.unwrap();

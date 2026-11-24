@@ -13,7 +13,10 @@ async fn config_apply_reconciles_canonical_event_source_and_trigger() -> Result<
     let root = tempdir.path().join("config");
     fs::create_dir_all(&home)?;
     let model = format!("event-apply-{}", Uuid::new_v4().simple());
-    let endpoint = MockModelEndpoint::start(&model)?;
+    let endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let port = allocate_port()?;
     let graphql = graphql_url(port);
     let init = run_init_json(

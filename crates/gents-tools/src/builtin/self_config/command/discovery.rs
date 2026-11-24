@@ -49,13 +49,18 @@ impl ConfigCommandTool {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        discover_configuration_within(
-            &DiscoveryRequest {
-                sources,
-                limits: DiscoveryLimits::default(),
-            },
-            &context.root(),
-        )
+        let root = context.root();
+        tokio::task::spawn_blocking(move || {
+            discover_configuration_within(
+                &DiscoveryRequest {
+                    sources,
+                    limits: DiscoveryLimits::default(),
+                },
+                &root,
+            )
+        })
+        .await
+        .context("configuration discovery did not finish")?
         .to_model_json_pretty()
         .context("serializing sanitized configuration discovery inventory")
     }

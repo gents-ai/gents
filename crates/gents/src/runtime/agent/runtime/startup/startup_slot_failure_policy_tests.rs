@@ -28,7 +28,7 @@ impl NodeReadinessWriter for DemotionWriter {
 async fn generated_startup_demotions_release_only_durable_current_obligations() {
     use gents_lean_vocab::families::runtime_startup_admission_try_demote as family;
     for case in family::cases() {
-        let db = gents_inference::test_support::test_db(
+        let db = gents_store::test_support::TestStore::start(
             "startup-demote-family",
             gents_automation::lifecycle_hooks::composition(),
         )
@@ -128,7 +128,7 @@ async fn generated_startup_demotions_release_only_durable_current_obligations() 
 async fn startup_generation_trace_matches_the_lean_model() {
     let cases = gents_lean_vocab::families::startup_readiness_generation_trace::cases::<String>();
     for (index, case) in cases.into_iter().enumerate() {
-        let node_db = gents_inference::test_support::test_db(
+        let node_db = gents_store::test_support::TestStore::start(
             &format!("startup-generation-trace-{index}"),
             gents_automation::lifecycle_hooks::composition(),
         )

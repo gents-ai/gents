@@ -58,7 +58,7 @@ pub(crate) fn production_sources(root: &Path) -> Vec<PathBuf> {
 /// Whether an item compiles only into tests: a `#[cfg(..)]` that requires
 /// `test`, the `test-fixtures` feature, the `test-home-guard` feature or the
 /// `native-e2e` feature, none of which reaches a shipped build
-/// (`gents_test_fixtures_stay_dev_only`, `service_isolation_stays_test_only`,
+/// (`test_fixtures_stay_dev_only`, `service_isolation_stays_test_only`,
 /// `native_e2e_stays_test_only`).
 pub(crate) fn cfg_test(attributes: &[syn::Attribute]) -> bool {
     attributes.iter().any(|attribute| {
@@ -301,7 +301,7 @@ fn dependency_reachability_resolves_renamed_packages() {
     );
 }
 
-pub(crate) const GENTS_TEST_FIXTURES: &str = "test-fixtures";
+pub(crate) const TEST_FIXTURES: &str = "test-fixtures";
 
 /// The feature end-to-end launchers pass on the command line to build the
 /// desktop, bridge and CLI with their native test harness hooks; release
@@ -319,7 +319,7 @@ pub(crate) const SERVICE_ISOLATION: (&str, &str) = ("gents-service", "test-home-
 /// The features only test builds enable: `cfg_test` treats what they gate as
 /// test code, and `Workspace::production` turns them on only where a
 /// compiled member's dependency entry or enabled feature does.
-pub(crate) const TEST_FEATURES: [&str; 2] = [GENTS_TEST_FIXTURES, SERVICE_ISOLATION.1];
+pub(crate) const TEST_FEATURES: [&str; 2] = [TEST_FIXTURES, SERVICE_ISOLATION.1];
 
 pub(crate) struct Workspace {
     pub(crate) inherited: toml::Table,

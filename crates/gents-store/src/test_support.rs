@@ -4,10 +4,12 @@ pub mod bounded_process;
 mod executable_script;
 pub mod relationships;
 pub mod snapshot_reader;
+mod test_store;
 pub mod wire_database;
 
 #[cfg(unix)]
 pub use executable_script::{copy_executable, hold_sibling, write_executable_script, HeldSibling};
+pub use test_store::TestStore;
 
 /// Hang detector for every wait without a deadline of its own: the longest a
 /// wait may observe no progress (no change to the documents it watches, no
@@ -61,6 +63,29 @@ where
             panic!("{what}: {collection} unchanged for {STALL_CEILING:?}; last: {last}");
         }
     }
+}
+
+/// Resolves with the first read of `query` that satisfies `predicate`,
+/// re-reading on each change to `collection`, through [`read_when_changed`].
+pub async fn rows_when<R, F>(
+    reader: &R,
+    collection: &str,
+    query: &str,
+    predicate: F,
+) -> serde_json::Value
+where
+    R: snapshot_reader::SnapshotReader + ?Sized,
+    F: Fn(&serde_json::Value) -> bool,
+{
+    read_when_changed(reader, collection, "rows_when", async || {
+        let rows = reader.read_data(query).await;
+        if predicate(&rows) {
+            Ok(rows)
+        } else {
+            Err(rows)
+        }
+    })
+    .await
 }
 
 pub fn attach_node_extensions(
@@ -160,6 +185,7 @@ fn home_status_body(
     use gents_protocol::delegation_audience::ReportedDelegationAudience;
     let authentication = match reports {
         ReportedDelegationAudience::Named(audience) => ClientAuthentication::Vera {
+            publisher_node: None,
             worker: audience.worker.clone(),
             deployment: audience.deployment,
         },
@@ -464,4 +490,11 @@ pub async fn unrelated_document_reader(
     .await
     .unwrap();
     crate::config_client::ConfigAccess::local_as(node.clone(), actor)
+}
+
+#[cfg(test)]
+pub(crate) fn config_signer() -> crate::config_client::ClientSigningCapability {
+    let key = identity::RawIdentity::from_private_key(crypto::generate_ed25519().unwrap()).unwrap();
+    crate::config_client::ClientSigningCapability::from_ed25519_key(&key.private_key_bytes())
+        .unwrap()
 }

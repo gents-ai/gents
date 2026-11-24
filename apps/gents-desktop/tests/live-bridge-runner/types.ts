@@ -44,7 +44,7 @@ export type RequestDiagnostics = {
     failureReason?: string | null;
     createdAt?: string | null;
     claimedAt?: string | null;
-    interruptRequestedAt?: string | null;
+    interruptGeneration?: number | null;
     validUntil?: string | null;
   } | null;
   response?: {

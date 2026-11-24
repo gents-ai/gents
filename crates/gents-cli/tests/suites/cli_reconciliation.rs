@@ -14,7 +14,10 @@ async fn runtime_state_reset_is_explicit() -> Result<()> {
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("reset-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let agent_name = format!("cli-reset-{}", Uuid::new_v4().simple());
 
     run_init_json(
@@ -105,7 +108,22 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
     )?;
 
     let model_name = format!("mock-tool-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockOpenAIEndpoint::start(&model_name, &token)?;
+    let final_token = token.clone();
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .respond(move |request| {
+                use gents_inference::test_support::scripted_backend::StreamResponse;
+                Some(if request_has_tool_result_message(request) {
+                    StreamResponse::text(final_token.clone())
+                } else {
+                    StreamResponse::tool_call(
+                        "call-read-file",
+                        "read_file",
+                        r#"{"path":"notes.txt"}"#,
+                    )
+                })
+            })
+            .start()?;
 
     let port = allocate_port()?;
     let agent_name = format!("cli-tool-loop-{}", Uuid::new_v4().simple());
@@ -211,7 +229,7 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
         })?;
     assert_eq!(response, token);
 
-    let captured_requests = mock_endpoint.captured_chat_requests();
+    let captured_requests = mock_endpoint.observed_completion_bodies();
     assert!(
         captured_requests.len() >= 2,
         "expected at least two chat completion requests, got {}",

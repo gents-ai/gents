@@ -14,7 +14,7 @@ use gents_store::config_client::NodePermission;
 #[tokio::test]
 async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Result<()> {
     let home = tempfile::tempdir()?;
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "delegated-http-claim-routes-mailbox-to",
         crate::test_support::no_lifecycle_plugins(),
     )
@@ -325,6 +325,91 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
             })
         })
         .await?;
+    // A turn that continues the claimed request (a background-completion
+    // wake) holds no client claim of its own and files for the signer of its
+    // lineage's root.
+    let signer = agent_access
+        .managed_agent_signer()
+        .expect("the working Agent signs its continuations");
+    let continuation =
+        crate::request::lifecycle::queue::mutation::build_session_request_at_hop_with_signer(
+            lifecycle.request(),
+            lifecycle.request().request_hop,
+            crate::request::lifecycle::queue::mutation::SessionRequestFields {
+                agent_did: agent.did(),
+                content: gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
+                execution_origin: ExecutionOrigin::Scheduled,
+                input: lifecycle.request().input.continuation(
+                    crate::request::lifecycle::queue::RequestQueue {
+                        delivery: Default::default(),
+                        position: None,
+                        source: crate::request::lifecycle::queue::QueueSource::BackgroundCompletion,
+                        policy: crate::request::lifecycle::queue::QueuePolicy::Coalesce,
+                        key: Some(
+                            crate::request::lifecycle::queue::QueueSource::BackgroundCompletion
+                                .queue_key("mailbox-delegated-session"),
+                        ),
+                        queued_after_request_id: Some(lifecycle.request().request_id.clone()),
+                        interrupted_request_id: None,
+                        background_completion_wake_version: None,
+                    },
+                    None,
+                    &lifecycle.request().doc_id,
+                ),
+                request_id: "mailbox-delegated-continuation",
+                created_at: "2026-11-04T00:00:01Z",
+                retry_key: None,
+            },
+            Some(&signer),
+        )
+        .await?;
+    let continuation_doc = agent_access
+        .transact_write("test.mailbox_continuation", |txn| {
+            let continuation = &continuation;
+            Box::pin(async move {
+                Ok::<_, anyhow::Error>(
+                    crate::request::lifecycle::runtime_publication::publish(txn, continuation)
+                        .await?,
+                )
+            })
+        })
+        .await?;
+    let continued = bind_request_tools(
+        Arc::new(vec![Box::new(
+            MailboxCreateTool::new(
+                node.clone(),
+                MailboxNotificationPolicy {
+                    kind: MailboxKind::Ask,
+                    action: MailboxAction::StartRequest,
+                    ..Default::default()
+                },
+            )
+            .with_access(agent_access.clone()),
+        ) as Box<dyn ToolDyn>]),
+        gents_loop::tool::ToolRequestContext {
+            request_id: "mailbox-delegated-continuation".into(),
+            request_doc_id: continuation_doc,
+            node_did: runtime.did().to_owned(),
+            agent_did: agent.did().to_owned(),
+            session_id: "mailbox-delegated-session".into(),
+            caused_by_source_doc_id: None,
+            admitted_client: None,
+        },
+    );
+    let continued: serde_json::Value = serde_json::from_str(
+        &continued[0]
+            .call_with_receipt(
+                serde_json::json!({"title":"continued notice"}).to_string(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
+            )
+            .await
+            .result?,
+    )?;
+    assert_eq!(continued["item"]["requester_did"], user.did());
+    assert_eq!(
+        continued["item"]["request_id"],
+        "mailbox-delegated-continuation"
+    );
     node.shutdown().await?;
     Ok(())
 }

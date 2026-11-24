@@ -105,8 +105,8 @@ async fn apply(tool: &SchemaTool, mut value: Value) -> Value {
     let preview = call(tool, value).await;
     call(tool, preview["next_call"]["args"].clone()).await
 }
-async fn node() -> gents_inference::test_support::TestDb {
-    gents_inference::test_support::test_db(
+async fn node() -> gents_store::test_support::TestStore {
+    gents_store::test_support::TestStore::start(
         "schema-help",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -115,17 +115,19 @@ async fn node() -> gents_inference::test_support::TestDb {
 
 /// Schema tool acting as a live Agent whose household owner's Tools select
 /// the schema tool, on a node whose projector uses the runtime's tool ceiling.
-async fn schema_agent_node() -> (gents_inference::test_support::TestDb, SchemaTool) {
+async fn schema_agent_node() -> (gents_store::test_support::TestStore, SchemaTool) {
     use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     use gents_store::identity::NodeIdentity;
-    let db = gents_inference::test_support::test_db_with_tool_policy(
+    let db = gents_store::test_support::TestStore::start_with_tool_policy(
         "schema-help-agent",
         gents_session::test_support::no_lifecycle_plugins(),
         Arc::new(crate::surface::ToolCeiling::meta_only()),
     )
     .await;
-    let (db, user, access, binding) =
-        gents_inference::test_support::signed_test_node_from_db(db, "schema-help-agent").await;
+    let signed_home =
+        gents_documents::test_support::SignedHome::enroll(db, "schema-help-agent").await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, access) = signed_home.into_parts();
     let runtime = gents_store::test_support::held_runtime_identity(db.node_identity.did());
     // Selecting the schema tool projects schema permissions only an owner
     // holds; init makes the installing User the household owner.
@@ -262,7 +264,7 @@ async fn schema_publication_uses_agent_native_authority() {
 
     for case in gents_lean_vocab::families::contracts_schema_publication::cases() {
         let home = tempfile::tempdir().unwrap();
-        let db = gents_inference::test_support::test_db(
+        let db = gents_store::test_support::TestStore::start(
             "schema-help-publication",
             gents_session::test_support::no_lifecycle_plugins(),
         )
@@ -403,7 +405,7 @@ async fn schema_view_and_materialization_use_managed_agent_authority() {
     use gents_store::config_client::NodePermission;
     use gents_store::identity::NodeIdentity;
 
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "schema-help-managed-agent",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -1580,11 +1582,12 @@ async fn collection_cleanup_refuses_managed_and_referenced_collections() {
 async fn schema_preview_and_publication_expose_ignored_native_directives() {
     use gents_store::config_client::NodePermission;
 
-    let (db, _user, _user_access, binding) = gents_inference::test_support::signed_test_node(
+    let db = gents_documents::test_support::SignedHome::start(
         "schema-native-warnings",
         gents_session::test_support::no_lifecycle_plugins(),
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&db).await;
     let agent =
         gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
     let admin = ConfigAccess::local_as(

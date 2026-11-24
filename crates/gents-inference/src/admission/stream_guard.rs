@@ -6,6 +6,9 @@ use tracing::Instrument;
 use super::{AdmissionError, ProviderCallUsage};
 
 pub(crate) trait StreamGuardLifecycle {
+    /// The guarded stream delivered a response item.
+    fn observe_progress(&self) {}
+
     fn mark_stream_success(
         &mut self,
         _usage: Option<ProviderCallUsage>,
@@ -14,6 +17,8 @@ pub(crate) trait StreamGuardLifecycle {
     }
 
     fn mark_stream_error(&mut self, _error: &str) {}
+
+    fn mark_first_token(&mut self) {}
 
     fn finish_stream(self) -> BoxFuture<'static, Result<(), AdmissionError>>
     where

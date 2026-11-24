@@ -240,6 +240,7 @@ pub(crate) fn run_request(request: &JobRequest, origin: &JobOrigin, plan: &RunPl
         source_dirty: request.source_dirty,
         captures: origin.captures.clone(),
         runs_dir: request.runs_dir.clone(),
+        divergences: None,
     }
 }
 
@@ -1767,6 +1768,7 @@ mod tests {
                     inference_calls: 0,
                 },
                 evidence_digest: None,
+                subject_usage: None,
             }),
         };
         let usage = |input, output| TrialUsage {

@@ -37,11 +37,13 @@ async fn an_unknown_outcome_is_rechecked_under_its_own_identity() -> anyhow::Res
     use gents_protocol::operations::request::{MessageSendInput, RequestRef};
     use gents_store::identity::NodeIdentity;
     let unknown = family::cases();
-    let (db, user, access, agent) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "unknown-send-outcome",
         crate::test_support::no_lifecycle_plugins(),
     )
     .await;
+    let agent = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, access) = signed_home.into_parts();
     let request_id = "storage-unknown-outcome";
     let session_id = "storage-unknown-outcome-session";
     let input = MessageSendInput {
@@ -128,11 +130,13 @@ async fn generated_retries_recheck_the_stored_request_rows() -> anyhow::Result<(
     let session_name = |n: u64| format!("retry-session-{n}");
     for case in family::cases() {
         let i = &case.input;
-        let (db, user, client, binding) = gents_inference::test_support::signed_test_node(
+        let signed_home = gents_documents::test_support::SignedHome::start(
             &format!("generated-retry-{}", i.name),
             crate::test_support::no_lifecycle_plugins(),
         )
         .await;
+        let binding = gents_inference::test_support::default_agent(&signed_home).await;
+        let (db, user, client) = signed_home.into_parts();
         let node_did = db.node_identity.did().to_owned();
         let base = chrono::SubsecRound::trunc_subsecs(chrono::Utc::now(), 0)
             - chrono::TimeDelta::minutes(1);

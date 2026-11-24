@@ -1,20 +1,20 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result};
+use gents_fs_runner::beneath::{Intent, Kind, Located, OpenRoot, RootDir};
 use serde_json::{json, Map, Value};
 
 use super::names::Names;
 use super::scaffold::{tool_markdown, ux_plugin, write_plugin_source};
-use crate::pack::rooted_paths::RootedPaths;
+use crate::pack::rooted_paths::ensure_unprotected;
 
 const CONFIG: &str = "pack_config.json";
 
-/// An editable pack directory. Every file it reads or writes resolves through
-/// the rooted path owner and must stay inside the pack, so a manifest naming
-/// `../` or a symlink in the tree cannot reach beyond it.
+/// An editable pack directory. Every file it reads or writes is resolved
+/// through the directory's handle and must stay beneath it, so a manifest
+/// naming `../` or a link in the tree cannot reach beyond it.
 pub struct PackEdit {
-    context: RootedPaths,
-    pub dir: PathBuf,
+    root: RootDir,
     pub manifest: Value,
     config: Option<Value>,
 }
@@ -37,11 +37,11 @@ pub enum PackAddition {
     Plugin {
         name: String,
         language: Option<String>,
-        prebuilt: Option<PathBuf>,
+        prebuilt: Option<Located>,
     },
     Skill {
         id: String,
-        from: Option<PathBuf>,
+        from: Option<Located>,
     },
     Schema {
         collection: String,
@@ -63,14 +63,10 @@ pub enum PackPart {
 }
 
 impl PackEdit {
-    pub fn load(dir: &Path) -> Result<Self> {
-        let context = RootedPaths::new(dir)
-            .with_context(|| format!("opening the pack directory {}", dir.display()))?;
-        let dir = std::fs::canonicalize(dir)
-            .with_context(|| format!("opening the pack directory {}", dir.display()))?;
+    pub fn load(dir: impl OpenRoot) -> Result<Self> {
+        let root = dir.open_root().context("opening the pack directory")?;
         let mut pack = Self {
-            context,
-            dir,
+            root,
             manifest: Value::Null,
             config: None,
         };
@@ -82,18 +78,19 @@ impl PackEdit {
         Ok(pack)
     }
 
-    /// `relative` resolved inside the pack directory, following no link out of it.
-    fn inside(&self, relative: &str) -> Result<PathBuf> {
-        let candidate = self.dir.join(relative);
-        let path = self
-            .context
-            .resolve_path_allow_create(&candidate.to_string_lossy())?;
-        anyhow::ensure!(
-            path.starts_with(&self.dir),
-            "{relative} is outside the pack directory {}",
-            self.dir.display()
-        );
-        Ok(path)
+    /// The pack directory every edit acts beneath.
+    pub fn root(&self) -> &RootDir {
+        &self.root
+    }
+
+    /// `relative` resolved beneath the pack directory, following no link out
+    /// of it.
+    fn inside(&self, relative: &str) -> Result<Located> {
+        let located = self
+            .root
+            .locate_relative(Path::new(relative), Intent::Create)?;
+        ensure_unprotected(&located.path())?;
+        Ok(located)
     }
 
     pub fn save(&self) -> Result<()> {
@@ -169,18 +166,15 @@ impl PackEdit {
         if let Ok(schemas) = self.manifest_list("schemas") {
             schemas.retain(|schema| schema != path);
         }
-        let file = self.inside(path)?;
-        if file.is_file() {
-            std::fs::remove_file(&file).with_context(|| format!("removing {}", file.display()))?;
-        }
-        Ok(())
+        remove_file(&self.inside(path)?)
     }
 
     pub fn create_file(&mut self, path: &str, contents: impl AsRef<[u8]>) -> Result<()> {
         let target = self.inside(path)?;
         anyhow::ensure!(!target.exists(), "{path} already exists");
-        std::fs::create_dir_all(target.parent().context("file has no parent")?)?;
-        std::fs::write(&target, contents).with_context(|| format!("writing {path}"))?;
+        target
+            .write(contents.as_ref())
+            .with_context(|| format!("writing {path}"))?;
         self.add_asset(path);
         Ok(())
     }
@@ -263,8 +257,11 @@ impl PackEdit {
                 check_id(&id)?;
                 self.require_new("skills", "skill_id", &id)?;
                 let body = match from {
-                    Some(path) => std::fs::read_to_string(&path)
-                        .with_context(|| format!("reading {}", path.display()))?,
+                    Some(file) => String::from_utf8(
+                        file.read()
+                            .with_context(|| format!("reading {}", file.path().display()))?,
+                    )
+                    .with_context(|| format!("{} is not UTF-8", file.path().display()))?,
                     None => format!("# {}\n\nWhen and how to use this skill.\n", title(&id)),
                 };
                 let path = format!("skills/{}/SKILL.md", snake(&id));
@@ -280,7 +277,7 @@ impl PackEdit {
                 name,
                 language,
                 prebuilt,
-            } => add_plugin(self, &name, language.as_deref(), prebuilt.as_deref()),
+            } => add_plugin(self, &name, language.as_deref(), prebuilt.as_ref()),
             PackAddition::Page { name } => add_page(self, &name),
         }
     }
@@ -360,19 +357,17 @@ impl PackEdit {
                 if let Some(instructions) = plugin["instructions"].as_str() {
                     self.remove_asset(instructions)?;
                     let path = self.inside(instructions)?;
-                    if path.is_file() {
-                        std::fs::remove_file(&path)
-                            .with_context(|| format!("removing {}", path.display()))?;
-                    }
-                    if let Some(dir) = path.parent() {
-                        let _ = std::fs::remove_dir(dir);
+                    remove_file(&path)?;
+                    if let Some(dir) = Path::new(instructions).parent() {
+                        let _ = self.inside(&dir.to_string_lossy())?.remove_empty_dir();
                     }
                 }
                 if let Some(source) = plugin["source"].as_str() {
                     let source = self.inside(source)?;
-                    if source.is_dir() {
-                        std::fs::remove_dir_all(&source)
-                            .with_context(|| format!("removing {}", source.display()))?;
+                    if source.exists() && source.kind()? == Kind::Directory {
+                        source
+                            .remove()
+                            .with_context(|| format!("removing {}", source.path().display()))?;
                     }
                 }
             }
@@ -389,14 +384,27 @@ fn list_in<'a>(object: &'a mut Map<String, Value>, key: &str) -> Result<&'a mut 
         .with_context(|| format!("{key} is not a list"))
 }
 
-fn read_json(path: &Path) -> Result<Value> {
-    let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+fn read_json(file: &Located) -> Result<Value> {
+    let path = file.path();
+    let bytes = file
+        .read()
+        .with_context(|| format!("reading {}", path.display()))?;
     serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))
 }
 
-fn write_json(path: &Path, value: &Value) -> Result<()> {
-    std::fs::write(path, serde_json::to_string_pretty(value)? + "\n")
-        .with_context(|| format!("writing {}", path.display()))
+fn write_json(file: &Located, value: &Value) -> Result<()> {
+    file.write((serde_json::to_string_pretty(value)? + "\n").as_bytes())
+        .with_context(|| format!("writing {}", file.path().display()))
+}
+
+/// Unlinks a regular file the edit no longer lists, through the directory it
+/// was resolved in.
+fn remove_file(file: &Located) -> Result<()> {
+    if file.exists() && file.kind()? == Kind::File {
+        file.remove()
+            .with_context(|| format!("removing {}", file.path().display()))?;
+    }
+    Ok(())
 }
 
 fn snake(id: &str) -> String {
@@ -484,7 +492,7 @@ fn add_plugin(
     pack: &mut PackEdit,
     name: &str,
     language: Option<&str>,
-    prebuilt: Option<&Path>,
+    prebuilt: Option<&Located>,
 ) -> Result<()> {
     anyhow::ensure!(
         name.bytes()
@@ -507,15 +515,17 @@ fn add_plugin(
     });
     match prebuilt {
         Some(file) => {
-            let bytes =
-                std::fs::read(file).with_context(|| format!("reading {}", file.display()))?;
+            let bytes = file
+                .read()
+                .with_context(|| format!("reading {}", file.path().display()))?;
             let afb = afterburner_afb::Afb::from_bytes(&bytes)
-                .with_context(|| format!("{} is not a compiled plugin", file.display()))?;
+                .with_context(|| format!("{} is not a compiled plugin", file.path().display()))?;
             entry["language"] = json!(afb.manifest.package.language);
             let target = pack.inside(&artifact)?;
             anyhow::ensure!(!target.exists(), "{artifact} already exists");
-            std::fs::create_dir_all(target.parent().context("artifact parent")?)?;
-            std::fs::write(&target, bytes).with_context(|| format!("writing {artifact}"))?;
+            target
+                .write(&bytes)
+                .with_context(|| format!("writing {artifact}"))?;
         }
         None => {
             let source = pack.inside(&format!("plugins/{name}"))?;
@@ -525,9 +535,8 @@ fn add_plugin(
         }
     }
     let (instructions, markdown) = tool_markdown(name);
-    let instructions_path = pack.inside(&instructions)?;
-    std::fs::create_dir_all(instructions_path.parent().context("instructions parent")?)?;
-    std::fs::write(&instructions_path, markdown)
+    pack.inside(&instructions)?
+        .write(markdown.as_bytes())
         .with_context(|| format!("writing {instructions}"))?;
     entry["instructions"] = json!(instructions);
     pack.add_asset(&instructions);
@@ -555,6 +564,16 @@ fn add_page(pack: &mut PackEdit, name: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
+    fn read_json(path: &Path) -> Result<Value> {
+        super::read_json(&Located::at(path, Intent::Existing)?)
+    }
+
+    fn write_json(path: &Path, value: &Value) -> Result<()> {
+        super::write_json(&Located::at(path, Intent::Create)?, value)
+    }
+
     use super::super::scaffold::{scaffold, ScaffoldInput};
     use super::super::template::Template;
     use super::*;

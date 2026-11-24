@@ -49,7 +49,8 @@ async fn trigger_checkpoint_uses_selected_agent_visibility_and_advances_serial_a
         serde_json::from_value(agent_row["data"]["Agent"][0].clone()).unwrap();
     assert_eq!(binding.agent_did, agent_did);
     let agent_identity =
-        gents_store::identity::resolve_agent_identity(home.identity.as_ref(), &binding).unwrap();
+        gents_store::identity::resolve_agent_identity(home.node_identity.as_ref(), &binding)
+            .unwrap();
     let agent = ConfigAccess::local_managed_agent(
         home.node.clone(),
         ::identity::Did::new(&agent_did).unwrap(),
@@ -119,7 +120,6 @@ async fn trigger_checkpoint_uses_selected_agent_visibility_and_advances_serial_a
             goal_id: None,
             goal_objective: None,
             goal_token_budget: None,
-            goal_blocked_audit_threshold: None,
             goal_max_infrastructure_retries: None,
             goal_assignment_applied: false,
             emit_outcome: false,
@@ -287,9 +287,44 @@ async fn trigger_checkpoint_uses_selected_agent_visibility_and_advances_serial_a
 #[tokio::test]
 async fn every_installed_trial_agent_can_read_its_operational_collections() {
     let dir = tempfile::tempdir().unwrap();
-    let pack_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../gents")
-        .join("tests/fixtures/configurator_evals/sessions/subject");
+    let pack_dir = dir.path().join("pack");
+    std::fs::create_dir_all(&pack_dir).unwrap();
+    std::fs::write(pack_dir.join("README.md"), "# two agents\n").unwrap();
+    std::fs::write(
+        pack_dir.join("manifest.json"),
+        serde_json::to_vec(&json!({
+            "manifest_version": 1, "name": "two_agents", "version": "1.0.0",
+            "description": "An Engineer and a partner agent sharing its Context.",
+            "authors": ["gents-ai contributors"], "kind": "documents",
+            "assets": ["README.md", "pack_config.json"], "config": "pack_config.json",
+            "inference_slots": [{"name": "engineer", "description": "Runs both agents.",
+                "agents": ["engineer", "partner"]}],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        pack_dir.join("pack_config.json"),
+        serde_json::to_vec(&json!({
+            "node": {},
+            "agents": [
+                {"agent_slot": "engineer", "display_name": "The Engineer",
+                    "context_id": "engineer-context",
+                    "inference_profile_id": "gents:inference-slot:engineer",
+                    "tags": [gents_tools::builtin::self_config::ENGINEER_AGENT_TAG]},
+                {"agent_slot": "partner", "display_name": "Partner",
+                    "context_id": "engineer-context",
+                    "inference_profile_id": "gents:inference-slot:engineer"},
+            ],
+            "contexts": [{"context_id": "engineer-context", "system_prompt": "Work.",
+                "tools_id": "engineer-tools"}],
+            "tools": [{"tools_id": "engineer-tools", "host": {"bash": {"mode": "Off"}},
+                "built_ins": {"enable_schema_tool": true, "enable_session_history_tool": true},
+                "self_config": gents_tools::builtin::self_config::engineer_self_config()}],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
     let mut home = EmbeddedHome::create_temp("all-agent-operations")
         .await
         .unwrap();
@@ -345,7 +380,7 @@ async fn every_installed_trial_agent_can_read_its_operational_collections() {
     }
     gents_store::identity::provision_agent_identity_authorized(
         &home.node,
-        home.identity.as_ref(),
+        home.node_identity.as_ref(),
         &selected_did,
     )
     .await
@@ -483,7 +518,8 @@ async fn installing_a_pack_binds_its_inference_slot_to_the_frozen_profile() {
     )
     .unwrap();
     let agent_identity =
-        gents_store::identity::resolve_agent_identity(home.identity.as_ref(), &binding).unwrap();
+        gents_store::identity::resolve_agent_identity(home.node_identity.as_ref(), &binding)
+            .unwrap();
     let actor = ConfigAccess::local_managed_agent(
         home.node.clone(),
         ::identity::Did::new(&agent_did).unwrap(),
@@ -604,7 +640,7 @@ async fn a_trial_subject_supplies_an_omitted_default_agent() {
     );
     let agent = gents::Gents::from_default_agent_documents(
         home.node.clone(),
-        home.identity.clone(),
+        home.node_identity.clone(),
         DocumentRuntimeOptions {
             backend_admission: Some(home.backend_admission()),
             ..Default::default()
@@ -759,7 +795,7 @@ async fn subject_schemas_are_installed_before_documents_without_fixture_copies()
         &workspace,
         &home,
         &Default::default(),
-        home.identity.as_ref(),
+        home.node_identity.as_ref(),
         None,
     )
     .await
@@ -774,7 +810,7 @@ async fn subject_schemas_are_installed_before_documents_without_fixture_copies()
         &workspace,
         &home,
         &Default::default(),
-        home.identity.as_ref(),
+        home.node_identity.as_ref(),
         None,
     )
     .await

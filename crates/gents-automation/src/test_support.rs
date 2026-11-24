@@ -145,25 +145,13 @@ pub async fn write_trigger_delivery_with_identity(
     .await
 }
 
-pub async fn signed_test_node(
-    name: &str,
-) -> (
-    gents_inference::test_support::TestDb,
-    gents_store::identity::KeyIdentity,
-    gents_store::config_client::ConfigAccess,
-    gents_protocol::agent_identity::AgentIdentityBinding,
-) {
-    gents_inference::test_support::signed_test_node(name, crate::lifecycle_hooks::composition())
-        .await
-}
-
 pub mod self_config;
 pub mod self_config_text;
 
 pub async fn self_config_fixture(
     name: &str,
 ) -> gents_toolcalls::test_support::self_config::SelfConfigFixture {
-    let db = gents_inference::test_support::test_db_with_tool_policy(
+    let db = gents_store::test_support::TestStore::start_with_tool_policy(
         name,
         crate::lifecycle_hooks::composition(),
         std::sync::Arc::new(gents_tools::surface::ToolCeiling::meta_only()),

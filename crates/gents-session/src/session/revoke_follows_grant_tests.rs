@@ -6,11 +6,13 @@ use gents_store::identity::{GrantSet, NodeIdentity};
 /// share as itself, while another baseline holder can do neither.
 #[tokio::test]
 async fn an_agent_revokes_the_share_it_granted() {
-    let (db, _user, _user_access, binding) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "revoke-follows-grant",
         crate::test_support::no_lifecycle_plugins(),
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, _user_access) = signed_home.into_parts();
     let node = db.node.clone();
     let root = gents_store::test_support::held_runtime_identity(db.node_identity.did());
     let node_did = root.did().to_owned();

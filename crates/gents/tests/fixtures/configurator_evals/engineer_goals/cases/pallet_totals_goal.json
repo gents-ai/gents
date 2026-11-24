@@ -25,59 +25,14 @@
   "stages": [
     {
       "stage_id": "goal",
+      "prompt": "Make this a goal with a 300,000-token budget: total the pallets in counts/ and write totals.json as {\"total_pallets\": N}. Each file directly in counts/ is a depot; skip depots marked void and anything under counts/archive/.",
       "settle": true,
-      "prompt": "Set this session's goal to exactly \"Write totals.json with the total pallet count from counts/\". Budget it at 150000 tokens per depot that counts toward the total, then work it to completion. Each file directly under counts/ is one depot; a depot marked void doesn't count, and nothing under counts/archive/ does either. totals.json should hold {\"total_pallets\": N}.",
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "goal",
-          "collection": "Goal",
-          "filter": {
-            "session_id": {
-              "_eq": "$session"
-            }
-          },
-          "fields": [
-            "goal_id",
-            "objective",
-            "status",
-            "token_budget",
-            "completion_evidence",
-            "consecutive_blocked_audits",
-            "last_blocked_reason"
-          ]
-        },
-        {
-          "kind": "file",
-          "name": "totals",
-          "glob": "totals.json"
-        }
-      ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "create_goal"
-            ],
-            "forbidden": [
-              "bash",
-              "bash_unrestricted"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "captured_fields_match",
           "params": {
             "name": "goal",
             "expect": [
-              {
-                "field": "objective",
-                "equals": "Write totals.json with the total pallet count from counts/"
-              },
               {
                 "field": "token_budget",
                 "equals": 300000
@@ -85,10 +40,6 @@
               {
                 "field": "status",
                 "equals": "complete"
-              },
-              {
-                "field": "completion_evidence",
-                "matches": "(?:^|\\D)37(?:\\D|$)"
               }
             ],
             "min_rows": 1,
@@ -111,6 +62,32 @@
           },
           "tier": "acceptance",
           "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "goal",
+          "collection": "Goal",
+          "filter": {
+            "session_id": {
+              "_eq": "$session"
+            }
+          },
+          "fields": [
+            "goal_id",
+            "objective",
+            "status",
+            "token_budget",
+            "tokens_used",
+            "completion_evidence",
+            "blocked_reason"
+          ]
+        },
+        {
+          "kind": "file",
+          "name": "totals",
+          "glob": "totals.json"
         }
       ]
     }

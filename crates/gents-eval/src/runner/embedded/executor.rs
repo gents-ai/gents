@@ -6,6 +6,7 @@ mod root_grants;
 mod settle;
 mod stage;
 mod submit;
+pub(super) mod usage;
 
 use rapidhash::{HashMapExt, RapidHashMap};
 use std::path::{Path, PathBuf};
@@ -20,8 +21,9 @@ use tokio_util::sync::CancellationToken;
 use self::capture::{run_captures_with_access, CaptureBindings};
 use self::evidence::{anchor, home_usage_with_access, session_requests_with_access};
 use self::install::install;
-use self::outcome::{outcome_kind, provider_reason};
+use self::outcome::{outcome_kind, stage_outcome, stated_provider_reason};
 use self::stage::{run_stages, StageEnv};
+use self::usage::{home_charge, home_rows, subject_usage};
 use crate::runner::embedded::home::{boot_runtime, EmbeddedHome};
 use crate::runner::embedded::live::LiveObserver;
 use crate::runner::embedded::observe::{
@@ -180,7 +182,7 @@ impl EmbeddedExecutor {
         options.plugin_home = Some(home.path().to_path_buf());
         options.runtime_snapshot_observer = Some(Arc::new(EventSourcesReady(event_sources_ready)));
         options.tool_ceiling = trial_tool_ceiling(&workspace, spec.host_bash, self.isolation);
-        let runtime = match boot_runtime(&home, home.identity.clone(), options).await {
+        let runtime = match boot_runtime(&home, home.node_identity.clone(), options).await {
             Ok((runtime, _agent)) => runtime,
             Err(error) => {
                 close(home).await;
@@ -206,18 +208,109 @@ impl EmbeddedExecutor {
                 "eval trial runtime did not shut down cleanly"
             );
         }
-        let usage = match home.client_access(&spec.evaluator_did) {
-            Ok(access) => home_usage_with_access(&access).await,
+        let rows = match home.client_access(&spec.evaluator_did) {
+            Ok(access) => home_rows(&access).await,
             Err(error) => Err(error),
         };
         close(home).await;
-        let usage = match usage {
-            Ok(usage) => usage,
+        let rows = match rows {
+            Ok(rows) => rows,
             Err(error) => return infrastructure(&spec.trial_id, locator, &error),
         };
+        let stage_requests: Vec<&str> = stages
+            .iter()
+            .filter_map(|stage| stage.request_id.as_deref())
+            .collect();
+        let subject_usage = subject_usage(&rows, &locator.session_id, &stage_requests);
         let anchor = anchor(&stages);
-        TrialEvidence::new(locator, stages, usage, anchor)
+        let mut evidence = TrialEvidence::new(locator, stages, home_charge(&rows).usage, anchor);
+        evidence.subject_usage = subject_usage;
+        evidence
     }
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+pub struct InstalledSubject {
+    pub home: EmbeddedHome,
+    pub agent_did: String,
+    pub evaluator_did: String,
+    pub tool_ceiling: ToolCeiling,
+}
+
+/// Installs a subject exactly as a trial does before its first stage, for
+/// tests above this crate that hold it to what a product home holds.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub async fn install_subject_for_tests(
+    pack_dir: &Path,
+    agent_slot: &str,
+    core_packs: &[String],
+    enabled_core_packs: &[String],
+    archives: gents::core_packs::Archives<'_>,
+    host_bash: bool,
+    isolation: Isolation,
+) -> Result<InstalledSubject> {
+    use crate::runner::executor::{InferenceBinding, TrialFixtures};
+    use gents_pack::pack::digest_declared_assets;
+
+    let (manifest, assets) = install::read_pack(pack_dir)?;
+    let pack_digest = digest_declared_assets(&manifest, |path| {
+        assets
+            .get(path)
+            .map(Vec::as_slice)
+            .with_context(|| format!("pack has no asset {path:?}"))
+    })?;
+    let mut home = EmbeddedHome::create_temp("subject").await?;
+    let evaluator = Arc::new(gents_store::identity::KeyIdentity::load_or_create(
+        home.path().join("evaluator.key"),
+        None,
+    )?);
+    let evaluator_did = gents_store::identity::NodeIdentity::did(evaluator.as_ref()).to_owned();
+    let capability = evaluator.client_signing_capability()?;
+    home.set_evaluator(evaluator, capability);
+    let trial_dir = home.path().join("trial");
+    let workspace = workspace_dir(&trial_dir);
+    std::fs::create_dir_all(&workspace)?;
+    let spec = TrialSpec {
+        trial_id: "subject".to_owned(),
+        pack_dir: pack_dir.to_owned(),
+        pack_digest,
+        agent_slot: agent_slot.to_owned(),
+        evaluator_did: evaluator_did.clone(),
+        inference: InferenceBinding {
+            profile: serde_json::json!({
+                "profile_id": "subject-profile",
+                "backend_id": "subject-backend",
+                "model_name": "subject-model",
+            }),
+            backend: serde_json::json!({
+                "backend_id": "subject-backend",
+                "name": "Subject backend",
+                "provider_kind": "OpenAiCompatible",
+                "endpoint": "http://127.0.0.1:1/v1",
+                "auth": {"kind": "unauthenticated"},
+            }),
+            sampling: None,
+            execution: None,
+            retry_policy: None,
+            seed: 0,
+        },
+        fixtures: TrialFixtures::default(),
+        host_bash,
+        core_packs: core_packs.to_vec(),
+        enabled_core_packs: enabled_core_packs.to_vec(),
+        stages: Vec::new(),
+        trial_dir,
+        script_key: None,
+        progress: Default::default(),
+        review: Default::default(),
+    };
+    let agent_did = install(&spec, &home, &workspace, archives).await?;
+    Ok(InstalledSubject {
+        tool_ceiling: trial_tool_ceiling(&workspace, host_bash, isolation),
+        home,
+        agent_did,
+        evaluator_did,
+    })
 }
 
 /// The process ceiling of an embedded trial. Bash is capped at
@@ -312,6 +405,22 @@ impl RuntimeSnapshotObserver for EventSourcesReady {
 impl TrialExecutor for EmbeddedExecutor {
     fn isolation(&self) -> Isolation {
         self.isolation
+    }
+
+    async fn provider_answers(&self, spec: &TrialSpec) -> bool {
+        match serde_json::from_value(spec.inference.backend.clone()) {
+            Ok(backend) => {
+                gents_inference::backends::registry::backend_endpoint_answers(&backend).await
+            }
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    trial_id = %spec.trial_id,
+                    "eval trial backend document is invalid; its provider cannot be asked"
+                );
+                true
+            }
+        }
     }
 
     async fn provision(&self, spec: &TrialSpec) -> TrialLocator {
@@ -433,16 +542,21 @@ impl TrialExecutor for EmbeddedExecutor {
             let terminal_state = RequestLifecycleState::parse(&request.lifecycle_state)
                 .ok()
                 .filter(|state| state.is_terminal());
-            let failure_kind =
-                classify_request_outcome(terminal_state, false, &evidence).map(outcome_kind);
+            let stated = stated_provider_reason(&evidence);
+            let outcome = stage_outcome(
+                stated.is_some_and(|stated| stated.ended_by_backend),
+                classify_request_outcome(terminal_state, false, &evidence).map(outcome_kind),
+                stated.map(|stated| stated.reason),
+                Some(&[]),
+            );
             stages.push(StageEvidence {
                 subject_agent: subject.clone(),
                 prods: 0,
                 stage_id: index.to_string(),
                 request_id: Some(request.request_id.clone()),
                 terminal_state,
-                provider_reason: provider_reason(failure_kind, &evidence),
-                failure_kind,
+                provider_reason: outcome.and_then(|(_, reason)| reason),
+                failure_kind: outcome.map(|(kind, _)| kind),
                 failure_detail: None,
                 messages: evidence.messages,
                 tool_calls: evidence.tool_calls,

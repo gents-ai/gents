@@ -64,7 +64,7 @@ fn source(kind: Source, same: bool) -> OutputSource {
 
 #[tokio::test]
 async fn transcript_views_match_model_on_served_node() -> anyhow::Result<()> {
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "transcript-views",
         gents_session::test_support::no_lifecycle_plugins(),
     )

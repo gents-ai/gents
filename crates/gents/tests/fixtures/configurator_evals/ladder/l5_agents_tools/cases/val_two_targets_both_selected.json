@@ -5,70 +5,7 @@
   "stages": [
     {
       "stage_id": "configure-two",
-      "prompt": "Create two assistants using our current model: Researcher for finding facts, and Reviewer for checking conclusions. Make both available for you to delegate to.",
-      "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "targets",
-            "min": 2,
-            "max": 2
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "agents": {
-              "agents": "agents",
-              "contexts": "contexts",
-              "tools": "tools",
-              "expect": [
-                {
-                  "agent_did": "gents:agent-slot:engineer",
-                  "delegates": {
-                    "targets": "targets",
-                    "agents": [
-                      "researcher",
-                      "reviewer"
-                    ]
-                  }
-                },
-                {
-                  "agent_did": "researcher",
-                  "source_match": {
-                    "field": "display_name",
-                    "matches": "(?i)^researcher$"
-                  }
-                },
-                {
-                  "agent_did": "reviewer",
-                  "source_match": {
-                    "field": "display_name",
-                    "matches": "(?i)^reviewer$"
-                  }
-                }
-              ]
-            }
-          },
-          "tier": "acceptance",
-          "weight": 1
-        }
-      ],
+      "prompt": "Create two assistants: Researcher for finding facts and Reviewer for checking conclusions. Set both up so you can hand work to them.",
       "capture": [
         {
           "kind": "documents",
@@ -84,7 +21,8 @@
             "display_name",
             "context_id",
             "enabled",
-            "inference_profile_id"
+            "inference_profile_id",
+            "tags"
           ]
         },
         {
@@ -98,8 +36,8 @@
           },
           "fields": [
             "context_id",
-            "tools_id",
-            "system_prompt"
+            "system_prompt",
+            "tools_id"
           ]
         },
         {
@@ -115,17 +53,61 @@
             "tools_id",
             "host",
             "datastore",
+            "self_config",
             "agents",
-            "self_config"
+            "remote",
+            "built_ins",
+            "integrations"
           ]
         },
         {
           "kind": "documents",
-          "name": "targets",
+          "name": "helper_targets_1",
           "collection": "AgentTarget",
           "filter": {
             "node_did": {
               "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^researcher$"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            }
+          },
+          "fields": [
+            "target_id",
+            "node_did",
+            "name",
+            "target_node_did",
+            "agent_did"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "helper_targets_2",
+          "collection": "AgentTarget",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^reviewer$"
+                  },
+                  "field": "agent_did"
+                }
+              }
             }
           },
           "fields": [
@@ -136,109 +118,64 @@
             "agent_did"
           ]
         }
-      ]
-    },
-    {
-      "stage_id": "delegate-to-beta",
-      "prompt": "Ask Reviewer to reply with exactly BETA-777 and report its reply when it arrives.",
+      ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "agent_new"
-            ],
-            "forbidden": [
-              "bash"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "beta-session",
-            "min": 1
-          },
-          "tier": "acceptance",
-          "weight": 2
-        },
-        {
-          "check": "captured_fields_match",
-          "params": {
-            "name": "beta-request",
-            "expect": [
-              {
-                "field": "content",
-                "contains": "BETA-777"
-              },
-              {
-                "field": "lifecycle_state",
-                "equals": "completed"
-              },
-              {
-                "field": "terminal_output",
-                "contains": "message_doc_id"
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 2
-        },
         {
           "check": "crew_spec_match",
           "params": {
-            "links": [
-              {
-                "capture": "beta-request",
-                "field": "caused_by_parent_tool_call_doc_id",
-                "target_capture": "delegation_calls",
-                "target_key": "_docID",
-                "expect": [
-                  {
-                    "field": "lifecycle_state",
-                    "equals": "completed"
+            "agents": {
+              "agents": "agents",
+              "contexts": "contexts",
+              "tools": "tools",
+              "expect": [
+                {
+                  "agent_did": "researcher",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^researcher$"
                   },
-                  {
-                    "field": "completion_notification_delivered_at",
-                    "matches": "^[0-9]{4}-"
-                  }
-                ],
-                "source_match": {
-                  "field": "content",
-                  "contains": "BETA-777"
+                  "agent": [
+                    {
+                      "field": "enabled",
+                      "equals": true
+                    }
+                  ]
                 },
-                "exact": true
+                {
+                  "agent_did": "reviewer",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^reviewer$"
+                  },
+                  "agent": [
+                    {
+                      "field": "enabled",
+                      "equals": true
+                    }
+                  ]
+                }
+              ]
+            },
+            "present": [
+              {
+                "capture": "helper_targets_1",
+                "min": 1
               },
               {
-                "capture": "beta-request",
-                "source_match": {
-                  "field": "content",
-                  "contains": "BETA-777"
-                },
-                "field": "session_id",
-                "target_capture": "beta-session",
-                "target_key": "session_id",
-                "exact": true
+                "capture": "helper_targets_2",
+                "min": 1
               }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 2
-        },
-        {
-          "check": "final_message_matches",
-          "params": {
-            "all": [
-              "BETA-777"
             ]
           },
           "tier": "acceptance",
           "weight": 1
         }
-      ],
+      ]
+    },
+    {
+      "stage_id": "delegate-to-both",
+      "prompt": "Ask Researcher to reply with exactly ALPHA-333 and Reviewer to reply with exactly BETA-777, and tell me what each says.",
+      "settle": true,
       "capture": [
         {
           "kind": "documents",
@@ -256,7 +193,76 @@
         },
         {
           "kind": "documents",
-          "name": "beta-session",
+          "name": "helper-1-session",
+          "collection": "AgentSession",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^researcher$"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            }
+          },
+          "fields": [
+            "session_id",
+            "agent_did",
+            "title",
+            "stopped_at"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "helper-1-request",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^researcher$"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "content": {
+              "_like": "%ALPHA-333%"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "session_id",
+            "content",
+            "lifecycle_state",
+            "terminal_output",
+            "caused_by_parent_tool_call_doc_id",
+            "caused_by_parent_request_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "helper-2-session",
           "collection": "AgentSession",
           "filter": {
             "node_did": {
@@ -278,12 +284,13 @@
           "fields": [
             "session_id",
             "agent_did",
-            "node_did"
+            "title",
+            "stopped_at"
           ]
         },
         {
           "kind": "documents",
-          "name": "beta-request",
+          "name": "helper-2-request",
           "collection": "AgentRequest",
           "filter": {
             "node_did": {
@@ -303,6 +310,12 @@
             },
             "purpose": {
               "_eq": "normal"
+            },
+            "content": {
+              "_like": "%BETA-777%"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
             }
           },
           "fields": [
@@ -312,7 +325,8 @@
             "content",
             "lifecycle_state",
             "terminal_output",
-            "caused_by_parent_tool_call_doc_id"
+            "caused_by_parent_tool_call_doc_id",
+            "caused_by_parent_request_id"
           ]
         },
         {
@@ -335,12 +349,118 @@
           },
           "fields": [
             "_docID",
+            "tool_name",
             "lifecycle_state",
             "completion_notification_delivered_at"
           ]
         }
       ],
-      "settle": true
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "links": [
+              {
+                "capture": "helper-1-request",
+                "field": "caused_by_parent_tool_call_doc_id",
+                "target_capture": "delegation_calls",
+                "target_key": "_docID",
+                "expect": [
+                  {
+                    "field": "lifecycle_state",
+                    "equals": "completed"
+                  },
+                  {
+                    "field": "completion_notification_delivered_at",
+                    "matches": "^[0-9]{4}-"
+                  }
+                ],
+                "source_match": {
+                  "field": "content",
+                  "contains": "ALPHA-333"
+                },
+                "exact": true
+              },
+              {
+                "capture": "helper-1-request",
+                "source_match": {
+                  "field": "content",
+                  "contains": "ALPHA-333"
+                },
+                "field": "session_id",
+                "target_capture": "helper-1-session",
+                "target_key": "session_id",
+                "exact": true
+              },
+              {
+                "capture": "helper-2-request",
+                "field": "caused_by_parent_tool_call_doc_id",
+                "target_capture": "delegation_calls",
+                "target_key": "_docID",
+                "expect": [
+                  {
+                    "field": "lifecycle_state",
+                    "equals": "completed"
+                  },
+                  {
+                    "field": "completion_notification_delivered_at",
+                    "matches": "^[0-9]{4}-"
+                  }
+                ],
+                "source_match": {
+                  "field": "content",
+                  "contains": "BETA-777"
+                },
+                "exact": true
+              },
+              {
+                "capture": "helper-2-request",
+                "source_match": {
+                  "field": "content",
+                  "contains": "BETA-777"
+                },
+                "field": "session_id",
+                "target_capture": "helper-2-session",
+                "target_key": "session_id",
+                "exact": true
+              }
+            ],
+            "present": [
+              {
+                "capture": "helper-1-session",
+                "min": 1
+              },
+              {
+                "capture": "helper-1-request",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "helper-2-session",
+                "min": 1
+              },
+              {
+                "capture": "helper-2-request",
+                "min": 1,
+                "max": 1
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              "ALPHA-333",
+              "BETA-777"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
     }
   ]
 }

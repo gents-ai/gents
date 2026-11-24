@@ -49,31 +49,6 @@ pub async fn load_status_enrollment_approvals(
     project_status_enrollment_response(&response, pins, principal, local_peer_id).await
 }
 
-pub async fn load_status_enrollment_approvals_in_txn(
-    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
-    principal: &dyn NodeIdentity,
-    local_peer_id: &str,
-) -> Result<(
-    BTreeMap<String, EnrollmentAuthorityOutcome>,
-    BTreeSet<String>,
-)> {
-    let runtime = identity::Did::new(principal.did())?;
-    txn.validate_runtime_actor(&runtime)?;
-    for collection in [
-        "NetworkAdminPin",
-        "NetworkEnrollmentRequest",
-        "NetworkEnrollmentDecision",
-        "NetworkAuthorizationRevision",
-        "NetworkEnrollmentRouteReceipt",
-    ] {
-        gents_store::graphql::fence_arrivals(txn, collection).await?;
-    }
-    let response: defra_node::QueryResponse =
-        serde_json::from_value(txn.execute(STATUS_ENROLLMENT_QUERY).await?)?;
-    let pins = runtime_admin_pin_rows(txn, &runtime, None).await?;
-    project_status_enrollment_response(&response, pins, principal, local_peer_id).await
-}
-
 async fn project_status_enrollment_response(
     response: &defra_node::QueryResponse,
     admin_pins: Vec<Value>,

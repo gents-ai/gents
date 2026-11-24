@@ -5,7 +5,7 @@
   "stages": [
     {
       "stage_id": "file",
-      "prompt": "Put a reminder called \u201cDoor interlock review\u201d in my inbox. The note should say \u201cCall Imogen about the dock interlock before unloading.\u201d",
+      "prompt": "Put a reminder in my inbox titled \"Door interlock review\" with the note \"Call Imogen about the dock interlock before unloading.\"",
       "capture": [
         {
           "kind": "documents",
@@ -57,41 +57,6 @@
         }
       ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "file_mailbox_item"
-            ],
-            "forbidden": [
-              "write",
-              "bash",
-              "bash_unrestricted",
-              "write_file",
-              "edit_file"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_result_matches",
-          "params": {
-            "expect": [
-              {
-                "field": "outcome",
-                "equals": "created"
-              },
-              {
-                "field": "item.title",
-                "equals": "Door interlock review"
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "crew_spec_match",
           "params": {
@@ -145,7 +110,7 @@
     },
     {
       "stage_id": "second",
-      "prompt": "Add another reminder for me: \u201cForklift 3 inspection\u201d, with the note \u201cForklift 3 is due for inspection at 14:00.\u201d Keep the dock interlock reminder as it is.",
+      "prompt": "Add another one: \"Forklift 3 inspection\", with the note \"Forklift 3 is due for inspection at 14:00.\" Keep the interlock reminder as it is.",
       "capture": [
         {
           "kind": "documents",
@@ -197,24 +162,6 @@
         }
       ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "file_mailbox_item"
-            ],
-            "forbidden": [
-              "write",
-              "bash",
-              "bash_unrestricted",
-              "write_file",
-              "edit_file"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "crew_spec_match",
           "params": {

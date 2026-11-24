@@ -14,7 +14,7 @@ path = "source/main.rs"
 
 [dependencies]
 rquickjs = "0.14"
-serde_json = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
 
 [profile.release]
 opt-level = 3

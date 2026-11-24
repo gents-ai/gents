@@ -216,7 +216,6 @@ pub struct TimelineInferenceCallEvent {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimelineGoalState {
     pub status: String,
-    pub consecutive_blocked_audits: i64,
     pub wrapup_requested: bool,
     pub wrapup_completed: bool,
 }
@@ -241,9 +240,7 @@ pub struct TimelineGoalTransitionEvent {
     pub token_budget: Option<i64>,
     pub tokens_used: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_blocked_request_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_blocked_reason: Option<String>,
+    pub blocked_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_failure: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -5,7 +5,7 @@ use support::agent_requests::{RequestActors, RequestSeed};
 const RECOVERY_CREATED_AT: &str = "2026-03-23T00:00:00Z";
 
 pub(super) async fn startup_recovery_order_terminalizes_crash_orphaned_calls() {
-    let db = test_db("startup-recovery-order-1001").await;
+    let db = trial_store("startup-recovery-order-1001").await;
     let actors = RequestActors::new(&db).await;
     let agent = actors.agent().clone();
     let request_id = "startup-order-1001-request";
@@ -81,7 +81,7 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
     for (initial_call_state, terminal_call_state) in
         [("running", "failed"), ("queued", "cancelled")]
     {
-        let db = test_db(&format!("deferred-inference-{initial_call_state}")).await;
+        let db = trial_store(&format!("deferred-inference-{initial_call_state}")).await;
         let actors = RequestActors::new(&db).await;
         let agent = actors.agent().clone();
         let request_id = format!("deferred-inference-{initial_call_state}");
@@ -206,7 +206,7 @@ fn recovered(count: usize) -> u64 {
 pub(super) async fn generated_request_recovery_cases_drive_request_owner() {
     for case in gents_lean_vocab::families::recovery_sweeps_request::cases() {
         let input = &case.input;
-        let db = test_db(&format!("recovery-sweep-{}", input.name)).await;
+        let db = trial_store(&format!("recovery-sweep-{}", input.name)).await;
         let actors = RequestActors::new(&db).await;
         let request_id = format!("{}-request", input.name);
         let session_id = format!("{}-session", input.name);
@@ -228,7 +228,7 @@ pub(super) async fn generated_request_recovery_cases_drive_request_owner() {
             .await;
         if input.interrupt_requested {
             actors
-                .set_interrupt_requested_at(&doc_id, "2026-07-09T00:00:00Z")
+                .interrupt_request_session_at(&doc_id, "2026-07-09T00:00:00Z")
                 .await;
         }
         let recover = || {
@@ -252,7 +252,7 @@ pub(super) async fn generated_request_recovery_cases_drive_request_owner() {
 pub(super) async fn generated_inference_recovery_cases_drive_inference_owner() {
     for case in gents_lean_vocab::families::recovery_sweeps_inference::cases() {
         let input = &case.input;
-        let db = test_db(&format!("recovery-sweep-{}", input.name)).await;
+        let db = trial_store(&format!("recovery-sweep-{}", input.name)).await;
         let actors = RequestActors::new(&db).await;
         let request_id = format!("{}-request", input.name);
         let session_id = format!("{}-session", input.name);
@@ -523,7 +523,7 @@ async fn seed_expired_execution_tuple(actors: &RequestActors, request_doc_id: &s
 
 #[tokio::test]
 async fn request_recovery_before_output_persists_canonical_terminal_selection() {
-    let db = test_db("recovery-no-response-failed").await;
+    let db = trial_store("recovery-no-response-failed").await;
     let actors = RequestActors::new(&db).await;
     let agent = actors.agent().clone();
     let request_id = "recovery-no-response-request";
@@ -581,7 +581,7 @@ async fn request_recovery_before_output_persists_canonical_terminal_selection() 
         "a repaired terminal request must leave the active-recovery scope"
     );
 
-    let db = test_db("recovery-no-response-interrupted").await;
+    let db = trial_store("recovery-no-response-interrupted").await;
     let actors = RequestActors::new(&db).await;
     let agent = actors.agent().clone();
     let request_id = "recovery-no-response-interrupted-request";
@@ -589,7 +589,7 @@ async fn request_recovery_before_output_persists_canonical_terminal_selection() 
     let doc_id = seed_scoped_request(&actors, request_id, session_id, "processing").await;
     seed_expired_execution_tuple(&actors, &doc_id).await;
     actors
-        .set_interrupt_requested_at(&doc_id, "2026-03-23T00:00:30Z")
+        .interrupt_request_session_at(&doc_id, "2026-03-23T00:00:30Z")
         .await;
     seed_recovery_session(
         &actors,

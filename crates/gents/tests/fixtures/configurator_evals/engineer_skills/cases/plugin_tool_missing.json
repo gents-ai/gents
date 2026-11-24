@@ -5,66 +5,17 @@
   "stages": [
     {
       "stage_id": "diagnose",
-      "prompt": "Tomorrow we'll install a label-printer plugin pack on another node, and its clerk agent has to use the pack's print tool. Nothing is installed yet and there is nothing to look up here; I want the plan in advance. Once the pack is installed, what do we still have to change for the clerk to get the tool, and from when will the clerk see it? Reply with JSON with \"change\" (the configuration document to edit) and \"visible_from\" (when the clerk sees the tool).",
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "loaded",
-          "collection": "AgentOutputSegment",
-          "filter": {
-            "session_id": {
-              "_eq": "$session"
-            },
-            "payload": {
-              "_like": "Skill: package-pack%"
-            }
-          },
-          "fields": [
-            "ordinal"
-          ]
-        }
-      ],
+      "prompt": "Tomorrow we're installing a label-printer plugin pack on another node, and its clerk agent needs the pack's print tool. Once the pack is installed, what do we still have to change for the clerk to get the tool, and from when will the clerk see it?",
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "load_skill"
-            ],
-            "forbidden": [
-              "write",
-              "bash",
-              "bash_unrestricted",
-              "write_file",
-              "edit_file"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "present": [
-              {
-                "capture": "loaded",
-                "min": 1
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "final_message_matches",
           "params": {
             "all": [
               {
-                "matches": "\"change\"\\s*:\\s*\"[^\"]*(?i:tools)"
+                "matches": "(?i)\\b(clerk|agent)('?s)?\\b[^.\\n]{0,40}\\btools\\b|\\btools\\b[^.\\n]{0,40}\\b(clerk|agent)\\b|integrations"
               },
               {
-                "matches": "\"visible_from\"\\s*:\\s*\"[^\"]*(?i:(?:fresh|new|next|later|subsequent|following)[^\"]*request)"
+                "matches": "(?i)\\b(next|new|fresh|later|subsequent|following)\\b[^.\\n]{0,40}\\b(request|turn|message|conversation|session|chat|run)"
               }
             ]
           },

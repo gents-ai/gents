@@ -6,15 +6,15 @@ use serde_json::json;
 
 use crate::support::fixtures::{agent_target, configure_agent_tools_as};
 use crate::support::live_inference::{
-    boot_live_agent_with_ceiling, live_target, rows_when, wait_for_request_terminal, LiveAgentSpec,
-    LiveUser,
+    boot_live_agent_with_ceiling, live_target, wait_for_request_terminal, LiveAgentSpec, LiveUser,
 };
-use crate::support::test_db;
+use crate::support::trial_store;
+use gents_store::test_support::rows_when;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn live_child_without_an_execution_limit_completes_a_six_step_read() {
     let target = live_target().await;
-    let db = test_db("live-session-default-limit").await;
+    let db = trial_store("live-session-default-limit").await;
     let live = LiveUser::install(&db, &target).await;
     let parent = live.agent(&target, LiveAgentSpec {
         display_name: "Read coordinator",

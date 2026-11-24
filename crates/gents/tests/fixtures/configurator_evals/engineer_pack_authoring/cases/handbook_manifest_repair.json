@@ -29,7 +29,7 @@
   "stages": [
     {
       "stage_id": "repair",
-      "prompt": "packs/shift_handbook fails its pack check. Fix the manifest so it passes, leaving the skill files, README and pack_config.json exactly as they are, then build it and install the archive you built.",
+      "prompt": "packs/shift_handbook fails its pack check. Fix the manifest, leaving the skill files, README and pack_config.json as they are, and install it here so you can use its skills.",
       "capture": [
         {
           "kind": "documents",
@@ -80,20 +80,6 @@
         }
       ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash",
-              "bash_unrestricted"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "crew_spec_match",
           "params": {
@@ -163,10 +149,6 @@
                 "contains": "skills/handoff_label/SKILL.md"
               },
               {
-                "path": "packs/fielddesk.shift_handbook-1.0.0.pack",
-                "exists": true
-              },
-              {
                 "path": "packs/shift_handbook/README.md",
                 "sha256": "eb75a6612760089469bee592d905afbb4a01f8a48a9fdf5e516166bff77a2b8c"
               },
@@ -186,6 +168,99 @@
           },
           "tier": "acceptance",
           "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "use",
+      "prompt": "What goes on a handoff label, and how do we do the hourly radio check?",
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "agents": {
+              "agents": "agents",
+              "contexts": "contexts",
+              "tools": "tools",
+              "expect": [
+                {
+                  "agent_did": "gents:agent-slot:engineer",
+                  "context": [
+                    {
+                      "field": "skill_ids",
+                      "contains": "handoff-label"
+                    },
+                    {
+                      "field": "skill_ids",
+                      "contains": "radio-checks"
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?i)initials"
+              },
+              {
+                "matches": "(?i)channel 14"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name",
+            "context_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "contexts",
+          "collection": "AgentContext",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "context_id",
+            "tools_id",
+            "skill_ids"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "tools",
+          "collection": "Tools",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "tools_id"
+          ]
         }
       ]
     }

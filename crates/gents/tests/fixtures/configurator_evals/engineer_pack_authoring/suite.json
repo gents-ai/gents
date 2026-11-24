@@ -2,15 +2,14 @@
   "id": "engineer-pack-authoring",
   "title": "Engineer pack authoring",
   "coverage": [
-    "author a documents pack with a collection and install its built archive",
-    "export live configuration to a pack without installing it",
-    "repair a manifest asset binding",
-    "fix check findings until clean",
+    "author a pack with a collection, install it and add a record",
+    "export live configuration to a pack file without installing it",
+    "repair a manifest, install it and answer from its skills",
+    "fix check findings and install",
     "release a new version and update the installed pack",
     "remove a pack and keep its collection",
-    "compare pack digests without installing",
-    "preview an install without committing",
-    "register an unregistered skill"
-  ],
-  "subject": "engineer_full"
+    "tell two copies of a release apart without installing",
+    "say what an install would add, then install it and run its task",
+    "register a skill the pack left out"
+  ]
 }

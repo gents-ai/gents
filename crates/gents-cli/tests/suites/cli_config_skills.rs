@@ -14,7 +14,10 @@ async fn config_skill_cli_disable_enable_and_rm_round_trip() -> Result<()> {
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("mock-skill-crud-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockChatEndpoint::start(&model_name, "ok")?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .replies("ok")
+            .start()?;
     let server_port = allocate_port()?;
     let graphql = graphql_url(server_port);
     let agent_name = format!("cli-skill-crud-{}", Uuid::new_v4().simple());
@@ -343,7 +346,10 @@ async fn config_skill_import_export_roundtrip_hermes() -> Result<()> {
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
     let model_name = format!("mock-skill-import-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockChatEndpoint::start(&model_name, "ok")?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .replies("ok")
+            .start()?;
     let server_port = allocate_port()?;
     let graphql = graphql_url(server_port);
     let agent_name = format!("cli-skill-import-{}", Uuid::new_v4().simple());

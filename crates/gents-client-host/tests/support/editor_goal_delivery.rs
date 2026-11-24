@@ -1,5 +1,8 @@
-use super::{fake_llm, support::Attachment, ChatAction};
+use super::support::Attachment;
 use anyhow::{ensure, Context, Result};
+use gents_inference::test_support::scripted_backend::{
+    ScriptedBackend, StreamChunk, StreamResponse, StreamScript,
+};
 use gents_protocol::{
     goal_control::{GoalControlOutcome, GoalOperation, SessionGoalControl},
     row::AgentRequestRow,
@@ -10,38 +13,23 @@ use gents_store::{
 use serde_json::{json, Value};
 use std::{
     path::Path,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    time::{Duration, Instant},
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 pub const OBJECTIVE: &str = "Recover this installed Goal without replacing its input.";
 pub const CAPTURE: &str = "unsaved Goal delivery context\n";
 pub const DRAFT: &str = "Keep this newer Goal delivery draft.";
 const COMPLETE_CALL: &str = "goal-delivery-complete";
+/// Releases the original Goal work the provider holds.
+pub const GATE: &str = "goal-delivery";
 
+#[derive(Default)]
 pub struct Provider {
     started: AtomicBool,
-    gate: Arc<tokio::sync::Semaphore>,
-}
-
-impl Default for Provider {
-    fn default() -> Self {
-        Self {
-            started: AtomicBool::new(false),
-            gate: Arc::new(tokio::sync::Semaphore::new(0)),
-        }
-    }
 }
 
 impl Provider {
-    pub fn reply(
-        &self,
-        request: &Value,
-        emitted: &tokio::sync::watch::Sender<Option<Instant>>,
-    ) -> Option<ChatAction> {
+    pub fn reply(&self, request: &Value) -> Option<StreamResponse> {
         let messages = request["messages"].as_array()?;
         if !messages
             .iter()
@@ -62,35 +50,21 @@ impl Provider {
             return None;
         }
         if !self.started.swap(true, Ordering::SeqCst) {
-            return Some(ChatAction::GatedSse(
-                vec![(
-                    Duration::ZERO,
-                    format!(
-                        "data: {}\n\n",
-                        json!({
-                            "choices":[{"delta":{"content":"Original Goal work is running."},"finish_reason":null}],"usage":null,
-                        })
-                    ),
-                )],
-                Arc::clone(&self.gate),
-                fake_llm::completion_text_sse(" Original Goal work finished."),
-                emitted.clone(),
+            return Some(StreamResponse::Stream(
+                StreamScript::paused(GATE, ["Original Goal work is running."])
+                    .then(vec![StreamChunk::text(" Original Goal work finished.")]),
             ));
         }
-        Some(ChatAction::Sse(if completed {
-            fake_llm::completion_text_sse("Recovered Goal completed.")
+        Some(if completed {
+            StreamResponse::text("Recovered Goal completed.")
         } else {
-            fake_llm::tool_call_sse_with_id(
+            StreamResponse::tool_call(
                 COMPLETE_CALL,
                 gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME,
-                &json!({"status":"complete","reason":"Installed Goal delivery recovered."})
+                json!({"status":"complete","reason":"Installed Goal delivery recovered."})
                     .to_string(),
             )
-        }))
-    }
-
-    pub fn release(&self) {
-        self.gate.add_permits(1);
+        })
     }
 }
 
@@ -102,8 +76,8 @@ fn image() -> gents_protocol::request_input::RequestAttachment {
     }
 }
 
-pub fn verify_images(provider: &fake_llm::FakeLlm) -> Result<()> {
-    let requests = provider.captured_chat_requests();
+pub fn verify_images(provider: &ScriptedBackend) -> Result<()> {
+    let requests = provider.observed_completion_bodies();
     let expected = format!("data:image/png;base64,{}", image().data);
     ensure!(
         requests.iter().any(|request| {

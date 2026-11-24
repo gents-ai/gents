@@ -205,7 +205,7 @@ async fn late_delivered_segments_match_the_lean_reads() {
         output_segment_create_variables, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
     for case in gents_lean_vocab::families::late_delivery_reads::cases::<String>() {
-        let db = gents_inference::test_support::test_db(
+        let db = gents_store::test_support::TestStore::start(
             "late-delivered-segments-match-the-lean-r",
             crate::test_support::no_lifecycle_plugins(),
         )

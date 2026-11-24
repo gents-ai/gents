@@ -16,9 +16,10 @@ pub enum GrantSet {
     /// creates. It includes DAC bypass.
     HouseholdOwner,
     /// Relationship-management authority bounded by what the holder holds,
-    /// plus read-only `NacStatus` to explain other identities' node grants and
+    /// plus read-only `NacStatus` to explain other identities' node grants,
     /// read-only `CollectionGet`, which native relationship changes outside a
-    /// transaction require. It holds no schema change permission.
+    /// transaction require, and `DacPolicyAdd` to register the document access
+    /// policies it writes. It holds no schema change permission.
     PolicyDelegate,
 }
 
@@ -66,6 +67,7 @@ impl GrantSet {
                 NodePermission::DacRelationAdd,
                 NodePermission::DacRelationDelete,
                 NodePermission::NacStatus,
+                NodePermission::DacPolicyAdd,
             ],
         }
     }

@@ -29,11 +29,12 @@ const OPENAI_USAGE_HEADERS: &[(&str, &str)] = &[
 #[tokio::test]
 async fn usage_wiring_openai_compatible_records_under_the_backend_id() {
     let cache: std::sync::Arc<crate::usage_observation::UsageCache> = std::sync::Arc::default();
-    let (db, _user, _access, binding) = crate::test_support::signed_test_node(
+    let db = gents_documents::test_support::SignedHome::start(
         "backend-usage",
         gents_store::node_extension::Extensions::none(),
     )
     .await;
+    let binding = crate::test_support::default_agent(&db).await;
     let node = db.node.clone();
     for (wire, backend_id) in [
         (

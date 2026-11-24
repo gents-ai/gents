@@ -27,6 +27,7 @@ import {
   observeElementRect,
   useVirtualizer,
 } from "@tanstack/react-virtual";
+import { REST_MS, STILL_FRAMES, viewRests } from "./viewRest";
 
 /* where a row is read from: the reader's eye sits this far below the top */
 const READING_LINE_PX = 72;
@@ -34,8 +35,6 @@ const READING_LINE_PX = 72;
 const REPIN_PX = 24;
 /* a scroll this soon after the reader's input is the reader's */
 const INTENT_MS = 300;
-/* the view rests once no scroll has come for this long */
-const REST_MS = 150;
 /* how far ahead of the top older rows are asked for, in views */
 const AHEAD_VIEWS = 3;
 /* a sent turn settles this far below the inset, so a line of what came
@@ -281,6 +280,7 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
     let dragging = false;
     let readerScrolling = false;
     let restTimer = 0;
+    let restPending = false;
     let quiet = 0;
     let landingFrames = -1;
     let awaitingPlace = 0;
@@ -288,16 +288,52 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
     let roomKey: string | null = null;
 
     const el = () => live.current.options.scroller;
+    /* drawn frames in a row that found the view where the frame before
+       left it, counted from the reader's last motion; the owner's own
+       writes are where the view is meant to be, not motion */
+    let stillFrames = STILL_FRAMES;
+    let framedTop = 0;
+    let counting = false;
+    const countStillFrames = () => {
+      const s = el();
+      if (!s || stillFrames >= STILL_FRAMES) {
+        counting = false;
+        return;
+      }
+      if (Math.abs(s.scrollTop - framedTop) >= 1) {
+        framedTop = s.scrollTop;
+        stillFrames = 0;
+      } else stillFrames += 1;
+      if (stillFrames < STILL_FRAMES) {
+        requestAnimationFrame(countStillFrames);
+        return;
+      }
+      counting = false;
+      /* the frame that finds the view still is when it rests, once the
+         time has passed too */
+      if (restPending && resting()) comeToRest();
+    };
+    const moving = () => {
+      stillFrames = 0;
+      framedTop = el()?.scrollTop ?? 0;
+      if (counting) return;
+      counting = true;
+      requestAnimationFrame(countStillFrames);
+    };
     const resting = () =>
-      !touching &&
-      !dragging &&
-      performance.now() - Math.max(lastScrollAt, lastMotionAt) >= REST_MS;
+      viewRests({
+        touching,
+        dragging,
+        sinceMotionMs: performance.now() - Math.max(lastScrollAt, lastMotionAt),
+        stillFrames,
+      });
     const write = (top: number) => {
       const s = el();
       if (!s) return;
       lastWrite = Math.round(top);
       s.scrollTop = lastWrite;
       seenTop = s.scrollTop;
+      framedTop = s.scrollTop;
       drawWritten();
     };
     const listTop = () => {
@@ -503,17 +539,25 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
       setHidden(0);
       lastMotionAt = -Infinity;
       lastScrollAt = -Infinity;
+      stillFrames = STILL_FRAMES;
       reconcile();
     }
 
     function scheduleRest() {
       window.clearTimeout(restTimer);
+      restPending = true;
       restTimer = window.setTimeout(() => {
         if (!resting()) return scheduleRest();
-        readerScrolling = false;
-        if (hidden) setHidden(0);
-        reconcile();
+        comeToRest();
       }, REST_MS);
+    }
+
+    function comeToRest() {
+      window.clearTimeout(restTimer);
+      restPending = false;
+      readerScrolling = false;
+      if (hidden) setHidden(0);
+      reconcile();
     }
 
     function ahead() {
@@ -530,7 +574,10 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
        of a fling moves the view by less than a pixel a frame */
     function onScrollEvent() {
       const s = el();
-      if (s && Math.abs(s.scrollTop - lastWrite) >= 1) lastScrollAt = performance.now();
+      if (s && Math.abs(s.scrollTop - lastWrite) >= 1) {
+        lastScrollAt = performance.now();
+        moving();
+      }
       onScroll();
     }
 
@@ -543,6 +590,7 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
       seenTop = s.scrollTop;
       if (Math.abs(s.scrollTop - lastWrite) < 1) return;
       lastScrollAt = performance.now();
+      moving();
       glide = null;
       const wheelMoved = pendingWheel !== 0 && Math.sign(moved) === pendingWheel;
       pendingWheel = 0;
@@ -628,10 +676,14 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
             : s.scrollTop < s.scrollHeight - s.clientHeight;
         if (target === s && canMove) pendingWheel = direction;
       }
+      /* only a wheel that moves the view animates it over frames */
       if (pendingWheel) {
+        moving();
         queueMicrotask(() => {
-          if (generation === wheelGeneration && event.defaultPrevented)
+          if (generation === wheelGeneration && event.defaultPrevented) {
             pendingWheel = 0;
+            stillFrames = STILL_FRAMES;
+          }
         });
       }
       /* wheeling at the very top moves nothing and sends no scroll: a
@@ -655,6 +707,7 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
     const onTouchMove = (event: TouchEvent) => {
       lastInputAt = performance.now();
       lastMotionAt = lastInputAt;
+      moving();
       if ((event.touches[0]?.clientY ?? 0) > touchY) release();
     };
     const onTouchEnd = () => {

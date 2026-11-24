@@ -309,11 +309,11 @@ async fn usage_client(
     cache: &std::sync::Arc<crate::usage_observation::UsageCache>,
     backend_id: &str,
 ) -> (
-    crate::test_support::TestDb,
+    gents_store::test_support::TestStore,
     crate::usage_observation::UsageAccount,
     ProviderHttpClient,
 ) {
-    let db = crate::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "provider-http-usage",
         gents_store::node_extension::Extensions::none(),
     )
@@ -496,4 +496,88 @@ fn provider_rejection_errors_carry_no_request_headers() {
     let rendered = error.to_string();
     assert!(!rendered.contains("HEADERSECRET"), "{rendered}");
     assert!(rendered.contains("rate_limit_error"));
+}
+
+fn scripted_model(
+    backend: &crate::test_support::scripted_backend::ScriptedBackend,
+) -> impl CompletionModel {
+    crate::llm::rig_compat::providers::build_openai_chat_completions_client(
+        "key",
+        backend.endpoint(),
+        ProviderHttpClient::new(ProviderHttpClient::credential_client().unwrap()),
+    )
+    .unwrap()
+    .completion_model("model")
+}
+
+async fn stream_to_end<M>(model: &M) -> Result<(), rig::completion::CompletionError>
+where
+    M: CompletionModel,
+{
+    let mut stream = model
+        .completion_request("hello")
+        .max_tokens(16)
+        .stream()
+        .await?;
+    while let Some(item) = stream.next().await {
+        item?;
+    }
+    Ok(())
+}
+
+/// A local server closes a connection kept alive past its keep-alive timeout
+/// as the next request arrives on it; the next call after such a pause goes
+/// out on a fresh connection and is answered.
+#[tokio::test]
+async fn a_call_after_a_local_servers_keep_alive_timeout_opens_a_fresh_connection() {
+    let backend = crate::test_support::scripted_backend::ScriptedBackend::builder("model")
+        .replies("ok")
+        .start()
+        .unwrap();
+    let model = scripted_model(&backend);
+    stream_to_end(&model).await.unwrap();
+
+    backend.expire_kept_alive_connections();
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(5)).await;
+    tokio::time::resume();
+
+    stream_to_end(&model)
+        .await
+        .unwrap_or_else(|error| panic!("the call after the pause failed: {error:?}"));
+    assert_eq!(backend.observed_completion_requests(), 2);
+}
+
+/// A server that reads a request and drops its connection without a response
+/// byte may have begun the completion, so the transport does not send it
+/// again: the call fails with the transport error, which the owned loop reads
+/// as transient and retries under its transport budget.
+#[tokio::test]
+async fn a_request_the_server_read_and_dropped_unanswered_is_not_sent_again() {
+    use crate::test_support::scripted_backend::{ScriptedBackend, StreamResponse};
+    let replies = std::sync::atomic::AtomicUsize::new(0);
+    let backend = ScriptedBackend::builder("model")
+        .respond(move |_| {
+            Some(
+                match replies.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+                    1 => StreamResponse::Disconnect,
+                    _ => StreamResponse::text("ok"),
+                },
+            )
+        })
+        .start()
+        .unwrap();
+    let model = scripted_model(&backend);
+    stream_to_end(&model).await.unwrap();
+
+    let error = stream_to_end(&model)
+        .await
+        .expect_err("a dropped request fails its call");
+    assert_eq!(backend.observed_completion_requests(), 2);
+    let classified =
+        classify_completion_error(&rig::agent::StreamingError::Completion(error)).error;
+    assert!(
+        matches!(classified, InferenceError::TransientFailure { .. }),
+        "the loop retries a transport failure under its own budget: {classified:?}"
+    );
 }

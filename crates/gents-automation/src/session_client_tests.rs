@@ -10,11 +10,13 @@ use gents_store::identity::{KeyIdentity, NodeIdentity};
 async fn agent_goal_submission_stages_the_session_before_its_goal_and_rolls_back_together() {
     for case in gents_lean_vocab::families::contracts_goal_backed_runtime::cases() {
         let name = case.input.name.as_str();
-        let (db, user, client, binding) = gents_inference::test_support::signed_test_node(
+        let signed_home = gents_documents::test_support::SignedHome::start(
             &format!("runtime-goal-opening-{name}"),
             crate::lifecycle_hooks::composition(),
         )
         .await;
+        let binding = gents_inference::test_support::default_agent(&signed_home).await;
+        let (db, user, client) = signed_home.into_parts();
         let node = db.node.clone();
         let agent =
             gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
@@ -261,7 +263,7 @@ async fn http_client_creates_session_and_grants_only_its_selected_agent() {
     let home = tempfile::tempdir().unwrap();
     let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
     let other_user = KeyIdentity::load_or_create(home.path().join("other.key"), None).unwrap();
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "http-client-session-grants",
         crate::lifecycle_hooks::composition(),
     )
@@ -270,7 +272,7 @@ async fn http_client_creates_session_and_grants_only_its_selected_agent() {
     let runtime = gents_store::test_support::held_runtime_identity(db.node_identity.did());
     let agent = gents_store::identity::provision_agent_identity(&runtime).unwrap();
     let sibling = gents_store::identity::provision_agent_identity(&runtime).unwrap();
-    let endpoint = db.client_endpoint().to_owned();
+    let endpoint = db.graphql_endpoint().to_owned();
     let endpoint_for = |actor: &KeyIdentity| {
         gents_store::config_client::GraphqlEndpoint::as_principal(&endpoint, actor.did())
             .with_client_signing_capability(actor.client_signing_capability().unwrap())
@@ -555,7 +557,6 @@ async fn http_client_creates_session_and_grants_only_its_selected_agent() {
         goal_id: None,
         goal_objective: None,
         goal_token_budget: None,
-        goal_blocked_audit_threshold: None,
         goal_max_infrastructure_retries: None,
         goal_assignment_applied: false,
         emit_outcome: false,

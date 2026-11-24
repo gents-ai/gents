@@ -6,10 +6,10 @@ use serde::Deserialize;
 use crate::support::agent_requests::canonical_now;
 use crate::support::builder_runtime::submit_request;
 use crate::support::live_inference::{
-    bind_target, boot_live_agent, live_target, rows_when, wait_for_assistant_answer,
-    wait_for_request_terminal,
+    bind_target, boot_live_agent, live_target, wait_for_assistant_answer, wait_for_request_terminal,
 };
-use crate::support::test_db;
+use crate::support::trial_store;
+use gents_store::test_support::rows_when;
 use gents_store::test_support::snapshot_reader::SnapshotReader;
 use gents_store::test_support::STALL_CEILING;
 
@@ -56,7 +56,7 @@ async fn durable_goal_continues_with_real_inference_until_model_completes() {
         .try_init();
     let target = live_target().await;
 
-    let db = test_db("durable-goal-real-inference").await;
+    let db = trial_store("durable-goal-real-inference").await;
     let actors = bind_target(&db, &target).await;
     let node_did = actors.node_did().to_owned();
     let reader = &actors.fixture.access;

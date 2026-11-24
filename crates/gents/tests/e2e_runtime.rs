@@ -10,6 +10,8 @@ mod effective_model_binding;
 mod fork_invariants;
 #[path = "e2e_runtime/interrupt_latch_contention.rs"]
 mod interrupt_latch_contention;
+#[path = "e2e_runtime/own_tools_rebinding.rs"]
+mod own_tools_rebinding;
 #[path = "e2e_runtime/provider_fixture_redaction.rs"]
 mod provider_fixture_redaction;
 #[path = "e2e_runtime/rendered_request_capture.rs"]
@@ -40,5 +42,7 @@ mod session_input_edit;
 #[path = "e2e_runtime/enrollment_renewal.rs"]
 mod enrollment_renewal;
 
+#[path = "e2e_runtime/goal_stop_conditions.rs"]
+mod goal_stop_conditions;
 #[path = "e2e_runtime/queued_user_turns.rs"]
 mod queued_user_turns;

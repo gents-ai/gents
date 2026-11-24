@@ -79,7 +79,7 @@ impl Fixture {
             client_signing,
         };
         let binding =
-            gents_store::identity::provision_agent_identity(home.identity.as_ref()).unwrap();
+            gents_store::identity::provision_agent_identity(home.node_identity.as_ref()).unwrap();
         let mut initial = vec![(Collection::Node, json!({"node_did": &owner}))];
         initial.extend(documents(&owner));
         install(&ctx.access, initial).await;
@@ -141,6 +141,7 @@ impl Fixture {
             source_dirty: false,
             captures: Vec::new(),
             runs_dir: self.ctx.runs_dir(),
+            divergences: None,
         }
     }
 
@@ -165,9 +166,10 @@ impl Fixture {
 
 pub(crate) fn fast() -> RunOptions {
     RunOptions {
-        trial_budget: None,
         poll_backoff_base: Duration::from_millis(1),
         poll_backoff_cap: Duration::from_millis(2),
+        provider_probe_gap: Duration::from_millis(1),
+        ..RunOptions::default()
     }
 }
 

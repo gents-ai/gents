@@ -652,19 +652,14 @@ mod tests {
         });
     }
 
-    /// Reads the request's interrupt latch as `access`; an Agent-owned
-    /// request is visible only to its owning Agent's access.
+    /// When the request's session interrupt passed it, as `access`; an
+    /// Agent-owned request is visible only to its owning Agent's access.
     async fn stamp(access: &ConfigAccess, doc_id: &str) -> Option<String> {
-        let escaped = gents_store::graphql::escape_graphql_string(doc_id);
-        let response = access
-            .execute(&format!(
-                "{{AgentRequest(filter:{{_docID:{{_eq:\"{escaped}\"}}}}){{interrupt_requested_at}}}}"
-            ))
-            .await
-            .unwrap();
-        response["data"]["AgentRequest"][0]["interrupt_requested_at"]
-            .as_str()
-            .map(str::to_owned)
+        gents_session::request::interrupt::request_interrupted_at_by_doc_id_with_access(
+            access, doc_id,
+        )
+        .await
+        .unwrap()
     }
 
     use crate::background::job::admit::{HostFacts, StepCall, StepChild, StepContext, StepRow};
@@ -1103,7 +1098,9 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(stamp(&harness.access, doc).await, latched);
+        // A session interrupt always writes one past the marker
+        // (`InterruptGeneration.bump`): the slot stays interrupted.
+        assert!(stamp(&harness.access, doc).await.is_some());
         harness.close().await;
     }
 

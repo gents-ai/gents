@@ -1,0 +1,12 @@
+# A session's interrupt marker, created with the session in its transaction
+# (Lean `Identity.SessionInterrupt`). An interrupt writes one past
+# `generation`; a claim, a wake publication and a redrive read it by id and
+# record the generation they saw on the request they write
+# (`SessionQueue.InterruptGeneration`).
+type AgentSessionInterrupt @policy(id: "$household", resource: "session_interrupts") {
+    session_doc_id: String @index(unique: true) @immutable
+    node_did: String @index @immutable
+    session_id: String @index @immutable
+    generation: Int
+    interrupted_at: String
+}

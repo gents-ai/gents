@@ -19,14 +19,16 @@ use gents_protocol::row::AgentRequest;
 use gents_store::identity::NodeIdentity as _;
 
 pub(super) async fn test_node() -> (
-    crate::test_support::TestDb,
+    gents_store::test_support::TestStore,
     gents_store::identity::ManagedAgentSigner,
 ) {
-    let (db, _user, _access, binding) = crate::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "inference-admission",
         gents_store::node_extension::Extensions::none(),
     )
     .await;
+    let binding = crate::test_support::default_agent(&signed_home).await;
+    let (db, _user, _access) = signed_home.into_parts();
     let agent =
         gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
     let signer = agent.managed_agent_signer().unwrap();
@@ -34,8 +36,8 @@ pub(super) async fn test_node() -> (
     (db, signer)
 }
 
-pub(super) async fn grant_test_agent(
-    db: &crate::test_support::TestDb,
+pub(crate) async fn grant_test_agent(
+    db: &gents_store::test_support::TestStore,
     signer: &gents_store::identity::ManagedAgentSigner,
 ) {
     use gents_store::config_client::NodePermission;
@@ -104,7 +106,7 @@ impl std::ops::Deref for TestRegistry {
     }
 }
 
-pub(super) async fn seeded_request(
+pub(crate) async fn seeded_request(
     node: &Arc<EmbeddedNode>,
     signer: &gents_store::identity::ManagedAgentSigner,
     request_id: &str,
@@ -479,7 +481,7 @@ async fn wait_for_call_row_count(
     .await
 }
 
-async fn wait_for_request_call_state(
+pub(crate) async fn wait_for_request_call_state(
     node: &Arc<EmbeddedNode>,
     signer: &gents_store::identity::ManagedAgentSigner,
     request_id: &str,

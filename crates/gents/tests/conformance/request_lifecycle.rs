@@ -13,7 +13,7 @@ fn parsed_request_state(value: &str) -> RequestLifecycleState {
 
 #[tokio::test]
 async fn claim_atomically_projects_the_request_owned_session() {
-    let db = support::test_db("claim-atomically-projects-session").await;
+    let db = support::trial_store("claim-atomically-projects-session").await;
     let fixture = support::managed_agent_fixture(&db).await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -85,7 +85,7 @@ async fn claim_atomically_projects_the_request_owned_session() {
 
 #[tokio::test]
 async fn admission_rejection_persists_despite_an_undecodable_session_row_under_its_label() {
-    let db = test_db("admission-rejection-undecodable-session-row").await;
+    let db = trial_store("admission-rejection-undecodable-session-row").await;
     let actors = support::agent_requests::RequestActors::new(&db).await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -147,7 +147,7 @@ async fn admission_rejection_persists_despite_an_undecodable_session_row_under_i
 
 #[tokio::test]
 async fn admission_rejection_projects_the_failed_turn_into_its_session() {
-    let db = test_db("admission-rejection-projects-session").await;
+    let db = trial_store("admission-rejection-projects-session").await;
     let actors = support::agent_requests::RequestActors::new(&db).await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -195,7 +195,7 @@ async fn admission_rejection_projects_the_failed_turn_into_its_session() {
 
 #[tokio::test]
 async fn terminalizing_an_older_request_preserves_the_latest_projection() {
-    let db = test_db("older-request-terminal-preserves-latest").await;
+    let db = trial_store("older-request-terminal-preserves-latest").await;
     let actors = support::agent_requests::RequestActors::new(&db).await;
     let session_id = uuid::Uuid::new_v4().to_string();
     let created_at = support::agent_requests::canonical_now();
@@ -285,7 +285,7 @@ async fn drive_request_legal_transition(
     to: RequestLifecycleState,
     action: RequestTransitionAction,
 ) {
-    let db = test_db("generated-request-transition").await;
+    let db = trial_store("generated-request-transition").await;
     let actors = support::agent_requests::RequestActors::new(&db).await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -424,7 +424,7 @@ async fn drive_request_legal_transition(
                 let interrupted = action == "interruptBackendWait";
                 if interrupted {
                     actors
-                        .set_interrupt_requested_at(&doc_id, &chrono::Utc::now().to_rfc3339())
+                        .interrupt_request_session_at(&doc_id, &chrono::Utc::now().to_rfc3339())
                         .await;
                 } else {
                     let past = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
@@ -462,7 +462,7 @@ async fn drive_request_legal_transition(
                     let interrupted = action == "interruptResuming";
                     if interrupted {
                         actors
-                            .set_interrupt_requested_at(&doc_id, &chrono::Utc::now().to_rfc3339())
+                            .interrupt_request_session_at(&doc_id, &chrono::Utc::now().to_rfc3339())
                             .await;
                     } else {
                         let past = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
@@ -531,17 +531,14 @@ async fn drive_request_legal_transition(
             assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Expired);
         }
         "interruptBeforeClaim" => {
-            let interrupt_at = chrono::Utc::now().to_rfc3339();
-            actors
-                .set_interrupt_requested_at(&doc_id, &interrupt_at)
-                .await;
+            gents_session::test_support::interrupt_request_doc(&actors.agent_access, &doc_id).await;
             assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Interrupted);
         }
         "interruptClaimed" => {
             assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
             let interrupt_at = chrono::Utc::now().to_rfc3339();
             actors
-                .set_interrupt_requested_at(&doc_id, &interrupt_at)
+                .interrupt_request_session_at(&doc_id, &interrupt_at)
                 .await;
             lifecycle
                 .terminalize_owned(
@@ -559,7 +556,7 @@ async fn drive_request_legal_transition(
                 .unwrap();
             let interrupt_at = chrono::Utc::now().to_rfc3339();
             actors
-                .set_interrupt_requested_at(&doc_id, &interrupt_at)
+                .interrupt_request_session_at(&doc_id, &interrupt_at)
                 .await;
             lifecycle
                 .terminalize_owned(
@@ -638,7 +635,7 @@ async fn scoped_matrix_request(
 }
 
 fn scoped_matrix_lifecycle(
-    db: &support::TestDb,
+    db: &gents_store::test_support::TestStore,
     agent: &dyn gents_store::identity::NodeIdentity,
     doc_id: String,
     request_id: String,
@@ -690,7 +687,7 @@ async fn production_request_writers_only_reach_contracted_edges() {
     let mut observed: std::collections::BTreeSet<(String, String)> = Default::default();
 
     for start in START_STATES {
-        let db = test_db(&format!("production-edges-{}", start.to_lowercase())).await;
+        let db = trial_store(&format!("production-edges-{}", start.to_lowercase())).await;
         let actors = support::agent_requests::RequestActors::new(&db).await;
         let agent = actors.agent().clone();
         let access = actors.agent_access.clone();
@@ -745,11 +742,6 @@ async fn production_request_writers_only_reach_contracted_edges() {
                 .unwrap();
                 lifecycle.begin_owned_execution(&writer).await.unwrap();
             }
-            if writer == "claim_after_interrupt" {
-                actors
-                    .set_interrupt_requested_at(&doc_id, &chrono::Utc::now().to_rfc3339())
-                    .await;
-            }
             if writer == "repair_terminal_requests" {
                 let expiry = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
                 actors
@@ -787,7 +779,15 @@ async fn production_request_writers_only_reach_contracted_edges() {
             );
 
             match writer {
-                "claim" | "claim_after_interrupt" => {
+                "claim" => {
+                    let _ = lifecycle.claim().await;
+                }
+                "claim_after_interrupt" => {
+                    gents_session::test_support::interrupt_request_doc(
+                        &actors.agent_access,
+                        &doc_id,
+                    )
+                    .await;
                     let _ = lifecycle.claim().await;
                 }
                 "admission_reject" => {
@@ -904,7 +904,7 @@ async fn production_request_writers_only_reach_contracted_edges() {
 
 #[tokio::test]
 async fn interactive_claim_snapshot_matches_claimed_waiting() {
-    let db = test_db("interactive-claim").await;
+    let db = trial_store("interactive-claim").await;
     let actors = support::agent_requests::RequestActors::new(&db).await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -951,7 +951,7 @@ async fn interactive_claim_snapshot_matches_claimed_waiting() {
 
 #[tokio::test]
 async fn interactive_admission_and_progress_snapshots_match_execution_flow() {
-    let db = test_db("interactive-executing").await;
+    let db = trial_store("interactive-executing").await;
     let actors = support::agent_requests::RequestActors::new(&db).await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -1009,7 +1009,7 @@ async fn interactive_admission_and_progress_snapshots_match_execution_flow() {
 
 #[tokio::test]
 async fn interactive_fail_before_stream_snapshot_matches_failed_released() {
-    let db = test_db("interactive-fail").await;
+    let db = trial_store("interactive-fail").await;
     let actors = support::agent_requests::RequestActors::new(&db).await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -1071,7 +1071,7 @@ async fn interactive_fail_before_stream_snapshot_matches_failed_released() {
 
 #[tokio::test]
 async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
-    let db = support::test_db("scheduled-materialize").await;
+    let db = support::trial_store("scheduled-materialize").await;
     let fixture = support::managed_agent_fixture(&db).await;
     let agent = &fixture.agent;
     let access = gents_store::config_client::ConfigAccess::local_managed_agent(
@@ -1129,7 +1129,7 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
 #[tokio::test]
 async fn materialized_lineage_follows_the_lean_model() {
     use gents_session::request::lifecycle::materialize::TriggerProvenanceRefusal;
-    let db = support::test_db("materialized-lineage").await;
+    let db = support::trial_store("materialized-lineage").await;
     let fixture = support::managed_agent_fixture(&db).await;
     let agent = &fixture.agent;
     let access = gents_store::config_client::ConfigAccess::local_managed_agent(
@@ -1506,7 +1506,7 @@ fn lifecycle_for(
 async fn drive_active_request_blocks_later_same_session_claim(
     case: &QueueAdmissionInput,
 ) -> QueueAdmissionOutput {
-    let db = test_db("queue-deadline-active-blocks").await;
+    let db = trial_store("queue-deadline-active-blocks").await;
     let actors = support::agent_requests::RequestActors::new(&db).await;
     let session_id = case.session_id.to_string();
     let active_id = case.pre_active_request_id.expect("active request id") as usize;
@@ -1580,7 +1580,7 @@ async fn drive_active_request_blocks_later_same_session_claim(
 async fn drive_terminal_active_allows_next_pending_same_session_claim(
     case: &QueueAdmissionInput,
 ) -> QueueAdmissionOutput {
-    let db = test_db("queue-deadline-terminal-allows").await;
+    let db = trial_store("queue-deadline-terminal-allows").await;
     let actors = support::agent_requests::RequestActors::new(&db).await;
     let session_id = case.session_id.to_string();
     let active_id = case.pre_active_request_id.expect("active request id") as usize;
@@ -1666,7 +1666,7 @@ async fn drive_terminal_active_allows_next_pending_same_session_claim(
 async fn drive_cancel_drains_automated_wakeups_preserves_user_pending(
     case: &QueueAdmissionInput,
 ) -> QueueAdmissionOutput {
-    let db = test_db("queue-deadline-cancel-drain").await;
+    let db = trial_store("queue-deadline-cancel-drain").await;
     let actors = support::agent_requests::RequestActors::new(&db).await;
     let session_id = case.session_id.to_string();
     let parent_request_id = "queue-deadline-cancel-parent";
@@ -1687,7 +1687,7 @@ async fn drive_cancel_drains_automated_wakeups_preserves_user_pending(
 
     let automated_id = case.pre_pending_request_ids[0];
     let user_id = case.pre_pending_request_ids[1];
-    create_queue_request(
+    let automated_doc = create_queue_request(
         &actors,
         support::agent_requests::RequestSeed {
             input: Some(&automated_queue_input(
@@ -1731,12 +1731,43 @@ async fn drive_cancel_drains_automated_wakeups_preserves_user_pending(
     .await;
     assert_pre_queue_snapshot(case, &pre);
 
-    let interrupted = gents_session::request::interrupt::interrupt_request(
-        &db.node,
-        actors.agent().as_ref(),
-        parent_request_id,
+    // The wake recorded the marker's generation at its publication; the
+    // session interrupt passes it, and the wake's claim drains it
+    // (`InterruptGeneration.wakeAtClaim`).
+    actors
+        .update_request(&automated_doc, json!({ "interrupt_generation": 0 }))
+        .await;
+    let scope = actors
+        .request_row(&automated_doc, "node_did requester_did")
+        .await;
+    let interrupted = actors
+        .agent_access
+        .transact_signed_conflict_rebuild("test.queue_deadline.session_interrupt", |txn| {
+            let (scope, session_id) = (&scope, &session_id);
+            Box::pin(async move {
+                gents_session::request::interrupt::interrupt_session_in_txn(
+                    txn,
+                    session_id,
+                    scope["node_did"].as_str().unwrap_or_default(),
+                    scope["requester_did"].as_str(),
+                )
+                .await
+            })
+        })
+        .await
+        .and_then(|refused| refused.map_err(anyhow::Error::from));
+    let request = gents_session::request::binding::load_agent_request_by_doc_id_with_access(
+        &actors.agent_access,
+        &automated_doc,
     )
-    .await;
+    .await
+    .unwrap()
+    .unwrap();
+    let mut lifecycle = actors.lifecycle(request, 60, ExecutionOrigin::Scheduled, "queue-deadline");
+    assert_eq!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        ClaimOutcome::Interrupted
+    );
 
     let post = fetch_queue_runtime_snapshot(
         &actors,
@@ -1749,7 +1780,7 @@ async fn drive_cancel_drains_automated_wakeups_preserves_user_pending(
 }
 
 async fn drive_claim_preserves_explicit_deadline(case: &ClaimDeadlineInput) -> ClaimDeadlineOutput {
-    let db = test_db("queue-deadline-explicit-deadline").await;
+    let db = trial_store("queue-deadline-explicit-deadline").await;
     let actors = support::agent_requests::RequestActors::new(&db).await;
     let session_id = case.session_id.to_string();
     let request_id = case.claimed_request_id.expect("claimed request id") as usize;
@@ -1876,7 +1907,7 @@ async fn terminal_repair_sweep_follows_the_lean_scope_model() {
     for case in
         gents_lean_vocab::families::request_repair_scope_sweep::cases::<RequestLifecycleState>()
     {
-        let db = test_db("terminal-repair-scope").await;
+        let db = trial_store("terminal-repair-scope").await;
         let actors = support::agent_requests::RequestActors::new(&db).await;
         let foreign =
             tokio::task::spawn_blocking(|| support::fixtures::test_identity("foreign-owner"))
@@ -1948,6 +1979,17 @@ async fn terminal_repair_sweep_follows_the_lean_scope_model() {
                 actors
                     .set_lifecycle_state(&doc, RequestLifecycleState::Claimed)
                     .await;
+                if row.interrupt_requested {
+                    actors
+                        .create_session_with(json!({
+                            "node_did": gents_store::identity::NodeIdentity::did(&foreign),
+                            "session_id": session_id,
+                            "agent_did": actors.agent_did(),
+                            "created_at": created_at,
+                            "relationships_pending": false,
+                        }))
+                        .await;
+                }
                 doc
             };
             if row.lease_expired || !row.own_node {
@@ -1958,7 +2000,7 @@ async fn terminal_repair_sweep_follows_the_lean_scope_model() {
             }
             if row.interrupt_requested {
                 actors
-                    .set_interrupt_requested_at(&doc, &chrono::Utc::now().to_rfc3339())
+                    .interrupt_request_session_at(&doc, &chrono::Utc::now().to_rfc3339())
                     .await;
             }
             docs.push(doc);

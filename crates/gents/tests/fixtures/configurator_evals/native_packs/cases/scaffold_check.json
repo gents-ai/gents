@@ -5,49 +5,20 @@
   "stages": [
     {
       "stage_id": "scaffold",
-      "prompt": "Create a minimal documents pack named scratch_native in this workspace using the native config pack scaffold command. Discover the relevant help first. Keep shell off. Do not install the pack, change agents or tools, or run a graph. Use native config commands; do not invoke a CLI or shell.",
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "installations",
-          "collection": "PackInstallation",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "coordinate",
-            "version"
-          ]
-        }
-      ],
+      "prompt": "Start a new, minimal documents pack called scratch_native in the workspace. Don't install it.",
       "checks": [
         {
-          "check": "tool_calls_expected",
+          "check": "captured_files_match",
           "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash",
-              "agent_message",
-              "agent_new"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_result_matches",
-          "params": {
+            "name": "pack",
             "expect": [
               {
-                "field": "completed",
-                "equals": true
+                "path": "scratch_native/manifest.json",
+                "exists": true
               },
               {
-                "field": "pack",
+                "path": "scratch_native/manifest.json",
+                "pointer": "/name",
                 "equals": "scratch_native"
               }
             ]
@@ -59,38 +30,19 @@
           "check": "captured_rows_count",
           "params": {
             "name": "installations",
-            "min": 1,
-            "max": 1
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_fields_match",
-          "params": {
-            "name": "installations",
-            "min_rows": 1,
-            "max_rows": 1,
-            "expect": [
-              {
-                "field": "coordinate",
-                "equals": "gents/native_pack_subject"
-              },
-              {
-                "field": "version",
-                "equals": "0.1.0"
-              }
-            ]
+            "min": 0,
+            "max": 0
           },
           "tier": "acceptance",
           "weight": 1
         }
-      ]
-    },
-    {
-      "stage_id": "check",
-      "prompt": "Use the native config pack check command to validate the scratch_native pack created in the preceding request and report the actual validation result. Keep shell off. Do not install the pack, change agents or tools, or run a graph.",
+      ],
       "capture": [
+        {
+          "kind": "file",
+          "name": "pack",
+          "glob": "scratch_native/manifest.json"
+        },
         {
           "kind": "documents",
           "name": "installations",
@@ -98,6 +50,9 @@
           "filter": {
             "node_did": {
               "_eq": "$trial"
+            },
+            "coordinate": {
+              "_like": "%scratch_native%"
             }
           },
           "fields": [
@@ -105,23 +60,12 @@
             "version"
           ]
         }
-      ],
+      ]
+    },
+    {
+      "stage_id": "check",
+      "prompt": "Check that scratch_native is a valid pack and tell me the result. Still don't install it.",
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash",
-              "agent_message",
-              "agent_new"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "tool_result_matches",
           "params": {
@@ -151,31 +95,30 @@
           "check": "captured_rows_count",
           "params": {
             "name": "installations",
-            "min": 1,
-            "max": 1
+            "min": 0,
+            "max": 0
           },
           "tier": "acceptance",
           "weight": 1
-        },
+        }
+      ],
+      "capture": [
         {
-          "check": "captured_fields_match",
-          "params": {
-            "name": "installations",
-            "min_rows": 1,
-            "max_rows": 1,
-            "expect": [
-              {
-                "field": "coordinate",
-                "equals": "gents/native_pack_subject"
-              },
-              {
-                "field": "version",
-                "equals": "0.1.0"
-              }
-            ]
+          "kind": "documents",
+          "name": "installations",
+          "collection": "PackInstallation",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "coordinate": {
+              "_like": "%scratch_native%"
+            }
           },
-          "tier": "acceptance",
-          "weight": 1
+          "fields": [
+            "coordinate",
+            "version"
+          ]
         }
       ]
     }

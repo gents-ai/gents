@@ -458,7 +458,7 @@ impl DeniedTarget {
 }
 
 struct AdmissionHarness {
-    _db: gents_inference::test_support::TestDb,
+    _db: gents_store::test_support::TestStore,
     _dir: tempfile::TempDir,
     user_did: String,
     access: gents_store::config_client::ConfigAccess,

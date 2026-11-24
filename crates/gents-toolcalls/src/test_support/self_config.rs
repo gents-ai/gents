@@ -33,7 +33,7 @@ pub fn config(categories: &[&str]) -> SelfConfigToolConfig {
 /// `recipient`, as the runtime owner does at init. The fixture Agent is its
 /// Node's default Agent, so it holds the modeled default-Agent sets.
 pub async fn grant_modeled_direct_sets(
-    db: &gents_inference::test_support::TestDb,
+    db: &gents_store::test_support::TestStore,
     recipient: gents_store::identity::Recipient,
     subject: &str,
 ) {
@@ -54,7 +54,7 @@ pub async fn grant_modeled_direct_sets(
 /// them. A fixture Agent that authors its own Engineer-like Tools must already
 /// hold these: the native held-bounded rule refuses a self-granted tool source.
 pub async fn grant_engineer_tool_source_permissions(
-    db: &gents_inference::test_support::TestDb,
+    db: &gents_store::test_support::TestStore,
     subject: &str,
 ) {
     use gents_tools::surface::{EndpointScope, ToolPolicySurface};
@@ -87,7 +87,7 @@ pub async fn grant_engineer_tool_source_permissions(
 }
 
 pub struct SelfConfigFixture {
-    pub db: gents_inference::test_support::TestDb,
+    pub db: gents_store::test_support::TestStore,
     pub user_access: gents_store::config_client::ConfigAccess,
     pub agent: Arc<dyn gents_store::identity::NodeIdentity>,
     pub agent_did: String,
@@ -96,7 +96,7 @@ pub struct SelfConfigFixture {
 
 impl SelfConfigFixture {
     pub async fn new(name: &str) -> Self {
-        let db = gents_inference::test_support::test_db(
+        let db = gents_store::test_support::TestStore::start(
             name,
             gents_session::test_support::no_lifecycle_plugins(),
         )
@@ -104,9 +104,10 @@ impl SelfConfigFixture {
         Self::from_db(db, name).await
     }
 
-    pub async fn from_db(db: gents_inference::test_support::TestDb, name: &str) -> Self {
-        let (db, _user, user_access, binding) =
-            gents_inference::test_support::signed_test_node_from_db(db, name).await;
+    pub async fn from_db(db: gents_store::test_support::TestStore, name: &str) -> Self {
+        let signed_home = gents_documents::test_support::SignedHome::enroll(db, name).await;
+        let binding = gents_inference::test_support::default_agent(&signed_home).await;
+        let (db, _user, user_access) = signed_home.into_parts();
         let agent =
             gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
                 .expect("fixture Agent is derived from the held runtime");

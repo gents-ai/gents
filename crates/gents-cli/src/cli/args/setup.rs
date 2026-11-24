@@ -139,6 +139,20 @@ pub(crate) struct InitArgs {
     pub(crate) store_key_custody: Option<StoreKeyCustodyArg>,
     #[arg(long, value_enum, hide = true, conflicts_with = "identity_only")]
     pub(crate) document_acp: Option<DocumentAcpArg>,
+    /// Host Vera on this loopback port, or connect through it when --vera-anchor is given.
+    #[arg(long, conflicts_with = "identity_only")]
+    pub(crate) vera_rpc_port: Option<std::num::NonZeroU16>,
+    /// JSON deployment anchor copied from the trusted host. Only used for a fresh follower home.
+    #[arg(
+        long,
+        requires = "vera_rpc_port",
+        conflicts_with = "create_transport_group",
+        value_name = "FILE"
+    )]
+    pub(crate) vera_anchor: Option<std::path::PathBuf>,
+    /// JSON output from the host's admit-device command for this device.
+    #[arg(long, requires = "vera_anchor")]
+    pub(crate) vera_device_admission: Option<std::path::PathBuf>,
     /// Create a device group owned by the signing client and admit this new Vera runtime.
     #[arg(long, conflicts_with = "identity_only")]
     pub(crate) create_transport_group: bool,

@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::scripted_backend::ScriptedBackend;
 
 async fn oauth_backend_configuration(
     access: &gents_store::config_client::ConfigAccess,
@@ -56,12 +57,13 @@ async fn scheduled_probe_requires_the_held_node_and_its_native_reader_grant() {
     use gents_store::identity::NodeIdentity;
     // No default agent: its fixture backend is also enabled on this node and
     // would make the runtime listing non-singular.
-    let (db, user, user_access) = crate::test_support::signed_test_node_without_agent(
+    let (db, user, user_access) = gents_documents::test_support::SignedHome::start(
         "health-runtime-owner",
         gents_store::node_extension::Extensions::none(),
     )
-    .await;
-    let other = crate::test_support::test_db(
+    .await
+    .into_parts();
+    let other = gents_store::test_support::TestStore::start(
         "health-foreign-owner",
         gents_store::node_extension::Extensions::none(),
     )
@@ -69,8 +71,8 @@ async fn scheduled_probe_requires_the_held_node_and_its_native_reader_grant() {
     let node = db.node.clone();
     let did = db.node_identity.did();
     let other_did = other.node_identity.did();
-    let models = ModelsListener::start();
-    let mut configured = backend("runtime-probe", models.endpoint());
+    let models = ScriptedBackend::start("test-model", Vec::new()).unwrap();
+    let mut configured = backend("runtime-probe", models.endpoint().to_owned());
     configured.node_did = did.to_owned();
     oauth_backend_configuration(&user_access, &configured).await;
 
@@ -138,7 +140,7 @@ async fn scheduled_probe_requires_the_held_node_and_its_native_reader_grant() {
     .await;
     assert!(outcome.promotable.is_empty());
     assert!(health.get("runtime-probe").await.is_none());
-    assert_eq!(models.requests(), 0);
+    assert_eq!(models.recorded_requests().len(), 0);
 
     let escaped = gents_store::graphql::escape_graphql_string(did);
     let response = user_access
@@ -279,11 +281,13 @@ async fn scheduled_probe_requires_the_held_node_and_its_native_reader_grant() {
 
 #[tokio::test]
 async fn oauth_kinds_probe_the_credential_document_fresh_is_healthy_and_promotes() {
-    let (db, _user, user_access, _binding) = crate::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "health-oauth",
         gents_store::node_extension::Extensions::none(),
     )
     .await;
+    let _binding = crate::test_support::default_agent(&signed_home).await;
+    let (db, _user, user_access) = signed_home.into_parts();
     let node = db.node.clone();
     let did = db.node_identity.did();
     let runtime_access = crate::auth::credential::runtime_credential_access(&node, did).unwrap();
@@ -301,8 +305,8 @@ async fn oauth_kinds_probe_the_credential_document_fresh_is_healthy_and_promotes
     );
     let mut claude = claude_backend();
     claude.node_did = did.to_string();
-    let models = ModelsListener::start();
-    claude.endpoint = models.endpoint();
+    let models = ScriptedBackend::start("test-model", Vec::new()).unwrap();
+    claude.endpoint = models.endpoint().to_owned();
     oauth_backend_observation(&user_access, &runtime_access, &claude, "unknown").await;
     let outcome = probe_backends_cycle(
         &node,
@@ -347,11 +351,13 @@ async fn toggled_models_server(
 
 #[tokio::test]
 async fn scheduled_oauth_probe_failure_records_a_bounded_reason_and_recovers() {
-    let (db, _user, user_access, _binding) = crate::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "health-oauth",
         gents_store::node_extension::Extensions::none(),
     )
     .await;
+    let _binding = crate::test_support::default_agent(&signed_home).await;
+    let (db, _user, user_access) = signed_home.into_parts();
     let node = db.node.clone();
     let did = db.node_identity.did();
     let runtime_access = crate::auth::credential::runtime_credential_access(&node, did).unwrap();
@@ -378,8 +384,10 @@ async fn scheduled_oauth_probe_failure_records_a_bounded_reason_and_recovers() {
         &health,
         &probe_options(),
         did,
-        Some((&mut schedule, true)),
-        None,
+        super::super::prober::CycleControl {
+            schedule: Some((&mut schedule, true)),
+            ..Default::default()
+        },
     )
     .await;
     assert!(outcome.promotable.is_empty());
@@ -404,8 +412,10 @@ async fn scheduled_oauth_probe_failure_records_a_bounded_reason_and_recovers() {
         &health,
         &probe_options(),
         did,
-        Some((&mut schedule, true)),
-        None,
+        super::super::prober::CycleControl {
+            schedule: Some((&mut schedule, true)),
+            ..Default::default()
+        },
     )
     .await;
     assert_eq!(outcome.promotable, vec!["claude".to_string()]);
@@ -440,11 +450,13 @@ fn probe_errors_are_bounded_on_a_char_boundary() {
 
 #[tokio::test]
 async fn oauth_account_reference_is_probed_with_its_own_account() {
-    let (db, _user, user_access, _binding) = crate::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "health-oauth-account",
         gents_store::node_extension::Extensions::none(),
     )
     .await;
+    let _binding = crate::test_support::default_agent(&signed_home).await;
+    let (db, _user, user_access) = signed_home.into_parts();
     let node = db.node.clone();
     let did = db.node_identity.did();
     let runtime_access = crate::auth::credential::runtime_credential_access(&node, did).unwrap();
@@ -485,8 +497,8 @@ async fn oauth_account_reference_is_probed_with_its_own_account() {
     grok.auth = gents_documents::BackendAuth::NodeOAuth {
         account_ref: Some("acct-b".into()),
     };
-    let models = ModelsListener::start();
-    grok.endpoint = models.endpoint();
+    let models = ScriptedBackend::start("test-model", Vec::new()).unwrap();
+    grok.endpoint = models.endpoint().to_owned();
     oauth_backend_observation(&user_access, &runtime_access, &grok, "unknown").await;
     let outcome = probe_backends_cycle(
         &node,
@@ -513,11 +525,13 @@ async fn oauth_account_reference_is_probed_with_its_own_account() {
 
 #[tokio::test]
 async fn oauth_account_reference_without_its_row_is_not_probed() {
-    let (db, _user, user_access, _binding) = crate::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "health-oauth",
         gents_store::node_extension::Extensions::none(),
     )
     .await;
+    let _binding = crate::test_support::default_agent(&signed_home).await;
+    let (db, _user, user_access) = signed_home.into_parts();
     let node = db.node.clone();
     let did = db.node_identity.did();
     let runtime_access = crate::auth::credential::runtime_credential_access(&node, did).unwrap();
@@ -542,8 +556,8 @@ async fn oauth_account_reference_without_its_row_is_not_probed() {
     grok.auth = gents_documents::BackendAuth::NodeOAuth {
         account_ref: Some("acct-b".into()),
     };
-    let models = ModelsListener::start();
-    grok.endpoint = models.endpoint();
+    let models = ScriptedBackend::start("test-model", Vec::new()).unwrap();
+    grok.endpoint = models.endpoint().to_owned();
     oauth_backend_observation(&user_access, &runtime_access, &grok, "unknown").await;
     let outcome = probe_backends_cycle(
         &node,
@@ -575,11 +589,13 @@ async fn oauth_account_reference_without_its_row_is_not_probed() {
 
 #[tokio::test]
 async fn oauth_kinds_fresh_grok_credential_stays_healthy_and_promotes() {
-    let (db, _user, user_access, _binding) = crate::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "health-oauth",
         gents_store::node_extension::Extensions::none(),
     )
     .await;
+    let _binding = crate::test_support::default_agent(&signed_home).await;
+    let (db, _user, user_access) = signed_home.into_parts();
     let node = db.node.clone();
     let did = db.node_identity.did();
     let runtime_access = crate::auth::credential::runtime_credential_access(&node, did).unwrap();
@@ -601,8 +617,8 @@ async fn oauth_kinds_fresh_grok_credential_stays_healthy_and_promotes() {
         "https://cli-chat-proxy.grok.com/v1",
     );
     grok.node_did = did.to_string();
-    let models = ModelsListener::start();
-    grok.endpoint = models.endpoint();
+    let models = ScriptedBackend::start("test-model", Vec::new()).unwrap();
+    grok.endpoint = models.endpoint().to_owned();
     oauth_backend_observation(&user_access, &runtime_access, &grok, "unknown").await;
     for _ in 0..3 {
         let outcome = probe_backends_cycle(
@@ -630,11 +646,13 @@ async fn oauth_kinds_fresh_grok_credential_stays_healthy_and_promotes() {
 
 #[tokio::test]
 async fn oauth_kinds_stale_credential_without_refresh_token_still_demotes_after_k() {
-    let (db, _user, user_access, _binding) = crate::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "health-oauth",
         gents_store::node_extension::Extensions::none(),
     )
     .await;
+    let _binding = crate::test_support::default_agent(&signed_home).await;
+    let (db, _user, user_access) = signed_home.into_parts();
     let node = db.node.clone();
     let did = db.node_identity.did();
     let runtime_access = crate::auth::credential::runtime_credential_access(&node, did).unwrap();
@@ -700,11 +718,13 @@ fn claude_bearer_refreshing_at(
 
 #[tokio::test]
 async fn oauth_kinds_refresh_an_expired_credential_on_probe_and_recover() {
-    let (db, _user, user_access, _binding) = crate::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "health-oauth",
         gents_store::node_extension::Extensions::none(),
     )
     .await;
+    let _binding = crate::test_support::default_agent(&signed_home).await;
+    let (db, _user, user_access) = signed_home.into_parts();
     let node = db.node.clone();
     let did = db.node_identity.did();
     let runtime_access = crate::auth::credential::runtime_credential_access(&node, did).unwrap();
@@ -724,8 +744,8 @@ async fn oauth_kinds_refresh_an_expired_credential_on_probe_and_recover() {
     );
     let mut claude = claude_backend();
     claude.node_did = did.to_string();
-    let models = ModelsListener::start();
-    claude.endpoint = models.endpoint();
+    let models = ScriptedBackend::start("test-model", Vec::new()).unwrap();
+    claude.endpoint = models.endpoint().to_owned();
     oauth_backend_observation(&user_access, &runtime_access, &claude, "unknown").await;
 
     let (url, server) = one_shot_token_server(
@@ -757,7 +777,12 @@ async fn oauth_kinds_refresh_an_expired_credential_on_probe_and_recover() {
     assert_eq!(snap.failure_count, 0);
     assert!(snap.last_error.is_none(), "{:?}", snap.last_error);
     assert_eq!(
-        models.last_authorization().as_deref(),
+        models
+            .recorded_requests()
+            .iter()
+            .rev()
+            .find_map(|request| request.headers.get("authorization").cloned())
+            .as_deref(),
         Some("Bearer access-REFRESHED"),
         "discovery must send the token the credential owner resolved, not the stale row"
     );
@@ -789,11 +814,13 @@ async fn oauth_kinds_refresh_an_expired_credential_on_probe_and_recover() {
 
 #[tokio::test]
 async fn a_hung_token_endpoint_does_not_stall_the_next_backend_probe() {
-    let (db, _user, user_access, _binding) = crate::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "health-oauth",
         gents_store::node_extension::Extensions::none(),
     )
     .await;
+    let _binding = crate::test_support::default_agent(&signed_home).await;
+    let (db, _user, user_access) = signed_home.into_parts();
     let node = db.node.clone();
     let did = db.node_identity.did();
     let runtime_access = crate::auth::credential::runtime_credential_access(&node, did).unwrap();
@@ -811,11 +838,11 @@ async fn a_hung_token_endpoint_does_not_stall_the_next_backend_probe() {
         reqwest::Client::new(),
         BackendHealthMap::new(),
     );
-    let models = ModelsListener::start();
+    let models = ScriptedBackend::start("test-model", Vec::new()).unwrap();
     let mut claude = claude_backend();
     claude.node_did = did.to_string();
-    claude.endpoint = models.endpoint();
-    let mut next = backend("next", models.endpoint());
+    claude.endpoint = models.endpoint().to_owned();
+    let mut next = backend("next", models.endpoint().to_owned());
     next.node_did = did.to_string();
     oauth_backend_observation(&user_access, &runtime_access, &claude, "unknown").await;
     oauth_backend_observation(&user_access, &runtime_access, &next, "unknown").await;
@@ -866,11 +893,13 @@ async fn a_hung_token_endpoint_does_not_stall_the_next_backend_probe() {
 
 #[tokio::test]
 async fn oauth_kinds_missing_credential_fails_with_login_hint() {
-    let (db, _user, user_access, _binding) = crate::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "health-missing",
         gents_store::node_extension::Extensions::none(),
     )
     .await;
+    let _binding = crate::test_support::default_agent(&signed_home).await;
+    let (db, _user, user_access) = signed_home.into_parts();
     let node = db.node.clone();
     let did = db.node_identity.did();
     let (options, client, health_map) = (
@@ -909,7 +938,7 @@ async fn oauth_kinds_missing_credential_fails_with_login_hint() {
 
 #[tokio::test]
 async fn subscription_probe_preserves_typed_refresh_rejections() {
-    let models = ModelsListener::start();
+    let models = ScriptedBackend::start("test-model", Vec::new()).unwrap();
     for (provider, kind, forbidden_event) in [
         (
             crate::auth::claude::CLAUDE_OAUTH_PROVIDER,
@@ -928,11 +957,13 @@ async fn subscription_probe_preserves_typed_refresh_rejections() {
             (403, r#"{"error":"forbidden"}"#, forbidden_event),
             (500, r#"{"error":"unavailable"}"#, "probeFail"),
         ] {
-            let (db, _user, user_access, _binding) = crate::test_support::signed_test_node(
+            let signed_home = gents_documents::test_support::SignedHome::start(
                 "health-rejection",
                 gents_store::node_extension::Extensions::none(),
             )
             .await;
+            let _binding = crate::test_support::default_agent(&signed_home).await;
+            let (db, _user, user_access) = signed_home.into_parts();
             let node = db.node.clone();
             let did = db.node_identity.did().to_owned();
             let runtime_access =
@@ -944,7 +975,7 @@ async fn subscription_probe_preserves_typed_refresh_rejections() {
                 Utc::now() - chrono::Duration::minutes(1),
             )
             .await;
-            let mut backend = oauth_backend(kind, provider, &models.endpoint());
+            let mut backend = oauth_backend(kind, provider, models.endpoint());
             backend.node_did = did.clone();
             oauth_backend_configuration(&user_access, &backend).await;
             let (url, server) = one_shot_token_server(status, body).await;
@@ -975,7 +1006,7 @@ async fn subscription_probe_preserves_typed_refresh_rejections() {
             assert_modeled_probe(None, &snapshot, event);
             assert_eq!(!outcome.flipped.is_empty(), snapshot.state.blocks_routing());
             assert_eq!(
-                models.requests(),
+                models.recorded_requests().len(),
                 0,
                 "a failed credential resolution must not call discovery"
             );
@@ -992,11 +1023,13 @@ async fn subscription_probe_preserves_typed_refresh_rejections() {
 /// the gateway refresh kind and product rather than the subscription's.
 #[tokio::test]
 async fn a_gateway_node_oauth_backend_probes_its_stored_gateway_account() {
-    let (db, _user, user_access, _binding) = crate::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "health-oauth",
         gents_store::node_extension::Extensions::none(),
     )
     .await;
+    let _binding = crate::test_support::default_agent(&signed_home).await;
+    let (db, _user, user_access) = signed_home.into_parts();
     let node = db.node.clone();
     let did = db.node_identity.did();
     let runtime_access = crate::auth::credential::runtime_credential_access(&node, did).unwrap();
@@ -1018,8 +1051,8 @@ async fn a_gateway_node_oauth_backend_probes_its_stored_gateway_account() {
         "https://gw.example",
     );
     gateway.node_did = did.to_string();
-    let models = ModelsListener::start();
-    gateway.endpoint = models.endpoint();
+    let models = ScriptedBackend::start("test-model", Vec::new()).unwrap();
+    gateway.endpoint = models.endpoint().to_owned();
     oauth_backend_observation(&user_access, &runtime_access, &gateway, "unknown").await;
     let outcome = probe_backends_cycle(
         &node,
@@ -1119,6 +1152,7 @@ async fn recorded_measurements_match_the_lean_model() {
                 health_map: &health,
                 options: &options,
                 cancel: None,
+                progress: None,
             },
             &mut outcome,
         )

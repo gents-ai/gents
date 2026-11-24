@@ -14,7 +14,10 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("mock-show-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let port = allocate_port()?;
     let agent_name = format!("cli-show-{}", Uuid::new_v4().simple());
     let graphql = graphql_url(port);

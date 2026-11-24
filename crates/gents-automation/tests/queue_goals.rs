@@ -3,9 +3,9 @@ use gents_session::request::lifecycle::queue::mutation::{
     session_request_create_mutation, SessionRequestFields,
 };
 use gents_session::request::lifecycle::queue::*;
-use gents_session::request::lifecycle::test_support::test_db;
 use gents_session::request::lifecycle::test_support::{hints, wake_queue_input};
 use gents_session::request::lifecycle::ExecutionOrigin;
+use gents_session::test_support::AgentHome;
 use gents_store::identity::NodeIdentity;
 
 use gents_automation::goal::continuation::{goal_continuation_identity, prepare_goal_continuation};
@@ -20,8 +20,8 @@ use gents_toolcalls::test_support::queue::*;
 
 #[tokio::test]
 async fn background_wakes_and_goal_continuations_keep_the_project_directory() {
-    let db = test_db("continuation-project-directory").await;
-    let project = db._tempdir.path().join("project with spaces 工具");
+    let db = AgentHome::start("continuation-project-directory").await;
+    let project = db.path().join("project with spaces 工具");
     std::fs::create_dir(&project).unwrap();
     let cwd = project
         .canonicalize()
@@ -78,7 +78,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
         QueueSource::Steering,
         QueueSource::Goal,
     ] {
-        let db = test_db("desktop-control-scope").await;
+        let db = AgentHome::start("desktop-control-scope").await;
         let session_id = "desktop-owned-session";
         let (desktop, create, parent, writer) = desktop_owned_session(&db, session_id).await;
         let query = format!(

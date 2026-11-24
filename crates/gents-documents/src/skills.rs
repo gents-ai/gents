@@ -101,9 +101,8 @@ pub fn render_skill_catalog(skills: &[Skill]) -> Option<String> {
         return None;
     }
     let mut out = String::from(
-        "## Skills\n\nThese skills are available. Before acting, scan them; if one is relevant \
-         to the task, call the `load_skill` tool with its name and follow the returned \
-         instructions. Skip skills only when none are relevant.\n",
+        "## Skills\n\nWhen an entry below matches the task, call `load_skill` with its name \
+         before acting or reading tool help, and follow what it returns.\n",
     );
     for skill in skills {
         out.push_str(&format!(

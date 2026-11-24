@@ -16,16 +16,17 @@ Graders read stored documents and files, and the reply where the reply is the
 answer. Each result records the command-execution mode its Engineer ran under
 and the isolation that held it.
 
-Scopes `case` and `suites` run the shipped Engineer (the `engineer_full`
-subject, every core pack installed) with unrestricted command execution, as
-`gents init --tool-package yolo` grants it, each trial in its own container
-(scripts/evals/run-container.sh on this machine, image TAG); the endpoint must
-be a loopback URL. `case` runs engineer-mailbox kiln-flag-and-question.
-`suites` runs the train and validation cases of every suite on that subject
-and fails only when a trial does not finish with a grade.
+Every scope runs the shipped Engineer: the one `gents init --engineer`
+makes at this revision, every core pack installed. Scopes `case` and
+`suites` run it with the bash and background processes init gives it, each
+trial in its own container (scripts/evals/run-container.sh on this machine,
+image TAG); the endpoint must be a loopback URL. `case` runs engineer-mailbox
+kiln-flag-and-question. `suites` runs the train and validation cases of
+every suite outside the ladder's default list and fails only when a trial
+does not finish with a grade.
 
-Scope `ladder` runs the configuration-only Engineer (command execution off,
-embedded trials) through scripts/evals/run-ladder.sh: L1-L5 and the
+Scope `ladder` runs it with command execution off (no bash, no background
+processes; embedded trials) through scripts/evals/run-ladder.sh: L1-L5 and the
 factory-setup capstone, train and validation cases, over SHARDS launchers
 until the deadline. Case verdicts are a trend; the job fails when a rung L1-L5
 passes fewer than RUNG_FLOOR of its graded trials or grades fewer than
@@ -60,7 +61,7 @@ import suites
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 SUITE = "engineer-mailbox"
 CASE = "kiln-flag-and-question"
-SHIPPED_SUBJECT = "engineer_full"
+SHIPPED_SUBJECT = "gents init --engineer"
 CELL = "engineer"
 TARGET = "live-ci"
 PROVIDER_KIND = "Vllm"
@@ -327,8 +328,10 @@ def copy_logs(home, out, prefix=""):
             shutil.copy(log, out / f"{prefix}{log.name}")
 
 
-def shipped_suites():
-    return [suite["id"] for suite in suites.suites(ROOT) if suite["subject"] == SHIPPED_SUBJECT]
+def container_suites():
+    """Every suite the ladder scope does not run: those outside matrix.json's default list."""
+    registry = suites.matrix(ROOT)
+    return [suite["id"] for suite in registry["suites"] if suite["id"] not in registry["default"]]
 
 
 def run_container(args, *arguments, log):
@@ -424,6 +427,7 @@ def run_contained(args, out, work, result, selected, definition=None, split=None
         return None
     summary["rows"] = [contained_row(entry, views.get(entry.get("slot"))) for entry in summary["slots"]]
     result.update(results=summary.get("results"), image=args.image, gents_revision=summary.get("image_commit"),
+                  divergences=summary.get("divergences"),
                   tokens={side: sum(row["tokens"][side] or 0 for row in summary["rows"]) for side in ("input", "output")})
     if summary.get("command_execution") != MODES[args.scope]["command_execution"]:
         result.update(outcome="error", reason=f"the run recorded command execution {summary.get('command_execution')!r}")
@@ -460,7 +464,7 @@ def run_case(args, out, home, work, result):
 
 
 def run_suites(args, out, home, work, result):
-    selected = shipped_suites()
+    selected = container_suites()
     summary = run_contained(args, out, work, result, selected)
     if summary is None:
         return
@@ -494,10 +498,16 @@ def run_full_ladder(args, out, home, work, result):
     statuses = wait_all(processes, started + args.eval_timeout)
     result["launcher_exits"] = statuses
     cases, tokens, failing_slots = {}, collections.Counter(), []
+    divergences = result.setdefault("divergences", [])
     for shard_home in homes:
         for report in sorted((shard_home / "eval" / "runs").glob("ladder-*/report.json")):
             view = json.loads(report.read_text())
             run = view["report"]["run"]
+            recorded = view["report"].get("divergences")
+            for item in recorded if recorded is not None else [
+                    {"severity": "narrows", "kind": "divergences_unrecorded", "detail": f"run {run['run_id']} records none"}]:
+                if item not in divergences:
+                    divergences.append(item)
             rung = by_definition.get(run["definition"]["definition_id"], run["definition"]["definition_id"])
             shutil.copy(report, out / f"report-{run['run_id']}.json")
             for cell in view["report"]["cells"]:
@@ -602,11 +612,13 @@ def render_summary(result):
     scope = result.get("scope", "case")
     title = {"case": "Live Engineer eval", "suites": "Live Engineer suites"}.get(scope, "Live Engineer ladder")
     lines = [f"## {title}: {result['outcome'].upper()}", ""]
+    if result.get("divergences") is not None:
+        lines += ["```", suites.banner(result["divergences"]), "```", ""]
     if scope == "case":
         lines += [f"- Case: `{result['suite']}` / `{result['case_id']}` on the shipped Engineer (`{result['subject']}`, every core pack)",
                   f"- Rule: pass when at least {result['min_pass_rate']:.0%} of {result['trials']} trials pass the grader"]
     elif scope == "suites":
-        lines += [f"- Scope: train and validation cases of every suite on the shipped Engineer (`{result['subject']}`), "
+        lines += [f"- Scope: train and validation cases of every suite outside the ladder on the shipped Engineer (`{result['subject']}`), "
                   f"{result['trials']} trial(s) each",
                   "- Rule: fails when a trial does not finish with a grade; pass rates are recorded"]
     else:

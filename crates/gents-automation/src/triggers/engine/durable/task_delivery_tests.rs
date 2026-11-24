@@ -30,7 +30,6 @@ async fn keyed_delivery(
         goal_id: None,
         goal_objective: None,
         goal_token_budget: None,
-        goal_blocked_audit_threshold: None,
         goal_max_infrastructure_retries: None,
         goal_assignment_applied: false,
         emit_outcome: false,
@@ -84,8 +83,13 @@ async fn keyed_delivery(
 /// the unique `(node_did, session_id)` index resolves the race between them.
 #[tokio::test]
 async fn fires_for_one_key_admit_before_it_exists_and_share_one_session() {
-    let (db, _user, _user_access, binding) =
-        crate::test_support::signed_test_node("keyed-session-fires").await;
+    let signed_home = gents_documents::test_support::SignedHome::start(
+        "keyed-session-fires",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, _user_access) = signed_home.into_parts();
     let agent =
         gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
     let owner = db.node_identity.did().to_owned();
@@ -208,7 +212,7 @@ fn task_fire_requires_its_canonical_identity_and_exact_session() {
 async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
     use gents_store::identity::NodeIdentity;
     let identity_dir = tempfile::tempdir().unwrap();
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "task-admission-atomic",
         crate::lifecycle_hooks::composition(),
     )
@@ -303,7 +307,6 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
         )),
         goal_objective: Some("complete assignment".into()),
         goal_token_budget: Some(100),
-        goal_blocked_audit_threshold: None,
         goal_max_infrastructure_retries: None,
         goal_assignment_applied: false,
         emit_outcome: true,
@@ -681,7 +684,7 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
 
 #[tokio::test]
 async fn reserved_trigger_cause_is_refused() {
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "reserved-trigger-cause-refused",
         crate::lifecycle_hooks::composition(),
     )
@@ -742,7 +745,6 @@ async fn reserved_trigger_cause_is_refused() {
         goal_id: None,
         goal_objective: None,
         goal_token_budget: None,
-        goal_blocked_audit_threshold: None,
         goal_max_infrastructure_retries: None,
         goal_assignment_applied: false,
         emit_outcome: false,

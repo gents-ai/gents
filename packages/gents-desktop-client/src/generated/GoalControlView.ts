@@ -5,4 +5,8 @@ import type { GoalRevision } from "./GoalRevision.js";
  * Decimal strings preserve the runtime's signed 64-bit budgets and counters
  * through JavaScript display and form editing.
  */
-export type GoalControlView = { goalId: string, revision: GoalRevision, objective: string, status: string, tokenBudget: string | null, blockedAuditThreshold: string, maxInfrastructureRetries: string, tokensUsed: string, activeTimeSeconds: string, continuationSequence: string, wrapupRequested: boolean, wrapupCompleted: boolean, lastBlockedReason: string | null, lastFailure: string | null, completionEvidence: string | null, };
+export type GoalControlView = { goalId: string, revision: GoalRevision, objective: string, status: string, tokenBudget: string | null, maxInfrastructureRetries: string, tokensUsed: string, activeTimeSeconds: string, continuationSequence: string, wrapupRequested: boolean, wrapupCompleted: boolean,
+/**
+ * What the Agent said it needs when it reported the Goal blocked.
+ */
+blockedReason: string | null, lastFailure: string | null, completionEvidence: string | null, };

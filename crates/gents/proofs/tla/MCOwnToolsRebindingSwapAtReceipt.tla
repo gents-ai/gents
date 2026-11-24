@@ -1,0 +1,3 @@
+---- MODULE MCOwnToolsRebindingSwapAtReceipt ----
+EXTENDS OwnToolsRebinding
+====

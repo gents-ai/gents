@@ -667,8 +667,13 @@ async fn generated_goal_request_head_cases_drive_signed_row_selector() {
 #[tokio::test]
 async fn task_assignment_root_fences_older_chain_even_when_its_child_is_newer() {
     use gents_store::config_client::ConfigAccess;
-    let (db, _user, _access, binding) =
-        crate::test_support::signed_test_node("task-assignment-root-fence").await;
+    let signed_home = gents_documents::test_support::SignedHome::start(
+        "task-assignment-root-fence",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, _access) = signed_home.into_parts();
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let agent = gents_store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();

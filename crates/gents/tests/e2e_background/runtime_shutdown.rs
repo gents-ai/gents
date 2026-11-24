@@ -3,16 +3,16 @@ use crate::support::accepted_turn::{
     AcceptedTurnSpec,
 };
 use crate::support::fixtures::configure_agent_tools_as;
-use crate::support::live_inference::{rows_when, wait_for_request_terminal};
-use crate::support::streaming_backend::StreamChunk;
-use crate::support::test_db;
+use crate::support::live_inference::wait_for_request_terminal;
+use crate::support::trial_store;
+use gents_inference::test_support::scripted_backend::StreamChunk;
 use gents_protocol::tool_call::CancelCause;
 use gents_store::graphql::escape_graphql_string;
+use gents_store::test_support::rows_when;
 use gents_store::test_support::STALL_CEILING;
 use serde::Deserialize;
 use serde_json::Value;
 use std::sync::Arc;
-use std::time::Duration;
 
 const R6_BACKEND_ID: &str = "r6-background-backend";
 const R6_MODEL: &str = "test-model";
@@ -25,7 +25,7 @@ struct ToolCallRow {
 }
 
 struct AcceptedBackgroundTurn {
-    db: crate::support::TestDb,
+    db: gents_store::test_support::TestStore,
     fixture: crate::support::ManagedAgentFixture,
     runtime: AcceptedTurnRuntime,
     session_id: String,
@@ -37,7 +37,7 @@ async fn boot_background_turn(
     test_name: &str,
     accepted_chunks: Vec<StreamChunk>,
 ) -> AcceptedBackgroundTurn {
-    let db = test_db(test_name).await;
+    let db = trial_store(test_name).await;
     let fixture = crate::support::managed_agent_fixture(&db).await;
     let agent_identity = fixture.agent.clone();
     let agent_did = agent_identity.did();
@@ -95,7 +95,7 @@ async fn boot_background_turn(
         db.node.clone(),
         identity,
         gents::DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
+            backend_admission: Some(db.backend_admission()),
             tool_ceiling: gents_tools::surface::ToolCeiling::readonly(),
             ..Default::default()
         },
@@ -145,49 +145,26 @@ where
 fn finish_dynamic_turn(turn: &AcceptedBackgroundTurn) {
     turn.runtime.backend.enqueue_response(
         &turn.prompt,
-        crate::support::streaming_backend::StreamResponse::completes(
+        gents_inference::test_support::scripted_backend::StreamResponse::completes(
             &turn.prompt,
             ["parent complete"],
         ),
     );
 }
 
-/// `Some(true)` while this test's own child is alive, `Some(false)` once it
-/// has exited, and `None` once its managed owner reaped it. `WNOWAIT` leaves
-/// the status for that owner, and an unreaped pid cannot have been recycled,
-/// so an answer here always describes the process this test spawned.
+/// Opens the writing end of `gate`, which returns once a reader holds it
+/// open. Seatbelt's read-only profile lets the probe read the FIFO but not
+/// write anywhere, so its reading open is its only signal of readiness.
 #[cfg(unix)]
-fn observe_own_child(pid: i32) -> Option<bool> {
-    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
-    // SAFETY: a non-blocking, non-consuming wait on this process's own child.
-    let observed = unsafe {
-        libc::waitid(
-            libc::P_PID,
-            pid as libc::id_t,
-            &mut info,
-            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
-        )
-    };
-    if observed == -1 {
-        return None;
-    }
-    Some(unsafe { info.si_pid() } == 0)
-}
-
-/// Ends the test's own spawned child if an assertion unwinds before the
-/// shutdown under test has stopped it.
-#[cfg(unix)]
-struct SpawnedChildGuard(i32);
-
-#[cfg(unix)]
-impl Drop for SpawnedChildGuard {
-    fn drop(&mut self) {
-        if observe_own_child(self.0) == Some(true) {
-            // SAFETY: the pid was just observed as this process's own unreaped
-            // child, so it cannot name anything else.
-            unsafe { libc::kill(self.0, libc::SIGKILL) };
-        }
-    }
+async fn open_gate_writer(gate: std::path::PathBuf) -> std::fs::File {
+    tokio::time::timeout(
+        STALL_CEILING,
+        tokio::task::spawn_blocking(move || std::fs::OpenOptions::new().write(true).open(gate)),
+    )
+    .await
+    .expect("the background probe opens its gate")
+    .expect("join the gate open")
+    .expect("open the gate for writing")
 }
 
 #[cfg(unix)]
@@ -201,7 +178,6 @@ async fn runtime_shutdown_terminates_a_spawned_background_process() {
         "initial accepted request did not complete"
     );
     let directory = tempfile::tempdir().unwrap();
-    let pid_path = directory.path().join("pid");
     let gate = directory.path().join("gate");
     assert!(tokio::process::Command::new("mkfifo")
         .arg(&gate)
@@ -213,7 +189,7 @@ async fn runtime_shutdown_terminates_a_spawned_background_process() {
     turn.runtime.backend.enable_dynamic_followups(prompt);
     turn.runtime.backend.enqueue_response(
         prompt,
-        crate::support::streaming_backend::StreamResponse::streams(
+        gents_inference::test_support::scripted_backend::StreamResponse::streams(
             prompt,
             vec![StreamChunk::tool_call(
                 "meta-bg-shutdown",
@@ -224,9 +200,8 @@ async fn runtime_shutdown_terminates_a_spawned_background_process() {
                         "command": "sh",
                         "args": [
                             "-c",
-                            r#"trap '' TERM; printf '%s' $$ > "$1"; read ignored < "$2""#,
+                            r#"trap '' TERM; read ignored < "$1""#,
                             "gents-shutdown-probe",
-                            pid_path.to_string_lossy(),
                             gate.to_string_lossy()
                         ]
                     }
@@ -237,7 +212,10 @@ async fn runtime_shutdown_terminates_a_spawned_background_process() {
     );
     turn.runtime.backend.enqueue_response(
         prompt,
-        crate::support::streaming_backend::StreamResponse::completes(prompt, ["started"]),
+        gents_inference::test_support::scripted_backend::StreamResponse::completes(
+            prompt,
+            ["started"],
+        ),
     );
     crate::support::accepted_turn::enqueue_managed_accepted_request(
         &turn.db,
@@ -255,29 +233,17 @@ async fn runtime_shutdown_terminates_a_spawned_background_process() {
     )
     .await;
     let tool_call_id = row.tool_call_id.expect("background handle");
-    let pid: i32 = tokio::time::timeout(STALL_CEILING, async {
-        loop {
-            if let Ok(recorded) = tokio::fs::read_to_string(&pid_path).await {
-                if let Ok(pid) = recorded.trim().parse() {
-                    return pid;
-                }
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("the background child installs its TERM trap and records its pid");
-    let guard = SpawnedChildGuard(pid);
-    assert_eq!(observe_own_child(pid), Some(true));
+    let mut gate = open_gate_writer(gate).await;
 
     turn.runtime.shutdown().await;
 
-    assert_ne!(
-        observe_own_child(pid),
-        Some(true),
+    use std::io::Write;
+    let written = gate.write_all(b"outlived\n");
+    assert_eq!(
+        written.map_err(|error| error.kind()),
+        Err(std::io::ErrorKind::BrokenPipe),
         "runtime shutdown must terminate the background process it owns"
     );
-    drop(guard);
 
     let settled = tool_call_when(
         &turn.fixture.access,

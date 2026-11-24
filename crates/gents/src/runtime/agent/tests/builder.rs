@@ -25,7 +25,7 @@ async fn builder_includes_custom_tools_in_resolved_tool_surface() {
     let expected_agent_did = binding.agent_did.clone();
     let agent = Gents::builder()
         .node(node.clone())
-        .backend_admission(db.home.backend_admission())
+        .backend_admission(db.backend_admission())
         .identity(identity.clone())
         .tool_ceiling(ToolCeiling::meta_only())
         .agent("policy-ops")
@@ -68,7 +68,7 @@ async fn builder_requires_resolvable_backend_documents() {
 
     let error = match Gents::builder()
         .node(node)
-        .backend_admission(db.home.backend_admission())
+        .backend_admission(db.backend_admission())
         .identity(identity)
         .agent("policy-ops")
         .backend_id("missing-backend")
@@ -109,7 +109,7 @@ async fn builder_rejects_backend_vetoed_by_measured_health() {
 
     let error = match Gents::builder()
         .node(node)
-        .backend_admission(db.home.backend_admission())
+        .backend_admission(db.backend_admission())
         .identity(identity)
         .backend_health(backend_health)
         .agent("policy-ops")

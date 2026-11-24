@@ -5,6 +5,17 @@ use gents_loop::live_output::LiveToolOutputRegistry;
 use gents_loop::tool::Tool;
 use serde_json::Value;
 
+/// `path` located beneath its parent directory.
+fn located(path: &std::path::Path) -> Located {
+    gents_fs_runner::beneath::RootDir::open(path.parent().unwrap())
+        .unwrap()
+        .locate_relative(
+            std::path::Path::new(path.file_name().unwrap()),
+            gents_fs_runner::beneath::Intent::Create,
+        )
+        .unwrap()
+}
+
 fn decoded_image(value: &Value) -> Vec<u8> {
     assert_eq!(value["kind"], "file");
     let bytes = base64::engine::general_purpose::STANDARD
@@ -19,24 +30,33 @@ fn images_distinguish_missing_empty_binary_and_unavailable_files() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("file.bin");
     assert_eq!(
-        serde_json::to_value(read_image(&path)).unwrap()["kind"],
+        serde_json::to_value(read_image(&located(&path))).unwrap()["kind"],
         "missing"
     );
     std::fs::write(&path, []).unwrap();
-    assert!(decoded_image(&serde_json::to_value(read_image(&path)).unwrap()).is_empty());
+    assert!(decoded_image(&serde_json::to_value(read_image(&located(&path))).unwrap()).is_empty());
     std::fs::write(&path, [0, 255, 128, 13, 10]).unwrap();
     assert_eq!(
-        decoded_image(&serde_json::to_value(read_image(&path)).unwrap()),
+        decoded_image(&serde_json::to_value(read_image(&located(&path))).unwrap()),
         [0, 255, 128, 13, 10]
     );
     let file = std::fs::File::create(&path).unwrap();
     file.set_len(MAX_IMAGE_BYTES + 1).unwrap();
-    let large = serde_json::to_value(read_image(&path)).unwrap();
+    let large = serde_json::to_value(read_image(&located(&path))).unwrap();
     assert_eq!(large["kind"], "unavailable");
     assert_eq!(large["reason"], "tooLarge");
     assert!(large.get("data").is_none());
     assert_eq!(
-        serde_json::to_value(read_image(root.path())).unwrap()["reason"],
+        serde_json::to_value(read_image(
+            &gents_fs_runner::beneath::RootDir::open(root.path())
+                .unwrap()
+                .locate_relative(
+                    std::path::Path::new(""),
+                    gents_fs_runner::beneath::Intent::Existing
+                )
+                .unwrap()
+        ))
+        .unwrap()["reason"],
         "unsupportedEntry"
     );
 }
@@ -49,12 +69,14 @@ fn images_preserve_permission_observations_and_refuse_symlink_content() {
     let path = root.path().join("source");
     std::fs::write(&path, "private bytes").unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o420)).unwrap();
-    let value = serde_json::to_value(read_image(&path)).unwrap();
+    let value = serde_json::to_value(read_image(&located(&path))).unwrap();
     assert_eq!(value["permissions"]["unix_mode"], 0o420);
     assert_eq!(value["links"], 1);
-    let link = root.path().join("link");
-    symlink(&path, &link).unwrap();
-    let value = serde_json::to_value(read_image(&link)).unwrap();
+    let target = located(&path);
+    let moved = root.path().join("moved");
+    std::fs::rename(&path, &moved).unwrap();
+    symlink(&moved, &path).unwrap();
+    let value = serde_json::to_value(read_image(&target)).unwrap();
     assert_eq!(value["reason"], "unsupportedEntry");
     assert!(value.get("data").is_none());
 }
@@ -75,10 +97,17 @@ async fn incomplete_images_retain_the_original_without_claiming_a_finished_mutat
         )
     }
     .call();
+    let target = gents_fs_runner::beneath::RootDir::open(&root_path)
+        .unwrap()
+        .locate_relative(
+            std::path::Path::new("file"),
+            gents_fs_runner::beneath::Intent::Existing,
+        )
+        .unwrap();
     async {
         let lock = file_mutation_lock_for(&path);
         let _guard = lock.lock().await;
-        let capture = FileChangeCapture::start(&scope_call, &root_path, &path)
+        let capture = FileChangeCapture::start(&scope_call, &target)
             .await
             .unwrap();
         std::fs::write(&path, "partial bytes").unwrap();
@@ -163,7 +192,7 @@ fn retained_images_reject_corruption_unsupported_versions_and_ambiguous_paths() 
             root: root.path().to_str().unwrap().into(),
             path: "file".into(),
             before: FileImage::Missing,
-            after: read_image(&path),
+            after: read_image(&located(&path)),
         }],
     };
     let valid = serde_json::to_value(changes).unwrap();
@@ -205,7 +234,8 @@ fn replaced_directory_entry_cannot_reuse_an_open_file_image() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("file");
     std::fs::write(&path, "same bytes").unwrap();
-    let opened = open_regular_file(&path).unwrap();
+    let target = located(&path);
+    let opened = target.open(gents_fs_runner::beneath::Access::Read).unwrap();
     let original = opened.metadata().unwrap();
     std::fs::rename(&path, root.path().join("retained-original")).unwrap();
     std::fs::write(&path, "same bytes").unwrap();
@@ -216,7 +246,7 @@ fn replaced_directory_entry_cannot_reuse_an_open_file_image() {
     let current = replacement.metadata().unwrap();
     assert_eq!(original.len(), current.len());
     assert_eq!(original.modified().unwrap(), current.modified().unwrap());
-    let image = serde_json::to_value(read_open_image(&path, opened).unwrap()).unwrap();
+    let image = serde_json::to_value(read_open_image(&target, opened).unwrap()).unwrap();
     assert_eq!(image["reason"], "changedDuringRead");
     assert!(image.get("data").is_none());
 }
@@ -226,9 +256,10 @@ fn unlinked_directory_entry_cannot_be_reported_as_a_captured_file() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("file");
     std::fs::write(&path, "retained descriptor bytes").unwrap();
-    let opened = open_regular_file(&path).unwrap();
+    let target = located(&path);
+    let opened = target.open(gents_fs_runner::beneath::Access::Read).unwrap();
     std::fs::remove_file(&path).unwrap();
-    let image = serde_json::to_value(read_open_image(&path, opened).unwrap()).unwrap();
+    let image = serde_json::to_value(read_open_image(&target, opened).unwrap()).unwrap();
     assert_eq!(image["reason"], "changedDuringRead");
     assert!(image.get("data").is_none());
 }

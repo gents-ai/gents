@@ -172,9 +172,9 @@ class LiveEngineerEvalTests(unittest.TestCase):
         sys.path.insert(0, str(SOURCE / "scripts/evals"))
         import suites
         for suite in suites.suites(SOURCE):
-            for relative in [suite["path"], suite["subject"]]:
-                if not (self.root / "repo" / suites.FIXTURES / relative).exists():
-                    shutil.copytree(SOURCE / suites.FIXTURES / relative, self.root / "repo" / suites.FIXTURES / relative)
+            relative = suite["path"]
+            if not (self.root / "repo" / suites.FIXTURES / relative).exists():
+                shutil.copytree(SOURCE / suites.FIXTURES / relative, self.root / "repo" / suites.FIXTURES / relative)
         self.assertTrue((self.root / "repo" / MAILBOX / "suite.json").is_file())
         (scripts / "fake_ladder.py").write_text(FAKE_LADDER)
         (scripts / "run-ladder.sh").write_text('exec "$PYTHON" "$(dirname "$0")/fake_ladder.py" "$@"\n')
@@ -253,7 +253,7 @@ class LiveEngineerEvalTests(unittest.TestCase):
         self.assertEqual((verdict["command_execution"], verdict["isolation"], verdict["results"]),
                          ("unrestricted", "a container per trial", "unauthenticated"))
         self.assertEqual((verdict["suite"], verdict["case_id"], verdict["subject"]),
-                         ("engineer-mailbox", "kiln-flag-and-question", "engineer_full"))
+                         ("engineer-mailbox", "kiln-flag-and-question", "gents init --engineer"))
         self.assertEqual(verdict["tokens"], {"input": 3000, "output": 150})
         [record] = self.records()
         argv = record["argv"]
@@ -330,14 +330,15 @@ class LiveEngineerEvalTests(unittest.TestCase):
                 self.assertNotIn(self.url, path.read_text(), path)
         self.assertIn("<model endpoint>", (self.out / "container/logs/slot/attempt-1.log").read_text())
 
-    def test_suites_run_every_suite_on_the_shipped_engineer_and_record_each_rate(self):
+    def test_suites_run_every_suite_outside_the_ladder_and_record_each_rate(self):
         result = self.contained("suites", "--trials", "1",
                                 SUITE_CLASSES=json.dumps({"engineer-goals": "fail"}))
         self.assertEqual(result.returncode, 0, result.stderr)
         verdict = self.result()
         sys.path.insert(0, str(SOURCE / "scripts/evals"))
         import suites
-        shipped = [s["id"] for s in suites.suites(SOURCE) if s["subject"] == "engineer_full"]
+        registry = suites.matrix(SOURCE)
+        shipped = [s["id"] for s in registry["suites"] if s["id"] not in registry["default"]]
         argv = self.records()[0]["argv"]
         self.assertEqual([argv[i + 1] for i, flag in enumerate(argv) if flag == "--suite"], shipped)
         self.assertNotIn("--definition", argv)
@@ -355,7 +356,10 @@ class LiveEngineerEvalTests(unittest.TestCase):
         verdict = self.result()
         self.assertTrue(verdict["stopped_at_deadline"])
         self.assertEqual(self.records()[-1]["argv"][:1], ["stop"])
-        self.assertIn("1 of 10 trials did not finish with a grade", verdict["reason"])
+        import suites
+        registry = suites.matrix(SOURCE)
+        contained = sum(suite["id"] not in registry["default"] for suite in registry["suites"])
+        self.assertIn(f"1 of {contained} trials did not finish with a grade", verdict["reason"])
 
     def run_full(self, *arguments, **environment):
         return self.drive("run", "--scope", "ladder", "--out", str(self.out), "--gents", str(self.gents),

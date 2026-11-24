@@ -49,14 +49,14 @@ pub struct GoalControlView {
     pub objective: String,
     pub status: String,
     pub token_budget: Option<String>,
-    pub blocked_audit_threshold: String,
     pub max_infrastructure_retries: String,
     pub tokens_used: String,
     pub active_time_seconds: String,
     pub continuation_sequence: String,
     pub wrapup_requested: bool,
     pub wrapup_completed: bool,
-    pub last_blocked_reason: Option<String>,
+    /// What the Agent said it needs when it reported the Goal blocked.
+    pub blocked_reason: Option<String>,
     pub last_failure: Option<String>,
     pub completion_evidence: Option<String>,
 }

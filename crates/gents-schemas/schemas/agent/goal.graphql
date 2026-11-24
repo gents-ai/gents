@@ -16,15 +16,12 @@ type Goal @policy(id: "$household", resource: "children") {
     assignment_root_request_doc_id: String
     active_time_seconds: Int
     active_started_at: String
-    consecutive_blocked_audits: Int
-    last_blocked_request_id: String @index
-    last_blocked_reason: String
+    blocked_reason: String
     last_continued_from_request_id: String @index
     continuation_sequence: Int
     wrapup_requested: Boolean @index
     wrapup_completed: Boolean @index
     infrastructure_retry_count: Int
-    blocked_audit_threshold: Int
     max_infrastructure_retries: Int
     last_failure: String
     completion_evidence: String

@@ -253,7 +253,7 @@ describeLive("Tauri app live interrupt flow", () => {
         const cancelCause = finalSession?.latestRequestOutcome?.cancelCause;
         if (cancelCause) {
           expect(finalSession.turnState).toBe("interrupted");
-          expect(cancelCause.cause).toBe("userCancelled");
+          expect(cancelCause.cause).toBe("interrupted");
           expect(cancelCause.source).toBe("requestInterrupt");
           if (phase === "streaming") {
             const retained = finalSession.timelineItems.filter(

@@ -24,7 +24,19 @@ fn unreachable_session_payload(
     requested: &str,
     args: &AgentMessageArgs,
     tools: &gents_documents::AgentToolConfig,
+    starter: bool,
 ) -> String {
+    if starter {
+        return json_string(json!({
+            "ok": false,
+            "failure_class": "tool_not_allowed",
+            "path": "/session_id",
+            "message": format!("'{requested}' started you and takes no messages. End your turn with your answer: it returns there once any helpers you started have reported."),
+            "retryable": false,
+            "service_id": "session",
+            "tool_name": tool_name
+        }));
+    }
     let named = tools.targets.iter().find(|target| {
         target.name.eq_ignore_ascii_case(requested) || target.agent_did == requested
     });
@@ -326,9 +338,21 @@ impl DefraSessionHook {
             )
             .await?
             else {
+                let starter = gents_session::session::message::is_starter(
+                    &self.node,
+                    caller,
+                    &target_session,
+                )
+                .await?;
                 refuse!(
                     FailureClass::ArgumentInvalid,
-                    unreachable_session_payload(tool_name, &target_session, &parsed, tools)
+                    unreachable_session_payload(
+                        tool_name,
+                        &target_session,
+                        &parsed,
+                        tools,
+                        starter
+                    )
                 );
             };
             let delivery = parsed.delivery();
@@ -806,12 +830,28 @@ impl DefraSessionHook {
         }
         match tool_name {
             gents_protocol::tool_names::AGENT_INTERRUPT_TOOL_NAME => {
-                let interrupted = gents_session::session::message::interrupt_session_with_access(
-                    &self.node,
-                    &self.actor_access()?,
-                    &target,
-                )
-                .await?;
+                let interrupted =
+                    match gents_session::session::message::interrupt_session_with_access(
+                        &self.node,
+                        &self.actor_access()?,
+                        &target,
+                    )
+                    .await
+                    {
+                        Ok(interrupted) => interrupted,
+                        Err(gents_session::request::interrupt::SessionInterruptError::Refused(
+                            refusal,
+                        )) => {
+                            return Ok(interrupt_refused_payload(
+                                tool_name,
+                                session,
+                                &refusal.to_string(),
+                            ));
+                        }
+                        Err(gents_session::request::interrupt::SessionInterruptError::Store(
+                            error,
+                        )) => return Err(error),
+                    };
                 Ok(json_string(json!({
                     "ok": true,
                     "session_id": session,
@@ -930,6 +970,7 @@ mod unreachable_session_tests {
             session_id,
             &args,
             tools,
+            false,
         ))
         .unwrap()
     }

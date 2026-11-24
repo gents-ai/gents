@@ -32,6 +32,9 @@ pub struct TerminalObservation {
     pub terminal_state: Option<RequestLifecycleState>,
     pub session_id: Option<String>,
     pub interrupted_on_deadline: bool,
+    /// Set when the runner interrupted the request on finding it parked in
+    /// `waiting_for_backend`.
+    pub parked_for_backend: bool,
     pub elapsed: Duration,
 }
 
@@ -132,6 +135,7 @@ async fn await_terminal_inner(
     let started = std::time::Instant::now();
     let mut interrupted_on_deadline = false;
     let mut interrupted_for_backend = false;
+    let mut interrupted_while_parked = false;
     let mut session_id = None;
     let mut last_progress: Option<(String, Option<String>)> = None;
     loop {
@@ -161,6 +165,7 @@ async fn await_terminal_inner(
                 terminal_state,
                 session_id,
                 interrupted_on_deadline,
+                parked_for_backend: interrupted_while_parked,
                 elapsed: started.elapsed(),
             });
         }
@@ -197,6 +202,7 @@ async fn await_terminal_inner(
                 "interrupt request parked for its backend"
             })?;
             interrupted_on_deadline |= at_deadline;
+            interrupted_while_parked |= parked_for_backend;
             interrupted_for_backend = true;
         }
         let boundary = deadline.map(|deadline| {
@@ -211,6 +217,7 @@ async fn await_terminal_inner(
                 terminal_state,
                 session_id,
                 interrupted_on_deadline: true,
+                parked_for_backend: interrupted_while_parked,
                 elapsed: started.elapsed(),
             });
         }
@@ -660,17 +667,15 @@ mod tests {
             pending_client_fixture_request, publish_accepted_on_claimed_request,
             AcceptedFixtureCall,
         };
-        let home = EmbeddedHome::create_temp("observe-evidence").await.unwrap();
-        let db = crate::support::test_db_from_home(home);
-        let (db, user, client, binding) =
-            crate::test_support::signed_test_node_from_db(db, "observe-evidence").await;
+        let db = crate::support::trial_store("observe-evidence").await;
+        let signed_home =
+            gents_documents::test_support::SignedHome::enroll(db, "observe-evidence").await;
+        let binding = gents_inference::test_support::default_agent(&signed_home).await;
+        let (db, user, client) = signed_home.into_parts();
         let did = db.node_identity.did().to_owned();
-        crate::runner::embedded::executor::install::grant_trial_operations(
-            &db.home,
-            &binding.agent_did,
-        )
-        .await
-        .unwrap();
+        crate::runner::embedded::executor::install::grant_trial_operations(&db, &binding.agent_did)
+            .await
+            .unwrap();
         let agent_identity =
             gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
                 .unwrap();
@@ -937,7 +942,10 @@ mod tests {
         let home = EmbeddedHome::create_temp("observe-unsettled")
             .await
             .unwrap();
-        for state in ["pending", "processing"] {
+        // The deadline interrupt ends a pending request before its claim and
+        // passes a processing one's claim; the observation reports the state
+        // it read, which the interrupt did not make terminal evidence.
+        for (state, after) in [("pending", "interrupted"), ("processing", "processing")] {
             let case = cases
                 .iter()
                 .find(|case| {
@@ -951,11 +959,26 @@ mod tests {
                 .unwrap();
             let request_id = format!("req-unsettled-{state}");
             insert_request(&home, &request_id, state).await;
-            let observed = await_terminal(
+            let access =
+                ConfigAccess::local_as(home.node.clone(), identity::Did::new(home.did()).unwrap());
+            if state == "processing" {
+                let row = poll_request(&home.node, &request_id)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                gents_session::test_support::record_running_request_as(
+                    &access,
+                    row.doc_id.as_deref().unwrap(),
+                )
+                .await;
+            }
+            let observed = await_terminal_with_access(
                 &home.node,
+                &access,
                 &request_id,
                 Some(Duration::ZERO),
                 Duration::ZERO,
+                &NoHook,
             )
             .await
             .unwrap();
@@ -963,7 +986,7 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
-            assert_eq!(stored.lifecycle_state.as_deref(), Some(state));
+            assert_eq!(stored.lifecycle_state.as_deref(), Some(after));
             assert!(observed.interrupted_on_deadline);
             assert_eq!(
                 serde_json::to_value(&observed).unwrap()["terminal_state"],
@@ -1135,15 +1158,21 @@ mod tests {
         .await
         .unwrap();
         assert!(observed.interrupted_on_deadline);
-        assert_eq!(observed.terminal_state, None);
+        assert_eq!(
+            observed.terminal_state.map(|state| state.as_str()),
+            Some("interrupted")
+        );
         let request_id = gents_store::graphql::escape_graphql_string("req-stuck");
         let query = format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ interrupt_requested_at }} }}"#
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ lifecycle_state }} }}"#
         );
         let response = home.node.execute(&query).await;
         assert!(response.errors.is_empty(), "{:?}", response.errors);
-        let rendered = serde_json::to_string(&response.data).unwrap();
-        assert!(rendered.contains("interrupt_requested_at"), "{rendered}");
+        assert_eq!(
+            response.data.unwrap()["AgentRequest"][0]["lifecycle_state"],
+            "interrupted",
+            "the pending request is interrupted before its claim"
+        );
     }
 
     struct DeadlineHook {

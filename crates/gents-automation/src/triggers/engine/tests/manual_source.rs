@@ -9,7 +9,6 @@ fn resolved_task_for_test(task_id: &str, agent_did: &str, prompt_template: &str)
         prompt_template: prompt_template.to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
-        goal_blocked_audit_threshold: None,
         goal_max_infrastructure_retries: None,
         output_schema_ref: None,
         hooks: Vec::new(),
@@ -181,7 +180,6 @@ async fn production_event_fire_into_a_paired_client_session_adopts_its_requester
         goal_id: None,
         goal_objective: None,
         goal_token_budget: None,
-        goal_blocked_audit_threshold: None,
         goal_max_infrastructure_retries: None,
         goal_assignment_applied: false,
         emit_outcome: false,
@@ -352,7 +350,7 @@ async fn production_schedule_materialization_passes_final_exact_config_admission
 
 #[tokio::test]
 async fn production_materializer_rejects_incoherent_source_document_lineage() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "production-materializer-rejects-incohere",
         crate::lifecycle_hooks::composition(),
     )
@@ -411,7 +409,7 @@ async fn production_materializer_rejects_incoherent_source_document_lineage() {
 
 #[tokio::test]
 async fn production_materializer_rejects_manual_lineage_with_trigger_id() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "production-materializer-rejects-manual-l",
         crate::lifecycle_hooks::composition(),
     )

@@ -9,7 +9,7 @@ use gents_store::test_support::first_content;
 use super::prompt::{LayeredPromptBuilder, PromptBuilder};
 
 struct CompactionFixture {
-    db: crate::support::TestDb,
+    db: gents_store::test_support::TestStore,
     _user: gents_store::identity::KeyIdentity,
     agent: Arc<dyn gents_store::identity::NodeIdentity>,
     lifecycle: gents_session::request::lifecycle::RequestLifecycle,
@@ -21,7 +21,13 @@ impl CompactionFixture {
             AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
         };
         use gents_store::identity::NodeIdentity;
-        let (db, user, client, binding) = crate::test_support::root::signed_test_node(name).await;
+        let signed_home = gents_documents::test_support::SignedHome::enroll(
+            crate::support::trial_store(name).await,
+            name,
+        )
+        .await;
+        let binding = gents_inference::test_support::default_agent(&signed_home).await;
+        let (db, user, client) = signed_home.into_parts();
         let agent =
             gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
                 .unwrap();
@@ -209,6 +215,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         structured_output: None,
         tool_choice: None,
         configuration_guard: None,
+        tool_rebinding: None,
         on_rendered_request: None,
         turn_compactor: None,
         active_reduction_keys: Vec::new(),

@@ -3,12 +3,20 @@
   "eval_definitions": [
     {
       "definition_id": "engineer-schema-experience",
-      "comparability_version": 5,
+      "comparability_version": 6,
       "title": "Engineer schema experience",
       "subject": {
         "kind": "agent",
         "inference_slots": [
           "engineer"
+        ],
+        "core_packs": [
+          "gents/pack_builder",
+          "gents/web",
+          "gents/dynamic_workflows",
+          "gents/charts",
+          "gents/data_tables",
+          "gents/script"
         ]
       },
       "cases": [

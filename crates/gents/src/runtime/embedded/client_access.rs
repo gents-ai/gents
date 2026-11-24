@@ -10,7 +10,7 @@ use gents_store::{
     identity::client_access::{ClientAccessError, ClientAccessOwner},
 };
 
-use super::ServedNode;
+use gents_store::local::home::ServedNode;
 
 #[derive(Clone)]
 struct ClientAccessState {

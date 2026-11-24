@@ -16,10 +16,11 @@ use serde_json::{json, Value};
 
 use crate::support::agent_requests::canonical_now;
 use crate::support::live_inference::{
-    bind_target, boot_live_agent_with_options, live_target, rows_when, wait_for_request_terminal,
+    bind_target, boot_live_agent_with_options, live_target, wait_for_request_terminal,
     InferenceTarget, LiveUser,
 };
-use crate::support::{test_db, ManagedAgentFixture};
+use crate::support::{trial_store, ManagedAgentFixture};
+use gents_store::test_support::rows_when;
 
 pub(super) async fn submit_with_cwd(
     access: &ConfigAccess,
@@ -167,7 +168,7 @@ async fn tool_result(
 }
 
 pub(super) struct LiveJobHarness {
-    pub db: crate::support::TestDb,
+    pub db: gents_store::test_support::TestStore,
     pub actors: super::plugin_job_support::JobActors,
     pub runtime: crate::support::interrupt::BootedAgent,
     pub live: LiveUser,
@@ -184,7 +185,7 @@ pub(super) async fn completed_live_job(name: &str, value: Value) -> LiveJobHarne
         effects, guest_pin, install_job_fixture, job_settings, result, spawn, PlanEntry,
     };
     let target = live_target().await;
-    let db = test_db(name).await;
+    let db = trial_store(name).await;
     let plugin_home = tokio::task::spawn_blocking(tempfile::tempdir)
         .await
         .unwrap()
@@ -381,7 +382,7 @@ async fn live_plugin_job_adopts_a_child_and_completes() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn live_waited_process_defers_goal_until_its_completion_wake() {
     let target = live_target().await;
-    let db = test_db("live-goal-process-wake").await;
+    let db = trial_store("live-goal-process-wake").await;
     let actors = bind_target(&db, &target).await;
     let root = tokio::task::spawn_blocking(tempfile::tempdir)
         .await

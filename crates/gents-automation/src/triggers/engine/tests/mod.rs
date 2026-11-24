@@ -442,7 +442,6 @@ fn resolved_task(prompt_template: &str) -> ResolvedTask {
         prompt_template: prompt_template.to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
-        goal_blocked_audit_threshold: None,
         goal_max_infrastructure_retries: None,
         output_schema_ref: None,
         hooks: Vec::new(),
@@ -648,12 +647,18 @@ pub(super) fn integration_test_agent(behavior_name: &str) -> Arc<ResolvedAgent> 
 pub(super) async fn signed_materializer_agent(
     name: &str,
 ) -> (
-    gents_inference::test_support::TestDb,
+    gents_store::test_support::TestStore,
     gents_store::identity::KeyIdentity,
     gents_store::config_client::ConfigAccess,
     Arc<ResolvedAgent>,
 ) {
-    let (db, user, access, binding) = crate::test_support::signed_test_node(name).await;
+    let signed_home = gents_documents::test_support::SignedHome::start(
+        name,
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, access) = signed_home.into_parts();
     let template = tokio::task::spawn_blocking(|| integration_test_agent("materializer-template"))
         .await
         .expect("build test agent template");

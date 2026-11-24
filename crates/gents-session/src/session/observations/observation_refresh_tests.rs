@@ -4,7 +4,7 @@ use gents_store::config_client::{ConfigAccess, IdempotentTransactionRetry};
 
 #[tokio::test]
 async fn request_head_uses_exact_scope_and_timestamp_then_logical_id() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "request-head-uses-exact-scope-and-timest",
         crate::test_support::no_lifecycle_plugins(),
     )
@@ -40,7 +40,7 @@ async fn request_head_uses_exact_scope_and_timestamp_then_logical_id() {
 
 #[tokio::test]
 async fn batched_request_heads_preserve_scope_order_and_bound_query_count() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "batched-request-heads-preserve-scope-ord",
         crate::test_support::no_lifecycle_plugins(),
     )
@@ -153,7 +153,7 @@ async fn session_observation_traces_match_the_lean_model() {
         RequestLifecycleState,
         String,
     >() {
-        let node_db = gents_inference::test_support::test_db(
+        let node_db = gents_store::test_support::TestStore::start(
             "session-observation-traces-match-the-lea",
             crate::test_support::no_lifecycle_plugins(),
         )
@@ -161,7 +161,10 @@ async fn session_observation_traces_match_the_lean_model() {
         let node = node_db.node.clone();
         let trace = case.input.clone();
         let observed = ConfigAccess::transact_local_idempotent(
-            &node, None, IdempotentTransactionRetry::Standard, "test.session.observation_trace",
+            &node,
+            node.node_identity_did().map(|did| ::identity::Did::new(did).expect("node DID")),
+            IdempotentTransactionRetry::Standard,
+            "test.session.observation_trace",
             |txn| {
                 let trace = trace.clone();
                 Box::pin(async move {
@@ -362,7 +365,7 @@ async fn generated_selection_cases_drive_the_native_request_head() {
     let did = |kind: &str, value: Option<u64>| value.map(|n| format!("did:test:{kind}-{n}"));
     let request_id = |value: u64| format!("{value:08}");
     for case in gents_lean_vocab::families::contracts_session_selection::cases::<String>() {
-        let node_db = gents_inference::test_support::test_db(
+        let node_db = gents_store::test_support::TestStore::start(
             "generated-selection-cases-drive-the-nati",
             crate::test_support::no_lifecycle_plugins(),
         )

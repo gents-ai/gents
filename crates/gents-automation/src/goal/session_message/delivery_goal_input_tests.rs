@@ -137,7 +137,6 @@ async fn deliver(
         goal_id: captured.as_ref().map(|r| r.goal_id.clone()),
         goal_objective: captured.as_ref().map(|_| "Prepared Task work".into()),
         goal_token_budget: None,
-        goal_blocked_audit_threshold: None,
         goal_max_infrastructure_retries: None,
         goal_assignment_applied: false,
         emit_outcome: false,
@@ -195,7 +194,7 @@ async fn deliver(
 #[tokio::test]
 async fn generated_deliveries_capture_destination_goal_in_the_admission_transaction() {
     let before = json!({"status":"active","sequence":0,"last_continued_from":null,
-        "latest_request":10,"children":[],"blocked_audits":0,"wrapup_requested":false,
+        "latest_request":10,"children":[],"wrapup_requested":false,
         "wrapup_completed":false,"tokens_used":37,"token_budget":1000});
     for modeled in gents_lean_vocab::families::goal_delivery_input_delivery::cases() {
         let case = &serde_json::to_value(&modeled.input).unwrap();
@@ -438,7 +437,7 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
 #[tokio::test]
 async fn staging_into_another_runtime_is_refused_before_any_write() {
     let before = json!({"status":"active","sequence":0,"last_continued_from":null,
-        "latest_request":10,"children":[],"blocked_audits":0,"wrapup_requested":false,
+        "latest_request":10,"children":[],"wrapup_requested":false,
         "wrapup_completed":false,"tokens_used":37,"token_budget":1000});
     let f = Fixture::new(&before).await;
     let cause = SessionMessageCause {

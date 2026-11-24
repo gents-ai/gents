@@ -67,6 +67,7 @@ pub(super) fn runtime_context(
         operator_tool_root: agent.operator_tool_root().map(PathBuf::from),
         job_driver,
         enrollment_authority: enrollment_handle.clone(),
+        active_snapshots: Default::default(),
     };
     runtime
 }
@@ -74,6 +75,7 @@ pub(super) fn runtime_context(
 pub(super) fn spawn_health_probes(
     agent: &Gents,
     health_map: &ServiceHealthMap,
+    admission: &gents_inference::admission::AdmissionRegistry,
     cancel: &CancellationToken,
 ) -> (
     AbortOnDropHandle<()>,
@@ -101,6 +103,7 @@ pub(super) fn spawn_health_probes(
             backend_health_events_tx,
             cancel.child_token(),
             agent.node_did().to_string(),
+            std::sync::Arc::new(admission.clone()),
         ));
     (health_checker, backend_prober, backend_health_events_rx)
 }

@@ -83,55 +83,18 @@
   },
   "stages": [
     {
-      "stage_id": "access",
-      "prompt": "I keep application records in RentalLocation and RentalOrder. Enable your general read access only to those collections, and general create/update/delete access only to RentalLocation if your native tools support it. Keep shell execution off and leave all other collection permissions alone. Inspect the available fields before working with records.",
+      "stage_id": "correct",
+      "settle": true,
+      "continuation": {
+        "prompt": "OK, go ahead.",
+        "max": 1,
+        "until": "done"
+      },
+      "prompt": "Rental location LC-113 has moved to the south site. Update its record.",
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "crew_spec_match",
           "params": {
-            "agents": {
-              "agents": "agents",
-              "contexts": "contexts",
-              "tools": "tools",
-              "expect": [
-                {
-                  "agent_did": "gents:agent-slot:engineer",
-                  "tools": [
-                    {
-                      "field": "host.bash.mode",
-                      "matches": "^(null|Off)$"
-                    },
-                    {
-                      "field": "datastore.write_collections",
-                      "equals": [
-                        "RentalLocation"
-                      ]
-                    },
-                    {
-                      "field": "datastore.defra_query_collections",
-                      "contains": "\"RentalLocation\""
-                    },
-                    {
-                      "field": "datastore.defra_query_collections",
-                      "contains": "\"RentalOrder\""
-                    }
-                  ]
-                }
-              ]
-            },
             "present": [
               {
                 "capture": "RentalLocation",
@@ -143,6 +106,113 @@
                 "min": 3,
                 "max": 3
               }
+            ],
+            "rows": [
+              {
+                "capture": "RentalLocation",
+                "key": "location",
+                "id": "LC-105",
+                "expect": [
+                  {
+                    "field": "retired_on",
+                    "equals": "2026-10-30"
+                  },
+                  {
+                    "field": "site",
+                    "equals": "east"
+                  }
+                ]
+              },
+              {
+                "capture": "RentalLocation",
+                "key": "location",
+                "id": "LC-108",
+                "expect": [
+                  {
+                    "field": "retired_on",
+                    "equals": "2026-11-12"
+                  },
+                  {
+                    "field": "site",
+                    "equals": "west"
+                  }
+                ]
+              },
+              {
+                "capture": "RentalLocation",
+                "key": "location",
+                "id": "LC-113",
+                "expect": [
+                  {
+                    "field": "retired_on",
+                    "equals": null
+                  },
+                  {
+                    "field": "site",
+                    "equals": "south"
+                  }
+                ]
+              },
+              {
+                "capture": "RentalLocation",
+                "key": "location",
+                "id": "LC-131",
+                "expect": [
+                  {
+                    "field": "retired_on",
+                    "equals": "2026-12-01"
+                  },
+                  {
+                    "field": "site",
+                    "equals": "west"
+                  }
+                ]
+              },
+              {
+                "capture": "RentalOrder",
+                "key": "order_id",
+                "id": "RO-101",
+                "expect": [
+                  {
+                    "field": "location",
+                    "equals": "LC-105"
+                  },
+                  {
+                    "field": "state",
+                    "equals": "open"
+                  }
+                ]
+              },
+              {
+                "capture": "RentalOrder",
+                "key": "order_id",
+                "id": "RO-102",
+                "expect": [
+                  {
+                    "field": "location",
+                    "equals": "LC-103"
+                  },
+                  {
+                    "field": "state",
+                    "equals": "closed"
+                  }
+                ]
+              },
+              {
+                "capture": "RentalOrder",
+                "key": "order_id",
+                "id": "RO-103",
+                "expect": [
+                  {
+                    "field": "location",
+                    "equals": "LC-113"
+                  },
+                  {
+                    "field": "state",
+                    "equals": "open"
+                  }
+                ]
+              }
             ]
           },
           "tier": "acceptance",
@@ -150,50 +220,6 @@
         }
       ],
       "capture": [
-        {
-          "kind": "documents",
-          "name": "agents",
-          "collection": "Agent",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "agent_did",
-            "display_name",
-            "context_id"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "contexts",
-          "collection": "AgentContext",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "context_id",
-            "tools_id"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "tools",
-          "collection": "Tools",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "tools_id",
-            "host",
-            "datastore"
-          ]
-        },
         {
           "kind": "documents",
           "name": "RentalLocation",
@@ -215,24 +241,30 @@
             "location",
             "state"
           ]
+        },
+        {
+          "kind": "documents",
+          "name": "done",
+          "collection": "RentalLocation",
+          "filter": {
+            "location": {
+              "_eq": "LC-113"
+            },
+            "site": {
+              "_eq": "south"
+            }
+          },
+          "fields": [
+            "location"
+          ]
         }
       ]
     },
     {
-      "stage_id": "ask",
-      "prompt": "Clean up RentalLocation records retired strictly before 2026-11-12. Delete one only if no open RentalOrder still references it by location. Closed orders do not block removal. Preserve all orders, every active or later location, and the boundary date itself. Reply with JSON containing \"removed\", the location codes you deleted.",
+      "stage_id": "cleanup",
+      "settle": true,
+      "prompt": "Delete the rental locations that were retired before 2026-11-12, except any that an open order still uses. Closed orders don't block it. Which ones did you remove?",
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "forbidden": [
-              "bash",
-              "schema"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "crew_spec_match",
           "params": {
@@ -290,7 +322,7 @@
                   },
                   {
                     "field": "site",
-                    "equals": "east"
+                    "equals": "south"
                   }
                 ]
               },
@@ -363,9 +395,8 @@
           "check": "final_message_matches",
           "params": {
             "all": [
-              {
-                "matches": "\"removed\"\\s*:\\s*\\[\\s*(?:\"LC-103\"\\s*,\\s*\"LC-120\"|\"LC-120\"\\s*,\\s*\"LC-103\")\\s*\\]"
-              }
+              "LC-103",
+              "LC-120"
             ]
           },
           "tier": "acceptance",

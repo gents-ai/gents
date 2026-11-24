@@ -70,7 +70,7 @@ impl CommandExecutionMode {
     }
 
     pub fn protects_credentials(self) -> bool {
-        matches!(self, Self::WorkspaceWrite | Self::ArtifactWrite)
+        !matches!(self, Self::Unrestricted)
     }
 }
 

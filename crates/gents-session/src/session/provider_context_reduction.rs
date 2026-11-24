@@ -1339,16 +1339,18 @@ mod tests {
     async fn reduction_fixture(
         requester: Option<&str>,
     ) -> (
-        gents_inference::test_support::TestDb,
+        gents_store::test_support::TestStore,
         String,
         gents_store::identity::ManagedAgentSigner,
     ) {
         use gents_store::identity::NodeIdentity;
-        let (db, _user, _access, binding) = gents_inference::test_support::signed_test_node(
+        let signed_home = gents_documents::test_support::SignedHome::start(
             "provider-context-reduction",
             crate::test_support::no_lifecycle_plugins(),
         )
         .await;
+        let binding = gents_inference::test_support::default_agent(&signed_home).await;
+        let (db, _user, _access) = signed_home.into_parts();
         let node = db.node.clone();
         let root = gents_store::test_support::held_runtime_identity(db.node_identity.did());
         let agent = gents_store::identity::resolve_agent_identity(&root, &binding).unwrap();
@@ -1864,7 +1866,7 @@ mod tests {
     #[tokio::test]
     async fn source_boundary_high_water_matches_the_lean_model() {
         for case in gents_lean_vocab::families::source_boundary_high_water::cases() {
-            let node_db = gents_inference::test_support::test_db(
+            let node_db = gents_store::test_support::TestStore::start(
                 "source-boundary-high-water-matches-the-l",
                 crate::test_support::no_lifecycle_plugins(),
             )

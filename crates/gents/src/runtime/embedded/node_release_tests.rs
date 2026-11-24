@@ -128,14 +128,18 @@ async fn measure_fixtures() -> Vec<StageReport> {
             Arc::downgrade(&home.node)
         })
         .await,
-        measure("test_db", || async {
-            let db = crate::support::test_db("node-release-db").await;
+        measure("trial_store", || async {
+            let db = crate::support::trial_store("node-release-db").await;
             Arc::downgrade(&db.node)
         })
         .await,
-        measure("signed_test_node", || async {
-            let (db, _user, _access, _binding) =
-                crate::test_support::root::signed_test_node("node-release-signed").await;
+        measure("signed_home", || async {
+            let db = gents_documents::test_support::SignedHome::enroll(
+                crate::support::trial_store("node-release-signed").await,
+                "node-release-signed",
+            )
+            .await;
+            let _binding = gents_inference::test_support::default_agent(&db).await;
             Arc::downgrade(&db.node)
         })
         .await,

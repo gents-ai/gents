@@ -6,14 +6,20 @@ use std::time::Duration;
 async fn oneshot_fixture(
     name: &str,
 ) -> (
-    crate::support::TestDb,
+    gents_store::test_support::TestStore,
     gents_store::identity::KeyIdentity,
     gents_store::config_client::ConfigAccess,
     gents_store::config_client::ConfigAccess,
     gents_protocol::agent_identity::AgentIdentityBinding,
 ) {
     use gents_store::config_client::NodePermission;
-    let (db, user, user_access, binding) = crate::test_support::root::signed_test_node(name).await;
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
+        crate::support::trial_store(name).await,
+        name,
+    )
+    .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, user_access) = signed_home.into_parts();
     let agent =
         gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
     let admin = gents_store::config_client::ConfigAccess::local_as(

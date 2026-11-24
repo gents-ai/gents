@@ -7,7 +7,7 @@ use serde_json::Value;
 use crate::runner::embedded::executor::capture::{
     capture_documents_with_access, documents_capture_query,
 };
-use crate::runner::embedded::executor::evidence::usage_of;
+use crate::runner::embedded::executor::usage::{home_charge, home_rows};
 use crate::runner::embedded::observe::request_evidence_from_query_data;
 use crate::runner::executor::{Capture, StageSpec};
 use crate::runner::progress::{LastToolCall, LiveSnapshot, ToolTally};
@@ -153,8 +153,8 @@ pub(super) async fn activity(access: &ConfigAccess) -> Result<LiveSnapshot> {
     let response = access.execute(&query).await?;
     let data = response.get("data").cloned().unwrap_or(Value::Null);
     let evidence = request_evidence_from_query_data(&data);
+    let charged = home_charge(&home_rows(access).await?);
     let last_tool = last_tool_call(access).await;
-    let usage = usage_of(&evidence.inference_calls);
     let mut tools: BTreeMap<String, ToolTally> = BTreeMap::new();
     let mut failed_tool_calls = 0;
     for call in &evidence.tool_calls {
@@ -171,24 +171,12 @@ pub(super) async fn activity(access: &ConfigAccess) -> Result<LiveSnapshot> {
             .get("AgentRequest")
             .and_then(Value::as_array)
             .map_or(0, |rows| rows.len() as u64),
-        model_turns: evidence.inference_calls.len() as u64,
-        input_tokens: usage.input_tokens,
-        output_tokens: usage.output_tokens,
+        model_turns: charged.calls,
+        input_tokens: charged.usage.input_tokens,
+        output_tokens: charged.usage.output_tokens,
         session_contexts: super::live_context::session_contexts(&data),
-        reported_input_tokens: Some(
-            evidence
-                .inference_calls
-                .iter()
-                .filter_map(|call| call.prompt_tokens)
-                .fold(0, u64::saturating_add),
-        ),
-        reported_output_tokens: Some(
-            evidence
-                .inference_calls
-                .iter()
-                .filter_map(|call| call.completion_tokens)
-                .fold(0, u64::saturating_add),
-        ),
+        reported_input_tokens: Some(charged.reported_input_tokens),
+        reported_output_tokens: Some(charged.reported_output_tokens),
         tool_calls: evidence.tool_calls.len() as u64,
         failed_tool_calls,
         tools,

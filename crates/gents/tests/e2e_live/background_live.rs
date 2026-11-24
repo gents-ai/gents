@@ -7,15 +7,17 @@ use serde_json::{json, Value};
 use crate::support::agent_requests::{submit_user_request, RequestActors};
 use crate::support::interrupt::BootedAgent;
 use crate::support::live_inference::{
-    bind_target, boot_live_agent_with_ceiling, live_target, rows_when, wait_for_request_terminal,
+    bind_target, boot_live_agent_with_ceiling, live_target, wait_for_request_terminal,
 };
-use crate::support::{test_db, TestDb};
+use crate::support::trial_store;
+use gents_store::test_support::rows_when;
 use gents_store::test_support::snapshot_reader::SnapshotReader;
+use gents_store::test_support::TestStore;
 
 const SESSION: &str = "live-background-session";
 
 struct Fixture {
-    _db: TestDb,
+    _db: TestStore,
     actors: RequestActors,
     runtime: BootedAgent,
     _root: tempfile::TempDir,
@@ -24,7 +26,7 @@ struct Fixture {
 impl Fixture {
     async fn new(name: &str) -> Self {
         let target = live_target().await;
-        let db = test_db(name).await;
+        let db = trial_store(name).await;
         let actors = bind_target(&db, &target).await;
         let root = tokio::task::spawn_blocking(tempfile::tempdir)
             .await

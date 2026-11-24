@@ -43,6 +43,7 @@ pub struct GoalToolCall<'a> {
     session_id: &'a str,
     request_id: &'a str,
     args: &'a str,
+    can_create: bool,
     lifecycle: &'a ToolCallLifecycle,
     output_obligation_gate: Option<&'a dyn OutputObligationCheck>,
 }
@@ -66,6 +67,10 @@ impl<'a> GoalToolCall<'a> {
 
     pub fn args(&self) -> &'a str {
         self.args
+    }
+
+    pub fn can_create(&self) -> bool {
+        self.can_create
     }
 
     pub fn request_doc_id(&self) -> Option<&'a str> {
@@ -154,6 +159,7 @@ impl DefraSessionHook {
                     session_id: &session_id,
                     request_id: &request_id,
                     args,
+                    can_create: self.tool_bindings().goal_creation_enabled,
                     lifecycle: &lifecycle,
                     output_obligation_gate: self.output_obligation_gate.as_deref(),
                 },

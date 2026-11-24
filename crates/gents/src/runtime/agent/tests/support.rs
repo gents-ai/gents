@@ -11,12 +11,14 @@ use gents_store::identity::KeyIdentity;
 pub(super) async fn test_node(
     name: &str,
 ) -> (
-    crate::support::TestDb,
+    gents_store::test_support::TestStore,
     KeyIdentity,
     gents_store::config_client::ConfigAccess,
 ) {
-    let db = crate::support::test_db(name).await;
-    crate::test_support::root::signed_test_node_without_agent_from_db(db, name).await
+    let db = crate::support::trial_store(name).await;
+    gents_documents::test_support::SignedHome::enroll(db, name)
+        .await
+        .into_parts()
 }
 
 pub(super) async fn install_agent(

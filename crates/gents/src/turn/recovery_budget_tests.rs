@@ -11,7 +11,7 @@ use gents_store::graphql::escape_graphql_string;
 use serde_json::Value;
 
 async fn grant_test_agent(
-    db: &crate::support::TestDb,
+    db: &gents_store::test_support::TestStore,
     signer: &gents_store::identity::ManagedAgentSigner,
 ) {
     use gents_store::config_client::NodePermission;
@@ -128,8 +128,13 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
     use gents_session::request::lifecycle::{RequestIdentity, RequestSigner, RequestSpec};
     use gents_store::identity::NodeIdentity;
 
-    let (db, user, access, binding) =
-        crate::test_support::root::signed_test_node("inference-recovery-parent").await;
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
+        crate::support::trial_store("inference-recovery-parent").await,
+        "inference-recovery-parent",
+    )
+    .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, access) = signed_home.into_parts();
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let agent = gents_store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
@@ -237,6 +242,7 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
         None,
         Some(usage),
         gents_loop::rig_compat::CachedInputTokensObservation::NotAvailable,
+        None,
     )
     .await
     .unwrap();
@@ -270,6 +276,7 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
         None,
         Some(usage),
         gents_loop::rig_compat::CachedInputTokensObservation::NotAvailable,
+        None,
     )
     .await
     .unwrap();

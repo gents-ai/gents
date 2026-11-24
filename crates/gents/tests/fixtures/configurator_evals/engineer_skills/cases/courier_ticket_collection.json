@@ -8,22 +8,6 @@
       "prompt": "Create a collection CourierTicket for the depot's courier tickets, with the fields ticket_number, depot and arrived_at. Tickets come from the courier company's system, which often sends the same ticket twice, and a page will list each depot's tickets newest first. Just the collection for now.",
       "capture": [
         {
-          "kind": "documents",
-          "name": "loaded",
-          "collection": "AgentOutputSegment",
-          "filter": {
-            "session_id": {
-              "_eq": "$session"
-            },
-            "payload": {
-              "_like": "Skill: use-database%"
-            }
-          },
-          "fields": [
-            "ordinal"
-          ]
-        },
-        {
           "kind": "schema",
           "name": "schema",
           "collections": [
@@ -33,39 +17,81 @@
       ],
       "checks": [
         {
-          "check": "tool_calls_expected",
+          "check": "schema_matches",
           "params": {
-            "required": [
-              "load_skill",
-              "schema"
-            ],
-            "forbidden": [
-              "bash",
-              "bash_unrestricted"
-            ],
-            "config_read_only": true
+            "name": "schema",
+            "sdl": "type CourierTicket { ticket_number: String @index(unique: true) depot: String arrived_at: DateTime }"
           },
           "tier": "acceptance",
           "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "import",
+      "settle": true,
+      "continuation": {
+        "prompt": "OK, go ahead.",
+        "max": 1,
+        "until": "ct1001"
+      },
+      "prompt": "Here's what the courier system sent this morning. Add them:\nCT-1001, North depot, arrived 2026-11-20T09:15:00Z\nCT-1002, Harbor depot, arrived 2026-11-20T09:20:00Z\nCT-1001, North depot, arrived 2026-11-20T09:15:00Z",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "tickets",
+          "collection": "CourierTicket",
+          "filter": {},
+          "fields": [
+            "ticket_number",
+            "depot",
+            "arrived_at"
+          ]
         },
+        {
+          "kind": "documents",
+          "name": "ct1001",
+          "collection": "CourierTicket",
+          "filter": {
+            "ticket_number": {
+              "_eq": "CT-1001"
+            }
+          },
+          "fields": [
+            "ticket_number",
+            "depot"
+          ]
+        }
+      ],
+      "checks": [
         {
           "check": "crew_spec_match",
           "params": {
             "present": [
               {
-                "capture": "loaded",
-                "min": 1
+                "capture": "tickets",
+                "min": 2,
+                "max": 2
+              },
+              {
+                "capture": "ct1001",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "ct1001",
+                "key": "ticket_number",
+                "id": "CT-1001",
+                "expect": [
+                  {
+                    "field": "depot",
+                    "matches": "(?i)north"
+                  }
+                ]
               }
             ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "schema_matches",
-          "params": {
-            "name": "schema",
-            "sdl": "type CourierTicket { ticket_number: String @index(unique: true) depot: String arrived_at: DateTime }"
           },
           "tier": "acceptance",
           "weight": 1

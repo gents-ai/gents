@@ -4,6 +4,9 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::checks::CHECK_REGISTRY_VERSION;
+use crate::runner::divergence::{
+    build_divergence, definition_divergences, read_divergences, write_divergences, Divergence,
+};
 use crate::runner::executor::{Capture, InferenceBinding, Isolation};
 use crate::{
     create_run, load_run, CellSpec, RunOrigin, RunRecord, DENOMINATOR_POLICY_V1, TAXONOMY_VERSION,
@@ -61,6 +64,9 @@ pub struct RunRequest {
     pub source_dirty: bool,
     pub captures: Vec<Capture>,
     pub runs_dir: PathBuf,
+    /// How the cells' subjects and the launch differ from a production node,
+    /// as the caller found them; `None` when the caller did not check.
+    pub divergences: Option<Vec<Divergence>>,
 }
 
 #[derive(Clone, Debug)]
@@ -182,6 +188,9 @@ pub async fn freeze(
     }
     write_sidecar(&run_dir, &sidecar)?;
     write_frozen_definition(&run_dir, &definition)?;
+    if read_divergences(&run_dir).is_none() {
+        write_divergences(&run_dir, &run_divergences(request, &definition))?;
+    }
 
     let record = match existing {
         Some(record) => record,
@@ -306,6 +315,21 @@ pub(crate) async fn thaw(
         captures: sidecar.captures,
         breaker_threshold,
     })
+}
+
+fn run_divergences(request: &RunRequest, definition: &EvalDefinition) -> Vec<Divergence> {
+    let mut found = request.divergences.clone().unwrap_or_else(|| {
+        vec![Divergence::narrows(
+            "subject_unchecked",
+            "the launcher did not check the subjects against the Engineer `gents init --engineer` makes",
+        )]
+    });
+    found.extend(definition_divergences(definition));
+    found.extend(build_divergence(
+        &request.source_commit,
+        request.source_dirty,
+    ));
+    found
 }
 
 /// A run_id reuses the run already frozen for it; a different request for the

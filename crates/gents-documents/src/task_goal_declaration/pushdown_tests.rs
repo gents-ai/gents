@@ -35,7 +35,6 @@ fn task_goal_declarations_follow_the_lean_publication_model() {
             .as_ref()
             .map(|budget| budget.0.as_i64());
         let limits = GoalLimits {
-            blocked_audit_threshold: case.goal_blocked_audit_threshold,
             max_infrastructure_retries: case.goal_max_infrastructure_retries,
         };
         gents_lean_vocab::families::contracts_task_goal_declaration::TaskGoalDeclarationOutput {

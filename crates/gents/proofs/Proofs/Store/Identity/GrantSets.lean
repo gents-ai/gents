@@ -131,7 +131,16 @@ the set holds none of `schemaChangePermissions`
 (`policy_delegate_holds_no_schema_change`), so the held-bounded rule refuses
 every schema change the Engineer would grant
 (`engineer_policy_refuses_schema_change`). Holding it, the Engineer may hand
-`get-collection` on (`engineer_policy_grants_get_collection`). -/
+`get-collection` on (`engineer_policy_grants_get_collection`).
+
+Decision (gents#4191): `policyDelegate` holds `add-dac-policy`, so the
+Engineer registers the document access policies it writes for application
+collections (`Identity.ApplicationPolicy`) as its own signer. It is outside the
+admin class (`add_dac_policy_outside_admin_class`) and is no schema change
+permission: registering a policy binds no collection and changes no existing
+policy (`Household.registerPolicy`). The Engineer may hand it on like any
+permission it holds; an enrolled User holds none to hand
+(`enrolled_user_cannot_grant_add_dac_policy`). -/
 def GrantSet.permissions : GrantSet → List String
   | .agentBaseline => NodeProvisioning.requiredPermissions
   | .operatorUser =>
@@ -140,7 +149,7 @@ def GrantSet.permissions : GrantSet → List String
   | .householdOwner => []
   | .policyDelegate =>
       ["get-collection", "add-nac-relation", "delete-nac-relation", "add-dac-relation",
-       "delete-dac-relation", "get-nac-status"]
+       "delete-dac-relation", "get-nac-status", "add-dac-policy"]
 
 def GrantSet.nativeAdmin : GrantSet → Bool
   | .householdOwner => true
@@ -699,14 +708,35 @@ theorem enrolled_user_cannot_grant_nac_status :
     admits (holderOf (receives .enrolledUser))
       ⟨.permission "get-nac-status", false, true, false⟩ = false := by decide
 
+/-! ### Registering document access policies -/
+
+theorem engineer_holds_add_dac_policy :
+    (holderOf (receives .defaultAgent)).holds "add-dac-policy" = true := by decide
+
+theorem add_dac_policy_outside_admin_class : adminClass.contains "add-dac-policy" = false := by
+  decide
+
+theorem add_dac_policy_is_no_schema_change :
+    schemaChangePermissions.contains "add-dac-policy" = false := by decide
+
+theorem baseline_agent_cannot_register_policies :
+    (holderOf (receives .agent)).holds "add-dac-policy" = false := by decide
+
+theorem engineer_policy_grants_add_dac_policy :
+    policyToolAdmits [policyCategory] (holderOf (receives .defaultAgent))
+      ⟨.permission "add-dac-policy", false, true, false⟩ = true := by decide
+
+theorem enrolled_user_cannot_grant_add_dac_policy :
+    admits (holderOf (receives .enrolledUser))
+      ⟨.permission "add-dac-policy", false, true, false⟩ = false := by decide
+
 /-! ### Self-lockout under `self_config_no_lockout`
 
 An Agent that set `self_config_no_lockout` may not, through the policy tool,
 revoke from itself a permission that keeps it able to configure itself: its
-baseline and its policy delegation. Other Agents' grants and all grants are
-otherwise governed by `policyToolAdmits`. Document relationships on the Agent's
-own documents are not modeled here; they stay governed by native document
-authorization. -/
+baseline and its policy delegation; nor a document relation it holds
+(`relationChangeKeepsLockout`). Other Agents' grants and all grants are
+otherwise governed by `policyToolAdmits`. -/
 
 /-- Permissions the acting Agent keeps while no-lockout is set. -/
 def lockoutProtected : List String :=
@@ -760,6 +790,24 @@ theorem engineer_cannot_revoke_own_get_collection :
 theorem engineer_can_revoke_baseline_from_others_under_no_lockout :
     policyToolAdmitsSelf [policyCategory] (holderOf (receives .defaultAgent)) true false
       ⟨.permission "read-document", true, true, false⟩ = true := by decide
+
+/-- Decision (gents#4191): while no-lockout is set, the policy tool never
+removes a document relation from the acting Agent itself, whatever the
+document's policy, so an Agent cannot revoke its own way into a document it
+does not own; the document's owner or a manager of the relation still can.
+Grants only add (`Household.allowedIn_mono`) and are never refused here. -/
+def relationChangeKeepsLockout (noLockout isSelf delete : Bool) : Bool :=
+  !(noLockout && isSelf && delete)
+
+theorem no_lockout_keeps_own_relations : relationChangeKeepsLockout true true true = false := rfl
+
+theorem relation_grants_never_lock_out (noLockout isSelf : Bool) :
+    relationChangeKeepsLockout noLockout isSelf false = true := by
+  cases noLockout <;> cases isSelf <;> rfl
+
+theorem others_relations_stay_revocable (noLockout delete : Bool) :
+    relationChangeKeepsLockout noLockout false delete = true := by
+  cases noLockout <;> cases delete <;> rfl
 
 /-! ### The yolo agent
 

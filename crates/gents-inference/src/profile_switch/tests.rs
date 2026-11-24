@@ -57,7 +57,7 @@ fn provision_agents(
 }
 
 struct Fixture {
-    _db: crate::test_support::TestDb,
+    _db: gents_store::test_support::TestStore,
     cache: crate::usage_observation::UsageCache,
     node: Arc<EmbeddedNode>,
     access: ConfigAccess,
@@ -76,11 +76,12 @@ impl Fixture {
     /// `accountOperationAdmitted`), so every fixture document is written
     /// through the enrolled User's client access on a protected node.
     async fn build(accounts: &[&'static str]) -> Self {
-        let (db, _user, access) = crate::test_support::signed_test_node_without_agent(
+        let (db, _user, access) = gents_documents::test_support::SignedHome::start(
             "profile-switch",
             gents_store::node_extension::Extensions::none(),
         )
-        .await;
+        .await
+        .into_parts();
         let node = db.node.clone();
         let did_owned = db.node_identity.did().to_owned();
         let did = did_owned.as_str();

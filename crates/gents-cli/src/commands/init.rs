@@ -252,6 +252,12 @@ pub(crate) async fn init_home_with_core_packs(
     let document_acp =
         admit_document_acp(&home_dir, args.document_acp, args.identity_backend, true)?;
 
+    if args.vera_rpc_port.is_some() {
+        anyhow::ensure!(
+            fresh_store && !document_acp.is_local() && !args.identity_only,
+            "--vera-rpc-port requires initializing a fresh Vera home"
+        );
+    }
     if args.create_transport_group {
         anyhow::ensure!(
             fresh_store,
@@ -352,6 +358,40 @@ pub(crate) async fn init_home_with_core_packs(
     } else {
         gents_service::home_state::client_identity_in(&home_dir, &client_identity.paths).await?
     };
+    use gents_store::local::document_acp::VeraConnection;
+    let connection = if let Some(port) = args.vera_rpc_port {
+        if let Some(path) = &args.vera_anchor {
+            let bytes = tokio::fs::read(path)
+                .await
+                .with_context(|| format!("reading the Vera anchor at {}", path.display()))?;
+            let anchor = serde_json::from_slice(&bytes)
+                .with_context(|| format!("invalid Vera anchor at {}", path.display()))?;
+            let device_registration = if let Some(path) = &args.vera_device_admission {
+                #[derive(serde::Deserialize)]
+                struct Admission {
+                    node_registration: Value,
+                }
+                let bytes = tokio::fs::read(path)
+                    .await
+                    .with_context(|| format!("reading device admission at {}", path.display()))?;
+                Some(serde_json::from_slice::<Admission>(&bytes)?.node_registration)
+            } else {
+                None
+            };
+            VeraConnection::Follower {
+                port,
+                anchor,
+                device_registration,
+            }
+        } else {
+            VeraConnection::Host {
+                port,
+                account: identity::Did::new(client_identity.did())?,
+            }
+        }
+    } else {
+        VeraConnection::Solo
+    };
     let initialized_identity = load_or_create_home_identity(HomeIdentityOptions {
         home: &home_dir,
         node_name: &args.node_name,
@@ -401,11 +441,21 @@ pub(crate) async fn init_home_with_core_packs(
     .await?;
     if let Some(fresh_backend) = fresh_backend {
         fresh_backend
-            .initialize(
+            .initialize_with_connection(
                 &store_key,
                 &initialized_identity.identity,
                 &identity::Did::new(client_identity.did())?,
                 document_acp,
+                &connection,
+                if matches!(connection, VeraConnection::Host { .. }) {
+                    Some(
+                        gents_store::config_client::ClientSigningCapability::from_ed25519_key(
+                            client_identity.private_key_bytes(),
+                        )?,
+                    )
+                } else {
+                    None
+                },
             )
             .await?;
     }
@@ -423,7 +473,7 @@ pub(crate) async fn init_home_with_core_packs(
         .with_document_projector(gents_store::local::document_projector(
             initialized_identity.identity.clone(),
             std::sync::Arc::new(ceiling),
-            gents_store::local::document_acp::home_policy_ids(document_acp),
+            gents_store::local::document_acp::recorded_policy_ids(&data_dir)?,
         )?)
         .with_node_identity_did(initialized_identity.node_identity_did.clone())
         .with_node_acp_enabled();
@@ -444,15 +494,13 @@ pub(crate) async fn init_home_with_core_packs(
         gents::defra_node::HttpConfig::with_listener(listener)?
             .with_extra_routes(owner_staged.router()),
     );
-    let node_arc = std::sync::Arc::new(
-        gents_store::local::backend_protection::build_configured(
-            node_builder,
-            &data_dir,
-            document_acp,
-        )
-        .await
-        .context("building embedded DefraDB node for init")?,
-    );
+    let node_arc = gents_store::local::backend_protection::build_configured(
+        node_builder,
+        &data_dir,
+        document_acp,
+    )
+    .await
+    .context("building embedded DefraDB node for init")?;
     stage("embedded_node_built");
     let held_store_access = ConfigAccess::claimed_local_as(
         node_arc,
@@ -472,6 +520,7 @@ pub(crate) async fn init_home_with_core_packs(
             client_identity.did(),
         )
         .with_client_signing_capability(client_signing)?
+        .with_local_home_schema(&init_node)?
         .with_client_signed_agent_creates()
         .with_reported_delegation_audience(
             gents_store::local::document_acp::status_reports(
@@ -510,7 +559,7 @@ pub(crate) async fn init_home_with_core_packs(
         )
         .await?;
         stage("runtime_home_initialized");
-        let transport_group = if args.create_transport_group {
+        let transport_group = if args.create_transport_group && !matches!(connection, VeraConnection::Host { .. }) {
             let account = identity::Did::new(client_identity.did())?;
             let device = identity::Did::new(initialized_identity.identity.did())?;
             let group = access.create_device_group(&account, &device).await?;
@@ -612,6 +661,13 @@ pub(crate) async fn init_home_with_core_packs(
             ),
             "init": summary,
         });
+        #[cfg(feature = "vera")]
+        if matches!(connection, VeraConnection::Host { .. }) {
+            let anchor = gents_store::local::document_acp::VeraDeploymentAnchor::from_host(&init_node, &data_dir)?
+                .context("hosted Vera deployment has no verified genesis")?;
+            output["transport_group"] = json!({"group": anchor.group, "account": anchor.account});
+            output["vera_anchor"] = serde_json::to_value(anchor)?;
+        }
         if let Some(group) = transport_group {
             output["transport_group"] = group;
         }
@@ -1454,42 +1510,24 @@ async fn initialize_runtime_home(
         args.enable_defra_query,
         args.disable_defra_query,
     );
-    let mut tools = tools_for_package(
-        node_did,
-        &tools_id,
+    let DefaultAgentDocuments {
+        tools,
+        context,
+        display_name,
+        description,
+        tags,
+        engineer: engineer_documents,
+    } = default_agent_documents(
+        args,
         tool_package,
-        pinned_tool_root,
-        enable_defra_query,
-        args.defra_query_collections.clone(),
-    );
-    tools.self_config = Some(engineer_self_config());
-    let engineer_documents = args.engineer.then(|| {
-        engineer_tools(
-            &mut tools,
+        &DefaultAgentIds {
             node_did,
-            &default_agent_did,
-            !args.disable_defra_query,
-        )
-    });
-    let context = AgentContext {
-        context_id: default_context_id_for_agent(&default_agent_did),
-        node_did: node_did.to_string(),
-        display_name: Some(if args.engineer {
-            "The Engineer".to_string()
-        } else {
-            "Default".to_string()
-        }),
-        description: None,
-        system_prompt: Some(if args.engineer {
-            ENGINEER_SYSTEM_PROMPT.to_string()
-        } else {
-            standard_system_prompt(tool_package).to_string()
-        }),
-        tools_id: Some(tools_id.clone()),
-        compaction_id: None,
-        skill_ids: Vec::new(),
-        tags: Vec::new(),
-    };
+            agent_did: &default_agent_did,
+            tools_id: &tools_id,
+            context_id: &default_context_id_for_agent(&default_agent_did),
+        },
+        pinned_tool_root,
+    );
     let inference_profile_id = default_inference_profile_id_for_agent(&default_agent_did);
     let inference_execution_id = default_inference_execution_id_for_profile(&inference_profile_id);
     let inference_execution = standard_inference_execution(node_did, &inference_execution_id);
@@ -1520,27 +1558,12 @@ async fn initialize_runtime_home(
         agent_did: default_agent_did.clone(),
         creation_nonce: binding.creation_nonce,
         node_did: node_did.to_string(),
-        display_name: Some(if args.engineer {
-            "The Engineer".to_string()
-        } else {
-            "Default".to_string()
-        }),
-        description: if args.engineer {
-            Some(
-                "Builds what you need on this node: apps, automations and teams of agents."
-                    .to_string(),
-            )
-        } else {
-            None
-        },
+        display_name: Some(display_name),
+        description,
         context_id: Some(context.context_id.clone()),
         inference_profile_id: inference_profile_id.clone(),
         enabled: true,
-        tags: if args.engineer {
-            vec![gents_tools::builtin::self_config::ENGINEER_AGENT_TAG.to_string()]
-        } else {
-            Vec::new()
-        },
+        tags,
         created_at: Some(chrono::Utc::now().to_rfc3339()),
     };
     if let Some(error) = tools
@@ -1682,6 +1705,97 @@ where
     })
 }
 
+pub(crate) struct DefaultAgentIds<'a> {
+    pub(crate) node_did: &'a str,
+    pub(crate) agent_did: &'a str,
+    pub(crate) tools_id: &'a str,
+    pub(crate) context_id: &'a str,
+}
+
+/// The eval subject is made from these too (`gents utils eval subject`).
+pub(crate) struct DefaultAgentDocuments {
+    pub(crate) tools: Tools,
+    pub(crate) context: AgentContext,
+    pub(crate) display_name: String,
+    pub(crate) description: Option<String>,
+    pub(crate) tags: Vec<String>,
+    pub(crate) engineer: Option<(DatastoreToolSurfaceDocument, AgentTargetDocument)>,
+}
+
+pub(crate) fn default_agent_documents(
+    args: &InitArgs,
+    tool_package: ToolPackageArg,
+    ids: &DefaultAgentIds<'_>,
+    pinned_tool_root: Option<PathBuf>,
+) -> DefaultAgentDocuments {
+    let mut tools = tools_for_package(
+        ids.node_did,
+        ids.tools_id,
+        tool_package,
+        pinned_tool_root,
+        init_enable_defra_query(
+            tool_package,
+            args.enable_defra_query,
+            args.disable_defra_query,
+        ),
+        args.defra_query_collections.clone(),
+    );
+    tools.self_config = Some(engineer_self_config());
+    let engineer = args.engineer.then(|| {
+        engineer_tools(
+            &mut tools,
+            ids.node_did,
+            ids.agent_did,
+            !args.disable_defra_query,
+        )
+    });
+    let display_name = if args.engineer {
+        "The Engineer"
+    } else {
+        "Default"
+    };
+    let context = AgentContext {
+        context_id: ids.context_id.to_owned(),
+        node_did: ids.node_did.to_owned(),
+        display_name: Some(display_name.to_owned()),
+        description: None,
+        system_prompt: Some(if args.engineer {
+            ENGINEER_SYSTEM_PROMPT.to_string()
+        } else {
+            standard_system_prompt(tool_package).to_string()
+        }),
+        tools_id: Some(ids.tools_id.to_owned()),
+        compaction_id: None,
+        skill_ids: Vec::new(),
+        tags: Vec::new(),
+    };
+    DefaultAgentDocuments {
+        tools,
+        context,
+        display_name: display_name.to_owned(),
+        description: args.engineer.then(|| {
+            "Builds what you need on this node: apps, automations and teams of agents.".to_owned()
+        }),
+        tags: if args.engineer {
+            vec![gents_tools::builtin::self_config::ENGINEER_AGENT_TAG.to_string()]
+        } else {
+            Vec::new()
+        },
+        engineer,
+    }
+}
+
+pub(crate) fn default_engineer_init() -> Result<(InitArgs, ToolPackageArg)> {
+    use clap::Parser as _;
+
+    let Some(Command::Init(args)) = Cli::try_parse_from(["gents", "init", "--engineer"])?.command
+    else {
+        anyhow::bail!("`gents init --engineer` did not parse as init");
+    };
+    let tool_package = resolve_initial_tool_package(&args)?;
+    Ok((args, tool_package))
+}
+
 fn default_tools_id_for_agent(agent_did: &str) -> String {
     format!("{agent_did}-tools")
 }
@@ -1698,6 +1812,7 @@ fn tools_for_package(
     enable_defra_query: bool,
     defra_query_collections: Vec<String>,
 ) -> Tools {
+    let writes = matches!(tool_package, ToolPackageArg::Write | ToolPackageArg::Yolo);
     let host = match tool_package {
         ToolPackageArg::Minimal | ToolPackageArg::Introspection => None,
         ToolPackageArg::Readonly | ToolPackageArg::Write | ToolPackageArg::Yolo => {
@@ -1724,10 +1839,7 @@ fn tools_for_package(
                         }
                         _ => None,
                     },
-                    background_enabled: matches!(
-                        tool_package,
-                        ToolPackageArg::Write | ToolPackageArg::Yolo
-                    ),
+                    background_enabled: writes,
                     ..Default::default()
                 }),
                 cli: Vec::new(),
@@ -1755,7 +1867,7 @@ fn tools_for_package(
         agents: None,
         built_ins: Some(BuiltInTools {
             enable_goal_tools: privileged.then_some(true),
-            enable_goal_creation: Some(false),
+            enable_goal_creation: Some(writes),
             enable_session_history_tool: None,
             enable_schema_tool: None,
             enable_p2p_tool: None,
@@ -1777,7 +1889,7 @@ fn tools_for_package(
     }
 }
 
-fn wide_open_tools_document(node_did: &str) -> Tools {
+pub(crate) fn wide_open_tools_document(node_did: &str) -> Tools {
     Tools {
         tools_id: wide_open_tools_id_for_node(node_did),
         node_did: node_did.to_string(),
@@ -2400,10 +2512,10 @@ mod tests {
     #[tokio::test]
     async fn a_freshly_initialized_profile_resolves_to_the_default_turn_limit() {
         let home = EmbeddedHome::create_temp("init-test").await.unwrap();
-        let identity = home.identity.clone();
+        let identity = home.node_identity.clone();
         let owner = home.did().to_owned();
         let node = home.node.clone();
-        let graphql = home.graphql_endpoint().unwrap().to_owned();
+        let graphql = home.graphql_endpoint().to_owned();
         let user_home = tempfile::tempdir().unwrap();
         let user = KeyIdentity::load_or_create(user_home.path().join("user.key"), None).unwrap();
         let fresh_binding = provision_fresh_home(&node, identity.as_ref(), user.did())
@@ -2483,10 +2595,10 @@ mod tests {
     #[tokio::test]
     async fn the_engineer_sets_max_turns_on_a_freshly_initialized_home() {
         let home = EmbeddedHome::create_temp("init-test").await.unwrap();
-        let identity = home.identity.clone();
+        let identity = home.node_identity.clone();
         let owner = home.did().to_owned();
         let node = home.node.clone();
-        let graphql = home.graphql_endpoint().unwrap().to_owned();
+        let graphql = home.graphql_endpoint().to_owned();
         let user_home = tempfile::tempdir().unwrap();
         let user = KeyIdentity::load_or_create(user_home.path().join("user.key"), None).unwrap();
         let fresh_binding = provision_fresh_home(&node, identity.as_ref(), user.did())
@@ -2577,10 +2689,10 @@ mod tests {
         engineer: bool,
     ) -> gents_tools::surface::ToolSurfaceExplanation {
         let home = EmbeddedHome::create_temp("init-test").await.unwrap();
-        let identity = home.identity.clone();
+        let identity = home.node_identity.clone();
         let owner = home.did().to_owned();
         let node = home.node.clone();
-        let graphql = home.graphql_endpoint().unwrap().to_owned();
+        let graphql = home.graphql_endpoint().to_owned();
         let user_home = tempfile::tempdir().unwrap();
         let user = KeyIdentity::load_or_create(user_home.path().join("user.key"), None).unwrap();
         let fresh_binding = provision_fresh_home(&node, identity.as_ref(), user.did())
@@ -3417,6 +3529,9 @@ mod tests {
             secure_enclave_label: None,
             store_key_custody: Some(gents_host::args::StoreKeyCustodyArg::File),
             document_acp: None,
+            vera_rpc_port: None,
+            vera_anchor: None,
+            vera_device_admission: None,
             create_transport_group: false,
             inference_endpoint: None,
             backend_id: None,

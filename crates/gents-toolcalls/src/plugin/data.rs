@@ -572,7 +572,10 @@ impl Session {
                         let (filter, text) = (&filter, &text);
                         Box::pin(async move {
                             gents_tools::builtin::defra_query::validate_filter(
-                                txn, collection, filter,
+                                txn,
+                                collection,
+                                filter,
+                                &CollectionScope::all(),
                             )
                             .await?;
                             Ok::<_, anyhow::Error>(txn.execute(text).await?)
@@ -587,7 +590,10 @@ impl Session {
                         let (filter, text) = (&filter, &text);
                         Box::pin(async move {
                             gents_tools::builtin::defra_query::validate_filter(
-                                txn, collection, filter,
+                                txn,
+                                collection,
+                                filter,
+                                &CollectionScope::all(),
                             )
                             .await?;
                             Ok::<_, anyhow::Error>(txn.execute(text).await?)
@@ -623,7 +629,7 @@ mod tests {
 
     #[tokio::test]
     async fn agent_data_caller_never_uses_a_node_identity() {
-        let node_db = gents_inference::test_support::test_db(
+        let node_db = gents_store::test_support::TestStore::start(
             "agent-data-caller-never-uses-a-node-iden",
             gents_session::test_support::no_lifecycle_plugins(),
         )

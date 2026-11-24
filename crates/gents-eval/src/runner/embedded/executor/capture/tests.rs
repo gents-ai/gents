@@ -9,7 +9,7 @@ use serde_json::json;
 
 #[tokio::test]
 async fn schema_capture_reads_active_indexes_and_records_absent_collections() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "schema-capture-reads-active-indexes-and-",
         gents_automation::lifecycle_hooks::composition(),
     )
@@ -61,7 +61,7 @@ async fn delegation_case_capture_excludes_session_title_requests() {
         ConfigAccess::write_local(
             &home.node,
             "eval.test.normal_request_capture",
-            &format!(r#"mutation {{ create_AgentRequest(input: {{request_id: "{purpose}", purpose: "{purpose}", node_did: "{did}", agent_did: "{did}:research-helper", content: "TRAIN-111"}}) {{ _docID }} }}"#),
+            &format!(r#"mutation {{ create_AgentRequest(input: {{request_id: "{purpose}", purpose: "{purpose}", node_did: "{did}", agent_did: "{did}:research-helper", content: "TRAIN-111", lifecycle_state: "completed"}}) {{ _docID }} }}"#),
         )
         .await
         .unwrap();
@@ -117,7 +117,7 @@ async fn delegation_case_capture_excludes_session_title_requests() {
 
 #[tokio::test]
 async fn document_capture_excludes_other_sessions_with_the_same_sequence() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "document-capture-excludes-other-sessions",
         gents_automation::lifecycle_hooks::composition(),
     )

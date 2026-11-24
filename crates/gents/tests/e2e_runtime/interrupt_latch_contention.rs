@@ -11,7 +11,7 @@ use gents_protocol::operations::request::{RequestInterruptInput, RequestRef};
 
 use crate::support::agent_requests::{submit_user_request, RequestActors};
 use crate::support::commit_race_proxy::{is_commit, CommitRaceProxy, ProxyHook};
-use crate::support::test_db;
+use crate::support::trial_store;
 
 const SESSION: &str = "contended-interrupt-session";
 const REQUEST: &str = "contended-interrupt-request";
@@ -85,7 +85,7 @@ fn interrupt_input(node_did: &str) -> RequestInterruptInput {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn interrupt_rebuilds_after_concurrent_lease_renewals() {
-    let db = test_db("interrupt-latch-contention").await;
+    let db = trial_store("interrupt-latch-contention").await;
     let actors = Arc::new(RequestActors::new(&db).await);
     let node_did = db.node_identity.did().to_owned();
     let doc = submit_user_request(
@@ -102,7 +102,7 @@ async fn interrupt_rebuilds_after_concurrent_lease_renewals() {
             "execution_lease_expires_at": format!("2099-01-01T00:00:0{landed}Z"),
         })
     });
-    let proxy = CommitRaceProxy::spawn(db.client_endpoint(), hook).await;
+    let proxy = CommitRaceProxy::spawn(db.graphql_endpoint(), hook).await;
     let contended = operator_access(&proxy, &actors);
 
     let receipt = gents::operations::request::interrupt(&contended, interrupt_input(&node_did))
@@ -114,14 +114,17 @@ async fn interrupt_rebuilds_after_concurrent_lease_renewals() {
         RENEWALS + 1,
         "each overtaken attempt aborted and was rebuilt once"
     );
-    let row = actors.request_row(&doc, "interrupt_requested_at").await;
-    let stamped = row["interrupt_requested_at"].as_str().expect("latched");
-    assert_eq!(receipt.interrupt_requested_at.as_deref(), Some(stamped));
+    let row = actors.request_row(&doc, "lifecycle_state").await;
+    assert_eq!(
+        row["lifecycle_state"], "interrupted",
+        "interrupted before its claim"
+    );
+    assert!(!receipt.already_interrupted);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn interrupt_rebuild_keeps_another_interrupters_latch() {
-    let db = test_db("interrupt-latch-stamped-once").await;
+    let db = trial_store("interrupt-latch-stamped-once").await;
     let actors = Arc::new(RequestActors::new(&db).await);
     let node_did = db.node_identity.did().to_owned();
     let doc = submit_user_request(
@@ -133,13 +136,14 @@ async fn interrupt_rebuild_keeps_another_interrupters_latch() {
         Default::default(),
     )
     .await;
-    let (hook, commits) = racing_writes(
-        &actors,
-        &doc,
-        1,
-        |_| serde_json::json!({ "interrupt_requested_at": OTHER_STAMP }),
-    );
-    let proxy = CommitRaceProxy::spawn(db.client_endpoint(), hook).await;
+    let (hook, commits) = racing_writes(&actors, &doc, 1, |_| {
+        serde_json::json!({
+            "lifecycle_state": "interrupted",
+            "failure_reason": "interrupted by another actor",
+            "terminalized_at": OTHER_STAMP,
+        })
+    });
+    let proxy = CommitRaceProxy::spawn(db.graphql_endpoint(), hook).await;
     let contended = operator_access(&proxy, &actors);
 
     let receipt = gents::operations::request::interrupt(&contended, interrupt_input(&node_did))
@@ -147,7 +151,10 @@ async fn interrupt_rebuild_keeps_another_interrupters_latch() {
         .expect("the interrupt settles on the other interrupter's latch");
 
     assert_eq!(commits.load(Ordering::SeqCst), 2);
-    let row = actors.request_row(&doc, "interrupt_requested_at").await;
-    assert_eq!(row["interrupt_requested_at"], OTHER_STAMP);
-    assert_eq!(receipt.interrupt_requested_at.as_deref(), Some(OTHER_STAMP));
+    let row = actors.request_row(&doc, "terminalized_at").await;
+    assert_eq!(row["terminalized_at"], OTHER_STAMP);
+    assert!(
+        receipt.already_interrupted,
+        "the rebuilt interrupt finds it settled"
+    );
 }

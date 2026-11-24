@@ -25,7 +25,7 @@ fn provision_agents(
 }
 
 struct Fixture {
-    _db: gents_inference::test_support::TestDb,
+    _db: gents_store::test_support::TestStore,
     node: Arc<defra_node::Node>,
     access: ConfigAccess,
 }
@@ -61,11 +61,12 @@ impl Fixture {
 async fn a_bound_plugin_slot_counts_and_keeps_serving_after_the_switch() {
     use crate::plugin::model_binding::{AccessModels, ModelBinding, ModelResolver};
     use crate::plugin::store;
-    let (db, _user, access) = gents_inference::test_support::signed_test_node_without_agent(
+    let (db, _user, access) = gents_documents::test_support::SignedHome::start(
         "plugin-profile-switch",
         gents_store::node_extension::Extensions::none(),
     )
-    .await;
+    .await
+    .into_parts();
     let node = db.node.clone();
     let did_owned = db.node_identity.did().to_owned();
     let did = did_owned.as_str();

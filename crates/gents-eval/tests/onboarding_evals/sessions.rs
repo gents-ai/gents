@@ -22,7 +22,7 @@ fn session_investigation_eval_pack_validates_all_splits_and_shipped_checks() {
     .unwrap();
     let definition = &config.eval_definitions[0];
     definition.validate().unwrap();
-    assert_eq!(definition.comparability_version, 9);
+    assert_eq!(definition.comparability_version, 10);
     let registry = CheckRegistry::builtin();
     for split in [EvalSplit::Train, EvalSplit::Validation, EvalSplit::HeldOut] {
         assert!(definition.cases.iter().any(|case| case.split == split));
@@ -82,9 +82,11 @@ fn session_model_fixtures_declare_cross_agent_visibility() {
     assert!(closed_release
         .iter()
         .any(|doc| doc["agent_did"] == "gents:agent-slot:partner"));
-    assert_eq!(
-        count["stages"][0]["checks"][0]["params"]["expect"][0]["equals"],
-        closed_release.len()
+    assert!(
+        count["stages"][0]["checks"][0]["params"]["all"][0]["matches"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("(?:{}|", closed_release.len()))
     );
     for entry in std::fs::read_dir(&root).unwrap() {
         let path = entry.unwrap().path();
@@ -269,5 +271,5 @@ fn transcript_citation_capture_is_scoped_to_the_trial_session() {
         .collect();
     assert_eq!(captures.len(), 1);
     assert_eq!(captures[0]["filter"]["session_id"]["_eq"], "$session");
-    assert_eq!(captures[0]["filter"]["sequence"]["_eq"], 1);
+    assert_eq!(captures[0]["filter"]["sequence"]["_eq"], 2);
 }

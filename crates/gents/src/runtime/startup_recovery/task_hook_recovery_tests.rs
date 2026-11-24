@@ -15,17 +15,18 @@ pub(super) struct Fixture {
     pub(super) node: Arc<defra_node::Node>,
     identity: Arc<dyn NodeIdentity>,
     agent_identity: Arc<dyn NodeIdentity>,
-    _db: crate::support::TestDb,
+    _db: gents_store::test_support::TestStore,
     user: KeyIdentity,
     owner_access: gents_store::config_client::ConfigAccess,
 }
 
 impl Fixture {
     pub(super) async fn new() -> Self {
-        let db = crate::support::test_db("task-hook-recovery").await;
-        let (db, user, owner_access, binding) =
-            crate::test_support::root::signed_test_node_from_db(db, "task-hook-recovery-user")
-                .await;
+        let db = crate::support::trial_store("task-hook-recovery").await;
+        let signed_home =
+            gents_documents::test_support::SignedHome::enroll(db, "task-hook-recovery-user").await;
+        let binding = gents_inference::test_support::default_agent(&signed_home).await;
+        let (db, user, owner_access) = signed_home.into_parts();
         let node = db.node.clone();
         let identity = db.node_identity.clone();
         let agent_identity =
@@ -239,7 +240,6 @@ fn hooks_admitted(task_id: &str, hooks: &[TaskHook]) -> bool {
         prompt_template: "run the task".to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
-        goal_blocked_audit_threshold: None,
         goal_max_infrastructure_retries: None,
         hooks: hooks.to_vec(),
         command: None,

@@ -4,7 +4,7 @@ use bytes::Bytes;
 use futures::{FutureExt, StreamExt};
 use rig::completion::{CompletionRequest, ToolDefinition};
 use rig::http_client;
-use rig::streaming::RawStreamingChoice;
+use rig::streaming::{RawStreamingChoice, ToolCallDeltaContent};
 use serde_json::{json, Value};
 
 use super::*;
@@ -472,7 +472,7 @@ data: {"type":"message_stop"}
     let surface = RapidHashSet::from_iter(["echo".to_string()]);
     let events = parse_messages_sse(sse, &surface).expect("map");
     assert!(matches!(
-        &events[0],
+        &events[1],
         RawStreamingChoice::ToolCall(call) if call.name == "echo" && call.id == "toolu_1"
     ));
 
@@ -498,9 +498,11 @@ fn sse_tool_use_block(id: &str, name: &str, start_input: &str, deltas: &[&str]) 
 }
 
 fn tool_call_arguments(events: &[RawStreamingChoice<StreamEnd>]) -> Value {
-    match &events[0] {
-        RawStreamingChoice::ToolCall(call) => call.arguments.clone(),
-        other => panic!("expected ToolCall first, got {other:?}"),
+    match events {
+        [RawStreamingChoice::ToolCallDelta { .. }, RawStreamingChoice::ToolCall(call), ..] => {
+            call.arguments.clone()
+        }
+        other => panic!("expected the tool's name then its call, got {other:?}"),
     }
 }
 
@@ -573,6 +575,9 @@ fn event_key(event: &RawStreamingChoice<StreamEnd>) -> String {
         RawStreamingChoice::Message(text) => format!("text:{text}"),
         RawStreamingChoice::ToolCall(call) => {
             format!("tool:{}:{}:{}", call.id, call.name, call.arguments)
+        }
+        RawStreamingChoice::ToolCallDelta { id, content, .. } => {
+            format!("tool_delta:{id}:{content:?}")
         }
         RawStreamingChoice::FinalResponse(response) => format!("final:{:?}", response.usage),
         other => format!("{other:?}"),
@@ -828,6 +833,15 @@ fn claude_sse_dispatch_cases_drive_the_stream_state() {
                 name: Some(call.name.clone()),
                 arguments: Some(call.arguments.to_string()),
                 ..base("tool_call")
+            },
+            RawStreamingChoice::ToolCallDelta {
+                id,
+                content: ToolCallDeltaContent::Name(name),
+                ..
+            } => sse::SseEmitted {
+                id: Some(tool_number(id)),
+                name: Some(name.clone()),
+                ..base("tool_name")
             },
             RawStreamingChoice::FinalResponse(_) => base("final"),
             other => panic!("unmodeled stream item {other:?}"),
@@ -1383,7 +1397,7 @@ fn usage_wiring_claude_live_messages_records_unified_headers() {
         .build()
         .expect("runtime")
         .block_on(async {
-            let db = crate::test_support::test_db(
+            let db = gents_store::test_support::TestStore::start(
                 "claude-live-usage",
                 gents_store::node_extension::Extensions::none(),
             )

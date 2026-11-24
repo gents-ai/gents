@@ -186,7 +186,6 @@ async fn process_command_with_clock(
                 .context("goal command native ownership is unavailable")?;
             anyhow::ensure!(owner.as_str() == command.requester_did,
                 "goal command author differs from its native owner");
-            gents_store::graphql::fence_arrivals(txn, "AgentSessionGoalControl").await?;
             let twins = txn.run(&Query::select(Selection::doc_id().field(fields::agent_session_goal_control::COMMAND_ID))
                 .filter(Filter::eq(fields::agent_session_goal_control::NODE_DID, &row.node_did)
                     .and(Filter::eq(fields::agent_session_goal_control::REQUESTER_DID, &row.requester_did)))
@@ -217,8 +216,6 @@ async fn process_command_with_clock(
             let now = clock();
             let issued = DateTime::parse_from_rfc3339(&command.issued_at)?.with_timezone(&Utc);
             if now < issued { return Ok((Some(issued), None)); }
-            gents_store::graphql::fence_arrivals(txn, "AgentSession").await?;
-            gents_store::graphql::fence_arrivals(txn, "Agent").await?;
             let Some(session) = gents_store::config_client::agent_session::load_agent_session_owner_in_txn(txn, &command.node_did, &command.session_id).await? else {
                 return Ok((None, None));
             };

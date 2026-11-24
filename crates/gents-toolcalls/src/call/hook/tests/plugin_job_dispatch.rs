@@ -77,7 +77,7 @@ impl Default for Options {
 }
 
 struct Step0 {
-    db: gents_inference::test_support::TestDb,
+    db: gents_store::test_support::TestStore,
     user: gents_store::identity::KeyIdentity,
     owner: gents_store::config_client::ConfigAccess,
     caller: Arc<dyn NodeIdentity>,
@@ -223,11 +223,13 @@ fn install_plugin(
 /// A hook bound to the job tool `workflow`, whose installed plugin answers
 /// every step 0 with `output`.
 async fn step0(output: Value, options: Options) -> Step0 {
-    let (db, user, owner, caller_binding) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "plugin-job-dispatch",
         gents_session::test_support::no_lifecycle_plugins(),
     )
     .await;
+    let caller_binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, owner) = signed_home.into_parts();
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let caller =
@@ -330,7 +332,7 @@ async fn step0(output: Value, options: Options) -> Step0 {
         "tools_id": format!("{}:tools", caller.did()),
         "node_did": identity.did(),
         "agents": {"enabled": true, "target_ids": ["t-worker"]},
-        "integrations": {"plugins": [{"plugin": "team/plugin", "job": hook.job_tools.get(TOOL).unwrap().settings}]},
+        "integrations": {"plugins": [{"plugin": "team/plugin", "job": hook.tool_bindings().job_tools.get(TOOL).unwrap().settings}]},
     })).unwrap();
     let tools_doc = gents_documents::write_tools_document(
         &owner,
@@ -408,7 +410,7 @@ async fn step0(output: Value, options: Options) -> Step0 {
 }
 
 async fn job_chain(
-    db: &gents_inference::test_support::TestDb,
+    db: &gents_store::test_support::TestStore,
     user: &gents_store::identity::KeyIdentity,
     owner: &gents_store::config_client::ConfigAccess,
     agent: &dyn NodeIdentity,
@@ -786,7 +788,7 @@ async fn pin_under_the_empty_ceiling_is_not_available_with_the_next_call() {
     assert_eq!(answer["code"], "plugin_job_not_available", "{answer}");
     assert_eq!(
         answer["next"],
-        "Next: wire it with config [\"pack\",\"wire\",\"<the pack that ships team/plugin>\"], which writes its `job` block (it needs the pack grant; without it ask the operator to run `gents config pack wire team/plugin --agent <you>`), then start a fresh request"
+        "Next: wire it with config [\"pack\",\"wire\",\"<the pack that ships team/plugin>\"] for its `job` block and call it next turn (needs the pack grant; else ask the operator to run `gents config pack wire team/plugin --agent <you>`, then retry next request)"
     );
     failed(&step.row().await, "serviceUnavailable");
     step.finish().await;
@@ -1149,12 +1151,13 @@ async fn refused_dispatches_name_their_policy_and_next_help() {
                 let args = r#"{"args":{},"agent_budget":2}"#;
                 accept_hook_tool_call(&step.hook, "call-1", TOOL, args, None).await;
                 let row = step.row_of("call-1").await;
+                let bindings = step.hook.tool_bindings();
                 let (input, _) = crate::background::job::input::build_step_input(
                     &step.hook.actor_access().unwrap(),
                     step.hook.job_driver.as_ref().unwrap().runtime(),
                     row["_docID"].as_str().unwrap(),
                     crate::background::job::input::StepKind::Step0 {
-                        binding: step.hook.job_tools.get(TOOL).unwrap(),
+                        binding: bindings.job_tools.get(TOOL).unwrap(),
                     },
                 )
                 .await
@@ -1540,7 +1543,7 @@ fn controlling(entries: &[(&str, &str)]) -> Value {
 
 impl Step0 {
     async fn interrupted(&self, doc_id: &str) -> bool {
-        gents_session::request::interrupt::fetch_interrupt_requested_at_by_doc_id_with_access(
+        gents_session::request::interrupt::request_interrupted_at_by_doc_id_with_access(
             &self.access(),
             doc_id,
         )

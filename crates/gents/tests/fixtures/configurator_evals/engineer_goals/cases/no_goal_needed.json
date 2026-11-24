@@ -20,9 +20,32 @@
   },
   "stages": [
     {
-      "stage_id": "answer",
-      "settle": true,
-      "prompt": "Which file in counts/ has the most crates, and how many? Just answer.",
+      "stage_id": "check",
+      "prompt": "Are we working toward a goal in this conversation right now? Just check.",
+      "checks": [
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "goal",
+            "min": 0,
+            "max": 0
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "any": [
+              {
+                "matches": "(?i)\\bno\\b[^.]{0,30}\\bgoal\\b|\\bnot\\b[^.]{0,40}\\bgoal\\b|\\bnone\\b|\\bnull\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
       "capture": [
         {
           "kind": "documents",
@@ -38,30 +61,18 @@
             "objective",
             "status",
             "token_budget",
+            "tokens_used",
             "completion_evidence",
-            "consecutive_blocked_audits",
-            "last_blocked_reason"
+            "blocked_reason"
           ]
         }
-      ],
+      ]
+    },
+    {
+      "stage_id": "answer",
+      "prompt": "Which file in counts/ has the most crates, and how many?",
+      "settle": true,
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "forbidden": [
-              "write",
-              "bash",
-              "bash_unrestricted",
-              "write_file",
-              "edit_file",
-              "create_goal",
-              "update_goal"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "captured_rows_count",
           "params": {
@@ -86,6 +97,27 @@
           },
           "tier": "acceptance",
           "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "goal",
+          "collection": "Goal",
+          "filter": {
+            "session_id": {
+              "_eq": "$session"
+            }
+          },
+          "fields": [
+            "goal_id",
+            "objective",
+            "status",
+            "token_budget",
+            "tokens_used",
+            "completion_evidence",
+            "blocked_reason"
+          ]
         }
       ]
     }

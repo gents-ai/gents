@@ -283,14 +283,31 @@ where
                 generation: lifecycle.execution_generation()?.to_owned(),
             })
             .map(Arc::new);
-        let tool_context = gents_tools::runtime_context::entered_with_workspace_overlay(
-            &gents_loop::tool::ToolCallEnvelope::default().with_extension(
-                gents_tools::runtime_context::ToolHostContext {
-                    workspace: Default::default(),
-                    interactive: request.execution_origin.as_deref() == Some("interactive"),
-                    approval: approval_context,
-                },
+        let rebinding = match &self.tool_rebinding {
+            Some(source) => Some(Arc::new(super::tool_rebinding::RequestToolRebinding::new(
+                source.clone(),
+                &self.agent_config,
+                self.slot_generation,
+                self.loop_tools.as_slice(),
+                lifecycle.claimed_tool_context()?,
+            ))),
+            None => None,
+        };
+        let enclosing = gents_loop::tool::ToolCallEnvelope::default().with_extension(
+            gents_tools::runtime_context::ToolHostContext {
+                workspace: Default::default(),
+                interactive: request.execution_origin.as_deref() == Some("interactive"),
+                approval: approval_context,
+            },
+        );
+        let enclosing = match &rebinding {
+            Some(rebinding) => enclosing.with_extension(
+                gents_tools::tools_rebinding::RequestToolsRebinding(rebinding.clone()),
             ),
+            None => enclosing,
+        };
+        let tool_context = gents_tools::runtime_context::entered_with_workspace_overlay(
+            &enclosing,
             workspace.clone(),
             gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
                 identity: Some(
@@ -347,6 +364,9 @@ where
                 } = prepared?;
                 let mut loop_config = loop_config;
                 loop_config.tool_context = tool_context.clone();
+                loop_config.tool_rebinding = rebinding
+                    .as_ref()
+                    .map(|rebinding| rebinding.loop_rebinding(persistence_hook.clone()));
                 let loop_tools = gents_loop::tool::bind_request_tools(
                     self.loop_tools.clone(),
                     lifecycle.claimed_tool_context()?,
@@ -703,13 +723,19 @@ pub(super) mod tests {
     async fn held_daemon_fixture(
         name: &str,
     ) -> (
-        crate::support::TestDb,
+        gents_store::test_support::TestStore,
         gents_store::identity::KeyIdentity,
         gents_store::config_client::ConfigAccess,
         Arc<ResolvedAgent>,
     ) {
         use gents_store::config_client::NodePermission;
-        let (db, user, access, binding) = crate::test_support::root::signed_test_node(name).await;
+        let signed_home = gents_documents::test_support::SignedHome::enroll(
+            crate::support::trial_store(name).await,
+            name,
+        )
+        .await;
+        let binding = gents_inference::test_support::default_agent(&signed_home).await;
+        let (db, user, access) = signed_home.into_parts();
         let config = test_agent_with_binding(db.node_identity.clone(), binding);
         let admin = gents_store::config_client::ConfigAccess::local_as(
             db.node.clone(),
@@ -733,7 +759,7 @@ pub(super) mod tests {
     }
 
     fn held_daemon_agent_access(
-        db: &crate::support::TestDb,
+        db: &gents_store::test_support::TestStore,
         config: &ResolvedAgent,
     ) -> gents_store::config_client::ConfigAccess {
         gents_store::config_client::ConfigAccess::local_managed_agent(
@@ -758,7 +784,7 @@ pub(super) mod tests {
     }
 
     async fn create_held_routed_request(
-        db: &crate::support::TestDb,
+        db: &gents_store::test_support::TestStore,
         user: &gents_store::identity::KeyIdentity,
         access: &gents_store::config_client::ConfigAccess,
         agent_config: &ResolvedAgent,
@@ -815,7 +841,7 @@ pub(super) mod tests {
     }
 
     async fn create_enrollment_daemon_request(
-        db: &crate::support::TestDb,
+        db: &gents_store::test_support::TestStore,
         member_access: &gents_store::config_client::ConfigAccess,
         agent_config: &ResolvedAgent,
         member: &dyn NodeIdentity,

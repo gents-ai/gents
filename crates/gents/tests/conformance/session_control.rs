@@ -7,7 +7,7 @@ pub(super) struct SeededSession {
 }
 
 pub(super) async fn seed_agent_session(
-    db: &support::TestDb,
+    db: &gents_store::test_support::TestStore,
     fixture: &support::ManagedAgentFixture,
     session_id: &str,
     created_at: &str,
@@ -51,6 +51,7 @@ pub(super) async fn seed_agent_session(
             let session_doc = gents_store::graphql::created_doc_id(&response,"AgentSession")?;
             txn.add_resource_relationship("AgentSession", &session_doc, "parent", "agents", agent_doc).await?;
             txn.add_actor_relationship("AgentSession", &session_doc, "working_agent", &fixture.agent.did().parse()?).await?;
+            gents_session::session::interrupt_marker::create_in_txn(txn, &session_doc, db.node_identity.did(), session_id).await?;
             Ok::<_,anyhow::Error>(session_doc)
         })
     }).await.unwrap();
@@ -62,7 +63,7 @@ pub(super) async fn seed_agent_session(
 }
 
 pub(super) async fn seed_agent_request(
-    db: &support::TestDb,
+    db: &gents_store::test_support::TestStore,
     fixture: &support::ManagedAgentFixture,
     session: &SeededSession,
     session_id: &str,
@@ -152,7 +153,7 @@ async fn load_goal(
 
 #[tokio::test]
 async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume() {
-    let db = support::test_db("session-control-generated").await;
+    let db = support::trial_store("session-control-generated").await;
     let fixture = support::managed_agent_fixture(&db).await;
     let node_did = db.node_identity.did();
 
@@ -352,7 +353,7 @@ async fn generated_resume_after_settlement_stages_the_paused_goal_continuation()
         gents_lean_vocab::families::session_control_contracts_resume_after_settlement::cases()
     {
         assert_eq!(resume_case.input.name, "resume_after_settlement");
-        let db = support::test_db("session-control-resume").await;
+        let db = support::trial_store("session-control-resume").await;
         let fixture = support::managed_agent_fixture(&db).await;
         let node_did = db.node_identity.did();
         let session_id = uuid::Uuid::new_v4().to_string();

@@ -169,6 +169,113 @@ mod tests {
         assert_eq!(json["policy"]["report"]["decision"]["decision"], "reject");
     }
 
+    fn spent(input: u64, first: u64) -> gents::eval::SubjectUsage {
+        gents::eval::SubjectUsage {
+            requests: 1,
+            first_request: Some(gents::eval::FirstRequest {
+                prompt_tokens: Some(first),
+                estimate: None,
+                first_token_ms: Some(input / 2),
+            }),
+            turns: gents::eval::CallTotals {
+                calls: input / 100,
+                input_tokens: Some(input),
+                output_tokens: Some(input / 10),
+                ..Default::default()
+            },
+            tool_calls: gents::eval::ToolCallSplit {
+                script: gents::eval::ToolCount {
+                    calls: 1,
+                    failed: 0,
+                },
+                inside_script: gents::eval::ToolCount {
+                    calls: 2,
+                    failed: 1,
+                },
+                ..Default::default()
+            },
+            wall_ms: Some(input * 10),
+            median_first_token_ms: Some(input / 4),
+            ..Default::default()
+        }
+    }
+
+    fn passed_spending(input: u64, first: u64) -> gents_eval::runner::TrialEvidence {
+        let mut evidence = super::super::testing::pass();
+        evidence.subject_usage = Some(spent(input, first));
+        evidence
+    }
+
+    #[tokio::test]
+    async fn show_trial_and_compare_print_the_subjects_own_work() {
+        use super::super::testing::TRIALS;
+        use gents_eval::runner::ScriptKey;
+        let mut executor =
+            gents_eval::runner::ScriptedExecutor::new().with_default(passed_spending(1_000, 900));
+        for case_id in VALIDATION_CASES {
+            for trial_index in 0..TRIALS {
+                executor = executor.with(
+                    ScriptKey {
+                        cell_label: "candidate".into(),
+                        case_id: case_id.into(),
+                        trial_index,
+                        attempt: 1,
+                    },
+                    passed_spending(600, 500),
+                );
+            }
+        }
+        let fixture = Fixture::new().await;
+        fixture
+            .scripted_run("r1", &executor, CancellationToken::new())
+            .await;
+
+        let shown = eval(&fixture, &["show", "r1"]).await.unwrap();
+        assert_eq!(
+            row(&shown, "baseline", 13),
+            vec![
+                "baseline", "evidence", "12", "900", "-", "1000", "100", "10", "0/1/2", "0/0/1",
+                "10.0s", "500ms", "250ms"
+            ],
+            "no trial recorded a first-request estimate: {shown}"
+        );
+        let trial = eval(&fixture, &["trial", "r1", "candidate", "val-a"])
+            .await
+            .unwrap();
+        for expected in [
+            "subject requests 1 turns 6 tokens 600/60 cached - unreported 0 compaction 0 tokens -/-",
+            "subject first_request prompt_tokens 500 estimate -",
+            "subject tools direct 0 (0 failed) script 1 (0 failed) inside_script 2 (1 failed)",
+            "subject wall 6.0s model - tool -",
+            "subject first_token first_request 300ms median 150ms",
+        ] {
+            assert!(trial.lines().any(|line| line == expected), "{expected:?} in\n{trial}");
+        }
+
+        let mut argv = vec!["compare", "r1", "r1"];
+        argv.extend(CELLS);
+        let compared = eval(&fixture, &argv).await.unwrap();
+        assert_eq!(
+            row(&compared, "input_tokens", 6),
+            vec!["input_tokens", "1000", "600", "-400", "12", "-400"]
+        );
+        assert_eq!(
+            row(&compared, "median_first_token_ms", 6),
+            vec!["median_first_token_ms", "250", "150", "-100", "12", "-100"]
+        );
+        assert_eq!(
+            row(&compared, "first_request_tool_schema_estimate", 6),
+            vec![
+                "first_request_tool_schema_estimate",
+                "-",
+                "-",
+                "-",
+                "0",
+                "-"
+            ]
+        );
+    }
+
     #[tokio::test]
     async fn compare_needs_a_cell_for_a_run_with_several_and_reads_a_policy_file() {
         let fixture = Fixture::new().await;

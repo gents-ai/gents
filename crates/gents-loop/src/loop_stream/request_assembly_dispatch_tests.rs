@@ -48,6 +48,7 @@ fn claude_config_without_compactor(
         structured_output: None,
         tool_choice: None,
         configuration_guard: None,
+        tool_rebinding: None,
         on_rendered_request: None,
         turn_compactor: None,
         active_reduction_keys: Vec::new(),

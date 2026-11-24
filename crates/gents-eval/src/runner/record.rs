@@ -107,11 +107,12 @@ mod tests {
 
     #[tokio::test]
     async fn thirty_two_trials_record_over_http_without_losing_completions_or_verdicts() {
-        let (db, _user, access) = gents_inference::test_support::signed_test_node_without_agent(
+        let (db, _user, access) = gents_documents::test_support::SignedHome::start(
             "thirty-two-trials-record-over-http",
             gents_automation::lifecycle_hooks::composition(),
         )
-        .await;
+        .await
+        .into_parts();
         let owner = db.node_identity.did();
         let recorder = DocumentRecorder::new(&access);
         let completion = TrialCompletion {
@@ -124,6 +125,7 @@ mod tests {
                 inference_calls: 0,
             },
             evidence_digest: None,
+            subject_usage: None,
         };
         stream::iter(0..32u32)
             .map(|i| {

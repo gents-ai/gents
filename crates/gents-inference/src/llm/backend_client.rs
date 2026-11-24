@@ -528,7 +528,7 @@ mod tests {
     }
 
     pub(super) fn held_test_agent(
-        db: &crate::test_support::TestDb,
+        db: &gents_store::test_support::TestStore,
         binding: &gents_protocol::agent_identity::AgentIdentityBinding,
         kind: BackendProviderKind,
         wire_api: gents_loop::openai_wire::OpenAiWireApi,
@@ -740,11 +740,12 @@ mod tests {
 
     #[tokio::test]
     async fn backend_account_reference_builds_with_its_own_account() {
-        let (db, _user, _access, binding) = crate::test_support::signed_test_node(
+        let db = gents_documents::test_support::SignedHome::start(
             "backend-client",
             gents_store::node_extension::Extensions::none(),
         )
         .await;
+        let binding = crate::test_support::default_agent(&db).await;
         let node = db.node.clone();
         for (kind, wire, provider) in [
             (
@@ -811,11 +812,12 @@ mod tests {
 
     #[tokio::test]
     async fn two_profiles_on_two_accounts_are_served_by_their_own() {
-        let (db, _user, _access, binding) = crate::test_support::signed_test_node(
+        let db = gents_documents::test_support::SignedHome::start(
             "backend-client",
             gents_store::node_extension::Extensions::none(),
         )
         .await;
+        let binding = crate::test_support::default_agent(&db).await;
         let node = db.node.clone();
         for (kind, wire, provider) in [
             (
@@ -866,11 +868,12 @@ mod tests {
 
     #[tokio::test]
     async fn backend_account_reference_never_falls_back_to_the_original_account() {
-        let (db, _user, _access, binding) = crate::test_support::signed_test_node(
+        let db = gents_documents::test_support::SignedHome::start(
             "backend-client",
             gents_store::node_extension::Extensions::none(),
         )
         .await;
+        let binding = crate::test_support::default_agent(&db).await;
         let node = db.node.clone();
         let mut codex = held_test_agent(
             &db,
@@ -907,11 +910,12 @@ mod tests {
 
     #[tokio::test]
     async fn each_oauth_provider_kind_yields_the_expected_client_variant() {
-        let (db, _user, _access, binding) = crate::test_support::signed_test_node(
+        let db = gents_documents::test_support::SignedHome::start(
             "backend-client",
             gents_store::node_extension::Extensions::none(),
         )
         .await;
+        let binding = crate::test_support::default_agent(&db).await;
         let node = db.node.clone();
 
         let codex = held_test_agent(
@@ -1028,11 +1032,12 @@ mod tests {
 
     #[tokio::test]
     async fn a_signed_in_gateway_builds_from_its_stored_account() {
-        let (db, _user, _access, binding) = crate::test_support::signed_test_node(
+        let db = gents_documents::test_support::SignedHome::start(
             "backend-client",
             gents_store::node_extension::Extensions::none(),
         )
         .await;
+        let binding = crate::test_support::default_agent(&db).await;
         let node = db.node.clone();
         let mut gateway = held_test_agent(
             &db,

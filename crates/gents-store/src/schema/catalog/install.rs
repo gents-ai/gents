@@ -77,14 +77,36 @@ async fn register_baseline(
     catalog: &Catalog<'_>,
     ids: &HomePolicyIds,
 ) -> Result<usize> {
+    let mut shared = Vec::new();
     let mut missing = Vec::new();
     for entry in catalog.baseline {
-        if node.get_collection(entry.name)?.is_none() {
+        let active = node.get_collection(entry.name)?;
+        if let Some(resource) = super::shared_transport::resource(ids, entry.name) {
+            let proof = super::shared_transport::verify(node, entry, resource).await?;
+            match active {
+                None => shared.push((entry, proof)),
+                Some(collection) if collection.collection_id == proof.child => {}
+                Some(_) => {
+                    return Err(SchemaError::SharedTransportAdmission {
+                        collection: entry.name.to_owned(),
+                    })
+                }
+            }
+        } else if active.is_none() {
             missing.push(entry);
         }
     }
+    let registered = shared.len() + missing.len();
+    for (entry, proof) in shared {
+        node.restore_shared_transport_collection_as(
+            &super::node_context(node),
+            &ids.render(entry.sdl),
+            proof,
+        )
+        .await?;
+    }
     if missing.is_empty() {
-        return Ok(0);
+        return Ok(registered);
     }
     let batch = ids.render(
         &missing
@@ -107,7 +129,7 @@ async fn register_baseline(
         collections = missing.len(),
         "baseline schemas registered in one batch"
     );
-    Ok(missing.len())
+    Ok(registered)
 }
 
 /// Branchable reads fall back to a collection ACP object when a document has
@@ -125,6 +147,7 @@ async fn register_branchable_identity_collection_owners(
         .filter(|(name, _)| {
             gents_protocol::schemas::is_replicated_protocol_collection(name)
                 && catalog.manages(name)
+                && super::shared_transport::resource(ids, name).is_none()
         })
         .collect();
     if owned.is_empty() {
@@ -186,6 +209,14 @@ async fn register_file_image_owner(
                     collection: (*name).into(),
                 })?;
         validate_file_image_policy(&collection, *branchable, ids)?;
+        // Vera checks the document itself for a non-branchable read. Registering
+        // the schema ID would claim the same object on every device.
+        if !collection.is_branchable
+            && crate::local::document_acp::provider_of(node)
+                == crate::local::document_acp::DocumentAcp::Vera
+        {
+            continue;
+        }
         let acp = node.document_acp();
         let policy = ids.id(BuiltInPolicy::ToolFileChange);
         let resource = gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_RESOURCE;

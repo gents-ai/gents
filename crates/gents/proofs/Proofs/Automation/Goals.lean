@@ -39,17 +39,16 @@ theorem fromDefraDB_toDefraDB (status : Status) :
 
 end Status
 
+/-- A Goal's durable state. `blocked` and `budgetLimited` are pauses that
+await the Goal's user: `blocked` after the working Agent reports it cannot go
+on (or a person blocks it), `budgetLimited` after its token budget is
+reached. The status is the reason the Goal paused; no separate reason field
+restates it. The Agent's blocked reason is kept on the Goal for the user to
+read and is never an input to a decision here. -/
 structure State where
   status : Status
-  blockedAudits : Nat
   wrapupRequested : Bool
   wrapupCompleted : Bool
-  deriving DecidableEq, Repr
-
-inductive AuditObservation where
-  | sameRequest
-  | sameCondition
-  | newCondition
   deriving DecidableEq, Repr
 
 inductive Action where
@@ -60,19 +59,15 @@ inductive Action where
   cancellation authority. Historical goal state and accounting remain durable. -/
   | stop
   | complete
-  | blockedAudit (observation : AuditObservation)
-  | operatorBlock
+  /-- One blocked report: the working Agent's `update_goal` with status
+  `blocked`, or a person's block. It carries no reason text, so how a reason
+  is worded cannot change what happens. -/
+  | block
   | usageLimit
   | budgetExhausted
   | wrapupFinished
   | wrapupAbandoned
-  | cleanTurn
   deriving DecidableEq, Repr
-
-/-- Consecutive same-condition blocked audits that block an active Goal when its
-Task declares no threshold. A Goal pins the threshold it was created with, so a
-later Task edit never changes the limit of a running Goal. -/
-def blockedAuditThreshold : Nat := 3
 
 /-- Automatic re-prompt requests after a Failed or Dead terminal when the Goal's
 Task declares no limit. Goal infrastructure retries create new requests and have
@@ -81,13 +76,24 @@ unattended Goal from repeatedly consuming resources when the underlying failure
 persists. A Goal pins the limit it was created with. -/
 def maxInfrastructureRetries : Nat := 2
 
-def nextBlockedAudits (current : Nat) : AuditObservation → Nat
-  | .sameRequest => current
-  | .sameCondition => current + 1
-  | .newCondition => 1
+/-- A Goal's budget is reached when its charged tokens (`chargedTokens`: prompt
+tokens not read from cache, plus output) reach its token budget. A Goal's
+budget is exactly the one set for it: by the person who creates or edits it,
+by the Task that fires it, or by the Agent for its own Goal. No budget is
+supplied by default (owner's decision), so a Goal with no budget, never set or
+lifted, has no token ceiling. Goal usage counts the Goal session's normal and
+access-review requests and excludes title work, so this reads only what goal
+usage already counts. -/
+def budgetReached (tokenBudget : Option Nat) (tokensUsed : Nat) : Bool :=
+  tokenBudget.any (· ≤ tokensUsed)
 
-def step? (state : State) (action : Action)
-    (threshold : Nat := blockedAuditThreshold) : Option State :=
+theorem unset_budget_is_never_reached (tokensUsed : Nat) :
+    budgetReached none tokensUsed = false := rfl
+
+theorem set_budget_is_reached_exactly_at_it (budget tokensUsed : Nat) :
+    budgetReached (some budget) tokensUsed = decide (budget ≤ tokensUsed) := rfl
+
+def step? (state : State) (action : Action) : Option State :=
   match action with
   | .pause =>
       if state.status = .active ∨ state.status = .budgetLimited then
@@ -95,11 +101,12 @@ def step? (state : State) (action : Action)
       else none
   | .resume =>
       if state.status = .paused ∨ state.status = .blocked ∨
-          state.status = .usageLimited then
-        some { state with
-          status := if state.wrapupRequested ∧ !state.wrapupCompleted
-            then .budgetLimited else .active
-          blockedAudits := 0 }
+          state.status = .usageLimited ∨
+          (state.status = .budgetLimited ∧ state.wrapupCompleted) then
+        let owed := state.wrapupRequested && !state.wrapupCompleted
+        some { status := if owed then .budgetLimited else .active
+               wrapupRequested := owed
+               wrapupCompleted := false }
       else none
   | .complete =>
       if state.status = .complete ∨ state.status = .stopped then none
@@ -107,14 +114,7 @@ def step? (state : State) (action : Action)
   | .stop =>
       if state.status = .complete ∨ state.status = .stopped then none
       else some { state with status := .stopped }
-  | .blockedAudit observation =>
-      if state.status = .active then
-        let audits := nextBlockedAudits state.blockedAudits observation
-        some { state with
-          status := if audits ≥ threshold then .blocked else .active
-          blockedAudits := audits }
-      else none
-  | .operatorBlock =>
+  | .block =>
       if state.status = .active then
         some { state with status := .blocked }
       else none
@@ -136,21 +136,17 @@ def step? (state : State) (action : Action)
           !state.wrapupCompleted then
         some { state with wrapupCompleted := true }
       else none
-  | .cleanTurn =>
-      if state.status = .active then
-        some { state with blockedAudits := 0 }
-      else none
 
 theorem stop_preserves_history (state post : State)
     (h : step? state .stop = some post) :
-    post.status = .stopped ∧ post.blockedAudits = state.blockedAudits ∧
+    post.status = .stopped ∧
       post.wrapupRequested = state.wrapupRequested ∧
       post.wrapupCompleted = state.wrapupCompleted := by
   simp only [step?] at h
   split at h
   · contradiction
   · cases h
-    exact ⟨rfl, rfl, rfl, rfl⟩
+    exact ⟨rfl, rfl, rfl⟩
 
 theorem stopped_rejects_later_transitions (state : State) (action : Action)
     (h : state.status = .stopped) : step? state action = none := by
@@ -168,44 +164,37 @@ theorem pause_resume_preserves_pending_wrapup (state paused resumed : State)
   · cases h_pause
     simp [h_requested, h_incomplete] at h_resume
     cases h_resume
-    simp [h_requested, h_incomplete]
+    simp
   · simp at h_pause
 
-theorem blocked_requires_threshold_audits
-    (state post : State) (observation : AuditObservation) (threshold : Nat)
-    (h : step? state (.blockedAudit observation) threshold = some post)
-    (hblocked : post.status = .blocked) :
-    post.blockedAudits ≥ threshold := by
-  simp only [step?] at h
-  split at h
-  · cases h
-    simp only
-    split at hblocked
-    · omega
-    · simp at hblocked
-  · simp at h
+/-- One blocked report pauses an active Goal awaiting its user. -/
+theorem one_blocked_report_blocks (state : State) (h : state.status = .active) :
+    (step? state .block).map (·.status) = some .blocked := by
+  simp [step?, h]
 
-theorem blocked_requires_three_audits
-    (state post : State) (observation : AuditObservation)
-    (h : step? state (.blockedAudit observation) = some post)
-    (hblocked : post.status = .blocked) :
-    post.blockedAudits ≥ 3 :=
-  blocked_requires_threshold_audits state post observation blockedAuditThreshold h hblocked
+/-- A paused Goal is never prevented from stopping: every Goal that has not
+ended can be stopped, whatever paused it. -/
+theorem pause_never_prevents_stop (state : State)
+    (h : state.status ≠ .complete ∧ state.status ≠ .stopped) :
+    (step? state .stop).isSome := by
+  simp [step?, h.1, h.2]
 
-theorem blocked_audit_below_threshold_stays_active
-    (state post : State) (observation : AuditObservation) (threshold : Nat)
-    (h : step? state (.blockedAudit observation) threshold = some post)
-    (hbelow : post.blockedAudits < threshold) :
-    post.status = .active := by
-  simp only [step?] at h
-  split at h
-  · cases h
-    change nextBlockedAudits state.blockedAudits observation < threshold at hbelow
-    simp only
-    split <;> rename_i hthreshold
-    · exact False.elim ((Nat.not_lt_of_ge hthreshold) hbelow)
-    · rfl
-  · simp at h
+/-- Only a resume takes a blocked Goal back to work; a resume is a user's
+action (their next message, or the resume operation), and the runtime's
+continuation decision (`decide`) never asks for one. -/
+theorem only_resume_leaves_blocked_for_work (state post : State) (action : Action)
+    (hblocked : state.status = .blocked) (h : step? state action = some post)
+    (hwork : post.status = .active ∨ post.status = .budgetLimited) :
+    action = .resume := by
+  cases action with
+  | resume => rfl
+  | stop | complete =>
+      simp only [step?] at h
+      split at h
+      · simp at h
+      · cases h
+        simp at hwork
+  | _ => simp [step?, hblocked] at h
 
 theorem budget_transition_sets_wrapup_latch
     (state post : State)
@@ -217,37 +206,38 @@ theorem budget_transition_sets_wrapup_latch
     simp_all
   · simp at h
 
-theorem resume_resets_blocked_audits
-    (state post : State)
+/-- Resuming a Goal whose wrap-up finished starts a fresh budget run: the
+latch is cleared, so reaching the budget again owes one more wrap-up. -/
+theorem resume_after_wrapup_clears_the_latch (state post : State)
+    (hcompleted : state.wrapupCompleted = true)
     (h : step? state .resume = some post) :
-    post.status =
-      (if state.wrapupRequested ∧ !state.wrapupCompleted
-        then .budgetLimited else .active) ∧ post.blockedAudits = 0 := by
+    post.status = .active ∧ post.wrapupRequested = false ∧ post.wrapupCompleted = false := by
   simp only [step?] at h
   split at h
   · cases h
-    simp
+    simp [hcompleted]
   · simp at h
 
-theorem same_request_does_not_increment
-    (state post : State)
-    (h : step? state (.blockedAudit .sameRequest) = some post) :
-    post.blockedAudits = state.blockedAudits := by
-  simp only [step?] at h
+/-- A user's message into a blocked Goal's session answers the block: the
+Goal resumes and the message's turn is the Goal's next turn. A user's message
+is a request admitted from a client that nothing caused (no trigger, parent
+request or parent tool call), so an Agent's session message does not resume
+it. A Goal paused
+for any other reason waits for its own resume: a halt's pause for the session
+resume, a budget pause for the budget to be raised or lifted. -/
+def resumeOnMessage (state : State) : Option State :=
+  if state.status = .blocked then step? state .resume else none
+
+theorem message_resumes_only_blocked (state post : State)
+    (h : resumeOnMessage state = some post) : state.status = .blocked := by
+  unfold resumeOnMessage at h
   split at h
-  · cases h
-    rfl
+  · assumption
   · simp at h
 
-theorem clean_turn_resets_blocked_audits
-    (state post : State)
-    (h : step? state .cleanTurn = some post) :
-    post.status = .active ∧ post.blockedAudits = 0 := by
-  simp only [step?] at h
-  split at h
-  · cases h
-    simp_all
-  · simp at h
+theorem message_resumes_blocked (state : State) (h : state.status = .blocked) :
+    (resumeOnMessage state).isSome := by
+  simp [resumeOnMessage, step?, h]
 
 inductive RequestTerminal where
   | completed
@@ -334,6 +324,30 @@ theorem inactive_goal_never_continues
     decide status terminal idle child budget activity wrapup retries requested completed maxRetries = .none := by
   rcases hinactive with ⟨ha, hb⟩
   cases status <;> simp_all [decide]
+
+/-- After one blocked report the Goal issues no continuation turn, whatever
+its last request's terminal and however the session stands. -/
+theorem blocked_report_stops_continuation (state post : State)
+    (h : step? state .block = some post) (terminal : RequestTerminal)
+    (idle child budget activity wrapup : Bool) (retries maxRetries : Nat) :
+    decide post.status terminal idle child budget activity wrapup retries
+      post.wrapupRequested post.wrapupCompleted maxRetries = .none := by
+  simp only [step?] at h
+  split at h
+  · cases h
+    cases idle <;> cases child <;> simp [decide]
+  · simp at h
+
+/-- A Goal whose budget is reached is never continued: its last turn over the
+budget is followed at most by the one wrap-up turn (and that turn's bounded
+infrastructure retries), never by ordinary work. -/
+theorem over_budget_never_continues (status : Status) (terminal : RequestTerminal)
+    (idle child activity wrapup : Bool) (retries maxRetries : Nat) (requested completed : Bool) :
+    decide status terminal idle child true activity wrapup retries requested completed
+      maxRetries ≠ .continue := by
+  unfold decide
+  repeat' split
+  all_goals simp_all
 
 theorem completed_wrapup_is_one_shot
     (terminal : RequestTerminal) (activity : Bool) (retries maxRetries : Nat) :

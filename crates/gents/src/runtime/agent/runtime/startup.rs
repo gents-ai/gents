@@ -464,6 +464,7 @@ async fn run_agent_owned(
         };
     }
     let (active_snapshot_tx, active_snapshot_rx) = watch::channel(initial_active_snapshot.clone());
+    runtime.active_snapshots.bind(active_snapshot_rx.clone());
     runtime.job_driver.runtime().bind_snapshot(
         gents_automation::triggers::runtime_snapshot::ActiveSnapshotAgentIdentities::boxed(
             active_snapshot_rx.clone(),
@@ -472,7 +473,7 @@ async fn run_agent_owned(
     let (reconcile_tx, reconcile_rx) = mpsc::channel(8);
     let _reconcile_tx_guard = reconcile_tx.clone();
     let (health_checker, backend_prober, backend_health_events_rx) =
-        tasks::spawn_health_probes(&agent, &health_map, &cancel);
+        tasks::spawn_health_probes(&agent, &health_map, &admission_registry, &cancel);
 
     let startup_tasks = StartupTasks {
         agent: &agent,

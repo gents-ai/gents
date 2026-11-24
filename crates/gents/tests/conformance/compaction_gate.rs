@@ -5,8 +5,8 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 use super::support::agent_requests::{canonical_now, RequestActors, RequestSeed};
 use super::support::interrupt::{managed_runtime_builder, spawn_runtime, BootedAgent};
-use super::support::streaming_backend::{
-    MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse,
+use gents_inference::test_support::scripted_backend::{
+    ScriptedBackend, StreamChunk, StreamPlan, StreamResponse,
 };
 
 const MODEL: &str = "default";
@@ -17,7 +17,7 @@ const SEEDED_TURNS: usize = 12;
 const SEEDED_TURN_BYTES: usize = 10_000;
 
 pub(super) async fn compaction_runtime_reduces_valid_canonical_history() {
-    let db = test_db("compaction-gate").await;
+    let db = trial_store("compaction-gate").await;
     let compaction_marker = gents_loop::compaction::summary::compaction_request_prompt();
     let checkpoint =
         serde_json::to_string(&gents_loop::compaction::summary::ContinuationCheckpoint {
@@ -27,7 +27,7 @@ pub(super) async fn compaction_runtime_reduces_valid_canonical_history() {
             ..Default::default()
         })
         .expect("serialize canonical checkpoint");
-    let backend = MockStreamingBackend::start_with_plans(
+    let backend = ScriptedBackend::start_with_plans(
         MODEL,
         vec![
             StreamPlan::current_authored_user(
@@ -152,7 +152,11 @@ async fn seed_bulky_history(actors: &RequestActors, session_id: &str) {
     }
 }
 
-async fn boot_agent(db: &support::TestDb, actors: &RequestActors, endpoint: &str) -> BootedAgent {
+async fn boot_agent(
+    db: &gents_store::test_support::TestStore,
+    actors: &RequestActors,
+    endpoint: &str,
+) -> BootedAgent {
     support::fixtures::bind_managed_agent_backend(db, &actors.fixture, BACKEND_ID, endpoint, MODEL)
         .await;
     let runtime = managed_runtime_builder(db, actors.agent_did())

@@ -308,6 +308,7 @@ pub fn configuration_replacement_patch(
             object.remove(&field.name);
         }
     }
+    object.retain(|name, value| current.get(name) != Some(value));
     Ok(patch)
 }
 

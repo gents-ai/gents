@@ -21,9 +21,12 @@ use serde_json::{json, Value};
 
 #[cfg(feature = "live-e2e")]
 use crate::support::live_inference::{live_target, InferenceTarget};
-use crate::support::streaming_backend::{MockStreamingBackend, StreamPlan, StreamResponse};
-use crate::support::{interrupt::BootedAgent, test_db, TestDb};
+use crate::support::{interrupt::BootedAgent, trial_store};
+use gents_inference::test_support::scripted_backend::{
+    ScriptedBackend, StreamPlan, StreamResponse,
+};
 use gents_store::test_support::snapshot_reader::SnapshotReader;
+use gents_store::test_support::TestStore;
 use gents_store::test_support::STALL_CEILING;
 
 #[cfg(feature = "live-e2e")]
@@ -44,7 +47,7 @@ enum InferenceSource<'a> {
 }
 
 struct Cycle {
-    db: TestDb,
+    db: TestStore,
     user: gents_store::identity::KeyIdentity,
     access: ConfigAccess,
     owner: String,
@@ -53,7 +56,7 @@ struct Cycle {
 
 impl Cycle {
     async fn install(name: &str, inference: InferenceSource<'_>, root: &Path, repo: &Path) -> Self {
-        let db = test_db(name).await;
+        let db = trial_store(name).await;
         let owner = db.node_identity.did().to_owned();
         let user = crate::support::managed_fixture_user(&db).await;
         crate::support::grant_household_owner(&db, &user).await;
@@ -103,7 +106,7 @@ impl Cycle {
             self.db.node.clone(),
             self.db.node_identity.clone(),
             DocumentRuntimeOptions {
-                backend_admission: Some(self.db.home.backend_admission()),
+                backend_admission: Some(self.db.backend_admission()),
                 tool_ceiling: ToolCeiling::readwrite(root),
                 ..Default::default()
             },
@@ -127,7 +130,7 @@ async fn boot_cycle(cycle: &Cycle, root: &Path) -> BootedAgent {
         r#"{{ NodeReadiness(filter: {{node_did: {{_eq: "{}"}}}}) {{node_did snapshot_json updated_at}} }}"#,
         escape_graphql_string(&cycle.owner),
     );
-    crate::support::live_inference::rows_when(&cycle.access, "NodeReadiness", &query, |data| {
+    gents_store::test_support::rows_when(&cycle.access, "NodeReadiness", &query, |data| {
         let row = data["NodeReadiness"]
             .as_array()
             .and_then(|rows| rows.first())
@@ -740,7 +743,7 @@ const SCRIPTED_STAGE_FAILURE: &str = "scripted failure for the change-unit super
 /// One plan per stage prompt: the ReadWrite failure stage reaches the provider only on a
 /// host that enforces the WorkspaceWrite sandbox, so a shared response queue would hand
 /// its scripted failure to the supervisor inbox elsewhere.
-fn failure_inbox_backend() -> MockStreamingBackend {
+fn failure_inbox_backend() -> ScriptedBackend {
     let stage = StreamPlan::current_authored_user(
         "Test failure stage for change-unit:cycle-inbox",
         vec![StreamResponse::bad_request(SCRIPTED_STAGE_FAILURE)],
@@ -752,7 +755,7 @@ fn failure_inbox_backend() -> MockStreamingBackend {
             ["The failed stage reached the supervisor session."],
         )],
     );
-    MockStreamingBackend::start_with_plans(MODEL, vec![stage, inbox]).expect("mock provider starts")
+    ScriptedBackend::start_with_plans(MODEL, vec![stage, inbox]).expect("mock provider starts")
 }
 
 async fn install_inference(access: &ConfigAccess, owner: &str, source: InferenceSource<'_>) {
@@ -1381,7 +1384,7 @@ async fn wait_request_completed(access: &ConfigAccess, request_id: &str) {
         "{{ AgentRequest(filter: {{ request_id: {{ _eq: \"{}\" }} }}) {{ request_id lifecycle_state failure_reason }} }}",
         escape_graphql_string(request_id)
     );
-    let rows = crate::support::live_inference::rows_when(access, "AgentRequest", &query, |data| {
+    let rows = gents_store::test_support::rows_when(access, "AgentRequest", &query, |data| {
         gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal_str(
             data["AgentRequest"][0]["lifecycle_state"].as_str(),
         )

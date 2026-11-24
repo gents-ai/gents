@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use super::super::args::EditFileArgs;
 use super::super::edit_match::{self, EditOutcome, EditRequest, MatchMode, Operation};
-use super::super::shared::{ToolContext, ToolError};
+use super::super::shared::{on_blocking, ToolContext, ToolError};
 use super::{
     deny_workspace_file_writes, file_mutation_lock_for, merge_optional_notes, render_tool_output,
 };
@@ -110,7 +110,7 @@ impl Tool for EditFileTool {
         if !args.dry_run {
             deny_workspace_file_writes(call)?;
         }
-        let path = context.resolve_existing_file(&args.path)?;
+        let path = context.locate_existing_file(&args.path)?.path();
         let consent = if args.dry_run {
             None
         } else {
@@ -134,7 +134,15 @@ impl Tool for EditFileTool {
                 ToolError::reported_failure(FailureClass::PolicyDenied, format!("{error:#}"))
             })?;
         }
-        let raw = tokio::fs::read(&path).await?;
+        let target = context.locate_existing_file(&args.path)?;
+        if target.path() != path {
+            return Err(anyhow!(
+                "{display} changed while it was being opened; repeat the call to resolve it again"
+            )
+            .into());
+        }
+        let reading = target.clone();
+        let raw = on_blocking(move || reading.read()).await?;
         let pre_edit_hash = content_hash(&raw);
 
         if let Some(expected) = &args.expected_content_hash {
@@ -198,11 +206,13 @@ impl Tool for EditFileTool {
                 let post_edit_hash = content_hash(post_text.as_bytes());
                 let mut edit_note = None;
                 if !args.dry_run {
-                    let capture =
-                        change_capture::FileChangeCapture::start(call, &context.root(), &path).await;
+                    let capture = change_capture::FileChangeCapture::start(call, &target).await;
                     let mutation = async {
-                        tokio::fs::write(&path, post_text.as_bytes()).await?;
-                        let verify = tokio::fs::read(&path).await?;
+                        let writing = target.clone();
+                        let content = post_text.clone().into_bytes();
+                        on_blocking(move || writing.write(&content)).await?;
+                        let reading = target.clone();
+                        let verify = on_blocking(move || reading.read()).await?;
                         if verify != post_text.as_bytes() {
                             return Err(anyhow!(
                                 "post-write verification failed for {display}: the bytes on disk do not match the edited content"

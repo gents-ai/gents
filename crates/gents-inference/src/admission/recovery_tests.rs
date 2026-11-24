@@ -32,7 +32,7 @@ async fn agent_query(
 async fn fixture(
     initial_state: &str,
 ) -> (
-    crate::test_support::TestDb,
+    gents_store::test_support::TestStore,
     gents_store::identity::ManagedAgentSigner,
     StaleInferenceCallRow,
 ) {
@@ -271,6 +271,7 @@ async fn physical_call_updates_preserve_identity_and_state_predicates() {
         None,
         None,
         CachedInputTokensObservation::NotAvailable,
+        None,
     )
     .await
     .is_err());
@@ -287,6 +288,7 @@ async fn physical_call_updates_preserve_identity_and_state_predicates() {
         None,
         None,
         CachedInputTokensObservation::NotAvailable,
+        None,
     )
     .await
     .unwrap();
@@ -299,6 +301,7 @@ async fn physical_call_updates_preserve_identity_and_state_predicates() {
         None,
         None,
         CachedInputTokensObservation::NotAvailable,
+        None,
     )
     .await
     .unwrap();

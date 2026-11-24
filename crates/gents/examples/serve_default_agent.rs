@@ -25,8 +25,8 @@ async fn main() -> Result<()> {
         EmbeddedHome::create_retained(&home_dir).await?
     };
     let node = home.node.clone();
-    let identity = home.identity.clone();
-    let graphql = home.graphql_endpoint().unwrap_or_default().to_owned();
+    let identity = home.node_identity.clone();
+    let graphql = home.graphql_endpoint().to_owned();
     let agent = Gents::from_default_agent_documents(
         node,
         identity.clone(),

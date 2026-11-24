@@ -15,7 +15,7 @@ pub(super) fn fixtures() -> PathBuf {
         .join("tests/fixtures/configurator_evals")
 }
 
-fn repo() -> PathBuf {
+pub(super) fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
@@ -23,7 +23,6 @@ fn repo() -> PathBuf {
 pub(super) struct Suite {
     pub(super) id: String,
     pub(super) dir: PathBuf,
-    pub(super) subject: String,
 }
 
 pub(super) fn suites() -> Vec<Suite> {
@@ -40,7 +39,6 @@ pub(super) fn suites() -> Vec<Suite> {
                 found.push(Suite {
                     id: suite["id"].as_str().unwrap().to_owned(),
                     dir: path.parent().unwrap().to_owned(),
-                    subject: suite["subject"].as_str().unwrap().to_owned(),
                 });
             }
         }
@@ -83,26 +81,10 @@ fn every_registered_suite_validates_and_uses_shipped_checks() {
         );
     }
     for suite in &suites {
-        assert!(
-            fixtures()
-                .join(&suite.subject)
-                .join("manifest.json")
-                .is_file(),
-            "{}: subject {} is not a pack",
-            suite.id,
-            suite.subject
-        );
         let definition = definition(&suite.dir);
         definition
             .validate()
             .unwrap_or_else(|error| panic!("{}: {error:#}", suite.id));
-        for pack in &definition.subject.core_packs {
-            assert!(
-                CorePack::of_coordinate(pack).is_some(),
-                "{}: {pack} is not a core pack",
-                suite.id
-            );
-        }
         for case in definition.cases {
             for stage in case.stages {
                 let mut evidence =
@@ -148,6 +130,37 @@ fn every_registered_suite_validates_and_uses_shipped_checks() {
                     );
                 }
             }
+        }
+    }
+}
+
+/// Every suite runs the Engineer `gents init --engineer` makes, so every
+/// definition installs every core pack init installs, in init's order; a
+/// suite may turn on one init leaves off, and nothing else.
+#[test]
+fn every_suite_installs_every_core_pack_init_installs() {
+    let expected: Vec<String> = CorePack::ALL
+        .iter()
+        .map(|pack| pack.coordinate().to_owned())
+        .collect();
+    let suites = suites();
+    assert!(!suites.is_empty());
+    for suite in suites {
+        let subject = definition(&suite.dir).subject;
+        assert_eq!(
+            subject.core_packs, expected,
+            "{}: the core packs init installs, in init's order",
+            suite.id
+        );
+        for pack in &subject.enabled_core_packs {
+            let pack = CorePack::of_coordinate(pack).unwrap();
+            assert_ne!(
+                gents_pack::pack::core_packs::init_wiring(pack),
+                gents_pack::pack::core_packs::enabled_wiring(pack),
+                "{}: {} is already on as init leaves it",
+                suite.id,
+                pack.coordinate()
+            );
         }
     }
 }

@@ -20,7 +20,7 @@ use gents_tools::surface::SelfConfigToolConfig;
 /// come from its published document; every other node permission is granted
 /// here by the runtime owner, as a User's init would.
 struct PolicyFixture {
-    db: gents_inference::test_support::TestDb,
+    db: gents_store::test_support::TestStore,
     user_access: ConfigAccess,
     agent: Arc<dyn NodeIdentity>,
     agent_did: String,
@@ -29,11 +29,13 @@ struct PolicyFixture {
 
 impl PolicyFixture {
     async fn new(name: &str) -> Self {
-        let (db, _user, user_access, binding) = gents_inference::test_support::signed_test_node(
+        let signed_home = gents_documents::test_support::SignedHome::start(
             name,
             gents_session::test_support::no_lifecycle_plugins(),
         )
         .await;
+        let binding = gents_inference::test_support::default_agent(&signed_home).await;
+        let (db, _user, user_access) = signed_home.into_parts();
         let agent =
             gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
                 .expect("fixture Agent is derived from the held runtime");
@@ -89,6 +91,28 @@ impl PolicyFixture {
 
     /// Publishes a second Agent through the User, as `install_sibling` does.
     async fn install_sibling(&self, display_name: &str) -> String {
+        self.install_sibling_binding(display_name).await.agent_did
+    }
+
+    /// A sibling Agent's own managed-Agent access, as its tools act.
+    async fn install_sibling_access(&self, display_name: &str) -> (String, ConfigAccess) {
+        let binding = self.install_sibling_binding(display_name).await;
+        let identity =
+            gents_store::identity::resolve_agent_identity(self.db.node_identity.as_ref(), &binding)
+                .expect("the sibling is derived from the held runtime");
+        let access = ConfigAccess::local_managed_agent(
+            self.db.node.clone(),
+            ::identity::Did::new(binding.agent_did.clone()).unwrap(),
+            identity.as_ref(),
+        )
+        .unwrap();
+        (binding.agent_did, access)
+    }
+
+    async fn install_sibling_binding(
+        &self,
+        display_name: &str,
+    ) -> gents_protocol::agent_identity::AgentIdentityBinding {
         let user = ::identity::Did::new(self.user_access.actor_did().unwrap()).unwrap();
         let binding = gents_store::identity::provision_agent_identity_authorized(
             &self.db.node,
@@ -104,7 +128,7 @@ impl PolicyFixture {
             &self.user_access,
         )
         .await;
-        binding.agent_did
+        binding
     }
 
     async fn agent_doc_id(&self, agent_did: &str) -> String {
@@ -782,4 +806,98 @@ async fn an_agent_never_removes_a_relation_of_a_session_it_published() {
         Some(1),
         "{visible}"
     );
+}
+
+async fn order_items(access: &ConfigAccess) -> Vec<String> {
+    let rows = access.execute("{ ShopOrder { item } }").await.unwrap();
+    rows["data"]["ShopOrder"]
+        .as_array()
+        .expect("ShopOrder rows")
+        .iter()
+        .map(|row| row["item"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// Lean `Identity.ApplicationPolicy.orders_shared_read_only`, through native
+/// DefraDB: the Engineer registers a policy, a collection binds it, the
+/// Engineer's order is invisible to the analyst until a `reader` grant, which
+/// lets it read and not update, and the revoke takes the read away.
+#[tokio::test]
+async fn engineer_creates_a_document_policy_and_shares_one_order_read_only() {
+    let fixture = PolicyFixture::new("policy-create-document").await;
+    let (analyst_did, analyst) = fixture.install_sibling_access("Analyst").await;
+    let tools = fixture.tools(&["policy"], false);
+    let tool = config(&tools);
+    let create = json!({"argv": ["policy", "create"], "options": {"definition": {
+        "name": "Orders access",
+        "resources": [{
+            "name": "orders",
+            "relations": [{"name": "reader", "types": ["actor"]}, {"name": "writer", "types": ["actor"]}],
+            "permissions": [
+                {"name": "read", "relations": ["reader", "writer"]},
+                {"name": "update", "relations": ["writer"]},
+                {"name": "delete"},
+            ],
+        }],
+    }}});
+
+    let unheld = run(tool, create.clone())
+        .await
+        .expect_err("an Agent without add-dac-policy cannot register a policy");
+    assert_eq!(
+        unheld["recovery"]["next_call"],
+        json!({"argv": ["policy", "check", "--permission", "add-dac-policy"]}),
+        "{unheld}"
+    );
+
+    fixture.grant_engineer_sets(&[]).await;
+    let receipt = run(tool, create)
+        .await
+        .expect("the policy delegate set holds add-dac-policy");
+    let directive = receipt["attach"][0].as_str().expect("one attach line");
+    fixture
+        .admin()
+        .add_collection(&format!("type ShopOrder {directive} {{ item: String }}"))
+        .await
+        .unwrap();
+    let engineer = ConfigAccess::local_managed_agent(
+        fixture.db.node.clone(),
+        ::identity::Did::new(fixture.agent_did.clone()).unwrap(),
+        fixture.agent.as_ref(),
+    )
+    .unwrap();
+    let created = engineer
+        .write(
+            "test.policy.create_order",
+            r#"mutation { create_ShopOrder(input: {item: "lamp"}) { _docID } }"#,
+        )
+        .await
+        .unwrap();
+    let order = gents_store::graphql::created_doc_id(&created, "ShopOrder").unwrap();
+    assert!(order_items(&analyst).await.is_empty());
+
+    let relation = |verb: &str| {
+        json!({"argv": [
+            "policy", verb, "--subject", analyst_did, "--collection", "ShopOrder",
+            "--doc", order, "--relation", "reader",
+        ]})
+    };
+    run(tool, relation("grant"))
+        .await
+        .expect("the order's owner grants reader");
+    assert_eq!(order_items(&analyst).await, ["lamp"]);
+    let update = r#"mutation { update_ShopOrder(input: {item: "changed"}) { _docID } }"#;
+    let _ = analyst.write("test.policy.update_order", update).await;
+    assert_eq!(order_items(&engineer).await, ["lamp"]);
+    engineer
+        .write("test.policy.update_order", update)
+        .await
+        .expect("the owner updates its order");
+    assert_eq!(order_items(&analyst).await, ["changed"]);
+
+    run(tool, relation("revoke"))
+        .await
+        .expect("the owner revokes the grant");
+    assert!(order_items(&analyst).await.is_empty());
+    assert_eq!(order_items(&engineer).await, ["changed"]);
 }

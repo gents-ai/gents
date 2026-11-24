@@ -68,6 +68,17 @@ pub struct EvalSubject {
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
     #[schemars(transform = crate::accepts_null)]
     pub core_packs: Vec<String>,
+    /// Core packs of `core_packs` each trial then turns on for the subject
+    /// as `gents config pack starter --enable` turns one on: a fixture for a
+    /// pack init installs but leaves off.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(transform = crate::accepts_null)]
+    pub enabled_core_packs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
@@ -408,6 +419,13 @@ impl EvalDefinition {
             ensure!(
                 !pack.trim().is_empty() && core_packs.insert(pack),
                 "eval definition {id} subject core_packs must name distinct packs; {pack:?} is empty or repeated"
+            );
+        }
+        let mut enabled = BTreeSet::new();
+        for pack in &self.subject.enabled_core_packs {
+            ensure!(
+                core_packs.contains(pack) && enabled.insert(pack),
+                "eval definition {id} subject enabled_core_packs must name distinct packs of its core_packs; {pack:?} is not one or is repeated"
             );
         }
         let mut case_ids = BTreeSet::new();

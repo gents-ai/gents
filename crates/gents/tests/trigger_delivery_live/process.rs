@@ -261,12 +261,7 @@ async fn delivery_crash_child() -> Result<()> {
     let artifacts =
         PathBuf::from(std::env::var_os(CHILD_ARTIFACTS).context("child artifact path")?);
     let home_path = artifacts.join("home");
-    let home = if phase == "seed" {
-        gents::runtime::embedded::EmbeddedHome::create_retained(&home_path).await?
-    } else {
-        gents::runtime::embedded::EmbeddedHome::open_retained(&home_path).await?
-    };
-    let db = support::test_db_from_home(home);
+    let db = support::trial_store_at(&home_path).await;
     let owner = db.node_identity.did().to_owned();
     let access = if phase == "seed" {
         let lanes = delivery_lanes().await?;

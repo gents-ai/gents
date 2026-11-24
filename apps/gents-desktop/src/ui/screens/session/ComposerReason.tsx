@@ -9,9 +9,9 @@ import { href } from "@/lib/router";
 import { useStoppedLocalNode } from "../agent/LocalServer";
 
 /** Why nothing typed here could be sent, for as long as that holds: the
-    node has no inference it can use, the node is offline, it refuses this
-    app's credentials, this app has no endpoint for it, or the session takes
-    no messages from this app. States
+    node has no inference it can use, the node is out of reach (the app is
+    reconnecting to it), it refuses this app's credentials, this app has no
+    endpoint for it, or the session takes no messages from this app. States
     that clear by themselves (sending, syncing, waiting to see a request) are
     none of these. */
 export type ComposerReason =
@@ -97,7 +97,9 @@ export function ComposerReasonBox({
     reason.kind === "inference"
       ? reason.title
       : reason.kind === "offline"
-        ? `${reason.name} is offline`
+        ? stopped
+          ? `${reason.name} is offline`
+          : `Reconnecting to ${reason.name}…`
         : reason.kind === "refused"
           ? `${reason.name} doesn't accept this app`
           : reason.kind === "noEndpoint"

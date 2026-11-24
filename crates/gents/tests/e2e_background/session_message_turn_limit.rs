@@ -18,12 +18,13 @@ use serde_json::json;
 use crate::support::accepted_turn::AcceptedTurnRuntime;
 use crate::support::fixtures::{agent_target, test_identity};
 use crate::support::interrupt::BootedAgent;
-use crate::support::streaming_backend::{
-    MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse,
+use gents_inference::test_support::scripted_backend::{
+    ScriptedBackend, StreamChunk, StreamPlan, StreamResponse,
 };
 use gents_store::test_support::STALL_CEILING;
 
-use crate::support::{test_db, TestDb};
+use crate::support::trial_store;
+use gents_store::test_support::TestStore;
 
 const CHILD_NAME: &str = "e2e-session-limit-child";
 const BACKEND_ID: &str = "e2e-session-limit-backend";
@@ -50,7 +51,7 @@ struct ChildRequestRow {
 }
 
 async fn configure_session_chain(
-    db: &TestDb,
+    db: &TestStore,
     owner: &dyn NodeIdentity,
     endpoint: &str,
     max_turns: Option<i64>,
@@ -188,7 +189,7 @@ async fn configure_session_chain(
 }
 
 /// Republishes the parent's Tools with its agents group selecting no target.
-async fn withdraw_child_target(db: &TestDb, owner: &dyn NodeIdentity) {
+async fn withdraw_child_target(db: &TestStore, owner: &dyn NodeIdentity) {
     let tools = json!({"node_did": db.node_identity.did(), "tools_id": "parent-tools", "agents": {"enabled": true}});
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
         collection: Collection::Tools,
@@ -214,7 +215,7 @@ async fn withdraw_child_target(db: &TestDb, owner: &dyn NodeIdentity) {
 
 /// Whether `caller` holds native `invoke` on `target`'s Agent document, the
 /// permission `agent_new` needs.
-async fn may_invoke(db: &TestDb, access: &ConfigAccess, caller: &str, target: &str) -> bool {
+async fn may_invoke(db: &TestStore, access: &ConfigAccess, caller: &str, target: &str) -> bool {
     let agent = escape_graphql_string(target);
     let agents = access
         .execute(&format!(
@@ -278,7 +279,7 @@ const CHAIN_PROGRESS: &str = r#"{ AgentRequest { _docID lifecycle_state } AgentT
 /// through one backend permit; a fixed window failed it whenever the host ran
 /// it slower than the window (`MCWallClockBoundFixedWindow`).
 async fn wait_for_terminal_child(
-    db: &TestDb,
+    db: &TestStore,
     access: &ConfigAccess,
     parent_request_id: &str,
     parent_did: &str,
@@ -395,14 +396,14 @@ fn child_tool_turn(index: usize) -> StreamResponse {
 }
 
 async fn start_child_session(
-    db: &TestDb,
+    db: &TestStore,
     request_id: &str,
     session_id: &str,
     child_responses: Vec<StreamResponse>,
     max_turns: Option<i64>,
     withdraw_target: bool,
 ) -> (String, String, ConfigAccess, AcceptedTurnRuntime) {
-    let backend = MockStreamingBackend::start_with_plans(
+    let backend = ScriptedBackend::start_with_plans(
         MODEL,
         vec![
             StreamPlan::current_authored_user(
@@ -466,7 +467,7 @@ async fn start_child_session(
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
+            backend_admission: Some(db.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -485,7 +486,7 @@ async fn start_child_session(
 
 #[tokio::test]
 async fn started_session_loop_enforces_its_execution_documents_turn_limit() {
-    let db = test_db("e2e-session-limit-explicit").await;
+    let db = trial_store("e2e-session-limit-explicit").await;
     let (parent_did, child_did, access, runtime) = start_child_session(
         &db,
         "e2e-session-limit-explicit-request",
@@ -531,7 +532,7 @@ async fn started_session_loop_enforces_its_execution_documents_turn_limit() {
 #[tokio::test]
 async fn agent_new_is_refused_once_its_configured_target_is_withdrawn() {
     const REQUEST_ID: &str = "e2e-session-limit-withdrawn-request";
-    let db = test_db("e2e-session-limit-withdrawn").await;
+    let db = trial_store("e2e-session-limit-withdrawn").await;
     let (_, child_did, access, runtime) = start_child_session(
         &db,
         REQUEST_ID,

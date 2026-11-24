@@ -10,12 +10,11 @@ use gents_protocol::{
 };
 use gents_session::request::lifecycle::queue::mutation::SessionRequestFields;
 use gents_session::request::lifecycle::queue::*;
-use gents_session::request::lifecycle::test_support::{test_db, TestDb};
 use gents_session::request::lifecycle::ExecutionOrigin;
-use gents_session::request::lifecycle::{ClaimOutcome, RequestLifecycle};
+use gents_session::request::lifecycle::RequestLifecycle;
 use gents_session::request::streaming::DefraStreamWriter;
+use gents_session::test_support::AgentHome;
 use gents_store::graphql::escape_graphql_string;
-use gents_store::identity::NodeIdentity;
 use serde::Deserialize;
 use std::sync::Arc;
 use std::time::Duration;
@@ -42,7 +41,7 @@ pub struct QueueRow {
     pub caused_by_parent_tool_call_doc_id: Option<String>,
 }
 
-pub async fn queue_rows(db: &TestDb, session_id: &str) -> Vec<QueueRow> {
+pub async fn queue_rows(db: &AgentHome, session_id: &str) -> Vec<QueueRow> {
     let escaped_session_id = escape_graphql_string(session_id);
     let query = format!(
         r#"{{
@@ -81,7 +80,7 @@ pub async fn queue_rows(db: &TestDb, session_id: &str) -> Vec<QueueRow> {
 }
 
 pub async fn insert_runtime_queue_request(
-    db: &TestDb,
+    db: &AgentHome,
     parent: &AgentRequest,
     request_id: &str,
     content: &str,
@@ -155,85 +154,28 @@ pub struct CanonicalBackgroundFixture {
 }
 
 pub async fn canonical_background_fixture(
-    db: &TestDb,
+    db: &AgentHome,
     session_id: &str,
 ) -> CanonicalBackgroundFixture {
     canonical_background_fixture_with_input(db, session_id, &RequestInput::default()).await
 }
 
 pub async fn canonical_background_fixture_with_input(
-    db: &TestDb,
+    db: &AgentHome,
     session_id: &str,
     input: &RequestInput,
 ) -> CanonicalBackgroundFixture {
     let request_id = format!("background-parent-{}", uuid::Uuid::new_v4());
-    let mut spec = gents_session::request::lifecycle::RequestSpec::new(
-        gents_protocol::request_admission::RequestPurpose::Normal,
-        gents_session::request::lifecycle::RequestIdentity {
-            request_id: request_id.clone(),
-            node_did: db.node_did().to_owned(),
-            requester_did: Some(db.user.did().to_owned()),
-            agent_did: db.agent_did().to_owned(),
-            session_id: session_id.to_owned(),
-            content: "work".to_owned(),
-            execution_origin: ExecutionOrigin::Interactive,
-            created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        },
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::client(db.user.did()),
-    );
-    spec.input = input.clone();
-    let create = gents_session::request::lifecycle::build_signed_client_request(
-        &db.user_access,
-        spec,
-        gents_session::request::lifecycle::RequestSigner::Identity(&db.user),
-    )
-    .await
-    .expect("sign canonical fixture parent");
-    gents_session::request::lifecycle::submit_client_request(&db.user_access, &create)
-        .await
-        .expect("publish canonical fixture parent");
-    let escaped = escape_graphql_string(&request_id);
-    let response = db.agent_access.execute(&format!(
-        r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{escaped}"}}}}, limit: 2) {{ {} }} }}"#,
-        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
-    )).await.expect("read canonical fixture parent");
-    let row: gents_protocol::row::AgentRequestRow =
-        serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
-    let request = row.try_into().expect("decode canonical fixture parent");
-    let (_authority_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
-    let verifier = gents_session::request::admission::AgentRequestAdmissionVerifier::new(
-        db.node.clone(),
-        db.identity.clone(),
-        authority,
-    );
-    let (request, admission) = verifier
-        .verify_fresh_for_claim_with_identity(&request, db.agent_identity.as_ref())
-        .await
-        .expect("verify canonical fixture client admission");
-    assert!(
-        admission.is_some(),
-        "fixture must retain client claim admission"
-    );
-    let mut lifecycle = RequestLifecycle::new_with_node_did(db.node.clone(), request, 60);
-    lifecycle
-        .bind_managed_agent(db.agent_identity.as_ref())
-        .unwrap();
-    lifecycle.set_client_claim_admission(admission);
     let claimed_at = chrono::Utc::now();
-    assert_eq!(
-        lifecycle
-            .claim_with_identity()
-            .await
-            .expect("claim canonical fixture parent"),
-        ClaimOutcome::Claimed
-    );
-    let writer =
-        DefraStreamWriter::new_managed(db.node.clone(), db.agent_identity.as_ref(), Duration::ZERO)
-            .unwrap();
-    lifecycle
-        .begin_owned_execution(&writer)
-        .await
-        .expect("begin canonical fixture parent");
+    let claimed = gents_session::test_support::ClaimedRequest::client_signed(db, &db.binding)
+        .ids(&request_id, session_id)
+        .content("work")
+        .input(input.clone())
+        .batch_interval(Duration::ZERO)
+        .drive(gents_session::test_support::Stage::Executing)
+        .await;
+    let writer = claimed.writer.expect("an executing request has its writer");
+    let lifecycle = claimed.lifecycle;
     CanonicalBackgroundFixture {
         node: db.node.clone(),
         access: db.agent_access.clone(),

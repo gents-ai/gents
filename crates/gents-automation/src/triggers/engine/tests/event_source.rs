@@ -358,7 +358,7 @@ async fn event_source_retries_schema_visibility_before_subscription_readiness() 
 
 #[tokio::test]
 async fn event_source_does_not_acknowledge_failed_seeding_on_later_generations() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "event-source-does-not-acknowledge-failed",
         crate::lifecycle_hooks::composition(),
     )
@@ -553,8 +553,8 @@ fn configured_event_agent(node_did: &str) -> Arc<ResolvedAgent> {
 }
 
 /// A node whose identity, Node row and Agent match `configured_event_agent`.
-/// The returned `TestDb` keeps the node running.
-async fn configured_event_node() -> gents_inference::test_support::TestDb {
+/// The returned store keeps the node running.
+async fn configured_event_node() -> gents_store::test_support::TestStore {
     let db = crate::triggers::callback::test_node_builder("event-source").await;
     crate::triggers::callback::seed_test_agent(&db.node, db.node_identity.did()).await;
     db
@@ -672,7 +672,6 @@ async fn admit_observed_event_for(
         goal_id: None,
         goal_objective: None,
         goal_token_budget: None,
-        goal_blocked_audit_threshold: None,
         goal_max_infrastructure_retries: None,
         goal_assignment_applied: false,
         emit_outcome: false,
@@ -727,7 +726,6 @@ async fn admit_selected_event(
         goal_id: None,
         goal_objective: None,
         goal_token_budget: None,
-        goal_blocked_audit_threshold: None,
         goal_max_infrastructure_retries: None,
         goal_assignment_applied: false,
         emit_outcome: intent.task.emit_outcome,
@@ -803,7 +801,7 @@ async fn admit_selected_event(
 
 #[tokio::test]
 async fn event_source_reconciles_subscriptions_on_generation_bump() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "event-source-reconciles-subscriptions-on",
         crate::lifecycle_hooks::composition(),
     )
@@ -1609,7 +1607,7 @@ fn group_state_identity_changes_only_with_membership_definition() {
 
 #[tokio::test]
 async fn generation_bump_recovers_only_when_group_membership_definition_changes() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "generation-bump-recovers-only-when-group",
         crate::lifecycle_hooks::composition(),
     )
@@ -1903,7 +1901,7 @@ async fn create_event_trigger_doc(
 
 #[tokio::test]
 async fn concurrent_trigger_fire_count_updates_are_not_lost() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "concurrent-trigger-fire-count-updates-ar",
         crate::lifecycle_hooks::composition(),
     )
@@ -2356,7 +2354,7 @@ async fn event_source_tries_all_triggers_when_first_filter_misses() {
 
 #[tokio::test]
 async fn event_source_reconcile_excludes_invalid_source_collection_identifiers() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "event-source-reconcile-excludes-invalid-",
         crate::lifecycle_hooks::composition(),
     )
@@ -2419,6 +2417,55 @@ mod resumed_goal;
 #[path = "event_source/unacknowledged.rs"]
 mod unacknowledged;
 
+/// The database's real change notifications, held so a trace decides whether
+/// each reaches the source, is lost, or arrives again.
+struct HeldNotifications {
+    transport: FakeUpdateSubscriptionSource,
+    node_updates: Subscription,
+    held: RapidHashMap<String, Message>,
+}
+
+impl HeldNotifications {
+    fn new(node: &defra_node::Node) -> Self {
+        Self {
+            transport: FakeUpdateSubscriptionSource::new(),
+            node_updates: node.subscribe(&[EventName::Update]),
+            held: RapidHashMap::default(),
+        }
+    }
+
+    async fn hold(&mut self, doc_id: &str, document: &str) {
+        let notification = tokio::time::timeout(gents_store::test_support::STALL_CEILING, async {
+            loop {
+                let message = self
+                    .node_updates
+                    .recv()
+                    .await
+                    .expect("the node's update stream stays open");
+                if message
+                    .as_update()
+                    .is_some_and(|update| update.doc_id == doc_id)
+                {
+                    return message;
+                }
+            }
+        })
+        .await
+        .expect("the database publishes a notification for the committed document");
+        self.held.insert(document.to_owned(), notification);
+    }
+
+    fn deliver(&self, document: &str) {
+        self.transport.0.publish(self.held[document].clone());
+    }
+
+    fn lose(&mut self, document: &str) {
+        self.held
+            .remove(document)
+            .expect("only a held notification can be lost");
+    }
+}
+
 #[tokio::test]
 async fn generated_event_source_convergence_reaches_fixed_point() {
     for case in
@@ -2467,8 +2514,15 @@ async fn generated_event_source_convergence_reaches_fixed_point() {
             RapidHashMap::from_iter([("convergence-trigger".into(), trigger)]),
         )
         .await;
+        let mut notifications = HeldNotifications::new(&node);
+        let transport = Arc::new(notifications.transport.clone());
         let (_tx, rx) = watch::channel(snapshot.clone());
-        let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
+        let mut source = EventSource::with_subscription_source(
+            transport.clone(),
+            rx,
+            node.clone(),
+            CancellationToken::new(),
+        );
         source.reconcile_subscriptions(snapshot.as_ref()).await;
         let mut offered = Vec::new();
         let mut attempts = Vec::new();
@@ -2482,8 +2536,22 @@ async fn generated_event_source_convergence_reaches_fixed_point() {
                             escape_graphql_string(&action.document))).await.unwrap();
                     let id = gents_store::graphql::created_doc_id(&result, "ConvergenceDocument")
                         .unwrap();
+                    notifications.hold(&id, &action.document).await;
                     physical.insert(id, action.document.clone());
                 }
+                "notify" => {
+                    notifications.deliver(&action.document);
+                    if let Some(intent) = source.conformance_notification().await {
+                        attempts.push(
+                            physical
+                                .get(intent.event_vars["source_doc_id"].as_str().unwrap())
+                                .unwrap()
+                                .clone(),
+                        );
+                        offered.push(intent);
+                    }
+                }
+                "drop" => notifications.lose(&action.document),
                 "rescan" => {
                     if let Some(intent) = source.conformance_rescan().await {
                         attempts.push(
@@ -2506,8 +2574,12 @@ async fn generated_event_source_convergence_reaches_fixed_point() {
                     drop(intent);
                     drop(source);
                     let (_replacement_tx, replacement_rx) = watch::channel(snapshot.clone());
-                    source =
-                        EventSource::new(replacement_rx, node.clone(), CancellationToken::new());
+                    source = EventSource::with_subscription_source(
+                        transport.clone(),
+                        replacement_rx,
+                        node.clone(),
+                        CancellationToken::new(),
+                    );
                     source.reconcile_subscriptions(snapshot.as_ref()).await;
                 }
                 "handle" => {

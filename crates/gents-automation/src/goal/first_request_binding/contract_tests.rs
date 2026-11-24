@@ -82,7 +82,7 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
         let case = &binding_case.input;
         let task = &task_case.input;
         assert_eq!(case.name, task.name);
-        let db = gents_inference::test_support::test_db(
+        let db = gents_store::test_support::TestStore::start(
             "first-request-binding",
             crate::lifecycle_hooks::composition(),
         )
@@ -286,7 +286,6 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
                                 },
                                 initial_state: GoalState {
                                     status: GoalStatus::Active,
-                                    blocked_audits: 0,
                                     wrapup_requested: false,
                                     wrapup_completed: false,
                                 },
@@ -344,7 +343,6 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
             goal_id: Some(selected.clone()),
             goal_objective: Some("Task work".into()),
             goal_token_budget: None,
-            goal_blocked_audit_threshold: None,
             goal_max_infrastructure_retries: None,
             goal_assignment_applied: false,
             emit_outcome: false,
@@ -413,6 +411,7 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
                             registry,
                             persisted,
                             "2026-10-21T00:00:01Z",
+                            false,
                         )
                         .await
                     })

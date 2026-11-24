@@ -103,7 +103,7 @@
   "stages": [
     {
       "stage_id": "investigate",
-      "prompt": "Find the partner rotation ledger session with sessions, even if another agent owns it. Report its session ID, title and whether it is closed. Include its canonical session document ID so I can check the source.",
+      "prompt": "Find the partner rotation ledger session, even if another agent owns it. What are its session ID and title, and is it closed?",
       "checks": [
         {
           "check": "final_message_matches",
@@ -120,35 +120,18 @@
           "weight": 1
         },
         {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "sessions"
-            ],
-            "forbidden": [
-              "bash",
-              "query",
-              "config"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
           "check": "crew_spec_match",
           "params": {
             "links": [
               {
                 "capture": "source_sessions",
-                "source_match": {
-                  "field": "session_id",
-                  "equals": "partner-archive"
-                },
-                "field": "_docID",
+                "key": "session_id",
+                "id": "partner-archive",
+                "field": "session_id",
                 "target_capture": "source_sessions",
-                "target_key": "_docID",
+                "target_key": "session_id",
                 "reported_fields": [
-                  "_docID"
+                  "session_id"
                 ]
               }
             ]

@@ -22,7 +22,7 @@ pub use commit::{
     commit, load_receipt, stage_planned_write_in_txn, CommitError, SessionMessageCall,
     SessionMessageReceipt, ToolCallTerminal,
 };
-pub use discovery::{agent_session_list, AgentSessionListArgs};
+pub use discovery::{agent_session_list, is_starter, AgentSessionListArgs};
 pub use goals::{NoSessionMessageGoals, RequestGoalAssignment, SessionGoal, SessionMessageGoals};
 pub use inspection::{agent_session_read, AgentSessionReadArgs};
 pub use interrupt::{

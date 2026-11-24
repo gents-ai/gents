@@ -23,6 +23,7 @@ type InferenceCall @policy(id: "$household", resource: "children") {
 
     queued_at: String
     started_at: String
+    first_token_at: String
     ended_at: String
 
     priority: Int

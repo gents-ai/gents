@@ -72,7 +72,7 @@ pub struct TimelineRequestRow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_count: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub interrupt_requested_at: Option<String>,
+    pub interrupt_generation: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caused_by_trigger_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -122,7 +122,7 @@ impl From<gents_protocol::row::AgentRequestRow> for TimelineRequestRow {
             failure_reason: row.failure_reason,
             created_at: row.created_at,
             retry_count: row.retry_count,
-            interrupt_requested_at: row.interrupt_requested_at,
+            interrupt_generation: row.interrupt_generation,
             caused_by_trigger_id: row.caused_by_trigger_id,
             caused_by_trigger_kind: row.caused_by_trigger_kind,
             caused_by_correlation: row.caused_by_correlation,
@@ -272,8 +272,6 @@ pub struct TimelineGoalVersionRow {
     #[serde(default)]
     pub status: String,
     #[serde(default)]
-    pub consecutive_blocked_audits: i64,
-    #[serde(default)]
     pub wrapup_requested: bool,
     #[serde(default)]
     pub wrapup_completed: bool,
@@ -282,9 +280,7 @@ pub struct TimelineGoalVersionRow {
     #[serde(default)]
     pub tokens_used: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_blocked_request_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_blocked_reason: Option<String>,
+    pub blocked_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_failure: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -299,7 +295,6 @@ impl TimelineGoalVersionRow {
     pub(super) fn semantic_state(&self) -> TimelineGoalState {
         TimelineGoalState {
             status: self.status.clone(),
-            consecutive_blocked_audits: self.consecutive_blocked_audits,
             wrapup_requested: self.wrapup_requested,
             wrapup_completed: self.wrapup_completed,
         }

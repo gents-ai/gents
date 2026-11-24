@@ -303,13 +303,14 @@ pub(crate) async fn settle_session_message_row(
             return Ok(true);
         }
     };
-    let caused_doc_id = caused
-        .doc_id
-        .as_deref()
-        .context("caused request lacks physical identity")?;
+    let Some(answer_doc_id) =
+        super::lineage::answering_request(&lifecycle.access()?, &caused).await?
+    else {
+        return Ok(false);
+    };
     let Some(terminal) = crate::background::status::load_session_message_terminal(
         &lifecycle.access()?,
-        caused_doc_id,
+        &answer_doc_id,
     )
     .await?
     else {

@@ -20,7 +20,8 @@ pub use account_backend::preset_account_backend;
 use account_backend::sync_account_backend;
 pub use accounts::{
     enabled_accounts_note, list_accounts, list_stored_accounts, no_switch_candidate_note,
-    remove_account_in_txn, set_account_enabled, set_account_label, AccountSummary, StoredAccount,
+    remove_account_in_txn, set_account_enabled, set_account_label, AccountSummary,
+    OAuthCredentialSummary, StoredAccount,
 };
 pub use auth_error::account_failure;
 use auth_error::MOVE_OFF_ACCOUNT;
@@ -32,8 +33,9 @@ pub use bearer::{
     apply_refreshed_tokens, shared_bearer, token_is_fresh, BearerSource, DbCredentialBearer,
 };
 use document::{
-    enabled_oauth_credentials_query, oauth_credentials_of_provider_query, pick_row_from_value,
-    refresh_update_mutation, OAUTH_CREDENTIAL_FIELDS, OAUTH_PICK_FIELDS, SET_ONCE_FIELDS,
+    enabled_oauth_credentials_query, oauth_credential_summaries_from_response,
+    oauth_credentials_of_provider_query, pick_row_from_value, refresh_update_mutation,
+    OAUTH_CREDENTIAL_FIELDS, OAUTH_PICK_FIELDS, OAUTH_SUMMARY_FIELDS, SET_ONCE_FIELDS,
 };
 pub use document::{
     oauth_credential_by_doc_id_query, oauth_credential_by_id_query,
@@ -42,11 +44,13 @@ pub use document::{
 pub use labels::{
     account_display_label, effective_account_label, provider_name, validate_account_label,
 };
-use labels::{ensure_label_free, next_free_label, sign_in_product};
+use labels::{
+    ensure_label_free, label_or_product, next_free_label, sign_in_product, token_account_email,
+};
 use resolve::resolver_order;
 pub use resolve::{
     account_pick, pick_oauth_credential, pick_oauth_pool, resolve_oauth_credential,
-    resolve_oauth_pool, AccountPick, NodeOAuthAccounts,
+    resolve_oauth_pool, AccountPick, AccountRow, NodeOAuthAccounts,
 };
 pub use resolve::{provider_default_account_ref, resolve_oauth_credential_in_txn};
 pub(crate) use resolve::{

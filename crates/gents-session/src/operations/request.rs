@@ -207,15 +207,24 @@ where
     let session_id = target::nonblank(session_id).unwrap_or_else(fresh_id);
     let supplied_request_id = target::nonblank(request_id);
     let request_id = supplied_request_id.clone().unwrap_or_else(fresh_id);
-    let requester = crate::session::client_requester_scope(access, &node_did, &session_id, &actor)
-        .await
-        .map_err(RequestOperationError::passthrough)?;
-    if supplied_request_id.is_some() {
-        if let Some(receipt) =
+    /* who is asking, and whether this request is already held, do not
+    depend on the message body, so they are read while it is prepared */
+    let lookups = async {
+        let requester =
+            crate::session::client_requester_scope(access, &node_did, &session_id, &actor)
+                .await
+                .map_err(RequestOperationError::passthrough)?;
+        let held = if supplied_request_id.is_some() {
             recover_scoped_send(access, &node_did, &session_id, &requester, &request_id).await?
-        {
-            return Ok(receipt);
-        }
+        } else {
+            None
+        };
+        Ok::<_, RequestOperationError>((requester, held))
+    };
+    let (lookups, body) = futures::join!(lookups, prepare(node_did.clone(), session_id.clone()));
+    let (requester, held) = lookups?;
+    if let Some(receipt) = held {
+        return Ok(receipt);
     }
     let MessageSendBody {
         agent_did,
@@ -224,7 +233,7 @@ where
         delivery,
         valid_until,
         mailbox_item_id,
-    } = prepare(node_did.clone(), session_id.clone()).await?;
+    } = body?;
     if !request_input.has_authored_input(&content) {
         return Err(RequestOperationError::ContentRequired);
     }
@@ -233,17 +242,19 @@ where
             Some(request_input),
             content.trim(),
         );
-    let request_input = queue_user_message_input(
-        access,
-        &node_did,
-        &session_id,
-        request_input,
-        delivery.resolve(),
-    )
-    .await
-    .map_err(target::user_message_error)?;
-    let agent_did =
-        target::resolve_agent(access, &node_did, &session_id, agent_did.as_deref()).await?;
+    /* queuing the input and resolving the agent are independent reads */
+    let (request_input, agent_did) = futures::join!(
+        queue_user_message_input(
+            access,
+            &node_did,
+            &session_id,
+            request_input,
+            delivery.resolve(),
+        ),
+        target::resolve_agent(access, &node_did, &session_id, agent_did.as_deref()),
+    );
+    let request_input = request_input.map_err(target::user_message_error)?;
+    let agent_did = agent_did?;
     let mailbox_item_id = target::nonblank(mailbox_item_id);
     if let Some(item_id) = mailbox_item_id.as_deref() {
         target::validate_mailbox_cause(
@@ -489,17 +500,23 @@ pub async fn interrupt(
     access: &ConfigAccess,
     input: RequestInterruptInput,
 ) -> Result<RequestInterruptReceipt, RequestOperationError> {
+    use crate::request::interrupt::{RequestInterrupt, SessionInterruptError};
     let target = get(access, &input.request).await?;
     let request_doc_id = target::row_field("_docID", target.doc_id.clone())?;
     let node_did = input.request.node_did.trim().to_owned();
-    let receipt = |interrupt_requested_at, already_interrupted| RequestInterruptReceipt {
+    let receipt = |interrupted_at, already_interrupted| RequestInterruptReceipt {
         request_id: target.request_id.clone(),
         request_doc_id: request_doc_id.clone(),
         node_did: node_did.clone(),
-        interrupt_requested_at,
+        interrupted_at,
         already_interrupted,
     };
-    let interrupted_at = target::nonblank(target.interrupt_requested_at.clone());
+    let interrupted_at = crate::request::interrupt::request_interrupted_at_by_doc_id_with_access(
+        access,
+        &request_doc_id,
+    )
+    .await
+    .map_err(RequestOperationError::passthrough)?;
     if interrupt_settled(
         target
             .lifecycle_state
@@ -508,28 +525,23 @@ pub async fn interrupt(
     ) {
         return Ok(receipt(interrupted_at, true));
     }
-    crate::request::interrupt::interrupt_request_by_doc_id_with_access(
+    match crate::request::interrupt::interrupt_request_by_doc_id_with_access(
         access,
         &request_doc_id,
         &node_did,
         target.requester_did.as_deref(),
     )
     .await
-    .map_err(RequestOperationError::passthrough)?;
-    let observed = get(access, &input.request).await?;
-    if observed.doc_id.as_deref() != Some(request_doc_id.as_str()) {
-        return Err(RequestOperationError::Ambiguous {
-            node_did,
-            request_id: target.request_id.clone(),
-        });
-    }
-    match target::nonblank(observed.interrupt_requested_at.clone()) {
-        Some(at) => Ok(receipt(Some(at), false)),
-        None => match observed.lifecycle_state.filter(|state| state.is_terminal()) {
-            Some(_) => Ok(receipt(None, true)),
-            None => Err(RequestOperationError::InterruptNotLatched {
+    {
+        Ok(RequestInterrupt::Interrupted { at, already }) => Ok(receipt(at, already)),
+        Ok(RequestInterrupt::InterruptedBeforeClaim { at }) => Ok(receipt(Some(at), false)),
+        Ok(RequestInterrupt::Settled) => Ok(receipt(None, true)),
+        Err(SessionInterruptError::Refused(refusal)) => {
+            Err(RequestOperationError::InterruptRefused {
                 request_id: target.request_id.clone(),
-            }),
-        },
+                reason: refusal.to_string(),
+            })
+        }
+        Err(SessionInterruptError::Store(error)) => Err(RequestOperationError::passthrough(error)),
     }
 }

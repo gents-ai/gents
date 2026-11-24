@@ -341,12 +341,16 @@ impl WriteTool {
             }
         }
         let before = if operation == "create" {
-            txn.execute(&format!("{{ COUNT({collection}: {{}}) }}"))
-                .await?["data"]
-                .clone()
+            Value::Null
         } else {
             if let Some(filter) = filter.as_ref() {
-                gents_tools::builtin::defra_query::validate_filter(txn, collection, filter).await?;
+                gents_tools::builtin::defra_query::validate_filter(
+                    txn,
+                    collection,
+                    filter,
+                    &CollectionScope::all(),
+                )
+                .await?;
             }
             let params = DefraQueryParams {
                 collection: collection.into(),
@@ -395,7 +399,7 @@ impl WriteTool {
             digest_matches: args.options.get("digest").and_then(Value::as_str)
                 == Some(digest.as_str()),
         };
-        if !observation.admitted() {
+        if !observation.admitted() && (preview || observation.digest_matches) {
             return Err(recovery(format!("selected {targets} targets; expected 1–{limit}. Narrow the filter before previewing"), WRITE_TOOL_NAME, serde_json::to_value(preview_call(args)).map_err(anyhow::Error::from)?));
         }
         let mut next = intent.clone();

@@ -43,7 +43,7 @@ async fn apply(access: &ConfigAccess, documents: Vec<(Collection, Value)>) {
 }
 
 async fn install(
-    db: &gents_inference::test_support::TestDb,
+    db: &gents_store::test_support::TestStore,
     user: &gents_store::identity::KeyIdentity,
     access: &ConfigAccess,
     archive: &PackArchive,
@@ -53,7 +53,7 @@ async fn install(
 }
 
 async fn install_in(
-    db: &gents_inference::test_support::TestDb,
+    db: &gents_store::test_support::TestStore,
     user: &gents_store::identity::KeyIdentity,
     access: &ConfigAccess,
     archive: &PackArchive,
@@ -105,7 +105,7 @@ async fn install_in(
 /// Publishing and reading application schemas are node permissions the
 /// fixture User does not hold by default.
 async fn grant_schema(
-    db: &gents_inference::test_support::TestDb,
+    db: &gents_store::test_support::TestStore,
     user: &gents_store::identity::KeyIdentity,
 ) {
     let admin = ConfigAccess::local_as(
@@ -130,9 +130,11 @@ async fn rows(access: &ConfigAccess, query: &str) -> Value {
 
 #[tokio::test]
 async fn a_live_app_exports_installs_on_a_second_node_and_is_adopted_where_it_came_from() {
-    let (origin, origin_user, origin_access, worker) =
-        gents_inference::test_support::signed_test_node("pack-export-origin", Default::default())
+    let signed_home =
+        gents_documents::test_support::SignedHome::start("pack-export-origin", Default::default())
             .await;
+    let worker = gents_inference::test_support::default_agent(&signed_home).await;
+    let (origin, origin_user, origin_access) = signed_home.into_parts();
     let owner = origin.node_identity.did().to_owned();
     let context_id = format!("{}:context", worker.agent_did);
     let tools_id = format!("{}:tools", worker.agent_did);
@@ -281,11 +283,9 @@ async fn a_live_app_exports_installs_on_a_second_node_and_is_adopted_where_it_ca
 
     // A second node holds none of it: the install creates the whole app.
     let (second, second_user, second_access) =
-        gents_inference::test_support::signed_test_node_without_agent(
-            "pack-export-second",
-            Default::default(),
-        )
-        .await;
+        gents_documents::test_support::SignedHome::start("pack-export-second", Default::default())
+            .await
+            .into_parts();
     let second_owner = second.node_identity.did().to_owned();
     grant_schema(&second, &second_user).await;
     apply(
@@ -467,9 +467,11 @@ async fn a_live_app_exports_installs_on_a_second_node_and_is_adopted_where_it_ca
 
 #[tokio::test]
 async fn a_reference_a_pack_cannot_carry_refuses_the_export_by_name() {
-    let (origin, _user, access, worker) =
-        gents_inference::test_support::signed_test_node("pack-export-refusal", Default::default())
+    let signed_home =
+        gents_documents::test_support::SignedHome::start("pack-export-refusal", Default::default())
             .await;
+    let worker = gents_inference::test_support::default_agent(&signed_home).await;
+    let (origin, _user, access) = signed_home.into_parts();
     let owner = origin.node_identity.did().to_owned();
     let context_id = format!("{}:context", worker.agent_did);
     apply(
@@ -524,11 +526,13 @@ async fn a_reference_a_pack_cannot_carry_refuses_the_export_by_name() {
 
 #[tokio::test]
 async fn a_page_and_a_plugin_source_export_with_the_surface_the_page_is_granted() {
-    let (origin, user, access, _worker) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "pack-export-live-documents",
         Default::default(),
     )
     .await;
+    let _worker = gents_inference::test_support::default_agent(&signed_home).await;
+    let (origin, user, access) = signed_home.into_parts();
     let owner = origin.node_identity.did().to_owned();
     grant_schema(&origin, &user).await;
     access
@@ -621,9 +625,13 @@ async fn a_page_and_a_plugin_source_export_with_the_surface_the_page_is_granted(
 
 #[tokio::test]
 async fn a_collection_with_defaults_and_a_full_text_index_exports_and_searches_where_it_installs() {
-    let (origin, user, access, _worker) =
-        gents_inference::test_support::signed_test_node("pack-export-fulltext", Default::default())
-            .await;
+    let signed_home = gents_documents::test_support::SignedHome::start(
+        "pack-export-fulltext",
+        Default::default(),
+    )
+    .await;
+    let _worker = gents_inference::test_support::default_agent(&signed_home).await;
+    let (origin, user, access) = signed_home.into_parts();
     let owner = origin.node_identity.did().to_owned();
     grant_schema(&origin, &user).await;
     access
@@ -658,12 +666,12 @@ async fn a_collection_with_defaults_and_a_full_text_index_exports_and_searches_w
 
     let (bytes, _) = pack_dir(&report.dir).unwrap();
     let archive = PackArchive::from_bytes(&bytes).unwrap();
-    let (second, second_user, second_access) =
-        gents_inference::test_support::signed_test_node_without_agent(
-            "pack-export-fulltext-second",
-            Default::default(),
-        )
-        .await;
+    let (second, second_user, second_access) = gents_documents::test_support::SignedHome::start(
+        "pack-export-fulltext-second",
+        Default::default(),
+    )
+    .await
+    .into_parts();
     grant_schema(&second, &second_user).await;
     install(
         &second,

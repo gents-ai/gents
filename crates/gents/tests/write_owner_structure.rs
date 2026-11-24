@@ -14,6 +14,10 @@ mod environment;
 mod error_holders;
 #[path = "write_owner_structure/executables.rs"]
 mod executables;
+#[path = "write_owner_structure/fences.rs"]
+mod fences;
+#[path = "write_owner_structure/fixtures.rs"]
+mod fixtures;
 #[path = "write_owner_structure/layers.rs"]
 mod layers;
 #[path = "write_owner_structure/lean_runtime.rs"]
@@ -28,6 +32,8 @@ mod owner_errors;
 mod rapidhash;
 #[path = "write_owner_structure/rig.rs"]
 mod rig;
+#[path = "write_owner_structure/session_creation.rs"]
+mod session_creation;
 #[path = "write_owner_structure/session_custody.rs"]
 mod session_custody;
 #[path = "write_owner_structure/statics.rs"]
@@ -38,5 +44,7 @@ mod support;
 mod test_features;
 #[path = "write_owner_structure/test_layout.rs"]
 mod test_layout;
+#[path = "write_owner_structure/transaction_fences.rs"]
+mod transaction_fences;
 #[path = "write_owner_structure/where_clauses.rs"]
 mod where_clauses;

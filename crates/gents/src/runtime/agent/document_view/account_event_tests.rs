@@ -25,8 +25,13 @@ async fn account_events_never_repoint_a_profile() -> Result<()> {
     use gents_inference::auth::credential::{
         resolve_oauth_credential, set_account_enabled, store_sign_in, AccountPick,
     };
-    let (db, _user, user_access, _binding) =
-        crate::test_support::root::signed_test_node("account-events-profile").await;
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
+        crate::support::trial_store("account-events-profile").await,
+        "account-events-profile",
+    )
+    .await;
+    let _binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, user_access) = signed_home.into_parts();
     let node = db.node.clone();
     let did_owned = db.node_identity.did().to_string();
     let did = did_owned.as_str();

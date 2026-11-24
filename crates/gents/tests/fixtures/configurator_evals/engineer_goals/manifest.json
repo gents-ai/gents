@@ -12,7 +12,6 @@
   "kind": "documents",
   "assets": [
     "README.md",
-    "cases/no_goal_check.json",
     "cases/pallet_totals_goal.json",
     "cases/queue_one_per_turn.json",
     "cases/no_goal_needed.json",
@@ -24,7 +23,6 @@
     "cases/greenhouse_water_goal.json",
     "cases/shelf_budget_raise.json",
     "pack_config.json",
-    "subject_patch.json",
     "suite.json"
   ],
   "config": "pack_config.json"

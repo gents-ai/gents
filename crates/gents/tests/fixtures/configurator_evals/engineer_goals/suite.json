@@ -2,14 +2,12 @@
   "id": "engineer-goals",
   "title": "Engineer goals",
   "coverage": [
-    "goal read without a goal",
-    "no goal for a one-shot question",
-    "goal with an exact objective and a computed budget",
-    "one job per goal turn across continuations",
-    "objective narrowed in place",
+    "no goal for a status question or a one-shot answer",
+    "a goal worked to completion within its budget",
+    "one item per goal turn across continuations",
+    "an objective narrowed when the facts change",
     "completion without needless edits",
-    "budget raised only when the data says so",
-    "partial work then a blocked goal with one notice"
-  ],
-  "subject": "engineer_full"
+    "a budget raised only when the data says so",
+    "partial work, one notice, then a blocked goal within a tight budget"
+  ]
 }

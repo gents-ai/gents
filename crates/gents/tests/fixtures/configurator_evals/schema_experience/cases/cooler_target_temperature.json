@@ -79,194 +79,15 @@
   },
   "stages": [
     {
-      "stage_id": "access",
-      "prompt": "I keep application records in CoolerRack, CoolerImport and CoolerInspection. Enable your general read access only to those collections, and general create/update/delete access only to CoolerRack if your native tools support it. Keep shell execution off and leave all other collection permissions alone. Inspect the available fields before working with records. Set up only the access now; do not change any records or collection definitions until I send the change request.",
-      "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "schema_matches",
-          "params": {
-            "name": "schema",
-            "sdl": "type CoolerRack { rack: String @index(unique: true) zone: String verified_c: Int }\ntype CoolerImport { rack: String @index(unique: true) import_c: Int }\ntype CoolerInspection { inspection: String @index(unique: true) rack: String note: String }",
-            "exact_nullability": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "agents": {
-              "agents": "agents",
-              "contexts": "contexts",
-              "tools": "tools",
-              "expect": [
-                {
-                  "agent_did": "gents:agent-slot:engineer",
-                  "tools": [
-                    {
-                      "field": "host.bash.mode",
-                      "matches": "^(null|Off)$"
-                    },
-                    {
-                      "field": "datastore.write_collections",
-                      "equals": [
-                        "CoolerRack"
-                      ]
-                    },
-                    {
-                      "field": "datastore.defra_query_collections",
-                      "contains": "\"CoolerRack\""
-                    },
-                    {
-                      "field": "datastore.defra_query_collections",
-                      "contains": "\"CoolerImport\""
-                    },
-                    {
-                      "field": "datastore.defra_query_collections",
-                      "contains": "\"CoolerInspection\""
-                    }
-                  ]
-                }
-              ]
-            },
-            "present": [
-              {
-                "capture": "CoolerRack",
-                "min": 4,
-                "max": 4
-              },
-              {
-                "capture": "CoolerImport",
-                "min": 3,
-                "max": 3
-              },
-              {
-                "capture": "CoolerInspection",
-                "min": 2,
-                "max": 2
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        }
-      ],
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "agents",
-          "collection": "Agent",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "agent_did",
-            "display_name",
-            "context_id"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "contexts",
-          "collection": "AgentContext",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "context_id",
-            "tools_id"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "tools",
-          "collection": "Tools",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "tools_id",
-            "host",
-            "datastore"
-          ]
-        },
-        {
-          "kind": "schema",
-          "name": "schema",
-          "collections": [
-            "CoolerRack",
-            "CoolerImport",
-            "CoolerInspection"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "CoolerRack",
-          "collection": "CoolerRack",
-          "filter": {},
-          "fields": [
-            "rack",
-            "zone",
-            "verified_c"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "CoolerImport",
-          "collection": "CoolerImport",
-          "filter": {},
-          "fields": [
-            "rack",
-            "import_c"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "CoolerInspection",
-          "collection": "CoolerInspection",
-          "filter": {},
-          "fields": [
-            "inspection",
-            "rack",
-            "note"
-          ]
-        }
-      ]
-    },
-    {
       "stage_id": "migrate",
-      "prompt": "Add an optional integer target_c to CoolerRack. Backfill it from CoolerImport for racks with no verified_c. A verified value always wins, including zero. Leave target_c unset when neither source has a value. Keep the existing rack records, fields and inspections. Reply with one JSON object whose \"unresolved\" array lists the rack values.",
+      "settle": true,
+      "continuation": {
+        "prompt": "OK, go ahead.",
+        "max": 1,
+        "until": "done"
+      },
+      "prompt": "Add an optional whole-number target_c to CoolerRack. Where a rack has a verified_c, use that, even when it is zero; otherwise take import_c from CoolerImport. Leave it empty if neither has a value. Which racks end up without a target?",
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "forbidden": [
-              "bash"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "schema_matches",
           "params": {
@@ -446,9 +267,7 @@
           "check": "final_message_matches",
           "params": {
             "all": [
-              {
-                "matches": "\"unresolved\"\\s*:\\s*\\[\\s*(?:\"CR-9\")\\s*\\]"
-              }
+              "CR-9"
             ]
           },
           "tier": "acceptance",
@@ -497,8 +316,47 @@
             "rack",
             "note"
           ]
+        },
+        {
+          "kind": "documents",
+          "name": "done",
+          "collection": "CoolerRack",
+          "filter": {
+            "rack": {
+              "_eq": "CR-4"
+            },
+            "target_c": {
+              "_eq": -3
+            }
+          },
+          "fields": [
+            "rack",
+            "target_c"
+          ]
         }
       ]
+    },
+    {
+      "stage_id": "read",
+      "prompt": "Which racks have a target below zero now, and what is each one's target?",
+      "checks": [
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "CR-4\\b[^\\n]{0,80}?[-−–]\\s?3\\b|[-−–]\\s?3\\b[^\\n]{0,80}?CR-4\\b"
+              },
+              {
+                "matches": "CR-7\\b[^\\n]{0,80}?[-−–]\\s?2\\b|[-−–]\\s?2\\b[^\\n]{0,80}?CR-7\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": []
     }
   ]
 }

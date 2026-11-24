@@ -138,13 +138,17 @@ export function OpenSessionComposer({
   );
   const history = useComposerHistory({
     field: slash.field,
-    sent: () =>
-      sentMessages(
+    sent: () => {
+      /* the message the transcript draws as just sent, until the read holds it */
+      const turn = stores.chat.getState().optimisticPendingTurn;
+      return sentMessages(
         selectedIn(stores.session.getState(), {
           selectedSessionId: sessionId,
           selectedNodeDid: nodeDid,
         })?.timelineItems ?? [],
-      ),
+        turn && turn.sessionId === sessionId ? turn : null,
+      );
+    },
     kinds: chipKinds,
   });
 

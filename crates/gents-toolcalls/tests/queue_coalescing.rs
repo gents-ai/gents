@@ -1,7 +1,7 @@
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_session::request::lifecycle::queue::*;
-use gents_session::request::lifecycle::test_support::test_db;
 use gents_session::request::lifecycle::test_support::wake_queue_input;
+use gents_session::test_support::AgentHome;
 use gents_store::graphql::escape_graphql_string;
 
 use gents_toolcalls::test_support::queue::*;
@@ -10,7 +10,7 @@ use gents_session::request::lifecycle::queue::queue_is_automated_wakeup;
 
 #[tokio::test]
 async fn atomic_background_completion_coalesces_keyed_agent_wakeups() {
-    let db = test_db("coalesce").await;
+    let db = AgentHome::start("coalesce").await;
     let session_id = "session-coalesced-wakeup";
     let mut fixture = canonical_background_fixture(&db, session_id).await;
     let parent = fixture.parent.clone();
@@ -111,7 +111,7 @@ async fn atomic_background_completion_coalesces_keyed_agent_wakeups() {
 
 #[tokio::test]
 async fn atomic_background_completion_ignores_append_row_with_same_source_and_key() {
-    let db = test_db("coalesce-ignores-append").await;
+    let db = AgentHome::start("coalesce-ignores-append").await;
     let session_id = "session-coalesce-ignores-append";
     let mut fixture = canonical_background_fixture(&db, session_id).await;
     let parent = fixture.parent.clone();
@@ -176,7 +176,7 @@ async fn atomic_background_completion_ignores_append_row_with_same_source_and_ke
 
 #[tokio::test]
 async fn reconcile_coalesced_pending_request_supersedes_duplicate_race_rows() {
-    let db = test_db("coalesce-race-reconcile").await;
+    let db = AgentHome::start("coalesce-race-reconcile").await;
     let session_id = "session-coalesce-race-reconcile";
     let mut fixture = canonical_background_fixture(&db, session_id).await;
     let parent = fixture.parent.clone();
@@ -273,7 +273,7 @@ async fn reconcile_coalesced_pending_request_supersedes_duplicate_race_rows() {
 
 #[tokio::test]
 async fn atomic_background_completion_without_key_rejects_without_persisting_input() {
-    let db = test_db("coalesce-without-key").await;
+    let db = AgentHome::start("coalesce-without-key").await;
     let session_id = "session-unkeyed-wakeup";
     let mut fixture = canonical_background_fixture(&db, session_id).await;
     let parent = fixture.parent.clone();

@@ -10,11 +10,13 @@ async fn provider_history_excludes_current_input_but_keeps_its_tool_results() {
     use gents_toolcalls::call::lifecycle::admission_fixture::{
         publish_accepted_on_claimed_request, AcceptedFixtureCall,
     };
-    let (db, user, client, binding) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "provider-history",
         gents_session::test_support::no_lifecycle_plugins(),
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, client) = signed_home.into_parts();
     let session_id = "session-steering-provider-history";
     publish_signed_history(
         &db,

@@ -12,7 +12,7 @@ use gents_tools::surface::ToolCeiling;
 use serde_json::{json, Value};
 
 use crate::support::snapshots::{is_routed_ready_after, wait_for_runtime_snapshot_as};
-use crate::support::{test_db, ManagedAgentFixture};
+use crate::support::{trial_store, ManagedAgentFixture};
 
 const DRIFT_SIG: &str = "drift:host-doc:9f2c";
 const SUMMARY: &str = "studio-1 host doc is stale vs runtime";
@@ -209,7 +209,7 @@ fn assert_multi_field_render(request: &AgentRequestRow, trigger_id: &str) {
 }
 
 async fn boot_agent_with_action_trigger(
-    db: &crate::support::TestDb,
+    db: &gents_store::test_support::TestStore,
     fixture: &ManagedAgentFixture,
     _test_name: &str,
     task_id: &str,
@@ -223,7 +223,7 @@ async fn boot_agent_with_action_trigger(
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
+            backend_admission: Some(db.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -271,7 +271,7 @@ async fn boot_agent_with_action_trigger(
         r#"{{EventSourceCursor(filter: {{owner_did: {{_eq: "{}"}}, source_collection: {{_eq: "ActionRequest"}}}}) {{consumer}}}}"#,
         escape_graphql_string(&node_did)
     );
-    crate::support::live_inference::rows_when(
+    gents_store::test_support::rows_when(
         &fixture.access,
         "EventSourceCursor",
         &cursor_query,
@@ -321,7 +321,7 @@ fn request_action_decl() -> WriteToolDecl {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn multi_field_template_renders_all_referenced_doc_fields() {
     let _guard = super::P2P_E2E_LOCK.lock().await;
-    let db = test_db("write-tool-trigger-multifield").await;
+    let db = trial_store("write-tool-trigger-multifield").await;
     let target = crate::support::live_inference::live_target().await;
     let actors = crate::support::live_inference::bind_target(&db, &target).await;
     let fixture = &actors.fixture;
@@ -358,7 +358,7 @@ async fn multi_field_template_renders_all_referenced_doc_fields() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn declared_write_tool_call_fires_event_trigger() {
     let _guard = super::P2P_E2E_LOCK.lock().await;
-    let db = test_db("write-tool-trigger-tooldriven").await;
+    let db = trial_store("write-tool-trigger-tooldriven").await;
     let target = crate::support::live_inference::live_target().await;
     let actors = crate::support::live_inference::bind_target(&db, &target).await;
     let fixture = &actors.fixture;

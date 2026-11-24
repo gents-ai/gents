@@ -7,11 +7,13 @@ use crate::test_support::{
 #[tokio::test]
 async fn history_reconstruction_scans_a_shared_request_once() {
     use gents_store::identity::NodeIdentity;
-    let (db, user, client, binding) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "history-shared-scan",
         crate::test_support::no_lifecycle_plugins(),
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, client) = signed_home.into_parts();
     let session_id = "session-shared-request-scan";
     let messages = (1..=3)
         .map(|sequence| format!("message {sequence}"))
@@ -36,11 +38,13 @@ async fn history_reconstruction_scans_a_shared_request_once() {
 #[tokio::test]
 async fn history_reconstruction_batches_distinct_requests() {
     use gents_store::identity::NodeIdentity;
-    let (db, user, client, binding) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "history-batch-scan",
         crate::test_support::no_lifecycle_plugins(),
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, client) = signed_home.into_parts();
     let session_id = "session-many-request-scans";
     let count = gents_inference::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH + 3;
     let messages = (0..count)
@@ -72,17 +76,19 @@ async fn signed_compaction_fixture(
     session: &str,
     count: usize,
 ) -> (
-    gents_inference::test_support::TestDb,
+    gents_store::test_support::TestStore,
     gents_store::identity::KeyIdentity,
     std::sync::Arc<dyn gents_store::identity::NodeIdentity>,
     gents_store::config_client::ConfigAccess,
     Vec<(String, String)>,
 ) {
-    let (db, user, client, binding) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         name,
         crate::test_support::no_lifecycle_plugins(),
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, client) = signed_home.into_parts();
     let agent =
         gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
     let access = gents_store::config_client::ConfigAccess::local_managed_agent(
@@ -286,11 +292,13 @@ async fn compaction_entries_track_files_cumulatively() {
 async fn compaction_save_stores_only_a_cursor_naming_a_stored_message() {
     use gents_lean_vocab::families::contracts_compaction_cursor_save as family;
     use gents_store::identity::NodeIdentity;
-    let (db, user, client, binding) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "compaction-cursor-save",
         crate::test_support::no_lifecycle_plugins(),
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, client) = signed_home.into_parts();
     let node_did = db.node_identity.did();
     let agent =
         gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
@@ -578,11 +586,13 @@ async fn exact_compaction_redelivery_is_idempotent() {
 #[tokio::test]
 async fn history_sequence_cursor_loads_only_the_sparse_suffix() {
     use gents_store::identity::NodeIdentity;
-    let (db, user, client, binding) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "history-cursor",
         crate::test_support::no_lifecycle_plugins(),
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, client) = signed_home.into_parts();
     let session_id = "session-cursor";
     let keys = publish_signed_history(
         &db,
@@ -673,11 +683,13 @@ async fn history_sequence_cursor_loads_only_the_sparse_suffix() {
 #[tokio::test]
 async fn close_session_preserves_creation_time() {
     use gents_store::identity::NodeIdentity;
-    let (db, user, client, binding) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "close-session",
         crate::test_support::no_lifecycle_plugins(),
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, client) = signed_home.into_parts();
     let node_did = db.node_identity.did();
     reserve_signed_session(&db, &user, &client, &binding, "session-1").await;
     let before = client
@@ -710,11 +722,13 @@ async fn close_session_preserves_creation_time() {
 
 #[tokio::test]
 async fn create_session_with_id_is_idempotent() {
-    let (db, user, client, binding) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "session-idempotent",
         crate::test_support::no_lifecycle_plugins(),
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, client) = signed_home.into_parts();
     let node_did = db.node_identity.did();
     reserve_signed_session(&db, &user, &client, &binding, "session-1").await;
     let before = client
@@ -767,11 +781,13 @@ async fn create_session_with_id_is_idempotent() {
 async fn create_session_with_agent_did_rejects_mismatched_existing_binding() {
     use gents_store::identity::NodeIdentity;
 
-    let (db, user, access, binding) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "session-binding",
         crate::test_support::no_lifecycle_plugins(),
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, access) = signed_home.into_parts();
     let node_did = db.node_identity.did();
     let other = gents_store::identity::provision_agent_identity_authorized(
         &db.node,
@@ -1450,11 +1466,13 @@ async fn fork_child_marker_rebuilds_after_a_concurrent_child_write() {
 async fn compaction_save_fault_leaves_chain_and_generation_intact() {
     use gents_store::identity::NodeIdentity;
     const SESSION: &str = "compaction-rollback";
-    let (db, user, client, binding) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "compaction-rollback",
         crate::test_support::no_lifecycle_plugins(),
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, client) = signed_home.into_parts();
     let node = &db.node;
     let node_did = db.node_identity.did();
     let agent =
@@ -1575,18 +1593,20 @@ async fn compaction_save_fault_leaves_chain_and_generation_intact() {
 #[tokio::test]
 async fn history_reads_exact_node_and_requester_scope() {
     use gents_store::identity::NodeIdentity;
-    let (local_db, local_user, local_client, local_binding) =
-        gents_inference::test_support::signed_test_node(
-            "history-local",
-            crate::test_support::no_lifecycle_plugins(),
-        )
-        .await;
-    let (foreign_db, foreign_user, foreign_client, foreign_binding) =
-        gents_inference::test_support::signed_test_node(
-            "history-foreign",
-            crate::test_support::no_lifecycle_plugins(),
-        )
-        .await;
+    let signed_home = gents_documents::test_support::SignedHome::start(
+        "history-local",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let local_binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (local_db, local_user, local_client) = signed_home.into_parts();
+    let signed_home = gents_documents::test_support::SignedHome::start(
+        "history-foreign",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let foreign_binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (foreign_db, foreign_user, foreign_client) = signed_home.into_parts();
     let local_node = local_db.node_identity.did();
     let foreign_node = foreign_db.node_identity.did();
     assert_ne!(local_node, foreign_node);
@@ -1677,18 +1697,20 @@ async fn history_reads_exact_node_and_requester_scope() {
 #[tokio::test]
 async fn authored_keys_are_immutable_and_sequences_are_node_scoped() {
     use gents_store::identity::NodeIdentity;
-    let (first_db, first_user, first_client, first_binding) =
-        gents_inference::test_support::signed_test_node(
-            "authored-local",
-            crate::test_support::no_lifecycle_plugins(),
-        )
-        .await;
-    let (second_db, second_user, second_client, second_binding) =
-        gents_inference::test_support::signed_test_node(
-            "authored-foreign",
-            crate::test_support::no_lifecycle_plugins(),
-        )
-        .await;
+    let signed_home = gents_documents::test_support::SignedHome::start(
+        "authored-local",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let first_binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (first_db, first_user, first_client) = signed_home.into_parts();
+    let signed_home = gents_documents::test_support::SignedHome::start(
+        "authored-foreign",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let second_binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (second_db, second_user, second_client) = signed_home.into_parts();
     let first_node = first_db.node_identity.did();
     let second_node = second_db.node_identity.did();
     assert_ne!(first_node, second_node);
@@ -1792,18 +1814,20 @@ async fn authored_keys_are_immutable_and_sequences_are_node_scoped() {
 #[tokio::test]
 async fn compaction_chains_with_equal_session_labels_remain_owner_scoped() {
     use gents_store::identity::NodeIdentity;
-    let (local_db, local_user, local_client, local_binding) =
-        gents_inference::test_support::signed_test_node(
-            "compaction-local",
-            crate::test_support::no_lifecycle_plugins(),
-        )
-        .await;
-    let (foreign_db, foreign_user, foreign_client, foreign_binding) =
-        gents_inference::test_support::signed_test_node(
-            "compaction-foreign",
-            crate::test_support::no_lifecycle_plugins(),
-        )
-        .await;
+    let signed_home = gents_documents::test_support::SignedHome::start(
+        "compaction-local",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let local_binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (local_db, local_user, local_client) = signed_home.into_parts();
+    let signed_home = gents_documents::test_support::SignedHome::start(
+        "compaction-foreign",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let foreign_binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (foreign_db, foreign_user, foreign_client) = signed_home.into_parts();
     let local_node = local_db.node_identity.did();
     let foreign_node = foreign_db.node_identity.did();
     assert_ne!(local_node, foreign_node);
@@ -1929,7 +1953,7 @@ async fn compaction_chains_with_equal_session_labels_remain_owner_scoped() {
 }
 
 async fn reserve_signed_session(
-    db: &gents_inference::test_support::TestDb,
+    db: &gents_store::test_support::TestStore,
     user: &dyn gents_store::identity::NodeIdentity,
     client: &gents_store::config_client::ConfigAccess,
     binding: &gents_protocol::agent_identity::AgentIdentityBinding,
@@ -1958,7 +1982,7 @@ async fn reserve_signed_session(
 }
 
 pub(crate) async fn publish_shared_signed_history(
-    db: &gents_inference::test_support::TestDb,
+    db: &gents_store::test_support::TestStore,
     user: &dyn gents_store::identity::NodeIdentity,
     client: &gents_store::config_client::ConfigAccess,
     binding: &gents_protocol::agent_identity::AgentIdentityBinding,
@@ -2002,11 +2026,13 @@ async fn concurrent_keyed_appends_resolve_sequence_conflicts_without_duplicates(
     use crate::request::streaming::DefraStreamWriter;
     use gents_store::identity::NodeIdentity;
     use std::time::Duration;
-    let (db, user, client, binding) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "append-race",
         crate::test_support::no_lifecycle_plugins(),
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, client) = signed_home.into_parts();
     let node = db.node.clone();
     let node_did = db.node_identity.did();
     let mut lifecycle = signed_claimed_authored_request(
@@ -2074,12 +2100,13 @@ async fn single_header_transaction_matches_bulk_coordinate_validation() {
     use gents_protocol::output::MessagePublication;
     use gents_store::identity::NodeIdentity;
 
-    let (foreign_db, foreign_user, _foreign_client, _foreign_binding) =
-        gents_inference::test_support::signed_test_node(
-            "header-coordinate-foreign",
-            crate::test_support::no_lifecycle_plugins(),
-        )
-        .await;
+    let signed_home = gents_documents::test_support::SignedHome::start(
+        "header-coordinate-foreign",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let _foreign_binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (foreign_db, foreign_user, _foreign_client) = signed_home.into_parts();
     for case in [
         "unrelated",
         "key",
@@ -2089,11 +2116,13 @@ async fn single_header_transaction_matches_bulk_coordinate_validation() {
         "requester",
         "fork",
     ] {
-        let (db, user, client, binding) = gents_inference::test_support::signed_test_node(
+        let signed_home = gents_documents::test_support::SignedHome::start(
             &format!("header-coordinate-{case}"),
             crate::test_support::no_lifecycle_plugins(),
         )
         .await;
+        let binding = gents_inference::test_support::default_agent(&signed_home).await;
+        let (db, user, client) = signed_home.into_parts();
         let node_did = db.node_identity.did();
         let foreign_did = foreign_db.node_identity.did();
         let user_did = user.did();
@@ -2210,11 +2239,13 @@ async fn single_header_transaction_matches_bulk_coordinate_validation() {
 #[tokio::test]
 async fn unsigned_starter_cannot_populate_the_index() {
     use gents_store::identity::NodeIdentity;
-    let (db, user, access, binding) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "unsigned-starter",
         crate::test_support::no_lifecycle_plugins(),
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, access) = signed_home.into_parts();
     let mut session = super::model_test_support::model_session(&serde_json::json!({
         "scope": {"node": 1, "session": 10, "requester": 2},
         "agent": 3, "created_at": 1, "closed_at": null, "stopped_at": null,

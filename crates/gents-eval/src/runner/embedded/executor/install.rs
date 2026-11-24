@@ -68,7 +68,8 @@ pub(super) async fn install(
     )
     .await
     .context("bootstrapping the evaluator-owned trial node")?;
-    let provisioner = gents_pack::pack::AgentProvisioner::local(&home.node, home.identity.as_ref());
+    let provisioner =
+        gents_pack::pack::AgentProvisioner::local(&home.node, home.node_identity.as_ref());
     let config = load_pack_install_config_with_provisioner(
         &planning_access,
         &manifest,
@@ -259,13 +260,14 @@ pub(super) async fn install(
 }
 
 /// Leaves each of the subject's core packs on its agent as `gents init`
-/// leaves them on the Engineer, through the same owner, from `archives`. The
-/// evaluator is the trial node's init User, so it holds the store and signs
-/// the wire, as init's User does; the trial's runtime has not started, so
-/// this is init's route through the home's own store (Lean
-/// `Pack.CorePacks.enableRoute` with nothing serving the home). A failure
-/// leaves the trial with no evidence, which grades as infrastructure, and
-/// the next attempt starts from a fresh home.
+/// leaves them on the Engineer, through the same owner, from `archives`,
+/// then turns on each of its enabled core packs as `gents config pack
+/// starter --enable` does. The evaluator is the trial node's init User, so
+/// it holds the store and signs the wire, as init's User does; the trial's
+/// runtime has not started, so this is init's route through the home's own
+/// store (Lean `Pack.CorePacks.enableRoute` with nothing serving the home).
+/// A failure leaves the trial with no evidence, which grades as
+/// infrastructure, and the next attempt starts from a fresh home.
 async fn install_core_packs(
     spec: &TrialSpec,
     home: &EmbeddedHome,
@@ -274,14 +276,14 @@ async fn install_core_packs(
     archives: gents::core_packs::Archives<'_>,
 ) -> Result<()> {
     use gents::core_packs::{apply, resolve, Consent, CorePackTarget};
-    use gents_pack::pack::core_packs::{init_wiring, CorePack};
+    use gents_pack::pack::core_packs::{enabled_wiring, init_wiring, CorePack};
     use gents_pack::pack::plugin_wire::{HeldUser, WireSigners};
 
     if spec.core_packs.is_empty() {
         return Ok(());
     }
     let access = home.local_client_access(&spec.evaluator_did)?;
-    let identity = home.identity.clone();
+    let identity = home.node_identity.clone();
     let runtime = move || -> Result<std::sync::Arc<dyn gents_store::identity::NodeIdentity>> {
         Ok(identity.clone())
     };
@@ -306,6 +308,14 @@ async fn install_core_packs(
             .await
             .with_context(|| format!("installing core pack {coordinate} on the trial subject"))?;
     }
+    for coordinate in &spec.enabled_core_packs {
+        let pack = CorePack::of_coordinate(coordinate)
+            .with_context(|| format!("{coordinate} is not a core pack"))?;
+        let source = resolve(home.path(), pack, archives, None).await?;
+        apply(&target, &source, enabled_wiring(pack), Consent::Explicit)
+            .await
+            .with_context(|| format!("enabling core pack {coordinate} on the trial subject"))?;
+    }
     Ok(())
 }
 
@@ -320,7 +330,10 @@ fn trial_wires_through_its_own_store(
     })
 }
 
-pub(crate) async fn grant_trial_operations(home: &EmbeddedHome, target: &str) -> Result<()> {
+pub(crate) async fn grant_trial_operations(
+    home: &gents_store::local::home::ServedHome,
+    target: &str,
+) -> Result<()> {
     use gents_store::config_client::NodePermission;
 
     let owner = ConfigAccess::local_as(home.node.clone(), ::identity::Did::new(home.did())?);
@@ -536,8 +549,10 @@ async fn install_fixtures(
                 .values()
                 .find(|binding| binding.agent_did == agent_did)
                 .context("expired request fixture references an unknown agent binding")?;
-            let agent =
-                gents_store::identity::resolve_agent_identity(home.identity.as_ref(), binding)?;
+            let agent = gents_store::identity::resolve_agent_identity(
+                home.node_identity.as_ref(),
+                binding,
+            )?;
             expired_request::install(access, &document, home, evaluator, agent.as_ref()).await?;
             continue;
         }
@@ -560,8 +575,10 @@ async fn install_fixtures(
                 .values()
                 .find(|binding| binding.agent_did == did)
                 .context("agent-owned fixture references an unknown agent binding")?;
-            let identity =
-                gents_store::identity::resolve_agent_identity(home.identity.as_ref(), binding)?;
+            let identity = gents_store::identity::resolve_agent_identity(
+                home.node_identity.as_ref(),
+                binding,
+            )?;
             Some(ConfigAccess::local_managed_agent(
                 home.node.clone(),
                 ::identity::Did::new(did)?,
@@ -649,6 +666,7 @@ async fn install_session_fixture(
                 &json!({"input": input}), gents_protocol::schemas::AGENT_SESSION,
             ).await?;
             let doc = gents_store::graphql::created_doc_id(&response, "AgentSession")?;
+            gents_session::session::interrupt_marker::create_in_txn(txn, &doc, &session.node_did, &session.session_id).await?;
             gents_session::session::stage_session_relationships_in_txn(txn, &doc, &agent_doc, target).await?;
             for reader in readers {
                 txn.add_actor_relationship("AgentSession", &doc, "reader", reader).await?;

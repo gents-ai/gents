@@ -304,11 +304,26 @@ impl<C> Filter<C> {
         V: Scalar<K>,
         I: IntoIterator<Item = V>,
     {
+        let mut values = values
+            .into_iter()
+            .map(Scalar::into_json)
+            .collect::<Vec<_>>();
+        /* one value is compared with `_eq`: the store answers `_eq` on a
+        document id by direct lookup but scans the whole collection for `_in`,
+        even with a single value */
+        if values.len() == 1 {
+            return Self::wrap(Expr::Compare {
+                field: field.name(),
+                operator: "_eq",
+                variable_type: K::GRAPHQL.to_string(),
+                value: values.remove(0),
+            });
+        }
         Self::wrap(Expr::Compare {
             field: field.name(),
             operator: "_in",
             variable_type: format!("[{}!]", K::GRAPHQL),
-            value: Value::Array(values.into_iter().map(Scalar::into_json).collect()),
+            value: Value::Array(values),
         })
     }
 
@@ -567,6 +582,45 @@ impl<C> gents_schemas::FieldSelection<C> for Selection<C> {
     }
 }
 
+/// A top-level `_docID: {_in: [...]}` naming at least one document (alone or
+/// as one member of an `_and`), split from the rest of the filter. An empty
+/// list stays in the filter, where it matches no document; as the `docID`
+/// argument it would name none and so read every document.
+fn split_doc_ids(expr: &Expr) -> Option<(Value, Option<Expr>)> {
+    let is_doc_ids = |expr: &Expr| {
+        matches!(expr, Expr::Compare { field: "_docID", operator: "_in", value, .. }
+            if value.as_array().is_some_and(|ids| !ids.is_empty()))
+    };
+    match expr {
+        Expr::Compare { value, .. } if is_doc_ids(expr) => Some((value.clone(), None)),
+        Expr::Group {
+            operator: "_and",
+            members,
+        } => {
+            let index = members.iter().position(is_doc_ids)?;
+            let Expr::Compare { value, .. } = &members[index] else {
+                return None;
+            };
+            let rest = members
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != index)
+                .map(|(_, member)| member.clone())
+                .collect::<Vec<_>>();
+            let rest = match rest.len() {
+                0 => None,
+                1 => rest.into_iter().next(),
+                _ => Some(Expr::Group {
+                    operator: "_and",
+                    members: rest,
+                }),
+            };
+            Some((value.clone(), rest))
+        }
+        _ => None,
+    }
+}
+
 /// A read of collection `C`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Query<C> {
@@ -652,6 +706,22 @@ where
             let reference = variables.bind("ID!", Value::String(doc_id.clone()));
             arguments.push(format!("docID: {reference}"));
         }
+        /* the store answers a `docID` list by direct lookups but scans the
+        collection for `_docID: {_in: [...]}`, so a top-level `_in` on the
+        document id becomes the argument */
+        let hoisted = (self.doc_id.is_none() && !self.count)
+            .then(|| self.filter.as_ref().and_then(split_doc_ids))
+            .flatten();
+        let remaining_filter;
+        let own_filter = match hoisted {
+            Some((ids, rest)) => {
+                let reference = variables.bind("[ID!]", ids);
+                arguments.push(format!("docID: {reference}"));
+                remaining_filter = rest;
+                remaining_filter.as_ref()
+            }
+            None => self.filter.as_ref(),
+        };
         let count_filter = self.doc_id.as_ref().filter(|_| self.count).map(|doc_id| {
             let doc_filter = Filter::eq(Field::<C, kind::DocId>::new("_docID"), doc_id);
             match &self.filter {
@@ -662,7 +732,7 @@ where
         let filter = count_filter
             .as_ref()
             .map(|filter| &filter.expr)
-            .or(self.filter.as_ref());
+            .or(own_filter);
         if let Some(filter) = filter {
             arguments.push(format!("filter: {}", render_filter(filter, variables)));
         }
@@ -1150,6 +1220,59 @@ mod tests {
             json!({"v0": hostile, "v1": ["pending", "claimed"], "v2": 5})
         );
         assert!(!rendered.document.contains(hostile));
+    }
+
+    /// The store answers `_eq` on a document id by direct lookup but scans
+    /// the collection for `_in`, even with one value.
+    #[test]
+    fn one_value_of_a_set_is_compared_with_eq() {
+        let rendered = Query::select(Selection::doc_id())
+            .filter(Filter::any_of(request::LIFECYCLE_STATE, ["pending"]))
+            .render();
+        assert_eq!(
+            rendered.document,
+            "query($v0: String) { AgentRequest(filter: {lifecycle_state: {_eq: $v0}}) { _docID } }"
+        );
+        assert_eq!(rendered.variables, json!({"v0": "pending"}));
+    }
+
+    /// The store answers a `docID` list by direct lookups but scans the
+    /// collection for `_docID: {_in: [...]}`.
+    #[test]
+    fn a_top_level_set_of_document_ids_is_the_doc_id_argument() {
+        let alone = Query::select(Selection::doc_id())
+            .filter(Filter::any_of(request::DOC_ID, ["a", "b"]))
+            .render();
+        assert_eq!(
+            alone.document,
+            "query($v0: [ID!]) { AgentRequest(docID: $v0) { _docID } }"
+        );
+        assert_eq!(alone.variables, json!({"v0": ["a", "b"]}));
+        let parsed = query::parse_query(&alone.document).unwrap();
+        assert!(parsed[0].filter.is_none());
+
+        let with_rest = Query::select(Selection::doc_id())
+            .filter(Filter::eq(request::NODE_DID, "node"))
+            .filter(Filter::any_of(request::DOC_ID, ["a", "b"]))
+            .render();
+        assert_eq!(
+            with_rest.document,
+            "query($v0: [ID!], $v1: String) { AgentRequest(docID: $v0, filter: {node_did: {_eq: $v1}}) { _docID } }"
+        );
+        assert_eq!(with_rest.variables, json!({"v0": ["a", "b"], "v1": "node"}));
+    }
+
+    /// An empty set names no document: it stays a filter that matches none,
+    /// never an empty `docID` argument that would read every document.
+    #[test]
+    fn an_empty_set_of_document_ids_stays_in_the_filter() {
+        let rendered = Query::select(Selection::doc_id())
+            .filter(Filter::any_of(request::DOC_ID, Vec::<&str>::new()))
+            .render();
+        assert_eq!(
+            rendered.document,
+            "query($v0: [String!]) { AgentRequest(filter: {_docID: {_in: $v0}}) { _docID } }"
+        );
     }
 
     /// DefraDB rejects several fields in one order object; a multi-field

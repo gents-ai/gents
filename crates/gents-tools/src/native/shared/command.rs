@@ -16,6 +16,8 @@ pub(super) mod command_env;
 pub(super) mod command_host_executable;
 #[path = "command_launch.rs"]
 pub(super) mod command_launch;
+#[path = "command_options.rs"]
+mod command_options;
 #[path = "command_output.rs"]
 pub(super) mod command_output;
 #[path = "command_run.rs"]
@@ -172,7 +174,7 @@ impl CommandExecutionPolicy {
                 "required_at_execution: command sandbox must enforce disabled network or the command is denied"
             }
             CommandExecutionMode::ReadOnly => {
-                "validated_at_execution: known network commands are denied"
+                "validated_at_execution: known network commands are denied, and the read-only sandbox refuses every connection where the host provides one"
             }
         }
     }
@@ -216,17 +218,17 @@ pub fn default_lsp_network_mode() -> CommandNetworkMode {
 }
 
 pub fn lsp_sandbox_for_effective(execution_mode: CommandExecutionMode) -> CommandExecutionMode {
+    lsp_server_sandbox(workspace_write_sandbox_enforced(), execution_mode)
+}
+
+pub(crate) fn lsp_server_sandbox(
+    sandbox_enforced: bool,
+    execution_mode: CommandExecutionMode,
+) -> CommandExecutionMode {
     match execution_mode {
-        CommandExecutionMode::WorkspaceWrite => CommandExecutionMode::WorkspaceWrite,
-        CommandExecutionMode::ArtifactWrite => CommandExecutionMode::ArtifactWrite,
-        CommandExecutionMode::Unrestricted => CommandExecutionMode::Unrestricted,
-        CommandExecutionMode::ReadOnly => {
-            if workspace_write_sandbox_enforced() {
-                CommandExecutionMode::WorkspaceWrite
-            } else {
-                CommandExecutionMode::Unrestricted
-            }
-        }
+        CommandExecutionMode::ReadOnly if sandbox_enforced => CommandExecutionMode::WorkspaceWrite,
+        CommandExecutionMode::ReadOnly => CommandExecutionMode::Unrestricted,
+        mode => mode,
     }
 }
 
@@ -316,6 +318,10 @@ pub(crate) async fn current_managed_command_credential_snapshot(
         Ok(None)
     }
 }
+
+#[cfg(test)]
+#[path = "command_read_only_tests.rs"]
+mod command_read_only_tests;
 
 #[cfg(test)]
 #[path = "command_network_disclosure_tests.rs"]

@@ -11,6 +11,7 @@ use crate::optimization::policy::{
 use crate::report::build::{CellReport, EvalReport, SlotClass, SlotReport, SlotScore, SlotVerdict};
 use crate::report::evidence::CellUsage;
 use crate::report::refused;
+use crate::report::subject::figure;
 use crate::scoring::PILOT_PURPOSE;
 use crate::{pair_trials, CaseTrialScore, DefinitionRef, Pair, PairedEvidence, TrialScore};
 
@@ -72,6 +73,7 @@ pub struct Comparison {
     /// default, never a comparison.
     pub policy: Option<PolicyOutcome>,
     pub trials: Vec<PairedTrial>,
+    pub subject_usage: Vec<SubjectChange>,
     #[serde(skip)]
     paired: PairedEvidence,
     #[serde(skip)]
@@ -155,6 +157,10 @@ pub fn compare(
         p_ppm: None,
         policy: None,
         trials: paired_trials(base, cand),
+        subject_usage: COMPARED_FIGURES
+            .iter()
+            .map(|name| subject_change(base, cand, name))
+            .collect(),
         paired,
         case_ids: base.cases.iter().map(|case| case.case_id.clone()).collect(),
         usage: [base.cell_usage, cand.cell_usage],
@@ -269,6 +275,79 @@ fn paired_trials(baseline: &CellReport, candidate: &CellReport) -> Vec<PairedTri
         entry(&mut trials, slot).candidate = Some(side(slot));
     }
     trials.into_values().collect()
+}
+
+pub const COMPARED_FIGURES: [&str; 8] = [
+    "first_request_prompt_tokens",
+    "first_request_tool_schema_estimate",
+    "input_tokens",
+    "output_tokens",
+    "model_turns",
+    "wall_ms",
+    "first_request_first_token_ms",
+    "median_first_token_ms",
+];
+
+/// Medians over each side's passing trials, which can be different cases;
+/// the paired change is over the slots both sides passed. No gate reads it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SubjectChange {
+    pub figure: String,
+    pub baseline_median: Option<u64>,
+    pub candidate_median: Option<u64>,
+    pub change: Option<i64>,
+    pub paired: u64,
+    pub paired_median_change: Option<i64>,
+}
+
+fn subject_change(baseline: &CellReport, candidate: &CellReport, name: &str) -> SubjectChange {
+    let passing_median = |cell: &CellReport| {
+        cell.subject_usage
+            .passing
+            .figures
+            .get(name)
+            .and_then(|figure| figure.median)
+    };
+    let passed = |slot: &SlotReport| {
+        (slot.class == SlotClass::Pass)
+            .then(|| figure(slot.latest.as_ref()?.subject_usage.as_ref()?, name))
+            .flatten()
+    };
+    let mut changes: Vec<i128> = baseline
+        .slots
+        .iter()
+        .filter_map(|left| {
+            let right = candidate.slots.iter().find(|right| {
+                right.case_id == left.case_id && right.trial_index == left.trial_index
+            })?;
+            Some(i128::from(passed(right)?) - i128::from(passed(left)?))
+        })
+        .collect();
+    changes.sort_unstable();
+    let (baseline_median, candidate_median) = (passing_median(baseline), passing_median(candidate));
+    SubjectChange {
+        figure: name.to_owned(),
+        baseline_median,
+        candidate_median,
+        change: baseline_median
+            .zip(candidate_median)
+            .map(|(left, right)| signed(i128::from(right) - i128::from(left))),
+        paired: changes.len() as u64,
+        paired_median_change: signed_median(&changes),
+    }
+}
+
+fn signed_median(sorted: &[i128]) -> Option<i64> {
+    let middle = sorted.len() / 2;
+    match sorted.len() {
+        0 => None,
+        length if length % 2 == 1 => Some(signed(sorted[middle])),
+        _ => Some(signed((sorted[middle - 1] + sorted[middle]).div_euclid(2))),
+    }
+}
+
+fn signed(value: i128) -> i64 {
+    i64::try_from(value).unwrap_or(if value < 0 { i64::MIN } else { i64::MAX })
 }
 
 fn cell<'a>(report: &'a EvalReport, cell_id: &str) -> Result<&'a CellReport> {

@@ -19,10 +19,10 @@ use crate::support::builder_runtime::{
 use crate::support::interrupt::{
     wait_for_request_lifecycle_state, wait_for_request_terminal_state, BootedAgent,
 };
-use crate::support::streaming_backend::{
-    MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse, StreamScript,
+use crate::support::trial_store;
+use gents_inference::test_support::scripted_backend::{
+    ScriptedBackend, StreamChunk, StreamPlan, StreamResponse, StreamScript,
 };
-use crate::support::test_db;
 use gents_store::test_support::STALL_CEILING;
 
 const CAPTURE_MODEL: &str = "capture-model";
@@ -35,7 +35,7 @@ const PROD_PARSE_400_BODY: &str = r#"{"object":"error","message":"BadRequestErro
 async fn attached_image_reaches_the_provider_and_survives_the_next_turn() {
     use gents_protocol::request_input::{RequestAttachment, RequestInput};
     let image = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQAAAABJRU5ErkJggg==";
-    let backend = MockStreamingBackend::start(
+    let backend = ScriptedBackend::start(
         CAPTURE_MODEL,
         vec![
             StreamScript::completes("", ["seen"]),
@@ -120,7 +120,7 @@ async fn attached_image_reaches_the_provider_and_survives_the_next_turn() {
 
 #[tokio::test]
 async fn the_persisted_request_json_is_the_body_the_provider_received() {
-    let backend = MockStreamingBackend::start(
+    let backend = ScriptedBackend::start(
         CAPTURE_MODEL,
         vec![StreamScript::completes("capture-me", ["ok"])],
     )
@@ -167,7 +167,7 @@ async fn the_persisted_request_json_is_the_body_the_provider_received() {
 
 #[tokio::test]
 async fn a_failing_capture_sink_issues_no_provider_request() {
-    let backend = MockStreamingBackend::start(
+    let backend = ScriptedBackend::start(
         CAPTURE_MODEL,
         vec![StreamScript::completes("must-not-send", ["ok"])],
     )
@@ -423,7 +423,7 @@ async fn stored_v2_delta_rows_still_decode_through_their_own_arm() {
 }
 
 async fn insert_stored_capture(
-    db: &crate::support::TestDb,
+    db: &gents_store::test_support::TestStore,
     agent: &dyn NodeIdentity,
     session_doc: &str,
     rendered: &RenderedCompletionRequest,
@@ -464,7 +464,7 @@ async fn insert_stored_capture(
 }
 
 async fn write_stored_capture(
-    db: &crate::support::TestDb,
+    db: &gents_store::test_support::TestStore,
     agent: &dyn NodeIdentity,
     session_doc: &str,
     mutation: &str,
@@ -649,7 +649,7 @@ async fn legacy_capture_remains_readable_and_idempotent_after_format_upgrade() {
 #[tokio::test]
 async fn a_retried_attempt_is_its_own_durable_fact() {
     let marker = "capture-attempt-fence";
-    let backend = MockStreamingBackend::start_with_plans(
+    let backend = ScriptedBackend::start_with_plans(
         CAPTURE_MODEL,
         vec![StreamPlan::new(
             marker,
@@ -755,7 +755,7 @@ async fn a_retried_attempt_is_its_own_durable_fact() {
 async fn retry_continues_recorded_tool_progress_without_republishing_input() {
     let marker = "capture-retry-frontier";
     let output = "RETRY_RECORDED_TOOL_RESULT";
-    let backend = MockStreamingBackend::start_with_plans(
+    let backend = ScriptedBackend::start_with_plans(
         CAPTURE_MODEL,
         vec![StreamPlan::new(
             marker,
@@ -839,7 +839,7 @@ async fn retry_continues_recorded_tool_progress_without_republishing_input() {
 async fn a_repaired_attempt_is_a_second_fact_with_a_different_canonical_request() {
     let marker = "capture-repair";
     let poisoned_arguments = format!("{{\"note\":\"bad{}value\"}}", '\u{0007}');
-    let backend = MockStreamingBackend::start_with_plans(
+    let backend = ScriptedBackend::start_with_plans(
         CAPTURE_MODEL,
         vec![StreamPlan::new(
             marker,
@@ -962,7 +962,7 @@ async fn per_turn_compaction_is_captured_and_governs_later_turns() {
 
     let big_output = format!("{BIG_MARKER}{}", "x".repeat(BIG_OUTPUT_CHARS));
     let marker = "capture-compaction";
-    let backend = MockStreamingBackend::start_with_plans(
+    let backend = ScriptedBackend::start_with_plans(
         CAPTURE_MODEL,
         vec![StreamPlan::new(
             marker,
@@ -1166,7 +1166,7 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
     })
     .to_string();
 
-    let backend = MockStreamingBackend::start_with_plans(
+    let backend = ScriptedBackend::start_with_plans(
         CAPTURE_MODEL,
         vec![
             StreamPlan::new(
@@ -1480,7 +1480,7 @@ async fn run_serialized_threshold_probe(name: &str, threshold: f64) -> Threshold
         "critical_context": [],
     })
     .to_string();
-    let backend = MockStreamingBackend::start_with_plans(
+    let backend = ScriptedBackend::start_with_plans(
         CAPTURE_MODEL,
         vec![
             StreamPlan::current_authored_user(
@@ -1507,7 +1507,7 @@ async fn run_serialized_threshold_probe(name: &str, threshold: f64) -> Threshold
         ],
     )
     .expect("threshold probe mock backend");
-    let db = test_db(name).await;
+    let db = trial_store(name).await;
     let (actors, agent) = boot_capture_agent_with(&db, backend.endpoint(), |behavior| {
         behavior
             .enable_meta_tools(false)
@@ -1743,7 +1743,7 @@ async fn rolling_chunk_failure_does_not_advance_session_and_retry_commits_once()
             vec![StreamChunk::text(checkpoint.clone())],
         )
     };
-    let backend = MockStreamingBackend::start_with_plans(
+    let backend = ScriptedBackend::start_with_plans(
         CAPTURE_MODEL,
         vec![
             StreamPlan::new(
@@ -1778,7 +1778,7 @@ async fn rolling_chunk_failure_does_not_advance_session_and_retry_commits_once()
         ],
     )
     .expect("mock backend");
-    let db = test_db("rolling-compaction-atomic-retry").await;
+    let db = trial_store("rolling-compaction-atomic-retry").await;
     let (actors, agent) = boot_capture_agent_with(&db, backend.endpoint(), |behavior| {
         behavior
             .enable_meta_tools(false)
@@ -1983,13 +1983,17 @@ fn parse_json(value: &Value) -> Value {
 
 async fn stored_capture_fixture(
     name: &str,
-) -> (crate::support::TestDb, Arc<dyn NodeIdentity>, String) {
+) -> (
+    gents_store::test_support::TestStore,
+    Arc<dyn NodeIdentity>,
+    String,
+) {
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
     use gents_session::request::lifecycle::{
         build_signed_client_request, submit_client_request, ExecutionOrigin, RequestIdentity,
         RequestSigner, RequestSpec,
     };
-    let db = test_db(name).await;
+    let db = trial_store(name).await;
     let agent = crate::support::managed_agent(&db).await;
     let root = db.node_identity.as_ref();
     let access = gents_store::config_client::ConfigAccess::local_as(
@@ -2019,7 +2023,7 @@ async fn stored_capture_fixture(
 }
 
 fn rendered_fixture(
-    db: &crate::support::TestDb,
+    db: &gents_store::test_support::TestStore,
     agent: &dyn NodeIdentity,
     request_json: Value,
 ) -> RenderedCompletionRequest {
@@ -2324,7 +2328,7 @@ async fn wait_for_rendered_requests(
 }
 
 async fn boot_capture_agent_with(
-    db: &crate::support::TestDb,
+    db: &gents_store::test_support::TestStore,
     endpoint: &str,
     customize: impl FnOnce(AgentBuilder) -> AgentBuilder,
 ) -> (RequestActors, BootedAgent) {
@@ -2366,7 +2370,7 @@ async fn agent_history(actors: &RequestActors, session_id: &str) -> Vec<Message>
 }
 
 struct OwnedCaptureFixture {
-    _db: crate::support::TestDb,
+    _db: gents_store::test_support::TestStore,
     node: Arc<EmbeddedNode>,
     user: gents_store::identity::KeyIdentity,
     _selected_identity: Arc<dyn NodeIdentity>,
@@ -2404,16 +2408,16 @@ impl OwnedCaptureFixture {
     ) -> Self {
         use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         use gents_store::config_client::{ConfigAccess, NodePermission};
-        let db = crate::support::test_db(name).await;
+        let db = crate::support::trial_store(name).await;
         let root: Arc<dyn NodeIdentity> = db.node_identity.clone();
         let node = db.node.clone();
         let user = crate::support::managed_fixture_user(&db).await;
         let outsider = gents_store::identity::KeyIdentity::load_or_create(
-            db.data_path().join("outsider.key"),
+            db.path().join("outsider.key"),
             None,
         )
         .unwrap();
-        let graphql = db.client_endpoint().to_owned();
+        let graphql = db.graphql_endpoint().to_owned();
         let admin = ConfigAccess::local_as(node.clone(), root.did().parse().unwrap());
         // The capture User is enrolled: it configures the Node and its Agents.
         gents_store::identity::GrantSet::OperatorUser
@@ -2531,7 +2535,7 @@ impl OwnedCaptureFixture {
         let agent = if failure.is_some() || !tools.is_empty() {
             let mut builder = Gents::builder()
                 .node(node.clone())
-                .backend_admission(db.home.backend_admission())
+                .backend_admission(db.backend_admission())
                 .identity(root.clone())
                 .default_agent_did(&binding.agent_did)
                 .tool_ceiling(ToolCeiling::meta_only());
@@ -2560,7 +2564,7 @@ impl OwnedCaptureFixture {
                 node.clone(),
                 root.clone(),
                 gents::DocumentRuntimeOptions {
-                    backend_admission: Some(db.home.backend_admission()),
+                    backend_admission: Some(db.backend_admission()),
                     tool_ceiling: ToolCeiling::meta_only(),
                     ..Default::default()
                 },

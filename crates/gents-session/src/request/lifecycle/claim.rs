@@ -222,6 +222,18 @@ pub(crate) async fn supersede_pending_in_txn(
     Ok(superseded)
 }
 
+/// Why a claim transaction committed without claiming its request.
+enum ClaimRefused {
+    AuthorizationDenied,
+    /// An automated wake pending at an interrupt's commit: the claim drained
+    /// it (Lean `InterruptGeneration.wakeAtClaim`).
+    Drained,
+}
+
+/// The claim reads the session's interrupt marker by id and records its
+/// generation on the claimed row, so an interrupt that commits first aborts
+/// the claim and one that commits later passes what it recorded
+/// (`InterruptGeneration.claimed_then_interrupted`).
 async fn claim_request_with_projection<F>(
     access: &gents_store::config_client::ConfigAccess,
     capture_background_snapshot: bool,
@@ -238,7 +250,7 @@ async fn claim_request_with_projection<F>(
                 BackgroundCompletionClaimSnapshot,
                 Vec<super::queue::FoldedInput>,
             ),
-            (),
+            ClaimRefused,
         >,
     >,
 >
@@ -275,13 +287,14 @@ where
         move |txn| {
             Box::pin(async move {
                 let claim_identity = txn.execute(&format!(
-                    r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ admission_kind }} }}"#,
+                    r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ admission_kind interrupt_generation }} }}"#,
                     escape_graphql_string(&request.doc_id),
                 )).await?;
                 let rows = claim_identity["data"]["AgentRequest"].as_array()
                     .context("claim admission identity query omitted rows")?;
                 if rows.len() != 1 { return Ok(None); }
                 let client = rows[0]["admission_kind"].as_str() == Some("client");
+                let recorded_generation = rows[0]["interrupt_generation"].as_i64();
                 match client_claim_admission {
                     Some(admission) => match admission.authorize_in_txn(txn, request).await? {
                         crate::request::admission::ClientClaimAuthorization::Allowed => {}
@@ -290,7 +303,7 @@ where
                             let rejected = reject_pending_admission_in_txn(
                                 txn, request, "request authorization denied", claimed_at,
                             ).await?;
-                            return Ok(rejected.then_some(Err(())));
+                            return Ok(rejected.then_some(Err(ClaimRefused::AuthorizationDenied)));
                         }
                     },
                     None if client => return Ok(None),
@@ -314,10 +327,46 @@ where
                     .await?;
                     return Ok(None);
                 }
+                let marker = crate::session::interrupt_marker::session_marker_in_txn(
+                    txn,
+                    &request.node_did,
+                    &request.session_id,
+                )
+                .await?;
+                let creates_session =
+                    request.purpose == gents_protocol::request_admission::RequestPurpose::Normal;
+                let Some(recorded_at_claim) =
+                    crate::session::interrupt_marker::claim_record(&marker, creates_session)
+                else {
+                    return Err(super::ClaimAdmissionError::Uncovered {
+                        session_id: request.session_id.clone(),
+                    }
+                    .into());
+                };
+                if let crate::session::interrupt_marker::SessionMarker::Found(marker) = &marker {
+                    if super::queue::is_scheduled_automated_wake(request)
+                        && crate::session::interrupt_marker::wake_drained_at_claim(
+                            recorded_generation,
+                            marker.generation,
+                        )
+                    {
+                        let drained = crate::request::interrupt::interrupt_pending_in_txn(
+                            txn,
+                            &request.doc_id,
+                            &request.node_did,
+                            &request.request_id,
+                            crate::request::interrupt::INTERRUPT_DRAIN_REASON,
+                        )
+                        .await?;
+                        return Ok(drained.is_some().then_some(Err(ClaimRefused::Drained)));
+                    }
+                }
                 match claim_gate_in_txn(txn, request, claimed_at, client).await? {
                     ClaimGate::Allowed => {}
                     ClaimGate::Queued | ClaimGate::Retired => return Ok(None),
-                    ClaimGate::Rejected { applied } => return Ok(applied.then_some(Err(()))),
+                    ClaimGate::Rejected { applied } => {
+                        return Ok(applied.then_some(Err(ClaimRefused::AuthorizationDenied)))
+                    }
                 }
                 if request.purpose == gents_protocol::request_admission::RequestPurpose::Normal
                     && !super::query::claim_queue_allows(txn, request).await?
@@ -404,7 +453,8 @@ where
                 } else {
                     BackgroundCompletionClaimSnapshot::default()
                 };
-                let snapshot_fields = if capture_background_snapshot { snapshot.mutation_fields() } else { Default::default() };
+                let mut snapshot_fields = if capture_background_snapshot { snapshot.mutation_fields() } else { String::new() };
+                snapshot_fields.push_str(&format!("interrupt_generation: {recorded_at_claim},"));
                 let mutation = build_mutation(&snapshot_fields);
                 let claimed = txn.execute_local_response(&mutation).await?;
                 let mut folded_selection = Vec::new();
@@ -415,10 +465,23 @@ where
                         .and_then(|data| data.get("update_AgentRequest"))
                         .is_some_and(response_has_documents)
                 {
-                    crate::request::hooks::points::claim_applied(txn, request, claimed_at).await?;
+                    crate::request::hooks::points::claim_applied(txn, request, claimed_at, client)
+                        .await?;
                     crate::session::mailbox::claim_reply_in_txn(txn, request, claimed_at).await?;
                     super::materialize::apply_request_session_projection(txn, request, claimed_at)
                         .await?;
+                    if marker == crate::session::interrupt_marker::SessionMarker::NoSession {
+                        let created = crate::session::interrupt_marker::read_for_session_in_txn(
+                            txn,
+                            &request.node_did,
+                            &request.session_id,
+                        )
+                        .await?;
+                        anyhow::ensure!(
+                            created.is_some_and(|created| created.generation == recorded_at_claim),
+                            "the session this claim created has no marker at the generation it recorded"
+                        );
+                    }
                     folded_selection = super::queue::select_fold_in_claim_txn(
                         txn,
                         request,
@@ -440,18 +503,20 @@ fn parse_rfc3339_utc(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
         .map(|dt| dt.with_timezone(&chrono::Utc))
 }
 
-async fn fetch_interrupt_and_ttl(
+/// The request's lifecycle state and `valid_until`: a request interrupted
+/// before its claim is not claimed.
+async fn fetch_ttl(
     node: &std::sync::Arc<EmbeddedNode>,
     actor: identity::Did,
     doc_id: &str,
-) -> Result<(Option<String>, Option<String>)> {
+) -> Result<(Option<RequestLifecycleState>, Option<String>)> {
     use gents_protocol::document_query::{
         fields::agent_request as fields, Filter, Query, Selection,
     };
     let query = Query::select(
         Selection::new()
             .field(fields::REQUEST_ID)
-            .field(fields::INTERRUPT_REQUESTED_AT)
+            .field(fields::LIFECYCLE_STATE)
             .field(fields::VALID_UNTIL),
     )
     .filter(Filter::eq(fields::DOC_ID, doc_id))
@@ -463,23 +528,16 @@ async fn fetch_interrupt_and_ttl(
     let rows = response
         .pointer("/data/AgentRequest")
         .and_then(serde_json::Value::as_array)
-        .context("interrupt and TTL query omitted AgentRequest rows")?;
+        .context("TTL query omitted AgentRequest rows")?;
     let row: gents_protocol::row::AgentRequestRow = serde_json::from_value(
         rows.first()
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("AgentRequest {doc_id} not found"))?,
     )?;
-    let interrupt = row
-        .interrupt_requested_at
-        .as_deref()
-        .filter(|s| !s.is_empty())
-        .map(String::from);
-    let valid = row
-        .valid_until
-        .as_deref()
-        .filter(|s| !s.is_empty())
-        .map(String::from);
-    Ok((interrupt, valid))
+    Ok((
+        row.lifecycle_state,
+        row.valid_until.filter(|s| !s.is_empty()),
+    ))
 }
 
 impl RequestLifecycle {
@@ -510,11 +568,9 @@ impl RequestLifecycle {
         F: FnOnce() -> (chrono::DateTime<chrono::Utc>, String),
     {
         self.ensure_state(&[LocalLifecycleState::Pending], "claim")?;
-        let (interrupt_requested_at, valid_until) =
-            fetch_interrupt_and_ttl(&self.node, self.actor_did()?, &self.request.doc_id).await?;
-        if let Some(interrupt_at) = interrupt_requested_at {
-            self.transition_pending_to_interrupted(&interrupt_at)
-                .await?;
+        let (state, valid_until) =
+            fetch_ttl(&self.node, self.actor_did()?, &self.request.doc_id).await?;
+        if state == Some(RequestLifecycleState::Interrupted) {
             self.state = LocalLifecycleState::Interrupted;
             return Ok(DurableClaimOutcome::NotClaimed(ClaimOutcome::Interrupted));
         }
@@ -536,8 +592,12 @@ impl RequestLifecycle {
             };
         let (now, generation) = claim_inputs();
         match self.persist_pending_claim_at(now, generation).await? {
-            Some(receipt) => Ok(DurableClaimOutcome::Claimed(Box::new(receipt))),
-            None => Ok(DurableClaimOutcome::NotClaimed(ClaimOutcome::Queued)),
+            Ok(receipt) => Ok(DurableClaimOutcome::Claimed(Box::new(receipt))),
+            Err(ClaimOutcome::Interrupted) => {
+                self.state = LocalLifecycleState::Interrupted;
+                Ok(DurableClaimOutcome::NotClaimed(ClaimOutcome::Interrupted))
+            }
+            Err(outcome) => Ok(DurableClaimOutcome::NotClaimed(outcome)),
         }
     }
 
@@ -1002,7 +1062,7 @@ impl RequestLifecycle {
         &self,
         now: chrono::DateTime<chrono::Utc>,
         execution_generation: String,
-    ) -> Result<Option<DurableClaimReceipt>> {
+    ) -> Result<std::result::Result<DurableClaimReceipt, ClaimOutcome>> {
         self.ensure_state(&[LocalLifecycleState::Pending], "claim")?;
         let claimed_at = now.to_rfc3339();
         let lease_secs = i64::try_from(self.execution_lease_duration_secs)
@@ -1100,7 +1160,6 @@ impl RequestLifecycle {
                     }}
                 ) {{{request_fields}
                     lifecycle_state
-                    interrupt_requested_at
                     valid_until
                     _version {{ cid height fieldName }}
                 }}
@@ -1124,10 +1183,15 @@ impl RequestLifecycle {
         )
         .await?
         else {
-            return Ok(None);
+            return Ok(Err(ClaimOutcome::Queued));
         };
-        let (resp, snapshot, folded_selection) =
-            claim_result.map_err(|()| ClaimAdmissionError::AuthorizationDenied)?;
+        let (resp, snapshot, folded_selection) = match claim_result {
+            Ok(claimed) => claimed,
+            Err(ClaimRefused::AuthorizationDenied) => {
+                return Err(ClaimAdmissionError::AuthorizationDenied.into())
+            }
+            Err(ClaimRefused::Drained) => return Ok(Err(ClaimOutcome::Interrupted)),
+        };
         let background_completion_input_through_sequence = snapshot.through_sequence;
 
         // The mutation response is the only response that can carry the exact
@@ -1175,7 +1239,7 @@ impl RequestLifecycle {
             .await?;
         }
 
-        Ok(Some(DurableClaimReceipt {
+        Ok(Ok(DurableClaimReceipt {
             request: claimed_request,
             request_commit_cid,
             deadline_at,

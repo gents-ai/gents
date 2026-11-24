@@ -47,89 +47,8 @@
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "Our bulletin board keeps DispatchThread { ticket: string, desk: string } records; the type and its records already exist. Give yourself a read-only tool that returns each ticket with its desk for a desk name the caller supplies, limited to DispatchThread. It must not add or change records or reach other collections.",
-      "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "agents": {
-              "agents": "agents",
-              "contexts": "contexts",
-              "tools": "tools",
-              "expect": [
-                {
-                  "agent_did": "gents:agent-slot:engineer",
-                  "datastore": {
-                    "surfaces": "surfaces",
-                    "create": [],
-                    "query": [
-                      "DispatchThread"
-                    ],
-                    "lookup_by": "desk",
-                    "query_fields": {
-                      "DispatchThread": [
-                        "ticket",
-                        "desk"
-                      ]
-                    }
-                  },
-                  "tools": [
-                    {
-                      "field": "datastore.enable_defra_query",
-                      "matches": "^(null|false)$"
-                    }
-                  ]
-                }
-              ]
-            },
-            "present": [
-              {
-                "capture": "surfaces"
-              },
-              {
-                "capture": "DispatchThread",
-                "min": 5,
-                "max": 5
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "surfaces",
-            "min": 1
-          },
-          "tier": "acceptance",
-          "weight": 1
-        }
-      ],
+      "prompt": "Our bulletin board keeps DispatchThread records, each with a ticket and a desk. Create an assistant called Board Reader with one tool of its own that looks tickets up by desk: read-only, no other database access. I will hand it work through you.",
       "capture": [
-        {
-          "kind": "documents",
-          "name": "DispatchThread",
-          "collection": "DispatchThread",
-          "filter": {},
-          "fields": [
-            "ticket",
-            "desk"
-          ]
-        },
         {
           "kind": "documents",
           "name": "agents",
@@ -144,7 +63,8 @@
             "display_name",
             "context_id",
             "enabled",
-            "inference_profile_id"
+            "inference_profile_id",
+            "tags"
           ]
         },
         {
@@ -158,8 +78,8 @@
           },
           "fields": [
             "context_id",
-            "tools_id",
-            "system_prompt"
+            "system_prompt",
+            "tools_id"
           ]
         },
         {
@@ -175,8 +95,11 @@
             "tools_id",
             "host",
             "datastore",
+            "self_config",
             "agents",
-            "self_config"
+            "remote",
+            "built_ins",
+            "integrations"
           ]
         },
         {
@@ -195,37 +118,19 @@
             "enabled",
             "entries"
           ]
+        },
+        {
+          "kind": "documents",
+          "name": "DispatchThread",
+          "collection": "DispatchThread",
+          "filter": {},
+          "fields": [
+            "ticket",
+            "desk"
+          ]
         }
-      ]
-    },
-    {
-      "stage_id": "exercise",
-      "prompt": "Which tickets belong to the receiving desk? Use your board tool and leave configuration alone.",
+      ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "forbidden": [
-              "config",
-              "bash"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "final_message_matches",
-          "params": {
-            "all": [
-              "B-14",
-              "B-18",
-              "B-22",
-              "B-37"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "crew_spec_match",
           "params": {
@@ -235,7 +140,17 @@
               "tools": "tools",
               "expect": [
                 {
-                  "agent_did": "gents:agent-slot:engineer",
+                  "agent_did": "board-reader",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^board[ -]?reader$"
+                  },
+                  "agent": [
+                    {
+                      "field": "enabled",
+                      "equals": true
+                    }
+                  ],
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [],
@@ -248,10 +163,7 @@
                         "ticket",
                         "desk"
                       ]
-                    },
-                    "called_query": [
-                      "DispatchThread"
-                    ]
+                    }
                   },
                   "tools": [
                     {
@@ -263,6 +175,91 @@
               ]
             },
             "present": [
+              {
+                "capture": "DispatchThread",
+                "min": 5,
+                "max": 5
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "exercise",
+      "prompt": "Ask Board Reader which tickets belong to the receiving desk, and tell me its answer.",
+      "settle": true,
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "role_agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "helper_requests",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^board[ -]?reader$"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "lifecycle_state",
+            "content"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "DispatchThread",
+          "collection": "DispatchThread",
+          "filter": {},
+          "fields": [
+            "ticket",
+            "desk"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "helper_requests",
+                "min": 1
+              },
               {
                 "capture": "DispatchThread",
                 "min": 5,
@@ -329,84 +326,19 @@
           },
           "tier": "acceptance",
           "weight": 1
-        }
-      ],
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "DispatchThread",
-          "collection": "DispatchThread",
-          "filter": {},
-          "fields": [
-            "ticket",
-            "desk"
-          ]
         },
         {
-          "kind": "documents",
-          "name": "agents",
-          "collection": "Agent",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              "B-14",
+              "B-18",
+              "B-22",
+              "B-37"
+            ]
           },
-          "fields": [
-            "agent_did",
-            "display_name",
-            "context_id",
-            "enabled",
-            "inference_profile_id"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "contexts",
-          "collection": "AgentContext",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "context_id",
-            "tools_id",
-            "system_prompt"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "tools",
-          "collection": "Tools",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "tools_id",
-            "host",
-            "datastore",
-            "agents",
-            "self_config"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "surfaces",
-          "collection": "DatastoreToolSurface",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "surface_id",
-            "node_did",
-            "display_name",
-            "enabled",
-            "entries"
-          ]
+          "tier": "acceptance",
+          "weight": 1
         }
       ]
     }

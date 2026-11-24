@@ -1,15 +1,14 @@
 use anyhow::{Context, Result};
 use serde_json::Value;
 
-use crate::runner::embedded::observe::{request_evidence_from_query_data, InferenceCallEvidence};
+use super::usage::{home_charge, home_rows, total};
+use crate::runner::embedded::observe::InferenceCallEvidence;
 use crate::runner::executor::StageEvidence;
 use crate::{Anchor, TrialUsage};
 #[cfg(test)]
 use gents::defra_node::Node as EmbeddedNode;
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
-#[cfg(test)]
-use gents_store::graphql::graphql_with_transaction_retry;
 
 pub(super) struct SessionRequest {
     pub(super) request_id: String,
@@ -48,56 +47,25 @@ pub(super) async fn session_requests_with_access(
 }
 
 #[cfg(test)]
-pub(super) async fn home_usage(node: &EmbeddedNode) -> TrialUsage {
-    let result = async {
-        let response = graphql_with_transaction_retry(
-            node,
-            "{ InferenceCall { call_seq call_state failure_reason prompt_tokens completion_tokens } }",
-            "eval trial total usage",
-        ).await?;
-        let data = response.data.context("trial usage query omitted data")?;
-        anyhow::ensure!(data.get("InferenceCall").is_some_and(Value::is_array), "trial usage query omitted inference calls");
-        Ok::<_, anyhow::Error>(usage_of(&request_evidence_from_query_data(&data).inference_calls))
-    }.await;
-    result.unwrap_or_else(|error| {
-        tracing::warn!(error = %format!("{error:#}"), "eval trial usage could not be collected");
-        TrialUsage::default()
-    })
+pub(super) async fn home_usage(node: &std::sync::Arc<EmbeddedNode>) -> TrialUsage {
+    home_usage_with_access(&ConfigAccess::local(node.clone()))
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!(error = %format!("{error:#}"), "eval trial usage could not be collected");
+            TrialUsage::default()
+        })
 }
 
-pub(super) async fn home_usage_with_access(access: &ConfigAccess) -> Result<TrialUsage> {
-    let response = access.execute(
-            "{ InferenceCall { call_seq call_state failure_reason prompt_tokens completion_tokens } }",
-        ).await?;
-    let data = response
-        .get("data")
-        .cloned()
-        .context("trial usage query omitted data")?;
-    anyhow::ensure!(
-        data.get("InferenceCall").is_some_and(Value::is_array),
-        "trial usage query omitted inference calls"
-    );
-    Ok(usage_of(
-        &request_evidence_from_query_data(&data).inference_calls,
-    ))
+pub(in crate::runner::embedded) async fn home_usage_with_access(
+    access: &ConfigAccess,
+) -> Result<TrialUsage> {
+    Ok(home_charge(&home_rows(access).await?).usage)
 }
 
-pub(in crate::runner::embedded) fn usage_of<'a>(
-    calls: impl IntoIterator<Item = &'a InferenceCallEvidence>,
-) -> TrialUsage {
-    let mut input_tokens = Some(0u64);
-    let mut output_tokens = Some(0u64);
-    for call in calls {
-        input_tokens = input_tokens
-            .zip(call.prompt_tokens)
-            .map(|(total, tokens)| total.saturating_add(tokens));
-        output_tokens = output_tokens
-            .zip(call.completion_tokens)
-            .map(|(total, tokens)| total.saturating_add(tokens));
-    }
+pub(in crate::runner::embedded) fn usage_of(calls: &[InferenceCallEvidence]) -> TrialUsage {
     TrialUsage {
-        input_tokens,
-        output_tokens,
+        input_tokens: total(calls.iter().map(|call| call.prompt_tokens)),
+        output_tokens: total(calls.iter().map(|call| call.completion_tokens)),
     }
 }
 

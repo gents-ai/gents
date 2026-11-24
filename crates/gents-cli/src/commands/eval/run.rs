@@ -6,6 +6,7 @@ use anyhow::{anyhow, Context, Result};
 use gents::eval::documents::default_breaker_threshold;
 use gents::eval::load_trials;
 use gents_eval::report::load_report;
+use gents_eval::runner::divergence::Divergence;
 use gents_eval::runner::{self, CellRequest, RunOutcome, RunRequest, CANCEL_MARKER};
 
 use super::{
@@ -133,6 +134,13 @@ pub(super) async fn run_request(
     let profiles = profiles_by_cell(args).map_err(anyhow::Error::msg)?;
     let mut cells = Vec::with_capacity(args.cells.len());
     let mut packs = Vec::with_capacity(args.cells.len());
+    let mut divergences: Vec<Divergence> = match &args.divergences {
+        Some(path) => serde_json::from_slice(
+            &std::fs::read(path).with_context(|| format!("reading {}", path.display()))?,
+        )
+        .with_context(|| format!("{} is not a list of divergences", path.display()))?,
+        None => Vec::new(),
+    };
     for cell in &args.cells {
         let pack =
             resolve_subject_pack(&ctx.home_dir, &cell.pack, args.registry.as_deref()).await?;
@@ -140,6 +148,11 @@ pub(super) async fn run_request(
             Some(agent) => agent.clone(),
             None => pack.default_agent()?,
         };
+        divergences.extend(
+            super::subject::pack_divergences(pack.directory())?
+                .into_iter()
+                .map(|divergence| divergence.in_cell(&cell.cell_id)),
+        );
         cells.push(CellRequest {
             cell_id: cell.cell_id.clone(),
             label: cell.cell_id.clone(),
@@ -177,6 +190,7 @@ pub(super) async fn run_request(
         source_dirty: source_dirty(),
         captures: Vec::new(),
         runs_dir: ctx.runs_dir(),
+        divergences: Some(divergences),
     };
     Ok((request, packs))
 }

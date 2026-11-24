@@ -548,6 +548,14 @@ impl GraphqlEnrollmentStore {
         })
     }
 
+    /// The enrollment decision lock, which every revision writer on this node
+    /// holds through its commit (Lean `Enrollment.RouteFence`). A home admits
+    /// one runtime process, so holding it orders a write against every
+    /// revision this node writes.
+    pub(super) async fn decision_guard(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.decision_lock.lock().await
+    }
+
     pub fn new(node: Arc<EmbeddedNode>, identity: Arc<dyn NodeIdentity>) -> Self {
         let decision_lock = gents_store::identity::enrollment_decision_gate(&node);
         Self {
@@ -841,7 +849,11 @@ impl GraphqlEnrollmentStore {
             record.validate_against_approval(&pending.request, &decision)?;
         }
 
-        let mutation = decision_mutation(&decision, revision.as_ref());
+        let mutation = decision_mutation(
+            &decision,
+            revision.as_ref(),
+            &super::publisher_field(&self.node)?,
+        );
         let committed = async {
             let mut collections = vec!["NetworkEnrollmentDecision"];
             if revision.is_some() {
@@ -1020,7 +1032,7 @@ impl GraphqlEnrollmentStore {
         let administration_removal_pending = withdrawal
             .as_ref()
             .is_some_and(|withdrawal| !withdrawal.owing_doc_ids.is_empty());
-        let mutation = revision_mutation(&revision);
+        let mutation = revision_mutation(&revision, &super::publisher_field(&self.node)?);
         let response = self
             .publish_records(
                 "p2p.write_enrollment_revocation",
@@ -1295,7 +1307,8 @@ impl GraphqlEnrollmentStore {
             );
             &active.request.admin_did
         };
-        let mutation = route_receipt_mutation(&receipt, recipient);
+        let mutation =
+            route_receipt_mutation(&receipt, recipient, &super::publisher_field(&self.node)?);
         let committed = self
             .publish_records(
                 "p2p.write_enrollment_route_receipt",
@@ -1392,15 +1405,6 @@ impl GraphqlEnrollmentStore {
         &self,
         txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     ) -> Result<EnrollmentProjection> {
-        for collection in [
-            "Network",
-            "NetworkEnrollmentRequest",
-            "NetworkEnrollmentDecision",
-            "NetworkAuthorizationRevision",
-            "NetworkEnrollmentRouteReceipt",
-        ] {
-            gents_store::graphql::fence_arrivals(txn, collection).await?;
-        }
         let response = txn
             .execute_local_response(ENROLLMENT_DOCUMENT_QUERY)
             .await?;
@@ -1962,12 +1966,13 @@ fn revisions_for<'a>(
 fn decision_mutation(
     decision: &EnrollmentDecisionRecord,
     revision: Option<&AuthorizationRevisionRecord>,
+    publisher: &str,
 ) -> String {
     let escaped = |value: &str| gents_store::graphql::escape_graphql_string(value);
     let decision_sig = bs58::encode(&decision.admin_sig).into_string();
     let decision_input = format!(
         r#"{{
-          initial_reader_did: "{}", protocol_version: {}, decision_id: "{}", request_id: "{}",
+          {publisher} initial_reader_did: "{}", protocol_version: {}, decision_id: "{}", request_id: "{}",
           request_digest: "{}", network_id: "{}", admin_did: "{}",
           candidate_did: "{}", candidate_peer: "{}", owner_node_did: "{}",
           decision: "{}", authorization_sequence: {}, authorization_expires_at: "{}", decided_at: "{}",
@@ -1995,7 +2000,7 @@ fn decision_mutation(
         format!(
             r#"
               create_NetworkAuthorizationRevision(input: {{
-                initial_reader_did: "{}", protocol_version: {}, revision_id: "{}", request_id: "{}",
+                {publisher} initial_reader_did: "{}", protocol_version: {}, revision_id: "{}", request_id: "{}",
                 request_digest: "{}", network_id: "{}", admin_did: "{}",
                 member_did: "{}", member_peer: "{}", owner_node_did: "{}",
                 sequence: {}, authorization_expires_at: "{}", kind: "{}", issued_at: "{}", signer_did: "{}",
@@ -2027,13 +2032,13 @@ fn decision_mutation(
     )
 }
 
-fn revision_mutation(revision: &AuthorizationRevisionRecord) -> String {
+fn revision_mutation(revision: &AuthorizationRevisionRecord, publisher: &str) -> String {
     let escaped = |value: &str| gents_store::graphql::escape_graphql_string(value);
     let signature = bs58::encode(&revision.admin_sig).into_string();
     format!(
         r#"mutation {{
           create_NetworkAuthorizationRevision(input: {{
-            initial_reader_did: "{}", protocol_version: {}, revision_id: "{}", request_id: "{}",
+            {publisher} initial_reader_did: "{}", protocol_version: {}, revision_id: "{}", request_id: "{}",
             request_digest: "{}", network_id: "{}", admin_did: "{}",
             member_did: "{}", member_peer: "{}", owner_node_did: "{}",
             sequence: {}, authorization_expires_at: "{}", kind: "{}",
@@ -2059,13 +2064,17 @@ fn revision_mutation(revision: &AuthorizationRevisionRecord) -> String {
     )
 }
 
-fn route_receipt_mutation(receipt: &EnrollmentRouteReceiptRecord, recipient: &str) -> String {
+fn route_receipt_mutation(
+    receipt: &EnrollmentRouteReceiptRecord,
+    recipient: &str,
+    publisher: &str,
+) -> String {
     let escaped = |value: &str| gents_store::graphql::escape_graphql_string(value);
     let admin_sig = bs58::encode(&receipt.admin_sig).into_string();
     format!(
         r#"mutation {{
           create_NetworkEnrollmentRouteReceipt(input: {{
-            initial_reader_did: "{}", protocol_version: {}, receipt_id: "{}", request_id: "{}",
+            {publisher} initial_reader_did: "{}", protocol_version: {}, receipt_id: "{}", request_id: "{}",
             request_digest: "{}", network_id: "{}", admin_did: "{}",
             member_did: "{}", member_peer: "{}", server_peer: "{}",
             owner_node_did: "{}", authorization_sequence: {}, authorization_expires_at: "{}", direction: "{}",

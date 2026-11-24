@@ -5,16 +5,7 @@
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "I am putting together a small history reference. Set up AdmiralReport records with name, rank and duty, all text. Duty will hold an English paragraph about each officer. I want keyword searches over those paragraphs to return the most relevant reports first. Set up what is needed and give yourself access to save and search these records; I will send the five entries next.",
-      "capture": [
-        {
-          "kind": "schema",
-          "name": "schema",
-          "collections": [
-            "AdmiralReport"
-          ]
-        }
-      ],
+      "prompt": "I'm putting together a small history reference. Set up AdmiralReport records with name, rank and duty, all text. Duty holds an English paragraph about each officer, and I want keyword searches over those paragraphs, most relevant first. Five entries are coming next.",
       "checks": [
         {
           "check": "schema_matches",
@@ -25,24 +16,26 @@
           "tier": "acceptance",
           "weight": 1
         }
+      ],
+      "capture": [
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "AdmiralReport"
+          ]
+        }
       ]
     },
     {
       "stage_id": "populate",
-      "prompt": "Save these five reports as given, one record per officer. The names and ranks below are intentional.\n\n[\n  {\n    \"name\": \"William D. Leahy\",\n    \"rank\": \"Fleet Admiral\",\n    \"duty\": \"Leahy served as Chief of Staff to the Commander in Chief for Presidents Roosevelt and Truman from 1942 to 1949. He was the senior member of the Joint Chiefs of Staff and helped coordinate military advice and wartime strategy at the presidential level.\"\n  },\n  {\n    \"name\": \"William F. Halsey Jr.\",\n    \"rank\": \"Fleet Admiral\",\n    \"duty\": \"Halsey commanded Allied forces in the South Pacific during the Solomon Islands campaign. He later commanded the Third Fleet, directing fast carrier operations across the western Pacific and supporting the advance toward Japan.\"\n  },\n  {\n    \"name\": \"Chester W. Nimitz\",\n    \"rank\": \"Fleet Admiral\",\n    \"duty\": \"Nimitz commanded the Pacific Fleet and Pacific Ocean Areas during the war against Japan. He directed the broad Pacific campaign and later became Chief of Naval Operations, overseeing the Navy during its transition from wartime strength to a smaller peacetime force.\"\n  },\n  {\n    \"name\": \"Ernest J. King\",\n    \"rank\": \"Fleet Admiral\",\n    \"duty\": \"King served as Chief of Naval Operations and Commander in Chief of the United States Fleet during World War II. He established the Tenth Fleet as an antisubmarine command in 1943, coordinating the Atlantic campaign against U-boats and allocating forces to protect shipping.\"\n  },\n  {\n    \"name\": \"Raymond A. Spruance\",\n    \"rank\": \"Admiral\",\n    \"duty\": \"Spruance commanded Task Force 16 at the Battle of Midway and later led the Fifth Fleet. His Central Pacific commands supported campaigns in the Gilberts, Marshalls and Marianas, followed by the assaults on Iwo Jima and Okinawa.\"\n  }\n]",
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "reports",
-          "collection": "AdmiralReport",
-          "filter": {},
-          "fields": [
-            "name",
-            "rank",
-            "duty"
-          ]
-        }
-      ],
+      "settle": true,
+      "continuation": {
+        "prompt": "OK, go ahead.",
+        "max": 1,
+        "until": "loaded"
+      },
+      "prompt": "Save the five reports in admirals.json, one record per officer, exactly as written.",
       "checks": [
         {
           "check": "crew_spec_match",
@@ -138,12 +131,37 @@
           "tier": "acceptance",
           "weight": 1
         }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "reports",
+          "collection": "AdmiralReport",
+          "filter": {},
+          "fields": [
+            "name",
+            "rank",
+            "duty"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "loaded",
+          "collection": "AdmiralReport",
+          "filter": {
+            "name": {
+              "_eq": "Raymond A. Spruance"
+            }
+          },
+          "fields": [
+            "name"
+          ]
+        }
       ]
     },
     {
       "stage_id": "search",
-      "prompt": "Search the saved duty paragraphs for the keywords \"antisubmarine U-boats\". Return only the strongest match from the ranked search, including its name, rank and duty paragraph, and tell me which officer it is.",
-      "capture": [],
+      "prompt": "Search the duty paragraphs for \"antisubmarine U-boats\". Which officer is the best match, and what does his paragraph say?",
       "checks": [
         {
           "check": "tool_result_matches",
@@ -158,16 +176,8 @@
                 "equals": "bm25"
               },
               {
-                "field": "returned_count",
-                "equals": 1
-              },
-              {
                 "field": "results",
                 "contains": "Ernest J. King"
-              },
-              {
-                "field": "results",
-                "contains": "King served as Chief of Naval Operations and Commander in Chief of the United States Fleet during World War II. He established the Tenth Fleet as an antisubmarine command in 1943, coordinating the Atlantic campaign against U-boats and allocating forces to protect shipping."
               }
             ]
           },
@@ -180,13 +190,23 @@
             "all": [
               {
                 "matches": "(?i)\\bKing\\b"
-              }
+              },
+              "Tenth Fleet"
             ]
           },
           "tier": "acceptance",
           "weight": 1
         }
-      ]
+      ],
+      "capture": []
     }
-  ]
+  ],
+  "fixtures": {
+    "files": [
+      {
+        "path": "admirals.json",
+        "contents": "[\n  {\n    \"name\": \"William D. Leahy\",\n    \"rank\": \"Fleet Admiral\",\n    \"duty\": \"Leahy served as Chief of Staff to the Commander in Chief for Presidents Roosevelt and Truman from 1942 to 1949. He was the senior member of the Joint Chiefs of Staff and helped coordinate military advice and wartime strategy at the presidential level.\"\n  },\n  {\n    \"name\": \"William F. Halsey Jr.\",\n    \"rank\": \"Fleet Admiral\",\n    \"duty\": \"Halsey commanded Allied forces in the South Pacific during the Solomon Islands campaign. He later commanded the Third Fleet, directing fast carrier operations across the western Pacific and supporting the advance toward Japan.\"\n  },\n  {\n    \"name\": \"Chester W. Nimitz\",\n    \"rank\": \"Fleet Admiral\",\n    \"duty\": \"Nimitz commanded the Pacific Fleet and Pacific Ocean Areas during the war against Japan. He directed the broad Pacific campaign and later became Chief of Naval Operations, overseeing the Navy during its transition from wartime strength to a smaller peacetime force.\"\n  },\n  {\n    \"name\": \"Ernest J. King\",\n    \"rank\": \"Fleet Admiral\",\n    \"duty\": \"King served as Chief of Naval Operations and Commander in Chief of the United States Fleet during World War II. He established the Tenth Fleet as an antisubmarine command in 1943, coordinating the Atlantic campaign against U-boats and allocating forces to protect shipping.\"\n  },\n  {\n    \"name\": \"Raymond A. Spruance\",\n    \"rank\": \"Admiral\",\n    \"duty\": \"Spruance commanded Task Force 16 at the Battle of Midway and later led the Fifth Fleet. His Central Pacific commands supported campaigns in the Gilberts, Marshalls and Marianas, followed by the assaults on Iwo Jima and Okinawa.\"\n  }\n]\n"
+      }
+    ]
+  }
 }

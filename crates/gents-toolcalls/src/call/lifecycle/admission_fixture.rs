@@ -201,7 +201,7 @@ pub struct PublishedAdmission {
     pub node: Arc<EmbeddedNode>,
     /// Holds the store lock until dropped, so a test that shuts the node down
     /// and drops this can reopen the retained store at `path`.
-    pub home: gents_inference::test_support::TestDb,
+    pub home: gents_store::test_support::TestStore,
     pub path: PathBuf,
     pub tool: ToolCallLifecycle,
     pub node_did: String,
@@ -510,7 +510,7 @@ pub async fn claimed_signed_request_create(
         &create.created_at,
     )
     .await;
-    claimed_signed_request_create_as_agent(node, identity, agent_identity.as_ref(), create).await
+    claimed_signed_request_create_as_agent(node, agent_identity.as_ref(), create).await
 }
 
 /// [`claimed_signed_request_create`] for a session that `agent_identity`
@@ -519,61 +519,43 @@ pub async fn claimed_signed_request_create(
 /// the owning Agent selects it directly.
 pub async fn claimed_signed_request_create_as_agent(
     node: &Arc<EmbeddedNode>,
-    identity: &dyn NodeIdentity,
     agent_identity: &dyn NodeIdentity,
     mut create: gents_protocol::request_admission::AgentRequestCreate,
 ) -> RequestLifecycle {
+    assert_eq!(
+        create.admission.kind,
+        gents_protocol::request_admission::AgentRequestAdmissionKind::LocalSelf,
+        "the selected Agent signs and owns a fixture request"
+    );
     create.agent_did = agent_identity.did().to_owned();
-    if create.admission.kind
-        == gents_protocol::request_admission::AgentRequestAdmissionKind::LocalSelf
-    {
-        create.requester_did = create.agent_did.clone();
-        create.admission =
-            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
-                &create.agent_did,
-            );
-        gents_session::request::admission::sign_agent_request_create(agent_identity, &mut create)
-            .await
-            .expect("sign fixture request as selected agent");
-    } else {
-        gents_session::request::admission::sign_agent_request_create(identity, &mut create)
-            .await
-            .expect("sign canonical admission fixture request");
-    }
-    let local_self = create.admission.kind
-        == gents_protocol::request_admission::AgentRequestAdmissionKind::LocalSelf;
+    create.requester_did = create.agent_did.clone();
+    create.admission = gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+        &create.agent_did,
+    );
+    gents_session::request::admission::sign_agent_request_create(agent_identity, &mut create)
+        .await
+        .expect("sign fixture request as selected agent");
     let actor_access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
         identity::Did::new(create.agent_did.as_str()).unwrap(),
         agent_identity,
     )
     .unwrap();
-    if local_self {
-        actor_access
-            .write(
-                "fixture.create_request",
-                &create.graphql_mutation().unwrap(),
-            )
-            .await
-            .expect("create agent-owned local request");
-    } else {
-        let created = node.execute(&create.graphql_mutation().unwrap()).await;
-        assert!(!created.has_errors(), "{:#?}", created.errors);
-    }
+    actor_access
+        .write(
+            "fixture.create_request",
+            &create.graphql_mutation().unwrap(),
+        )
+        .await
+        .expect("create agent-owned local request");
     let request_id = gents_store::graphql::escape_graphql_string(&create.request_id);
     let query = format!(
         r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
         gents_protocol::row::AGENT_REQUEST_FIELDS,
     );
-    let row: gents_protocol::row::AgentRequestRow = if local_self {
-        let result = actor_access.execute(&query).await.unwrap();
-        serde_json::from_value(result["data"]["AgentRequest"][0].clone()).unwrap()
-    } else {
-        let result = node.execute(&query).await;
-        gents_store::graphql::first_row(&result, "AgentRequest")
-            .unwrap()
-            .unwrap()
-    };
+    let result = actor_access.execute(&query).await.unwrap();
+    let row: gents_protocol::row::AgentRequestRow =
+        serde_json::from_value(result["data"]["AgentRequest"][0].clone()).unwrap();
     let mut lifecycle = RequestLifecycle::new_with_node_did(
         node.clone(),
         row.try_into().unwrap(),
@@ -597,11 +579,16 @@ pub async fn published_admission_with_owner(
     let name = options.name;
     let path =
         std::env::temp_dir().join(format!("admission-fixture-{name}-{}", uuid::Uuid::new_v4()));
-    let p2p = options.p2p.then(test_p2p_config);
-    let db =
-        gents_inference::test_support::test_db_at(&path, p2p, options.composition.clone()).await?;
-    let (db, user, owner, binding) =
-        gents_inference::test_support::signed_test_node_from_db(db, &name).await;
+    let p2p = options
+        .p2p
+        .then(|| -> gents_store::local::home::NodeConfigure {
+            Arc::new(|_, builder| builder.with_p2p(test_p2p_config()))
+        });
+    let db = gents_store::test_support::TestStore::open_at(&path, p2p, options.composition.clone())
+        .await?;
+    let signed_home = gents_documents::test_support::SignedHome::enroll(db, &name).await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, owner) = signed_home.into_parts();
     let node = db.node.clone();
     let runtime = db.node_identity.clone();
     let node_did = runtime.did().to_owned();
@@ -1349,17 +1336,45 @@ pub async fn materialize_session_at(
         .unwrap();
 }
 
+/// Moves the request to `state` and, as a claim does, records the session's
+/// interrupt generation on it.
 pub async fn set_state(
     access: &gents_store::config_client::ConfigAccess,
     doc_id: &str,
     state: &str,
 ) {
+    let doc = gents_store::graphql::escape_graphql_string(doc_id);
+    let generation = access
+        .transact_readonly("test.set_state.marker", |txn| {
+            let doc = &doc;
+            Box::pin(async move {
+                let row = txn
+                    .execute(&format!(
+                        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}) {{ node_did session_id }} }}"#
+                    ))
+                    .await?["data"]["AgentRequest"][0]
+                    .clone();
+                Ok::<_, anyhow::Error>(
+                    gents_session::session::interrupt_marker::read_for_session_in_txn(
+                        txn,
+                        row["node_did"].as_str().unwrap_or_default(),
+                        row["session_id"].as_str().unwrap_or_default(),
+                    )
+                    .await?
+                    .map(|marker| marker.generation),
+                )
+            })
+        })
+        .await
+        .unwrap();
+    let generation = generation
+        .map(|generation| format!(", interrupt_generation: {generation}"))
+        .unwrap_or_default();
     access
         .write(
             "test.set_state",
             &format!(
-                r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "{state}" }}) {{ _docID }} }}"#,
-                gents_store::graphql::escape_graphql_string(doc_id)
+                r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}, input: {{ lifecycle_state: "{state}"{generation} }}) {{ _docID }} }}"#
             ),
         )
         .await

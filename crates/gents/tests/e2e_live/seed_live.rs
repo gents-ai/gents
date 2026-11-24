@@ -9,7 +9,7 @@ use crate::support::builder_runtime::{seed_session_message, submit_request};
 use crate::support::live_inference::{
     bind_target, boot_live_agent, live_target, wait_for_assistant_answer, wait_for_request_terminal,
 };
-use crate::support::test_db;
+use crate::support::trial_store;
 use gents_store::test_support::STALL_CEILING;
 
 const PROFILE_SEED: i64 = 424_242;
@@ -18,7 +18,7 @@ const PROFILE_SEED: i64 = 424_242;
 async fn seeded_profile_completes_requests_and_compacts_retained_history() {
     let target = live_target().await;
 
-    let db = test_db("live-seed").await;
+    let db = trial_store("live-seed").await;
     let actors = bind_target(&db, &target).await;
     let (node_did, agent_did) = (actors.node_did().to_owned(), actors.agent_did().to_owned());
     let reader = &actors.fixture.access;

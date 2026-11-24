@@ -34,6 +34,12 @@ private structure RunState where
   queue : SessionQueueState
   captured : Option (List RequestId)
 
+/-- `captureInterrupt` and `commitInterrupt` are the interrupt's first read and
+its commit with other writes between them. The interrupt covers what is
+pending at its commit, not what its first read saw: every wake publication
+reads the session's interrupt marker by id, so one committed in between
+recorded the generation the interrupt bumps
+(`InterruptGeneration.wake_before_the_interrupt_is_drained`). -/
 def step (state : RunState) : Event → Option RunState
   | .interrupt => do
       let (request, next) ← latchInterruptScoped queue.scope state.request state.queue
@@ -42,9 +48,8 @@ def step (state : RunState) : Event → Option RunState
       if state.request.interruptRequestedAt.isSome then some state
       else some { state with captured := some (state.queue.pending.map QueueEntry.requestId) }
   | .commitInterrupt => do
-      let observed ← state.captured
-      let (request, next) ← latchInterruptObservedScoped queue.scope
-        state.request observed state.queue
+      let _ ← state.captured
+      let (request, next) ← latchInterruptScoped queue.scope state.request state.queue
       pure ⟨request, next, none⟩
   | .enqueue entry => do
       let next ← scopedStep? queue.scope state.queue
@@ -90,7 +95,7 @@ example : cases.map (fun c => observation c.2) =
     , some ([], [301], true)
     , some ([302], [301, 303], true)
     , some ([303, 302], [301], true)
-    , some ([301], [], true)
+    , some ([], [301], true)
     , some ([303], [301], true)
     , some ([304], [], true) ] := by native_decide
 

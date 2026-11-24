@@ -5,7 +5,7 @@ use gents_store::identity::{GrantSet, NodeIdentity};
 
 #[tokio::test]
 async fn task_view_selection_matches_lean_on_served_node() -> anyhow::Result<()> {
-    let db = gents_inference::test_support::test_db("task-views", Default::default()).await;
+    let db = gents_store::test_support::TestStore::start("task-views", Default::default()).await;
     let (owner, outsider) = tokio::task::spawn_blocking(|| {
         (
             gents_store::test_support::test_identity("task-view-owner"),
@@ -15,7 +15,7 @@ async fn task_view_selection_matches_lean_on_served_node() -> anyhow::Result<()>
     .await?;
     let access = |identity: &gents_store::identity::KeyIdentity| -> anyhow::Result<ConfigAccess> {
         Ok(ConfigAccess::Graphql(
-            GraphqlEndpoint::as_principal(db.client_endpoint(), identity.did())
+            GraphqlEndpoint::as_principal(db.graphql_endpoint(), identity.did())
                 .with_client_signing_capability(identity.client_signing_capability()?)?,
         ))
     };

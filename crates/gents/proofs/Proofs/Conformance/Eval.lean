@@ -79,24 +79,32 @@ def storedVerdict : Family StoredVerdictInput StoredVerdictOutput where
       reason := recordedReason i.providerReason }
 
 deriving instance ToJson for FireFailure, SeedObservation, SeedAction, SeedStep,
-  FiredRun, RunSelector
+  FiredRun, RunSelector, StageFailure, OutageStep
 
 def failureLists : List (List FireFailure) :=
   [[], [.error], [.budgetExhausted], [.unacknowledged], [.unacknowledged, .unacknowledged],
     [.unacknowledged, .error], [.error, .unacknowledged], [.budgetExhausted, .unacknowledged]]
 
 structure StageOutcomeInput where
+  endedByBackend : Bool
   request : Option OutcomeKind
+  stated : Option ProviderReason
   triggersRead : Bool
   failures : List FireFailure
   deriving ToJson
 
+private def reasons : List (Option ProviderReason) := [none] ++ allReasons.map some
+
 @[conformance_family]
-def stageOutcomes : Family StageOutcomeInput (Option OutcomeKind) where
-  inputs := ([none] ++ allKinds.map some).flatMap fun request =>
-    [false, true].flatMap fun triggersRead =>
-      failureLists.map fun failures => { request, triggersRead, failures }
-  model := fun i => stageOutcome i.request i.triggersRead i.failures
+def stageOutcome : Family StageOutcomeInput (Option StageFailure) where
+  inputs := [false, true].flatMap fun endedByBackend =>
+    ([none] ++ allKinds.map some).flatMap fun request =>
+      reasons.flatMap fun stated =>
+        [false, true].flatMap fun triggersRead =>
+          failureLists.map fun failures =>
+            { endedByBackend, request, stated, triggersRead, failures }
+  model := fun i =>
+    _root_.Eval.stageOutcome i.endedByBackend i.request i.stated i.triggersRead i.failures
 
 @[conformance_family]
 def seedSteps : Family SeedObservation SeedStep where
@@ -127,5 +135,72 @@ def runAddressing : Family RunAddressingInput Bool where
               [false, true].map fun priorToStage =>
                 { selector, seed, run := { trigger, watched, source, priorToStage } }
   model := fun i => runAddressed i.selector i.seed i.run
+
+structure StageInput where
+  failureKind : Option OutcomeKind
+  providerReason : Option ProviderReason
+  deriving ToJson
+
+def StageInput.failure (stage : StageInput) : Option StageFailure :=
+  stage.failureKind.map fun kind => ⟨kind, stage.providerReason⟩
+
+structure AttemptInput where
+  stages : List StageInput
+  deriving ToJson
+
+private def stageInputs : List StageInput :=
+  [{ failureKind := none, providerReason := none }] ++
+    allKinds.flatMap fun kind =>
+      reasons.map fun providerReason => { failureKind := some kind, providerReason }
+
+@[conformance_family]
+def attemptRetry : Family AttemptInput Bool where
+  inputs := [{ stages := [] }] ++ stageInputs.map (fun stage => { stages := [stage] }) ++
+    stageInputs.flatMap fun first => stageInputs.map fun second => { stages := [first, second] }
+  model := fun i => attemptRetryable (i.stages.map StageInput.failure)
+
+structure SlotInput where
+  maxInfraRetries : Nat
+  maxAbandoned : Nat
+  latestRetryable : Option Bool
+  retryable : Nat
+  abandoned : Nat
+  deriving ToJson
+
+@[conformance_family]
+def slotAttempt : Family SlotInput Bool where
+  inputs := [0, 1, 2].flatMap fun maxInfraRetries =>
+    [none, some true, some false].flatMap fun latestRetryable =>
+      [0, 1, 2, 3].flatMap fun retryable =>
+        [0, 9, 10, 11].map fun abandoned =>
+          { maxInfraRetries, maxAbandoned := 10, latestRetryable, retryable, abandoned }
+  model := fun i =>
+    slotOwesAttempt i.maxInfraRetries i.maxAbandoned ⟨i.latestRetryable, i.retryable, i.abandoned⟩
+
+structure OutageInput where
+  providerAnswers : Bool
+  waitedSecs : Nat
+  limitSecs : Nat
+  deriving ToJson
+
+@[conformance_family]
+def outage : Family OutageInput OutageStep where
+  inputs := [false, true].flatMap fun providerAnswers =>
+    [0, 1, 599, 600, 601].flatMap fun waitedSecs =>
+      [0, 600].map fun limitSecs => { providerAnswers, waitedSecs, limitSecs }
+  model := fun i => outageStep i.providerAnswers i.waitedSecs i.limitSecs
+
+structure BreakerInput where
+  consecutive : Nat
+  retryable : Bool
+  providerAnswers : Bool
+  deriving ToJson
+
+@[conformance_family]
+def breaker : Family BreakerInput Nat where
+  inputs := [0, 1, 4].flatMap fun consecutive =>
+    [false, true].flatMap fun retryable =>
+      [false, true].map fun providerAnswers => { consecutive, retryable, providerAnswers }
+  model := fun i => breakerCount i.consecutive i.retryable i.providerAnswers
 
 end Conformance.Eval

@@ -22,19 +22,20 @@ pub struct Fixture {
     pub access: ConfigAccess,
     pub agent: Arc<dyn NodeIdentity>,
     pub _workspace_dir: tempfile::TempDir,
-    pub _home: gents_inference::test_support::TestDb,
+    pub _home: gents_store::test_support::TestStore,
 }
 
 impl Fixture {
     pub async fn new() -> Self {
-        let db = gents_inference::test_support::test_db(
+        let db = gents_store::test_support::TestStore::start(
             "workspace-rejection",
             gents_session::test_support::no_lifecycle_plugins(),
         )
         .await;
-        let (home, user, user_access, binding) =
-            gents_inference::test_support::signed_test_node_from_db(db, "workspace-rejection-user")
-                .await;
+        let signed_home =
+            gents_documents::test_support::SignedHome::enroll(db, "workspace-rejection-user").await;
+        let binding = gents_inference::test_support::default_agent(&signed_home).await;
+        let (home, user, user_access) = signed_home.into_parts();
         let node = home.node.clone();
         let identity = home.node_identity.clone();
         let agent =

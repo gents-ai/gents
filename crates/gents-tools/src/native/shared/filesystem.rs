@@ -15,34 +15,44 @@ pub(crate) fn render_file_contents(
     text: &str,
     start_line: Option<usize>,
     end_line: Option<usize>,
+    numbered: bool,
 ) -> RenderedFileContents {
     let total_lines = text.lines().count();
     let start_line = start_line.unwrap_or(1).max(1);
     let end_line = end_line
         .unwrap_or(total_lines.max(start_line))
         .max(start_line);
+    let selected = |index: &usize| (start_line..=end_line).contains(&(index + 1));
 
-    let mut rendered = Vec::new();
-    for (idx, line) in text.lines().enumerate() {
-        let line_number = idx + 1;
-        if line_number < start_line || line_number > end_line {
-            continue;
-        }
-        rendered.push(format!("L{line_number}: {line}"));
-    }
-
-    let content = if rendered.is_empty() && text.is_empty() {
-        "(empty file)".to_string()
-    } else if rendered.is_empty() {
-        "(no lines in requested range)".to_string()
+    let (content, returned_lines) = if numbered {
+        let rendered: Vec<String> = text
+            .lines()
+            .enumerate()
+            .filter(|(index, _)| selected(index))
+            .map(|(index, line)| format!("L{}: {line}", index + 1))
+            .collect();
+        let content = if rendered.is_empty() && text.is_empty() {
+            "(empty file)".to_string()
+        } else if rendered.is_empty() {
+            "(no lines in requested range)".to_string()
+        } else {
+            rendered.join("\n")
+        };
+        (content, rendered.len())
     } else {
-        rendered.join("\n")
+        let lines: Vec<&str> = text
+            .split_inclusive('\n')
+            .enumerate()
+            .filter(|(index, _)| selected(index))
+            .map(|(_, line)| line)
+            .collect();
+        (lines.concat(), lines.len())
     };
 
     RenderedFileContents {
         content,
         total_lines,
-        returned_lines: rendered.len(),
+        returned_lines,
         start_line,
         end_line,
     }

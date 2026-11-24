@@ -5,9 +5,9 @@ use gents_store::graphql::escape_graphql_string;
 use gents_tools::surface::ToolCeiling;
 
 use crate::support::fixtures::bind_managed_agent_backend;
-use crate::support::live_inference::rows_when;
 use crate::support::snapshots::{is_routed_ready_after, wait_for_runtime_snapshot_as};
-use crate::support::{managed_agent_fixture, test_db, ManagedAgentFixture};
+use crate::support::{managed_agent_fixture, trial_store, ManagedAgentFixture};
+use gents_store::test_support::rows_when;
 use gents_store::test_support::snapshot_reader::SnapshotReader;
 
 const UNUSED_BACKEND_ENDPOINT: &str = "http://127.0.0.1:9/v1";
@@ -110,7 +110,7 @@ async fn create_scheduled_task(
     .await;
 }
 
-fn node_runtime(db: &crate::support::TestDb) -> ConfigAccess {
+fn node_runtime(db: &gents_store::test_support::TestStore) -> ConfigAccess {
     ConfigAccess::local_as(
         db.node.clone(),
         db.node_identity.did().parse().expect("runtime DID"),
@@ -121,7 +121,7 @@ fn node_runtime(db: &crate::support::TestDb) -> ConfigAccess {
 /// Trigger's cursor is seeded: no fire admitted so far is still in flight,
 /// and no seed write can land over a cursor the test writes later.
 async fn await_seeded(
-    db: &crate::support::TestDb,
+    db: &gents_store::test_support::TestStore,
     owner: &str,
     interval_trigger_id: &str,
     cron_trigger_id: &str,
@@ -163,7 +163,7 @@ async fn set_schedule_trigger_enabled(
 /// The scheduling cursor is the runtime's own observation, written by the
 /// Node runtime that owns the trigger cursor.
 async fn set_trigger_cursor(
-    db: &crate::support::TestDb,
+    db: &gents_store::test_support::TestStore,
     owner: &str,
     trigger_id: &str,
     next_run_at: &str,
@@ -212,7 +212,10 @@ async fn create_event_trigger(
 }
 
 /// Scheduled requests belong to the Agent that runs them.
-fn agent_reader(db: &crate::support::TestDb, fixture: &ManagedAgentFixture) -> ConfigAccess {
+fn agent_reader(
+    db: &gents_store::test_support::TestStore,
+    fixture: &ManagedAgentFixture,
+) -> ConfigAccess {
     ConfigAccess::local_managed_agent(
         db.node.clone(),
         fixture.agent.did().parse().expect("Agent DID"),
@@ -240,7 +243,7 @@ async fn schedule_request_count(access: &ConfigAccess, owner: &str, trigger_id: 
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn schedule_insert_and_trigger_disable_bump_active_generation() {
-    let db = test_db("schedule-snapshot-reconcile").await;
+    let db = trial_store("schedule-snapshot-reconcile").await;
     let fixture = managed_agent_fixture(&db).await;
     let identity = db.node_identity.clone();
     bind_managed_agent_backend(
@@ -255,7 +258,7 @@ async fn schedule_insert_and_trigger_disable_bump_active_generation() {
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
+            backend_admission: Some(db.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -368,7 +371,7 @@ async fn schedule_insert_and_trigger_disable_bump_active_generation() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn event_source_trigger_insert_bumps_active_generation() {
-    let db = test_db("event-trigger-snapshot-reconcile").await;
+    let db = trial_store("event-trigger-snapshot-reconcile").await;
     let fixture = managed_agent_fixture(&db).await;
     let identity = db.node_identity.clone();
     bind_managed_agent_backend(
@@ -383,7 +386,7 @@ async fn event_source_trigger_insert_bumps_active_generation() {
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
+            backend_admission: Some(db.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },

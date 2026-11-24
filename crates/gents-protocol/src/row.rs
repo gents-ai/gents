@@ -212,7 +212,7 @@ pub struct AgentRequestRow {
     #[serde(default)]
     pub retry_count: Option<i64>,
     #[serde(default)]
-    pub interrupt_requested_at: Option<String>,
+    pub interrupt_generation: Option<i64>,
     /// Positive terminal-owner evidence that no provider-capable work began.
     /// Missing/false never licenses inference from absent provider rows.
     #[serde(default)]
@@ -332,11 +332,7 @@ pub struct GoalRow {
     #[serde(default)]
     pub active_started_at: Option<String>,
     #[serde(default)]
-    pub consecutive_blocked_audits: Option<i64>,
-    #[serde(default)]
-    pub last_blocked_request_id: Option<String>,
-    #[serde(default)]
-    pub last_blocked_reason: Option<String>,
+    pub blocked_reason: Option<String>,
     #[serde(default)]
     pub last_continued_from_request_id: Option<String>,
     #[serde(default)]
@@ -347,8 +343,6 @@ pub struct GoalRow {
     pub wrapup_completed: Option<bool>,
     #[serde(default)]
     pub infrastructure_retry_count: Option<i64>,
-    #[serde(default)]
-    pub blocked_audit_threshold: Option<i64>,
     #[serde(default)]
     pub max_infrastructure_retries: Option<i64>,
     #[serde(default)]
@@ -494,6 +488,8 @@ pub struct OAuthCredentialRow {
     pub id_token: Option<String>,
     #[serde(default)]
     pub account_id: Option<String>,
+    #[serde(default)]
+    pub account_email: Option<String>,
     #[serde(default)]
     pub chatgpt_plan_type: Option<String>,
     #[serde(default)]

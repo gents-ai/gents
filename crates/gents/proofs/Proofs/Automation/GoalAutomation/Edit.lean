@@ -15,17 +15,20 @@ structure Fields where
   deriving DecidableEq, Repr
 
 /-- A running agent cannot rewrite paused intent. The signed client-control
-boundary may edit a paused goal without resuming its work. -/
+boundary may edit a Goal that awaits its user (paused, blocked, or paused at
+its budget) without resuming its work, so a person can raise or lift the
+budget before resuming. -/
 inductive Origin where
   | agent | client
   deriving DecidableEq, Repr
 
 def editable (origin : Origin) (status : Goals.Status) : Bool :=
-  status == .active || (origin == .client && status == .paused)
+  status == .active || (origin == .client &&
+    (status == .paused || status == .blocked || status == .budgetLimited))
 
 /-- Editing preserves the current assignment identity and continuation epoch.
 Only a matching editable observed epoch may change fields; completion, blocked
-audits, operator resume and Task reassignment retain their existing owners. A missing
+reports, operator resume and Task reassignment retain their existing owners. A missing
 budget preserves its value. Creation claims describe the original admission
 and are never rewritten by an edit. -/
 def apply? (observed current : Assignment) (fields : Fields)

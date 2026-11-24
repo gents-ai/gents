@@ -1074,3 +1074,230 @@ async fn find_signer_names_who_wrote_a_document_not_who_it_claims() {
         "a field page never silently drops the requested _signer: {error:#}"
     );
 }
+
+async fn run_query(tool: &DefraQueryTool, args: Value) -> std::result::Result<Value, Value> {
+    match Tool::call(
+        tool,
+        serde_json::from_value(args).unwrap(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
+    )
+    .await
+    {
+        Ok(text) => Ok(serde_json::from_str(&text).unwrap()),
+        Err(error) => Err(serde_json::from_str(&error.to_string()).unwrap()),
+    }
+}
+
+#[tokio::test]
+async fn relationship_selections_follow_grants_and_acp() {
+    let keys = tempfile::tempdir().unwrap();
+    let owner =
+        gents_store::identity::KeyIdentity::load_or_create(keys.path().join("owner.key"), None)
+            .unwrap();
+    let node_did = gents_store::identity::NodeIdentity::did(&owner).to_owned();
+    let agents: Vec<_> = (0..2)
+        .map(|_| {
+            gents_store::identity::resolve_agent_identity(
+                &owner,
+                &gents_store::identity::provision_agent_identity(&owner).unwrap(),
+            )
+            .unwrap()
+        })
+        .collect();
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(node_did.clone())
+            .build()
+            .await
+            .unwrap(),
+    );
+    let policy = node
+        .add_dac_policy_as(
+            &defra_core::RequestContext::default().with_identity(Some(node_did.clone())),
+            "name: Private related rows\nresources:\n  - name: records\n    relations:\n      - name: reader\n    permissions:\n      - name: read\n        expr: reader\n      - name: update\n      - name: delete\n",
+        )
+        .await
+        .unwrap();
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::node_store().render(&format!(
+        "type LinkedRecord @policy(id: \"{}\", resource: \"records\") {{ label: String notes: [RecordNote] }} type RecordNote {{ text: String record: LinkedRecord }}",
+        gents_store::graphql::escape_graphql_string(&policy)
+    )))
+    .await
+    .unwrap();
+    let mut ids = Vec::new();
+    for (agent, label) in agents.iter().zip(["Mine", "Theirs"]) {
+        let did = ::identity::Did::new(gents_store::identity::NodeIdentity::did(&**agent)).unwrap();
+        let access = gents_store::config_client::ConfigAccess::local_managed_agent(
+            node.clone(),
+            did.clone(),
+            agent.as_ref(),
+        )
+        .unwrap();
+        let mutation =
+            format!("mutation {{ add_LinkedRecord(input: {{label: \"{label}\"}}) {{_docID}} }}");
+        let created = access
+            .transact_write("seed_linked_record", |txn| {
+                let mutation = &mutation;
+                Box::pin(async move { txn.execute(mutation).await })
+            })
+            .await
+            .unwrap();
+        ids.push(
+            created["data"]["add_LinkedRecord"][0]["_docID"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        );
+    }
+    let mut notes = vec![
+        ("about-mine".to_owned(), &ids[0]),
+        ("about-theirs".to_owned(), &ids[1]),
+    ];
+    notes.extend((0..21).map(|n| (format!("more-{n:02}"), &ids[0])));
+    for (text, record) in &notes {
+        gents_store::config_client::ConfigAccess::write_local(
+            &node,
+            "seed_record_note",
+            &format!("mutation {{ add_RecordNote(input: {{text: \"{text}\", record: \"{record}\"}}) {{_docID}} }}"),
+        )
+        .await
+        .unwrap();
+    }
+    let reader =
+        ::identity::Did::new(gents_store::identity::NodeIdentity::did(&*agents[0])).unwrap();
+    let granted = DefraQueryTool::new(
+        node.clone(),
+        CollectionScope::restricted(vec!["RecordNote".into(), "LinkedRecord".into()]),
+    )
+    .with_actor(reader.clone());
+    let about = json!({"text":{"_in":["about-mine","about-theirs"]}});
+    let linked = run_query(&granted, json!({"argv":["find"],"collection":"RecordNote","options":{"fields":["text","record.label","record._docID"],"filter":about,"order":[{"text":"ASC"}]}})).await.unwrap();
+    assert_eq!(
+        linked["results"],
+        json!([
+            {"text":"about-mine","record":{"label":"Mine","_docID":ids[0]}},
+            {"text":"about-theirs","record":null},
+        ])
+    );
+    let many = run_query(&granted, json!({"argv":["find"],"collection":"LinkedRecord","options":{"fields":["label","notes.text"]}})).await.unwrap();
+    assert_eq!(many["returned_count"], 1);
+    assert_eq!(many["results"][0]["label"], "Mine");
+    assert_eq!(many["results"][0]["notes"].as_array().unwrap().len(), 20);
+    assert_eq!(
+        many["truncated_relations"],
+        json!([{"row":0,"relation":"notes","shown":20}])
+    );
+    let across = run_query(&granted, json!({"argv":["find"],"collection":"RecordNote","options":{"fields":["text"],"filter":{"record":{"label":{"_eq":"Mine"}}}}})).await.unwrap();
+    assert_eq!(across["returned_count"], 22);
+    let unselected = run_query(&granted, json!({"argv":["find"],"collection":"RecordNote","options":{"fields":["text"],"filter":{"record":{"label":{"_eq":"Theirs"}}}}})).await.unwrap();
+    assert_eq!(unselected["results"], json!([{"text":"about-theirs"}]));
+    for (fields, expected, next) in [
+        (
+            json!(["record"]),
+            "select its fields as record.FIELD",
+            json!({"argv":["fields"],"collection":"LinkedRecord"}),
+        ),
+        (
+            json!(["text.size"]),
+            "is a value, not a relationship",
+            json!({"argv":["fields"],"collection":"RecordNote"}),
+        ),
+        (
+            json!(["record.notes.text"]),
+            "crosses more than one relationship",
+            json!({"argv":["fields"],"collection":"RecordNote"}),
+        ),
+        (
+            json!(["record.lable"]),
+            "did you mean \"label\"",
+            json!({"argv":["fields"],"collection":"LinkedRecord"}),
+        ),
+    ] {
+        let refused = run_query(
+            &granted,
+            json!({"argv":["find"],"collection":"RecordNote","options":{"fields":fields}}),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            refused["error"].as_str().unwrap().contains(expected),
+            "{refused}"
+        );
+        assert_eq!(refused["recovery"]["args"], next, "{refused}");
+    }
+    let narrow = DefraQueryTool::new(
+        node.clone(),
+        CollectionScope::restricted(vec!["RecordNote".into()]),
+    )
+    .with_actor(reader);
+    for options in [
+        json!({"fields":["text","record.label"]}),
+        json!({"fields":["text"],"filter":{"record":{"label":{"_eq":"Mine"}}}}),
+    ] {
+        let refused = run_query(
+            &narrow,
+            json!({"argv":["find"],"collection":"RecordNote","options":options}),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            refused["error"]
+                .as_str()
+                .unwrap()
+                .contains("not within the allowed query scope"),
+            "{refused}"
+        );
+    }
+    node.shutdown().await.expect("shut down test node");
+}
+
+#[tokio::test]
+async fn vector_search_ranks_by_the_fields_index_metric() {
+    let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
+    node.add_collection("type CatalogItem { sku: String coordinates: [Float32!] @index(vector: {dimensions: 3, flat: {metric: EUCLIDEAN}}) }")
+        .await
+        .unwrap();
+    for (sku, coordinates) in [("a", "[0, 0, 0]"), ("b", "[1, 1, 1]"), ("c", "[5, 5, 5]")] {
+        gents_store::config_client::ConfigAccess::write_local(
+            &node,
+            "seed_vector_search",
+            &format!("mutation {{ add_CatalogItem(input: {{sku: \"{sku}\", coordinates: {coordinates}}}) {{_docID}} }}"),
+        )
+        .await
+        .unwrap();
+    }
+    let tool = DefraQueryTool::new(
+        node.clone(),
+        CollectionScope::restricted(vec!["CatalogItem".into()]),
+    );
+    let base = json!({"argv":["search"],"collection":"CatalogItem","options":{"fields":["sku"],"vector_field":"coordinates","vector":[4, 4, 4],"limit":2}});
+    let nearest = run_query(&tool, base.clone()).await.unwrap();
+    assert_eq!(nearest["ranking"], "similarity");
+    assert_eq!(nearest["results"][0]["sku"], "c");
+    assert_eq!(nearest["results"][1]["sku"], "b");
+    assert!(
+        nearest["results"][0]["_score"].as_f64().unwrap()
+            > nearest["results"][1]["_score"].as_f64().unwrap()
+    );
+    assert!(nearest["results"][0].get("_docID").is_none());
+    let mut filtered = base.clone();
+    filtered["options"]["filter"] = json!({"sku":{"_neq":"c"}});
+    let filtered = run_query(&tool, filtered).await.unwrap();
+    assert_eq!(filtered["results"][0]["sku"], "b");
+    assert_eq!(filtered["results"][1]["sku"], "a");
+    for (key, value, expected) in [
+        ("text", json!("crate"), "give exactly one"),
+        ("vector_field", json!("sku"), "numeric list field"),
+        ("vector", json!([]), "nonempty array of numbers"),
+        ("vector", json!([4, 4]), "same length"),
+    ] {
+        let mut args = base.clone();
+        args["options"][key] = value;
+        let refused = run_query(&tool, args).await.unwrap_err();
+        assert!(
+            refused["error"].as_str().unwrap().contains(expected),
+            "{key}: {refused}"
+        );
+    }
+    node.shutdown().await.expect("shut down test node");
+}

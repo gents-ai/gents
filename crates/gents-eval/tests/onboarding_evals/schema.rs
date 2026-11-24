@@ -151,7 +151,7 @@ async fn admiral_search_fixture_grades_native_writes_and_ranked_results() {
         }
         for value in row.as_object().unwrap().values() {
             assert!(
-                populate["prompt"]
+                case["fixtures"]["files"][0]["contents"]
                     .as_str()
                     .unwrap()
                     .contains(value.as_str().unwrap()),

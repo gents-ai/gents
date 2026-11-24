@@ -168,7 +168,7 @@ mod tests {
     #[tokio::test]
     async fn received_preview_uses_only_the_exact_readable_parent_envelope() {
         use gents_store::config_client::ConfigAccess;
-        let node_db = gents_inference::test_support::test_db(
+        let node_db = gents_store::test_support::TestStore::start(
             "received-preview-uses-only-the-exact-rea",
             crate::test_support::no_lifecycle_plugins(),
         )
