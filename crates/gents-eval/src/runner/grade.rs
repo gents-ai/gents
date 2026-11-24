@@ -170,7 +170,7 @@ fn synthetic(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runner::completion_is_not_evidence;
+    use crate::runner::attempt_retryable;
     use crate::runner::projection::completion;
     use crate::runner::scripted::ScriptedExecutor;
     use crate::{
@@ -395,7 +395,7 @@ mod tests {
             case_trial_score(EvalReducer::WeightedMean, &views(&rows)),
             CaseTrialScore::NotEvidence
         );
-        assert!(completion_is_not_evidence(&completion(&case, &evidence)));
+        assert!(attempt_retryable(&completion(&case, &evidence)));
     }
 
     #[test]

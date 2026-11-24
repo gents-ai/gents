@@ -21,7 +21,7 @@ use tokio_util::sync::CancellationToken;
 use self::capture::{run_captures_with_access, CaptureBindings};
 use self::evidence::{anchor, home_usage_with_access, session_requests_with_access};
 use self::install::install;
-use self::outcome::{outcome_kind, provider_reason};
+use self::outcome::{outcome_kind, stage_outcome, stated_provider_reason};
 use self::stage::{run_stages, StageEnv};
 use self::usage::{home_charge, home_rows, subject_usage};
 use crate::runner::embedded::home::{boot_runtime, EmbeddedHome};
@@ -407,6 +407,22 @@ impl TrialExecutor for EmbeddedExecutor {
         self.isolation
     }
 
+    async fn provider_answers(&self, spec: &TrialSpec) -> bool {
+        match serde_json::from_value(spec.inference.backend.clone()) {
+            Ok(backend) => {
+                gents_inference::backends::registry::backend_endpoint_answers(&backend).await
+            }
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    trial_id = %spec.trial_id,
+                    "eval trial backend document is invalid; its provider cannot be asked"
+                );
+                true
+            }
+        }
+    }
+
     async fn provision(&self, spec: &TrialSpec) -> TrialLocator {
         match self.provision_home(spec).await {
             Ok(locator) => locator,
@@ -526,16 +542,20 @@ impl TrialExecutor for EmbeddedExecutor {
             let terminal_state = RequestLifecycleState::parse(&request.lifecycle_state)
                 .ok()
                 .filter(|state| state.is_terminal());
-            let failure_kind =
-                classify_request_outcome(terminal_state, false, &evidence).map(outcome_kind);
+            let stated = stated_provider_reason(&evidence);
+            let outcome = stage_outcome(
+                stated.is_some_and(|stated| stated.ended_by_backend),
+                classify_request_outcome(terminal_state, false, &evidence).map(outcome_kind),
+                stated.map(|stated| stated.reason),
+            );
             stages.push(StageEvidence {
                 subject_agent: subject.clone(),
                 prods: 0,
                 stage_id: index.to_string(),
                 request_id: Some(request.request_id.clone()),
                 terminal_state,
-                provider_reason: provider_reason(failure_kind, &evidence),
-                failure_kind,
+                provider_reason: outcome.and_then(|(_, reason)| reason),
+                failure_kind: outcome.map(|(kind, _)| kind),
                 messages: evidence.messages,
                 tool_calls: evidence.tool_calls,
                 inference_calls: evidence.inference_calls,
