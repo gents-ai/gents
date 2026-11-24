@@ -2,8 +2,8 @@
 
 ## Configuration
 
-Use the bundled pack_config.json. The subject is `../engineer_full` with every
-core pack installed, so the Engineer holds the pack and pack-authority grants
+Use the bundled pack_config.json. The subject is the Engineer `gents init --engineer` makes at the commit under
+test, every core pack installed as init installs them (`scripts/evals/suites.py`). It holds the pack and pack-authority grants
 and does all pack work through `config`. Cases put draft packs in the trial
 workspace as fixture files and grade the pack directories the stage leaves,
 the PackInstallation rows, the installed documents and schemas, and tool

@@ -3,7 +3,7 @@
   "eval_definitions": [
     {
       "definition_id": "engineer-automation-graphs",
-      "comparability_version": 1,
+      "comparability_version": 2,
       "title": "Automation graphs: filters, groups, chains, routing and repair",
       "subject": {
         "kind": "agent",

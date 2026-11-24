@@ -2,9 +2,9 @@
 
 ## Configuration
 
-Use the bundled pack_config.json. The subject is `../engineer_full` with every
-core pack installed, patched by `subject_patch.json` to cap one `read_file`
-result at 4000 characters so a case can hold a file longer than one read.
+Use the bundled pack_config.json. The subject is the Engineer `gents init --engineer` makes at the commit under
+test, every core pack installed as init installs them (`scripts/evals/suites.py`). One
+`read_file` result holds at most the default 32,000 characters.
 
 Cases cover `context_budget`, the stubs that replace an earlier request's tool
 outputs (recovered with the `sessions` output read once the file they came

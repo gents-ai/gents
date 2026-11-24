@@ -1,33 +1,46 @@
 #!/usr/bin/env python3
-"""The native Engineer eval suites and the subject each one runs as.
+"""The native Engineer eval suites and the one subject they all run.
 
   suites.py list TRIALS                 split, stage and check counts per suite
   suites.py select SELECTION SHARD      suite ids SELECTION names (`all` is the default list)
-  suites.py field SUITE KEY             one field of a suite (path, definition_id, subject)
-  suites.py prepare-subject SUITE DEST  the suite's subject, prepared for a trial, at DEST
+  suites.py field SUITE KEY             one field of a suite (path, definition_id)
+  suites.py prepare-subject SUITE DEST  the subject a suite's trials run, at DEST
   suites.py command-execution           the mode GENTS_EVAL_COMMAND_EXECUTION requests
 
 A suite is a `suite.json` beside its definition's `pack_config.json` under
-the configurator eval fixtures: its `id`, `title`, `coverage`, the `subject`
-pack directory (relative to the fixtures) and whether the shipped Engineer
-self-config preset replaces its Engineer's grant (`preset_self_config`).
-`scripts/evals/matrix.json` keeps only the `default` list `all` runs.
+the configurator eval fixtures: its `id`, `title`, `coverage` and the
+`subject_fixtures` it layers on the subject. `scripts/evals/matrix.json`
+keeps only the `default` list `all` runs.
 
-Preparing a subject copies it, writes the shipped Engineer prompt over its
-Engineer's system prompt, applies the preset when the suite asks, then
-applies the suite's `subject_patch.json` when one sits beside its
-definition. A patch is a JSON merge patch (RFC 7386) over the subject's
-pack_config.json, except that a list of documents named in DOCUMENT_KEYS is
-patched as an object keyed by each document's id: `{"tools": {"engineer-tools":
-{"built_ins": {"enable_goal_creation": true}}}}` edits one Tools document, a
-new key adds a document and `null` removes one. Patched content is inline;
-a patch adds no files. GENTS_EVAL_SUBJECT replaces the subject directory of
-every suite prepared.
+Every suite runs the Engineer `gents init --engineer` makes on a fresh home
+at the commit under test: `$GENTS_BIN utils eval subject` writes it from
+init's own code, and each trial installs the definition's core packs on it
+as init installs them. GENTS_EVAL_SUBJECT replaces it with a subject
+directory for every suite prepared.
+
+A subject fixture adds to that Engineer what a user's node could plausibly
+hold, and the suite's README says why; `gents utils eval subject --suite`
+layers it and refuses one that would change or drop anything. Each fixture
+has a `name`, a `why` and any of
+  documents     {key: [document, ...]}: new agents, contexts, tools, skills,
+                datastore_tool_surfaces or agent_targets, each under an id the
+                subject does not have;
+  engineer      {"context"|"tools": {...}}: fields added to the Engineer's
+                own Context or Tools, each one the document leaves unset or
+                items appended to a list it has;
+  slot_agents   [agent_slot, ...]: new agents run by the Engineer's
+                inference slot;
+  assets        [path, ...]: files or directories under the suite directory
+                the subject carries.
+A core pack init installs but leaves off is turned on by the definition's
+`subject.enabled_core_packs` instead, as `gents config pack starter --enable`
+does.
 
 Every prepared subject's Engineer runs commands in the mode
 GENTS_EVAL_COMMAND_EXECUTION names (default `off`): `off` leaves it no host
-bash; `unrestricted` grants host bash as `gents init --tool-package yolo`
-does, which a trial holds only inside an isolating container
+bash and so no background processes; `unrestricted` keeps the bash and
+background processes init gives it (a GENTS_EVAL_SUBJECT keeps its own),
+which a trial holds only inside an isolating container
 (scripts/evals/run-container.sh); the launcher sets the definition's
 `subject.host_bash` to match.
 """
@@ -36,23 +49,14 @@ import json
 import os
 import pathlib
 import shutil
+import subprocess
 import sys
 
 FIXTURES = pathlib.PurePosixPath("crates/gents/tests/fixtures/configurator_evals")
 MATRIX = pathlib.PurePosixPath("scripts/evals/matrix.json")
-PROMPT = pathlib.PurePosixPath("crates/gents-protocol/prompts/engineer.md")
-PRESET = pathlib.PurePosixPath("crates/gents-protocol/presets/engineer-self-config.json")
-CELL_AGENT = "engineer"
-DOCUMENT_KEYS = {
-    "agents": "agent_slot",
-    "contexts": "context_id",
-    "tools": "tools_id",
-    "skills": "skill_id",
-    "datastore_tool_surfaces": "surface_id",
-    "agent_targets": "target_id",
-}
-SUITE_KEYS = {"id", "title", "coverage", "subject", "preset_self_config", "blocked_reason"}
-BASH_MODES = {"off": "Off", "unrestricted": "Unrestricted"}
+SUITE_KEYS = {"id", "title", "coverage", "subject_fixtures", "blocked_reason"}
+FIXTURE_KEYS = {"name", "why", "documents", "engineer", "slot_agents", "assets"}
+COMMAND_EXECUTION = ("off", "unrestricted")
 
 
 def suites(root):
@@ -63,11 +67,16 @@ def suites(root):
         suite = json.loads(path.read_text())
         relative = path.parent.relative_to(fixtures).as_posix()
         unknown = set(suite) - SUITE_KEYS
-        missing = {"id", "title", "coverage", "subject"} - set(suite)
+        missing = {"id", "title", "coverage"} - set(suite)
         if unknown or missing:
             raise SystemExit(f"{relative}/suite.json: unknown keys {sorted(unknown)}, missing {sorted(missing)}")
-        if not (fixtures / suite["subject"] / "pack_config.json").is_file():
-            raise SystemExit(f"{relative}/suite.json: subject {suite['subject']} has no pack_config.json")
+        names = set()
+        for fixture in suite.get("subject_fixtures", []):
+            name = fixture.get("name")
+            if set(fixture) - FIXTURE_KEYS or not name or not fixture.get("why") or name in names:
+                raise SystemExit(f"{relative}/suite.json: a subject fixture needs a distinct name and a why, "
+                                 f"and takes only {sorted(FIXTURE_KEYS)}: {fixture}")
+            names.add(name)
         definition = json.loads((path.parent / "pack_config.json").read_text())["eval_definitions"][0]
         suite = dict(suite, path=relative, definition_id=definition["definition_id"])
         if suite["id"] in ids or suite["definition_id"] in definitions:
@@ -131,87 +140,36 @@ def listing(root, trials):
     return "\n".join(lines)
 
 
-def merge(target, patch):
-    if not isinstance(patch, dict):
-        return patch
-    merged = dict(target) if isinstance(target, dict) else {}
-    for key, value in patch.items():
-        if value is None:
-            merged.pop(key, None)
-        else:
-            merged[key] = merge(merged.get(key), value)
-    return merged
-
-
-def apply_patch(config, patch):
-    """CONFIG with PATCH applied as the module docstring describes."""
-    config = dict(config)
-    for key, value in patch.items():
-        id_key = DOCUMENT_KEYS.get(key)
-        if id_key is None or not isinstance(value, dict):
-            if value is None:
-                config.pop(key, None)
-            else:
-                config[key] = merge(config.get(key), value)
-            continue
-        rows = {row[id_key]: row for row in config.get(key, [])}
-        for document_id, document_patch in value.items():
-            if document_patch is None:
-                if rows.pop(document_id, None) is None:
-                    raise SystemExit(f"subject_patch.json removes {key} {document_id}, which the subject does not have")
-            else:
-                rows[document_id] = merge(rows.get(document_id, {id_key: document_id}), document_patch)
-        config[key] = list(rows.values())
-    return config
-
-
-def engineer_parts(config):
-    """The cell agent's prompt path and Tools document id in a subject's pack_config."""
-    agents = [a for a in config.get("agents", []) if a.get("agent_slot") == CELL_AGENT]
-    if len(agents) != 1:
-        raise SystemExit(f"a subject needs exactly one {CELL_AGENT} agent slot")
-    contexts = [c for c in config.get("contexts", []) if c.get("context_id") == agents[0].get("context_id")]
-    if len(contexts) != 1 or not str(contexts[0].get("system_prompt", "")).startswith("./"):
-        raise SystemExit(f"the {CELL_AGENT} agent's Context must name its system prompt as a ./ sidecar")
-    return contexts[0]["system_prompt"][2:], contexts[0]["tools_id"]
-
-
 def command_execution():
     mode = os.environ.get("GENTS_EVAL_COMMAND_EXECUTION") or "off"
-    if mode not in BASH_MODES:
-        raise SystemExit(f"GENTS_EVAL_COMMAND_EXECUTION must be one of {', '.join(sorted(BASH_MODES))}, not {mode!r}")
+    if mode not in COMMAND_EXECUTION:
+        raise SystemExit(f"GENTS_EVAL_COMMAND_EXECUTION must be one of {', '.join(COMMAND_EXECUTION)}, not {mode!r}")
     return mode
 
 
+def gents_binary():
+    binary = os.environ.get("GENTS_BIN") or shutil.which("gents")
+    if not binary:
+        raise SystemExit("set GENTS_BIN to the gents binary of the commit under test: it writes the subject")
+    return binary
+
+
 def prepare_subject(root, suite_id, destination):
+    """The subject SUITE_ID's trials run, at DESTINATION: the Engineer the gents binary's init makes
+    (or GENTS_EVAL_SUBJECT) in the requested command execution mode, with the suite's fixtures."""
     root = pathlib.Path(root)
     found = suite(root, suite_id)
-    source = os.environ.get("GENTS_EVAL_SUBJECT") or str(root / FIXTURES / found["subject"])
     destination = pathlib.Path(destination)
     if destination.exists():
         shutil.rmtree(destination)
-    shutil.copytree(source, destination)
-    config_path = destination / "pack_config.json"
-    config = json.loads(config_path.read_text())
-    prompt, tools_id = engineer_parts(config)
-    shutil.copy(root / PROMPT, destination / prompt)
-    if found.get("preset_self_config"):
-        engineer_tools(config, suite_id, tools_id)["self_config"] = json.loads((root / PRESET).read_text())
-    patch_path = root / FIXTURES / found["path"] / "subject_patch.json"
-    if patch_path.is_file():
-        config = apply_patch(config, json.loads(patch_path.read_text()))
-        _, tools_id = engineer_parts(config)
-    host = engineer_tools(config, suite_id, tools_id).setdefault("host", {})
-    host["bash"] = dict(host.get("bash") or {}, mode=BASH_MODES[command_execution()])
-    json.dump(config, open(config_path, "w"), indent=2)
+    command = [gents_binary(), "utils", "eval", "subject", "--out", str(destination),
+               "--command-execution", command_execution(), "--suite", str(root / FIXTURES / found["path"])]
+    if override := os.environ.get("GENTS_EVAL_SUBJECT"):
+        command += ["--from", override]
+    written = subprocess.run(command, capture_output=True, text=True)
+    if written.returncode != 0:
+        raise SystemExit(f"gents utils eval subject failed: {written.stderr.strip()}")
     return destination
-
-
-def engineer_tools(config, suite_id, tools_id):
-    tools = [t for t in config.get("tools", []) if t.get("tools_id") == tools_id]
-    if len(tools) != 1:
-        raise SystemExit(f"{suite_id}: the {CELL_AGENT} agent's Tools {tools_id} is not in its subject")
-    return tools[0]
 
 
 def main(argv):

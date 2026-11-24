@@ -3,12 +3,20 @@
   "eval_definitions": [
     {
       "definition_id": "engineer-sessions",
-      "comparability_version": 9,
+      "comparability_version": 10,
       "title": "Engineer session investigation",
       "subject": {
         "kind": "agent",
         "inference_slots": [
           "engineer"
+        ],
+        "core_packs": [
+          "gents/pack_builder",
+          "gents/web",
+          "gents/dynamic_workflows",
+          "gents/charts",
+          "gents/data_tables",
+          "gents/script"
         ]
       },
       "cases": [

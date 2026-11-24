@@ -9,5 +9,14 @@
     "offline deterministic artifact, no registry dependency",
     "model assertion cannot grant plugin authority"
   ],
-  "subject": "native_pack_subject"
+  "subject_fixtures": [
+    {
+      "name": "native-pack-archives",
+      "why": "Two built plugin pack archives a user hands the Engineer to inspect and install; each case copies the one it names into the workspace.",
+      "assets": [
+        "artifacts/native_echo.pack",
+        "artifacts/native_authority.pack"
+      ]
+    }
+  ]
 }

@@ -24,7 +24,6 @@
     "cases/lab_holding_periods.json",
     "cases/courier_eta_no_skill.json",
     "pack_config.json",
-    "subject_patch.json",
     "suite.json"
   ],
   "config": "pack_config.json"

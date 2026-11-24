@@ -9,5 +9,13 @@
     "delegation permissions",
     "setup receipt"
   ],
-  "subject": "factory_setup/engineer_kspec"
+  "subject_fixtures": [
+    {
+      "name": "research-desk-brief",
+      "why": "The user's written brief for the research desk, which the case copies into the workspace and the stage prompt asks the Engineer to read.",
+      "assets": [
+        "factory/kickoff.md"
+      ]
+    }
+  ]
 }

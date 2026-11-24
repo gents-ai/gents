@@ -11,6 +11,5 @@
     "compare pack digests without installing",
     "preview an install without committing",
     "register an unregistered skill"
-  ],
-  "subject": "engineer_full"
+  ]
 }

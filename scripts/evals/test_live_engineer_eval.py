@@ -253,7 +253,7 @@ class LiveEngineerEvalTests(unittest.TestCase):
         self.assertEqual((verdict["command_execution"], verdict["isolation"], verdict["results"]),
                          ("unrestricted", "a container per trial", "unauthenticated"))
         self.assertEqual((verdict["suite"], verdict["case_id"], verdict["subject"]),
-                         ("engineer-mailbox", "kiln-flag-and-question", "engineer_full"))
+                         ("engineer-mailbox", "kiln-flag-and-question", "gents init --engineer"))
         self.assertEqual(verdict["tokens"], {"input": 3000, "output": 150})
         [record] = self.records()
         argv = record["argv"]
@@ -330,14 +330,15 @@ class LiveEngineerEvalTests(unittest.TestCase):
                 self.assertNotIn(self.url, path.read_text(), path)
         self.assertIn("<model endpoint>", (self.out / "container/logs/slot/attempt-1.log").read_text())
 
-    def test_suites_run_every_suite_on_the_shipped_engineer_and_record_each_rate(self):
+    def test_suites_run_every_suite_outside_the_ladder_and_record_each_rate(self):
         result = self.contained("suites", "--trials", "1",
                                 SUITE_CLASSES=json.dumps({"engineer-goals": "fail"}))
         self.assertEqual(result.returncode, 0, result.stderr)
         verdict = self.result()
         sys.path.insert(0, str(SOURCE / "scripts/evals"))
         import suites
-        shipped = [s["id"] for s in suites.suites(SOURCE) if s["subject"] == "engineer_full"]
+        registry = suites.matrix(SOURCE)
+        shipped = [s["id"] for s in registry["suites"] if s["id"] not in registry["default"]]
         argv = self.records()[0]["argv"]
         self.assertEqual([argv[i + 1] for i, flag in enumerate(argv) if flag == "--suite"], shipped)
         self.assertNotIn("--definition", argv)

@@ -2,7 +2,7 @@
 
 ## Configuration
 
-Application datastore eval definition: the Engineer scopes its native query and write grants, then counts, pages, links, updates and deletes application records. The subject is `../ladder/engineer_subject`.
+Application datastore eval definition: the Engineer scopes its native query and write grants, then counts, pages, links, updates and deletes application records. The subject is the Engineer `gents init --engineer` makes at the commit under test, every core pack installed as init installs them (`scripts/evals/suites.py`).
 
 ## Usage
 

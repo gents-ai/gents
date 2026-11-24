@@ -12,6 +12,5 @@
     "multi-file rename without substring hits",
     "one output file per group, none for empty groups",
     "computed JSON artifacts in nested layouts"
-  ],
-  "subject": "engineer_full"
+  ]
 }

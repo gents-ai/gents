@@ -9,7 +9,5 @@
     "write and read configured records",
     "precedence backfill",
     "archive field"
-  ],
-  "subject": "ladder/engineer_subject",
-  "preset_self_config": true
+  ]
 }

@@ -2,7 +2,7 @@
 
 ## Configuration
 
-Engineer schema experience eval definition: create and additively evolve collections, then write and read their records. The subject is `../ladder/engineer_subject`.
+Engineer schema experience eval definition: create and additively evolve collections, then write and read their records. The subject is the Engineer `gents init --engineer` makes at the commit under test, every core pack installed as init installs them (`scripts/evals/suites.py`).
 
 ## Usage
 

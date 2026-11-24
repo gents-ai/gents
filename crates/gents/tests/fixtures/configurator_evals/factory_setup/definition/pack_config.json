@@ -3,14 +3,22 @@
   "eval_definitions": [
     {
       "definition_id": "factory-setup",
-      "comparability_version": 16,
+      "comparability_version": 17,
       "title": "Research desk: complete configuration, no execution",
       "subject": {
         "kind": "agent",
         "inference_slots": [
           "engineer"
         ],
-        "host_bash": true
+        "host_bash": true,
+        "core_packs": [
+          "gents/pack_builder",
+          "gents/web",
+          "gents/dynamic_workflows",
+          "gents/charts",
+          "gents/data_tables",
+          "gents/script"
+        ]
       },
       "cases": [
         "./cases/factory_setup.json"

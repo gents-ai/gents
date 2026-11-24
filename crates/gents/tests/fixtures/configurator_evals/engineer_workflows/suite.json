@@ -6,6 +6,5 @@
     "worker fan-out",
     "fan-in from worker text",
     "reading a finished job"
-  ],
-  "subject": "engineer_full"
+  ]
 }

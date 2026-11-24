@@ -3,12 +3,20 @@
   "eval_definitions": [
     {
       "definition_id": "engineer-datastore",
-      "comparability_version": 3,
+      "comparability_version": 4,
       "title": "Application datastore: count, paging and durable writes",
       "subject": {
         "kind": "agent",
         "inference_slots": [
           "engineer"
+        ],
+        "core_packs": [
+          "gents/pack_builder",
+          "gents/web",
+          "gents/dynamic_workflows",
+          "gents/charts",
+          "gents/data_tables",
+          "gents/script"
         ]
       },
       "cases": [
