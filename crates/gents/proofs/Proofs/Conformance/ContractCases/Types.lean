@@ -12,6 +12,7 @@ structure RuntimeReconcileCase where
   preDefaultAgent : AgentDid
   preSessionAgent : Option AgentDid
   preRunnable : List AgentDid
+  preStartupDemoted : List AgentDid
   name : String
   action : String
   legal : Bool

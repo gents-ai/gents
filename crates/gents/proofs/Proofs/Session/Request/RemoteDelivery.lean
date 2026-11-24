@@ -67,8 +67,7 @@ and node permissions inside the target Agent's claim transaction. The same
 native commit fences those observations; visibility or a prior detached check
 is insufficient. The CrossActor owner determines denial, retry, and claim. -/
 def claimDecision (record : RemoteRecord)
-    (observation : CrossActorAuthorization.Observation)
-    (commit : CrossActorAuthorization.NativeCommit) : CrossActorAuthorization.Decision :=
+    (observation : CrossActorAuthorization.Observation) : CrossActorAuthorization.Decision :=
   match record.intent.targetSessionDoc with
   | none => .unavailable
   | some session =>
@@ -76,22 +75,25 @@ def claimDecision (record : RemoteRecord)
         .denied
       else
         CrossActorAuthorization.decideClaim
-          ⟨record.requestDocument, session, record.intent.targetAgentDoc,
-            record.intent.sender, record.intent.target⟩ observation commit
+          { document := record.requestDocument, session, agentDocument := record.intent.targetAgentDoc,
+            author := record.intent.sender, selectedAgent := record.intent.target,
+            requester := record.intent.sender, content := record.requestDocument } observation
 
-def claim (record : RemoteRecord) (observation : CrossActorAuthorization.Observation)
-    (commit : CrossActorAuthorization.NativeCommit) : Bool :=
-  claimDecision record observation commit == .claimed
+def claim (record : RemoteRecord) (observation : CrossActorAuthorization.Observation) : Bool :=
+  claimDecision record observation == .claimed
 
-theorem missing_native_authorization_blocks_claim (record : RemoteRecord)
-    (observation : CrossActorAuthorization.Observation)
-    (commit : CrossActorAuthorization.NativeCommit) (unsupported : observation.supported = false) :
-    claim record observation commit = false := by
-  cases h : record.intent.targetSessionDoc with
-  | none => simp [claim, claimDecision, h]; rfl
-  | some session =>
-      simp [claim, claimDecision, h, CrossActorAuthorization.decideClaim, unsupported]
-      all_goals split <;> rfl
+/-- The request row the target Agent cannot read leaves the delivery
+unclaimed. -/
+theorem unreadable_request_blocks_claim (record : RemoteRecord)
+    (observation : CrossActorAuthorization.Observation) (unreadable : observation.request = .absent) :
+    claim record observation = false := by
+  unfold claim claimDecision
+  split
+  · rfl
+  · split
+    · rfl
+    · unfold CrossActorAuthorization.decideClaim
+      cases observation.transientFailure <;> simp (config := { decide := true }) [unreadable]
 
 /-- A parent tuple on a sender-owned document can be managed by that sender.
 Its presence alone is not proof of authorization to invoke the target Agent. -/

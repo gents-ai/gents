@@ -59,8 +59,8 @@ async fn generated_readiness_publication_traces_write_only_semantic_changes() {
         for (index, &state) in case.input.states.iter().enumerate() {
             let (process, written) = match state {
                 0 => (
-                    ProcessLifecycleState::Recovering,
-                    NodeReadinessProcessState::Recovering,
+                    ProcessLifecycleState::Uninitialized,
+                    NodeReadinessProcessState::Uninitialized,
                 ),
                 1 => (
                     ProcessLifecycleState::Ready,
@@ -95,6 +95,53 @@ async fn generated_readiness_publication_traces_write_only_semantic_changes() {
                 publishes,
             },
         );
+        owner.close().await.unwrap();
+    }
+}
+
+struct RecordingWriter(std::sync::Mutex<Vec<NodeReadinessProcessState>>);
+
+#[async_trait::async_trait]
+impl NodeReadinessWriter for RecordingWriter {
+    async fn upsert(&self, _: &str, snapshot: &NodeReadinessSnapshot, _: &str) -> Result<()> {
+        self.0.lock().unwrap().push(snapshot.process_state);
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn generated_process_writes_follow_the_lean_transition() {
+    use gents_lean_vocab::families::process_state_next as family;
+    for case in family::cases() {
+        let writer = Arc::new(RecordingWriter(Default::default()));
+        let (owner, publisher) = NodeReadinessPublisherHandle::start_with_writer(
+            writer.clone(),
+            "did:test:process-transition",
+            Duration::from_millis(1),
+        );
+        publisher.initialize("general").await.unwrap();
+        let pre: NodeReadinessProcessState = case.input.pre;
+        publisher.set_process_state(pre).await.unwrap();
+        let writes_before = writer.0.lock().unwrap().len();
+        let written = publisher
+            .apply_process_action(
+                case.input.action,
+                case.input.stuck_requests,
+                case.input.active_is_zero,
+            )
+            .await
+            .unwrap();
+        let durable = publisher.observation().process_state();
+        let persisted = writer.0.lock().unwrap().clone();
+        match written {
+            Ok(state) => assert_eq!(state, durable),
+            Err(refused) => {
+                assert_eq!((refused.from, durable), (pre, pre));
+                assert_eq!(persisted.len(), writes_before, "a refused write persisted");
+            }
+        }
+        assert_eq!(persisted.last(), Some(&durable));
+        case.check(written.ok());
         owner.close().await.unwrap();
     }
 }

@@ -1093,8 +1093,8 @@ async fn direct_user_steer_passes_ordinary_queue_without_consuming_it() {
 }
 
 #[tokio::test]
-async fn expired_or_malformed_steering_is_a_modelled_publication_barrier() {
-    for case in gents_lean_vocab::families::fold_queue_contracts_management_expired_intake::cases::<
+async fn generated_intake_cases_bind_to_the_steering_snapshot() {
+    for case in gents_lean_vocab::families::fold_queue_contracts_management_intake::cases::<
         String,
         String,
         String,
@@ -1129,10 +1129,13 @@ async fn expired_or_malformed_steering_is_a_modelled_publication_barrier() {
             .unwrap();
             active.begin(&writer).await;
             for (index, entry) in pending.iter().enumerate() {
-                let doc = if entry.fresh {
-                    enqueue_signed(&db, session_id, entry, index + 1).await
-                } else {
+                let admitted = input.operation.admitted.contains(&entry.request_id);
+                let doc = if !entry.fresh {
                     enqueue_with_ttl(&db, session_id, entry, index + 1, Some(ttl)).await
+                } else if entry.requester_id == Some(2) || !admitted {
+                    enqueue(&db, session_id, entry, index + 1).await
+                } else {
+                    enqueue_signed(&db, session_id, entry, index + 1).await
                 };
                 bound.insert(entry.request_id, doc);
             }
@@ -1161,22 +1164,23 @@ async fn expired_or_malformed_steering_is_a_modelled_publication_barrier() {
                         .0
                 })
                 .collect::<Vec<_>>();
-            let blocked = &pending[0];
-            let error = writer
-                .publish_authored_message(
-                    &active.lifecycle,
-                    &folded_input_key(&bound[&blocked.request_id]),
-                    &gents_protocol::message::Message::user(format!(
-                        "message {}",
-                        blocked.request_id
-                    )),
-                )
-                .await
-                .unwrap_err();
-            assert!(
-                error.is::<super::super::PendingInputChanged>(),
-                "{name}: {error:#}"
-            );
+            for blocked in pending.iter().filter(|entry| !entry.fresh) {
+                let error = writer
+                    .publish_authored_message(
+                        &active.lifecycle,
+                        &folded_input_key(&bound[&blocked.request_id]),
+                        &gents_protocol::message::Message::user(format!(
+                            "message {}",
+                            blocked.request_id
+                        )),
+                    )
+                    .await
+                    .unwrap_err();
+                assert!(
+                    error.is::<super::super::PendingInputChanged>(),
+                    "{name}: {error:#}"
+                );
+            }
             let rows = fold_rows(&db, session_id).await;
             let state = |id: u64| {
                 rows.iter()
@@ -1186,7 +1190,7 @@ async fn expired_or_malformed_steering_is_a_modelled_publication_barrier() {
             let ids = std::iter::once(head.request_id)
                 .chain(pending.iter().map(|entry| entry.request_id));
             observed.push(serde_json::to_value(Some(
-                gents_lean_vocab::families::fold_queue_contracts_management_expired_intake::QueueImageWire {
+                gents_lean_vocab::families::fold_queue_contracts_management_intake::QueueImageWire {
                     active: ids
                         .clone()
                         .find(|id| {

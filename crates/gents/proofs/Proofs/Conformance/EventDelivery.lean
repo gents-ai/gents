@@ -123,79 +123,78 @@ def groupClock : Family ClockInput ClockOutput where
       elapsedBefore := (i.clock.observe none).elapsed i.now i.timeout
       elapsedAfter := (after.observe none).elapsed i.now i.timeout }
 
+def callbackGroupKey : Triggers.Groups.EventGroupKey :=
+  ⟨"did:agent:a", .callbackBinding "summarize", "config-1", "run-1"⟩
+
+/-- Callback groups the served callback scan offers to `materialize_group`:
+complete, already quiesced, and still short of its expected count. -/
 def eventGroupCaptureCases :
     List (String × _root_.EventDelivery.Group.EventGroupState × Triggers.Groups.Candidate) :=
-  let key : Triggers.Groups.EventGroupKey :=
-    ⟨"did:agent:a", .callbackBinding "summarize", "config-1", "run-1"⟩
-  let group : _root_.EventDelivery.Group.EventGroupState := ⟨key, 100, none⟩
-  let candidate : Triggers.Groups.Candidate :=
-    ⟨key, 2, some 2, 1, false, true⟩
-  let trigger := { key with consumer := .trigger "summarize" }
+  let group : _root_.EventDelivery.Group.EventGroupState := ⟨callbackGroupKey, 100, none⟩
+  let candidate : Triggers.Groups.Candidate := ⟨callbackGroupKey, 2, some 2, 1, false, true⟩
   [ ("eligible_callback", group, candidate)
-    , ("quiesced_callback_is_not_delivered", { group with quiescedAt := some 120 }, candidate)
-    , ("ineligible_callback", group, { candidate with actualCount := 1 })
-    , ("different_config_key", group,
-        { candidate with key := { key with consumerConfigKey := "config-2" } })
-    , ("trigger_cannot_capture_callback", { group with key := trigger },
-        { candidate with key := trigger }) ]
-
-structure CandidateWire where
-  key : KeyWire
-  actualCount : Nat
-  expectedCount : Option Nat
-  minimumCount : Nat
-  timedOut : Bool
-  wellFormed : Bool
-  deriving Lean.ToJson
-
-def CandidateWire.toModel (c : CandidateWire) : Triggers.Groups.Candidate :=
-  ⟨c.key.toModel, c.actualCount, c.expectedCount, c.minimumCount, c.timedOut, c.wellFormed⟩
+  , ("quiesced_callback_is_not_delivered", { group with quiescedAt := some 120 }, candidate)
+  , ("ineligible_callback", group, { candidate with actualCount := 1 }) ]
 
 structure CaptureInput where
   name : String
-  groupKey : KeyWire
-  firstSeen : Nat
-  quiescedAt : Option Nat
-  offered : CandidateWire
-  input : String
+  quiesced : Bool
+  actualCount : Nat
+  expectedCount : Option Nat
   deriving Lean.ToJson
 
+/-- `ownedByGroupNode` and `originIsGroup` are whether the captured invocation
+belongs to the group's node and names the group as its origin. -/
 structure CaptureOutput where
-  eligible : Bool
+  captured : Bool
+  ownedByGroupNode : Bool
+  originIsGroup : Bool
+  deriving Lean.ToJson
+
+private def captureCase (name : String) :
+    _root_.EventDelivery.Group.EventGroupState × Triggers.Groups.Candidate :=
+  ((eventGroupCaptureCases.find? (·.1 == name)).map (·.2)).getD
+    (⟨callbackGroupKey, 0, none⟩, ⟨callbackGroupKey, 0, none, 0, false, false⟩)
+
+/-- Callback group capture (`captureCallback`), replayed against the callback
+scan's `materialize_group`. -/
+@[conformance_family]
+def groupCapture : Family CaptureInput CaptureOutput where
+  inputs := eventGroupCaptureCases.map fun (name, group, candidate) =>
+    { name, quiesced := group.quiescedAt.isSome, actualCount := candidate.actualCount,
+      expectedCount := candidate.expectedCount }
+  model := fun i =>
+    let (group, candidate) := captureCase i.name
+    let captured := _root_.EventDelivery.Group.captureCallback group candidate "inv-capture"
+      "[]" "did:key:agent"
+    { captured := captured.isSome
+      ownedByGroupNode := captured.any (·.ownerNodeDid == group.key.nodeDid)
+      originIsGroup := captured.any (·.originGroupKey == some group.key) }
+
+structure MarkerInput where
+  name : String
+  priorMaterialized : Bool
+  deriving Lean.ToJson
+
+structure MarkerOutput where
   materialized : Bool
   markerCountAfter : Nat
-  captured : Bool
-  capturedOwner : Option String
-  capturedInput : Option String
-  capturedGroupKey : Option KeyWire
   deriving Lean.ToJson
 
-/-- model-production-gap: production captures a callback group only inside the
-served callback scan (`materialize_group` in gents-automation), which loads the
-group by the delivery's own key, so a candidate whose key differs from its
-group, or a trigger group offered to a callback, has no production path; the
-eligible and quiesced cases need a served callback-binding scenario. -/
+def triggerGroupKey : Triggers.Groups.EventGroupKey :=
+  ⟨"did:agent:a", .trigger "group-trigger", "config-1", "run-1"⟩
+
+/-- Per-group trigger dispatch of a complete group, with and without a request
+already materialized for it, replayed against `TriggerEngine::dispatch`. -/
 @[conformance_family]
-def groupCaptureUnreached : Family CaptureInput CaptureOutput where
-  inputs := eventGroupCaptureCases.map fun (name, clock, c) =>
-    { name, groupKey := KeyWire.ofModel clock.key, firstSeen := clock.firstSeen
-      quiescedAt := clock.quiescedAt
-      offered := { key := KeyWire.ofModel c.key, actualCount := c.actualCount
-                   expectedCount := c.expectedCount, minimumCount := c.minimumCount
-                   timedOut := c.timedOut, wellFormed := c.wellFormed }
-      input := "[\"b\",\"a\"]" }
+def groupMarker : Family MarkerInput MarkerOutput where
+  inputs := [⟨"unmarked_group", false⟩, ⟨"marked_group", true⟩]
   model := fun i =>
-    let candidate := i.offered.toModel
-    let after := Triggers.Groups.reconcile ⟨[]⟩ candidate
-    let captured := _root_.EventDelivery.Group.captureCallback
-      ⟨i.groupKey.toModel, i.firstSeen, i.quiescedAt⟩ candidate "inv-capture" i.input
-      "did:key:agent"
-    { eligible := candidate.eligible
-      materialized := after.has candidate.key
-      markerCountAfter := after.materialized.length
-      captured := captured.isSome
-      capturedOwner := captured.map (·.ownerNodeDid)
-      capturedInput := captured.map (·.input)
-      capturedGroupKey := (captured.bind (·.originGroupKey)).map KeyWire.ofModel }
+    let candidate : Triggers.Groups.Candidate := ⟨triggerGroupKey, 2, some 2, 1, false, true⟩
+    let prior : Triggers.Groups.MarkerState :=
+      ⟨if i.priorMaterialized then [triggerGroupKey] else []⟩
+    let after := _root_.EventDelivery.Group.markGroup ⟨triggerGroupKey, 100, none⟩ prior candidate
+    { materialized := after.materialized.length > prior.materialized.length
+      markerCountAfter := after.materialized.length }
 
 end Conformance.EventDelivery

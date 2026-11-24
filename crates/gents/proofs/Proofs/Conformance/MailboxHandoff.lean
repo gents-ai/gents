@@ -77,8 +77,18 @@ theorem generated_case_outcomes_follow_owners :
       ] := by
   native_decide
 
+/-- A row already stored under the question's owner prefix before the
+producer files, oldest first. -/
+structure PriorQuestion where
+  requestId : Nat
+  sessionId : String
+  content : String
+  isOpen : Bool
+  deriving Lean.ToJson
+
 structure HandoffInput where
   variant : String
+  prior : List PriorQuestion
   kind : String
   action : String
   content : String
@@ -105,7 +115,11 @@ structure HandoffOutput where
   deriving Lean.ToJson
 
 private def handoffInput (test : Case) : HandoffInput :=
-  { variant := test.name, kind := test.question.identity.kind.toDefraDB
+  { variant := test.name
+    prior := test.registry.rows.reverse.map fun row =>
+      { requestId := row.envelope.requestId, sessionId := row.envelope.sessionId
+        content := row.envelope.content, isOpen := row.isOpen }
+    kind := test.question.identity.kind.toDefraDB
     action := test.question.handling.toDefraDB, content := test.question.content
     requestId := test.question.requestId, producerRequestId := test.producer.requestId
     toolRequestId := test.producer.tool.requestId, producerNodeDid := test.producer.nodeDid
@@ -139,19 +153,11 @@ private def unstorableNames : List String :=
   , "producer-requester-mismatch", "unstamped", "wrong-reply-target", "wrong-reply-session"
   , "same-physical-request" ]
 
-private def servedNames : List String := ["fresh-linked", "wrong-reply-source"]
-
 /-- A question filed through the stamped mailbox write from the producer's own
 claimed request, then a signed reply claimed against it. -/
 @[conformance_family]
 def linked : Family HandoffInput HandoffOutput where
-  inputs := (cases.filter (servedNames.contains ·.name)).map handoffInput
-  model := handoffOf
-
-@[conformance_family]
-def linkedUnreached : Family HandoffInput HandoffOutput where
-  inputs := (cases.filter fun c =>
-    !servedNames.contains c.name && !unstorableNames.contains c.name).map handoffInput
+  inputs := (cases.filter fun c => !unstorableNames.contains c.name).map handoffInput
   model := handoffOf
 
 end Conformance.MailboxHandoffContracts

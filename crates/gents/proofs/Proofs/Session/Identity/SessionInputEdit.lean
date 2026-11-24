@@ -87,10 +87,11 @@ conflicts. A completed receipt is an observation, not a new claim, and does
 not recheck or reapply after a later revocation. -/
 def apply (prior : Outcome) (intent : Request.CrossActorAuthorization.Intent)
     (observation : Request.CrossActorAuthorization.Observation)
-    (commit : Request.CrossActorAuthorization.NativeCommit)
+    (committed : Bool)
     (selectedObserved selectedAtCommit : Option (List Bool)) : Outcome :=
   if prior != .pending then prior else
-  match Request.CrossActorAuthorization.decideClaim intent observation commit with
+  match Request.CrossActorAuthorization.commitDecision committed
+      (Request.CrossActorAuthorization.decideClaim intent observation) with
   | .claimed =>
       match selectedObserved, selectedAtCommit with
       | some observed, some current =>
@@ -122,37 +123,36 @@ theorem an_admitted_user_write_goes_on_to_apply
 theorem committed_edit_not_rechecked
     (intent : Request.CrossActorAuthorization.Intent)
     (observation : Request.CrossActorAuthorization.Observation)
-    (commit : Request.CrossActorAuthorization.NativeCommit)
-    (observed current : Option (List Bool)) :
-    apply .applied intent observation commit observed current = .applied := by rfl
+    (committed : Bool) (observed current : Option (List Bool)) :
+    apply .applied intent observation committed observed current = .applied := by rfl
 
 theorem conflict_leaves_edit_pending :
     apply .pending Request.CrossActorAuthorization.exampleIntent
-      Request.CrossActorAuthorization.permittedObservation ⟨false, true, true, true⟩ (some [true]) (some [true]) = .pending := by decide
+      Request.CrossActorAuthorization.permittedObservation false (some [true]) (some [true]) = .pending := by decide
 
 theorem native_denial_rejects_without_effect :
     apply .pending Request.CrossActorAuthorization.exampleIntent
-      Request.CrossActorAuthorization.deniedObservation ⟨false, true, true, true⟩ (some [true]) (some [true]) = .rejected := by decide
+      Request.CrossActorAuthorization.deniedObservation true (some [true]) (some [true]) = .rejected := by decide
 
 theorem matching_native_author_and_targets_can_apply :
     apply .pending Request.CrossActorAuthorization.exampleIntent
-      Request.CrossActorAuthorization.permittedObservation ⟨true, true, true, true⟩ (some [true]) (some [true]) = .applied := by decide
+      Request.CrossActorAuthorization.permittedObservation true (some [true]) (some [true]) = .applied := by decide
 
 theorem selected_request_denial_rejects :
     apply .pending Request.CrossActorAuthorization.exampleIntent
-      Request.CrossActorAuthorization.permittedObservation ⟨true, true, true, true⟩ (some [true, false]) (some [true, false]) = .rejected := by decide
+      Request.CrossActorAuthorization.permittedObservation true (some [true, false]) (some [true, false]) = .rejected := by decide
 
 theorem selected_request_revoke_conflicts :
     apply .pending Request.CrossActorAuthorization.exampleIntent
-      Request.CrossActorAuthorization.permittedObservation ⟨true, true, true, true⟩ (some [true]) (some [false]) = .pending := by decide
+      Request.CrossActorAuthorization.permittedObservation true (some [true]) (some [false]) = .pending := by decide
 
 theorem missing_selected_request_observation_stays_pending :
     apply .pending Request.CrossActorAuthorization.exampleIntent
-      Request.CrossActorAuthorization.permittedObservation ⟨true, true, true, true⟩ none none = .pending := by decide
+      Request.CrossActorAuthorization.permittedObservation true none none = .pending := by decide
 
 theorem empty_selection_cannot_apply :
     apply .pending Request.CrossActorAuthorization.exampleIntent
-      Request.CrossActorAuthorization.permittedObservation ⟨true, true, true, true⟩ (some []) (some []) = .rejected := by decide
+      Request.CrossActorAuthorization.permittedObservation true (some []) (some []) = .rejected := by decide
 
 /-- An interrupted request without a replacement does not identify the edit
 that interrupted it. If the command's verified receipt is unavailable, that

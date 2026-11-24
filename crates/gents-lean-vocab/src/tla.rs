@@ -3,7 +3,8 @@
 //! A spec names its Lean owners on its second line (`\* lean: A.b, C.d`). Each
 //! must be exported as a conformance function over a finite domain (every
 //! argument a `Bool` or a field-less enum, every result a `Bool`, `Nat` or
-//! enum); it becomes `<name>_table`, the decision over its whole domain keyed
+//! enum, or an `Option` of one whose `none` is the string `"none"`); it
+//! becomes `<name>_table`, the decision over its whole domain keyed
 //! by the tuple of its arguments in Lean parameter order, and `<name>(...)`,
 //! its lookup, in `generated/LeanDecision_<Namespace>.tla`. Lean a spec
 //! restates without a table goes on its `\* models:` line, which this
@@ -165,7 +166,18 @@ fn balanced(rows: &[String]) -> Vec<String> {
 /// The decision's table and lookup, or `None` when it is not a function over
 /// a finite domain that TLA+ values can carry.
 fn render_decision(owner: &str, name: &str, family: &FamilyView<'_>) -> Option<String> {
-    if !(family.output == "bool" || family.output == "nat" || family.output.get("enum").is_some()) {
+    let optional = family.output.get("option");
+    let result = optional.unwrap_or(family.output);
+    if !(result == "bool" || result == "nat" || result.get("enum").is_some()) {
+        return None;
+    }
+    let none = Value::from("none");
+    if optional.is_some()
+        && result
+            .get("values")
+            .and_then(Value::as_array)
+            .is_some_and(|values| values.contains(&none))
+    {
         return None;
     }
     let mut parameters = Vec::new();
@@ -190,6 +202,10 @@ fn render_decision(owner: &str, name: &str, family: &FamilyView<'_>) -> Option<S
         if !seen.insert(key.clone()) {
             return None;
         }
+        let expected = match (optional, expected) {
+            (Some(_), Value::Null) => &none,
+            _ => *expected,
+        };
         rows.push((key, literal(expected)?));
     }
     if parameters.is_empty() || rows.len() != size {
@@ -384,6 +400,35 @@ mod tests {
         );
         let doubled: Vec<_> = cases.iter().chain(&cases[..1]).cloned().collect();
         assert!(render_decision("Ns.decide", "decide", &view(&input, &output, &doubled)).is_none());
+    }
+
+    #[test]
+    fn an_optional_result_renders_none_as_a_value_unless_the_enum_has_one() {
+        let input = serde_json::json!({"struct": "Input", "fields": [["flag", "bool"]]});
+        let output = serde_json::json!({"option": {"enum": "Out", "values": ["yes", "no"]}});
+        let cases = [
+            (serde_json::json!({"flag": false}), Value::Null),
+            (serde_json::json!({"flag": true}), serde_json::json!("yes")),
+        ];
+        fn view<'a>(
+            input: &'a Value,
+            output: &'a Value,
+            cases: &'a [(Value, Value)],
+        ) -> FamilyView<'a> {
+            FamilyView {
+                input,
+                output,
+                cases: cases.iter().map(|(i, e)| (i, e)).collect(),
+            }
+        }
+        assert_eq!(
+            render_decision("Ns.decide", "decide", &view(&input, &output, &cases)).unwrap(),
+            "\\* Lean `Ns.decide`.\ndecide_table ==\n  (<<FALSE>> :> \"none\"\n   @@ <<TRUE>> :> \"yes\")\n\ndecide(flag) ==\n  decide_table[<<flag>>]\n"
+        );
+        let ambiguous = serde_json::json!({"option": {"enum": "Out", "values": ["yes", "none"]}});
+        assert!(
+            render_decision("Ns.decide", "decide", &view(&input, &ambiguous, &cases)).is_none()
+        );
     }
 
     /// The most `@@` operators any one parenthesized group joins, and the

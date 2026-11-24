@@ -101,6 +101,17 @@ async fn persisted_request(
     AgentRequest::try_from(record).unwrap()
 }
 
+async fn stored_rows(node: &Arc<EmbeddedNode>, requester: &str) -> Vec<Value> {
+    let mut rows = tests::list_as_creator(node, requester, None)
+        .await
+        .unwrap()
+        .iter()
+        .map(super::notification_tests::stored_value)
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| left["_docID"].as_str().cmp(&right["_docID"].as_str()));
+    rows
+}
+
 async fn claim(node: &Arc<EmbeddedNode>, request: &AgentRequest, abort: bool) -> Result<()> {
     gents_store::test_support::fixture_agent_access(node, tests::AGENT_NONCE).transact_write("test.mailbox_reply", |txn| Box::pin(async move {
         let mutation = format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "claimed" }}) {{ _docID }} }}"#,
@@ -354,11 +365,6 @@ async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
         let modeled = &case.input;
         assert_eq!(modeled.request_id, modeled.producer_request_id);
         assert_eq!(modeled.request_id, modeled.tool_request_id);
-        assert_eq!(modeled.session_id, modeled.reply_session_id);
-        assert_eq!(
-            modeled.reply_bound_session_id.as_deref(),
-            Some(modeled.session_id.as_str())
-        );
         assert_eq!(modeled.producer_node_did, modeled.question_node_did);
         assert_eq!(
             modeled.producer_requester_did,
@@ -398,7 +404,10 @@ async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
         lifecycle.begin_owned_execution(&writer).await.unwrap();
 
         let context = tests::context(identity.did());
-        let notification_identity = NotificationIdentity::Event;
+        let access = gents_store::test_support::fixture_agent_access(&node, tests::AGENT_NONCE);
+        let notification_identity = NotificationIdentity::Condition {
+            key: "condition-key".into(),
+        };
         let source_id = notification_identity
             .source_id(
                 &context.node_did,
@@ -407,30 +416,77 @@ async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
                 &producer.request_id,
             )
             .unwrap();
-        let receipt = stamp_notification(
+        let filing = |request_id: String, title: &str| FileMailboxItemArgs {
+            kind: serde_json::from_value(json!(modeled.kind)).unwrap(),
+            action: serde_json::from_value(json!(modeled.action)).unwrap(),
+            title: title.to_owned(),
+            summary: None,
+            payload: None,
+            source_kind: MailboxSourceKind::Agent,
+            source_id: source_id.clone(),
+            session_id: None,
+            request_id: Some(request_id),
+            cause_doc_id: None,
+            expected_collection: None,
+            parent_item_id: None,
+            deadline_at: None,
+        };
+        let request_of = |modeled_request: u64| {
+            if modeled_request == modeled.producer_request_id {
+                producer.request_id.clone()
+            } else {
+                format!("request-{modeled_request}")
+            }
+        };
+        for prior in &modeled.prior {
+            let stored = stamp_notification(
+                &node,
+                &access,
+                &context,
+                filing(request_of(prior.request_id), &prior.content),
+                &notification_identity,
+                MAILBOX_CLOSE_COLLECTIONS,
+            )
+            .await
+            .unwrap()
+            .item;
+            if !prior.is_open {
+                tests::dismiss_as_creator(&node, &stored.doc_id)
+                    .await
+                    .unwrap();
+            }
+        }
+        let rows_before = stored_rows(&node, identity.did()).await;
+        let receipt = match stamp_notification(
             &node,
-            &gents_store::test_support::fixture_agent_access(&node, tests::AGENT_NONCE),
+            &access,
             &context,
-            FileMailboxItemArgs {
-                kind: serde_json::from_value(json!(modeled.kind)).unwrap(),
-                action: serde_json::from_value(json!(modeled.action)).unwrap(),
-                title: modeled.content.clone(),
-                summary: None,
-                payload: None,
-                source_kind: MailboxSourceKind::Agent,
-                source_id,
-                session_id: None,
-                request_id: Some(producer.request_id.clone()),
-                cause_doc_id: None,
-                expected_collection: None,
-                parent_item_id: None,
-                deadline_at: None,
-            },
+            filing(producer.request_id.clone(), &modeled.content),
             &notification_identity,
             MAILBOX_CLOSE_COLLECTIONS,
         )
         .await
-        .unwrap();
+        {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                assert!(
+                    error
+                        .downcast_ref::<notification::MailboxFilingRefusal>()
+                        .is_some(),
+                    "{error:#}"
+                );
+                assert_eq!(stored_rows(&node, identity.did()).await, rows_before);
+                node.shutdown().await.expect("shut down test node");
+                case.check(
+                    gents_lean_vocab::families::mailbox_handoff_contracts_linked::HandoffOutput {
+                        handoff_accepted: false,
+                        stored_open_receipt: false,
+                        linked_reply_accepted: false,
+                    },
+                );
+                continue;
+            }
+        };
         let receipt = serde_json::to_value(receipt).unwrap();
         let created = receipt["outcome"] == "created";
         let mailbox_doc_id = receipt["item"]["_docID"].as_str().unwrap();
@@ -472,6 +528,11 @@ async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
             "open"
         );
 
+        assert_eq!(modeled.session_id, modeled.reply_session_id);
+        assert_eq!(
+            modeled.reply_bound_session_id.as_deref(),
+            Some(modeled.session_id.as_str())
+        );
         let source = if modeled.reply_source_doc_id == modeled.mailbox_doc_id {
             mailbox_doc_id
         } else {

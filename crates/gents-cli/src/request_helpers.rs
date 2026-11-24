@@ -339,8 +339,8 @@ pub(crate) async fn goal_request(
     objective: &str,
 ) -> anyhow::Result<gents_protocol::request_admission::AgentRequestCreate> {
     use gents_session::request::lifecycle::{
-        build_signed_client_request, ExecutionOrigin, RequestIdentity, RequestSigner, RequestSpec,
-        RetryLink,
+        build_signed_reserved_client_request, ExecutionOrigin, RequestIdentity, RequestSigner,
+        RequestSpec, RetryLink,
     };
     let signer = client_signer(access)?;
     let actor = gents_store::identity::NodeIdentity::did(&signer).to_owned();
@@ -386,5 +386,5 @@ pub(crate) async fn goal_request(
             gents_protocol::request_admission::AgentRequestAdmissionRecord::client(&actor),
         )
     };
-    build_signed_client_request(access, spec, RequestSigner::Identity(&signer)).await
+    build_signed_reserved_client_request(access, spec, RequestSigner::Identity(&signer)).await
 }

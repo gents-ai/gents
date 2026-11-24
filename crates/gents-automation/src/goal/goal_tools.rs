@@ -4,8 +4,8 @@ use serde_json::json;
 
 use crate::goal::{
     create_goal_for_request_from_access, load_goal_tool_context, load_goal_tool_context_with_usage,
-    refresh_goal_usage_observed, CreateGoalForSessionError, GoalUsageObservation,
-    RequestAssignmentObservation,
+    refresh_goal_usage_observed, CreateGoalForSessionError, GoalAuditObservation,
+    GoalUsageObservation, RequestAssignmentObservation,
 };
 use crate::operations::goal::set_as_working_agent;
 use gents_loop::tool_call_lifecycle::FailureClass;
@@ -306,12 +306,19 @@ async fn update_goal(call: &GoalToolCall<'_>) -> anyhow::Result<GoalToolReply> {
             Some(GoalStatus::Complete) => {
                 json!({"accepted": true, "status": GoalStatus::Complete.as_str()})
             }
-            Some(GoalStatus::Blocked) => json!({
-                "accepted": updated.parsed_status() == Some(GoalStatus::Blocked),
-                "status": updated.status,
-                "consecutive_blocked_audits": updated.consecutive_blocked_audits.unwrap_or_default(),
-                "required_blocked_audits": updated.blocked_audit_threshold(),
-            }),
+            Some(GoalStatus::Blocked) => {
+                let blocked = updated.parsed_status() == Some(GoalStatus::Blocked);
+                let mut answer = json!({"accepted": blocked, "status": updated.status});
+                if !blocked {
+                    answer["next"] = blocked_audit_next(&goal, &updated, request_id).into();
+                }
+                answer["consecutive_blocked_audits"] = updated
+                    .consecutive_blocked_audits
+                    .unwrap_or_default()
+                    .into();
+                answer["required_blocked_audits"] = updated.blocked_audit_threshold().into();
+                answer
+            }
             _ => json!({"accepted": true, "goal": crate::goal::snapshot(&updated, Utc::now())}),
         },
     };
@@ -320,6 +327,32 @@ async fn update_goal(call: &GoalToolCall<'_>) -> anyhow::Result<GoalToolReply> {
         &["goal", "error", "accepted", "disposition"],
     )?;
     Ok(GoalToolReply::Complete(result))
+}
+
+fn blocked_audit_next(
+    observed: &crate::goal::GoalDocument,
+    updated: &crate::goal::GoalDocument,
+    request_id: &str,
+) -> String {
+    let remaining =
+        updated.blocked_audit_threshold() - updated.consecutive_blocked_audits.unwrap_or_default();
+    let repeat = match remaining {
+        1 => "repeat this reason verbatim in the next goal turn".to_owned(),
+        _ => format!("repeat this reason verbatim in each of the next {remaining} goal turns"),
+    };
+    let observation = updated
+        .last_blocked_reason
+        .as_deref()
+        .map(|reason| crate::operations::goal::audit_observation(observed, reason, request_id));
+    match (observation, observed.last_blocked_reason.as_deref()) {
+        (Some(GoalAuditObservation::NewCondition), Some(previous)) => format!(
+            "the count restarted at 1 because this reason differs from the previous one, {previous:?}; {repeat}"
+        ),
+        (Some(GoalAuditObservation::SameRequest), _) => {
+            format!("this turn already counted; {repeat}")
+        }
+        _ => repeat,
+    }
 }
 
 /// Writes an `update_goal` call through the Goal handler as the working

@@ -15,9 +15,8 @@ use gents_session::request::lifecycle::materialize::{
     refuse_retired_reserved_cause, sign_request, RequestSigner,
 };
 use gents_session::request::lifecycle::{
-    bind_client_targets_in_txn, stage_client_request_in_txn,
-    stage_revoke_execution_preserving_output, stage_supersede_parked_execution,
-    RequestTerminalOutcome, TerminalizeResult,
+    admit_client_request_in_txn, stage_revoke_execution_preserving_output,
+    stage_supersede_parked_execution, RequestTerminalOutcome, TerminalizeResult,
 };
 use gents_store::config_client::ConfigApplyTxn;
 use gents_store::graphql::escape_graphql_string;
@@ -941,27 +940,12 @@ async fn stage_task_delivery_with_receipt(
         if create.admission.kind
             == gents_protocol::request_admission::AgentRequestAdmissionKind::Client
         {
-            let mut resolved = create.clone();
-            bind_client_targets_in_txn(txn, &mut resolved).await?;
-            anyhow::ensure!(
-                create.session_doc_id == resolved.session_doc_id
-                    && create.agent_doc_id == resolved.agent_doc_id,
-                "Task request physical targets changed before publication"
-            );
             refuse_retired_reserved_cause(create)?;
-            stage_client_request_in_txn(
-                txn,
-                create,
-                create
-                    .session_doc_id
-                    .as_deref()
-                    .context("client Task session is unavailable")?,
-                create
-                    .agent_doc_id
-                    .as_deref()
-                    .context("client Task agent is unavailable")?,
-            )
-            .await?;
+            let actor = txn
+                .actor_did()
+                .context("client Task admission requires its signer")?
+                .to_owned();
+            admit_client_request_in_txn(txn, create, &actor).await?;
         } else {
             refuse_retired_reserved_cause(create)?;
             gents_session::request::lifecycle::runtime_publication::publish(txn, create).await?;

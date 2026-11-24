@@ -391,7 +391,7 @@ async fn restart_publishes_fail_closed_readiness_before_other_runtime_work() {
     .unwrap();
     assert_eq!(
         restarted.process_state,
-        gents_protocol::node_readiness::NodeReadinessProcessState::Recovering,
+        gents_protocol::node_readiness::NodeReadinessProcessState::Uninitialized,
         "a prior durable Ready must be overwritten before restart work can fail"
     );
     second_owner.close().await.unwrap();

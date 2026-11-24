@@ -506,6 +506,8 @@ impl ClientClaimAdmission {
                     .is_some_and(|(live, signed)| {
                         current.signing_payload(&live) == retained.signing_payload(&signed)
                     })
+                && row.doc_id.is_some()
+                && row.doc_id == self.row.doc_id
                 && row.doc_id.as_deref() == Some(request.doc_id.as_str())
                 && row.request_id == request.request_id
                 && row.node_did.as_deref() == Some(request.node_did.as_str())
@@ -513,7 +515,7 @@ impl ClientClaimAdmission {
                 && row.agent_did.as_deref() == Some(request.agent_did.as_str())
         });
         if retained.signer_did == request.agent_did {
-            return Ok(if bound { Allowed } else { Unavailable });
+            return Ok(if bound { Allowed } else { Denied });
         }
         let owners = txn
             .document_owners("AgentRequest", std::slice::from_ref(&request.doc_id))
@@ -533,7 +535,7 @@ impl ClientClaimAdmission {
             return Ok(Unavailable);
         };
         if session.doc_id != session_doc {
-            return Ok(Unavailable);
+            return Ok(Denied);
         }
         let session_matches = session.session.agent_did == request.agent_did
             && session.session.requester_did == request.requester_did;

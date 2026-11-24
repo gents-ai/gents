@@ -496,6 +496,54 @@ async fn owned_begin_rejects_expiry_without_materializing_response() {
 }
 
 #[tokio::test]
+async fn owned_begin_uses_only_its_own_claim_and_rechecks_its_generation() {
+    let (node, _dir, identity, agent) = test_node().await;
+    let access = agent_access(&node, &identity, &agent);
+    let mut lifecycle = claimed_owner(&node, &identity, &agent).await;
+    let doc_id = lifecycle.request.doc_id.clone();
+    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
+        node.clone(),
+        gents_store::identity::resolve_agent_identity(identity.as_ref(), &agent)
+            .unwrap()
+            .as_ref(),
+        Duration::ZERO,
+    )
+    .unwrap();
+    let claimed = request_row(&access, &doc_id).await;
+
+    let mut unclaimed =
+        RequestLifecycle::new_with_node_did(node.clone(), lifecycle.request().clone(), 60);
+    unclaimed
+        .bind_managed_agent(
+            gents_store::identity::resolve_agent_identity(identity.as_ref(), &agent)
+                .unwrap()
+                .as_ref(),
+        )
+        .unwrap();
+    assert!(unclaimed.begin_owned_execution(&writer).await.is_err());
+    let after = request_row(&access, &doc_id).await;
+    assert_eq!(after.lifecycle_state, Some(RequestLifecycleState::Claimed));
+    assert_eq!(lease_tuple(&after), lease_tuple(&claimed));
+
+    access
+        .write(
+            "test.agent_graphql_mutation",
+            &format!(
+                r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_generation: "another-claim" }}) {{ _docID }} }}"#,
+                escape_graphql_string(&doc_id),
+            ),
+        )
+        .await
+        .unwrap();
+    let reclaimed = request_row(&access, &doc_id).await;
+    assert!(lifecycle.begin_owned_execution(&writer).await.is_err());
+    let after = request_row(&access, &doc_id).await;
+    assert_eq!(after.lifecycle_state, Some(RequestLifecycleState::Claimed));
+    assert_eq!(lease_tuple(&after), lease_tuple(&reclaimed));
+    assert_eq!(output_segment_count(&access, &doc_id).await, 0);
+}
+
+#[tokio::test]
 async fn racing_owned_begins_commit_one_processing_transition_without_renewal() {
     let (node, _dir, identity, agent) = test_node().await;
     let access = agent_access(&node, &identity, &agent);

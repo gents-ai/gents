@@ -4,6 +4,201 @@ use crate::request::lifecycle::{ClaimOutcome, ExecutionOrigin, RequestLifecycle}
 use gents_protocol::row::AgentRequest;
 use gents_store::config_client::NodePermission;
 
+type ClaimInput =
+    gents_lean_vocab::families::cross_actor_authorization_signed_client_claim::ClaimInput;
+
+/// The served node, identities and targets one claim case runs against. The
+/// `owner` holds the Agent document; the `user` is the session's requester;
+/// the request's signer is the user or a `collaborator` whose update on the
+/// user's session is a relation the user grants.
+struct ClaimWorld {
+    db: gents_inference::test_support::TestDb,
+    node: Arc<defra_node::Node>,
+    runtime: Arc<dyn NodeIdentity>,
+    admin: ConfigAccess,
+    user: KeyIdentity,
+    owner: KeyIdentity,
+    collaborator: KeyIdentity,
+    signer_is_collaborator: bool,
+    agent_doc: String,
+    session_doc: String,
+}
+
+impl ClaimWorld {
+    fn signer(&self) -> &KeyIdentity {
+        if self.signer_is_collaborator {
+            &self.collaborator
+        } else {
+            &self.user
+        }
+    }
+
+    fn access(&self, identity: &KeyIdentity) -> ConfigAccess {
+        self.db.client_access(identity)
+    }
+
+    async fn client_update(
+        &self,
+        identity: &KeyIdentity,
+        collection: &str,
+        schema: &'static str,
+        doc: &str,
+        input: serde_json::Value,
+    ) {
+        let mutation = format!(
+            r#"mutation($input: {collection}MutationInputArg!) {{ update_{collection}(docID: "{}", input: $input) {{ _docID }} }}"#,
+            gents_store::graphql::escape_graphql_string(doc)
+        );
+        self.access(identity)
+            .transact_write("test.claim.client_update", |txn| {
+                let (mutation, input) = (&mutation, &input);
+                Box::pin(async move {
+                    txn.execute_client_signed_update(
+                        mutation,
+                        &serde_json::json!({ "input": input }),
+                        schema,
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await
+            .unwrap();
+    }
+
+    async fn apply(&self, write: &str) {
+        let signer = self.signer().did().parse().unwrap();
+        let collaborator = self.collaborator.did().parse().unwrap();
+        let (user, owner) = (self.access(&self.user), self.access(&self.owner));
+        match write {
+            "revoke_session_update" => user
+                .delete_actor_relationship(
+                    "AgentSession",
+                    &self.session_doc,
+                    "working_agent",
+                    &collaborator,
+                )
+                .await
+                .unwrap(),
+            "grant_session_update" => user
+                .add_actor_relationship(
+                    "AgentSession",
+                    &self.session_doc,
+                    "working_agent",
+                    &collaborator,
+                )
+                .await
+                .unwrap(),
+            "revoke_invoke" => owner
+                .delete_actor_relationship("Agent", &self.agent_doc, "session_writer", &signer)
+                .await
+                .unwrap(),
+            "grant_invoke" => owner
+                .add_actor_relationship("Agent", &self.agent_doc, "session_writer", &signer)
+                .await
+                .unwrap(),
+            "revoke_node_permission" => self
+                .admin
+                .revoke_node_permission(&signer, NodePermission::DocumentUpdate)
+                .await
+                .unwrap(),
+            "grant_node_permission" => self
+                .admin
+                .grant_node_permission(&signer, NodePermission::DocumentUpdate)
+                .await
+                .unwrap(),
+            "touch_agent" => {
+                self.client_update(
+                    &self.owner,
+                    "Agent",
+                    gents_protocol::schemas::AGENT,
+                    &self.agent_doc,
+                    serde_json::json!({ "inference_profile_id": "touched" }),
+                )
+                .await
+            }
+            other => panic!("unmodeled write {other}"),
+        }
+    }
+
+    async fn apply_all(&self, writes: &[String]) {
+        for write in writes {
+            self.apply(write).await;
+        }
+    }
+
+    /// Creates an AgentRequest from `input` as `creator`, with the request's
+    /// ACP relationships unless the selected Agent must not read it.
+    async fn raw_request(
+        &self,
+        creator: &KeyIdentity,
+        input: &serde_json::Value,
+        agent_doc: &str,
+        agent_did: &str,
+        related: bool,
+    ) -> String {
+        self.access(creator)
+            .transact_write("test.claim.raw_request", |txn| {
+                let session = self.session_doc.as_str();
+                Box::pin(async move {
+                    let response = txn
+                        .execute_client_signed_create(
+                            "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",
+                            &serde_json::json!({ "input": input }),
+                            gents_protocol::schemas::AGENT_REQUEST,
+                        )
+                        .await?;
+                    let request = gents_store::graphql::created_doc_id(&response, "AgentRequest")?;
+                    if related {
+                        crate::request::lifecycle::client::stage_request_relationships_in_txn(
+                            txn, &request, agent_doc, session, agent_did,
+                        )
+                        .await?;
+                    }
+                    Ok::<_, anyhow::Error>(request)
+                })
+            })
+            .await
+            .unwrap()
+    }
+
+    async fn request_row(&self, reader: &ConfigAccess, doc: &str) -> AgentRequest {
+        let response = reader
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
+                gents_store::graphql::escape_graphql_string(doc),
+                gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
+            ))
+            .await
+            .unwrap();
+        let row: gents_protocol::row::AgentRequestRow =
+            serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
+        AgentRequest::try_from(row).unwrap()
+    }
+}
+
+async fn authorize_directly(
+    agent_access: &ConfigAccess,
+    admission: &crate::request::admission::ClientClaimAdmission,
+    request: &AgentRequest,
+) -> &'static str {
+    use crate::request::admission::ClientClaimAuthorization::{Allowed, Denied, Unavailable};
+    match agent_access
+        .transact_readonly("test.claim.authorize", |txn| {
+            Box::pin(async move { admission.authorize_in_txn(txn, request).await })
+        })
+        .await
+    {
+        Ok(Allowed) => "claimed",
+        Ok(Denied) => "denied",
+        Ok(Unavailable) => "unavailable",
+        Err(_) => "error",
+    }
+}
+
+/// Builds the case's world through the production writers, then replays its
+/// claim against `ClientClaimAdmission::authorize_in_txn` directly (the
+/// decision) and through the claim transaction (the request's effect).
 #[tokio::test]
 async fn signed_client_claim_uses_transaction_bound_intent_and_native_permissions() {
     for (index, case) in
@@ -11,12 +206,12 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
             .into_iter()
             .enumerate()
     {
-        let input = &case.input;
+        let input: &ClaimInput = &case.input;
         let name = format!("{}-{index}", input.name);
-        let (mutate, scheduled, steer) = (!input.signature_valid, input.scheduled, input.steer);
         let home = tempfile::tempdir().unwrap();
-        let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
-        let owner = KeyIdentity::load_or_create(home.path().join("owner.key"), None).unwrap();
+        let key = |file: &str| KeyIdentity::load_or_create(home.path().join(file), None).unwrap();
+        let (user, owner, collaborator) =
+            (key("user.key"), key("owner.key"), key("collaborator.key"));
         let (db, runtime) = serve_client_node(
             "signed-client-claim-uses-transaction-bou",
             crate::test_support::no_lifecycle_plugins(),
@@ -24,15 +219,24 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
         .await;
         let runtime: Arc<dyn NodeIdentity> = Arc::new(runtime);
         let node = db.node.clone();
-        grant_operator_user(&node, runtime.as_ref(), &user).await;
-        grant_operator_user(&node, runtime.as_ref(), &owner).await;
+        for identity in [&user, &owner, &collaborator] {
+            grant_operator_user(&node, runtime.as_ref(), identity).await;
+        }
         let binding = gents_store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
+        let agent_identity =
+            gents_store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
+        let agent_access = ConfigAccess::local_managed_agent(
+            node.clone(),
+            binding.agent_did.parse().unwrap(),
+            agent_identity.as_ref(),
+        )
+        .unwrap();
+        let agent_signs = input.author == "agent";
         let admin = ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
         let subject = ::identity::Did::new(binding.agent_did.as_str()).unwrap();
         for permission in [
             NodePermission::CollectionGet,
             NodePermission::DocumentRead,
-            NodePermission::CollectionGet,
             NodePermission::DocumentUpdate,
             NodePermission::DacRelationAdd,
         ] {
@@ -41,38 +245,73 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
                 .await
                 .unwrap();
         }
-        let user_access = db.client_access(&user);
-        if !input.agent_invoke {
-            let owner_access = db.client_access(&owner);
-            seed_owned_agent(&owner_access, runtime.did(), &binding).await;
-            let agent = owner_access.execute("{ Agent { _docID } }").await.unwrap();
-            let doc = agent["data"]["Agent"][0]["_docID"].as_str().unwrap();
+        let owner_access = db.client_access(&owner);
+        seed_owned_agent(&owner_access, runtime.did(), &binding).await;
+        let agent_doc = owner_access.execute("{ Agent { _docID } }").await.unwrap()["data"]
+            ["Agent"][0]["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let mut world = ClaimWorld {
+            db,
+            node: node.clone(),
+            runtime: runtime.clone(),
+            admin,
+            user,
+            owner,
+            collaborator,
+            signer_is_collaborator: input.author == "collaborator",
+            agent_doc,
+            session_doc: String::new(),
+        };
+        let signer: String = if agent_signs {
+            binding.agent_did.clone()
+        } else {
+            world.signer().did().to_owned()
+        };
+        let signer_did: ::identity::Did = signer.parse().unwrap();
+        let invoke_holder = if input.agent_invoke {
+            "session_writer"
+        } else {
+            "reader"
+        };
+        if !agent_signs {
             owner_access
-                .add_actor_relationship("Agent", doc, "reader", &user.did().parse().unwrap())
+                .add_actor_relationship("Agent", &world.agent_doc, invoke_holder, &signer_did)
                 .await
                 .unwrap();
-        } else {
-            seed_owned_agent(&user_access, runtime.did(), &binding).await;
         }
+        for identity in [&world.user, &world.collaborator] {
+            if agent_signs || identity.did() != world.signer().did() {
+                owner_access
+                    .add_actor_relationship(
+                        "Agent",
+                        &world.agent_doc,
+                        "session_writer",
+                        &identity.did().parse().unwrap(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        }
+        let user_access = world.access(&world.user);
+        let scope = |session: String| {
+            RequestScope::new(runtime.did(), world.user.did(), &binding.agent_did, session)
+        };
         let mut create = AgentRequestCreate::base(
             RequestPurpose::Normal,
             format!("model-{name}"),
-            RequestScope::new(
-                runtime.did(),
-                user.did(),
-                &binding.agent_did,
-                format!("session-{name}"),
-            ),
+            scope(format!("session-{name}")),
             "signed text",
-            if scheduled {
+            if input.scheduled {
                 "scheduled"
             } else {
                 "interactive"
             },
             "2026-11-04T00:00:00Z",
-            AgentRequestAdmissionRecord::client(user.did()),
+            AgentRequestAdmissionRecord::client(signer.as_str()),
         );
-        if steer {
+        if input.steer {
             create.input.queue = Some(gents_protocol::request_input::RequestQueue {
                 delivery: gents_protocol::request_input::QueueDelivery::Steer,
                 source: gents_protocol::request_input::QueueSource::User,
@@ -84,83 +323,294 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
                 background_completion_wake_version: None,
             });
         }
-        create.session_doc_id = Some(reserve_goal_session(&user_access, &create).await.unwrap());
-        let agent = user_access
-            .execute("{ Agent { _docID agent_did } }")
+        let reserve = |session: String| {
+            let mut reservation = create.clone();
+            reservation.session_id = session;
+            reservation.admission = AgentRequestAdmissionRecord::client(world.user.did());
+            reservation
+        };
+        world.session_doc = reserve_goal_session(&user_access, &reserve(create.session_id.clone()))
             .await
             .unwrap();
-        create.agent_doc_id = Some(
-            agent["data"]["Agent"][0]["_docID"]
-                .as_str()
-                .unwrap()
-                .to_owned(),
-        );
-        crate::request::admission::sign_agent_request_create(&user, &mut create)
-            .await
-            .unwrap();
-        submit_client_request(&user_access, &create).await.unwrap();
-        if !input.requester_node_permission {
-            admin
-                .revoke_node_permission(
-                    &user.did().parse().unwrap(),
-                    NodePermission::DocumentUpdate,
+        if world.signer_is_collaborator || input.owner.as_deref() == Some("collaborator") {
+            let relation = if input.session_update {
+                "working_agent"
+            } else {
+                "reader"
+            };
+            user_access
+                .add_actor_relationship(
+                    "AgentSession",
+                    &world.session_doc,
+                    relation,
+                    &world.collaborator.did().parse().unwrap(),
                 )
                 .await
                 .unwrap();
         }
-        let agent_identity =
-            gents_store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
-        let agent_access = ConfigAccess::local_managed_agent(
-            node.clone(),
-            binding.agent_did.parse().unwrap(),
-            agent_identity.as_ref(),
-        )
-        .unwrap();
-        let query = format!(
-            "{{ AgentRequest {{ {} }} }}",
-            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
-        );
-        let response = agent_access.execute(&query).await.unwrap();
-        let row: gents_protocol::row::AgentRequestRow =
-            serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
-        let request = AgentRequest::try_from(row).unwrap();
-        let (_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
-        let verifier = AgentRequestAdmissionVerifier::new(node.clone(), runtime.clone(), authority);
-        let (request, mut admission) = verifier
-            .verify_fresh_for_claim(&request, &binding.agent_did)
+        create.session_doc_id = Some(if input.named_session_matches {
+            world.session_doc.clone()
+        } else {
+            reserve_goal_session(&user_access, &reserve(format!("other-session-{name}")))
+                .await
+                .unwrap()
+        });
+        create.agent_doc_id = Some(if input.agent_row == "other" {
+            let other = gents_store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
+            let other_doc = owner_access
+                .transact_write("test.claim.other_agent", |txn| {
+                    let (node_did, other) = (runtime.did(), &other);
+                    Box::pin(async move {
+                        let created = txn
+                            .execute_client_signed_create(
+                                "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
+                                &serde_json::json!({"input": {
+                                    "node_did": node_did, "agent_did": other.agent_did,
+                                    "creation_nonce": other.creation_nonce,
+                                    "inference_profile_id": "fixture", "enabled": true,
+                                }}),
+                                gents_protocol::schemas::AGENT,
+                            )
+                            .await?;
+                        Ok::<_, anyhow::Error>(gents_store::graphql::created_doc_id(&created, "Agent")?)
+                    })
+                })
+                .await
+                .unwrap();
+            for (relation, did) in [
+                ("reader", binding.agent_did.as_str()),
+                ("session_writer", world.signer().did()),
+            ] {
+                owner_access
+                    .add_actor_relationship("Agent", &other_doc, relation, &did.parse().unwrap())
+                    .await
+                    .unwrap();
+            }
+            other_doc
+        } else {
+            world.agent_doc.clone()
+        });
+        let signing_identity: &dyn NodeIdentity = if agent_signs {
+            agent_identity.as_ref()
+        } else {
+            world.signer()
+        };
+        crate::request::admission::sign_agent_request_create(signing_identity, &mut create)
             .await
             .unwrap();
-        assert!(admission.is_some());
-        if mutate {
-            admission.as_mut().unwrap().alter_signed_content_for_test();
-        }
-        let mut lifecycle = RequestLifecycle::new_with_execution_binding(
-            node.clone(),
-            request,
-            60,
-            if scheduled {
-                ExecutionOrigin::Scheduled
-            } else {
-                ExecutionOrigin::Interactive
-            },
-            String::new(),
-        );
-        lifecycle
-            .bind_managed_agent(agent_identity.as_ref())
-            .unwrap();
-        lifecycle.set_client_claim_admission(admission);
-        let result = lifecycle.claim_with_identity().await;
-        let claimed = matches!(result.as_ref(), Ok(ClaimOutcome::Claimed));
-        let decision = match result.as_ref() {
-            Ok(ClaimOutcome::Claimed) => "claimed",
-            Err(_) => "denied",
-            Ok(other) => panic!("{name}: unmodeled claim outcome {other:?}"),
+        let signed_session = create.session_doc_id.clone().unwrap();
+        let signed_agent = create.agent_doc_id.clone().unwrap();
+        let request_creator = if input.owner.as_deref() == Some("collaborator") {
+            &world.collaborator
+        } else {
+            world.signer()
         };
-        if claimed {
-            assert!(lifecycle.owns_execution().await.unwrap());
+        let request_doc = if agent_signs {
+            submit_client_request(&agent_access, &create).await.unwrap();
+            agent_access
+                .execute(&format!(
+                    r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+                    gents_store::graphql::escape_graphql_string(&create.request_id)
+                ))
+                .await
+                .unwrap()["data"]["AgentRequest"][0]["_docID"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        } else if request_creator.did() != world.signer().did() {
+            let input = gents_store::config_client::client_request_input(&create).unwrap();
+            world
+                .raw_request(
+                    request_creator,
+                    &input,
+                    &signed_agent,
+                    &binding.agent_did,
+                    true,
+                )
+                .await
+        } else if input.named_session_matches && input.agent_row != "other" {
+            let signer_access = world.access(world.signer());
+            submit_client_request(&signer_access, &create)
+                .await
+                .unwrap();
+            signer_access
+                .execute(&format!(
+                    r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+                    gents_store::graphql::escape_graphql_string(&create.request_id)
+                ))
+                .await
+                .unwrap()["data"]["AgentRequest"][0]["_docID"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        } else {
+            world
+                .access(world.signer())
+                .transact_write("test.claim.stage", |txn| {
+                    let (create, session, agent) = (&create, &signed_session, &signed_agent);
+                    Box::pin(async move {
+                        stage_client_request_in_txn(txn, create, session, agent).await
+                    })
+                })
+                .await
+                .unwrap()
+        };
+        let retained = world.request_row(&agent_access, &request_doc).await;
+        let (_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
+        let verifier = AgentRequestAdmissionVerifier::new(node.clone(), runtime.clone(), authority);
+        let (retained, admission) = verifier
+            .verify_fresh_for_claim(&retained, &binding.agent_did)
+            .await
+            .unwrap();
+        let mut admission = admission.expect("a client request retains its claim admission");
+        if !input.signature_valid {
+            admission.alter_signed_content_for_test();
         }
-        let state = user_access
-            .execute("{ AgentRequest { lifecycle_state failure_reason terminal_output } }")
+        let creator_access = if agent_signs {
+            agent_access.clone()
+        } else {
+            world.access(request_creator)
+        };
+        let (claimed, claimed_reader) = if input.claimed_document == "replayed" {
+            let mut replay = gents_store::config_client::client_request_input(&create).unwrap();
+            replay["relationships_pending"] = true.into();
+            if !input.live_author_present {
+                replay
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("admission_signer_did");
+            }
+            let replayed = world
+                .raw_request(
+                    request_creator,
+                    &replay,
+                    &signed_agent,
+                    &binding.agent_did,
+                    input.request_read != "absent",
+                )
+                .await;
+            world
+                .client_update(
+                    request_creator,
+                    "AgentRequest",
+                    gents_protocol::schemas::AGENT_REQUEST,
+                    &replayed,
+                    serde_json::json!({ "relationships_pending": false }),
+                )
+                .await;
+            (
+                world.request_row(&creator_access, &replayed).await,
+                replayed,
+            )
+        } else {
+            (retained, request_doc.clone())
+        };
+        if input.request_read == "pending" {
+            world
+                .client_update(
+                    request_creator,
+                    "AgentRequest",
+                    gents_protocol::schemas::AGENT_REQUEST,
+                    &claimed_reader,
+                    serde_json::json!({ "relationships_pending": true }),
+                )
+                .await;
+        }
+        if input.session_read == "pending" {
+            world
+                .client_update(
+                    &world.user,
+                    "AgentSession",
+                    gents_protocol::schemas::AGENT_SESSION,
+                    &world.session_doc,
+                    serde_json::json!({ "relationships_pending": true }),
+                )
+                .await;
+        }
+        match input.agent_row.as_str() {
+            "absent" => owner_access
+                .delete_actor_relationship("Agent", &world.agent_doc, "executor", &subject)
+                .await
+                .unwrap(),
+            "disabled" => {
+                world
+                    .client_update(
+                        &world.owner,
+                        "Agent",
+                        gents_protocol::schemas::AGENT,
+                        &world.agent_doc,
+                        serde_json::json!({ "enabled": false }),
+                    )
+                    .await
+            }
+            _ => {}
+        }
+        if !input.requester_node_permission {
+            world.apply("revoke_node_permission").await;
+        }
+        world.apply_all(&input.before).await;
+        let lifecycle_for = |request: &AgentRequest| {
+            let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+                node.clone(),
+                request.clone(),
+                60,
+                if input.scheduled {
+                    ExecutionOrigin::Scheduled
+                } else {
+                    ExecutionOrigin::Interactive
+                },
+                String::new(),
+            );
+            lifecycle
+                .bind_managed_agent(agent_identity.as_ref())
+                .unwrap();
+            lifecycle.set_client_claim_admission(Some(admission.clone()));
+            lifecycle
+        };
+        if input.prior_claimed {
+            assert!(matches!(
+                lifecycle_for(&claimed).claim_with_identity().await.unwrap(),
+                ClaimOutcome::Claimed
+            ));
+        }
+        let read_failure = "relationships_pending";
+        let decision = if input.transient_failure {
+            gents_store::config_client::ConfigApplyTxn::with_read_storage_failure(
+                read_failure,
+                authorize_directly(&agent_access, &admission, &claimed),
+            )
+            .await
+        } else {
+            authorize_directly(&agent_access, &admission, &claimed).await
+        };
+        let mut lifecycle = lifecycle_for(&claimed);
+        let result = if input.transient_failure {
+            gents_store::config_client::ConfigApplyTxn::with_read_storage_failure(
+                read_failure,
+                lifecycle.claim_with_identity(),
+            )
+            .await
+        } else if input.race.is_empty() {
+            lifecycle.claim_with_identity().await
+        } else {
+            let (result, raced) =
+                gents_store::config_client::ConfigApplyTxn::with_concurrent_write_before_commit(
+                    lifecycle.claim_with_identity(),
+                    world.apply_all(&input.race),
+                )
+                .await;
+            assert!(
+                raced,
+                "{name}: the race lands inside the claim's first attempt"
+            );
+            result
+        };
+        let claimed_now = matches!(result.as_ref(), Ok(ClaimOutcome::Claimed));
+        let state = creator_access
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state failure_reason terminal_output }} }}"#,
+                gents_store::graphql::escape_graphql_string(&claimed_reader)
+            ))
             .await
             .unwrap();
         let row = &state["data"]["AgentRequest"][0];
@@ -183,64 +633,85 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
                     .map(str::to_owned),
             },
         );
-        if claimed {
-            if scheduled {
-                let writer = crate::request::streaming::DefraStreamWriter::new_managed(
-                    node.clone(),
-                    agent_identity.as_ref(),
-                    std::time::Duration::ZERO,
-                )
-                .unwrap();
-                lifecycle.begin_owned_execution(&writer).await.unwrap();
-                lifecycle.validate_owned_execution().await.unwrap();
-            }
-            let node_view = gents_store::test_support::unrelated_document_reader(&node)
-                .await
-                .execute("{ AgentRequest { _docID } }")
-                .await
-                .unwrap();
-            assert!(node_view["data"]["AgentRequest"]
-                .as_array()
-                .unwrap()
-                .is_empty());
-            let doc_id = gents_store::graphql::escape_graphql_string(&lifecycle.request().doc_id);
-            agent_access
-                .write(
-                    "test.expire_claim",
-                    &format!(
-                        r#"mutation {{ update_AgentRequest(
+        if claimed_now && input.name == "committed_claim" {
+            assert_claimed_execution(
+                &world,
+                &mut lifecycle,
+                &agent_access,
+                agent_identity.clone(),
+                input.scheduled,
+            )
+            .await;
+        }
+        drop(lifecycle);
+        world.node.shutdown().await.expect("shut down test node");
+    }
+}
+
+/// A committed claim owns its execution: the node itself cannot read the
+/// request, recovery repairs its expired lease, and a scheduled claim's
+/// background wake is ineligible.
+async fn assert_claimed_execution(
+    world: &ClaimWorld,
+    lifecycle: &mut RequestLifecycle,
+    agent_access: &ConfigAccess,
+    agent_identity: Arc<dyn NodeIdentity>,
+    scheduled: bool,
+) {
+    let node = &world.node;
+    assert!(lifecycle.owns_execution().await.unwrap());
+    if scheduled {
+        let writer = crate::request::streaming::DefraStreamWriter::new_managed(
+            node.clone(),
+            agent_identity.as_ref(),
+            std::time::Duration::ZERO,
+        )
+        .unwrap();
+        lifecycle.begin_owned_execution(&writer).await.unwrap();
+        lifecycle.validate_owned_execution().await.unwrap();
+    }
+    let node_view = gents_store::test_support::unrelated_document_reader(node)
+        .await
+        .execute("{ AgentRequest { _docID } }")
+        .await
+        .unwrap();
+    assert!(node_view["data"]["AgentRequest"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    let doc_id = gents_store::graphql::escape_graphql_string(&lifecycle.request().doc_id);
+    agent_access
+        .write(
+            "test.expire_claim",
+            &format!(
+                r#"mutation {{ update_AgentRequest(
                 filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
                 input: {{ execution_lease_expires_at: "2000-01-01T00:00:00Z" }}
             ) {{ _docID }} }}"#
-                    ),
-                )
-                .await
-                .unwrap();
-            let recovery = RequestLifecycle::repair_terminal_requests_with_identities(
-                &node,
-                runtime.did(),
-                std::slice::from_ref(&agent_identity),
-            )
-            .await
-            .unwrap();
-            assert_eq!(recovery.scanned, 1);
-            assert_eq!(recovery.repaired, 1);
-            assert_eq!(recovery.failed, 0);
-
-            if scheduled {
-                let wake = RequestLifecycle::redrive_failed_background_wakeups_with_identities(
-                    &node,
-                    runtime.did(),
-                    std::slice::from_ref(&agent_identity),
-                )
-                .await
-                .unwrap();
-                assert_eq!(wake.scanned, 1);
-                assert_eq!(wake.ineligible, 1);
-            }
-        }
-        drop(lifecycle);
-        node.shutdown().await.expect("shut down test node");
+            ),
+        )
+        .await
+        .unwrap();
+    let recovery = RequestLifecycle::repair_terminal_requests_with_identities(
+        node,
+        world.runtime.did(),
+        std::slice::from_ref(&agent_identity),
+    )
+    .await
+    .unwrap();
+    assert_eq!(recovery.scanned, 1);
+    assert_eq!(recovery.repaired, 1);
+    assert_eq!(recovery.failed, 0);
+    if scheduled {
+        let wake = RequestLifecycle::redrive_failed_background_wakeups_with_identities(
+            node,
+            world.runtime.did(),
+            std::slice::from_ref(&agent_identity),
+        )
+        .await
+        .unwrap();
+        assert_eq!(wake.scanned, 1);
+        assert_eq!(wake.ineligible, 1);
     }
 }
 

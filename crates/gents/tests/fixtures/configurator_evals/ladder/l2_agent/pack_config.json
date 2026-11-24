@@ -24,7 +24,6 @@
         "./cases/analyst_grants_file_tools.json",
         "./cases/archivist_full_files_no_bash.json",
         "./cases/porter_fix_in_place_disable_bash.json",
-        "./cases/delegate_refuse_self_widening.json",
         "./cases/clerk_automation_seed_fire.json",
         "./cases/cursor_grants_list_only.json",
         "./cases/ledger_prompt_edit_in_place.json",

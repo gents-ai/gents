@@ -359,21 +359,18 @@ pub(super) fn client_signer(
     Ok((*capability.config).clone())
 }
 
-pub(super) async fn execute(
+/// The signed create graph of `input` under the endpoint's held client key.
+/// Signing is deterministic in the key and the input, so the same input
+/// always yields the same first block and so the same document id.
+async fn client_create_graph(
     endpoint: &GraphqlEndpoint,
-    txn_id: &str,
-    mutation: &str,
-    variables: &Value,
+    input: Value,
     schema: String,
     collection: String,
-) -> Result<Value> {
+) -> Result<db::block::builder::ClientCreateSignatures> {
     let signer = client_signer(endpoint)?;
     let ids = endpoint.home_policy_ids().await?;
-    let input = variables
-        .get("input")
-        .cloned()
-        .ok_or(ConfigClientError::VariablesNotObject)?;
-    let mut graph = tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         let schema = signing_schema(&schema, &collection, ids)?;
         db::block::builder::ClientCreateSignatures::from_input(
             &storage::Crdts::default(),
@@ -384,7 +381,49 @@ pub(super) async fn execute(
         .map_err(ConfigClientError::ClientAgentGraph)
     })
     .await
-    .map_err(ConfigClientError::ClientAgentGraphJoin)??;
+    .map_err(ConfigClientError::ClientAgentGraphJoin)?
+}
+
+impl super::ConfigAccess {
+    /// The document id a client-signed create of `input` under the bundled
+    /// `trusted_schema` stores, derived from its signed first block before
+    /// anything is written. Only an endpoint holding the client key signs.
+    pub async fn client_signed_create_doc_id(
+        &self,
+        input: &Value,
+        trusted_schema: &str,
+    ) -> Result<String> {
+        let Self::Graphql(endpoint) = self else {
+            return Err(ConfigClientError::ClientAgentSignerRequired);
+        };
+        let schemas = query::parse_sdl(trusted_schema)?;
+        let [schema] = schemas.as_slice() else {
+            return Err(ConfigClientError::ClientConfigurationUpdateInvalid);
+        };
+        let graph = client_create_graph(
+            endpoint,
+            input.clone(),
+            trusted_schema.to_owned(),
+            schema.name.clone(),
+        )
+        .await?;
+        Ok(graph.doc_id().to_owned())
+    }
+}
+
+pub(super) async fn execute(
+    endpoint: &GraphqlEndpoint,
+    txn_id: &str,
+    mutation: &str,
+    variables: &Value,
+    schema: String,
+    collection: String,
+) -> Result<Value> {
+    let input = variables
+        .get("input")
+        .cloned()
+        .ok_or(ConfigClientError::VariablesNotObject)?;
+    let mut graph = client_create_graph(endpoint, input, schema, collection).await?;
     let mut url =
         reqwest::Url::parse(endpoint.url()).map_err(|source| ConfigClientError::ParseEndpoint {
             url: endpoint.url().to_owned(),
