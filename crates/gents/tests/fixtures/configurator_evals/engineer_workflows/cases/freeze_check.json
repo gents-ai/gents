@@ -13,7 +13,7 @@
   "stages": [
     {
       "stage_id": "run",
-      "prompt": "Run a background job called freeze-check: one helper checks readings.json for readings below zero, and the job returns frozen, the list of their labels (empty if there are none). Only read the file.",
+      "prompt": "Run a background job called freeze-check: one helper checks readings.json for readings below zero, and the job returns frozen with the list of their labels, an empty list if there are none. Only read the file.",
       "settle": true,
       "checks": [
         {
