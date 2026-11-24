@@ -567,7 +567,11 @@ mod tests {
         symlink("../data/sales.csv", fixtures.join("hostile/link.csv")).unwrap();
         std::fs::create_dir_all(root.join("shared")).unwrap();
         std::fs::write(root.join("shared/notes.txt"), b"shared").unwrap();
-        symlink("../../shared/notes.txt", root.join("plugin_src/tests/notes.txt")).unwrap();
+        symlink(
+            "../../shared/notes.txt",
+            root.join("plugin_src/tests/notes.txt"),
+        )
+        .unwrap();
         let held = RootDir::open(&root).unwrap();
 
         let staged = held.create_dir_all("target/plugins/linked").unwrap();
