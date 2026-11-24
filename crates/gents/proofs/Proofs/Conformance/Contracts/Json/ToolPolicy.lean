@@ -4,6 +4,7 @@ import Proofs.Tools.ToolPolicy.Cases
 import Proofs.Tools.ToolPolicy.FieldRead
 import Proofs.Shared.ToolPolicy.WriteInput
 import Proofs.Tools.ToolPolicy.ApplicationWrite
+import Proofs.Tools.ToolPolicy.QuerySelection
 
 import Proofs.Tools.ToolPolicy.WorkspacePermissions
 
@@ -371,5 +372,47 @@ def applicationWrite : Family ApplicationWriteInput ApplicationWriteOutput where
         i.preview, i.digestMatches⟩
     { admitted := ToolPolicy.ApplicationWrite.admitted i.operation o
       mayApply := ToolPolicy.ApplicationWrite.mayApply i.operation o }
+
+deriving instance ToJson for ToolPolicy.ApplicationWrite.Sibling
+
+attribute [conformance_function] ToolPolicy.ApplicationWrite.staleAfter
+
+deriving instance ToJson for ToolPolicy.QuerySelection.Kind
+deriving instance ToJson for ToolPolicy.QuerySelection.Segment
+deriving instance ToJson for ToolPolicy.QuerySelection.Decision
+deriving instance ToJson for ToolPolicy.QuerySelection.Ranking
+
+attribute [conformance_function] ToolPolicy.QuerySelection.ranking
+
+structure QuerySelectionInput where
+  segments : List ToolPolicy.QuerySelection.Segment
+  observedRelated : Nat
+  deriving ToJson
+
+structure QuerySelectionOutput where
+  decision : ToolPolicy.QuerySelection.Decision
+  segment : Nat
+  shown : Nat
+  truncated : Bool
+  deriving ToJson
+
+def querySelectionSegments : List ToolPolicy.QuerySelection.Segment :=
+  [⟨.value, false⟩, ⟨.relation, true⟩, ⟨.relation, false⟩, ⟨.unavailable, false⟩]
+
+def querySelectionPaths : List (List ToolPolicy.QuerySelection.Segment) :=
+  let one := querySelectionSegments.map ([·])
+  let two := querySelectionSegments.flatMap fun a => querySelectionSegments.map ([a, ·])
+  let three := two.flatMap fun p => querySelectionSegments.map (p ++ [·])
+  one ++ two ++ three
+
+@[conformance_family]
+def querySelection : Family QuerySelectionInput QuerySelectionOutput where
+  inputs :=
+    querySelectionPaths.flatMap fun segments =>
+      [0, 1, 20, 21].map fun observedRelated => { segments, observedRelated }
+  model := fun i =>
+    let decided := ToolPolicy.QuerySelection.decide i.segments
+    let page := ToolPolicy.QuerySelection.relatedPage i.observedRelated
+    { decision := decided.1, segment := decided.2, shown := page.1, truncated := page.2 }
 
 end Conformance.Contracts

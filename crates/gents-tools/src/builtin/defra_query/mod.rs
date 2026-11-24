@@ -57,6 +57,7 @@ pub(crate) use command::QueryCommandError;
 mod field_page;
 pub(crate) use field_page::{utf8_page, Utf8PageError};
 mod native_filter;
+mod relation;
 mod search;
 mod truncation_sidecar;
 pub use command::{build_paged_query, execute_command, query_help, render_result, QueryParams};
@@ -72,7 +73,7 @@ pub use query::{
     MAX_LIMIT,
 };
 pub use render::render_filter;
-pub use schema::{diagnose_failed_query, discovery_payload, unknown_collection_message};
+pub use schema::{diagnose_failed_query, unknown_collection_message};
 
 #[derive(Debug)]
 pub struct DefraQueryError(anyhow::Error);
@@ -162,6 +163,7 @@ impl Tool for DefraQueryTool {
         match result {
             Ok(value) => render_result(value).map_err(Into::into),
             Err(error @ command::QueryCommandError::Discovery(_)) => Err(anyhow!("{}", json!({"error":format!("{error:#}"),"recovery":{"tool":"schema","args":{"argv":["collection","list"]}}})).into()),
+            Err(command::QueryCommandError::Refused(refusal)) => Err(anyhow!("{}", json!({"error":refusal.message,"recovery":refusal.next_call})).into()),
             Err(error) => {
                 let error = error.erased();
                 Err(anyhow!("{}", json!({"error":format!("{error:#}"),"recovery":{"tool":"query","args":{"argv":["help",args.argv.first().filter(|command| query_help(Some(command)).is_ok()).map(String::as_str).unwrap_or("find")]}}})).into())
