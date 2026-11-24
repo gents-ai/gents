@@ -201,13 +201,7 @@ mod tests {
         };
         let runs = tempfile::tempdir().unwrap();
         let path = runs.path().join("trial/home");
-        let db = gents_store::test_support::TestStore::open_at(
-            &path,
-            None,
-            gents_automation::lifecycle_hooks::composition(),
-        )
-        .await
-        .unwrap();
+        let db = crate::support::trial_store_at(&path).await;
         let (db, user, client, binding) =
             crate::test_support::signed_test_node_from_db(db, "eval-inspect-retained").await;
         let did = db.node_identity.did().to_owned();

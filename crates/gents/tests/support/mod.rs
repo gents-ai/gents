@@ -330,6 +330,19 @@ pub async fn trial_store(name: &str) -> gents_store::test_support::TestStore {
     .await
 }
 
+/// A [`trial_store`] over the home at `path`, retained after the node stops,
+/// so the trial's own home owner can reopen it.
+pub async fn trial_store_at(path: &std::path::Path) -> gents_store::test_support::TestStore {
+    init_test_tracing();
+    gents_store::test_support::TestStore::open_at_with_tool_policy(
+        path,
+        gents_automation::lifecycle_hooks::composition(),
+        Arc::new(gents_tools::surface::ToolCeiling::meta_only()),
+    )
+    .await
+    .expect("trial store")
+}
+
 pub async fn test_db(name: &str) -> TestDb {
     let home = EmbeddedHome::create_temp(name)
         .await

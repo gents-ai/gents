@@ -99,6 +99,16 @@ impl TestStore {
         Self::open(path, configure, composition, Arc::new(NoToolSources)).await
     }
 
+    /// [`Self::open_at`] with the permission projector using `tool_policy`,
+    /// for a home another owner reopens with that projection.
+    pub async fn open_at_with_tool_policy(
+        path: &Path,
+        composition: Extensions,
+        tool_policy: Arc<dyn ToolSourcePolicy>,
+    ) -> anyhow::Result<Self> {
+        Self::open(path, None, composition, tool_policy).await
+    }
+
     async fn start_in(
         name: &str,
         node_did: Option<&str>,
