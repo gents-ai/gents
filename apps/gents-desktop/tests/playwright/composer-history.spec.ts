@@ -2,7 +2,9 @@ import { expect, gotoHarness, openChat, test, type Page } from "./desktopTest";
 
 const field = (page: Page) => page.getByRole("textbox", { name: "Message" });
 const history = (page: Page) => page.getByTestId("composer-history");
-const commandChips = (page: Page) => page.locator('[data-slot="command-chip"]');
+/* the composer's own chips: a message just sent shows its skill as a chip in
+   the transcript too, until the session's read brings the stored message */
+const commandChips = (page: Page) => field(page).locator('[data-slot="command-chip"]');
 
 async function sendTwo(page: Page) {
   await gotoHarness(page);
