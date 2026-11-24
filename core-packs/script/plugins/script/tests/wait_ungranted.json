@@ -1,0 +1,26 @@
+{
+  "input": {
+    "script": "try { await wait({session_id: 's-1', request_id: 'r-1'}); } catch (error) { return error.message; }"
+  },
+  "tools": {
+    "definitions": [
+      {
+        "name": "agent_new",
+        "description": "Starts a session.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "agent": {
+              "type": "string"
+            },
+            "prompt": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    ],
+    "calls": []
+  },
+  "expect": "wait needs tools.agent_session_read, which this request does not grant; Object.keys(tools) lists the tools it does"
+}

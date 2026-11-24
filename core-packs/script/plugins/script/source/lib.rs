@@ -5,6 +5,8 @@ use rquickjs::promise::PromiseState;
 use rquickjs::{Context, Function, Promise, Runtime};
 use serde_json::Value;
 
+mod help;
+
 /// Why a host call returned no answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HostError {
@@ -25,6 +27,11 @@ pub const CANCELLED: &str = "script cancelled: the host stopped this invocation"
 pub const PROBE_EVERY: u32 = 512;
 
 const PROBE: &str = r#"{"sleep_ms":0}"#;
+
+/// Console lines come back beside the result, so past this many characters a
+/// line is counted instead of kept: printing cannot push the result over the
+/// plugin's output limit.
+pub const CONSOLE_CHARS: usize = 64 * 1024;
 
 const UNKNOWN_TOOL_HINT: &str = "If this was a tools.NAME call, NAME is not on this request's tool surface; Object.keys(tools) lists the names that are.";
 
@@ -57,6 +64,22 @@ Object.defineProperty(globalThis, '__gents_flush', {value: () => {
     }
     return true;
 }});
+const __printed = {lines: [], room: __console_chars, omitted: 0};
+const __shown = value => {
+    if (typeof value === 'string') return value;
+    if (value instanceof Error) return `${value.name}: ${value.message}`;
+    try { return JSON.stringify(value) ?? String(value); } catch { return String(value); }
+};
+const __print = (...values) => {
+    const line = values.map(__shown).join(' ');
+    if (__printed.omitted > 0 || line.length > __printed.room) return void __printed.omitted++;
+    __printed.lines.push(line);
+    __printed.room -= line.length;
+};
+const console = Object.freeze({log: __print, info: __print, debug: __print, warn: __print, error: __print, dir: __print, table: __print, trace: __print});
+Object.defineProperty(globalThis, '__gents_console', {value: () => __printed.omitted === 0
+    ? __printed.lines
+    : [...__printed.lines, `(${__printed.omitted} more console lines omitted)`]});
 const sleep = async milliseconds => {
     if (!Number.isSafeInteger(milliseconds) || milliseconds < 0)
         throw new TypeError('sleep expects a nonnegative integer number of milliseconds');
@@ -101,6 +124,38 @@ const tools = __tools_enabled ? (() => {
             ? {value: tool(name), enumerable: true, configurable: true, writable: false} : undefined,
     });
 })() : undefined;
+const __tool = name => {
+    if (tools !== undefined && name in tools) return tools[name];
+    throw new Error(`wait needs tools.${name}, which this request does not grant; Object.keys(tools) lists the tools it does`);
+};
+const wait = async (run, {timeout_ms = 60000} = {}) => {
+    if (run === null || typeof run !== 'object' || (typeof run.session_id !== 'string' && typeof run.tool_call_id !== 'string'))
+        throw new TypeError('wait takes the receipt that agent_new, agent_message, config task run or spawn_process returned');
+    if (!Number.isSafeInteger(timeout_ms) || timeout_ms < 0)
+        throw new TypeError('wait expects timeout_ms as a nonnegative integer number of milliseconds');
+    if (typeof run.session_id !== 'string')
+        return __tool('wait_process')({tool_call_id: run.tool_call_id, timeout_secs: Math.max(1, Math.ceil(timeout_ms / 1000))});
+    const read = __tool('agent_session_read');
+    const later = `agent_session_read({session_id: ${JSON.stringify(run.session_id)}, view: "last"})`;
+    let waited = 0;
+    for (let pause = 500; ; pause = Math.min(pause * 2, 10000)) {
+        const seen = await read({session_id: run.session_id, view: 'last'});
+        const request = seen.request ?? {};
+        if (request.terminalized_at && (run.request_id == null || request.request_id === run.request_id)) {
+            const message = seen.messages?.items?.[0] ?? {};
+            let reply = message.text ?? null;
+            try { reply = JSON.parse(reply); } catch {}
+            return {reply, reply_truncated: message.text_truncated === true, ...request, session_id: run.session_id};
+        }
+        const state = request.lifecycle_state ?? 'not started';
+        const step = Math.min(pause, timeout_ms - waited);
+        if (step <= 0)
+            throw new Error(`the run is still ${state} after ${timeout_ms} ms; call wait again with a larger timeout_ms, or return and read it later with ${later}`);
+        try { await sleep(step); }
+        catch (error) { throw new Error(`${error.message}; the run is still ${state}: return and read it later with ${later}`); }
+        waited += step;
+    }
+};
 const input = __input;
 "#;
 
@@ -110,9 +165,12 @@ pub fn run<F>(request: &Value, host: F) -> Result<Value, String>
 where
     F: Fn(String) -> Result<String, HostError> + 'static,
 {
+    if let Some(topic) = request["help"].as_str() {
+        return help::answer(topic);
+    }
     let source = request["script"]
         .as_str()
-        .ok_or("script must be a string")?;
+        .ok_or(r#"script must be a JavaScript string; {"help": "topics"} lists the help topics"#)?;
     let runtime = Runtime::new().map_err(|e| e.to_string())?;
     let host = Rc::new(host);
     let stopped = Rc::new(Cell::new(false));
@@ -143,10 +201,17 @@ where
         ctx.globals().set("__gents_host", host).map_err(|e| e.to_string())?;
         let enabled = request["tool_calls"] == true && request["with_tools"] != false;
         ctx.globals().set("__tools_enabled", enabled).map_err(|e| e.to_string())?;
+        ctx.globals().set("__console_chars", CONSOLE_CHARS).map_err(|e| e.to_string())?;
         let input = ctx.json_parse(request.get("input").unwrap_or(&Value::Null).to_string())
             .map_err(|e| e.to_string())?;
         ctx.globals().set("__input", input).map_err(|e| e.to_string())?;
-        let program = format!("(async () => {{ {API}\nreturn await (async () => {{\n{source}\n}})(); }})().then(value => JSON.stringify(value === undefined ? null : value))");
+        let program = format!("(async () => {{ {API}\nreturn await (async () => {{\n{source}\n}})(); }})().then(value => {{ const result = value === undefined ? null : value; const console = __gents_console(); return JSON.stringify(console.length === 0 ? result : {{result, console}}); }})");
+        let printed = || -> Vec<String> {
+            ctx.globals()
+                .get::<_, Function>("__gents_console")
+                .and_then(|printed| printed.call(()))
+                .unwrap_or_default()
+        };
         // Host calls made while the job queue drains wait in the guest and go
         // to the host together once it is empty, so calls a script starts
         // before awaiting any of them reach the host as one batch.
@@ -175,18 +240,27 @@ where
             if stopped.get() {
                 return CANCELLED.into();
             }
+            let mut text = error.to_string();
+            let mut hint = None;
             if error.is_exception() {
                 let exception = ctx.catch();
                 if let Some(object) = exception.as_object() {
                     let message = object.get::<_, String>("message").unwrap_or_else(|_| error.to_string());
                     let stack = object.get::<_, String>("stack").unwrap_or_default();
                     if enabled && message == "not a function" {
-                        return format!("{message}\n{stack}\n{UNKNOWN_TOOL_HINT}");
+                        hint = Some(UNKNOWN_TOOL_HINT);
                     }
-                    return format!("{message}\n{stack}");
+                    text = format!("{message}\n{stack}");
                 }
             }
-            error.to_string()
+            let printed = printed();
+            if !printed.is_empty() {
+                text = format!("{text}\nconsole:\n{}", printed.join("\n"));
+            }
+            match hint {
+                Some(hint) => format!("{text}\n{hint}"),
+                None => text,
+            }
         })?;
         serde_json::from_str(&output).map_err(|e| e.to_string())
     })
