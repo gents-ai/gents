@@ -26,10 +26,44 @@ const VERA_DIR_NAME: &str = "vera";
 const NODE_DIR_NAME: &str = "node";
 const DEPLOYMENT_RECORD: &str = ".gents-embedded-vera-deployment";
 
+/// Independently provisioned identity of a shared Vera deployment.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VeraDeploymentAnchor {
+    pub host_node: String,
+    pub group: String,
+    pub account: identity::Did,
+    pub deployment: u64,
+    pub consensus_key: String,
+    pub genesis_id: [u8; 32],
+}
+
+/// How a fresh home reaches its Vera deployment. A shared RPC route always
+/// terminates on loopback. Devices on different machines supply a private tunnel.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "role", rename_all = "lowercase", deny_unknown_fields)]
+pub enum VeraConnection {
+    #[default]
+    Solo,
+    Host {
+        account: identity::Did,
+        port: std::num::NonZeroU16,
+    },
+    Follower {
+        port: std::num::NonZeroU16,
+        anchor: VeraDeploymentAnchor,
+        device_registration: Option<serde_json::Value>,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Deployment {
     consensus_key: String,
+    #[serde(default)]
+    pub(super) connection: VeraConnection,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) transport: Option<crate::schema::catalog::SharedTransportHome>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,6 +96,8 @@ pub enum DocumentAcpError {
         recorded: DocumentAcp,
         requested: DocumentAcp,
     },
+    #[error("sharing a Vera deployment requires a Vera home")]
+    ShareRequiresVera,
     #[error("this version of Gents cannot open this home; update Gents on this device")]
     Unavailable,
     #[error(
@@ -125,7 +161,8 @@ impl DocumentAcpError {
             Self::DeploymentMissing { .. }
             | Self::DeploymentReplaced { .. }
             | Self::Record { .. } => Some(IncompatibleStoreKind::UnsupportedOrCorrupt),
-            Self::Switch { .. }
+            Self::ShareRequiresVera
+            | Self::Switch { .. }
             | Self::Unavailable
             | Self::NodeKeyCannotSign { .. }
             | Self::HeldUserKey
@@ -225,6 +262,18 @@ pub async fn node_publication(node: &defra_node::Node) -> Result<Publication> {
     Ok(publication_with_admission(provider_of(node), admitted))
 }
 
+/// The registered parent used when this device originates a transport record.
+pub fn transport_publisher_node(node: &defra_node::Node) -> Result<Option<String>> {
+    if node_policy_ids(node) != gents_protocol::schemas::HomePolicyIds::embedded_vera_transport_v2()
+    {
+        return Ok(None);
+    }
+    let scope =
+        crate::node_extension::attached::<crate::schema::catalog::SharedTransportHome>(node)
+            .ok_or(DocumentAcpError::TransportGrantsAwaitProvider)?;
+    Ok(Some(scope.device_node.clone()))
+}
+
 pub async fn ensure_node_publication(node: &defra_node::Node) -> Result<()> {
     match node_publication(node).await? {
         Publication::Proceeds => Ok(()),
@@ -319,9 +368,18 @@ pub fn home_policy_ids(provider: DocumentAcp) -> &'static gents_protocol::schema
     }
 }
 
-/// [`home_policy_ids`] of the home `node` serves.
+pub(crate) struct BoundPolicyIds(pub(super) &'static gents_protocol::schemas::HomePolicyIds);
+
+impl BoundPolicyIds {
+    pub(crate) fn ids(&self) -> &'static gents_protocol::schemas::HomePolicyIds {
+        self.0
+    }
+}
+
+/// The policy IDs selected when the home was opened.
 pub fn node_policy_ids(node: &defra_node::Node) -> &'static gents_protocol::schemas::HomePolicyIds {
-    home_policy_ids(provider_of(node))
+    crate::node_extension::attached::<BoundPolicyIds>(node)
+        .map_or_else(|| home_policy_ids(provider_of(node)), |bound| bound.ids())
 }
 
 /// Where `node` decides document access.
@@ -379,7 +437,7 @@ fn node_dir(data: &Path) -> PathBuf {
     vera_dir(data).join(NODE_DIR_NAME)
 }
 
-fn recorded_deployment(data: &Path) -> Result<Option<Deployment>> {
+pub(super) fn recorded_deployment(data: &Path) -> Result<Option<Deployment>> {
     let path = data.join(DEPLOYMENT_RECORD);
     let bytes = match std::fs::read(&path) {
         Ok(bytes) => bytes,
@@ -389,6 +447,29 @@ fn recorded_deployment(data: &Path) -> Result<Option<Deployment>> {
     serde_json::from_slice(&bytes)
         .map(Some)
         .map_err(|source| DocumentAcpError::Record { path, source })
+}
+
+pub(super) fn recorded_connection(data: &Path) -> Result<Option<VeraConnection>> {
+    Ok(recorded_deployment(data)?.map(|deployment| deployment.connection))
+}
+
+pub fn recorded_policy_ids(data: &Path) -> Result<&'static gents_protocol::schemas::HomePolicyIds> {
+    Ok(policy_ids_for_connection(
+        recorded_connection(data)?.as_ref(),
+    ))
+}
+
+pub(super) fn policy_ids_for_connection(
+    connection: Option<&VeraConnection>,
+) -> &'static gents_protocol::schemas::HomePolicyIds {
+    use gents_protocol::schemas::HomePolicyIds;
+    match connection {
+        None => HomePolicyIds::node_store(),
+        Some(VeraConnection::Solo) => HomePolicyIds::embedded_vera(),
+        Some(VeraConnection::Host { .. } | VeraConnection::Follower { .. }) => {
+            HomePolicyIds::embedded_vera_transport_v2()
+        }
+    }
 }
 
 /// The provider the store at `data` was created with.
@@ -402,10 +483,13 @@ pub(crate) fn recorded(data: &Path) -> Result<DocumentAcp> {
 pub(crate) fn created(
     node: &defra_node::Node,
     requested: DocumentAcp,
+    connection: &VeraConnection,
 ) -> Result<Option<Deployment>> {
     match requested {
         DocumentAcp::Local => Ok(None),
-        DocumentAcp::Vera => started(node).map(Some).ok_or(DocumentAcpError::Unavailable),
+        DocumentAcp::Vera => started(node, connection)
+            .map(Some)
+            .ok_or(DocumentAcpError::Unavailable),
     }
 }
 
@@ -423,16 +507,39 @@ pub(crate) fn record(data: &Path, deployment: &Deployment) -> std::io::Result<()
     Ok(())
 }
 
-fn started(node: &defra_node::Node) -> Option<Deployment> {
+fn started(node: &defra_node::Node, connection: &VeraConnection) -> Option<Deployment> {
     #[cfg(feature = "vera")]
     {
-        embedded_vera::consensus_key(node).map(|consensus_key| Deployment { consensus_key })
+        let hosted = node.embedded_vera_trust();
+        let follows = matches!(connection, VeraConnection::Follower { .. });
+        let (key, matches) = match connection {
+            VeraConnection::Follower { anchor, .. } => {
+                use acp::RemotePolicies as _;
+                let audience = node.vera_acp()?.light_client_status().ok()?.delegation?;
+                (
+                    &anchor.consensus_key,
+                    audience.genesis_id == Some(anchor.genesis_id)
+                        && audience.deployment == anchor.deployment,
+                )
+            }
+            _ => (&hosted?.consensus_key, true),
+        };
+        accepts_deployment(follows, hosted.is_some(), matches).then(|| Deployment {
+            consensus_key: key.clone(),
+            connection: connection.clone(),
+            transport: None,
+        })
     }
     #[cfg(not(feature = "vera"))]
     {
-        let _ = node;
+        let _ = (node, connection);
         None
     }
+}
+
+#[cfg(any(test, feature = "vera"))]
+fn accepts_deployment(follows: bool, hosted: bool, same_anchor: bool) -> bool {
+    follows != hosted && same_anchor
 }
 
 #[cfg(feature = "vera")]
@@ -449,8 +556,11 @@ fn ensure_present(data: &Path) -> Result<()> {
 }
 
 fn ensure_recorded(data: &Path, started: Option<&Deployment>) -> Result<()> {
-    if recorded_deployment(data)?.as_ref() == started {
-        return Ok(());
+    if let (Some(started), Some(record)) = (started, recorded_deployment(data)?) {
+        if record.consensus_key == started.consensus_key && record.connection == started.connection
+        {
+            return Ok(());
+        }
     }
     Err(DocumentAcpError::DeploymentReplaced {
         path: node_dir(data),
@@ -465,7 +575,13 @@ pub(crate) fn check_started(
 ) -> Result<()> {
     match requested {
         DocumentAcp::Local => Ok(()),
-        DocumentAcp::Vera => ensure_recorded(data, started(node).as_ref()),
+        DocumentAcp::Vera => {
+            let deployment =
+                recorded_deployment(data)?.ok_or_else(|| DocumentAcpError::DeploymentMissing {
+                    path: data.join(DEPLOYMENT_RECORD),
+                })?;
+            ensure_recorded(data, started(node, &deployment.connection).as_ref())
+        }
     }
 }
 
@@ -556,7 +672,23 @@ pub fn configure(
     requested: DocumentAcp,
     node: &Arc<dyn NodeIdentity>,
 ) -> Result<defra_node::NodeBuilder> {
-    apply(builder, data, key, false, requested, node)
+    apply(builder, data, key, Open::Serve, requested, node)
+}
+
+pub(crate) fn configure_preflight(
+    builder: defra_node::NodeBuilder,
+    data: &Path,
+    key: &StoreKey,
+    requested: DocumentAcp,
+    node: &Arc<dyn NodeIdentity>,
+) -> Result<defra_node::NodeBuilder> {
+    apply(builder, data, key, Open::Preflight, requested, node)
+}
+
+enum Open<'a> {
+    Fresh(&'a VeraConnection),
+    Preflight,
+    Serve,
 }
 
 pub(crate) fn configure_fresh(
@@ -565,30 +697,63 @@ pub(crate) fn configure_fresh(
     key: &StoreKey,
     requested: DocumentAcp,
     node: &Arc<dyn NodeIdentity>,
+    connection: &VeraConnection,
 ) -> Result<defra_node::NodeBuilder> {
-    apply(builder, data, key, true, requested, node)
+    apply(builder, data, key, Open::Fresh(connection), requested, node)
 }
 
 fn apply(
     builder: defra_node::NodeBuilder,
     data: &Path,
     key: &StoreKey,
-    fresh: bool,
+    open: Open<'_>,
     requested: DocumentAcp,
     node: &Arc<dyn NodeIdentity>,
 ) -> Result<defra_node::NodeBuilder> {
     let available = cfg!(feature = "vera");
-    match admit(data, fresh, requested, node.as_ref(), available)? {
+    match admit(
+        data,
+        matches!(open, Open::Fresh(_)),
+        requested,
+        node.as_ref(),
+        available,
+    )? {
+        DocumentAcp::Local if matches!(open, Open::Fresh(connection) if *connection != VeraConnection::Solo) => {
+            Err(DocumentAcpError::ShareRequiresVera)
+        }
         DocumentAcp::Local => Ok(builder),
         #[cfg(feature = "vera")]
         DocumentAcp::Vera => {
-            if !fresh {
+            let recorded;
+            let connection = match open {
+                Open::Fresh(connection) => connection,
+                Open::Preflight | Open::Serve => {
+                    recorded = recorded_deployment(data)?.ok_or_else(|| {
+                        DocumentAcpError::DeploymentMissing {
+                            path: data.join(DEPLOYMENT_RECORD),
+                        }
+                    })?;
+                    &recorded.connection
+                }
+            };
+            if let VeraConnection::Follower { anchor, port, .. } = connection {
+                return anchor.configure_follower(builder, *port, data, key, node);
+            }
+            if !matches!(open, Open::Fresh(_)) {
                 ensure_present(data)?;
             }
+            let (account, port) = match connection {
+                VeraConnection::Host { account, port } => {
+                    (Some(account), matches!(open, Open::Serve).then_some(*port))
+                }
+                _ => (None, None),
+            };
             Ok(embedded_vera::configure(
                 builder,
                 &node_dir(data),
                 &vera_dir(data),
+                port,
+                account,
                 key,
                 node,
             ))

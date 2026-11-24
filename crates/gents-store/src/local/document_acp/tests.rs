@@ -73,6 +73,8 @@ fn admission_matches_the_lean_model() {
                     store.path(),
                     &Deployment {
                         consensus_key: "recorded".into(),
+                        connection: Default::default(),
+                        transport: None,
                     },
                 )
                 .unwrap();
@@ -418,4 +420,11 @@ fn policy_ids_match_the_lean_model() {
     gents_lean_vocab::families::document_acp_choice_policy_ids::replay::<super::PolicyIds, Provider>(
         |input| super::policy_ids(document_acp(input.provider)),
     );
+}
+
+#[test]
+fn deployment_role_and_anchor_match_the_model() {
+    gents_lean_vocab::families::document_acp_choice_accepts_deployment::replay(|input| {
+        super::accepts_deployment(input.follows, input.hosted, input.same_anchor)
+    });
 }

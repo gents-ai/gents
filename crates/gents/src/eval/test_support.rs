@@ -147,6 +147,7 @@ pub fn completion() -> TrialCompletion {
             inference_calls: 3,
         },
         evidence_digest: None,
+        subject_usage: None,
     }
 }
 
@@ -170,6 +171,7 @@ pub fn rival_completion() -> TrialCompletion {
             inference_calls: 5,
         },
         evidence_digest: Some("sha256:rival".into()),
+        subject_usage: None,
     }
 }
 

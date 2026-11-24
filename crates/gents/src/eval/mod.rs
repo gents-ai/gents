@@ -4,6 +4,7 @@
 pub mod documents;
 pub mod outcome;
 pub mod scoring;
+pub mod subject;
 
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod test_support;
@@ -22,4 +23,7 @@ pub use outcome::{
 pub use scoring::{
     case_means_bp, case_trial_score, exposure, headline_bp, latest_verdicts, pair_trials,
     CaseTrialScore, Pair, PairedEvidence, RunHeader, TrialScore, VerdictView, SCORE_BP_MAX,
+};
+pub use subject::{
+    CallTotals, FirstRequest, PromptEstimate, SubjectUsage, ToolCallSplit, ToolCount,
 };

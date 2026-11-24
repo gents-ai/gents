@@ -79,6 +79,16 @@ struct PublishedRegistryEntry {
 }
 
 pub fn registry_upsert_mutation(entry: &RegistryEntry, now: &str, kind: UpsertKind) -> String {
+    registry_upsert_mutation_for_publisher(entry, now, kind, None)
+}
+
+pub(crate) fn registry_upsert_mutation_for_publisher(
+    entry: &RegistryEntry,
+    now: &str,
+    kind: UpsertKind,
+    publisher: Option<&str>,
+) -> String {
+    let publisher = super::publisher_field_for_id(publisher);
     let peer_id = escape_graphql_string(&entry.peer_id);
     let node_did = escape_graphql_string(&entry.node_did);
     let addresses = graphql_string_list_literal(entry.addresses.iter().map(String::as_str));
@@ -114,6 +124,7 @@ pub fn registry_upsert_mutation(entry: &RegistryEntry, now: &str, kind: UpsertKi
             upsert_PeerRegistry(
                 filter: {{ peer_id: {{ _eq: "{peer_id}" }}, node_did: {{ _eq: "{node_did}" }} }},
                 add: {{
+                    {publisher}
                     peer_id: "{peer_id}",
                     node_did: "{node_did}",
                     addresses: {addresses},
@@ -138,7 +149,12 @@ pub(super) async fn publish_registry_heartbeat(
     now: &str,
 ) -> Result<()> {
     use gents_protocol::document_query::{fields::peer_registry as fields, Filter, Input, Update};
-    let mutation = registry_upsert_mutation(entry, now, UpsertKind::Heartbeat);
+    let mutation = registry_upsert_mutation_for_publisher(
+        entry,
+        now,
+        UpsertKind::Heartbeat,
+        gents_store::local::document_acp::transport_publisher_node(node)?.as_deref(),
+    );
     let network = Update::matching(
         Filter::eq(fields::PEER_ID, &entry.peer_id)
             .and(Filter::eq(fields::NODE_DID, &entry.node_did))

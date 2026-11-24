@@ -30,6 +30,14 @@ pub fn seed(policy: &BuiltInPolicy) -> EmbeddedVeraPolicy {
     }
 }
 
+pub fn seed_transport_v2(policy: &BuiltInPolicy) -> EmbeddedVeraPolicy {
+    let mut seed = seed(policy);
+    if *policy == BuiltInPolicy::Household {
+        seed.definition = gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_TRANSPORT_V2.to_owned();
+    }
+    seed
+}
+
 #[cfg(test)]
 mod tests {
     use gents_protocol::schemas::BuiltInPolicy;

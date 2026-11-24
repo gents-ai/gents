@@ -6,6 +6,15 @@ either provider. -/
 
 namespace DocumentAcpChoice
 
+/-- A paired device opens only a remote provider for the pinned deployment.
+A host must actually have started its local validator. The provider checks
+finality with the provisioned consensus key before reporting its reads. -/
+def acceptsDeployment (follows hosted sameAnchor : Bool) : Bool :=
+  follows != hosted && sameAnchor
+
+theorem a_follower_never_accepts_its_own_validator (sameAnchor : Bool) :
+    acceptsDeployment true true sameAnchor = false := rfl
+
 inductive Provider where
   | nodeStore
   | embeddedVera
@@ -209,6 +218,12 @@ before; every Vera home names the seeded ones. -/
 theorem a_vera_home_names_its_seeded_policies : policyIds .embeddedVera = .seeded := rfl
 
 theorem a_node_store_home_keeps_its_counter_ids : policyIds .nodeStore = .counter := rfl
+
+/-- Sharing a new home adds its account alongside the original device. Both
+operators must authorize changes to that initial policy. -/
+def initialOperatorThreshold (shared : Bool) : Nat := if shared then 2 else 1
+
+theorem sharing_requires_two_operators : initialOperatorThreshold true = 2 := rfl
 
 end DocumentAcpChoice
 

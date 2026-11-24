@@ -87,9 +87,10 @@ pub async fn request_renewal_offer(
     let f = |value: &str| escape_graphql_string(value);
     let intent_id = intent.intent_id();
     let signature = bs58::encode(&intent.member_sig).into_string();
+    let publisher = super::publisher_field(node)?;
     let mutation = format!(
         r#"mutation {{ create_EnrollmentRenewalIntent(input: {{
-        initial_reader_did: "{reader}", intent_id: "{}", network_id: "{}", admin_did: "{}", server_peer: "{}",
+        {publisher} initial_reader_did: "{reader}", intent_id: "{}", network_id: "{}", admin_did: "{}", server_peer: "{}",
         member_did: "{}", member_peer: "{}", predecessor_sequence: {},
         issued_at: "{}", expires_at: "{}", nonce: "{}", member_sig: "{}"
     }}) {{ _docID }} }}"#,
@@ -630,7 +631,11 @@ pub async fn write_enrollment_request(
     node: &Arc<EmbeddedNode>,
     request: &EnrollmentRequestRecord,
 ) -> Result<String> {
-    let input = enrollment_request_input(request, Some(&request.admin_did));
+    let input = enrollment_request_input_for_publisher(
+        request,
+        Some(&request.admin_did),
+        &super::publisher_field(node)?,
+    );
     let mutation =
         format!("mutation {{ create_NetworkEnrollmentRequest(input: {input}) {{ _docID }} }}");
     publish_candidate_document(
@@ -714,6 +719,14 @@ pub fn enrollment_request_input(
     request: &EnrollmentRequestRecord,
     initial_reader: Option<&str>,
 ) -> String {
+    enrollment_request_input_for_publisher(request, initial_reader, "")
+}
+
+fn enrollment_request_input_for_publisher(
+    request: &EnrollmentRequestRecord,
+    initial_reader: Option<&str>,
+    publisher: &str,
+) -> String {
     let initial_reader = initial_reader
         .map(|did| format!("initial_reader_did: \"{}\",", escape_graphql_string(did)))
         .unwrap_or_default();
@@ -726,7 +739,7 @@ pub fn enrollment_request_input(
         .unwrap_or_else(|| "null".to_owned());
     format!(
         r#"{{
-            {initial_reader}
+            {publisher} {initial_reader}
             protocol_version: {},
             request_id: "{}",
             request_digest: "{}",

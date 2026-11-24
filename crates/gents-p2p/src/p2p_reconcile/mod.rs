@@ -75,3 +75,20 @@ pub use templates::{
     NODE_DIRECTORY_COLLECTION,
 };
 pub use trait_def::{RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator};
+
+/// Render the parent on the create arm only. Defra makes it immutable.
+pub(crate) fn publisher_field(node: &defra_node::Node) -> anyhow::Result<String> {
+    Ok(publisher_field_for_id(
+        gents_store::local::document_acp::transport_publisher_node(node)?.as_deref(),
+    ))
+}
+
+fn publisher_field_for_id(id: Option<&str>) -> String {
+    id.map(|id| {
+        format!(
+            "publisher_node_id: \"{}\",",
+            gents_store::graphql::escape_graphql_string(id)
+        )
+    })
+    .unwrap_or_default()
+}
