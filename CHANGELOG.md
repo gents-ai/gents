@@ -6,6 +6,16 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- The Engineer creates document access policies. `config` `policy create`
+  registers a policy it writes (resources with typed relations and union
+  permissions; names beginning `Gents` are the runtime's) as the calling
+  Agent, which needs node permission `add-dac-policy`, now in the default
+  Agent's `policy-delegate` set. The receipt gives the `@policy` line that
+  binds it to a new collection; `policy grant` and `policy revoke` change its
+  relations per document. Under `self_config_no_lockout` an Agent no longer
+  revokes its own document relations. On a home initialised earlier the
+  Engineer was issued the set without `add-dac-policy`, so `policy create`
+  is refused there.
 - Eval trials record what the subject agent itself spent, beside the
   home-wide `usage`: each completion's `subject_usage` holds its first request's
   prompt tokens and estimated component split (tool schemas among them), its
