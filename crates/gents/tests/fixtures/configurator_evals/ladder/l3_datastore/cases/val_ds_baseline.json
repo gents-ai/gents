@@ -46,18 +46,30 @@
       ],
       "checks": [
         {
-          "check": "captured_fields_match",
+          "check": "crew_spec_match",
           "params": {
-            "name": "outputs",
-            "max_rows": 1,
-            "expect": [
+            "present": [
               {
-                "field": "correlation",
-                "equals": "val-alpha-002"
-              },
+                "capture": "outputs",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
               {
-                "field": "result",
-                "equals": "ok"
+                "capture": "outputs",
+                "key": "correlation",
+                "id": "val-alpha-002",
+                "expect": [
+                  {
+                    "field": "correlation",
+                    "equals": "val-alpha-002"
+                  },
+                  {
+                    "field": "result",
+                    "equals": "ok"
+                  }
+                ]
               }
             ]
           },

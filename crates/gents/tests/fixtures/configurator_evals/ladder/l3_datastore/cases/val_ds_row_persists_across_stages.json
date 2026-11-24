@@ -45,18 +45,30 @@
       ],
       "checks": [
         {
-          "check": "captured_fields_match",
+          "check": "crew_spec_match",
           "params": {
-            "name": "outputs",
-            "max_rows": 1,
-            "expect": [
+            "present": [
               {
-                "field": "correlation",
-                "equals": "val-foxtrot-007"
-              },
+                "capture": "outputs",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
               {
-                "field": "result",
-                "equals": "once"
+                "capture": "outputs",
+                "key": "correlation",
+                "id": "val-foxtrot-007",
+                "expect": [
+                  {
+                    "field": "correlation",
+                    "equals": "val-foxtrot-007"
+                  },
+                  {
+                    "field": "result",
+                    "equals": "once"
+                  }
+                ]
               }
             ]
           },
@@ -98,18 +110,30 @@
       ],
       "checks": [
         {
-          "check": "captured_fields_match",
+          "check": "crew_spec_match",
           "params": {
-            "name": "outputs_after",
-            "max_rows": 1,
-            "expect": [
+            "present": [
               {
-                "field": "correlation",
-                "equals": "val-foxtrot-007"
-              },
+                "capture": "outputs_after",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
               {
-                "field": "result",
-                "equals": "once"
+                "capture": "outputs_after",
+                "key": "correlation",
+                "id": "val-foxtrot-007",
+                "expect": [
+                  {
+                    "field": "correlation",
+                    "equals": "val-foxtrot-007"
+                  },
+                  {
+                    "field": "result",
+                    "equals": "once"
+                  }
+                ]
               }
             ]
           },

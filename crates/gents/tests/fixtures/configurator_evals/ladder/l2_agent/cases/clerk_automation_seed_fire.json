@@ -144,42 +144,20 @@
       },
       "checks": [
         {
-          "check": "captured_fields_match",
-          "params": {
-            "name": "clerk_requests",
-            "min_rows": 1,
-            "max_rows": 1,
-            "expect": [
-              {
-                "field": "lifecycle_state",
-                "equals": "completed"
-              },
-              {
-                "field": "caused_by_trigger_id",
-                "matches": ".+"
-              },
-              {
-                "field": "content",
-                "contains": "A-100"
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 3
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "clerk_outcomes",
-            "min": 1,
-            "max": 1
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
           "check": "crew_spec_match",
           "params": {
+            "present": [
+              {
+                "capture": "clerk_requests",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "clerk_outcomes",
+                "min": 1,
+                "max": 1
+              }
+            ],
             "links": [
               {
                 "capture": "clerk_fires",
@@ -272,6 +250,15 @@
             },
             "purpose": {
               "_eq": "normal"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            },
+            "content": {
+              "_like": "%A-100%"
+            },
+            "caused_by_trigger_id": {
+              "_ne": null
             }
           },
           "fields": [

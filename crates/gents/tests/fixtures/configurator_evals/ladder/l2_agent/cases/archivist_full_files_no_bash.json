@@ -172,6 +172,9 @@
             },
             "purpose": {
               "_eq": "normal"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
             }
           },
           "fields": [
@@ -189,13 +192,12 @@
       ],
       "checks": [
         {
-          "check": "captured_fields_match",
+          "check": "crew_spec_match",
           "params": {
-            "name": "helper_requests",
-            "expect": [
+            "present": [
               {
-                "field": "lifecycle_state",
-                "equals": "completed"
+                "capture": "helper_requests",
+                "min": 1
               }
             ]
           },

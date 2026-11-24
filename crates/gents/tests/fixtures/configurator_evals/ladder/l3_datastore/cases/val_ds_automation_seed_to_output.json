@@ -57,18 +57,26 @@
       ],
       "checks": [
         {
-          "check": "captured_fields_match",
+          "check": "crew_spec_match",
           "params": {
-            "name": "outputs",
-            "max_rows": 1,
-            "expect": [
+            "present": [
               {
-                "field": "correlation",
-                "equals": "val-seed-006"
-              },
+                "capture": "outputs",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
               {
-                "field": "result",
-                "equals": "processed"
+                "capture": "outputs",
+                "key": "correlation",
+                "id": "val-seed-006",
+                "expect": [
+                  {
+                    "field": "result",
+                    "equals": "processed"
+                  }
+                ]
               }
             ]
           },

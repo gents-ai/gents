@@ -208,6 +208,9 @@
             },
             "purpose": {
               "_eq": "normal"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
             }
           },
           "fields": [
@@ -230,23 +233,13 @@
       ],
       "checks": [
         {
-          "check": "captured_fields_match",
-          "params": {
-            "name": "helper_requests",
-            "expect": [
-              {
-                "field": "lifecycle_state",
-                "equals": "completed"
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
           "check": "crew_spec_match",
           "params": {
             "present": [
+              {
+                "capture": "helper_requests",
+                "min": 1
+              },
               {
                 "capture": "outputs",
                 "min": 1,

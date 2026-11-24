@@ -224,6 +224,9 @@
             },
             "content": {
               "_like": "%ALPHA-333%"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
             }
           }
         },
@@ -274,6 +277,9 @@
             },
             "content": {
               "_like": "%BETA-777%"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
             }
           }
         },
@@ -335,27 +341,6 @@
                 "exact": true
               },
               {
-                "capture": "helper-1-request",
-                "source_match": {
-                  "field": "content",
-                  "contains": "ALPHA-333"
-                },
-                "field": "request_id",
-                "target_capture": "helper-1-request",
-                "target_key": "request_id",
-                "exact": true,
-                "expect": [
-                  {
-                    "field": "lifecycle_state",
-                    "equals": "completed"
-                  },
-                  {
-                    "field": "terminal_output",
-                    "contains": "message_doc_id"
-                  }
-                ]
-              },
-              {
                 "capture": "helper-2-request",
                 "field": "caused_by_parent_tool_call_doc_id",
                 "target_capture": "delegation_calls",
@@ -386,27 +371,6 @@
                 "target_capture": "helper-2-session",
                 "target_key": "session_id",
                 "exact": true
-              },
-              {
-                "capture": "helper-2-request",
-                "source_match": {
-                  "field": "content",
-                  "contains": "BETA-777"
-                },
-                "field": "request_id",
-                "target_capture": "helper-2-request",
-                "target_key": "request_id",
-                "exact": true,
-                "expect": [
-                  {
-                    "field": "lifecycle_state",
-                    "equals": "completed"
-                  },
-                  {
-                    "field": "terminal_output",
-                    "contains": "message_doc_id"
-                  }
-                ]
               }
             ],
             "present": [

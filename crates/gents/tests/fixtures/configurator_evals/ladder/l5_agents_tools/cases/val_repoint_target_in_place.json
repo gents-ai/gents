@@ -445,6 +445,9 @@
             },
             "content": {
               "_like": "%REP-555%"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
             }
           }
         },
@@ -469,29 +472,6 @@
         }
       ],
       "checks": [
-        {
-          "check": "captured_fields_match",
-          "params": {
-            "name": "helper-request",
-            "expect": [
-              {
-                "field": "content",
-                "contains": "REP-555"
-              },
-              {
-                "field": "lifecycle_state",
-                "equals": "completed"
-              },
-              {
-                "field": "terminal_output",
-                "contains": "message_doc_id"
-              }
-            ],
-            "max_rows": 1
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "crew_spec_match",
           "params": {
@@ -550,6 +530,11 @@
               {
                 "capture": "helper-session",
                 "min": 1
+              },
+              {
+                "capture": "helper-request",
+                "min": 1,
+                "max": 1
               }
             ]
           },

@@ -325,6 +325,12 @@
             },
             "purpose": {
               "_eq": "normal"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            },
+            "max_total_tokens": {
+              "_eq": 100000
             }
           },
           "fields": [
@@ -340,17 +346,12 @@
       ],
       "checks": [
         {
-          "check": "captured_fields_match",
+          "check": "crew_spec_match",
           "params": {
-            "name": "reviews",
-            "expect": [
+            "present": [
               {
-                "field": "lifecycle_state",
-                "equals": "completed"
-              },
-              {
-                "field": "max_total_tokens",
-                "equals": 100000
+                "capture": "reviews",
+                "min": 1
               }
             ]
           },
