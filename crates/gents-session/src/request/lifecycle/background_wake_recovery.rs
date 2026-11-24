@@ -370,16 +370,35 @@ async fn redrive_in_transaction(
     }
     let candidate = current;
     let queue_key = eligible_queue_key(candidate, pin)?.context("wake became ineligible")?;
-    if agent_request_rows(data, "pending")?.iter().any(|row| {
+    let node_did = required_str(candidate.node_did.as_deref(), "node_did")?;
+    let session_id = required_str(candidate.session_id.as_deref(), "session_id")?;
+    let marker =
+        crate::session::interrupt_marker::read_for_session_in_txn(txn, node_did, session_id)
+            .await?;
+    for row in agent_request_rows(data, "pending")?.iter().filter(|row| {
         row_queue(row)
             .and_then(automated_queue_key)
             .is_some_and(|key| key == queue_key)
     }) {
-        return Ok(RedriveOutcome::Coalesced);
+        let drained = marker.as_ref().is_some_and(|marker| {
+            crate::session::interrupt_marker::wake_drained_at_claim(
+                row.interrupt_generation,
+                marker.generation,
+            )
+        });
+        if !drained {
+            return Ok(RedriveOutcome::Coalesced);
+        }
+        crate::request::interrupt::interrupt_pending_in_txn(
+            txn,
+            required_str(row.doc_id.as_deref(), "_docID")?,
+            node_did,
+            &row.request_id,
+            crate::request::interrupt::INTERRUPT_DRAIN_REASON,
+        )
+        .await?;
     }
 
-    let node_did = required_str(candidate.node_did.as_deref(), "node_did")?;
-    let session_id = required_str(candidate.session_id.as_deref(), "session_id")?;
     let source_doc_id = required_str(candidate.doc_id.as_deref(), "_docID")?;
     let Some(head) =
         crate::session::load_latest_request_in_txn(txn, node_did, session_id, None).await?
@@ -406,6 +425,7 @@ async fn redrive_in_transaction(
     let hop = crate::session::load_session_current_hop_in_txn(txn, node_did, session_id).await?;
     let create = build_redrive_request(candidate, request_id, &retry_key, hop, signer).await?;
     let doc_id = super::runtime_publication::publish(txn, &create).await?;
+    crate::request::interrupt::record_wake_generation_in_txn(txn, &doc_id, marker.as_ref()).await?;
     let response = txn
         .execute(&format!(
             "{{ AgentRequest(docIDs: [\"{}\"]) {{ {} }} }}",

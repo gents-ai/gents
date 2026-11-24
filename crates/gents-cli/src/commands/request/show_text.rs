@@ -108,11 +108,8 @@ pub(super) fn render_request_show_text(
         lines.push("CancelCause:".to_string());
         lines.push(format!("  cause: {}", cancel.cause));
         lines.push(format!(
-            "  interrupt_requested_at: {}",
-            cancel
-                .interrupt_requested_at
-                .as_deref()
-                .unwrap_or("unknown")
+            "  interrupted_at: {}",
+            cancel.interrupted_at.as_deref().unwrap_or("unknown")
         ));
     }
 

@@ -393,7 +393,7 @@ function requestDiagnosticsBundle({
       failureReason: null,
       createdAt: "2026-04-22T00:00:00Z",
       claimedAt: "2026-04-22T00:00:01Z",
-      interruptRequestedAt: null,
+      interruptGeneration: null,
       validUntil: null,
     },
     response: {

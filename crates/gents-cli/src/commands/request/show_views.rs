@@ -35,7 +35,7 @@ pub(super) struct RequestShowHeader {
     pub(super) claimed_at: Option<String>,
     pub(super) deadline: Option<String>,
     pub(super) valid_until: Option<String>,
-    pub(super) interrupt_requested_at: Option<String>,
+    pub(super) interrupt_generation: Option<i64>,
     pub(super) retry_count: Option<i64>,
     pub(super) input: Option<RequestInput>,
     pub(super) max_total_tokens: Option<i64>,
@@ -66,7 +66,7 @@ pub(super) struct RequestTransitionView {
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct RequestCancelCauseView {
     pub(super) cause: String,
-    pub(super) interrupt_requested_at: Option<String>,
+    pub(super) interrupted_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -143,7 +143,7 @@ pub(super) fn request_header_view(
         claimed_at: string_field(row, "claimed_at"),
         deadline: string_field(row, "deadline"),
         valid_until: string_field(row, "valid_until"),
-        interrupt_requested_at: string_field(row, "interrupt_requested_at"),
+        interrupt_generation: integer_field(row, "interrupt_generation"),
         retry_count: integer_field(row, "retry_count"),
         input: row
             .get("input")
@@ -195,24 +195,6 @@ pub(super) fn transition_history(
             note: Some("no dedicated begin timestamp is persisted".to_string()),
         });
     }
-    if RequestLifecycleState::parse_opt(Some(&state)) != Some(RequestLifecycleState::Interrupted) {
-        if let Some(interrupt_at) = string_field(request, "interrupt_requested_at") {
-            let note = if terminal_action_for_state(&state).is_some() {
-                "interrupt was requested before this terminal snapshot"
-            } else {
-                "interrupt requested; terminal transition not yet observed"
-            };
-            transitions.push(RequestTransitionView {
-                action: "interrupt_requested".to_string(),
-                from: None,
-                to: state.clone(),
-                at: Some(interrupt_at),
-                source: "AgentRequest.interrupt_requested_at".to_string(),
-                inferred: false,
-                note: Some(note.to_string()),
-            });
-        }
-    }
     if let Some(action) = terminal_action_for_state(&state) {
         transitions.push(RequestTransitionView {
             action: action.to_string(),
@@ -251,19 +233,16 @@ fn terminal_action_for_state(state: &str) -> Option<&'static str> {
 
 pub(super) fn terminal_timestamp(request: &Value, action: &str) -> Option<String> {
     match action {
-        "finish" | "fail" => string_field(request, "terminalized_at"),
+        "finish" | "fail" | "interrupt" => string_field(request, "terminalized_at"),
         "expire" => string_field(request, "terminalized_at")
             .or_else(|| string_field(request, "valid_until")),
-        "interrupt" => string_field(request, "interrupt_requested_at"),
         _ => None,
     }
 }
 
 pub(super) fn terminal_source(action: &str) -> &'static str {
     match action {
-        "finish" | "fail" => "AgentRequest.terminalized_at",
-        "expire" => "AgentRequest.terminalized_at",
-        "interrupt" => "AgentRequest.interrupt_requested_at",
+        "finish" | "fail" | "expire" | "interrupt" => "AgentRequest.terminalized_at",
         _ => "AgentRequest.lifecycle_state",
     }
 }
@@ -308,17 +287,19 @@ fn cause_suffix(cause: Option<&str>) -> String {
 
 pub(super) fn request_cancel_cause_view(request: &Value) -> Option<RequestCancelCauseView> {
     let request_cause = string_field(request, "cancel_cause");
-    let interrupt_at = string_field(request, "interrupt_requested_at");
     let lifecycle_state = string_field(request, "lifecycle_state").unwrap_or_default();
     let is_interrupted = RequestLifecycleState::parse_opt(Some(lifecycle_state.as_str()))
         == Some(RequestLifecycleState::Interrupted);
-    let was_cancelled = is_interrupted || request_cause.is_some() || interrupt_at.is_some();
+    let interrupt_at = is_interrupted
+        .then(|| string_field(request, "terminalized_at"))
+        .flatten();
+    let was_cancelled = is_interrupted || request_cause.is_some();
     if !was_cancelled {
         return None;
     }
     Some(RequestCancelCauseView {
         cause: request_cause.unwrap_or_else(|| "unknown".to_string()),
-        interrupt_requested_at: interrupt_at,
+        interrupted_at: interrupt_at,
     })
 }
 

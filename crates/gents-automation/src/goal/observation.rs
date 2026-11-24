@@ -491,9 +491,6 @@ pub async fn project_session_goal(
     access.transact_write("goal.project_observation", |txn| {
         let signer = &signer;
         Box::pin(async move {
-        gents_store::graphql::fence_arrivals(txn, "AgentSession").await?;
-        gents_store::graphql::fence_arrivals(txn, "Goal").await?;
-        gents_store::graphql::fence_arrivals(txn, "GoalObservation").await?;
         let Some(session) = gents_store::config_client::agent_session::load_agent_session_row_in_txn(
             txn, identity.did(), session_id, requester_did,
         ).await? else { return Ok(()); };

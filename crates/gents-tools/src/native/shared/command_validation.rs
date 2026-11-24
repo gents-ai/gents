@@ -2,8 +2,10 @@ use std::path::Path;
 
 use super::super::context::ToolError;
 use super::command_args::{
-    validate_curl_args, validate_git_args, validate_git_worktree_diff_policy,
-    validate_launchctl_args, validate_ripgrep_args, validate_sudo_args, validate_tailscale_args,
+    validate_curl_args, validate_date_args, validate_file_args, validate_git_args,
+    validate_git_worktree_diff_policy, validate_hostname_args, validate_launchctl_args,
+    validate_lsof_args, validate_ripgrep_args, validate_sed_args, validate_sudo_args,
+    validate_tailscale_args,
 };
 use super::{CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode};
 use crate::native::{CommandPolicyDenial, DenialReason};
@@ -125,16 +127,7 @@ fn validate_read_only_command_inner(
     }
 
     match command_key.as_str() {
-        "sed" => {
-            if let Some(argument) = args.iter().find(|arg| {
-                arg.as_str() == "-i"
-                    || arg.as_str() == "--in-place"
-                    || arg.starts_with("-i")
-                    || arg.starts_with("--in-place=")
-            }) {
-                return Err(read_only_argument_denial(policy, "sed", argument));
-            }
-        }
+        "sed" => validate_sed_args(args, policy)?,
         "find" => {
             if let Some(argument) = args.iter().find(|arg| {
                 matches!(
@@ -159,6 +152,10 @@ fn validate_read_only_command_inner(
         "tailscale" => validate_tailscale_args(args, policy)?,
         "curl" => validate_curl_args(args, policy)?,
         "sudo" => validate_sudo_args(args, policy)?,
+        "file" => validate_file_args(args, policy)?,
+        "lsof" => validate_lsof_args(args, policy)?,
+        "date" => validate_date_args(args, policy)?,
+        "hostname" => validate_hostname_args(args, policy)?,
         _ => {}
     }
 

@@ -853,6 +853,7 @@ impl RequestLifecycle {
             executed_inference_profile_id: None,
             executed_runtime_generation: None,
             request_hop: 0,
+            interrupt_generation: None,
             caused_by_parent_request_id: None,
             caused_by_parent_request_doc_id: None,
             caused_by_parent_tool_call_id: None,

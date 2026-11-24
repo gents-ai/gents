@@ -44,7 +44,7 @@ pub async fn interrupt_request(
     Ok(InterruptRequestResult {
         request_id: receipt.request_id,
         accepted: true,
-        interrupt_requested_at: receipt.interrupt_requested_at,
+        interrupted_at: receipt.interrupted_at,
         already_interrupted: receipt.already_interrupted,
     })
 }

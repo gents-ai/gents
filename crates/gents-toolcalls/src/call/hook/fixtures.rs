@@ -591,14 +591,26 @@ pub async fn ensure_runtime_session(
         .as_array()
         .is_some_and(Vec::is_empty)
     {
+        let mutation = format!(
+            r#"mutation {{ create_AgentSession(input: {{ session_id: "{session}", node_did: "{did}", requester_did: "{did}", agent_did: "{did}", created_at: "{}" }}) {{ _docID }} }}"#,
+            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        );
         access
-            .write(
-                "test.hook.runtime_session",
-                &format!(
-                    r#"mutation {{ create_AgentSession(input: {{ session_id: "{session}", node_did: "{did}", requester_did: "{did}", agent_did: "{did}", created_at: "{}" }}) {{ _docID }} }}"#,
-                    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-                ),
-            )
+            .transact_write("test.hook.runtime_session", |txn| {
+                let mutation = &mutation;
+                Box::pin(async move {
+                    let created = txn.execute(mutation).await?;
+                    let doc = gents_store::graphql::created_doc_id(&created, "AgentSession")?;
+                    gents_session::session::interrupt_marker::create_in_txn(
+                        txn,
+                        &doc,
+                        owner.did(),
+                        session_id,
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
             .await?;
     }
     Ok(access)

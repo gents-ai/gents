@@ -1,4 +1,5 @@
 import Proofs.Shared.Basic
+import Proofs.Store.TransactionFence
 
 namespace Background
 
@@ -38,10 +39,21 @@ theorem valid_backgroundLimit_is_configured (configured : Nat)
 
 /-- The native owner counts running background rows and reserved spawn children,
 excluding accepted calls that have not reserved capacity, against the parent
-Agent's resolved `limit`. It serializes that count with the reservation or
-transition to running in one transaction. -/
+Agent's resolved `limit`, and reserves or transitions to running in the same
+transaction. The count is a filtered read the store does not validate; the
+admission also bumps the parent request's `background_admission_sequence`,
+which every admission under that parent writes, so of two concurrent
+admissions the second to commit aborts and counts again
+(`admissions_of_one_parent_are_fenced`, `BackgroundAdmissionContention.tla`). -/
 def admitBackground (limit liveCount : Nat) : Option Nat :=
   if liveCount < limit then some (liveCount + 1) else none
+
+/-- Two admissions under one parent both write its request document. -/
+theorem admissions_of_one_parent_are_fenced (a b : TransactionFence.Footprint)
+    (parent : TransactionFence.Doc) (ha : a.writes.contains parent = true)
+    (hb : b.writes.contains parent = true) :
+    TransactionFence.fencedAgainst a b = true ∧ TransactionFence.fencedAgainst b a = true :=
+  TransactionFence.a_common_write_fences_both_orders a b parent ha hb
 
 /-- Recovery transfers an already-running physical invocation into the background
 owner. It creates no execution; the transferred row continues to count when

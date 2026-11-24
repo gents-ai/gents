@@ -20,6 +20,7 @@ pub mod fork;
 #[cfg(test)]
 mod fork_publication_tests;
 mod history;
+pub mod interrupt_marker;
 #[cfg(test)]
 mod model_test_support;
 pub mod observations;

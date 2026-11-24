@@ -1,4 +1,6 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
+
+use gents_fs_runner::beneath::{Intent, Located};
 
 use gents_protocol::document_query::{fields::skill as fields, Filter, Query, Selection};
 use gents_protocol::operations::document::{
@@ -121,8 +123,9 @@ pub fn document_patch(document: &SkillDocument) -> anyhow::Result<SelfConfigPatc
 pub enum SkillSourceRoot<'a> {
     /// A User reads any path the process can.
     Unconfined,
-    /// An Agent reads only what `resolve` places inside its tool root.
-    ToolRoot(&'a (dyn Fn(&Path) -> anyhow::Result<PathBuf> + Send + Sync)),
+    /// An Agent reads only what `resolve` places beneath its tool root,
+    /// through the directory handles it resolved there.
+    ToolRoot(&'a (dyn Fn(&Path) -> anyhow::Result<Located> + Send + Sync)),
 }
 
 impl SkillSourceRoot<'_> {
@@ -166,7 +169,7 @@ pub fn load_source(import: &SkillImport<'_>) -> Result<SkillDocument, SkillOpera
     let loaded = match &import.root {
         SkillSourceRoot::Unconfined => {
             load_skill_source(import.source, import.skill_id, import.owner, |path| {
-                Ok(std::fs::canonicalize(path)?)
+                Ok(Located::at(path, Intent::Existing)?)
             })
         }
         SkillSourceRoot::ToolRoot(resolve) => {

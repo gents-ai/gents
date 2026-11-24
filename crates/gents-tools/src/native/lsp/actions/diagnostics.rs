@@ -44,7 +44,7 @@ pub(super) async fn glob_action(
     {
         let display = context.display_path(&path);
         let uri = super::super::uri::path_to_file_uri(&path);
-        let text = std::fs::read_to_string(&path)
+        let text = String::from_utf8(context.read_existing(&path).await?)
             .with_context(|| format!("reading matched diagnostic file {}", path.display()))?;
         client
             .ensure_open(&uri, &language_id(servers, &path), &text)

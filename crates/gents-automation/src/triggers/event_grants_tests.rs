@@ -187,6 +187,11 @@ async fn event_configuration_publication_rebinding_and_revocation_use_native_gra
     .await?;
     user.add_collection(
         &gents_protocol::schemas::HomePolicyIds::node_store()
+            .render(gents_protocol::schemas::AGENT_SESSION_INTERRUPT),
+    )
+    .await?;
+    user.add_collection(
+        &gents_protocol::schemas::HomePolicyIds::node_store()
             .render(gents_protocol::schemas::AGENT_REQUEST),
     )
     .await?;

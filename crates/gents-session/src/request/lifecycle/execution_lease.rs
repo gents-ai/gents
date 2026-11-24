@@ -193,7 +193,7 @@ pub async fn terminalize_parked_request(
             },
             fixture_now: None,
             fixture_fresh_generation: None,
-            pending_fence: None,
+            pending_snapshot: None,
         },
     )
     .await
@@ -287,11 +287,11 @@ impl RequestLifecycle {
             .await
     }
 
-    /// Finishes an interactive request against its observed whole pending queue.
-    /// DefraDB 980190c mutates the AgentRequest arrival head for local and P2P
-    /// inserts in their document transaction. Reading that head inside the
-    /// finalizer supplies the point-read conflict fence that RepeatableRead
-    /// predicate scans alone cannot provide.
+    /// Finishes an interactive request unless the pending queue its finishing
+    /// transaction reads differs from `pending_request_doc_ids`
+    /// (Lean `SessionQueue.naturalFinish`). That read is not validated at
+    /// commit, so an input committing after it is an ordinary later turn
+    /// (`SessionQueue.input_after_the_finish_read_is_a_later_turn`).
     pub(crate) async fn finish_natural_turn(
         &mut self,
         message_doc_id: &str,
@@ -310,7 +310,7 @@ impl RequestLifecycle {
                 reason: "",
                 fixture_now: None,
                 fixture_fresh_generation: None,
-                pending_fence: Some((pending_request_doc_ids, self.claimed_deadline_at)),
+                pending_snapshot: Some((pending_request_doc_ids, self.claimed_deadline_at)),
             },
         )
         .await;
@@ -346,7 +346,7 @@ impl RequestLifecycle {
                     .unwrap_or_default(),
                 fixture_now: None,
                 fixture_fresh_generation: None,
-                pending_fence: None,
+                pending_snapshot: None,
             },
         )
         .await?;
@@ -360,8 +360,8 @@ impl RequestLifecycle {
     }
 }
 
-/// Revoke without discarding already-published output. Selection is made under
-/// the same write gate as the generation CAS and uses immutable header metadata,
+/// Revoke without discarding already-published output. Selection is made in
+/// the transaction of the generation CAS and uses immutable header metadata,
 /// exactly as `terminalSelectionMetadataValid`; corrupt bytes remain untouched.
 #[cfg(test)]
 pub(crate) async fn revoke_execution_generation(
@@ -398,7 +398,7 @@ pub(crate) async fn revoke_execution_generation(
             reason,
             fixture_now: None,
             fixture_fresh_generation: None,
-            pending_fence: None,
+            pending_snapshot: None,
         },
     )
     .await
@@ -437,7 +437,7 @@ pub async fn revoke_execution_preserving_output_with_access(
             reason,
             fixture_now: None,
             fixture_fresh_generation: None,
-            pending_fence: None,
+            pending_snapshot: None,
         },
     )
     .await
@@ -469,7 +469,7 @@ pub async fn revoke_execution_preserving_output_at_with_access(
             reason,
             fixture_now: Some(now),
             fixture_fresh_generation: Some(fresh_generation),
-            pending_fence: None,
+            pending_snapshot: None,
         },
     )
     .await
@@ -494,7 +494,7 @@ pub async fn terminalize_owned_at_with_access(
             reason: "",
             fixture_now: Some(now),
             fixture_fresh_generation: None,
-            pending_fence: None,
+            pending_snapshot: None,
         },
     )
     .await
@@ -508,7 +508,7 @@ struct TerminalizeSpec<'a> {
     reason: &'a str,
     fixture_now: Option<DateTime<Utc>>,
     fixture_fresh_generation: Option<&'a str>,
-    pending_fence: Option<(&'a [String], Option<DateTime<Utc>>)>,
+    pending_snapshot: Option<(&'a [String], Option<DateTime<Utc>>)>,
 }
 
 async fn terminalize_execution_with_access(
@@ -565,7 +565,7 @@ pub async fn stage_revoke_execution_preserving_output(
             reason,
             fixture_now: None,
             fixture_fresh_generation: None,
-            pending_fence: None,
+            pending_snapshot: None,
         },
         &ExecutionGeneration::fresh(),
     )
@@ -595,7 +595,7 @@ pub async fn stage_supersede_parked_execution(
             reason,
             fixture_now: None,
             fixture_fresh_generation: None,
-            pending_fence: None,
+            pending_snapshot: None,
         },
         &ExecutionGeneration::fresh(),
     )
@@ -614,12 +614,9 @@ async fn terminalize_execution_in_txn(
     let selection = &spec.selection;
     let reason = spec.reason;
     let fixture_now = spec.fixture_now;
-    let pending_fence = spec.pending_fence;
+    let pending_snapshot = spec.pending_snapshot;
     use super::execution_policy::LeaseObservation;
 
-    if pending_fence.is_some() {
-        gents_store::graphql::fence_arrivals(txn, "AgentRequest").await?;
-    }
     let doc_id = escape_graphql_string(request_doc_id);
     let result = {
         use gents_protocol::document_query::{
@@ -635,7 +632,7 @@ async fn terminalize_execution_in_txn(
                 .field(request::LIFECYCLE_STATE)
                 .field(request::EXECUTION_GENERATION)
                 .field(request::EXECUTION_LEASE_EXPIRES_AT)
-                .field(request::INTERRUPT_REQUESTED_AT)
+                .field(request::INTERRUPT_GENERATION)
                 .field(request::TERMINAL_OUTPUT)
                 .field(request::DEADLINE),
         )
@@ -647,6 +644,7 @@ async fn terminalize_execution_in_txn(
     let row = gents_store::graphql::first_row::<AgentRequestRow>(&result, "AgentRequest")
         .map_err(anyhow::Error::from)?
         .context("execution request disappeared")?;
+    let interrupted = crate::request::interrupt::row_interrupted_in_txn(txn, &row).await?;
     let purpose = row.purpose.context("execution request purpose missing")?;
     let auxiliary = purpose.is_auxiliary();
     if auxiliary
@@ -663,12 +661,7 @@ async fn terminalize_execution_in_txn(
         .as_deref()
         .context("missing execution generation")?;
     let state = row.lifecycle_state.context("missing request state")?;
-    let effective_outcome = if outcome == RequestTerminalOutcome::Failed
-        && row
-            .interrupt_requested_at
-            .as_deref()
-            .is_some_and(|v| !v.is_empty())
-    {
+    let effective_outcome = if outcome == RequestTerminalOutcome::Failed && interrupted {
         RequestTerminalOutcome::Interrupted
     } else {
         outcome
@@ -702,10 +695,7 @@ async fn terminalize_execution_in_txn(
     };
     let parked = ParkedObservation {
         leased: expiry.is_some(),
-        interrupted: row
-            .interrupt_requested_at
-            .as_deref()
-            .is_some_and(|value| !value.is_empty()),
+        interrupted,
         deadline: row
             .deadline
             .as_deref()
@@ -730,7 +720,7 @@ async fn terminalize_execution_in_txn(
         .session_id
         .as_deref()
         .context("missing request session")?;
-    validate_pending_fence(txn, agent, session_id, pending_fence).await?;
+    validate_pending_snapshot(txn, agent, session_id, pending_snapshot).await?;
 
     let headers = session::load_request_headers_in_txn(
         txn,
@@ -761,7 +751,6 @@ async fn terminalize_execution_in_txn(
         state,
         owner,
         expiry,
-        interrupt_requested_at: row.interrupt_requested_at.as_deref(),
         deadline: row.deadline.as_deref(),
         reason: if matches!(authority, TerminalAuthority::Parked { .. })
             && effective_outcome == RequestTerminalOutcome::Interrupted
@@ -794,7 +783,6 @@ struct TerminalSite<'a> {
     owner: &'a str,
     /// A parked row holds no lease.
     expiry: Option<&'a str>,
-    interrupt_requested_at: Option<&'a str>,
     deadline: Option<&'a str>,
     reason: &'a str,
     fresh_generation: &'a ExecutionGeneration,
@@ -864,13 +852,13 @@ fn authorize_terminal_transition(
     Ok(authorized && !has_terminal_output)
 }
 
-async fn validate_pending_fence(
+async fn validate_pending_snapshot(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     agent: &str,
     session_id: &str,
-    pending_fence: Option<(&[String], Option<DateTime<Utc>>)>,
+    pending_snapshot: Option<(&[String], Option<DateTime<Utc>>)>,
 ) -> std::result::Result<(), TerminalizeError> {
-    if let Some((expected, request_deadline)) = pending_fence {
+    if let Some((expected, request_deadline)) = pending_snapshot {
         if !request_deadline.is_none_or(|deadline| Utc::now() < deadline) {
             return Err(
                 anyhow::anyhow!("request deadline expired before natural completion").into(),
@@ -1000,7 +988,6 @@ async fn write_terminal_request(
         state,
         owner,
         expiry,
-        interrupt_requested_at,
         deadline,
         reason,
         fresh_generation,
@@ -1024,11 +1011,7 @@ async fn write_terminal_request(
                 .map(|value| format!("\"{}\"", escape_graphql_string(value)))
                 .unwrap_or_else(|| "null".to_string())
         };
-        format!(
-            ", interrupt_requested_at: {{ _eq: {} }}, deadline: {{ _eq: {} }}",
-            quoted(interrupt_requested_at),
-            quoted(deadline)
-        )
+        format!(", deadline: {{ _eq: {} }}", quoted(deadline))
     } else {
         String::new()
     };

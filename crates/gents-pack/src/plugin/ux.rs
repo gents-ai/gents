@@ -28,6 +28,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use gents_fs_runner::beneath::{Intent, Located, OpenRoot};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -236,9 +237,11 @@ pub fn find(home: &Path, id: &str) -> Result<UxListing> {
         .with_context(|| format!("no ux plugin {id:?} under {}", home.display()))
 }
 
-fn read_bounded(path: &Path, what: &str) -> Result<String> {
-    let bytes =
-        std::fs::read(path).with_context(|| format!("reading {what} {}", path.display()))?;
+fn read_bounded(file: &Located, what: &str) -> Result<String> {
+    let path = file.path();
+    let bytes = file
+        .read()
+        .with_context(|| format!("reading {what} {}", path.display()))?;
     anyhow::ensure!(
         bytes.len() <= MAX_MODULE_BYTES,
         "{what} {} is {} bytes; the limit is {} MiB",
@@ -257,12 +260,12 @@ pub(crate) fn digest_of(source: &str) -> String {
 /// the listing (dev) or the manifest (pack) names one.
 pub fn file_module(home: &Path, listing: &UxListing, css: Option<&str>) -> Result<UxModule> {
     let entry = PathBuf::from(&listing.file);
-    let source = read_bounded(&entry, "ux plugin entry")?;
+    if listing.door == UxDoor::Dev {
+        return draft_module(&Located::at(&entry, Intent::Existing)?);
+    }
+    let source = read_bounded(&Located::at(&entry, Intent::Existing)?, "ux plugin entry")?;
     let css_path = match (listing.door, css) {
-        (UxDoor::Dev, _) => {
-            let beside = entry.with_file_name(DEV_CSS);
-            beside.is_file().then_some(beside)
-        }
+        (UxDoor::Dev, _) => None,
         (UxDoor::Pack, Some(css)) => Some(
             home.join(
                 listing
@@ -282,8 +285,27 @@ pub fn file_module(home: &Path, listing: &UxListing, css: Option<&str>) -> Resul
         }
     };
     let css = css_path
-        .map(|path| read_bounded(&path, "ux plugin css"))
+        .map(|path| read_bounded(&Located::at(&path, Intent::Existing)?, "ux plugin css"))
         .transpose()?;
+    Ok(UxModule {
+        digest: digest_of(&source),
+        source,
+        css,
+    })
+}
+
+/// A draft module: the entry file, and the stylesheet beside it when there
+/// is one, each read through the directory the entry was resolved in.
+pub fn draft_module(entry: &Located) -> Result<UxModule> {
+    let source = read_bounded(entry, "ux plugin entry")?;
+    let beside = entry.relative().with_file_name(DEV_CSS);
+    let css = match entry.root().kind(&beside)? {
+        Some(_) => Some(read_bounded(
+            &entry.root().existing(&beside)?,
+            "ux plugin css",
+        )?),
+        None => None,
+    };
     Ok(UxModule {
         digest: digest_of(&source),
         source,
@@ -375,11 +397,15 @@ where
 }
 
 /// Lints one module file, within the limit the desktop evaluates.
-pub fn lint_file(path: &Path) -> Result<Vec<lint::Finding>> {
-    let text = read_bounded(path, "ux plugin entry")?;
+pub fn lint_file(file: &Located) -> Result<Vec<lint::Finding>> {
+    let text = read_bounded(file, "ux plugin entry")?;
     // Either file may declare a custom property the other reads, so each is
     // linted with the one the frame would load beside it.
-    let beside = |name: &str| read_bounded(&path.with_file_name(name), "ux plugin file").ok();
+    let path = file.relative();
+    let beside = |name: &str| {
+        let located = file.root().existing(path.with_file_name(name)).ok()?;
+        read_bounded(&located, "ux plugin file").ok()
+    };
     if path.extension().is_some_and(|extension| extension == "css") {
         let entry = beside(DEV_ENTRY).unwrap_or_default();
         let mut findings = lint::lint_plugin(&entry, Some(&text));
@@ -394,19 +420,20 @@ pub fn lint_file(path: &Path) -> Result<Vec<lint::Finding>> {
 /// what `gents config pack check` and `gents config pack build` run. Keys are plugin
 /// names; a plugin produced by an `.afb` has no file to lint here.
 pub fn lint_pack_dir(
-    dir: &Path,
+    dir: impl OpenRoot,
     ux: &[PackUxPlugin],
 ) -> Result<BTreeMap<String, Vec<lint::Finding>>> {
+    let dir = dir.open_root()?;
     let mut out = BTreeMap::new();
     for plugin in ux {
         let Some(entry) = &plugin.entry else {
             continue;
         };
-        let source = read_bounded(&dir.join(entry), "ux plugin entry")?;
+        let source = read_bounded(&dir.existing(entry)?, "ux plugin entry")?;
         let css = plugin
             .css
             .as_deref()
-            .map(|css| read_bounded(&dir.join(css), "ux plugin css"))
+            .map(|css| read_bounded(&dir.existing(css)?, "ux plugin css"))
             .transpose()?;
         out.insert(
             plugin.name.clone(),

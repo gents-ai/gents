@@ -423,6 +423,7 @@ async fn background_completion_transaction_attempt(
                     order: [{{ created_at: ASC }}, {{ request_id: ASC }}]
                 ) {{
                     {request_fields}
+                    interrupt_generation
                 }}
                 generations: AgentRequest(
                     filter: {{
@@ -563,6 +564,33 @@ async fn background_completion_transaction_attempt(
             break;
         }
     }
+    let marker = crate::session::interrupt_marker::read_for_session_in_txn(
+        txn,
+        &parent.node_did,
+        &parent.session_id,
+    )
+    .await?;
+    let matching = match (matching, &marker) {
+        (Some(row), Some(marker))
+            if crate::session::interrupt_marker::wake_drained_at_claim(
+                row.interrupt_generation,
+                marker.generation,
+            ) =>
+        {
+            crate::request::interrupt::interrupt_pending_in_txn(
+                txn,
+                row.doc_id
+                    .as_deref()
+                    .context("pending wake is missing _docID")?,
+                &parent.node_did,
+                &row.request_id,
+                crate::request::interrupt::INTERRUPT_DRAIN_REASON,
+            )
+            .await?;
+            None
+        }
+        (matching, _) => matching,
+    };
     let (pending, lower) = match matching {
         Some(row)
             if row
@@ -629,6 +657,9 @@ async fn background_completion_transaction_attempt(
             )
             .await?;
             let doc_id = super::super::runtime_publication::publish(txn, &create).await?;
+            crate::request::interrupt::record_wake_generation_in_txn(txn, &doc_id, marker.as_ref())
+                .await?;
+            touch_wake_session_in_txn(txn, parent, &now).await?;
             if let Some(lower) = &lower {
                 let lower_doc_id = lower
                     .doc_id
@@ -686,6 +717,26 @@ async fn background_completion_transaction_attempt(
         message_sequence,
         created_request,
     })
+}
+
+/// A new wake writes its session document, which a failed wake's redrive
+/// also writes, so of a notifier and a redrive publishing a wake for one
+/// queue at once the second to commit aborts and runs again over the first
+/// (`TransactionFence.commonWrite`, `BackgroundWakeIdentity.tla`).
+async fn touch_wake_session_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    parent: &AgentRequest,
+    now: &str,
+) -> Result<()> {
+    let session = gents_store::config_client::agent_session::load_agent_session_row_in_txn(
+        txn,
+        &parent.node_did,
+        &parent.session_id,
+        parent.requester_did.as_deref(),
+    )
+    .await?
+    .context("background wake session is missing")?;
+    crate::session::touch_session_in_txn(txn, &session, now).await
 }
 
 async fn publish_native_tool_notification(

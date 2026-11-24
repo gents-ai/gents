@@ -250,7 +250,10 @@ async fn stage_caused_session_in_txn(
             "started_by_session_id": source.session_id, "provenance": provenance
         }}),
     ).await?;
-    gents_store::graphql::created_doc_id(&response, "AgentSession").map_err(Into::into)
+    let session_doc = gents_store::graphql::created_doc_id(&response, "AgentSession")?;
+    super::interrupt_marker::create_in_txn(txn, &session_doc, &create.node_did, &create.session_id)
+        .await?;
+    Ok(session_doc)
 }
 
 async fn verify_caused_opening_in_txn(
@@ -816,6 +819,7 @@ async fn ensure_session_with_pending_in_txn(
         .and_then(|doc| doc.get("_docID"))
         .and_then(serde_json::Value::as_str)
         .context("created session lacks physical identity")?;
+    super::interrupt_marker::create_in_txn(txn, doc_id, node_did, session_id).await?;
     if let Some(origin) = provenance.as_mut() {
         origin.creation_receipt = crate::session::origin::issue_creation_receipt_in_txn(
             txn,
