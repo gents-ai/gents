@@ -548,6 +548,14 @@ impl GraphqlEnrollmentStore {
         })
     }
 
+    /// The enrollment decision lock, which every revision writer on this node
+    /// holds through its commit (Lean `Enrollment.RouteFence`). A home admits
+    /// one runtime process, so holding it orders a write against every
+    /// revision this node writes.
+    pub(super) async fn decision_guard(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.decision_lock.lock().await
+    }
+
     pub fn new(node: Arc<EmbeddedNode>, identity: Arc<dyn NodeIdentity>) -> Self {
         let decision_lock = gents_store::identity::enrollment_decision_gate(&node);
         Self {
