@@ -220,6 +220,42 @@ theorem stopped_client_does_not_clear_client_error (autostartDeclined : Bool) :
 theorem client_observation_does_not_clear_managed_error (running autostartDeclined : Bool) :
     observeStartup .managedServerError running autostartDeclined = .managedServerError := by rfl
 
+/-- What a ready app shows: the shell, or a screen that asks something of the
+person. Waiting is never one of them. -/
+inductive StartupGate where
+  | shell | unreadable | notConnected
+  deriving DecidableEq, Repr
+
+/-- Once this device's own saved settings are read, the shell shows. A first
+run still unsettled because the node's configuration has not been read from
+the node yet waits in the shell, with the node shown connecting: that read
+needs the node, which may be slow, stopped or away. Only settings that cannot
+be read, or a configured node this desktop is not connected to, take the
+window instead, each with what to do about it. `nodeNotConnected` is the
+connect screen's verdict on the local node (`DesktopConnect`). -/
+def startupGate (settled : Bool) (initConfigStatus : InitConfigStatus)
+    (nodeNotConnected : Bool) : StartupGate :=
+  if settled then .shell
+  else match initConfigStatus with
+    | .unreadable => .unreadable
+    | .configured => if nodeNotConnected then .notConnected else .shell
+    | _ => .shell
+
+theorem a_settled_first_run_shows_the_shell (status : InitConfigStatus) (notConnected : Bool) :
+    startupGate true status notConnected = .shell := by rfl
+
+/-- A node that is slow or away, but known, never holds the window. -/
+theorem a_connected_configured_node_waits_in_the_shell :
+    startupGate false .configured false = .shell := by rfl
+
+/-- Only unreadable settings and a configured node this desktop is not
+connected to take the window. -/
+theorem the_window_is_taken_only_to_ask (settled : Bool) (status : InitConfigStatus)
+    (notConnected : Bool) (h : startupGate settled status notConnected ≠ .shell) :
+    settled = false ∧
+      (status = .unreadable ∨ (status = .configured ∧ notConnected = true)) := by
+  cases settled <;> cases status <;> cases notConnected <;> simp_all [startupGate]
+
 end ClientSnapshotObservation
 
 /-! Each node's rows live in that node's own store. A store is published only

@@ -11,7 +11,9 @@ export type StartupGate = "shell" | "unreadable" | "not_connected";
     from the node yet waits in the shell, with the node shown connecting:
     that read needs the node, and the node may be slow, stopped or away. Only
     settings that cannot be read, or a node this desktop is not connected to,
-    take the window instead, each with what to do about it. */
+    take the window instead, each with what to do about it (Lean
+    `ClientSnapshotObservation.startupGate`, with the connect screen's
+    verdict on the local node as its `nodeNotConnected`). */
 export function projectStartupGate(
   settled: boolean,
   initConfigStatus: "absent" | "configured" | "unreadable" | null | undefined,

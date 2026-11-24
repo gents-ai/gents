@@ -36,6 +36,14 @@ attribute [conformance_function] armedEvent armedAfter snapshotEvent selectedRoo
 
 end RuntimeConnectionObservation
 
+namespace ClientSnapshotObservation
+
+deriving instance Lean.ToJson for InitConfigStatus, StartupGate
+
+attribute [conformance_function] startupGate
+
+end ClientSnapshotObservation
+
 namespace ObserverResync
 
 deriving instance Lean.ToJson for Change, Delivery
