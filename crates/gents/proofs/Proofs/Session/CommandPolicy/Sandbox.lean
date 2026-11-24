@@ -12,12 +12,17 @@ def effectiveNetworkMode (mode : ExecutionMode) (network : NetworkMode) : Networ
   | _, network => network
 
 /-- The native adapter supplies the credential namespace from host-owned home
-and identity configuration. Seatbelt must exclude both its names and resolved
-targets, independently of optional workspace consent. Filesystem namespace
-replacement by an outside host process after inspection is an external premise;
-the child may not move protected ancestors or create hard-link aliases. -/
+and identity configuration. Every Seatbelt profile a mode selects excludes both
+its names and resolved targets, independently of optional workspace consent:
+the read-only profile reads everywhere else, so it excludes them as the
+workspace and artifact profiles do. A read-only launch no profile contains (a
+program in `seatbeltRefusedPrograms`, a host with no sandbox backend) has no
+kernel to enforce the exclusion (`contained_commands_protect_credentials`).
+Filesystem namespace replacement by an outside host process after inspection is
+an external premise; the child may not move protected ancestors or create
+hard-link aliases. -/
 def protectsCredentials (mode : ExecutionMode) : Bool :=
-  mode == .workspaceWrite || mode == .artifactWrite
+  mode != .unrestricted
 
 theorem bounded_inherits_no_network :
     effectiveNetworkMode .workspaceWrite .inherit = .disabled ∧
@@ -29,7 +34,8 @@ theorem disabled_network_is_never_enabled (mode : ExecutionMode) :
 theorem explicit_network_preserved (mode : ExecutionMode) :
     effectiveNetworkMode mode .enabled = .enabled := by cases mode <;> rfl
 
-theorem bounded_credentials_are_protected :
+theorem contained_modes_protect_credentials :
+    protectsCredentials .readOnly = true ∧
     protectsCredentials .workspaceWrite = true ∧
     protectsCredentials .artifactWrite = true := by decide
 
@@ -129,5 +135,20 @@ def commandProfile
       seatbeltProfile sandbox
         (kernelNetwork policy.mode policy.networkMode (readOnlyReachesNetwork request))
   | .denied _ => none
+
+/-- Whatever profile contains a command excludes the credential namespace. -/
+theorem contained_commands_protect_credentials
+    (support : RuntimeSupport)
+    (policy : Policy)
+    (request : CommandRequest)
+    (program : String)
+    (profile : SeatbeltProfile)
+    (contained : commandProfile support policy request program = some profile) :
+    protectsCredentials policy.mode = true := by
+  cases h : policy.mode with
+  | unrestricted => simp [commandProfile, selectSandbox, h, seatbeltProfile] at contained
+  | readOnly => decide
+  | workspaceWrite => decide
+  | artifactWrite => decide
 
 end CommandPolicy

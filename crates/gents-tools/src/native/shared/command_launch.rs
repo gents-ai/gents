@@ -271,18 +271,19 @@ pub(super) async fn prepare_command_launch(
         None => sandboxed_command_for_policy(writable_root, command, args, policy)?,
     };
     #[cfg(target_os = "macos")]
-    let (argv, credentials) = if policy.mode.protects_credentials() {
-        let credentials = command_credentials::capture(call)
-            .await
-            .map_err(command_guard_error)?;
-        let mut argv = argv;
-        credentials
-            .protect_launch(&mut argv)
-            .map_err(command_guard_error)?;
-        (argv, Some(credentials))
-    } else {
-        (argv, None)
-    };
+    let (argv, credentials) =
+        if policy.mode.protects_credentials() && seatbelt_profile(sandbox, false).is_some() {
+            let credentials = command_credentials::capture(call)
+                .await
+                .map_err(command_guard_error)?;
+            let mut argv = argv;
+            credentials
+                .protect_launch(&mut argv)
+                .map_err(command_guard_error)?;
+            (argv, Some(credentials))
+        } else {
+            (argv, None)
+        };
     Ok(CommandLaunch {
         program,
         args: argv,

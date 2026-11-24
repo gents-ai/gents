@@ -165,7 +165,7 @@ impl Tool for ReadOnlyBashTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Run a single read-only command under the allowed root. On macOS the command and every program it starts run in a sandbox that refuses every file write and every connection except curl's and tailscale's, so \"Operation not permitted\" on a write is the sandbox. Relative cwd values resolve from the active request workspace when one is provided, otherwise from the root. Returns compact text with first-line gents_exec metadata. Set raw_json=true for structured JSON."
+            description: "Run a single read-only command under the allowed root. On macOS the command and every program it starts run in a sandbox that refuses every file write, every read of saved credentials and every connection except curl's and tailscale's, so \"Operation not permitted\" on a write or a credential is the sandbox. Relative cwd values resolve from the active request workspace when one is provided, otherwise from the root. Returns compact text with first-line gents_exec metadata. Set raw_json=true for structured JSON."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -266,7 +266,7 @@ impl Tool for UnrestrictedBashTool {
         let policy = crate::native::effective_command_policy(call, &self.policy);
         let policy_description = match policy.mode {
             CommandExecutionMode::ReadOnly => {
-                "read-only policy; on macOS the command and every program it starts run in a sandbox that refuses every file write and every connection except curl's and tailscale's"
+                "read-only policy; on macOS the command and every program it starts run in a sandbox that refuses every file write, every read of saved credentials and every connection except curl's and tailscale's"
             }
             CommandExecutionMode::ArtifactWrite => {
                 "artifact_write policy; source stays read-only, with compiler output and temporary files confined to the request's private artifact directory. CARGO_TARGET_DIR and TMPDIR are supplied automatically"
@@ -283,7 +283,10 @@ impl Tool for UnrestrictedBashTool {
             super::shared::CommandNetworkMode::Enabled => "network access is enabled by policy",
             super::shared::CommandNetworkMode::Inherit => "network access follows the host policy",
         };
-        let credential_description = if policy.mode.protects_credentials() {
+        let credential_description = if matches!(
+            policy.mode,
+            CommandExecutionMode::WorkspaceWrite | CommandExecutionMode::ArtifactWrite
+        ) {
             "; saved credentials are protected from this command"
         } else {
             ""

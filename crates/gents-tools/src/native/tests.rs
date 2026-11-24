@@ -1832,6 +1832,22 @@ async fn workspace_write_bash_cannot_signal_a_process_outside_its_sandbox() {
 
 #[cfg(target_os = "macos")]
 async fn read_only_bash(root: &Path, command: &str, args: &[&str]) -> String {
+    read_only_bash_in(
+        root,
+        &gents_loop::tool::ToolCallEnvelope::default(),
+        command,
+        args,
+    )
+    .await
+}
+
+#[cfg(target_os = "macos")]
+async fn read_only_bash_in(
+    root: &Path,
+    call: &gents_loop::tool::ToolCallEnvelope,
+    command: &str,
+    args: &[&str],
+) -> String {
     let tool = ReadOnlyBashTool::new(
         ToolContext::new(root.to_path_buf(), false).unwrap(),
         Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
@@ -1841,7 +1857,7 @@ async fn read_only_bash(root: &Path, command: &str, args: &[&str]) -> String {
     match crate::runtime_context::call_tool_managed(
         boxed.as_ref(),
         serde_json::json!({ "command": command, "args": args }).to_string(),
-        &gents_loop::tool::ToolCallEnvelope::default(),
+        call,
     )
     .await
     {
@@ -1849,6 +1865,46 @@ async fn read_only_bash(root: &Path, command: &str, args: &[&str]) -> String {
         | gents_loop::tool_call_lifecycle::ToolOutcome::Failed { text, .. } => text,
         other => panic!("{command} {args:?} did not run: {other:?}"),
     }
+}
+
+/// The read-only profile reads everywhere except the credential namespace,
+/// which it excludes as the workspace profile does.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn read_only_bash_cannot_read_a_protected_credential() {
+    if !std::path::Path::new("/usr/bin/sandbox-exec").exists() {
+        return;
+    }
+    let root = temp_root("gents-bash-read-only-credential")
+        .canonicalize()
+        .unwrap();
+    let home = root.join("home");
+    let keys = gents_store::local::home::keys_dir(&home);
+    std::fs::create_dir_all(&keys).unwrap();
+    std::fs::write(keys.join("identity"), "fixture credential").unwrap();
+    std::fs::write(root.join("ordinary.txt"), "ordinary content").unwrap();
+    let call = crate::runtime_context::entered_with_workspace_overlay(
+        &gents_loop::tool::ToolCallEnvelope::default(),
+        crate::runtime_context::ToolWorkspaceScope {
+            runtime_home: Some(home.clone()),
+            ..Default::default()
+        },
+        gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(None, Default::default()),
+    );
+
+    let ordinary = read_only_bash_in(&root, &call, "cat", &["ordinary.txt"]).await;
+    let meta = compact_exec_meta(&ordinary);
+    assert_eq!(meta["sandbox"], "macos_seatbelt_read_only", "{ordinary}");
+    assert_eq!(meta["exit_code"].as_i64(), Some(0), "{ordinary}");
+    assert!(ordinary.contains("ordinary content"), "{ordinary}");
+
+    let credential = keys.join("identity");
+    let relative = credential.strip_prefix(&root).unwrap().to_str().unwrap();
+    let output = read_only_bash_in(&root, &call, "cat", &[relative]).await;
+    let meta = compact_exec_meta(&output);
+    assert_eq!(meta["sandbox"], "macos_seatbelt_read_only", "{output}");
+    assert_ne!(meta["exit_code"].as_i64(), Some(0), "{output}");
+    assert!(!output.contains("fixture credential"), "{output}");
 }
 
 /// A clean filter that `.gitattributes` names is a configured program no
