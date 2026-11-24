@@ -280,6 +280,7 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
     let dragging = false;
     let readerScrolling = false;
     let restTimer = 0;
+    let restPending = false;
     let quiet = 0;
     let landingFrames = -1;
     let awaitingPlace = 0;
@@ -303,7 +304,14 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
         framedTop = s.scrollTop;
         stillFrames = 0;
       } else stillFrames += 1;
-      requestAnimationFrame(countStillFrames);
+      if (stillFrames < STILL_FRAMES) {
+        requestAnimationFrame(countStillFrames);
+        return;
+      }
+      counting = false;
+      /* the frame that finds the view still is when it rests, once the
+         time has passed too */
+      if (restPending && resting()) comeToRest();
     };
     const moving = () => {
       stillFrames = 0;
@@ -537,12 +545,19 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
 
     function scheduleRest() {
       window.clearTimeout(restTimer);
+      restPending = true;
       restTimer = window.setTimeout(() => {
         if (!resting()) return scheduleRest();
-        readerScrolling = false;
-        if (hidden) setHidden(0);
-        reconcile();
+        comeToRest();
       }, REST_MS);
+    }
+
+    function comeToRest() {
+      window.clearTimeout(restTimer);
+      restPending = false;
+      readerScrolling = false;
+      if (hidden) setHidden(0);
+      reconcile();
     }
 
     function ahead() {
@@ -629,7 +644,6 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
       lastInputAt = performance.now();
       readerScrolling = true;
       lastMotionAt = lastInputAt;
-      moving();
       if (event.deltaY < 0) release();
       const s = el();
       pendingWheel = 0;
@@ -662,10 +676,14 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
             : s.scrollTop < s.scrollHeight - s.clientHeight;
         if (target === s && canMove) pendingWheel = direction;
       }
+      /* only a wheel that moves the view animates it over frames */
       if (pendingWheel) {
+        moving();
         queueMicrotask(() => {
-          if (generation === wheelGeneration && event.defaultPrevented)
+          if (generation === wheelGeneration && event.defaultPrevented) {
             pendingWheel = 0;
+            stillFrames = STILL_FRAMES;
+          }
         });
       }
       /* wheeling at the very top moves nothing and sends no scroll: a

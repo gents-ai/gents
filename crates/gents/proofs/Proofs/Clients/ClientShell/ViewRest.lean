@@ -3,8 +3,8 @@ namespace ClientShell.ViewRest
 /-- What the transcript's scroll owner has observed of the reader's motion:
 whether a finger or a scrollbar drag holds the view, how long since the last
 wheel, touch or reader scroll, and how many drawn frames in a row have found
-the view where the frame before left it. The owner's own position writes are
-not motion. -/
+the view where the frame before left it since the last wheel that could move
+it, touch or reader scroll. The owner's own position writes are not motion. -/
 structure Motion where
   touching : Bool
   dragging : Bool
