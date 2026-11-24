@@ -50,6 +50,10 @@ function showWindow(shown: boolean) {
   document.dispatchEvent(new Event("visibilitychange"));
 }
 
+/* reads requested in the same moment join one read after a short burst
+   window (projectionController's BURST_MS) */
+const BURST = 150;
+
 describe("following the client while it runs", () => {
   it.each([false, true])(
     "reads the open session on store updates and never on a timer (live source %s)",
@@ -90,19 +94,19 @@ describe("following the client while it runs", () => {
             return () => {};
           }),
         );
-        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(BURST);
         expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(1);
         await vi.advanceTimersByTimeAsync(10_000);
         expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(1);
         expect(api.fetchSessionLiveDelta).not.toHaveBeenCalled();
 
         void update?.({ reason: "store" });
-        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(BURST);
         expect(api.fetchSessionLiveDelta).toHaveBeenCalledTimes(0);
         expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(2);
 
         void update?.({ reason: "store" });
-        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(BURST);
         expect(api.fetchSessionLiveDelta).toHaveBeenCalledTimes(hasLive ? 1 : 0);
         expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(hasLive ? 2 : 3);
         /* the live read stood in for the update; the full read it owes
@@ -141,7 +145,7 @@ describe("following the client while it runs", () => {
         app,
         vi.fn(async () => () => {}),
       );
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(BURST);
       expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(1);
       const indexReads = api.fetchDesktopSnapshot.mock.calls.length;
 
@@ -153,7 +157,7 @@ describe("following the client while it runs", () => {
       expect(api.reconnectNode).not.toHaveBeenCalled();
 
       showWindow(true);
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(BURST);
       expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(2);
       expect(api.fetchDesktopSnapshot).toHaveBeenCalledTimes(indexReads + 1);
 
@@ -297,8 +301,8 @@ describe("registering for client updates", () => {
       await vi.advanceTimersByTimeAsync(UNREGISTERED_READ_MS - 1);
       expect(api.fetchSessionSnapshot).not.toHaveBeenCalled();
       /* a registration that never settles must not leave the selection
-         unread */
-      await vi.advanceTimersByTimeAsync(1);
+         unread; the read then waits out the burst window */
+      await vi.advanceTimersByTimeAsync(1 + BURST);
       expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(60_000);
       expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(1);
@@ -306,7 +310,7 @@ describe("registering for client updates", () => {
          registration, so the registration reads in full again */
       const snapshotsBefore = api.fetchDesktopSnapshot.mock.calls.length;
       register();
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(BURST);
       expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(2);
       expect(api.fetchDesktopSnapshot.mock.calls.length).toBe(snapshotsBefore + 1);
     } finally {
@@ -336,17 +340,19 @@ describe("registering for client updates", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(attempts).toBe(1);
       expect(app.stores.client.getState().error).toBe("listen refused");
+      await vi.advanceTimersByTimeAsync(BURST);
       expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(250);
+      await vi.advanceTimersByTimeAsync(250 - BURST);
       expect(attempts).toBe(2);
       await vi.advanceTimersByTimeAsync(499);
       expect(attempts).toBe(2);
       await vi.advanceTimersByTimeAsync(1);
       expect(attempts).toBe(3);
       expect(app.stores.client.getState().error).toBeNull();
+      await vi.advanceTimersByTimeAsync(BURST);
       expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(2);
       void update?.({ reason: "store" });
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(BURST);
       expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(3);
     } finally {
       stop?.();

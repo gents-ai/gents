@@ -11,6 +11,9 @@ export type DesktopUpdateRefreshScope =
     the session joins it. */
 export type ProjectionRequest = DesktopUpdateRefreshScope | "reread";
 
+/** How long an idle controller waits for more requests to join a read. */
+export const BURST_MS = 120;
+
 export function desktopUpdateRefreshScope(
   reason: string | undefined,
   selectedSessionId: string | null,
@@ -185,7 +188,9 @@ export function createProjectionController({
       if (disposed) return Promise.resolve();
       enqueue(requestedWork(scope));
       if (!active) {
-        active = Promise.resolve()
+        /* a burst of updates (a reconnect's snapshots, a turn's events)
+           lands as one read: requests in the next moment join this one */
+        active = new Promise<void>((resolve) => setTimeout(resolve, BURST_MS))
           .then(drain)
           .finally(() => {
             active = null;
