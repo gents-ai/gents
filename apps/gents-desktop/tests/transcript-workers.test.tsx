@@ -301,7 +301,52 @@ describe("the provenance owner", () => {
 });
 
 describe("agent lineage freshness", () => {
-  it("asks again on a session-list change and keeps the last view on a failed ask", async () => {
+  it("asks again only when a session its lineage names, or a new child, changes", async () => {
+    const api = apiWith(async () =>
+      view([caused("r-1", "session-1", "processing", "req-1", "call-1")]),
+    );
+    const tool = call("req-1", "call-1", "success");
+    const own = { nodeDid: AGENT, sessionId: "parent-session", requesterDid: PERSON };
+    const child = { nodeDid: AGENT, sessionId: "session-1", turnState: "running" };
+    const app = appFor(api, [group(tool)], { sessions: [own, child] });
+    const { result } = renderWorkers(app);
+    await waitFor(() => expect(result.current.byToolCall(tool)).toBeTruthy());
+    await act(async () => {});
+    expect(
+      api.sessionProvenance,
+      "a lineage that names a listed session is not itself a change",
+    ).toHaveBeenCalledTimes(1);
+
+    for (const turnState of ["running", "completed"])
+      act(() =>
+        publish(app, nodeListing([own, child, { sessionId: "unrelated", turnState }])),
+      );
+    await act(async () => {});
+    expect(api.sessionProvenance, "an unrelated session").toHaveBeenCalledTimes(1);
+
+    const done = { ...child, turnState: "completed" };
+    act(() => publish(app, nodeListing([own, done, { sessionId: "unrelated" }])));
+    await waitFor(() => expect(api.sessionProvenance).toHaveBeenCalledTimes(2));
+
+    act(() =>
+      publish(
+        app,
+        nodeListing([
+          own,
+          done,
+          { sessionId: "unrelated" },
+          {
+            sessionId: "new-child",
+            turnState: "running",
+            startedBy: { ...link("parent-session"), requesterDid: PERSON },
+          },
+        ]),
+      ),
+    );
+    await waitFor(() => expect(api.sessionProvenance).toHaveBeenCalledTimes(3));
+  });
+
+  it("asks again when a session its lineage names changes and keeps the last view on a failed ask", async () => {
     let state: RequestLifecycleState = "processing";
     const api = apiWith(async () =>
       view([caused("r-1", "session-1", state, "req-1", "call-1")]),
@@ -319,14 +364,20 @@ describe("agent lineage freshness", () => {
 
     api.sessionProvenance.mockRejectedValueOnce(new Error("bridge busy"));
     act(() =>
-      publish(app, nodeListing([own, { sessionId: "other", turnState: "running" }])),
+      publish(
+        app,
+        nodeListing([own, { sessionId: "session-1", turnState: "running" }]),
+      ),
     );
     await waitFor(() => expect(api.sessionProvenance).toHaveBeenCalledTimes(2));
     expect(result.current.byToolCall(tool)?.request.lifecycleState).toBe("processing");
 
     state = "completed";
     act(() =>
-      publish(app, nodeListing([own, { sessionId: "other", turnState: "completed" }])),
+      publish(
+        app,
+        nodeListing([own, { sessionId: "session-1", turnState: "completed" }]),
+      ),
     );
     await waitFor(() =>
       expect(result.current.byToolCall(tool)?.request.lifecycleState).toBe("completed"),
