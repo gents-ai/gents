@@ -427,6 +427,7 @@ def run_contained(args, out, work, result, selected, definition=None, split=None
         return None
     summary["rows"] = [contained_row(entry, views.get(entry.get("slot"))) for entry in summary["slots"]]
     result.update(results=summary.get("results"), image=args.image, gents_revision=summary.get("image_commit"),
+                  divergences=summary.get("divergences"),
                   tokens={side: sum(row["tokens"][side] or 0 for row in summary["rows"]) for side in ("input", "output")})
     if summary.get("command_execution") != MODES[args.scope]["command_execution"]:
         result.update(outcome="error", reason=f"the run recorded command execution {summary.get('command_execution')!r}")
@@ -497,10 +498,16 @@ def run_full_ladder(args, out, home, work, result):
     statuses = wait_all(processes, started + args.eval_timeout)
     result["launcher_exits"] = statuses
     cases, tokens, failing_slots = {}, collections.Counter(), []
+    divergences = result.setdefault("divergences", [])
     for shard_home in homes:
         for report in sorted((shard_home / "eval" / "runs").glob("ladder-*/report.json")):
             view = json.loads(report.read_text())
             run = view["report"]["run"]
+            recorded = view["report"].get("divergences")
+            for item in recorded if recorded is not None else [
+                    {"severity": "narrows", "kind": "divergences_unrecorded", "detail": f"run {run['run_id']} records none"}]:
+                if item not in divergences:
+                    divergences.append(item)
             rung = by_definition.get(run["definition"]["definition_id"], run["definition"]["definition_id"])
             shutil.copy(report, out / f"report-{run['run_id']}.json")
             for cell in view["report"]["cells"]:
@@ -605,6 +612,8 @@ def render_summary(result):
     scope = result.get("scope", "case")
     title = {"case": "Live Engineer eval", "suites": "Live Engineer suites"}.get(scope, "Live Engineer ladder")
     lines = [f"## {title}: {result['outcome'].upper()}", ""]
+    if result.get("divergences") is not None:
+        lines += ["```", suites.banner(result["divergences"]), "```", ""]
     if scope == "case":
         lines += [f"- Case: `{result['suite']}` / `{result['case_id']}` on the shipped Engineer (`{result['subject']}`, every core pack)",
                   f"- Rule: pass when at least {result['min_pass_rate']:.0%} of {result['trials']} trials pass the grader"]

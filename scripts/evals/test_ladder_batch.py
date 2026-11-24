@@ -47,6 +47,8 @@ if args[:3] == ["utils", "data", "query"] and args[args.index("--collection") + 
 elif args[:3] == ["utils", "data", "query"]:
     assert args[args.index("--collection") + 1] == "DefaultAgentSelection", args
     print(json.dumps({"results": [{"node_did": "did:test:node", "default_agent_did": None if os.getenv("MISSING_DEFAULT_AGENT") else "did:test:provisioned-agent"}]}))
+elif args[:2] == ["runtime", "version"]:
+    print("gents 1.0.0 (abc1234)")
 elif args[:3] == ["utils", "eval", "subject"]:
     out = pathlib.Path(args[args.index("--out") + 1])
     out.mkdir(parents=True)
@@ -209,7 +211,7 @@ elif args[:2] != ["config", "apply"]:
         plan.write_text(json.dumps({"runs": [{"args": ["definition", "--run-id", "same"]}]}))
         import sys
         from unittest.mock import patch
-        arguments = ["plan", str(plan), "definition", str(self.root), "profile", "train", "3", "2", "same"]
+        arguments = ["plan", str(plan), "definition", str(self.root), "profile", "train", "3", "2", "same", "divergences.json"]
         before = plan.read_bytes()
         with patch.object(sys, "argv", arguments):
             with self.assertRaisesRegex(SystemExit, "duplicate run id"):

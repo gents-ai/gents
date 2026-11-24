@@ -87,6 +87,7 @@ pub async fn load_report_among(
     let verdicts = load_verdicts(access, owner, &record.run_id).await?;
     let mut report = build(record, &trials, &verdicts, &definition, peers)?;
     report.definition_changed = definition_changed;
+    report.divergences = crate::runner::divergence::read_divergences(&run_dir);
     Ok(report)
 }
 
@@ -170,6 +171,7 @@ mod tests {
             source_dirty: false,
             captures: Vec::new(),
             runs_dir: launching.runs_dir(),
+            divergences: None,
         }
     }
 
