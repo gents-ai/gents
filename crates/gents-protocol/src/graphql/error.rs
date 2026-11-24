@@ -74,6 +74,14 @@ pub enum GraphqlError {
         #[source]
         source: reqwest::Error,
     },
+    /// A body that read whole but did not inflate or parse as JSON.
+    #[cfg(feature = "native")]
+    #[error("decoding GraphQL response body from {graphql}")]
+    DecodeContent {
+        graphql: String,
+        #[source]
+        source: std::io::Error,
+    },
     #[cfg(feature = "native")]
     #[error("GraphQL request retries exhausted for {graphql}")]
     RetriesExhausted { graphql: String },

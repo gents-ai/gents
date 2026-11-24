@@ -830,6 +830,27 @@ def observe (status : Status) (event : Event) : Status :=
 
 def blocksAdmission (status : Status) : Bool := decide (status ≠ .connected)
 
+/-- Whether selecting a node reads it at once, given its observation (`none`
+before the node is observed). While the observer is still connecting, its own
+first read is what makes the node current; a second full read beside it only
+collides with that one (one is discarded or read again), doubling a launch's
+requests. In every other state, and before any observation, the selection
+reads the node. -/
+def selectionReadsNode (observed : Option Status) : Bool :=
+  decide (observed ≠ some .connecting)
+
+/-- `selectionReadsNode` over a flag for whether the node is observed and its
+status, the shape its conformance cases take. -/
+def selectionReads (observed : Bool) (status : Status) : Bool :=
+  selectionReadsNode (if observed then some status else none)
+
+theorem a_connecting_observer_defers_the_selection_read :
+    selectionReadsNode (some .connecting) = false := by decide
+
+theorem selection_reads_in_every_other_state (observed : Option Status)
+    (other : observed ≠ some .connecting) : selectionReadsNode observed = true := by
+  simp [selectionReadsNode, other]
+
 theorem empty_snapshot_is_connected (status : Status) :
     observe status .snapshotSucceeded = .connected := by rfl
 

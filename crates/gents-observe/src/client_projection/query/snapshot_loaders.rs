@@ -1,5 +1,6 @@
 use super::collection_roots::{root, Root};
 use super::*;
+use futures::future::BoxFuture;
 use gents_documents::views::config::NodeList;
 use gents_documents::views::tasks::TriggerList;
 use gents_session::views::requests::{RequestOrder, RequestRows};
@@ -67,14 +68,39 @@ pub(super) fn scoped_session_heads(
         .collect()
 }
 
-pub(super) async fn complete_access_snapshot_requests(
-    access: &ConfigAccess,
+/// `rows` whose physical documents no earlier seed carried.
+fn fresh(rows: Vec<AgentRequestRow>, seen: &mut RapidHashSet<String>) -> Vec<AgentRequestRow> {
+    rows.into_iter()
+        .filter(|row| row.doc_id.as_ref().is_none_or(|id| seen.insert(id.clone())))
+        .collect()
+}
+
+/// The snapshot's requests: the nonterminal `seeds`, each trigger's recent
+/// task requests, each session's observed head, and every row those need.
+/// Reads that do not wait on each other share a request: the task pages and
+/// heads go with the seeds' first dependency round, and the task page
+/// cutoffs with the next.
+pub(super) async fn complete_access_snapshot_requests<'a>(
+    access: &'a ConfigAccess,
     node_did: &str,
     sessions: &[AgentSession],
     triggers: &[Trigger],
-    mut seeds: Vec<AgentRequestRow>,
+    seeds: Vec<AgentRequestRow>,
 ) -> Result<Vec<AgentRequestRow>> {
+    let mut execute =
+        move |views: Vec<RequestRows>| -> BoxFuture<'a, Result<Vec<Vec<AgentRequestRow>>>> {
+            Box::pin(async move { Ok(access.read_views(&views).await?) })
+        };
+    let mut walk = super::request_closure::RequestClosure::default();
+    let mut seen = RapidHashSet::new();
+    walk.seed(fresh(seeds, &mut seen));
     let head_scopes = request_head_scopes(sessions);
+    let missing = head_scopes
+        .iter()
+        .filter(|(doc, _, _, _, _)| !seen.contains(doc))
+        .map(|(doc, _, _, _, _)| doc.clone())
+        .collect::<Vec<_>>();
+
     let mut trigger_ids = triggers
         .iter()
         .filter(|trigger| trigger.node_did == node_did)
@@ -82,14 +108,28 @@ pub(super) async fn complete_access_snapshot_requests(
         .collect::<Vec<_>>();
     trigger_ids.sort();
     trigger_ids.dedup();
+    let trigger_count = trigger_ids.len();
     let views = trigger_ids
         .into_iter()
         .map(|trigger| RequestRows::trigger_candidates(Scope::Node(node_did.to_owned()), trigger))
+        .chain(missing.chunks(128).map(|batch| {
+            RequestRows::new(Scope::Node(node_did.to_owned())).doc_ids(batch.to_vec())
+        }))
         .collect::<Vec<_>>();
-    let mut task_rows = Vec::new();
-    for batch in views.chunks(32) {
-        task_rows.extend(access.read_views(batch).await?.into_iter().flatten());
-    }
+    let mut answers = walk
+        .round(views, &mut execute)
+        .await?
+        .unwrap_or_default()
+        .into_iter();
+    let task_rows = answers
+        .by_ref()
+        .take(trigger_count)
+        .flatten()
+        .collect::<Vec<_>>();
+    let heads = answers
+        .flat_map(|rows| scoped_session_heads(rows, &head_scopes))
+        .collect::<Vec<_>>();
+
     let mut groups = std::collections::BTreeMap::new();
     for row in &task_rows {
         let node = row
@@ -123,26 +163,13 @@ pub(super) async fn complete_access_snapshot_requests(
                 .limit(8),
         );
     }
-    for batch in boundaries.chunks(32) {
-        seeds.extend(access.read_views(batch).await?.into_iter().flatten());
+    walk.seed(fresh(task_rows, &mut seen));
+    walk.seed(fresh(heads, &mut seen));
+    if let Some(cutoffs) = walk.round(boundaries, &mut execute).await? {
+        walk.seed(fresh(cutoffs.into_iter().flatten().collect(), &mut seen));
+        while walk.round(Vec::new(), &mut execute).await?.is_some() {}
     }
-    seeds.extend(task_rows);
-    let mut seen = RapidHashSet::new();
-    seeds.retain(|row| row.doc_id.as_ref().is_none_or(|id| seen.insert(id.clone())));
-    let missing = head_scopes
-        .iter()
-        .filter(|(doc, _, _, _, _)| !seen.contains(doc))
-        .map(|(doc, _, _, _, _)| doc.clone())
-        .collect::<Vec<_>>();
-    for batch in missing.chunks(128) {
-        let rows = access
-            .read_view(&RequestRows::new(Scope::Node(node_did.to_owned())).doc_ids(batch.to_vec()))
-            .await?;
-        seeds.extend(scoped_session_heads(rows, &head_scopes));
-    }
-    let mut seen = RapidHashSet::new();
-    seeds.retain(|row| row.doc_id.as_ref().is_none_or(|id| seen.insert(id.clone())));
-    super::close_request_rows_on(access, seeds).await
+    Ok(walk.finish())
 }
 
 /// How a runtime snapshot read failed

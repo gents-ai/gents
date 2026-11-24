@@ -161,9 +161,14 @@ def runtimeReconcileResolve : Family ReconcileInput ReconcileResolveOutput where
 Production tracks in-flight work per Agent slot: a published generation that
 replaces an Agent's slot retires the old slot, which keeps running the call in
 flight and exits when that call finishes, so a slot's generation is the
-generation of every call it runs. The supervisor fixture retires generation 1
-with no call, with a held call, and after that call finishes, and counts the
-slots still running. -/
+generation of every call it runs. A slot's request channel is held open only
+by the generation snapshots that name it (the supervisor's, the published
+watch's and the router's routed one); once the next generation is published
+and routed, none names the retired slot, so its channel closes and its task
+exits when its last call finishes. The runtime fixture restages the Agent's
+slot with no call, with a claimed request whose inference call the model
+endpoint holds, and after the endpoint answers it, and counts the slot tasks
+not yet joined. -/
 def retireNames : List String :=
   ["retire_unobserved_generation", "retired_generation_waits_for_its_call_in_flight",
     "retire_after_its_call_finishes"]
@@ -182,9 +187,11 @@ def runtimeReconcileRetire : Family ReconcileInput ReconcileRetireOutput where
       postLiveGenerationCount :=
         if c.legal then c.postLiveGenerationCount else c.preLiveGenerationCount }
 
-/-- A finished call leaves the in-flight set, which releases the backend slot
-it held: the supervisor fixture finishes the call held on a retired slot and
-counts the inference calls still holding a backend slot. -/
+/-- A finished call leaves the in-flight set, which finalizes its request's
+claim and releases the backend slot its inference call held: the runtime
+fixture answers the call held on a retired slot and counts the request as in
+flight while it is claimed or processing or an inference call of it holds a
+backend slot. -/
 def finishNames : List String := ["finish_request_releases_generation"]
 
 structure ReconcileFinishOutput where
