@@ -5,7 +5,8 @@ import type {
 } from "@source-inc/gents-desktop-client";
 
 import {
-  projectStartupPhaseAfterSnapshot,
+  projectStartupPhaseAfterSettingsAnswer,
+  projectStartupPhaseAfterSettingsTimeout,
   shouldAutoStartDesktopClient,
   type DesktopStartupPhase,
 } from "../lib/loadingStatus";
@@ -97,17 +98,47 @@ export function createClientLifecycle({
     client.setState({ startupPhase: next });
   }
 
+  /** A published snapshot is the current read's success. */
   function resolveStartupPhase(next: DesktopClientSnapshot) {
-    const phase = projectStartupPhaseAfterSnapshot(
+    const phase = projectStartupPhaseAfterSettingsAnswer(
       client.getState().startupPhase,
+      true,
+      "succeeded",
       Boolean(next.client),
       !clientAutostarts(next),
     );
     if (phase !== client.getState().startupPhase) setStartupPhase(phase);
   }
 
+  /** While startup waits on it, the read of this device's saved settings is
+      bounded: past the timeout startup shows the wait as an error with a
+      retry rather than loading forever. The read goes on, and its success
+      recovers startup from the error (Lean
+      `ClientSnapshotObservation.settingsReadTimedOut`). */
   async function refreshSnapshot() {
     const publish = publication.begin();
+    const read = readSnapshot(publish);
+    if (client.getState().startupPhase !== "loading-configuration") return read;
+    const limit = timingConfig().configurationReadTimeoutMs;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const answered = await Promise.race([
+      read.then(() => true),
+      new Promise<false>((resolve) => {
+        timer = setTimeout(() => resolve(false), limit);
+      }),
+    ]);
+    clearTimeout(timer);
+    if (answered) return;
+    const before = client.getState().startupPhase;
+    const phase = projectStartupPhaseAfterSettingsTimeout(before, publish.isCurrent());
+    if (phase === before) return;
+    setError(
+      `Reading this device’s saved settings did not finish within ${Math.round(limit / 1000)} seconds.`,
+    );
+    setStartupPhase(phase);
+  }
+
+  async function readSnapshot(publish: ReturnType<typeof publication.begin>) {
     try {
       const next = await api.fetchDesktopSnapshot();
       if (publish.publish(next)) {
@@ -118,11 +149,15 @@ export function createClientLifecycle({
         return;
       }
       setError(String(error));
-      if (client.getState().startupPhase === "loading-configuration") {
-        setStartupPhase("configuration-error");
-      } else if (client.getState().startupPhase === "starting-client") {
-        setStartupPhase("client-error");
-      }
+      const before = client.getState().startupPhase;
+      const phase = projectStartupPhaseAfterSettingsAnswer(
+        before,
+        true,
+        "failed",
+        false,
+        false,
+      );
+      if (phase !== before) setStartupPhase(phase);
     }
   }
 
