@@ -516,17 +516,24 @@ async fn arm(
     let started = Instant::now();
     let mut period = None;
     let mut streams = Vec::with_capacity(OBSERVED_COLLECTIONS.len() + 2);
-    for collection in OBSERVED_COLLECTIONS
+    let roots = OBSERVED_COLLECTIONS
         .iter()
         .copied()
         .chain(["AgentToolControl", "AgentToolControlClaim"])
-    {
-        let query =
-            format!("subscription {{ {collection}(showDeleted: true) {{ _docID _deleted }} }}");
-        let mut stream = access
-            .subscribe(&query)
+        .map(|collection| {
+            let query =
+                format!("subscription {{ {collection}(showDeleted: true) {{ _docID _deleted }} }}");
+            (collection, query)
+        })
+        .collect::<Vec<_>>();
+    /* every root is opened at once: one round trip for the set instead of one
+    per root, and a slow handshake no longer holds the rest back. All are
+    armed before the source reports the set ready, as before */
+    let opened =
+        futures::future::try_join_all(roots.iter().map(|(_, query)| access.subscribe(query)))
             .await
             .map_err(|error| failed(node, &anyhow::Error::new(error)))?;
+    for ((collection, _), mut stream) in roots.into_iter().zip(opened) {
         period = stream.take_renewal().or(period);
         streams.push((collection, stream));
     }
