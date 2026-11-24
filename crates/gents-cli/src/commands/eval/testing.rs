@@ -141,6 +141,7 @@ impl Fixture {
             source_dirty: false,
             captures: Vec::new(),
             runs_dir: self.ctx.runs_dir(),
+            divergences: None,
         }
     }
 

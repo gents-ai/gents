@@ -1,7 +1,7 @@
 //! The eval subject is made by the functions init writes the Engineer's
 //! documents with, on init's own default arguments, never from a copy.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Component, Path};
 
@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::cli::{CommandExecutionArg, EvalSubjectArgs};
+use gents_eval::runner::divergence::{build_divergence, definition_divergences, Divergence};
+
 use crate::commands::init::{
     default_agent_documents, default_engineer_init, wide_open_tools_document,
     DefaultAgentDocuments, DefaultAgentIds,
@@ -24,6 +26,7 @@ const NODE_DID: &str = "${GENTS_PACK_NODE_DID}";
 const CONFIG: &str = "pack_config.json";
 const MANIFEST: &str = "manifest.json";
 const README: &str = "README.md";
+const PROVENANCE: &str = "eval_subject.json";
 
 const DOCUMENT_IDS: [(&str, &str); 6] = [
     ("agents", "agent_slot"),
@@ -57,30 +60,46 @@ struct SuiteFile {
     subject_fixtures: Vec<SubjectFixture>,
 }
 
+/// What `write` made the subject from, so a run can derive it again and say
+/// how it differs from the Engineer init makes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Provenance {
+    from: Option<String>,
+    command_execution: CommandExecutionArg,
+    fixtures: Vec<SubjectFixture>,
+}
+
+type AssetReader<'a> = &'a dyn Fn(&str) -> Result<Vec<(String, Vec<u8>)>>;
+
 pub(super) fn write(args: &EvalSubjectArgs, out: &mut dyn Write) -> Result<()> {
     anyhow::ensure!(
         !args.out.exists(),
         "{} already exists; the subject is written into a new directory",
         args.out.display()
     );
-    let mut files = match &args.from {
+    let base = match &args.from {
         Some(dir) => read_pack_dir(dir)?,
         None => engineer_subject(CommandExecutionArg::Unrestricted)?,
     };
-    if args.command_execution == CommandExecutionArg::Off {
-        turn_off_commands(&mut files)?;
-    }
-    let fixtures = match &args.suite {
-        Some(dir) => suite_fixtures(dir)?,
-        None => Vec::new(),
+    let provenance = Provenance {
+        from: args.from.as_ref().map(|dir| dir.display().to_string()),
+        command_execution: args.command_execution,
+        fixtures: match &args.suite {
+            Some(dir) => suite_fixtures(dir)?,
+            None => Vec::new(),
+        },
     };
-    for fixture in &fixtures {
-        let suite = args
-            .suite
-            .as_deref()
-            .context("fixtures come from a suite")?;
-        apply_fixture(&mut files, suite, fixture)?;
+    let suite = args.suite.clone().unwrap_or_default();
+    let files = layered(base, &provenance, &|asset| asset_files(&suite, asset))?;
+    let mut divergences = subject_divergences(&files);
+    if let Some(dir) = &args.suite {
+        divergences.extend(definition_divergences(&suite_definition(dir)?));
     }
+    divergences.extend(build_divergence(
+        &super::source_commit(),
+        super::source_dirty(),
+    ));
     for (path, bytes) in &files {
         let destination = args.out.join(path);
         if let Some(parent) = destination.parent() {
@@ -97,10 +116,150 @@ pub(super) fn write(args: &EvalSubjectArgs, out: &mut dyn Write) -> Result<()> {
             "from": args.from.as_ref().map_or_else(|| json!("gents init --engineer"), |dir| json!(dir)),
             "agent_slot": SLOT,
             "command_execution": args.command_execution,
-            "fixtures": fixtures.iter().map(|fixture| &fixture.name).collect::<Vec<_>>(),
+            "fixtures": provenance.fixtures.iter().map(|fixture| &fixture.name).collect::<Vec<_>>(),
             "files": files.keys().collect::<Vec<_>>(),
+            "divergences": divergences,
         }),
     )
+}
+
+fn layered(
+    base: SubjectFiles,
+    provenance: &Provenance,
+    assets: AssetReader<'_>,
+) -> Result<SubjectFiles> {
+    let mut files = base;
+    if provenance.command_execution == CommandExecutionArg::Off {
+        turn_off_commands(&mut files)?;
+    }
+    for fixture in &provenance.fixtures {
+        apply_fixture(&mut files, fixture, assets)?;
+    }
+    let mut manifest = read_json(&files, MANIFEST)?;
+    manifest["assets"]
+        .as_array_mut()
+        .context("the subject declares no assets")?
+        .push(json!(PROVENANCE));
+    files.insert(MANIFEST.to_owned(), pretty(&manifest)?);
+    files.insert(
+        PROVENANCE.to_owned(),
+        pretty(&serde_json::to_value(provenance)?)?,
+    );
+    Ok(files)
+}
+
+/// How the subject pack in `dir` differs from the Engineer init makes.
+pub(crate) fn pack_divergences(dir: &Path) -> Result<Vec<Divergence>> {
+    Ok(subject_divergences(&read_pack_dir(dir)?))
+}
+
+/// The subject is checked by writing it again from its provenance with this
+/// binary's init: any byte that differs is reported, never trusted.
+fn subject_divergences(files: &SubjectFiles) -> Vec<Divergence> {
+    let files = declared(files);
+    let provenance = files
+        .get(PROVENANCE)
+        .and_then(|bytes| serde_json::from_slice::<Provenance>(bytes).ok());
+    let Some(provenance) = provenance else {
+        return vec![Divergence::narrows(
+            "subject_unknown",
+            "the subject was not written by `gents utils eval subject`, so nothing about it is checked against the Engineer `gents init --engineer` makes",
+        )];
+    };
+    let mut found = Vec::new();
+    match &provenance.from {
+        Some(dir) => found.push(Divergence::narrows(
+            "subject_override",
+            format!("the subject starts from {dir}, not the Engineer `gents init --engineer` makes; what that changes is not checked"),
+        )),
+        None => {
+            let from_pack = |asset: &str| -> Result<Vec<(String, Vec<u8>)>> {
+                let prefix = format!("{asset}/");
+                Ok(files
+                    .iter()
+                    .filter(|(path, _)| *path == asset || path.starts_with(&prefix))
+                    .map(|(path, bytes)| (path.clone(), bytes.clone()))
+                    .collect())
+            };
+            match engineer_subject(CommandExecutionArg::Unrestricted)
+                .and_then(|base| layered(base, &provenance, &from_pack))
+            {
+                Ok(expected) if expected == files => {}
+                Ok(expected) => {
+                    let paths: BTreeSet<&String> = expected.keys().chain(files.keys()).collect();
+                    let differ: Vec<&str> = paths
+                        .into_iter()
+                        .filter(|path| expected.get(*path) != files.get(*path))
+                        .map(String::as_str)
+                        .collect();
+                    found.push(Divergence::narrows(
+                        "subject_differs",
+                        format!(
+                            "the subject is not what this gents writes from its provenance: {} differ",
+                            differ.join(", ")
+                        ),
+                    ));
+                }
+                Err(error) => found.push(Divergence::narrows(
+                    "subject_differs",
+                    format!("this gents cannot write the subject again from its provenance: {error:#}"),
+                )),
+            }
+        }
+    }
+    if provenance.command_execution == CommandExecutionArg::Off {
+        found.push(Divergence::narrows(
+            "command_execution_off",
+            "command execution is off: the Engineer has no bash and no background processes",
+        ));
+    }
+    for fixture in &provenance.fixtures {
+        found.push(Divergence::adds(
+            "fixture",
+            format!("{}: {}", fixture.name, fixture.why),
+        ));
+    }
+    found
+}
+
+/// The files a pack declares, which are the ones a run freezes.
+fn declared(files: &SubjectFiles) -> SubjectFiles {
+    let assets: BTreeSet<String> = read_json(files, MANIFEST)
+        .ok()
+        .and_then(|manifest| {
+            manifest["assets"].as_array().map(|assets| {
+                assets
+                    .iter()
+                    .filter_map(|asset| asset.as_str().map(str::to_owned))
+                    .collect()
+            })
+        })
+        .unwrap_or_default();
+    files
+        .iter()
+        .filter(|(path, _)| *path == MANIFEST || assets.contains(*path))
+        .map(|(path, bytes)| (path.clone(), bytes.clone()))
+        .collect()
+}
+
+fn suite_definition(dir: &Path) -> Result<gents_documents::EvalDefinition> {
+    let manifest: gents_pack::pack::PackManifest = serde_json::from_slice(
+        &std::fs::read(dir.join(MANIFEST))
+            .with_context(|| format!("reading {}/{MANIFEST}", dir.display()))?,
+    )?;
+    let config = gents_pack::pack::load_pack_config(
+        &manifest,
+        &gents_pack::pack::PackInstallOptions {
+            node_did: "did:key:suite".into(),
+        },
+        &|path| Ok(std::fs::read(dir.join(path))?),
+        &|_| None,
+    )?;
+    config
+        .eval_definitions
+        .into_iter()
+        .next()
+        .with_context(|| format!("{} carries no eval definition", dir.display()))
 }
 
 /// Command execution `off` changes only the Engineer's host bash mode.
@@ -205,8 +364,8 @@ pub(crate) fn suite_fixtures(dir: &Path) -> Result<Vec<SubjectFixture>> {
 /// has is refused and leaves `files` as they were.
 pub(crate) fn apply_fixture(
     files: &mut SubjectFiles,
-    suite: &Path,
     fixture: &SubjectFixture,
+    assets: AssetReader<'_>,
 ) -> Result<()> {
     let name = &fixture.name;
     let mut layered = files.clone();
@@ -277,7 +436,12 @@ pub(crate) fn apply_fixture(
                 .all(|component| matches!(component, Component::Normal(_))),
             "fixture {name}: asset {asset} is not a path inside its suite"
         );
-        for (relative, bytes) in asset_files(suite, asset)? {
+        let found = assets(asset)?;
+        anyhow::ensure!(
+            !found.is_empty(),
+            "fixture {name}: asset {asset} names no file"
+        );
+        for (relative, bytes) in found {
             let declared = manifest["assets"]
                 .as_array_mut()
                 .context("the subject declares no assets")?;

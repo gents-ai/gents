@@ -174,7 +174,7 @@ fn every_suite_layers_its_fixtures_on_the_engineer_init_makes() {
         for suite in &suites {
             let mut files = default.clone();
             for fixture in suite_fixtures(suite).unwrap() {
-                apply_fixture(&mut files, suite, &fixture)
+                apply_fixture(&mut files, &fixture, &|asset| asset_files(suite, asset))
                     .unwrap_or_else(|error| panic!("{}: {error:#}", suite.display()));
             }
             let manifest: gents_pack::pack::PackManifest =

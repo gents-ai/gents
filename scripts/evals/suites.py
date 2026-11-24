@@ -6,6 +6,8 @@
   suites.py field SUITE KEY             one field of a suite (path, definition_id)
   suites.py prepare-subject SUITE DEST  the subject a suite's trials run, at DEST
   suites.py command-execution           the mode GENTS_EVAL_COMMAND_EXECUTION requests
+  suites.py launcher-divergences OUT    what only the launcher sees sets this launch apart from a production node
+  suites.py banner FILE...              the block that says how a launch differs, from those lists and subject receipts
 
 A suite is a `suite.json` beside its definition's `pack_config.json` under
 the configurator eval fixtures: its `id`, `title`, `coverage` and the
@@ -43,11 +45,18 @@ background processes init gives it (a GENTS_EVAL_SUBJECT keeps its own),
 which a trial holds only inside an isolating container
 (scripts/evals/run-container.sh); the launcher sets the definition's
 `subject.host_bash` to match.
+
+Every run records how its subjects and conditions differ from a production
+node running the Engineer `gents init --engineer` makes: the run finds what it
+can in its subjects and definition, and `--divergences` adds what only the
+launcher sees. Each is `narrows` (removes, narrows or replaces what ships) or
+`adds` (a fixture a user's node could plausibly hold).
 """
 import collections
 import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -169,7 +178,89 @@ def prepare_subject(root, suite_id, destination):
     written = subprocess.run(command, capture_output=True, text=True)
     if written.returncode != 0:
         raise SystemExit(f"gents utils eval subject failed: {written.stderr.strip()}")
+    receipt(destination).write_text(written.stdout)
     return destination
+
+
+def receipt(subject):
+    return subject.with_name(subject.name + ".receipt.json")
+
+
+def git(root, *arguments):
+    try:
+        found = subprocess.run(["git", "-C", str(root), *arguments], capture_output=True, text=True)
+    except OSError:
+        return None
+    return found.stdout.strip() if found.returncode == 0 else None
+
+
+def launcher_divergences(root, built_here):
+    """What only the launcher sees sets this launch apart from a production node."""
+    root = pathlib.Path(root)
+    found = []
+
+    def narrows(kind, detail):
+        found.append({"severity": "narrows", "kind": kind, "detail": detail})
+
+    if os.environ.get("GENTS_EVAL_DEFINITION_SOURCE"):
+        narrows("definition_override", f"the definitions come from GENTS_EVAL_DEFINITION_SOURCE="
+                f"{os.environ['GENTS_EVAL_DEFINITION_SOURCE']}, not this checkout's suites")
+    version = subprocess.run([gents_binary(), "runtime", "version"], capture_output=True, text=True).stdout
+    built = re.search(r"\(([0-9a-f]{7,40})(?:-dirty)?\)", version)
+    binary = built.group(1) if built else None
+    image = os.environ.get("GENTS_IMAGE_COMMIT")
+    checkout = git(root, "rev-parse", "HEAD") or image
+    same = binary and checkout and (binary.startswith(checkout) or checkout.startswith(binary))
+    if not binary or not checkout:
+        narrows("binary_unchecked", f"the commit of the gents binary ({binary or 'unknown'}) or of the suites "
+                f"({checkout or 'unknown'}) is unknown, so the binary is not checked against the suites it runs")
+    elif not same:
+        narrows("binary_not_checkout", f"gents was built from {binary}, the suites come from {checkout}")
+    if git(root, "status", "--porcelain", "--", str(FIXTURES), "scripts/evals"):
+        narrows("checkout_dirty", "the suites or the launcher have uncommitted changes")
+    if image and binary and (image.startswith(binary) or binary.startswith(image)):
+        pass
+    elif built_here:
+        packs = pathlib.Path(os.environ.get("GENTS_CORE_PACKS_DIR") or root / "target/core-packs")
+        stamp = (packs / "SOURCE").read_text().strip() if (packs / "SOURCE").is_file() else None
+        tree = git(root, "rev-parse", "HEAD:core-packs")
+        current = tree and tree + ("-dirty" if git(root, "status", "--porcelain", "--", "core-packs") else "")
+        if not stamp or stamp != current:
+            narrows("core_packs_not_rebuilt", f"the core packs this gents embeds were built from core-packs "
+                    f"{stamp or 'of unknown source'}, not this checkout's {current or 'unknown'}; run "
+                    f"`make core-packs` before building")
+    else:
+        narrows("core_packs_unchecked", "the core packs GENTS_BIN embeds are not checked against this checkout")
+    return found
+
+
+def read_divergences(paths):
+    """The divergences in launcher lists and subject receipts, each receipt's under its suite."""
+    divergences = []
+    for path in map(pathlib.Path, paths):
+        loaded = json.loads(path.read_text() or "[]")
+        if isinstance(loaded, dict):
+            suite_id = path.name.removesuffix(".receipt.json")
+            loaded = [dict(item, cell=item.get("cell") or suite_id) for item in loaded.get("divergences", [])]
+        divergences += [item for item in loaded if item not in divergences]
+    return divergences
+
+
+def banner(divergences, color=False):
+    """The block that opens a launch's output, or one plain line when it has no divergence."""
+    if not divergences:
+        return ("divergences: none; the subject and conditions are the Engineer `gents init --engineer` makes, "
+                "as a production node runs it")
+    narrowing = sum(item["severity"] == "narrows" for item in divergences)
+    rule = "!" * 78
+    lines = [rule, f"!! NOT THE SHIPPED ENGINEER: {narrowing} difference(s) that remove, narrow or replace what it "
+                   f"ships, {len(divergences) - narrowing} addition(s)"]
+    for item in sorted(divergences, key=lambda item: (item["severity"] != "narrows", item.get("cell") or "", item["kind"])):
+        where = f"[{item['cell']}] " if item.get("cell") else ""
+        lines.append(f"!! {item['severity'].upper():<7} {where}{item['kind']}: {item['detail']}")
+    lines.append(rule)
+    text = "\n".join(lines)
+    return f"\033[1;31m{text}\033[0m" if color else text
 
 
 def main(argv):
@@ -185,6 +276,11 @@ def main(argv):
         print(prepare_subject(root, *arguments))
     elif command == "command-execution" and not arguments:
         print(command_execution())
+    elif command == "launcher-divergences" and len(arguments) == 1:
+        found = launcher_divergences(root, os.environ.get("GENTS_EVAL_BUILT") == "1")
+        pathlib.Path(arguments[0]).write_text(json.dumps(found, indent=2) + "\n")
+    elif command == "banner" and arguments:
+        print(banner(read_divergences(arguments), color=sys.stderr.isatty()))
     else:
         sys.exit(__doc__)
 

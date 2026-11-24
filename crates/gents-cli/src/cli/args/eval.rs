@@ -339,7 +339,7 @@ pub(crate) struct EvalSubjectArgs {
     pub(crate) from: Option<PathBuf>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum, serde::Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum CommandExecutionArg {
     Off,
@@ -509,6 +509,11 @@ pub(crate) struct EvalRunArgs {
     /// hold; a download is stored in the home for the next run.
     #[arg(long)]
     pub(crate) registry: Option<String>,
+    /// A JSON list of the ways the launch differs from a production node
+    /// that only the launcher sees, recorded with the run beside what the
+    /// run finds in its subjects and definition.
+    #[arg(long, value_name = "FILE")]
+    pub(crate) divergences: Option<PathBuf>,
     #[arg(long)]
     pub(crate) json: bool,
     #[command(flatten)]

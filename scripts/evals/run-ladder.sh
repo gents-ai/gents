@@ -31,6 +31,9 @@
 #   unrestricted (the bash and background processes init gives the Engineer), the mode
 #   every subject's Engineer runs commands in; unrestricted holds only inside an
 #   isolating container (scripts/evals/run-container.sh).
+# Before the batch starts and after it ends, a block says how the launch differs from a
+#   production node running the shipped Engineer (each run records it in report.json), or
+#   one plain line when it does not.
 # Suites are the suite.json files under the eval fixtures (scripts/evals/suites.py);
 # scripts/evals/matrix.json holds the default list `all` runs.
 set -euo pipefail
@@ -110,9 +113,11 @@ if not splits or len(splits) != len(set(splits)) or any(s not in {"train", "vali
     sys.exit("GENTS_EVAL_SPLITS must contain distinct train, validation or held_out splits")
 PYVALIDATESPLITS
 
+BUILT_HERE=0
 if [ -n "${GENTS_BIN:-}" ]; then
   GENTS=$GENTS_BIN
 else
+  BUILT_HERE=1
   echo "building gents at $SHA ..." >&2
   BUILD_SOURCE=$(git -C "$ROOT" rev-parse HEAD)
   BUILD_REF=$(git -C "$ROOT" rev-parse --abbrev-ref HEAD)
@@ -224,6 +229,9 @@ echo "profile $PROFILE_ID: $MODEL, reasoning $REASONING, temperature ${TEMPERATU
 
 STAMP=$(python3 -c 'import datetime,uuid; print(datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S-%f") + "-" + uuid.uuid4().hex[:8])')
 PLAN="$EVAL_HOME/batch-$STAMP.json"
+DIVERGENCES="$EVAL_HOME/divergences-$STAMP.json"
+GENTS_BIN="$GENTS" GENTS_EVAL_BUILT=$BUILT_HERE python3 "$SUITES" launcher-divergences "$DIVERGENCES"
+RECEIPTS=()
 PLAN_DRAFT="$PLAN.tmp"
 printf '{"runs":[]}\n' >"$PLAN_DRAFT"
 WATCH=${GENTS_EVAL_WATCH:-auto}
@@ -240,6 +248,7 @@ for level in "${SELECTED[@]}"; do
   SUITE_PATH=$(python3 "$SUITES" field "$level" path)
   DEFINITION_ID=$(python3 "$SUITES" field "$level" definition_id)
   RUN_SUBJECT=$(GENTS_BIN="$GENTS" python3 "$SUITES" prepare-subject "$level" "$EVAL_HOME/subjects-$SHA/$level")
+  RECEIPTS+=("$RUN_SUBJECT.receipt.json")
   DEFINITION="$EVAL_HOME/definitions/$level"
   rm -rf "$DEFINITION" && mkdir -p "$EVAL_HOME/definitions" && cp -R "${GENTS_EVAL_DEFINITION_SOURCE:-$FIXTURES/$SUITE_PATH}" "$DEFINITION"
   python3 - "$DEFINITION/pack_config.json" "$DEFAULT_AGENT_DID" "$DID" "$COMMAND_EXECUTION" <<'PYDEFINITION'
@@ -266,13 +275,14 @@ PYSPLIT
 == $level ($split): $TRIALS trials per case, $TRIAL_CONCURRENCY trials at once, $PER_TRIAL call(s) per trial, $MODEL at $ENDPOINT, command execution $COMMAND_EXECUTION
 watch:  $GENTS utils eval watch $RUN_ID --home $EVAL_HOME
 EOF
-    python3 - "$PLAN_DRAFT" "$DEFINITION_ID" "$RUN_SUBJECT" "$PROFILE_ID" "$split" "$TRIALS" "$TRIAL_CONCURRENCY" "$RUN_ID" <<'PYPLAN'
+    python3 - "$PLAN_DRAFT" "$DEFINITION_ID" "$RUN_SUBJECT" "$PROFILE_ID" "$split" "$TRIALS" "$TRIAL_CONCURRENCY" "$RUN_ID" "$DIVERGENCES" <<'PYPLAN'
 import json, pathlib, sys
 path = pathlib.Path(sys.argv[1])
-definition, subject, profile, split, trials, concurrency, run_id = sys.argv[2:]
+definition, subject, profile, split, trials, concurrency, run_id, divergences = sys.argv[2:]
 plan = json.loads(path.read_text())
 args = [definition, "--cell", f"engineer={subject}:engineer", "--profile", f"engineer={profile}",
-        "--split", split, "--trials", trials, "--concurrency", concurrency, "--run-id", run_id]
+        "--split", split, "--trials", trials, "--concurrency", concurrency, "--run-id", run_id,
+        "--divergences", divergences]
 if any(run["args"][run["args"].index("--run-id") + 1] == run_id for run in plan["runs"]):
     sys.exit(f"duplicate run id: {run_id}")
 plan["runs"].append({"args": args})
@@ -289,6 +299,7 @@ if not plan["runs"]:
 os.link(source, destination)
 source.unlink()
 PYFINALPLAN
+python3 "$SUITES" banner "$DIVERGENCES" "${RECEIPTS[@]}" >&2
 BATCH_LOG="$EVAL_HOME/batch-$STAMP.log"
 FIRST_RUN_ID=$(python3 -c 'import json,sys; a=json.load(open(sys.argv[1]))["runs"][0]["args"]; print(a[a.index("--run-id")+1])' "$PLAN")
 echo "saved batch plan: $PLAN" >&2
@@ -312,6 +323,7 @@ status=0
 wait "$BATCH_PID" || status=$?
 trap - INT
 if [ "$status" != 0 ]; then tail -n 20 "$BATCH_LOG" >&2; fi
+python3 "$SUITES" banner "$DIVERGENCES" "${RECEIPTS[@]}" >&2
 echo "resume saved batch: $GENTS utils eval batch --plan $PLAN --concurrency $TRIAL_CONCURRENCY --home $EVAL_HOME" >&2
 echo "saved plan: $PLAN; inspect each run with $GENTS utils eval show <run-id> --home $EVAL_HOME" >&2
 echo "the eval home stays served on $PORT; stop it with: kill \$(cat $EVAL_HOME/server.pid)" >&2

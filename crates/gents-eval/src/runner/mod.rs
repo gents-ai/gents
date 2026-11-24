@@ -1,3 +1,4 @@
+pub mod divergence;
 pub mod embedded;
 pub mod executor;
 mod files;
