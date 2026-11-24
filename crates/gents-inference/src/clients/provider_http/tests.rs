@@ -497,3 +497,52 @@ fn provider_rejection_errors_carry_no_request_headers() {
     assert!(!rendered.contains("HEADERSECRET"), "{rendered}");
     assert!(rendered.contains("rate_limit_error"));
 }
+
+/// A local server drops an idle kept-alive connection as the next request
+/// arrives on it, before answering; the provider client sends that request
+/// again on a fresh connection instead of failing the call.
+#[tokio::test]
+async fn a_request_the_server_closed_on_a_kept_alive_connection_is_sent_again() {
+    use crate::test_support::scripted_backend::{ScriptedBackend, StreamResponse};
+    let replies = std::sync::atomic::AtomicUsize::new(0);
+    let backend = ScriptedBackend::builder("model")
+        .respond(move |_| {
+            Some(
+                match replies.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+                    1 => StreamResponse::Disconnect,
+                    _ => StreamResponse::text("ok"),
+                },
+            )
+        })
+        .start()
+        .unwrap();
+    let client = crate::llm::rig_compat::providers::build_openai_chat_completions_client(
+        "key",
+        backend.endpoint(),
+        ProviderHttpClient::new(ProviderHttpClient::credential_client().unwrap()),
+    )
+    .unwrap();
+    let model = client.completion_model("model");
+    for call in 0..2 {
+        let request = rig::completion::CompletionRequest {
+            model: None,
+            preamble: None,
+            chat_history: rig::one_or_many::OneOrMany::one(rig::message::Message::user("hello")),
+            documents: Vec::new(),
+            tools: Vec::new(),
+            temperature: None,
+            max_tokens: Some(16),
+            tool_choice: None,
+            additional_params: None,
+            output_schema: None,
+        };
+        let mut stream = model
+            .stream(request)
+            .await
+            .unwrap_or_else(|error| panic!("call {call}: {error}"));
+        while let Some(item) = stream.next().await {
+            item.unwrap_or_else(|error| panic!("call {call}: {error}"));
+        }
+    }
+    assert_eq!(backend.observed_completion_requests(), 3);
+}

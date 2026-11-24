@@ -782,3 +782,71 @@ async fn scheduled_cycles_match_the_lean_trace() {
         node.shutdown().await.expect("node shutdown");
     }
 }
+
+/// A replica busy with a call answers its models endpoint slower than the
+/// probe waits; the backend answering that call stays routable.
+#[tokio::test]
+async fn slow_models_probes_while_a_call_is_in_flight_leave_the_backend_routable() {
+    let options = BackendProberOptions {
+        probe_interval: Duration::from_millis(50),
+        probe_timeout: Duration::from_millis(200),
+        failure_threshold_k: 3,
+    };
+    let client = reqwest::Client::builder()
+        .timeout(options.probe_timeout)
+        .build()
+        .unwrap();
+    let health_map = BackendHealthMap::new();
+    let fixture = CycleFixture::new().await;
+    let node = fixture.db.node.clone();
+    let backend = ScriptedBackend::start("test-model", Vec::new()).unwrap();
+    let backends = vec![fixture.backend("busy", backend.endpoint().to_owned())];
+    fixture.write(&backends[0]).await;
+    probe_backends_cycle(
+        &node,
+        &client,
+        &backends,
+        Utc::now(),
+        &health_map,
+        &options,
+        None,
+    )
+    .await;
+    assert_eq!(
+        health_map.get("busy").await.unwrap().state,
+        BackendHealthState::Healthy
+    );
+
+    let in_flight = backend.hold("in-flight call");
+    let endpoint = backend.endpoint().to_owned();
+    let call = tokio::spawn(async move {
+        reqwest::Client::new()
+            .post(format!("{endpoint}/chat/completions"))
+            .body(r#"{"stream":true,"messages":[{"role":"user","content":"in-flight call"}]}"#)
+            .send()
+            .await
+    });
+    in_flight.entered().await;
+    let _slow = backend.hold_models();
+    for _ in 0..3 {
+        probe_backends_cycle(
+            &node,
+            &client,
+            &backends,
+            Utc::now(),
+            &health_map,
+            &options,
+            None,
+        )
+        .await;
+    }
+    let snapshot = health_map.get("busy").await.unwrap();
+    assert!(
+        !health_map.measured_blocks_routing("busy").await,
+        "a backend answering a call in flight is busy, not gone: {:?} after {} failures",
+        snapshot.state,
+        snapshot.failure_count,
+    );
+    in_flight.release();
+    assert!(call.await.unwrap().unwrap().status().is_success());
+}
