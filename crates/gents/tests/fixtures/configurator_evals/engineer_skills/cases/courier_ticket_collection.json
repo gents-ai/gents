@@ -29,6 +29,12 @@
     },
     {
       "stage_id": "import",
+      "settle": true,
+      "continuation": {
+        "prompt": "OK, go ahead.",
+        "max": 1,
+        "until": "ct1001"
+      },
       "prompt": "Here's what the courier system sent this morning. Add them:\nCT-1001, North depot, arrived 2026-11-20T09:15:00Z\nCT-1002, Harbor depot, arrived 2026-11-20T09:20:00Z\nCT-1001, North depot, arrived 2026-11-20T09:15:00Z",
       "capture": [
         {

@@ -62,6 +62,11 @@
       "stage_id": "add_slip",
       "prompt": "A new urgent pickup slip just came in for the North depot: PS-207. Please add it to our pickup slips.",
       "settle": true,
+      "continuation": {
+        "prompt": "OK, go ahead.",
+        "max": 1,
+        "until": "note"
+      },
       "capture": [
         {
           "kind": "documents",

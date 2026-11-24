@@ -7,7 +7,9 @@ core pack installed, so the pack_builder skills are in the Engineer's catalog;
 `subject_patch.json` adds four domain Skill documents to that catalog. No
 check requires a skill load: a case is graded on the outcome, and where only
 a skill states the rules (the four added ones), the right answer depends on
-reading it.
+reading it. A stage that needs a write grant the Engineer gives itself (which
+applies from its next request) settles and may send one "OK, go ahead." turn
+before it is graded.
 
 ## Cases
 
