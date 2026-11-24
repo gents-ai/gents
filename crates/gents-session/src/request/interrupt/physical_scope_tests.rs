@@ -41,7 +41,7 @@ async fn interrupted_at(node: &Arc<EmbeddedNode>, doc: &str) -> Option<String> {
 
 #[tokio::test]
 async fn physical_interrupt_preserves_exact_scope_and_never_reaches_caused_requests() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "physical-interrupt-preserves-exact-scope",
         crate::test_support::no_lifecycle_plugins(),
     )
@@ -92,7 +92,7 @@ async fn physical_interrupt_preserves_exact_scope_and_never_reaches_caused_reque
 
 #[tokio::test]
 async fn colliding_logical_interrupt_fetch_binds_owner_physical() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "colliding-logical-interrupt-fetch-reject",
         crate::test_support::no_lifecycle_plugins(),
     )
@@ -144,7 +144,7 @@ async fn colliding_logical_interrupt_fetch_binds_owner_physical() {
 /// (`Identity.SessionInterrupt.marker_squatting_needs_the_creators_key`).
 #[tokio::test]
 async fn a_second_marker_for_an_existing_session_is_refused() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "a-second-marker-for-an-existing-session",
         crate::test_support::no_lifecycle_plugins(),
     )

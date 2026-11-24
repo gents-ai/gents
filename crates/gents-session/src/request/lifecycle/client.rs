@@ -1658,7 +1658,7 @@ mod tests {
 
     #[tokio::test]
     async fn local_self_materialization_publishes_bound_session_before_claim() {
-        let db = gents_inference::test_support::test_db(
+        let db = gents_store::test_support::TestStore::start(
             "local-self-materialization-publishes-bou",
             crate::test_support::no_lifecycle_plugins(),
         )
@@ -2474,7 +2474,7 @@ mod tests {
                 .iter()
                 .any(|action| action.kind == "observe" && action.owner == Some(false));
             let name = format!("delegated-recovery-{}", case.input.name);
-            let db = gents_inference::test_support::test_db(
+            let db = gents_store::test_support::TestStore::start(
                 &name,
                 crate::test_support::no_lifecycle_plugins(),
             )

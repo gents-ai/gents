@@ -5,7 +5,7 @@ use gents_loop::tool::{ToolDyn, ToolError};
 use gents_toolcalls::call::hook::{BackgroundToolRegistry, DefraSessionHook};
 use serde_json::{json, Value};
 
-use gents_inference::test_support::test_db;
+use gents_store::test_support::TestStore;
 use gents_toolcalls::call::hook::fixtures::r4c_private_support::{
     accepted_call, assert_accepted_control_rows, setup_private_hook,
 };
@@ -75,12 +75,12 @@ async fn setup_hook(
     test_name: &str,
     registry: BackgroundToolRegistry,
 ) -> (
-    gents_inference::test_support::TestDb,
+    gents_store::test_support::TestStore,
     DefraSessionHook,
     String,
     String,
 ) {
-    let db = test_db(
+    let db = TestStore::start(
         test_name,
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -99,7 +99,7 @@ async fn setup_hook(
 }
 
 async fn setup_hook_on_db(
-    db: &gents_inference::test_support::TestDb,
+    db: &gents_store::test_support::TestStore,
     request_id: &str,
     session_id: &str,
     registry: BackgroundToolRegistry,
@@ -651,7 +651,7 @@ async fn read_tool_output_rejects_non_backgrounded() {
 
 #[tokio::test]
 async fn read_tool_output_rejects_unauthorized() {
-    let db = test_db(
+    let db = TestStore::start(
         "r4c-read-output-unauthorized",
         gents_session::test_support::no_lifecycle_plugins(),
     )

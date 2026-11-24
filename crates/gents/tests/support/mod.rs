@@ -27,7 +27,6 @@ pub mod ports;
 
 pub mod signed_mailbox;
 pub mod snapshots;
-pub mod streaming_backend;
 pub mod waits;
 
 /// A test's `#[tokio::test]` runtime is its entry point; constructors take
@@ -69,10 +68,7 @@ impl TestDb {
         &self,
         identity: &dyn NodeIdentity,
     ) -> gents_store::config_client::ConfigAccess {
-        let endpoint = self
-            .home
-            .graphql_endpoint()
-            .expect("test home GraphQL endpoint");
+        let endpoint = self.home.graphql_endpoint();
         gents_store::config_client::ConfigAccess::Graphql(
             gents::runtime::lifecycle_hooks::compose_endpoint(
                 gents_store::config_client::GraphqlEndpoint::as_principal(endpoint, identity.did())
@@ -85,9 +81,7 @@ impl TestDb {
     }
 
     pub fn client_endpoint(&self) -> &str {
-        self.home
-            .graphql_endpoint()
-            .expect("test database HTTP endpoint")
+        self.home.graphql_endpoint()
     }
 
     pub async fn simulate_process_crash(&mut self) -> anyhow::Result<()> {
@@ -120,7 +114,7 @@ pub fn init_test_tracing() {
 pub fn test_db_from_home(home: EmbeddedHome) -> TestDb {
     init_test_tracing();
     let node = home.node.clone();
-    let node_identity = home.identity.clone();
+    let node_identity = home.node_identity.clone();
     TestDb {
         home,
         node,
@@ -320,6 +314,32 @@ pub async fn install_managed_agent(
         .await
         .expect("install managed test Agent as user");
     (agent, binding)
+}
+
+/// A [`TestStore`](gents_store::test_support::TestStore) projecting what a
+/// trial home's node projects: the meta-only tool ceiling and the lifecycle
+/// hook composition.
+pub async fn trial_store(name: &str) -> gents_store::test_support::TestStore {
+    init_test_tracing();
+    gents_store::test_support::TestStore::start_with_tool_policy(
+        name,
+        gents_automation::lifecycle_hooks::composition(),
+        Arc::new(gents_tools::surface::ToolCeiling::meta_only()),
+    )
+    .await
+}
+
+/// A [`trial_store`] over the home at `path`, retained after the node stops,
+/// so the trial's own home owner can reopen it.
+pub async fn trial_store_at(path: &std::path::Path) -> gents_store::test_support::TestStore {
+    init_test_tracing();
+    gents_store::test_support::TestStore::open_at_with_tool_policy(
+        path,
+        gents_automation::lifecycle_hooks::composition(),
+        Arc::new(gents_tools::surface::ToolCeiling::meta_only()),
+    )
+    .await
+    .expect("trial store")
 }
 
 pub async fn test_db(name: &str) -> TestDb {
@@ -857,16 +877,25 @@ pub async fn complete_pending_request_with_canonical_output(
     );
 
     let backend_id = format!("fixture-completion-{}", row.request_id);
-    let backend = streaming_backend::MockStreamingBackend::start_with_plans(
-        "fixture-completion-model",
-        vec![streaming_backend::StreamPlan::current_authored_user(
-            prompt.clone(),
-            vec![streaming_backend::StreamResponse::streams(
-                prompt,
-                vec![streaming_backend::StreamChunk::text(text)],
-            )],
-        )],
-    )?;
+    let backend =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::start_with_plans(
+            "fixture-completion-model",
+            vec![
+                gents_inference::test_support::scripted_backend::StreamPlan::current_authored_user(
+                    prompt.clone(),
+                    vec![
+                        gents_inference::test_support::scripted_backend::StreamResponse::streams(
+                            prompt,
+                            vec![
+                                gents_inference::test_support::scripted_backend::StreamChunk::text(
+                                    text,
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+            ],
+        )?;
     fixtures::bind_agent_backend(
         db,
         &agent_did,

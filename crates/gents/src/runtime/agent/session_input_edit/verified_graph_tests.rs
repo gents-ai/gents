@@ -25,7 +25,7 @@ async fn verified_signer_as(
 #[tokio::test]
 async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> anyhow::Result<()> {
     for case in gents_lean_vocab::families::session_input_edit_claim::cases() {
-        let db = gents_inference::test_support::test_db(
+        let db = gents_store::test_support::TestStore::start(
             "verified-graph",
             gents_automation::lifecycle_hooks::composition(),
         )

@@ -19,8 +19,8 @@ use gents_store::identity::{KeyIdentity, NodeIdentity as _, RuntimeNode};
 use gents_store::schema::ensure_runtime_schemas;
 use gents_tools::surface::{AgentToolSurfaceConfig, AgentWithTools, ToolCeiling, ToolSurface};
 
-async fn test_node() -> gents_inference::test_support::TestDb {
-    gents_inference::test_support::test_db(
+async fn test_node() -> gents_store::test_support::TestStore {
+    gents_store::test_support::TestStore::start(
         "reconcile",
         gents_automation::lifecycle_hooks::composition(),
     )
@@ -760,8 +760,11 @@ async fn seed_fixture_agent_session(
 
 #[tokio::test]
 async fn generation_supervisor_restages_slot_on_api_key_rotation() {
-    let (db, _user, _access, binding) =
-        crate::test_support::root::signed_test_node("reconcile-api-key-rotation").await;
+    let (db, _user, _access, binding) = gents_inference::test_support::signed_test_node_from_db(
+        crate::support::trial_store("reconcile-api-key-rotation").await,
+        "reconcile-api-key-rotation",
+    )
+    .await;
     let node = db.node.clone();
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let node_did = db.node_identity.did().to_string();
@@ -2955,8 +2958,11 @@ async fn inference_calls_holding_a_backend_slot(
 /// the calls holding a backend slot while generation 2 serves a request, then
 /// finishes the call; either way it waits for generation 1's runner to return.
 async fn retire_slot_with_call(call_in_flight: bool) -> RetiredSlotObservation {
-    let (db, _user, _access, binding) =
-        crate::test_support::root::signed_test_node("reconcile-retired-slot").await;
+    let (db, _user, _access, binding) = gents_inference::test_support::signed_test_node_from_db(
+        crate::support::trial_store("reconcile-retired-slot").await,
+        "reconcile-retired-slot",
+    )
+    .await;
     let node = db.node.clone();
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let node_did = db.node_identity.did().to_string();

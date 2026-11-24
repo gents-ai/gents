@@ -932,7 +932,7 @@ mod tests {
 
     #[tokio::test]
     async fn error_response_terminalizes_an_existing_streaming_response() {
-        let node_db = gents_inference::test_support::test_db(
+        let node_db = gents_store::test_support::TestStore::start(
             "error-response-terminalizes-an-existing-",
             crate::test_support::no_lifecycle_plugins(),
         )

@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 mod init_config;
 mod lock;
 mod retire;
+mod served;
 mod test_guard;
 
 pub use init_config::{
@@ -17,6 +18,10 @@ pub use lock::{
 };
 pub use retire::{
     archive_preflight, home_entries, retire_entries, HomeEntries, RetireDisposition, RetireGroup,
+};
+pub use served::{
+    agent_routes, HomeRoutes, HomeServing, NodeConfigure, NodeProjection, ServedHome,
+    ServedHomeError, ServedNode,
 };
 pub use test_guard::refuse_real_gents_home;
 const INIT_CONFIG_FILE_NAME: &str = "init.json";

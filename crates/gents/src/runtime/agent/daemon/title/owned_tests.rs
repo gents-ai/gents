@@ -1147,7 +1147,7 @@ fn fencing_title_provider(
 }
 
 struct TitleFixture {
-    _db: crate::support::TestDb,
+    _db: gents_store::test_support::TestStore,
     user_access: ConfigAccess,
     node: Arc<EmbeddedNode>,
     agent_config: Arc<ResolvedAgent>,
@@ -1210,8 +1210,8 @@ impl TitleFixture {
         parent_limit: Option<u64>,
     ) -> Self {
         let (db, _user, user_access, binding) =
-            crate::test_support::root::signed_test_node_from_db(
-                crate::support::test_db("title-owned").await,
+            gents_inference::test_support::signed_test_node_from_db(
+                crate::support::trial_store("title-owned").await,
                 "title-owned",
             )
             .await;

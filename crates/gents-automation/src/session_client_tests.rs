@@ -261,7 +261,7 @@ async fn http_client_creates_session_and_grants_only_its_selected_agent() {
     let home = tempfile::tempdir().unwrap();
     let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
     let other_user = KeyIdentity::load_or_create(home.path().join("other.key"), None).unwrap();
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "http-client-session-grants",
         crate::lifecycle_hooks::composition(),
     )
@@ -270,7 +270,7 @@ async fn http_client_creates_session_and_grants_only_its_selected_agent() {
     let runtime = gents_store::test_support::held_runtime_identity(db.node_identity.did());
     let agent = gents_store::identity::provision_agent_identity(&runtime).unwrap();
     let sibling = gents_store::identity::provision_agent_identity(&runtime).unwrap();
-    let endpoint = db.client_endpoint().to_owned();
+    let endpoint = db.graphql_endpoint().to_owned();
     let endpoint_for = |actor: &KeyIdentity| {
         gents_store::config_client::GraphqlEndpoint::as_principal(&endpoint, actor.did())
             .with_client_signing_capability(actor.client_signing_capability().unwrap())

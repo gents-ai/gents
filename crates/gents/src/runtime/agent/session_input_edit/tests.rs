@@ -20,7 +20,7 @@ type ModelAuthority = atomic::Authority<String>;
 type ModelReceipt = atomic::Receipt<SessionInputEditOutcome>;
 
 struct Fixture {
-    db: gents_inference::test_support::TestDb,
+    db: gents_store::test_support::TestStore,
     node: Arc<EmbeddedNode>,
     identity: Arc<dyn NodeIdentity>,
     _dir: tempfile::TempDir,
@@ -32,7 +32,7 @@ struct Fixture {
 impl Fixture {
     async fn empty() -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let db = gents_inference::test_support::test_db(
+        let db = gents_store::test_support::TestStore::start(
             "session-input-edit",
             gents_automation::lifecycle_hooks::composition(),
         )

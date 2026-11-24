@@ -3,8 +3,9 @@ use serde::{Deserialize, Serialize};
 use crate::support::agent_requests::submit_user_request;
 use crate::support::fixtures::configure_agent_tools_as;
 use crate::support::interrupt::spawn_runtime;
-use crate::support::live_inference::{bind_target, live_target, rows_when};
+use crate::support::live_inference::{bind_target, live_target};
 use crate::support::test_db_in;
+use gents_store::test_support::rows_when;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 

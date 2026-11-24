@@ -20,7 +20,7 @@ use gents_tools::surface::SelfConfigToolConfig;
 /// come from its published document; every other node permission is granted
 /// here by the runtime owner, as a User's init would.
 struct PolicyFixture {
-    db: gents_inference::test_support::TestDb,
+    db: gents_store::test_support::TestStore,
     user_access: ConfigAccess,
     agent: Arc<dyn NodeIdentity>,
     agent_did: String,

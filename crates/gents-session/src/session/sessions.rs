@@ -1146,7 +1146,7 @@ mod relationship_publication_tests {
 
     #[tokio::test]
     async fn authorized_noncreator_can_use_completed_but_cannot_publish_pending_session() {
-        let db = gents_inference::test_support::test_db(
+        let db = gents_store::test_support::TestStore::start(
             "authorized-noncreator-session",
             crate::test_support::no_lifecycle_plugins(),
         )

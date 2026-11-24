@@ -48,7 +48,7 @@ fn task_id(same_node: bool, same_agent: bool, readable: bool) -> String {
 
 #[tokio::test]
 async fn shared_view_runner_preserves_actor_and_scope_on_served_node() -> anyhow::Result<()> {
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "shared-view-runner",
         gents_store::node_extension::Extensions::default(),
     )
@@ -111,7 +111,7 @@ async fn shared_view_runner_preserves_actor_and_scope_on_served_node() -> anyhow
         .await?;
     let http = db.client_access(&reader);
     let embedded = ConfigAccess::local_as(db.node.clone(), reader_did);
-    let anonymous_http = ConfigAccess::graphql(db.client_endpoint());
+    let anonymous_http = ConfigAccess::graphql(db.graphql_endpoint());
     let anonymous_embedded = ConfigAccess::local(db.node.clone());
     let cases = gents_lean_vocab::families::read_views_runner::cases::<Scope>();
     assert_eq!(cases.len(), 32);

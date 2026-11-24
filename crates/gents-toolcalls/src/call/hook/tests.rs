@@ -45,7 +45,7 @@ pub(crate) mod process_records;
 
 #[tokio::test]
 async fn client_output_snapshot_reads_full_retained_window_without_widening_model_budget() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "client-output-snapshot-reads-full-retain",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -165,7 +165,7 @@ async fn client_output_snapshot_reads_full_retained_window_without_widening_mode
 
 #[tokio::test]
 async fn goal_tool_interception_defaults_deny_and_create_depends_on_base_capability() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "goal-tool-interception-defaults-deny-and",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -216,7 +216,7 @@ fn hook_counters_for_test() -> HookCounters {
 
 #[tokio::test]
 async fn request_lineage_preserves_previous_binding_when_request_is_missing() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "request-lineage-preserves-previous-bindi",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -253,7 +253,7 @@ async fn request_lineage_preserves_previous_binding_when_request_is_missing() {
 
 #[tokio::test]
 async fn active_request_binding_rejects_a_half_bound_pair() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "active-request-binding-rejects-a-half-bo",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -305,7 +305,7 @@ fn hook_persistence_failure_decisions_follow_the_lean_model() {
 
 #[tokio::test]
 async fn hook_persistence_mutation_results_follow_the_lean_model() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "generated-storage-observation-cases-matc",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -339,7 +339,7 @@ async fn hook_persistence_mutation_results_follow_the_lean_model() {
 
 #[tokio::test]
 async fn control_tool_lost_terminal_compare_replays_the_durable_winner() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "control-tool-lost-terminal-compare-repla",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -435,7 +435,7 @@ async fn control_tool_lost_terminal_compare_replays_the_durable_winner() {
 async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-deadline-{}", uuid::Uuid::new_v4()));
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "hook-attaches-active-request-deadline-to",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -493,7 +493,7 @@ async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
 async fn claimed_authored_input_persists_context_once_before_prompt() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-context-{}", uuid::Uuid::new_v4()));
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "claimed-authored-input-persists-context-",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -533,7 +533,7 @@ async fn claimed_authored_input_persists_context_once_before_prompt() {
 #[tokio::test]
 async fn context_and_prompt_deduped_across_retry_attempts() {
     let data_path = std::env::temp_dir().join(format!("agent-hook-retry-{}", uuid::Uuid::new_v4()));
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "context-and-prompt-deduped-across-retry-",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -611,7 +611,7 @@ async fn steering_input_is_published_once_when_claimed_owner_runs() {
         "agent-hook-steering-dedup-{}",
         uuid::Uuid::new_v4()
     ));
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "steering-input-is-published-once-when-cl",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -662,7 +662,7 @@ async fn steering_input_is_published_once_when_claimed_owner_runs() {
 async fn hook_maps_managed_timeout_result_to_timed_out_lifecycle() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-timeout-{}", uuid::Uuid::new_v4()));
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "hook-maps-managed-timeout-result-to-time",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -725,7 +725,7 @@ async fn hook_maps_managed_timeout_result_to_timed_out_lifecycle() {
 async fn hook_maps_unknown_tool_dispatch_to_failed_lifecycle() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-unknown-tool-{}", uuid::Uuid::new_v4()));
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "hook-maps-unknown-tool-dispatch-to-faile",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -795,7 +795,7 @@ async fn hook_maps_unknown_tool_dispatch_to_failed_lifecycle() {
 async fn hook_persists_exact_canonical_output_stream_without_legacy_spill_rows() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-full-spill-{}", uuid::Uuid::new_v4()));
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "hook-persists-exact-canonical-output-str",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -859,7 +859,7 @@ async fn hook_interrupts_cancel_only_their_own_calls_as_the_lean_model_says() {
         .into_iter()
         .enumerate()
     {
-        let node_db = gents_inference::test_support::test_db(
+        let node_db = gents_store::test_support::TestStore::start(
             &format!("hook-interrupt-scope-{index}"),
             gents_session::test_support::no_lifecycle_plugins(),
         )
@@ -926,7 +926,7 @@ async fn hook_interrupts_cancel_only_their_own_calls_as_the_lean_model_says() {
 #[cfg(unix)]
 async fn interruption_leaves_background_workers_running() {
     use std::time::Duration;
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "interruption-leaves-background-workers-r",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -1071,7 +1071,7 @@ fn generated_interrupt_dispositions_follow_the_lean_model() {
 #[tokio::test]
 async fn generated_interrupt_dispositions_drive_in_flight_interrupt() {
     use gents_protocol::tool_call::AwaitMode;
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "generated-interrupt-dispositions-drive-i",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -1117,7 +1117,7 @@ async fn generated_interrupt_dispositions_drive_in_flight_interrupt() {
 async fn interrupt_cancels_native_tools_and_keeps_children_running() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-mixed-cancel-{}", uuid::Uuid::new_v4()));
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "interrupt-cancels-native-tools-and-keeps",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -1249,7 +1249,7 @@ async fn interrupt_cancels_native_tools_and_keeps_children_running() {
 #[tokio::test]
 async fn hook_can_fail_live_tool_call_without_conflating_timeout_or_cancel() {
     let data_path = std::env::temp_dir().join(format!("agent-hook-fail-{}", uuid::Uuid::new_v4()));
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "hook-can-fail-live-tool-call-without-con",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -1303,7 +1303,7 @@ async fn hook_can_fail_live_tool_call_without_conflating_timeout_or_cancel() {
 #[tokio::test]
 async fn streaming_turn_persists_full_assistant_history_in_sequence() {
     let data_path = std::env::temp_dir().join(format!("gents-hook-{}", uuid::Uuid::new_v4()));
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "streaming-turn-persists-full-assistant-h",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -1432,7 +1432,7 @@ async fn assistant_turn_materializes_durable_reasoning_into_agent_message() {
         "agent-hook-durable-reasoning-{}",
         uuid::Uuid::new_v4()
     ));
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "assistant-turn-materializes-durable-reas",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -1488,7 +1488,7 @@ async fn read_file_result_persists_raw_output() {
         "agent-hook-read-file-model-observation-{}",
         uuid::Uuid::new_v4()
     ));
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "read-file-result-persists-raw-output",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -1573,7 +1573,7 @@ async fn owned_tool_result_materializes_one_transcript_row() {
         "agent-hook-tool-result-message-dedupe-{}",
         uuid::Uuid::new_v4()
     ));
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "owned-tool-result-materializes-one-trans",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -1710,7 +1710,7 @@ async fn tool_result_message_dedupe_preserves_distinct_result_ids() {
         "agent-hook-tool-result-distinct-message-{}",
         uuid::Uuid::new_v4()
     ));
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "tool-result-message-dedupe-preserves-dis",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -1776,7 +1776,7 @@ async fn tool_result_message_dedupe_preserves_distinct_result_ids() {
 async fn accepted_tool_turns_keep_results_bound_to_their_assistant_headers() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-tool-turn-{}", uuid::Uuid::new_v4()));
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "accepted-tool-turns-keep-results-bound-t",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -1862,7 +1862,7 @@ async fn accepted_tool_turns_keep_results_bound_to_their_assistant_headers() {
 #[tokio::test]
 async fn remote_presentations_persist_the_same_selected_identity() {
     use gents_documents::{RemoteServiceTools, RemoteToolStyle, RemoteTools};
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "remote-presentations-persist-the-same-se",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -2064,7 +2064,7 @@ async fn background_execution_completion_wait_observes_task_abort_guard_drop() {
 async fn forged_lifecycle_sentinel_in_tool_output_persists_as_completed() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-forgery-{}", uuid::Uuid::new_v4()));
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "forged-lifecycle-sentinel-in-tool-output",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -2138,7 +2138,7 @@ async fn trusted_reported_failure_persists_typed_state_and_model_facing_text() {
         "agent-hook-reported-failure-{}",
         uuid::Uuid::new_v4()
     ));
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "trusted-reported-failure-persists-typed-",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -2204,7 +2204,7 @@ async fn trusted_reported_failure_persists_typed_state_and_model_facing_text() {
 async fn cancelled_tool_result_persists_cancelled_lifecycle_with_interrupt_cause() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-cancelled-{}", uuid::Uuid::new_v4()));
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "cancelled-tool-result-persists-cancelled",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -2274,7 +2274,7 @@ async fn cancelled_tool_result_persists_cancelled_lifecycle_with_interrupt_cause
 async fn real_bash_policy_denial_persists_typed_class_and_payload() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-real-denial-{}", uuid::Uuid::new_v4()));
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "real-bash-policy-denial-persists-typed-c",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -2367,7 +2367,7 @@ async fn plugin_child_requires_durable_completion_even_when_hook_is_fail_open() 
 
     let data_path =
         std::env::temp_dir().join(format!("plugin-child-hook-{}", uuid::Uuid::new_v4()));
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "plugin-child-requires-durable-completion",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -2442,7 +2442,7 @@ async fn plugin_child_timeout_is_child_terminal_and_parent_completes() {
 
     let data_path =
         std::env::temp_dir().join(format!("plugin-child-timeout-{}", uuid::Uuid::new_v4()));
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "plugin-child-timeout-is-child-terminal-a",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -2536,7 +2536,7 @@ async fn plugin_child_naming_a_job_tool_reaches_its_owner() {
 
     let data_path =
         std::env::temp_dir().join(format!("plugin-child-job-tool-{}", uuid::Uuid::new_v4()));
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "plugin-child-naming-a-job-tool-reaches-i",
         gents_session::test_support::no_lifecycle_plugins(),
     )

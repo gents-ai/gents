@@ -8,8 +8,9 @@ use serde_json::Value;
 pub const FIXTURE_DID: &str = "did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z";
 
 /// A started node with its own node identity, for fixtures that write rows as that node.
-pub async fn started_node(name: &str) -> gents_inference::test_support::TestDb {
-    gents_inference::test_support::test_db(name, crate::test_support::no_lifecycle_plugins()).await
+pub async fn started_node(name: &str) -> gents_store::test_support::TestStore {
+    gents_store::test_support::TestStore::start(name, crate::test_support::no_lifecycle_plugins())
+        .await
 }
 
 /// A fixed test key, so fixture rows can name its DID as a constant.

@@ -20,7 +20,7 @@ fn agent_delivery_matches_lean() {
 #[tokio::test]
 async fn remote_delivery_waits_for_authenticated_http_transport() {
     use gents_store::identity::NodeIdentity;
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "remote-delivery-waits-for-authenticated-",
         crate::test_support::no_lifecycle_plugins(),
     )

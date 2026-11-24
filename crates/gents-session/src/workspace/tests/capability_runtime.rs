@@ -8,7 +8,7 @@ use std::time::Duration;
 
 #[tokio::test]
 async fn workspace_completion_requires_selected_managed_agent() {
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "workspace-completion-selected-agent",
         crate::test_support::no_lifecycle_plugins(),
     )
@@ -194,7 +194,7 @@ async fn mutate(
 
 async fn runtime_seal_case(unowned: bool) {
     let fx = Fixture::new();
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "runtime-seal",
         crate::test_support::no_lifecycle_plugins(),
     )

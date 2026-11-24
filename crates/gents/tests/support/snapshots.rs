@@ -346,7 +346,7 @@ pub async fn wait_for_runtime_snapshot_as<F>(
 where
     F: Fn(&RuntimeSnapshot) -> bool,
 {
-    let data = super::live_inference::rows_when(
+    let data = gents_store::test_support::rows_when(
         access,
         "NodeRuntime",
         &runtime_snapshot_query(node_did),

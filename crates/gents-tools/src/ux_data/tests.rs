@@ -64,13 +64,13 @@ struct Fixture {
     client_did: identity::Did,
     node_did: String,
     other_node_did: String,
-    _db: gents_inference::test_support::TestDb,
+    _db: gents_store::test_support::TestStore,
 }
 
 impl Fixture {
     async fn new() -> Self {
         let home = tempfile::tempdir().unwrap();
-        let db = gents_inference::test_support::test_db(
+        let db = gents_store::test_support::TestStore::start(
             "ux-data",
             gents_session::test_support::no_lifecycle_plugins(),
         )
@@ -705,7 +705,7 @@ async fn http_operator_signs_ux_create_from_the_verified_installed_pack() {
         } else {
             unsigned =
                 ConfigAccess::Graphql(gents_store::config_client::GraphqlEndpoint::as_principal(
-                    fixture._db.client_endpoint(),
+                    fixture._db.graphql_endpoint(),
                     fixture.client_did.as_str(),
                 ));
             &unsigned

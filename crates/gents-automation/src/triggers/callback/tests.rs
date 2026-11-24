@@ -911,7 +911,7 @@ fn callback_result_only_after_workspace_docs_are_durable() {
     ));
 }
 
-async fn test_node(name: &str) -> gents_inference::test_support::TestDb {
+async fn test_node(name: &str) -> gents_store::test_support::TestStore {
     super::test_node_builder(name).await
 }
 
@@ -1803,7 +1803,7 @@ fn every_invocation_origin_names_its_binding() {
 }
 
 struct Backlog {
-    _db: gents_inference::test_support::TestDb,
+    _db: gents_store::test_support::TestStore,
     node: Arc<defra_node::Node>,
     owner: String,
     access: gents_store::config_client::ConfigAccess,

@@ -185,7 +185,10 @@ fn write_portable_manifest_root(
     let source_home_env = temp_root.join(format!("source-{}", Uuid::new_v4().simple()));
     fs::create_dir_all(&source_home_env)?;
     let model_name = format!("mock-provision-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let agent_name = root
         .file_name()
         .and_then(|value| value.to_str())

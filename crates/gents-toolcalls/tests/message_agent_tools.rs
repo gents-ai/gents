@@ -452,7 +452,6 @@ async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
     let mut worker =
         gents_toolcalls::call::lifecycle::admission_fixture::claimed_signed_request_create_as_agent(
             &node,
-            &identity,
             caller_agent.as_ref(),
             create,
         )

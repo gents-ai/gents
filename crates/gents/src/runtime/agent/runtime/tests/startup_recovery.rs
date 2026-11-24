@@ -176,7 +176,11 @@ async fn wait_for_backend_probe_status(
 
 #[tokio::test]
 async fn run_agent_starts_when_startup_probe_discovers_selected_model() {
-    let mock_endpoint = MockModelEndpoint::start("default").unwrap();
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder("default")
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Refuse)
+            .start()
+            .unwrap();
     let fixture = held_runtime_fixture_with_status(
         "startup-probe-discovers-model",
         "backend-startup-probe",
@@ -362,7 +366,11 @@ async fn run_agent_fails_when_all_agents_are_unavailable_due_to_invalid_config()
 
 #[tokio::test]
 async fn router_generation_persistence_failure_terminates_run_agent_before_dispatch() {
-    let mock_endpoint = MockModelEndpoint::start("default").unwrap();
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder("default")
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Refuse)
+            .start()
+            .unwrap();
     let fixture = held_runtime_fixture_with_status(
         "router-generation-persistence-run-agent",
         "backend-router-generation-persistence",
@@ -426,7 +434,11 @@ async fn router_generation_persistence_failure_terminates_run_agent_before_dispa
 
 #[tokio::test]
 async fn slot_drain_failure_reaches_run_agent_after_external_shutdown() {
-    let mock_endpoint = MockModelEndpoint::start("default").unwrap();
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder("default")
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Refuse)
+            .start()
+            .unwrap();
     let fixture = held_runtime_fixture_with_status(
         "slot-drain-failure",
         "backend-slot-drain-failure",
@@ -488,7 +500,11 @@ async fn slot_drain_failure_reaches_run_agent_after_external_shutdown() {
 async fn startup_publication_follows_the_lean_persistence_model() {
     use gents_lean_vocab::families::startup_publication_startup;
     for case in gents_lean_vocab::families::startup_publication_startup::cases::<String>() {
-        let mock_endpoint = MockModelEndpoint::start("default").unwrap();
+        let mock_endpoint =
+            gents_inference::test_support::scripted_backend::ScriptedBackend::builder("default")
+                .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Refuse)
+                .start()
+                .unwrap();
         let fixture = held_runtime_fixture_with_status(
             "startup-publication",
             "backend-startup-publication",
@@ -593,7 +609,11 @@ async fn startup_publication_follows_the_lean_persistence_model() {
 /// shuts the generation-one slot down and `run_agent` returns only after it exits.
 #[tokio::test]
 async fn startup_source_failure_returns_only_after_the_slot_exits() {
-    let mock_endpoint = MockModelEndpoint::start("default").unwrap();
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder("default")
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Refuse)
+            .start()
+            .unwrap();
     let fixture = held_runtime_fixture_with_status(
         "startup-source-slot-join",
         "backend-startup-source-slot-join",
@@ -939,7 +959,11 @@ async fn wait_for_held_inference_state(
 
 #[tokio::test]
 async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity() {
-    let mock_endpoint = MockModelEndpoint::start_blocking_chat("default").unwrap();
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder("default")
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()
+            .unwrap();
     let fixture = held_runtime_fixture_with_status(
         "shutdown-waiting-request",
         "backend-blocked",
@@ -1073,7 +1097,11 @@ async fn generated_snapshot_demotions_preserve_healthy_agents() {
         ids
     }
 
-    let endpoint = MockModelEndpoint::start("default").unwrap();
+    let endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder("default")
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Refuse)
+            .start()
+            .unwrap();
     let fixture = held_runtime_fixture_with_status(
         "snapshot-demotion",
         "demotion-backend",
@@ -1196,8 +1224,18 @@ async fn write_runtime_documents(
 
 /// A node with runtime schemas, an identity and a default agent backend
 /// bound to the returned model endpoint, which the caller keeps alive.
-async fn missing_plugin_node(label: &str) -> (HeldRuntimeFixture, String, MockModelEndpoint) {
-    let endpoint = MockModelEndpoint::start("default").unwrap();
+async fn missing_plugin_node(
+    label: &str,
+) -> (
+    HeldRuntimeFixture,
+    String,
+    gents_inference::test_support::scripted_backend::ScriptedBackend,
+) {
+    let endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder("default")
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Refuse)
+            .start()
+            .unwrap();
     let fixture = held_runtime_fixture(
         &format!("startup-{label}"),
         &format!("backend-{label}"),
@@ -1720,7 +1758,11 @@ impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for StorageFu
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn storage_full_readiness_writes_do_not_fail_or_stall_shutdown() {
-    let mock_endpoint = MockModelEndpoint::start("default").unwrap();
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder("default")
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Refuse)
+            .start()
+            .unwrap();
     let fixture = held_runtime_fixture_with_status(
         "shutdown-storage-full",
         "backend-shutdown-storage-full",

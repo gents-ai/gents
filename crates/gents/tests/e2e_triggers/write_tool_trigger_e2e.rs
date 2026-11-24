@@ -271,7 +271,7 @@ async fn boot_agent_with_action_trigger(
         r#"{{EventSourceCursor(filter: {{owner_did: {{_eq: "{}"}}, source_collection: {{_eq: "ActionRequest"}}}}) {{consumer}}}}"#,
         escape_graphql_string(&node_did)
     );
-    crate::support::live_inference::rows_when(
+    gents_store::test_support::rows_when(
         &fixture.access,
         "EventSourceCursor",
         &cursor_query,

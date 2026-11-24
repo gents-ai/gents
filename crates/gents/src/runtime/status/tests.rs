@@ -24,8 +24,8 @@ struct NodeReadinessRow {
     updated_at: String,
 }
 
-async fn test_node() -> gents_inference::test_support::TestDb {
-    let db = gents_inference::test_support::test_db(
+async fn test_node() -> gents_store::test_support::TestStore {
+    let db = gents_store::test_support::TestStore::start(
         "status",
         gents_automation::lifecycle_hooks::composition(),
     )

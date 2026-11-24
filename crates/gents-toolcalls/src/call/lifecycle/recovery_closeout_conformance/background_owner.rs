@@ -21,7 +21,7 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
         } else {
             "task-deleted"
         };
-        let db = gents_inference::test_support::test_db(
+        let db = gents_store::test_support::TestStore::start(
             &format!("recovery-closeout-{name}"),
             gents_session::test_support::no_lifecycle_plugins(),
         )

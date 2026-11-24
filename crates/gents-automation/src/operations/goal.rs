@@ -440,7 +440,11 @@ fn target_name(target: GoalTarget) -> &'static str {
     }
 }
 
-fn audit_observation(goal: &GoalDocument, reason: &str, request_id: &str) -> GoalAuditObservation {
+pub(crate) fn audit_observation(
+    goal: &GoalDocument,
+    reason: &str,
+    request_id: &str,
+) -> GoalAuditObservation {
     if goal.last_blocked_request_id.as_deref() == Some(request_id) {
         GoalAuditObservation::SameRequest
     } else if goal.last_blocked_reason.as_deref() == Some(reason) {

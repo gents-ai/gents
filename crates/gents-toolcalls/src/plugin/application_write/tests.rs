@@ -38,8 +38,8 @@ fn call(operation: &str, input: Value, filter: Option<Value>) -> WriteParams {
         options,
     }
 }
-async fn fixture() -> (gents_inference::test_support::TestDb, WriteTool) {
-    let db = gents_inference::test_support::test_db(
+async fn fixture() -> (gents_store::test_support::TestStore, WriteTool) {
+    let db = gents_store::test_support::TestStore::start(
         "application-write",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -212,7 +212,7 @@ async fn managed_credentials_scope_and_injection_are_refused() {
 
 #[tokio::test]
 async fn native_relationship_input_uses_the_target_document_id() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "native-relationship-input-uses-the-targe",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -386,7 +386,7 @@ mod plugin {
         node: Arc<defra_node::Node>,
         runtime: identity::Did,
         agent: Arc<dyn gents_store::identity::NodeIdentity>,
-        _db: gents_inference::test_support::TestDb,
+        _db: gents_store::test_support::TestStore,
     }
 
     impl std::ops::Deref for Fixture {
@@ -398,7 +398,7 @@ mod plugin {
 
     async fn node() -> Fixture {
         use gents_store::identity::NodeIdentity;
-        let db = gents_inference::test_support::test_db(
+        let db = gents_store::test_support::TestStore::start(
             "application-write-plugin",
             gents_session::test_support::no_lifecycle_plugins(),
         )

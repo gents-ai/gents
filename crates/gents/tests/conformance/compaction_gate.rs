@@ -5,8 +5,8 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 use super::support::agent_requests::{canonical_now, RequestActors, RequestSeed};
 use super::support::interrupt::{managed_runtime_builder, spawn_runtime, BootedAgent};
-use super::support::streaming_backend::{
-    MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse,
+use gents_inference::test_support::scripted_backend::{
+    ScriptedBackend, StreamChunk, StreamPlan, StreamResponse,
 };
 
 const MODEL: &str = "default";
@@ -27,7 +27,7 @@ pub(super) async fn compaction_runtime_reduces_valid_canonical_history() {
             ..Default::default()
         })
         .expect("serialize canonical checkpoint");
-    let backend = MockStreamingBackend::start_with_plans(
+    let backend = ScriptedBackend::start_with_plans(
         MODEL,
         vec![
             StreamPlan::current_authored_user(

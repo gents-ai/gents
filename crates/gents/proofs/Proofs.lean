@@ -151,6 +151,7 @@ import Proofs.Tools.SelfConfig.Auth
 import Proofs.ToolCalls.TaskHooks
 
 import Proofs.Runtime.Eval
+import Proofs.Runtime.EvalUsage
 
 import Proofs.Runtime.Optimization
 

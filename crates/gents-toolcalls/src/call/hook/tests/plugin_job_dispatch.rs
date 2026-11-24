@@ -77,7 +77,7 @@ impl Default for Options {
 }
 
 struct Step0 {
-    db: gents_inference::test_support::TestDb,
+    db: gents_store::test_support::TestStore,
     user: gents_store::identity::KeyIdentity,
     owner: gents_store::config_client::ConfigAccess,
     caller: Arc<dyn NodeIdentity>,
@@ -408,7 +408,7 @@ async fn step0(output: Value, options: Options) -> Step0 {
 }
 
 async fn job_chain(
-    db: &gents_inference::test_support::TestDb,
+    db: &gents_store::test_support::TestStore,
     user: &gents_store::identity::KeyIdentity,
     owner: &gents_store::config_client::ConfigAccess,
     agent: &dyn NodeIdentity,

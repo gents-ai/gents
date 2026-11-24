@@ -5,7 +5,7 @@ use gents_store::config_client::{ConfigApplyTxn, RelationshipMatch};
 /// The served node, its User and selected Agent, and the numbers the model
 /// gives them.
 struct Served {
-    db: gents_inference::test_support::TestDb,
+    db: gents_store::test_support::TestStore,
     runtime: KeyIdentity,
     user: KeyIdentity,
     access: ConfigAccess,

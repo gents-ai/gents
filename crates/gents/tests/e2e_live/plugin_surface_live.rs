@@ -8,9 +8,8 @@ use serde_json::json;
 
 use super::plugin_goal_live::{completed_live_job, submit_with_cwd, LiveJobHarness};
 use super::plugin_job_support::PLUGIN;
-use crate::support::live_inference::{
-    boot_live_agent_with_options, rows_when, wait_for_request_terminal,
-};
+use crate::support::live_inference::{boot_live_agent_with_options, wait_for_request_terminal};
+use gents_store::test_support::rows_when;
 
 fn caller(h: &LiveJobHarness, session_id: &str) -> JobCaller {
     let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(

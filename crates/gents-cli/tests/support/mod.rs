@@ -16,7 +16,7 @@ pub use graphql::{
 };
 pub use mocks::{
     request_has_tool_result_message, request_system_message, request_tool_names,
-    request_tool_result_text, MockChatEndpoint, MockModelEndpoint, MockOpenAIEndpoint,
+    request_tool_result_text, MockChatEndpoint, MockOpenAIEndpoint,
 };
 pub use pack_preview::{assert_preview_hides_the_secret, documents_fixture_with_secret_variable};
 pub use process::{

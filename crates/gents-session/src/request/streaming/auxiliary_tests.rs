@@ -15,7 +15,7 @@ use gents_protocol::output::rows::{decode_output_segment_row, AGENT_OUTPUT_SEGME
 use gents_store::config_client::ConfigAccess;
 
 struct TitleFixture {
-    _db: gents_inference::test_support::TestDb,
+    _db: gents_store::test_support::TestStore,
     node: Arc<EmbeddedNode>,
     identity: gents_store::identity::KeyIdentity,
     agent: Arc<dyn gents_store::identity::NodeIdentity>,
@@ -31,7 +31,7 @@ async fn claimed_title_fixture() -> TitleFixture {
     };
     use gents_store::identity::NodeIdentity;
 
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "claimed-title-fixture-node",
         crate::test_support::no_lifecycle_plugins(),
     )

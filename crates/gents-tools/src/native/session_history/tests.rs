@@ -45,10 +45,10 @@ fn usage_duration_requires_valid_provider_intervals_and_excludes_queue_time() {
     );
 }
 
-async fn seeded_node() -> gents_inference::test_support::TestDb {
+async fn seeded_node() -> gents_store::test_support::TestStore {
     let identities = tempfile::tempdir().unwrap();
     let node_identity = pin_fixed_signing_identity(identities.path());
-    let db = gents_inference::test_support::test_db_as(
+    let db = gents_store::test_support::TestStore::start_as(
         "session-history",
         node_identity.did(),
         gents_session::test_support::no_lifecycle_plugins(),

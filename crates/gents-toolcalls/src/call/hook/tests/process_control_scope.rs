@@ -183,7 +183,7 @@ struct WaitObservation {
 /// deadline the hook times the wait call out and ends the turn instead of
 /// publishing the observer's envelope.
 async fn observe_wait_boundary(boundary: &str) -> WaitObservation {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         &format!("wait-boundary-{boundary}"),
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -348,7 +348,7 @@ async fn generated_wait_boundaries_preserve_background_process() {
 
 #[tokio::test]
 async fn accepted_cross_agent_process_controls_preserve_the_owners_running_job() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "accepted-cross-agent-process-controls-pr",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -528,7 +528,7 @@ mod job_control {
     use gents_store::config_client::ConfigAccess;
 
     struct JobHook {
-        _db: gents_inference::test_support::TestDb,
+        _db: gents_store::test_support::TestStore,
         node: Arc<EmbeddedNode>,
         executions: BackgroundExecutionRegistry,
         owner: DefraSessionHook,
@@ -538,7 +538,7 @@ mod job_control {
 
     impl JobHook {
         pub async fn new() -> Self {
-            let db = gents_inference::test_support::test_db(
+            let db = gents_store::test_support::TestStore::start(
                 "job-hook",
                 gents_session::test_support::no_lifecycle_plugins(),
             )

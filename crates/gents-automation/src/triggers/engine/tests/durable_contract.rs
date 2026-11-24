@@ -326,7 +326,7 @@ async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_wor
 #[tokio::test]
 async fn generated_fire_transactions_are_atomic_and_owner_scoped() {
     for case in gents_lean_vocab::families::trigger_delivery_fire_admission::cases() {
-        let node_db = gents_inference::test_support::test_db(
+        let node_db = gents_store::test_support::TestStore::start(
             "generated-fire-transactions-are-atomic-a",
             crate::lifecycle_hooks::composition(),
         )
@@ -520,7 +520,7 @@ async fn restart_outcome_recovery_matches_modeled_crash_boundaries() {
         })
         .await
         .unwrap();
-        let mut db = gents_inference::test_support::test_db_at(
+        let mut db = gents_store::test_support::TestStore::open_at(
             directory.path(),
             None,
             crate::lifecycle_hooks::composition(),
@@ -705,7 +705,7 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
         })
         .await
         .unwrap();
-        let db = gents_inference::test_support::test_db_at(
+        let db = gents_store::test_support::TestStore::open_at(
             directory.path(),
             None,
             crate::lifecycle_hooks::composition(),
@@ -967,7 +967,7 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
     for case in gents_lean_vocab::families::trigger_delivery_arrival_cursor::cases() {
         let input = &case.input;
         let name = &input.name;
-        let db = gents_inference::test_support::test_db(
+        let db = gents_store::test_support::TestStore::start(
             "arrival-checkpoints",
             crate::lifecycle_hooks::composition(),
         )
@@ -1302,7 +1302,7 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
         let input = &case.input;
         let name = &input.name;
         use gents_store::identity::NodeIdentity as _;
-        let db = gents_inference::test_support::test_db(
+        let db = gents_store::test_support::TestStore::start(
             "callback-checkpoints",
             crate::lifecycle_hooks::composition(),
         )
@@ -1604,7 +1604,7 @@ fn generated_session_key_cases_match_admission_and_config() {
 async fn budget_fixture(
     name: &str,
 ) -> (
-    gents_inference::test_support::TestDb,
+    gents_store::test_support::TestStore,
     gents_store::config_client::ConfigAccess,
     gents_store::config_client::ConfigAccess,
     ProductionMaterializer,

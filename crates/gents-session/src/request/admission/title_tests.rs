@@ -227,7 +227,7 @@ async fn lifecycle_state(node: &Arc<EmbeddedNode>, doc_id: &str) -> Option<Strin
 async fn replay_case(case: &LeanTitleRequestAdmissionCase, variation: Variation) -> Replay {
     let temp = tempfile::tempdir().expect("temporary identity directory");
     gents_store::test_support::pin_fixed_signing_identity(temp.path());
-    let node_db = gents_inference::test_support::test_db_as(
+    let node_db = gents_store::test_support::TestStore::start_as(
         "title-generated-case-node",
         gents_store::test_support::PIN_FIXED_DID,
         crate::test_support::no_lifecycle_plugins(),

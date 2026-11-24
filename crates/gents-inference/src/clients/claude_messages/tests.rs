@@ -1383,7 +1383,7 @@ fn usage_wiring_claude_live_messages_records_unified_headers() {
         .build()
         .expect("runtime")
         .block_on(async {
-            let db = crate::test_support::test_db(
+            let db = gents_store::test_support::TestStore::start(
                 "claude-live-usage",
                 gents_store::node_extension::Extensions::none(),
             )

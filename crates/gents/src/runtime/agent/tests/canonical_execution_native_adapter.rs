@@ -318,7 +318,7 @@ pub(crate) struct NativeCanonicalExecutionAdapter;
 
 pub(crate) struct NativeCanonicalExecution {
     node: Arc<EmbeddedNode>,
-    _identity_guard: crate::support::TestDb,
+    _identity_guard: gents_store::test_support::TestStore,
     access: gents_store::config_client::ConfigAccess,
     agent: Arc<dyn NodeIdentity>,
     requester_did: String,
@@ -1541,7 +1541,11 @@ impl NativeCanonicalExecutionAdapter {
             );
             let initial_session_id = format!("lean-session-{}", seed.session_id);
             let (db, user, owner, binding) =
-                crate::test_support::root::signed_test_node("lean-canonical-execution").await;
+                gents_inference::test_support::signed_test_node_from_db(
+                    crate::support::trial_store("lean-canonical-execution").await,
+                    "lean-canonical-execution",
+                )
+                .await;
             let identity = db.node_identity.clone();
             let node_did = identity.did().to_owned();
             let node = db.node.clone();

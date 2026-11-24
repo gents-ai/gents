@@ -173,7 +173,7 @@ async fn runtime_usage_rejects_a_different_node_identity() {
         gents_store::node_extension::Extensions::none(),
     )
     .await;
-    let other = crate::test_support::test_db(
+    let other = gents_store::test_support::TestStore::start(
         "usage-foreign-owner",
         gents_store::node_extension::Extensions::none(),
     )
@@ -987,7 +987,7 @@ async fn usage_cache_runtime_newer_follows_the_lean_model() {
         .await;
         let node = db.node.clone();
         let did = db.node_identity.did();
-        let other_db = crate::test_support::test_db(
+        let other_db = gents_store::test_support::TestStore::start(
             "usage-other-node",
             gents_store::node_extension::Extensions::none(),
         )

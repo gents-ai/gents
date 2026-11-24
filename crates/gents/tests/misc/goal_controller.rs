@@ -221,7 +221,7 @@ async fn boot_goal_background_handoff_with_plans(
     db: &TestDb,
     fixture: &crate::support::ManagedAgentFixture,
     request_id: &str,
-    child_plans: Vec<crate::support::streaming_backend::StreamPlan>,
+    child_plans: Vec<gents_inference::test_support::scripted_backend::StreamPlan>,
 ) -> GoalBackgroundHandoff {
     let did = db.node_identity.did();
     let agent_identity = fixture.agent.clone();
@@ -245,18 +245,20 @@ async fn boot_goal_background_handoff_with_plans(
             request_id,
             session_id: SESSION,
             prompt,
-            accepted_chunks: vec![crate::support::streaming_backend::StreamChunk::tool_call(
-                "goal-background-spawn",
-                "spawn_process",
-                serde_json::json!({
-                    "tool_name": "bash",
-                    "args": {
-                        "command": "python3",
-                        "args": ["-c", held_command]
-                    }
-                })
-                .to_string(),
-            )],
+            accepted_chunks: vec![
+                gents_inference::test_support::scripted_backend::StreamChunk::tool_call(
+                    "goal-background-spawn",
+                    "spawn_process",
+                    serde_json::json!({
+                        "tool_name": "bash",
+                        "args": {
+                            "command": "python3",
+                            "args": ["-c", held_command]
+                        }
+                    })
+                    .to_string(),
+                ),
+            ],
             child_plans,
             valid_until: None,
             request_hop: None,
@@ -356,7 +358,7 @@ struct ChildRow {
 
 #[tokio::test]
 async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_retry() {
-    use crate::support::streaming_backend::{
+    use gents_inference::test_support::scripted_backend::{
         StreamChunk, StreamPlan, StreamResponse, StreamScript,
     };
 

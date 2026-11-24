@@ -15,26 +15,26 @@ use defra_node::Node as EmbeddedNode;
 use events::{Bus, ChannelBus, EventName, Message, Subscription, Update};
 use gents_inference::backends::provider::BackendProviderKind;
 use gents_inference::resolved::ResolvedAgent;
-use gents_inference::test_support::TestDb;
 use gents_protocol::goal_status::GoalStatus;
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::RuntimeNode;
 use gents_store::subscription_source::UpdateSubscriptionSource;
+use gents_store::test_support::TestStore;
 use gents_store::{config_client::ConfigAccess, identity::NodeIdentity};
 use serde::Deserialize;
 use tokio::sync::{watch, Notify};
 use tokio_util::sync::CancellationToken;
 
-async fn test_db(name: &str) -> TestDb {
-    gents_inference::test_support::test_db(name, crate::lifecycle_hooks::composition()).await
+async fn test_db(name: &str) -> TestStore {
+    gents_store::test_support::TestStore::start(name, crate::lifecycle_hooks::composition()).await
 }
 
-async fn managed_agent(db: &TestDb) -> Arc<dyn NodeIdentity> {
+async fn managed_agent(db: &TestStore) -> Arc<dyn NodeIdentity> {
     managed_agent_with_binding(db).await.0
 }
 
 async fn managed_agent_with_binding(
-    db: &TestDb,
+    db: &TestStore,
 ) -> (
     Arc<dyn NodeIdentity>,
     gents_protocol::agent_identity::AgentIdentityBinding,
@@ -49,7 +49,7 @@ struct ManagedAgentFixture {
     pub binding: gents_protocol::agent_identity::AgentIdentityBinding,
 }
 
-async fn managed_fixture_user(db: &TestDb) -> gents_store::identity::KeyIdentity {
+async fn managed_fixture_user(db: &TestStore) -> gents_store::identity::KeyIdentity {
     let path = db.data_path().join("fixture-user.key");
     tokio::task::spawn_blocking(move || {
         gents_store::identity::KeyIdentity::load_or_create(path, None)
@@ -59,7 +59,7 @@ async fn managed_fixture_user(db: &TestDb) -> gents_store::identity::KeyIdentity
     .expect("create held test user")
 }
 
-async fn managed_agent_fixture(db: &TestDb) -> ManagedAgentFixture {
+async fn managed_agent_fixture(db: &TestStore) -> ManagedAgentFixture {
     use gents_documents::apply_desired_state_plan;
     use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 
@@ -107,7 +107,7 @@ async fn managed_agent_fixture(db: &TestDb) -> ManagedAgentFixture {
 }
 
 async fn install_managed_agent(
-    db: &TestDb,
+    db: &TestStore,
     access: &gents_store::config_client::ConfigAccess,
     user: &gents_store::identity::KeyIdentity,
     display_name: &str,
@@ -326,7 +326,7 @@ const SESSION: &str = "goal-session";
 const RESCAN: Duration = Duration::from_millis(20);
 
 async fn goal_creation_actors(
-    db: &TestDb,
+    db: &TestStore,
 ) -> (gents_store::identity::KeyIdentity, Arc<dyn NodeIdentity>) {
     let fixture = managed_agent_fixture(db).await;
     let admin = ConfigAccess::local_as(db.node.clone(), db.node_identity.did().parse().unwrap());
@@ -347,7 +347,7 @@ async fn goal_creation_actors(
 }
 
 async fn goal_fixture_request(
-    db: &TestDb,
+    db: &TestStore,
     user: &gents_store::identity::KeyIdentity,
     agent: &Arc<dyn NodeIdentity>,
     request_id: &str,
@@ -356,7 +356,7 @@ async fn goal_fixture_request(
 }
 
 async fn goal_fixture_usage(
-    db: &TestDb,
+    db: &TestStore,
     agent: &Arc<dyn NodeIdentity>,
     request_id: &str,
     request_doc: &str,
@@ -439,7 +439,7 @@ async fn goal_fixture_usage_for_node(
 }
 
 /// The working Agent's own signed access, the only actor its controller writes run as.
-fn agent_access(db: &TestDb, agent: &Arc<dyn NodeIdentity>) -> ConfigAccess {
+fn agent_access(db: &TestStore, agent: &Arc<dyn NodeIdentity>) -> ConfigAccess {
     ConfigAccess::local_managed_agent(
         db.node.clone(),
         agent.did().parse().unwrap(),
@@ -482,7 +482,7 @@ fn snapshot(local_did: &str, agent_did: &str) -> Arc<ActiveRuntimeSnapshot> {
 }
 
 async fn publish_node_readiness_for_agent(
-    db: &TestDb,
+    db: &TestStore,
     process_state: gents_protocol::row::NodeReadinessProcessState,
     behavior: Option<gents_protocol::row::AgentReadinessUnavailableReason>,
     agent_did: &str,
@@ -557,7 +557,7 @@ async fn publish_node_readiness_for_agent(
 }
 
 async fn source_for_agent(
-    db: &TestDb,
+    db: &TestStore,
     agent_identity: &Arc<dyn NodeIdentity>,
 ) -> (GoalSource, watch::Sender<Arc<ActiveRuntimeSnapshot>>) {
     publish_node_readiness_for_agent(
@@ -571,7 +571,7 @@ async fn source_for_agent(
 }
 
 fn agent_snapshot(
-    db: &TestDb,
+    db: &TestStore,
     agent_identity: &Arc<dyn NodeIdentity>,
 ) -> Arc<ActiveRuntimeSnapshot> {
     let node = test_node_for(db.node_identity.clone(), agent_identity.did());
@@ -586,7 +586,7 @@ fn agent_snapshot(
 }
 
 fn unready_source_for_agent(
-    db: &TestDb,
+    db: &TestStore,
     agent_identity: &Arc<dyn NodeIdentity>,
 ) -> (GoalSource, watch::Sender<Arc<ActiveRuntimeSnapshot>>) {
     let (tx, rx) = watch::channel(agent_snapshot(db, agent_identity));
@@ -706,7 +706,7 @@ async fn assert_stale_controller_cannot_mutate_new_continuation(status: GoalStat
 }
 
 async fn signed_goal_backed_request(
-    db: &TestDb,
+    db: &TestStore,
     agent: &Arc<dyn NodeIdentity>,
     request_id: &str,
 ) -> gents_protocol::request_admission::AgentRequestCreate {
@@ -781,7 +781,7 @@ const RENDERED_LIMIT: &str =
     "provider usage limit reached (resets at 2026-07-15T05:00:00Z): capped";
 
 async fn usage_limited_goal_after_failed_request(
-    db: &TestDb,
+    db: &TestStore,
     agent: &Arc<dyn NodeIdentity>,
     access: &ConfigAccess,
 ) -> Option<String> {
@@ -810,7 +810,7 @@ async fn usage_limited_goal_after_failed_request(
 }
 
 async fn seed_a_passed_reset(
-    db: &TestDb,
+    db: &TestStore,
     opted_in: bool,
 ) -> (
     gents_store::identity::KeyIdentity,
@@ -862,7 +862,7 @@ async fn seed_a_passed_reset(
     (user, agent, access)
 }
 
-async fn goal_and_children(db: &TestDb, access: &ConfigAccess) -> (Option<GoalStatus>, usize) {
+async fn goal_and_children(db: &TestStore, access: &ConfigAccess) -> (Option<GoalStatus>, usize) {
     let goal = load_goal_as(access, db.node_identity.did())
         .await
         .expect("goal exists");
@@ -899,7 +899,7 @@ async fn goal_after_a_passed_reset(name: &str, opted_in: bool) -> (Option<GoalSt
 }
 
 async fn seed_same_second_canonical_goal_child(
-    db: &TestDb,
+    db: &TestStore,
     user: &gents_store::identity::KeyIdentity,
     agent: &Arc<dyn NodeIdentity>,
     access: &ConfigAccess,
@@ -1044,7 +1044,7 @@ async fn reject_before_claim(access: &ConfigAccess, doc_id: &str, reason: &str) 
 }
 
 async fn goal_fixture_request_with_state(
-    db: &TestDb,
+    db: &TestStore,
     user: &gents_store::identity::KeyIdentity,
     agent: &Arc<dyn NodeIdentity>,
     request_id: &str,
@@ -1055,7 +1055,7 @@ async fn goal_fixture_request_with_state(
 }
 
 async fn goal_fixture_request_with_state_at(
-    db: &TestDb,
+    db: &TestStore,
     user: &gents_store::identity::KeyIdentity,
     agent: &Arc<dyn NodeIdentity>,
     request_id: &str,
@@ -1067,7 +1067,7 @@ async fn goal_fixture_request_with_state_at(
 }
 
 async fn goal_fixture_request_in_session_at(
-    db: &TestDb,
+    db: &TestStore,
     user: &gents_store::identity::KeyIdentity,
     agent: &Arc<dyn NodeIdentity>,
     session: &str,
@@ -1130,7 +1130,7 @@ async fn goal_fixture_request_in_session_at(
 }
 
 async fn reserve_goal_session(
-    db: &TestDb,
+    db: &TestStore,
     user: &gents_store::identity::KeyIdentity,
     agent: &Arc<dyn NodeIdentity>,
     session: &str,
@@ -1261,7 +1261,7 @@ async fn publish_owned_terminal_activity(
 }
 
 async fn goal_recovery_actors(
-    db: &TestDb,
+    db: &TestStore,
     request_id: &str,
     state: &str,
 ) -> (
@@ -1418,7 +1418,7 @@ async fn operator_resume_child_row_from_access(
 }
 
 async fn seed_operator_resume_parent_with_actors(
-    db: &TestDb,
+    db: &TestStore,
     user: &gents_store::identity::KeyIdentity,
     agent: &Arc<dyn NodeIdentity>,
     request_id: &str,
@@ -1438,7 +1438,7 @@ async fn seed_operator_resume_parent_with_actors(
 /// since only that Node's own Agent signs its lifecycle and P2P carries only
 /// discovery and enrollment, so no foreign terminal row can reach this runtime.
 async fn create_visible_foreign_collision(
-    db: &TestDb,
+    db: &TestStore,
     observer: &dyn NodeIdentity,
     request_id: &str,
     retry_key: Option<&str>,
@@ -1674,7 +1674,7 @@ async fn seed_lineage_tool(
 }
 
 async fn seed_lineage_parent(
-    db: &TestDb,
+    db: &TestStore,
     user: &gents_store::identity::KeyIdentity,
     agent: &Arc<dyn NodeIdentity>,
     request_id: &str,

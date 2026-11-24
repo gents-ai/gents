@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Notify;
 
 struct QueueFixture {
-    db: gents_inference::test_support::TestDb,
+    db: gents_store::test_support::TestStore,
     user: gents_store::identity::KeyIdentity,
     client: ConfigAccess,
     agent: Arc<dyn NodeIdentity>,

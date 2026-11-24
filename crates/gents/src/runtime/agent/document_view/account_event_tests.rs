@@ -26,7 +26,11 @@ async fn account_events_never_repoint_a_profile() -> Result<()> {
         resolve_oauth_credential, set_account_enabled, store_sign_in, AccountPick,
     };
     let (db, _user, user_access, _binding) =
-        crate::test_support::root::signed_test_node("account-events-profile").await;
+        gents_inference::test_support::signed_test_node_from_db(
+            crate::support::trial_store("account-events-profile").await,
+            "account-events-profile",
+        )
+        .await;
     let node = db.node.clone();
     let did_owned = db.node_identity.did().to_string();
     let did = did_owned.as_str();

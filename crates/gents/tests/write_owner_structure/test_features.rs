@@ -1,12 +1,14 @@
 use super::support::{
-    all_rust_sources, package_name, repo_root, toml_file, Workspace, GENTS_TEST_FIXTURES,
-    NATIVE_E2E, SERVICE_ISOLATION, TEST_FEATURES,
+    all_rust_sources, repo_root, toml_file, Workspace, NATIVE_E2E, SERVICE_ISOLATION,
+    TEST_FEATURES, TEST_FIXTURES,
 };
 use std::collections::BTreeSet;
 
 /// `cfg_test` treats `test-fixtures` items as test code, which holds only
-/// while no production build can enable the feature.
-fn test_fixtures_leaks(manifest: &toml::Table, inherited: &toml::Table) -> Vec<String> {
+/// while no production build can enable any crate's `test-fixtures`: no
+/// normal, build or workspace dependency entry names it, and no feature other
+/// than a crate's own `test-fixtures` enables it, its own or a dependency's.
+fn test_fixtures_leaks(manifest: &toml::Table) -> Vec<String> {
     let mut tables = vec![(
         "workspace.dependencies",
         manifest
@@ -22,40 +24,32 @@ fn test_fixtures_leaks(manifest: &toml::Table, inherited: &toml::Table) -> Vec<S
     let mut leaks = Vec::new();
     for (kind, table) in tables {
         for (key, specification) in table.and_then(toml::Value::as_table).into_iter().flatten() {
-            if package_name(key, specification, inherited) == "gents"
-                && specification
-                    .get("features")
-                    .and_then(toml::Value::as_array)
-                    .is_some_and(|features| {
-                        features
-                            .iter()
-                            .any(|feature| feature.as_str() == Some(GENTS_TEST_FIXTURES))
-                    })
+            if specification
+                .get("features")
+                .and_then(toml::Value::as_array)
+                .is_some_and(|features| {
+                    features
+                        .iter()
+                        .any(|feature| feature.as_str() == Some(TEST_FIXTURES))
+                })
             {
                 leaks.push(format!("[{kind}] {key}"));
             }
         }
     }
-    let own = manifest
-        .get("package")
-        .and_then(|package| package.get("name"))
-        .and_then(toml::Value::as_str)
-        == Some("gents");
     for (feature, enabled) in manifest
         .get("features")
         .and_then(toml::Value::as_table)
         .into_iter()
         .flatten()
     {
-        if enabled
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(toml::Value::as_str)
-            .any(|entry| {
-                matches!(entry, "gents/test-fixtures" | "gents?/test-fixtures")
-                    || (own && entry == GENTS_TEST_FIXTURES)
-            })
+        if feature != TEST_FIXTURES
+            && enabled
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(toml::Value::as_str)
+                .any(|entry| entry.rsplit('/').next() == Some(TEST_FIXTURES))
         {
             leaks.push(format!("[features] {feature}"));
         }
@@ -64,15 +58,10 @@ fn test_fixtures_leaks(manifest: &toml::Table, inherited: &toml::Table) -> Vec<S
 }
 
 #[test]
-fn gents_test_fixtures_stay_dev_only() {
+fn test_fixtures_stay_dev_only() {
     let root = repo_root();
     let workspace = toml_file(&root.join("Cargo.toml"));
-    let inherited = workspace["workspace"]
-        .get("dependencies")
-        .and_then(toml::Value::as_table)
-        .cloned()
-        .unwrap_or_default();
-    let mut leaks = test_fixtures_leaks(&workspace, &inherited)
+    let mut leaks = test_fixtures_leaks(&workspace)
         .into_iter()
         .map(|site| format!("Cargo.toml {site}"))
         .collect::<Vec<_>>();
@@ -83,35 +72,31 @@ fn gents_test_fixtures_stay_dev_only() {
         let member = member.as_str().expect("member path");
         let manifest = toml_file(&root.join(member).join("Cargo.toml"));
         leaks.extend(
-            test_fixtures_leaks(&manifest, &inherited)
+            test_fixtures_leaks(&manifest)
                 .into_iter()
                 .map(|site| format!("{member}/Cargo.toml {site}")),
         );
     }
     assert!(
         leaks.is_empty(),
-        "the gents `test-fixtures` feature is enabled only from [dev-dependencies]:\n{}",
+        "a crate's `test-fixtures` feature is enabled only from [dev-dependencies] or another crate's `test-fixtures`:\n{}",
         leaks.join("\n")
     );
 }
 
 #[test]
 fn test_fixtures_fence_flags_production_and_default_enablement() {
-    let leaks = |manifest: &str| {
-        let manifest: toml::Table = manifest.parse().expect("parse manifest");
-        let inherited = manifest
-            .get("workspace")
-            .and_then(|workspace| workspace.get("dependencies"))
-            .and_then(toml::Value::as_table)
-            .cloned()
-            .unwrap_or_default();
-        test_fixtures_leaks(&manifest, &inherited)
-    };
+    let leaks = |manifest: &str| test_fixtures_leaks(&manifest.parse().expect("parse manifest"));
     for (manifest, expected) in [
         (
             r#"[dependencies]
             gents = { path = "../gents", features = ["test-fixtures"] }"#,
             "[dependencies] gents",
+        ),
+        (
+            r#"[dependencies]
+            store = { package = "gents-store", path = "../gents-store", features = ["test-fixtures"] }"#,
+            "[dependencies] store",
         ),
         (
             r#"[build-dependencies]
@@ -120,22 +105,27 @@ fn test_fixtures_fence_flags_production_and_default_enablement() {
         ),
         (
             r#"[target.'cfg(unix)'.dependencies]
-            gents = { path = "../gents", features = ["test-fixtures"] }"#,
-            "[dependencies] gents",
+            gents-session = { path = "../gents-session", features = ["test-fixtures"] }"#,
+            "[dependencies] gents-session",
         ),
         (
             r#"[workspace.dependencies]
-            gents = { path = "crates/gents", features = ["test-fixtures"] }"#,
-            "[workspace.dependencies] gents",
+            gents-documents = { path = "crates/gents-documents", features = ["test-fixtures"] }"#,
+            "[workspace.dependencies] gents-documents",
         ),
         (
             r#"[features]
-            fixtures = ["gents/test-fixtures"]"#,
+            fixtures = ["gents-inference/test-fixtures"]"#,
             "[features] fixtures",
         ),
         (
+            r#"[features]
+            live = ["gents-store?/test-fixtures"]"#,
+            "[features] live",
+        ),
+        (
             r#"[package]
-            name = "gents"
+            name = "gents-desktop-core"
             [features]
             default = ["test-fixtures"]
             test-fixtures = []"#,
@@ -146,20 +136,14 @@ fn test_fixtures_fence_flags_production_and_default_enablement() {
     }
     for manifest in [
         r#"[dev-dependencies]
-        gents = { path = "../gents", features = ["test-fixtures"] }"#,
+        gents-store = { path = "../gents-store", features = ["test-fixtures"] }"#,
         r#"[dependencies]
-        gents = { path = "../gents", features = ["live-e2e"] }
-        other = { path = "../other", features = ["test-fixtures"] }"#,
+        gents = { path = "../gents", features = ["live-e2e"] }"#,
         r#"[package]
-        name = "gents-desktop-core"
-        [features]
-        default = ["test-fixtures"]
-        test-fixtures = []"#,
-        r#"[package]
-        name = "gents"
+        name = "gents-inference"
         [features]
         test-home-guard = []
-        test-fixtures = ["test-home-guard"]"#,
+        test-fixtures = ["test-home-guard", "gents-store/test-fixtures", "gents-documents?/test-fixtures"]"#,
     ] {
         assert!(leaks(manifest).is_empty(), "{manifest}");
     }

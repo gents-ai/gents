@@ -1,33 +1,22 @@
 use gents_protocol::request_lifecycle::RequestLifecycleState;
-use gents_session::request::lifecycle::test_support::{
-    agent_access, agent_identity, claimed_owner_caused_by, request_row, test_node,
-};
+use gents_session::request::lifecycle::test_support::{agent_access, request_row, test_node};
 use gents_session::request::lifecycle::TriggerLineage;
-use std::time::Duration;
 
 #[tokio::test]
 async fn latest_only_supersession_settles_parked_and_resuming_fires() {
     use gents_session::request::lifecycle::backend_wait::{wake_parked_execution, WakeResult};
     for resuming in [false, true] {
-        let (node, _db, identity, agent) = test_node().await;
+        let (node, home, identity, agent) = test_node().await;
         let access = agent_access(&node, &identity, &agent);
-        let mut lifecycle = claimed_owner_caused_by(
-            &node,
-            &identity,
-            &agent,
-            TriggerLineage {
+        let mut lifecycle = gents_session::test_support::ClaimedRequest::self_signed(&home, &agent)
+            .backend("lease-test")
+            .caused_by(TriggerLineage {
                 trigger_id: Some("latest".to_owned()),
                 ..Default::default()
-            },
-        )
-        .await;
-        let writer = gents_session::request::streaming::DefraStreamWriter::new_managed(
-            node.clone(),
-            agent_identity(&identity, &agent).as_ref(),
-            Duration::ZERO,
-        )
-        .unwrap();
-        lifecycle.begin_owned_execution(&writer).await.unwrap();
+            })
+            .drive(gents_session::test_support::Stage::Executing)
+            .await
+            .lifecycle;
         let doc_id = lifecycle.request().doc_id.clone();
         let node_did = lifecycle.request().node_did.clone();
         assert!(lifecycle.park_for_backend().await.unwrap());

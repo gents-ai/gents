@@ -68,7 +68,8 @@ pub(super) async fn install(
     )
     .await
     .context("bootstrapping the evaluator-owned trial node")?;
-    let provisioner = gents_pack::pack::AgentProvisioner::local(&home.node, home.identity.as_ref());
+    let provisioner =
+        gents_pack::pack::AgentProvisioner::local(&home.node, home.node_identity.as_ref());
     let config = load_pack_install_config_with_provisioner(
         &planning_access,
         &manifest,
@@ -281,7 +282,7 @@ async fn install_core_packs(
         return Ok(());
     }
     let access = home.local_client_access(&spec.evaluator_did)?;
-    let identity = home.identity.clone();
+    let identity = home.node_identity.clone();
     let runtime = move || -> Result<std::sync::Arc<dyn gents_store::identity::NodeIdentity>> {
         Ok(identity.clone())
     };
@@ -320,7 +321,10 @@ fn trial_wires_through_its_own_store(
     })
 }
 
-pub(crate) async fn grant_trial_operations(home: &EmbeddedHome, target: &str) -> Result<()> {
+pub(crate) async fn grant_trial_operations(
+    home: &gents_store::local::home::ServedHome,
+    target: &str,
+) -> Result<()> {
     use gents_store::config_client::NodePermission;
 
     let owner = ConfigAccess::local_as(home.node.clone(), ::identity::Did::new(home.did())?);
@@ -536,8 +540,10 @@ async fn install_fixtures(
                 .values()
                 .find(|binding| binding.agent_did == agent_did)
                 .context("expired request fixture references an unknown agent binding")?;
-            let agent =
-                gents_store::identity::resolve_agent_identity(home.identity.as_ref(), binding)?;
+            let agent = gents_store::identity::resolve_agent_identity(
+                home.node_identity.as_ref(),
+                binding,
+            )?;
             expired_request::install(access, &document, home, evaluator, agent.as_ref()).await?;
             continue;
         }
@@ -560,8 +566,10 @@ async fn install_fixtures(
                 .values()
                 .find(|binding| binding.agent_did == did)
                 .context("agent-owned fixture references an unknown agent binding")?;
-            let identity =
-                gents_store::identity::resolve_agent_identity(home.identity.as_ref(), binding)?;
+            let identity = gents_store::identity::resolve_agent_identity(
+                home.node_identity.as_ref(),
+                binding,
+            )?;
             Some(ConfigAccess::local_managed_agent(
                 home.node.clone(),
                 ::identity::Did::new(did)?,
