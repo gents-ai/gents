@@ -169,10 +169,12 @@ async fn write_documents(
 #[tokio::test]
 async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
     crate::test_support::root::enable_scoped_event_capture();
-    let fixture = held_runtime_fixture(
+    let fixture = RuntimeHome::new(
         "control-watcher",
         "backend-control",
         "http://127.0.0.1:8111/v1",
+        1,
+        "healthy",
     )
     .await;
     let node = fixture.db.node.clone();
@@ -340,10 +342,12 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
 
 #[tokio::test]
 async fn control_watcher_reconciles_a_local_write_without_the_replication_debounce() {
-    let fixture = held_runtime_fixture(
+    let fixture = RuntimeHome::new(
         "control-watcher-local",
         "backend-control",
         "http://127.0.0.1:8111/v1",
+        1,
+        "healthy",
     )
     .await;
     let node = fixture.db.node.clone();
@@ -445,10 +449,12 @@ fn the_reconcile_deadline_matches_the_lean_model() {
 #[tokio::test]
 async fn sustained_access_changes_do_not_starve_a_pending_control_change() {
     use events::Bus as _;
-    let fixture = held_runtime_fixture(
+    let fixture = RuntimeHome::new(
         "control-watcher-busy",
         "backend-control",
         "http://127.0.0.1:8114/v1",
+        1,
+        "healthy",
     )
     .await;
     let node = fixture.db.node.clone();
@@ -556,10 +562,12 @@ async fn sustained_access_changes_do_not_starve_a_pending_control_change() {
 #[tokio::test]
 async fn control_watcher_demotes_and_recovers_agent_on_measured_health_flip() {
     crate::test_support::root::enable_scoped_event_capture();
-    let fixture = held_runtime_fixture(
+    let fixture = RuntimeHome::new(
         "control-watcher-health",
         "backend-measured",
         "http://127.0.0.1:8113/v1",
+        1,
+        "healthy",
     )
     .await;
     let node = fixture.db.node.clone();
@@ -686,10 +694,12 @@ async fn control_watcher_demotes_and_recovers_agent_on_measured_health_flip() {
 #[tokio::test]
 async fn control_watcher_recovers_after_resolve_error() {
     crate::test_support::root::enable_scoped_event_capture();
-    let fixture = held_runtime_fixture(
+    let fixture = RuntimeHome::new(
         "control-watcher-recover",
         "backend-control-recover",
         "http://127.0.0.1:8112/v1",
+        1,
+        "healthy",
     )
     .await;
     let node = fixture.db.node.clone();
@@ -767,10 +777,12 @@ async fn control_watcher_recovers_after_resolve_error() {
 
 #[tokio::test]
 async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
-    let fixture = held_runtime_fixture(
+    let fixture = RuntimeHome::new(
         "control-watcher-tools",
         "backend-control-tools",
         "http://127.0.0.1:8113/v1",
+        1,
+        "healthy",
     )
     .await;
     let node = fixture.db.node.clone();
@@ -877,10 +889,12 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
 
 #[tokio::test]
 async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid() {
-    let fixture = held_runtime_fixture(
+    let fixture = RuntimeHome::new(
         "control-watcher-settle",
         "backend-settle",
         "http://127.0.0.1:8114/v1",
+        1,
+        "healthy",
     )
     .await;
     let node = fixture.db.node.clone();

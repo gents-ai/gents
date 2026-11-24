@@ -19,6 +19,10 @@ use gents_store::graphql::escape_graphql_string;
 /// Reconcile-phase transitions are only observable through this event stream:
 /// `NodeRuntime.reconcile_phase` holds only the phase the runtime is in now.
 pub(crate) const RECONCILE_PHASE_EVENT_TARGET: &str = "gents.runtime.reconcile_phase";
+/// Emitted with `agent_did` and `generation` once a retired Agent slot's task
+/// has joined: its workers have finished every call they held and released
+/// the slot.
+pub(crate) const RETIRED_SLOT_EVENT_TARGET: &str = "gents.runtime.retired_slot";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RuntimeStatusRow {

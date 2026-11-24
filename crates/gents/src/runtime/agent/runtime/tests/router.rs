@@ -70,7 +70,7 @@ async fn invalid_execution_origin_route_rejection_terminalizes_without_stopping_
     let node = db.node.clone();
     let root = db.node_identity.clone();
     let agent = gents_store::identity::resolve_agent_identity(root.as_ref(), &binding).unwrap();
-    grant_held_agent_operations(&node, root.as_ref(), agent.as_ref()).await;
+    grant_agent_operations(&node, root.as_ref(), agent.as_ref()).await;
     let node_did = root.did();
     let agent_did = agent.did();
     let doc_id = create_held_agent_request(
@@ -152,7 +152,7 @@ async fn unresolvable_session_terminalizes_the_request_at_the_attempt_bound() {
     let node = db.node.clone();
     let root = db.node_identity.clone();
     let agent = gents_store::identity::resolve_agent_identity(root.as_ref(), &binding).unwrap();
-    grant_held_agent_operations(&node, root.as_ref(), agent.as_ref()).await;
+    grant_agent_operations(&node, root.as_ref(), agent.as_ref()).await;
     let node_did = root.did().to_owned();
     let agent_did = agent.did().to_owned();
     let doc_id = create_held_agent_request(
