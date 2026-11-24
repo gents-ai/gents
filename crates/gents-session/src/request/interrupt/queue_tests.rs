@@ -95,11 +95,13 @@ async fn fixture(case: &ModeledCase) -> QueueFixture {
         Some(case.node_id),
         "modeled requester scope"
     );
-    let (db, user, client, binding) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         &format!("interrupt-queue-{}", case.name),
         crate::test_support::no_lifecycle_plugins(),
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, client) = signed_home.into_parts();
     let agent =
         gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
     let agent_access = ConfigAccess::local_managed_agent(

@@ -520,11 +520,13 @@ pub async fn fixture_with_provider_payload_options(
 ) -> ReplayFixture {
     use crate::request::lifecycle::{RequestIdentity, RequestSigner, RequestSpec};
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
-    let (db, user, user_access, binding) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "canonical-replay",
         crate::test_support::no_lifecycle_plugins(),
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, user_access) = signed_home.into_parts();
     let node = db.node.clone();
     let node_did = db.node_identity.did().to_owned();
     let requester_did = user.did().to_owned();
