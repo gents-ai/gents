@@ -188,7 +188,6 @@ pub(crate) async fn start_running_in_txn(
                 txn,
                 &start.agent,
                 &start.session,
-                start.requester.as_deref(),
                 row["interrupt_generation"].as_i64(),
             )
             .await?

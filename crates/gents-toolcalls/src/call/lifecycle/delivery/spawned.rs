@@ -302,7 +302,6 @@ impl ToolCallLifecycle {
                             txn,
                             &node_did,
                             &session_id,
-                            requester_did.as_deref(),
                             request_row["interrupt_generation"].as_i64(),
                         )
                         .await?

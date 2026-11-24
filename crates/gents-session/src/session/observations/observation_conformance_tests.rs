@@ -211,7 +211,8 @@ async fn generated_session_advances_drive_the_claim_observation() {
         let input = case.input.clone();
         let after = ConfigAccess::transact_local_idempotent(
             &node,
-            None,
+            node.node_identity_did()
+                .map(|did| ::identity::Did::new(did).expect("node DID")),
             IdempotentTransactionRetry::Standard,
             "test.session.generated_advance",
             |txn| {
@@ -265,7 +266,8 @@ async fn generated_session_refreshes_drive_the_request_observation() {
             serde_json::from_value(serde_json::to_value(&input.rows).unwrap()).unwrap();
         let after = ConfigAccess::transact_local_idempotent(
             &node,
-            None,
+            node.node_identity_did()
+                .map(|did| ::identity::Did::new(did).expect("node DID")),
             IdempotentTransactionRetry::Standard,
             "test.session.generated_refresh",
             |txn| {

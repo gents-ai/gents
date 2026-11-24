@@ -379,6 +379,10 @@ pub(crate) enum ClaimAdmissionError {
         existing_agent_did: String,
         requested_agent_did: String,
     },
+    /// Lean `InterruptGeneration.claimRecord`: a request whose claim cannot
+    /// record its session's interrupt generation does not run.
+    #[error("session {session_id} has no interrupt marker this Agent can read, so no interrupt could reach the request and it does not run; check the session with agent_session_read")]
+    Uncovered { session_id: String },
 }
 
 pub fn is_claim_admission_error(error: &anyhow::Error) -> bool {

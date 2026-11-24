@@ -45,7 +45,6 @@ pub async fn observe_request_interrupted_at_with_access(
                     txn,
                     row["node_did"].as_str().unwrap_or_default(),
                     row["session_id"].as_str().unwrap_or_default(),
-                    row["requester_did"].as_str(),
                     gents_protocol::request_lifecycle::RequestLifecycleState::parse_opt(
                         row["lifecycle_state"].as_str(),
                     ),

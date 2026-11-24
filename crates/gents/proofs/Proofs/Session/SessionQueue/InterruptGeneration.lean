@@ -16,8 +16,10 @@ request active at its commit and the automated wakes pending at its commit;
 pending user input survives as the next turn. Its cut-off is its commit, not
 its scan: a wake committed after the scan and before the commit is drained.
 
-A session interrupt reads no request, so no write of a request delays it. An
-interrupt by request id also reads that request by id: a request that settles
+A session interrupt reads no request, so no write of a request delays it; a
+write of the session document does, since the marker's access check reads it
+(`only_marker_and_session_writers_abort_an_interrupt`). An interrupt by
+request id also reads that request by id: a request that settles
 meanwhile aborts it, rather than its bump passing a request claimed after the
 one it named. Every other write of that request, such as a lease renewal,
 aborts it as well and it is rebuilt from fresh reads; it lands while fewer such
@@ -86,6 +88,50 @@ holds when it is claimed was pending at an interrupt's commit: it is drained. -/
 def wakeAtClaim (recorded current : Generation) : WakeAtClaim :=
   if recorded < current then .drained else .runs
 
+/-- What a claim finds when it reads its session's marker. The session is the
+one named by the request's node and session id, whoever requested it: an
+auxiliary request the Agent requests in a User's session records that
+session's generation like any other. -/
+inductive MarkerRead where
+  /-- The claim read the marker by id. -/
+  | found (generation : Generation)
+  /-- No session of the request is readable. -/
+  | noSession
+  /-- The session is readable and its marker is not. -/
+  | unreadable
+  deriving DecidableEq, Repr
+
+/-- The generation a claim records, or `none` when it refuses the request. A
+claim that creates its request's session in its own transaction creates the
+marker at generation 0 there, and no interrupt can have passed a marker that
+has not committed, so it records 0. Any other claim that finds no marker
+refuses: a request that ran with no recorded generation could be interrupted
+by nothing, since `runningInterrupted` compares only what a claim recorded. -/
+def claimRecord (read : MarkerRead) (createsSession : Bool) : Option Generation :=
+  match read with
+  | .found generation => some generation
+  | .noSession => if createsSession then some 0 else none
+  | .unreadable => none
+
+/-- A claim that runs records the generation it read, or, creating the
+session, the generation its fresh marker holds; an interrupt committing after
+it passes that record. -/
+theorem a_claim_that_runs_is_covered (read : MarkerRead) (createsSession : Bool)
+    (g : Generation) (h : claimRecord read createsSession = some g) :
+    (read = .found g ∨ (read = .noSession ∧ createsSession = true ∧ g = 0)) ∧
+      runningInterrupted g (bump g) = true := by
+  refine ⟨?_, by simp [runningInterrupted, bump]⟩
+  cases read with
+  | found generation => simp [claimRecord] at h; subst h; exact Or.inl rfl
+  | noSession =>
+      cases createsSession <;> simp [claimRecord] at h
+      exact Or.inr ⟨rfl, rfl, h.symm⟩
+  | unreadable => simp [claimRecord] at h
+
+/-- A session whose marker its claimant cannot read runs nothing. -/
+theorem an_unreadable_marker_refuses_the_claim (createsSession : Bool) :
+    claimRecord .unreadable createsSession = none := rfl
+
 /-- A request claimed before the interrupt committed was active at the commit,
 so it is interrupted. -/
 theorem claimed_then_interrupted (g : Generation) :
@@ -123,19 +169,35 @@ theorem a_reader_of_the_marker_yields_to_the_interrupt
   TransactionFence.a_named_fence_fences reader interrupt (.pointRead marker)
     (by simp [TransactionFence.Fence.holds, List.contains_iff_mem, h_read, h_write])
 
-/-- The interrupt reads no document a claim, a wake publication or a terminal
-writes, and writes nothing they write, so none of them aborts it: only
-another interrupt of the session, which also writes the marker, does. -/
-theorem nothing_but_an_interrupt_aborts_an_interrupt
-    (interrupt other : TransactionFence.Footprint)
-    (h_reads : ∀ doc ∈ interrupt.pointReads, doc ∉ other.writes)
-    (h_writes : ∀ doc ∈ interrupt.writes, doc ∉ other.writes)
-    (h_unique : interrupt.uniqueInserts = [])
-    (h_scanned : interrupt.scanned = []) :
-    TransactionFence.fencedAgainst interrupt other = false := by
-  simp only [TransactionFence.fencedAgainst, TransactionFence.conflicts, h_unique, h_scanned,
-    List.any_nil, Bool.or_false, Bool.or_eq_false_iff, List.any_eq_false,
-    List.contains_iff_mem, decide_eq_true_eq]
-  exact ⟨fun doc h => h_reads doc h, fun doc h => h_writes doc h⟩
+/-- What a session interrupt's transaction does that the store validates: it
+reads the marker by id and writes it, and the marker's access check reads the
+session document, because the marker's read and update are the session's
+(`Identity.SessionInterrupt`: `parent->read`, `parent->update`). External
+premise (`a_session_write_aborts_a_session_interrupt`, gents-session): a write
+of the session document committed inside an interrupt's attempt aborts that
+attempt, and a write of the session's requests does not. -/
+def interruptFootprint (marker session : TransactionFence.Doc) : TransactionFence.Footprint :=
+  { TransactionFence.Footprint.empty with pointReads := [marker, session], writes := [marker] }
+
+/-- A writer of the session document aborts an interrupt attempt: a claim's
+session projection, a terminal's session observation, a title, a stop. -/
+theorem a_session_writer_aborts_an_interrupt (marker session : TransactionFence.Doc)
+    (writer : TransactionFence.Footprint) (h : session ∈ writer.writes) :
+    TransactionFence.fencedAgainst (interruptFootprint marker session) writer = true := by
+  simp [TransactionFence.fencedAgainst, TransactionFence.conflicts, interruptFootprint,
+    TransactionFence.Footprint.empty, List.contains_iff_mem, h]
+
+/-- Only a writer of the marker (another interrupt of the session) or of the
+session document aborts an interrupt attempt; a write of a request, a wake or
+any other document of the session does not. The interrupt therefore commits
+within its attempts whenever fewer marker and session writes land during one
+series of its attempts than it has attempts, the premise
+`InterruptCoverage.tla` checks (its `InterruptReads` configuration drops it). -/
+theorem only_marker_and_session_writers_abort_an_interrupt
+    (marker session : TransactionFence.Doc) (other : TransactionFence.Footprint)
+    (h_marker : marker ∉ other.writes) (h_session : session ∉ other.writes) :
+    TransactionFence.fencedAgainst (interruptFootprint marker session) other = false := by
+  simp [TransactionFence.fencedAgainst, TransactionFence.conflicts, interruptFootprint,
+    TransactionFence.Footprint.empty, List.contains_iff_mem, h_marker, h_session]
 
 end SessionQueue.InterruptGeneration

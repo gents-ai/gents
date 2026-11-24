@@ -327,14 +327,23 @@ where
                     .await?;
                     return Ok(None);
                 }
-                let marker = crate::session::interrupt_marker::read_for_session_in_txn(
+                let marker = crate::session::interrupt_marker::session_marker_in_txn(
                     txn,
                     &request.node_did,
                     &request.session_id,
-                    request.requester_did.as_deref(),
                 )
                 .await?;
-                if let Some(marker) = &marker {
+                let creates_session =
+                    request.purpose == gents_protocol::request_admission::RequestPurpose::Normal;
+                let Some(recorded_at_claim) =
+                    crate::session::interrupt_marker::claim_record(&marker, creates_session)
+                else {
+                    return Err(super::ClaimAdmissionError::Uncovered {
+                        session_id: request.session_id.clone(),
+                    }
+                    .into());
+                };
+                if let crate::session::interrupt_marker::SessionMarker::Found(marker) = &marker {
                     if super::queue::is_scheduled_automated_wake(request)
                         && crate::session::interrupt_marker::wake_drained_at_claim(
                             recorded_generation,
@@ -445,9 +454,7 @@ where
                     BackgroundCompletionClaimSnapshot::default()
                 };
                 let mut snapshot_fields = if capture_background_snapshot { snapshot.mutation_fields() } else { String::new() };
-                if let Some(marker) = &marker {
-                    snapshot_fields.push_str(&format!("interrupt_generation: {},", marker.generation));
-                }
+                snapshot_fields.push_str(&format!("interrupt_generation: {recorded_at_claim},"));
                 let mutation = build_mutation(&snapshot_fields);
                 let claimed = txn.execute_local_response(&mutation).await?;
                 let mut folded_selection = Vec::new();
@@ -462,6 +469,18 @@ where
                     crate::session::mailbox::claim_reply_in_txn(txn, request, claimed_at).await?;
                     super::materialize::apply_request_session_projection(txn, request, claimed_at)
                         .await?;
+                    if marker == crate::session::interrupt_marker::SessionMarker::NoSession {
+                        let created = crate::session::interrupt_marker::read_for_session_in_txn(
+                            txn,
+                            &request.node_did,
+                            &request.session_id,
+                        )
+                        .await?;
+                        anyhow::ensure!(
+                            created.is_some_and(|created| created.generation == recorded_at_claim),
+                            "the session this claim created has no marker at the generation it recorded"
+                        );
+                    }
                     folded_selection = super::queue::select_fold_in_claim_txn(
                         txn,
                         request,

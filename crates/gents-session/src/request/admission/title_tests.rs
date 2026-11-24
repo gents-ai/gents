@@ -274,6 +274,51 @@ async fn replay_case(case: &LeanTitleRequestAdmissionCase, variation: Variation)
         .await;
     }
     let request_agent = modeled_agent(&case.request.agent_did);
+    // Every request runs in a session its claimant reads, with that session's
+    // interrupt marker (`InterruptGeneration.claimRecord`).
+    {
+        let session_agent = modeled_agent(&case.session_agent);
+        let parent_agent = modeled_agent(&parent.agent_did);
+        let root: ::identity::Did = target.parse().expect("fixture node DID");
+        gents_store::config_client::ConfigAccess::local_as(node.clone(), root)
+            .transact_write("test.title_admission.session", |txn| {
+                let (session_agent, parent_agent, request_agent) =
+                    (&session_agent, &parent_agent, &request_agent);
+                Box::pin(async move {
+                    crate::session::ensure_session_in_txn(
+                        txn,
+                        crate::session::NewAgentSession {
+                            session_id: &case.request.session_id,
+                            node_did: target,
+                            agent_did: session_agent.did(),
+                            requester_did: Some(parent_agent.did()),
+                            title: None,
+                            provenance: None,
+                            created_at: &case.request.created_at,
+                        },
+                    )
+                    .await?;
+                    let session =
+                        gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
+                            txn,
+                            target,
+                            &case.request.session_id,
+                        )
+                        .await?
+                        .ok_or_else(|| anyhow::anyhow!("fixture session"))?;
+                    txn.add_actor_relationship(
+                        "AgentSession",
+                        &session.doc_id,
+                        "working_agent",
+                        &::identity::Did::new(request_agent.did())?,
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await
+            .expect("create the modeled session");
+    }
     // The modeled requester is the request's own Agent, the target node, or a
     // foreign principal.
     let requester = if case.request.requester_did == case.request.agent_did {

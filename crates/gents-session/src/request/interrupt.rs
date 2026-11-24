@@ -36,14 +36,11 @@ pub enum SessionInterruptError {
     Store(#[from] anyhow::Error),
 }
 
-/// A committed session interrupt: the marker's new generation and when, and
-/// the request its unvalidated scan saw running, which only labels the
-/// receipt (the generation, not the scan, decides what is interrupted).
+/// A committed session interrupt: the marker's new generation and when.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionInterrupted {
     pub generation: i64,
     pub interrupted_at: String,
-    pub active_request_id: Option<String>,
 }
 
 /// What a request interrupt found and did.
@@ -60,8 +57,11 @@ pub enum RequestInterrupt {
 
 /// Interrupts a session (Lean `InterruptGeneration`): reads the session's
 /// marker by id, writes one past its generation and stages the session-halt
-/// hook. It writes no request and decides on no scan, so only another
-/// interrupt of the session aborts it. The request active at its commit and
+/// hook. It reads no request, writes no request and decides on no scan; the marker's access
+/// check reads the session document, so another interrupt or a write of the
+/// session document aborts an attempt, and it commits while fewer of those
+/// land than it has attempts
+/// (`only_marker_and_session_writers_abort_an_interrupt`). The request active at its commit and
 /// the automated wakes pending at its commit recorded the generation it
 /// passed; pending user input runs as the next turn.
 pub async fn interrupt_session_in_txn(
@@ -92,12 +92,9 @@ pub async fn interrupt_session_in_txn(
         return Ok(Err(refused()));
     };
     crate::request::hooks::points::session_halt(txn, node_did, session_id).await?;
-    let active_request_id =
-        active_session_request_in_txn(txn, session_id, node_did, requester_did).await?;
     Ok(Ok(SessionInterrupted {
         generation: bumped.generation,
         interrupted_at: bumped.interrupted_at.unwrap_or_default(),
-        active_request_id,
     }))
 }
 
@@ -108,19 +105,20 @@ async fn bump_in_txn(
     interrupt_marker::bump_in_txn(txn, marker, &Utc::now().to_rfc3339()).await
 }
 
-/// The session interrupt the stop and message owners run inside their own
-/// transaction; a refusal is their error.
+/// The session interrupt the stop owner runs inside its own transaction, with
+/// the request its unvalidated scan saw running, which only labels the stop's
+/// receipt (the generation, not the scan, decides what is interrupted). The
+/// scan reads the session's requests, so a write of the running request
+/// aborts this transaction; a session interrupt alone does not scan
+/// ([`interrupt_session_in_txn`]). A refusal is the caller's error.
 pub async fn interrupt_active_session_in_txn(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
 ) -> Result<Option<String>> {
-    Ok(
-        interrupt_session_in_txn(txn, session_id, node_did, requester_did)
-            .await??
-            .active_request_id,
-    )
+    interrupt_session_in_txn(txn, session_id, node_did, requester_did).await??;
+    active_session_request_in_txn(txn, session_id, node_did, requester_did).await
 }
 
 /// Interrupts a request as its working Agent, signed by that Agent's managed
@@ -290,18 +288,20 @@ async fn interrupt_request_matching_in_txn(
             Ok(Ok(RequestInterrupt::InterruptedBeforeClaim))
         }
         _ => {
-            let Some(marker) = interrupt_marker::read_for_session_in_txn(
-                txn,
-                node_did,
-                session_id,
-                row["requester_did"].as_str(),
-            )
-            .await?
-            else {
-                return Ok(Err(SessionInterruptRefusal::NoMarker {
-                    session_id: session_id.to_owned(),
-                }));
-            };
+            let marker =
+                match interrupt_marker::session_marker_in_txn(txn, node_did, session_id).await? {
+                    interrupt_marker::SessionMarker::Found(marker) => marker,
+                    interrupt_marker::SessionMarker::NoSession => {
+                        return Ok(Err(SessionInterruptRefusal::NotPermitted {
+                            session_id: session_id.to_owned(),
+                        }))
+                    }
+                    interrupt_marker::SessionMarker::Unreadable => {
+                        return Ok(Err(SessionInterruptRefusal::NoMarker {
+                            session_id: session_id.to_owned(),
+                        }))
+                    }
+                };
             let recorded = row["interrupt_generation"].as_i64();
             if interrupt_marker::running_interrupted(recorded, marker.generation) {
                 return Ok(Ok(RequestInterrupt::Interrupted {
@@ -489,14 +489,13 @@ pub async fn request_interrupted_at_in_txn(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,
-    requester_did: Option<&str>,
     recorded: Option<i64>,
 ) -> Result<Option<String>> {
     if recorded.is_none() {
         return Ok(None);
     }
     Ok(
-        interrupt_marker::read_for_session_in_txn(txn, node_did, session_id, requester_did)
+        interrupt_marker::read_for_session_in_txn(txn, node_did, session_id)
             .await?
             .filter(|marker| interrupt_marker::running_interrupted(recorded, marker.generation))
             .map(|marker| marker.interrupted_at.unwrap_or_default()),
@@ -512,14 +511,12 @@ pub async fn observed_interrupted_at_in_txn(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,
-    requester_did: Option<&str>,
     state: Option<RequestLifecycleState>,
     recorded: Option<i64>,
     terminalized_at: Option<&str>,
 ) -> Result<Option<String>> {
     use interrupt_marker::Settlement;
-    let passed =
-        || request_interrupted_at_in_txn(txn, node_did, session_id, requester_did, recorded);
+    let passed = || request_interrupted_at_in_txn(txn, node_did, session_id, recorded);
     Ok(match interrupt_marker::settlement(state) {
         Settlement::Otherwise => None,
         Settlement::Unsettled => passed().await?,
@@ -545,7 +542,6 @@ pub async fn row_interrupted_in_txn(
         txn,
         node_did,
         session_id,
-        row.requester_did.as_deref(),
         row.lifecycle_state,
         row.interrupt_generation,
         row.terminalized_at.as_deref(),
@@ -576,7 +572,7 @@ pub async fn request_interrupted_at_by_doc_id_with_access(
         "interrupt fetch requires a physical request document id"
     );
     let query = format!(
-        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ node_did session_id requester_did lifecycle_state interrupt_generation terminalized_at }} }}"#,
+        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ node_did session_id lifecycle_state interrupt_generation terminalized_at }} }}"#,
         escape_graphql_string(request_doc_id)
     );
     access
@@ -595,7 +591,6 @@ pub async fn request_interrupted_at_by_doc_id_with_access(
                     txn,
                     row["node_did"].as_str().unwrap_or_default(),
                     row["session_id"].as_str().unwrap_or_default(),
-                    row["requester_did"].as_str(),
                     RequestLifecycleState::parse_opt(row["lifecycle_state"].as_str()),
                     row["interrupt_generation"].as_i64(),
                     row["terminalized_at"].as_str(),
@@ -638,7 +633,6 @@ pub fn spawn_request_interrupt_observer(
         doc_id: request.doc_id.clone(),
         node_did: request.node_did.clone(),
         session_id: request.session_id.clone(),
-        requester_did: request.requester_did.clone(),
         recorded: request.interrupt_generation,
     };
     tokio::spawn(async move {
@@ -661,7 +655,6 @@ struct WatchedRequest {
     doc_id: String,
     node_did: String,
     session_id: String,
-    requester_did: Option<String>,
     recorded: Option<i64>,
 }
 
@@ -670,13 +663,8 @@ impl WatchedRequest {
         let read = access
             .transact_readonly("interrupt.observer_marker", |txn| {
                 Box::pin(async move {
-                    interrupt_marker::read_for_session_in_txn(
-                        txn,
-                        &self.node_did,
-                        &self.session_id,
-                        self.requester_did.as_deref(),
-                    )
-                    .await
+                    interrupt_marker::read_for_session_in_txn(txn, &self.node_did, &self.session_id)
+                        .await
                 })
             })
             .await;
@@ -697,7 +685,6 @@ impl WatchedRequest {
                         txn,
                         &self.node_did,
                         &self.session_id,
-                        self.requester_did.as_deref(),
                         self.recorded,
                     )
                     .await

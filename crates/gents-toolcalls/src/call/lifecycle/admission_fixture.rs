@@ -1368,7 +1368,7 @@ pub async fn set_state(
                     .await?["data"]["AgentRequest"][0]
                     .clone();
                 Ok::<_, anyhow::Error>(
-                    gents_session::session::interrupt_marker::read_for_session_owner_in_txn(
+                    gents_session::session::interrupt_marker::read_for_session_in_txn(
                         txn,
                         row["node_did"].as_str().unwrap_or_default(),
                         row["session_id"].as_str().unwrap_or_default(),

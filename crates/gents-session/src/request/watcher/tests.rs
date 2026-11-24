@@ -699,6 +699,13 @@ async fn later_request_cannot_overtake_delivered_native_session_head() {
                 let doc_id = gents_store::graphql::created_doc_id(&created, "AgentSession")?;
                 txn.add_actor_relationship("AgentSession", &doc_id, "working_agent", agent)
                     .await?;
+                crate::session::interrupt_marker::create_in_txn(
+                    txn,
+                    &doc_id,
+                    session_input["node_did"].as_str().unwrap_or_default(),
+                    session_input["session_id"].as_str().unwrap_or_default(),
+                )
+                .await?;
                 Ok::<_, anyhow::Error>(())
             })
         })

@@ -568,7 +568,6 @@ async fn background_completion_transaction_attempt(
         txn,
         &parent.node_did,
         &parent.session_id,
-        parent.requester_did.as_deref(),
     )
     .await?;
     let matching = match (matching, &marker) {

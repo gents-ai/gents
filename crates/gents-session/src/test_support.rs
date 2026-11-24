@@ -837,7 +837,7 @@ pub async fn record_claim_generation(
                     ))
                     .await?["data"]["AgentRequest"][0]
                     .clone();
-                let marker = crate::session::interrupt_marker::read_for_session_owner_in_txn(
+                let marker = crate::session::interrupt_marker::read_for_session_in_txn(
                     txn,
                     row["node_did"].as_str().unwrap_or_default(),
                     row["session_id"].as_str().unwrap_or_default(),

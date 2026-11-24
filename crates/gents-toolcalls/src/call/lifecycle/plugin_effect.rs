@@ -439,7 +439,6 @@ pub(super) async fn validate_parent(
             txn,
             &binding.node_did,
             &binding.session_id,
-            binding.requester_did.as_deref(),
             request["interrupt_generation"].as_i64(),
         )
         .await?

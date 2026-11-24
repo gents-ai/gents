@@ -538,7 +538,7 @@ async fn newest_request(
         return Ok(None);
     };
     let interrupted_at =
-        crate::session::interrupt_marker::read_for_session_owner_in_txn(txn, node_did, session_id)
+        crate::session::interrupt_marker::read_for_session_in_txn(txn, node_did, session_id)
             .await?
             .and_then(|marker| marker.interrupted_at)
             .filter(|latch| !latch.is_empty());

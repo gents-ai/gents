@@ -25,8 +25,8 @@ pub fn bump(current: i64) -> i64 {
 }
 
 /// A running request is interrupted once the marker passes the generation its
-/// claim recorded (`InterruptGeneration.runningInterrupted`). A request that
-/// recorded nothing is never compared.
+/// claim recorded (`InterruptGeneration.runningInterrupted`). Every claim
+/// records one (`claim_record`); only a pending wake has recorded nothing.
 pub fn running_interrupted(recorded: Option<i64>, current: i64) -> bool {
     recorded.is_some_and(|recorded| recorded < current)
 }
@@ -58,9 +58,9 @@ pub fn wake_drained_at_claim(recorded: Option<i64>, current: i64) -> bool {
 }
 
 /// Creates the marker of a session this transaction has just created, as the
-/// session's creator, at generation 0, with the session as its parent. A
-/// transaction with no actor creates documents no actor owns and that document
-/// ACP does not govern, so the marker takes no relationship either.
+/// session's creator, at generation 0, and stages its `parent` relationship to
+/// the session in the same transaction, so whoever reads or updates the
+/// session reads or updates its marker (`Identity.SessionInterrupt`).
 pub async fn create_in_txn(
     txn: &ConfigApplyTxn<'_>,
     session_doc_id: &str,
@@ -78,10 +78,8 @@ pub async fn create_in_txn(
         )
         .await?;
     let doc_id = gents_store::graphql::created_doc_id(&created, COLLECTION)?;
-    if txn.actor_did().is_some() {
-        txn.add_resource_relationship(COLLECTION, &doc_id, "parent", "sessions", session_doc_id)
-            .await?;
-    }
+    txn.add_resource_relationship(COLLECTION, &doc_id, "parent", "sessions", session_doc_id)
+        .await?;
     Ok(doc_id)
 }
 
@@ -135,43 +133,70 @@ pub async fn read_in_txn(
     }))
 }
 
-/// Reads by id the marker of the session in the exact scope
-/// `(node_did, session_id, requester_did)`; a request whose requester is not
-/// its session's has no marker to record or compare.
-pub async fn read_for_session_in_txn(
-    txn: &ConfigApplyTxn<'_>,
-    node_did: &str,
-    session_id: &str,
-    requester_did: Option<&str>,
-) -> Result<Option<InterruptMarker>> {
-    let Some(session) = gents_store::config_client::agent_session::load_agent_session_row_in_txn(
-        txn,
-        node_did,
-        session_id,
-        requester_did,
-    )
-    .await?
-    else {
-        return Ok(None);
-    };
-    read_in_txn(txn, &session.doc_id).await
+/// What a reader of a session's marker finds (`InterruptGeneration.MarkerRead`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionMarker {
+    Found(InterruptMarker),
+    NoSession,
+    Unreadable,
 }
 
-/// Reads by id the marker of the session `(node_did, session_id)`, whatever
-/// its requester.
-pub async fn read_for_session_owner_in_txn(
+/// A session the caller reads whose marker it cannot read. The marker is
+/// created with its session and related to it in that transaction, so this is
+/// a broken session: nothing in it can be interrupted, and nothing runs in it.
+#[derive(Debug, thiserror::Error)]
+#[error("session {session_id} has no interrupt marker this caller can read, so no interrupt could reach its requests and none of them runs; check the session with agent_session_read")]
+pub struct UnreadableMarker {
+    pub session_id: String,
+}
+
+/// Reads the marker of the session `(node_did, session_id)` (unique), whoever
+/// requested it: every request of the session, an Agent's auxiliary request in
+/// a User's session included, records and compares that session's generation.
+pub async fn session_marker_in_txn(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,
-) -> Result<Option<InterruptMarker>> {
+) -> Result<SessionMarker> {
     let Some(session) = gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
         txn, node_did, session_id,
     )
     .await?
     else {
-        return Ok(None);
+        return Ok(SessionMarker::NoSession);
     };
-    read_in_txn(txn, &session.doc_id).await
+    Ok(match read_in_txn(txn, &session.doc_id).await? {
+        Some(marker) => SessionMarker::Found(marker),
+        None => SessionMarker::Unreadable,
+    })
+}
+
+/// [`session_marker_in_txn`] for a reader that has nothing to do without a
+/// session: `None` when no session is readable, [`UnreadableMarker`] when the
+/// session is and its marker is not.
+pub async fn read_for_session_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    node_did: &str,
+    session_id: &str,
+) -> Result<Option<InterruptMarker>> {
+    match session_marker_in_txn(txn, node_did, session_id).await? {
+        SessionMarker::Found(marker) => Ok(Some(marker)),
+        SessionMarker::NoSession => Ok(None),
+        SessionMarker::Unreadable => Err(UnreadableMarker {
+            session_id: session_id.to_owned(),
+        }
+        .into()),
+    }
+}
+
+/// The generation a claim records, or `None` when it refuses the request
+/// (`InterruptGeneration.claimRecord`).
+pub fn claim_record(read: &SessionMarker, creates_session: bool) -> Option<i64> {
+    match read {
+        SessionMarker::Found(marker) => Some(marker.generation),
+        SessionMarker::NoSession => creates_session.then_some(0),
+        SessionMarker::Unreadable => None,
+    }
 }
 
 /// Writes one past `marker.generation`; the marker is the only document the
@@ -209,4 +234,37 @@ pub async fn bump_in_txn(
         generation,
         interrupted_at: Some(at.to_owned()),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{claim_record, InterruptMarker, SessionMarker};
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum Read {
+        Found,
+        NoSession,
+        Unreadable,
+    }
+
+    #[test]
+    fn a_claim_records_the_generation_lean_decides() {
+        use gents_lean_vocab::families::interrupt_generation_claim_claim as family;
+        family::replay::<Read>(|input| {
+            let read = match input.read {
+                Read::Found => SessionMarker::Found(InterruptMarker {
+                    doc_id: "marker".into(),
+                    generation: i64::try_from(input.generation).expect("small generation"),
+                    interrupted_at: None,
+                }),
+                Read::NoSession => SessionMarker::NoSession,
+                Read::Unreadable => SessionMarker::Unreadable,
+            };
+            family::Output {
+                recorded: claim_record(&read, input.creates_session)
+                    .map(|generation| u64::try_from(generation).expect("generations count up")),
+            }
+        });
+    }
 }
