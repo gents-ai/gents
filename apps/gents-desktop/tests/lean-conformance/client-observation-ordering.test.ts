@@ -217,7 +217,10 @@ describe("generated startup gate and settings read", () => {
     expect(timedOut).toHaveLength(14);
     for (const { input, expected } of timedOut) {
       expect(
-        projectStartupPhaseAfterSettingsTimeout(startupPhase(input.phase), input.current),
+        projectStartupPhaseAfterSettingsTimeout(
+          startupPhase(input.phase),
+          input.current,
+        ),
         JSON.stringify(input),
       ).toBe(startupPhase(expected));
     }

@@ -150,7 +150,13 @@ export function createClientLifecycle({
       }
       setError(String(error));
       const before = client.getState().startupPhase;
-      const phase = projectStartupPhaseAfterSettingsAnswer(before, true, "failed", false, false);
+      const phase = projectStartupPhaseAfterSettingsAnswer(
+        before,
+        true,
+        "failed",
+        false,
+        false,
+      );
       if (phase !== before) setStartupPhase(phase);
     }
   }
