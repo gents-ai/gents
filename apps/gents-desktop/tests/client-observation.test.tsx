@@ -234,6 +234,14 @@ describe("following the client while it runs", () => {
       expect(api.fetchDesktopSnapshot).toHaveBeenCalledTimes(listReads);
       expect(api.fetchSessionSnapshot.mock.calls.length).toBeGreaterThan(1);
 
+      /* an update without a fingerprint cannot say a row changed: it reads
+         the open session only, as on main */
+      for (let piece = 0; piece < 3; piece++) {
+        void update?.({ reason: "store" });
+        await vi.advanceTimersByTimeAsync(BURST);
+      }
+      expect(api.fetchDesktopSnapshot).toHaveBeenCalledTimes(listReads);
+
       /* a row changes: the list is read once */
       void update?.({ reason: "store", sessionList: "list-2" });
       await vi.advanceTimersByTimeAsync(BURST);

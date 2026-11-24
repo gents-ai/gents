@@ -82,11 +82,14 @@ export function startClientObservation(
       void listenToDesktopClientUpdates(
         async (event) => {
           if (stopped) return;
-          /* a store update says what the session lists show; one with no
-             fingerprint, or a new one, may have changed a row */
+          /* a store update fingerprints what the session lists show, and a
+             new fingerprint means a row changed. One without a fingerprint
+             (an emitter that cannot tell) changes nothing: while a turn is
+             followed it reads the open session only, as it always has, so a
+             stream's budget never depends on the emitter */
           const sessionList = event.sessionList ?? null;
           const sessionListChanged =
-            sessionList === null || sessionList !== lastSessionList;
+            sessionList !== null && sessionList !== lastSessionList;
           if (event.reason === "store") lastSessionList = sessionList;
           const scope = desktopUpdateRefreshScope(
             event.reason,
