@@ -540,7 +540,9 @@ async fn goal_provenance_agrees_before_transcript_publication_and_after_reload()
 #[tokio::test]
 async fn paged_native_forks_follow_goal_provenance() {
     use crate::types::{GoalControlAction, GoalControlRequest};
-    use gents::support::streaming_backend::{StreamPlan, StreamResponse, StreamScript};
+    use gents_inference::test_support::scripted_backend::{
+        StreamPlan, StreamResponse, StreamScript,
+    };
 
     let desktop = crate::tests::support::RunningDesktop::start(vec![
         StreamPlan::current_authored_user(

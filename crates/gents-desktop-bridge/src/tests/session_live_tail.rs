@@ -1,7 +1,7 @@
 use super::support::{refresh_request_and_assert_fresh_projection, RunningDesktop};
 use crate::commands::session_snapshot;
 use crate::types::RenderedTimelineItem;
-use gents::support::streaming_backend::{StreamPlan, StreamResponse, StreamScript};
+use gents_inference::test_support::scripted_backend::{StreamPlan, StreamResponse, StreamScript};
 
 fn held(marker: &'static str, text: &'static str) -> StreamPlan {
     StreamPlan::current_authored_user(

@@ -27,7 +27,6 @@ pub mod ports;
 
 pub mod signed_mailbox;
 pub mod snapshots;
-pub mod streaming_backend;
 pub mod waits;
 
 /// A test's `#[tokio::test]` runtime is its entry point; constructors take
@@ -890,16 +889,25 @@ pub async fn complete_pending_request_with_canonical_output(
     );
 
     let backend_id = format!("fixture-completion-{}", row.request_id);
-    let backend = streaming_backend::MockStreamingBackend::start_with_plans(
-        "fixture-completion-model",
-        vec![streaming_backend::StreamPlan::current_authored_user(
-            prompt.clone(),
-            vec![streaming_backend::StreamResponse::streams(
-                prompt,
-                vec![streaming_backend::StreamChunk::text(text)],
-            )],
-        )],
-    )?;
+    let backend =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::start_with_plans(
+            "fixture-completion-model",
+            vec![
+                gents_inference::test_support::scripted_backend::StreamPlan::current_authored_user(
+                    prompt.clone(),
+                    vec![
+                        gents_inference::test_support::scripted_backend::StreamResponse::streams(
+                            prompt,
+                            vec![
+                                gents_inference::test_support::scripted_backend::StreamChunk::text(
+                                    text,
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+            ],
+        )?;
     fixtures::bind_agent_backend(
         db,
         &agent_did,

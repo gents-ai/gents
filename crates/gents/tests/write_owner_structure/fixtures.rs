@@ -34,7 +34,6 @@ const FIXTURE_NAMES: &[&str] = &[
 #[rustfmt::skip]
 const FIXTURE_DUPLICATES: &[(&str, usize, &str)] = &[
     ("ManagedAgentFixture", 2, "root tests/support and the automation pushdown tests each install a managed Agent; both move to SignedHome::create_agent"),
-    ("MockModelEndpoint", 3, "root, runtime-test and CLI HTTP provider doubles; they move to the one scripted HTTP backend"),
     ("managed_agent", 4, "root tests/support and automation pushdown copies of Agent installation; callers move to SignedHome::create_agent"),
     ("node_builder", 3, "raw-node builders in gents-store, gents-host and gents-desktop-bridge; callers move to TestStore"),
     ("signed_test_node", 2, "the inference tuple composition over SignedHome and the automation wrapper naming its lifecycle composition; callers move to SignedHome"),

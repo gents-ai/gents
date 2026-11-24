@@ -9,8 +9,8 @@ use serde_json::Value;
 use crate::support::accepted_turn::boot_prepared_accepted_turn;
 use crate::support::live_inference::wait_for_request_terminal;
 use crate::support::signed_mailbox::{prepare_signed_mailbox_turn, SignedMailboxTurn};
-use crate::support::streaming_backend::StreamChunk;
 use crate::support::test_db;
+use gents_inference::test_support::scripted_backend::StreamChunk;
 
 const BACKEND_ID: &str = "effective-binding-backend";
 const MODEL: &str = "effective-binding-model";
@@ -173,7 +173,7 @@ async fn a_claimed_request_records_the_settings_its_dispatch_bound() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn profile_model_line_changes_on_the_next_request_in_the_same_session() {
-    use crate::support::streaming_backend::{MockStreamingBackend, StreamScript};
+    use gents_inference::test_support::scripted_backend::{ScriptedBackend, StreamScript};
     use gents_protocol::node_readiness::{decode_node_readiness_snapshot, NodeReadinessRow};
     use gents_store::test_support::rows_when;
 
@@ -216,7 +216,7 @@ async fn profile_model_line_changes_on_the_next_request_in_the_same_session() {
         .unwrap();
 
     let next_model = "profile-next-model";
-    let backend = MockStreamingBackend::start(
+    let backend = ScriptedBackend::start(
         next_model,
         vec![StreamScript::completes("second-model", ["second"])],
     )

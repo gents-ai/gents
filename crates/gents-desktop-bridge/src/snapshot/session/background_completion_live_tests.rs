@@ -6,8 +6,8 @@ use gents::support::accepted_turn::{
     AcceptedTurnSpec,
 };
 use gents::support::fixtures::configure_agent_tools_as;
-use gents::support::streaming_backend::{StreamChunk, StreamPlan, StreamResponse};
 use gents::support::{managed_agent_fixture, test_db};
+use gents_inference::test_support::scripted_backend::{StreamChunk, StreamPlan, StreamResponse};
 use gents_observe::client_projection::query::TranscriptWindow;
 use gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
 use gents_store::graphql::escape_graphql_string;

@@ -24,8 +24,8 @@ use crate::support::accepted_turn::{
 use crate::support::fixtures::{
     agent_target, bind_selected_managed_agent_backend, configure_agent_tools_as,
 };
-use crate::support::streaming_backend::{MockStreamingBackend, StreamChunk, StreamPlan};
 use crate::support::{managed_agent_fixture, test_db_from_home, ManagedAgentFixture, TestDb};
+use gents_inference::test_support::scripted_backend::{ScriptedBackend, StreamChunk, StreamPlan};
 use gents_store::test_support::STALL_CEILING;
 
 pub(crate) const PARENT: &str = "plugin-job-parent";
@@ -425,7 +425,7 @@ pub(crate) async fn reboot_job_harness(
         child_did,
     };
     let backend =
-        MockStreamingBackend::start_with_plans(MODEL, plans).expect("start the restart backend");
+        ScriptedBackend::start_with_plans(MODEL, plans).expect("start the restart backend");
     for agent_did in [&actors.fixture.binding.agent_did, &actors.child_did] {
         bind_selected_managed_agent_backend(
             &db,

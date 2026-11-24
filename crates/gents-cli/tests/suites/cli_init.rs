@@ -79,7 +79,10 @@ async fn init_bootstraps_backend_default_agent_and_tools_idempotently() -> Resul
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("mock-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
 
     let port = allocate_port()?;
     let agent_name = format!("cli-init-{}", Uuid::new_v4().simple());
@@ -270,7 +273,10 @@ async fn server_apply_root_reports_post_apply_default_readiness() -> Result<()> 
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("mock-apply-root-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let agent_name = format!("cli-apply-root-{}", Uuid::new_v4().simple());
     let init = run_init_json(
         &home_dir,
@@ -358,7 +364,10 @@ async fn server_apply_root_accepts_metadata_only_change_without_generation_advan
     let pack_root = tempdir.path().join("pack");
     fs::create_dir_all(&home_dir)?;
     let model_name = format!("mock-metadata-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let init = run_init_json(
         &home_dir,
         &[
@@ -416,7 +425,10 @@ async fn server_apply_root_waits_for_task_only_runtime_generation() -> Result<()
     let pack_root = tempdir.path().join("pack");
     fs::create_dir_all(&home_dir)?;
     let model_name = format!("mock-task-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let init = run_init_json(
         &home_dir,
         &[
@@ -769,7 +781,10 @@ async fn init_dangerously_overwrite_replaces_existing_home() -> Result<()> {
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("overwrite-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let agent_name = format!("cli-overwrite-{}", Uuid::new_v4().simple());
 
     run_init_json(
@@ -821,7 +836,10 @@ async fn init_accepts_explicit_backend_and_model_together() -> Result<()> {
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("explicit-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
 
     let port = allocate_port()?;
     let agent_name = format!("cli-explicit-{}", Uuid::new_v4().simple());
@@ -879,7 +897,10 @@ fn init_accepts_tool_root_for_readonly_defaults() -> Result<()> {
     fs::create_dir_all(&readonly_root)?;
 
     let model_name = format!("readonly-root-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let agent_name = format!("cli-readonly-root-{}", Uuid::new_v4().simple());
 
     let init = run_init_json(
@@ -1010,7 +1031,10 @@ async fn serve_startup_logs_the_tool_root_that_escapes_the_ceiling() -> Result<(
     let explicit_root = explicit_root.to_str().context("utf-8 explicit root")?;
 
     let model_name = format!("tool-root-conflict-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let agent_name = format!("cli-tool-root-conflict-{}", Uuid::new_v4().simple());
     let init = run_init_json(
         &home_dir,
@@ -1071,7 +1095,10 @@ async fn serve_service_mode_writes_the_startup_diagnostic_to_stderr() -> Result<
     let explicit_root = explicit_root.to_str().context("utf-8 explicit root")?;
 
     let model_name = format!("service-diagnostic-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let agent_name = format!("cli-service-diagnostic-{}", Uuid::new_v4().simple());
     let init = run_init_json(
         &home_dir,
@@ -1132,7 +1159,10 @@ async fn serve_admits_a_narrower_tool_root_after_the_live_root_moved() -> Result
     let project_root = project_root.to_str().context("utf-8 project root")?;
 
     let model_name = format!("moved-tool-root-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let agent_name = format!("cli-moved-tool-root-{}", Uuid::new_v4().simple());
     let init = run_init_json(
         &home_dir,
@@ -1182,7 +1212,10 @@ async fn serve_clamps_the_default_tools_root_to_a_narrowed_operator_root() -> Re
     let project_root = project_root.to_str().context("utf-8 project root")?;
 
     let model_name = format!("clamped-tool-root-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let agent_name = format!("cli-clamped-tool-root-{}", Uuid::new_v4().simple());
     let init = run_init_json(
         &home_dir,
@@ -1326,7 +1359,10 @@ async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("write-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
 
     let port = allocate_port()?;
     let agent_name = format!("cli-write-{}", Uuid::new_v4().simple());
@@ -1582,7 +1618,10 @@ async fn a_deleted_home_stops_its_server_without_writing_into_the_new_one() -> R
     let temp = tempfile::tempdir()?;
     let home = temp.path().join(".gents");
     let model_name = format!("home-watch-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     run_init_json(
         temp.path(),
         &[

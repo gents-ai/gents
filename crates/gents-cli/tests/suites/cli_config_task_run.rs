@@ -15,7 +15,10 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("mock-task-run-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let port = allocate_port()?;
     let graphql = graphql_url(port);
     let agent_name = format!("cli-task-run-{}", Uuid::new_v4().simple());
@@ -242,7 +245,10 @@ async fn config_task_run_rejects_disabled_task() -> Result<()> {
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("mock-task-run-disabled-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .unscripted(gents_inference::test_support::scripted_backend::Unscripted::Hold)
+            .start()?;
     let port = allocate_port()?;
     let graphql = graphql_url(port);
     let agent_name = format!("cli-task-run-disabled-{}", Uuid::new_v4().simple());
