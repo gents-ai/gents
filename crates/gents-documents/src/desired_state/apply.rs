@@ -289,12 +289,13 @@ pub(crate) async fn apply_desired_state_plan_with_semantics(
                 },
             )
         };
+        let desired = if created { &input } else { &document.update };
         match document.collection {
             Collection::DatastoreToolSurface => {
-                validate_output_obligation_count_fields(txn, &input, &mut introspected).await?;
+                validate_output_obligation_count_fields(txn, desired, &mut introspected).await?;
             }
             Collection::EventSource => {
-                validate_event_source_live_fields(txn, &input, &mut introspected).await?;
+                validate_event_source_live_fields(txn, desired, &mut introspected).await?;
             }
             _ => {}
         }

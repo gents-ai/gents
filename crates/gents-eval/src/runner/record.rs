@@ -125,6 +125,7 @@ mod tests {
                 inference_calls: 0,
             },
             evidence_digest: None,
+            subject_usage: None,
         };
         stream::iter(0..32u32)
             .map(|i| {

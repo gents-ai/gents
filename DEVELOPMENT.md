@@ -64,11 +64,48 @@ Registry, endpoint, directory and enrollment operations check membership again
 when they run. Revoking the runtime's membership stops subsequent publication.
 A Vera home started without the account option leaves peer publication idle.
 
-Each Vera home hosts its own deployment. The runtime derives the deployment ID
-from its Node DID, uses that DID as its sole operator, and talks to Vera in
-process. The transport group controls which devices may publish. Enrolling a
-second home in the group leaves each home's deployment and worker intact.
-[Embedded deployment configuration](crates/gents-store/src/local/document_acp/embedded_vera.rs)
+By default a Vera home runs in process with its Node as the sole operator.
+To share a deployment, initialize the host with `--document-acp vera
+--vera-rpc-port 9841`. Administrative changes require signatures from both
+the account and the host Node. Save the `vera_anchor` object from the init
+result as `host-anchor.json`. It binds the account, deployment, consensus
+key, genesis, device group and host publisher Node.
+
+Start the host. From its account, admit the follower's device signing DID
+and save the command's JSON output. Use the group ID from the host's init
+result (`transport_group.group`).
+
+```sh
+gents runtime p2p enrollment admit-device "$GROUP_ID" "$FOLLOWER_DID" > device-admission.json
+```
+
+The admission receipt includes `publisher_node_id`, the registered Node document ID
+to use when creating transport records. A direct Defra write must supply this ID.
+To create a record on behalf of another Node, the account that owns that Node
+must grant the signing device DID the `transport_publisher` relation on it.
+Group membership alone grants no such authority. The parent ID is immutable
+and stays with the record when another device receives a replica.
+
+Transfer both JSON files to the follower over an authenticated channel.
+The signing key stays on the follower. Set up a private tunnel from its
+loopback port to the host's Vera loopback port, then initialize a fresh
+home with the matching device key and your usual model options.
+
+```sh
+gents init --document-acp vera --vera-rpc-port 9841 \
+  --vera-anchor host-anchor.json --vera-device-admission device-admission.json \
+  --key-path "$FOLLOWER_KEY"
+```
+
+The follower verifies the account signature over its Node registration and
+checks current group membership and publishing rights against Vera. On
+restart it uses the admission saved in its home. The private tunnel must
+remain available. To revoke that device’s membership and publisher grant,
+run the following command from the host account.
+
+```sh
+gents runtime p2p enrollment remove-device "$GROUP_ID" "$FOLLOWER_DID"
+```
 
 ## Read the documents assigned to a node
 
@@ -99,5 +136,11 @@ arrives, the watcher saves C’s certified revision before stopping B. After a
 restart it finishes outstanding stops even while the authority is unreachable,
 and rejects an older view when reads resume. The applied
 inventory advances after the stop succeeds. C can start once its body is verified.
+
+The watcher is a Rust API for workload owners. `gents utils debug fleet slots`
+reports a snapshot and does not start a watcher. The restart test uses a real
+embedded Vera provider and reopens Defra from disk. Its workload adapter tracks
+running IDs and body availability in memory. A fleet integration must supply
+the adapter that verifies its signed documents and controls its running work.
 [Receiver API](crates/gents-store/src/config_client/assignment_receiver.rs) ·
 [Restart and withdrawal tests](crates/gents-store/src/identity/enrollment_grant/withdrawal_tests.rs)

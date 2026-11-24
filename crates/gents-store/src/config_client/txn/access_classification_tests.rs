@@ -156,6 +156,10 @@ fn wrapped(wrapper: &str, failure: AccessFailure, erasure: Erasure) -> AccessCla
             erasure,
             crate::config_client::owed::OwnGrantError::Unanswered(access),
         ),
+        "host_admission_error_config" => classify_erased(
+            erasure,
+            crate::schema::catalog::HostAdmissionError::Config(access),
+        ),
         other => panic!(
             "store owner variant {other} has no constructor here; add it with its \
              `AccessClassification.StoreWrapper` constructor"

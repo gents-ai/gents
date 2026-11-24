@@ -300,6 +300,7 @@ pub(crate) mod tests {
                         inference_calls: 1,
                     },
                     evidence_digest: None,
+                    subject_usage: None,
                 }),
             });
             if let Some(score_bp) = slot.score_bp {

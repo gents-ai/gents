@@ -189,3 +189,194 @@ async fn a_new_vera_home_serves_with_its_client_owned_device_group() -> Result<(
     anyhow::ensure!(readiness["status"] == "serving", "{readiness}");
     stop(serve).await
 }
+
+#[cfg(feature = "vera")]
+async fn publish_test_peer(
+    access: &gents_store::config_client::ConfigAccess,
+    peer_id: &str,
+    device: &str,
+    publisher: &str,
+) -> Result<String> {
+    let variables = serde_json::json!({"input":{
+        "peer_id": peer_id, "node_did": device,
+        "publisher_node_id": publisher, "addresses": ["loopback"],
+    }});
+    let response: Value = access.transact_write("test.shared_peer_publication", |txn| {
+        let variables = variables.clone();
+        Box::pin(async move {
+            txn.execute_with_variables(
+                "mutation($input: PeerRegistryMutationInputArg!) { create_PeerRegistry(input: $input) { _docID } }",
+                &variables,
+            ).await
+        })
+    }).await.map_err(anyhow::Error::from)?;
+    Ok(gents_store::graphql::created_doc_id(
+        &response,
+        "PeerRegistry",
+    )?)
+}
+
+#[cfg(feature = "vera")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn paired_home_reopens_against_the_original_vera_deployment() -> Result<()> {
+    let host = tempfile::tempdir()?;
+    let follower = tempfile::tempdir()?;
+    let model = MockChatEndpoint::start("paired-home", REPLY)?;
+    let port = allocate_port()?.to_string();
+    let init_args = [
+        "--model-name",
+        "paired-home",
+        "--inference-url",
+        model.endpoint(),
+        "--document-acp",
+        "vera",
+        "--vera-rpc-port",
+        &port,
+    ];
+    let provisioned = run_init_json(host.path(), &init_args)?;
+    let home = provisioned["home"].as_str().context("host home path")?;
+    let data = gents_store::local::home::default_data_dir(Path::new(home));
+    let genesis: Value =
+        serde_json::from_slice(&fs::read(data.join("vera/node/solo-genesis.json"))?)?;
+    let account = provisioned["transport_group"]["account"]
+        .as_str()
+        .context("transport group owner")?;
+    anyhow::ensure!(
+        provisioned["vera_anchor"]["account"].as_str() == Some(account),
+        "follower must pin the account that owns the host's device group"
+    );
+    let device = node_did_from_init(&provisioned)?;
+    let mut operators = [account, device.as_str()];
+    operators.sort_unstable();
+    anyhow::ensure!(
+        genesis["operators"] == serde_json::json!({"threshold": 2, "keys": operators}),
+        "shared genesis must require the account and the device"
+    );
+    let anchor = host.path().join("follower-anchor.json");
+    fs::write(
+        &anchor,
+        serde_json::to_vec(
+            provisioned
+                .get("vera_anchor")
+                .context("host must export its verified deployment identity")?,
+        )?,
+    )?;
+    let (active, _) = served(host.path()).await?;
+    let mut paired = init_args.to_vec();
+    paired.extend([
+        "--vera-anchor",
+        anchor.to_str().context("temporary file path")?,
+    ]);
+    let unadmitted = tempfile::tempdir()?;
+    let mut denied_args = vec!["init", "--store-key-custody", "file"];
+    denied_args.extend_from_slice(&paired);
+    let denied = run_cli_failure_stderr(unadmitted.path(), &denied_args)?;
+    anyhow::ensure!(
+        denied.contains("no certified group assignment"),
+        "expected the shared account to refuse an unadmitted device: {denied}"
+    );
+
+    use gents_store::identity::{KeyIdentity, NodeIdentity};
+    let key_path = follower.path().join("follower.key");
+    let follower_key = KeyIdentity::load_or_create(&key_path, None)?;
+    let follower_did = follower_key.did();
+    let group = provisioned["transport_group"]["group"]
+        .as_str()
+        .context("transport group document")?;
+    let admitted = run_cli_json(
+        host.path(),
+        &[
+            "runtime",
+            "p2p",
+            "enrollment",
+            "admit-device",
+            group,
+            follower_did,
+        ],
+    )?;
+    anyhow::ensure!(admitted["member"] == true && admitted["device"] == follower_did);
+    let publisher_node = admitted["publisher_node_id"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .context("registered publisher Node")?;
+    let admission = host.path().join("paired-admission.json");
+    fs::write(&admission, serde_json::to_vec(&admitted)?)?;
+    paired.extend([
+        "--vera-device-admission",
+        admission.to_str().context("device admission path")?,
+        "--key-path",
+        key_path.to_str().context("follower key path")?,
+    ]);
+    let initialized = run_init_json(follower.path(), &paired)?;
+    anyhow::ensure!(
+        node_did_from_init(&initialized)? != node_did_from_init(&provisioned)?,
+        "the follower must retain its own signing identity"
+    );
+    fs::remove_file(&anchor)?;
+    fs::remove_file(&admission)?;
+    let (serving, graphql) = served(follower.path()).await?;
+    let endpoints = gents_store::config_client::runtime_endpoints::RuntimeEndpoints::new(
+        follower_key.client_signing_capability()?,
+    );
+    let access = gents_store::config_client::ConfigAccess::Graphql(
+        endpoints.endpoint(follower_did, &graphql)?,
+    );
+    anyhow::ensure!(access.transport_publisher_node().await?.as_deref() == Some(publisher_node));
+    let peer_id = Uuid::new_v4().to_string();
+    let host_node = provisioned["vera_anchor"]["host_node"]
+        .as_str()
+        .context("host publisher Node")?;
+    anyhow::ensure!(host_node != publisher_node);
+    let refusal = publish_test_peer(&access, &peer_id, follower_did, host_node)
+        .await
+        .expect_err("publication under another device's Node requires its grant");
+    anyhow::ensure!(
+        format!("{refusal:#}").contains("parent requires 'transport_publisher'"),
+        "unexpected cross-device publication error: {refusal:#}"
+    );
+    let peer = publish_test_peer(&access, &peer_id, follower_did, publisher_node).await?;
+    prompted(follower.path(), "record a session on the paired device")?;
+    let first = sessions(follower.path(), Some(&graphql))?;
+    anyhow::ensure!(!first.is_empty(), "the paired device has no sessions");
+    stop(serving).await?;
+    stop(active).await?;
+    let (active, _) = served(host.path()).await?;
+    let (serving, graphql) = served(follower.path()).await?;
+    kept(
+        &first,
+        &sessions(follower.path(), Some(&graphql))?,
+        "after both devices restarted",
+    )?;
+    let resumed = gents_store::config_client::ConfigAccess::Graphql(
+        endpoints.endpoint(follower_did, &graphql)?,
+    );
+    let selection = format!(
+        r#"{{ PeerRegistry(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID publisher_node_id }} }}"#,
+        gents_store::graphql::escape_graphql_string(&peer)
+    );
+    let rows = resumed.execute(&selection).await?;
+    let rows = gents_protocol::graphql::graphql_rows_from_response(&rows, "PeerRegistry");
+    anyhow::ensure!(
+        matches!(rows.as_slice(), [row] if row["_docID"] == peer && row["publisher_node_id"] == publisher_node),
+        "the restarted follower lost the certified publisher's record"
+    );
+    stop(serving).await?;
+    let removed = run_cli_json(
+        host.path(),
+        &[
+            "runtime",
+            "p2p",
+            "enrollment",
+            "remove-device",
+            group,
+            follower_did,
+        ],
+    )?;
+    anyhow::ensure!(removed["member"] == false && removed["publisher_node_id"] == publisher_node);
+    let denied = run_cli_failure_stderr(follower.path(), &["runtime", "server"])?;
+    anyhow::ensure!(
+        denied.contains("no certified group assignment"),
+        "a revoked follower must refuse startup: {denied}"
+    );
+    stop(active).await
+}

@@ -9,6 +9,7 @@ pub mod evidence;
 #[cfg(test)]
 pub(crate) mod fixtures;
 pub mod store;
+pub mod subject;
 
 pub use breakdown::{by_check, by_stage, case_view, CaseView, CheckDiff, StageDiff};
 pub use build::{
@@ -17,13 +18,14 @@ pub use build::{
 };
 pub use compare::{
     compare, CaseComparison, CompareOptions, Comparison, GateView, PairedTrial, PolicyOutcome,
-    SideTrial,
+    SideTrial, SubjectChange, COMPARED_FIGURES,
 };
 pub use evidence::{
     cell_trial_scores, cell_usage, concat_paired, counted_verdicts, latest_attempts, load_run_rows,
     paired_evidence, CellUsage, RunRows,
 };
 pub use store::{load_report, load_report_among, load_runs, run_header};
+pub use subject::{Figure, SubjectSpend, SubjectSummary};
 
 /// Documents a report cannot be built or compared from, and why.
 #[derive(Debug)]

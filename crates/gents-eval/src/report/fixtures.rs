@@ -159,6 +159,7 @@ impl Rows {
                     inference_calls: 1,
                 },
                 evidence_digest: Some(format!("sha256:{trial_id}")),
+                subject_usage: None,
             }),
         };
         self.trials.push(TrialRecord {

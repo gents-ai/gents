@@ -1,6 +1,7 @@
 import Proofs.Conformance.RootCandidates.ClaudeSessionLineage
 import Proofs.Conformance.RootCandidates.StartupBarrier
 import Proofs.Conformance.RootCandidates.EvalSelection
+import Proofs.Conformance.RootCandidates.EvalUsage
 import Proofs.Conformance.RootCandidates.CompletionParameters
 import Proofs.Conformance.RootCandidates.PinnedTokenLimit
 import Proofs.Conformance.RootCandidates.PinnedRetryBudget

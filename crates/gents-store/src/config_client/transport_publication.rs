@@ -232,13 +232,33 @@ pub async fn project_transport_document(
         system.set(&key, b"pending").await?;
         changed = true;
     }
-    let Some((node, owner)) = local_node(context, ids, runtime).await? else {
-        return Ok(changed);
+    let (owner, local_publisher) = if ids == HomePolicyIds::embedded_vera_transport_v2() {
+        // Registration already bound this document to the publisher's Node.
+        let parent = document
+            .get("publisher_node_id")
+            .and_then(|value| value.as_str())
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| failure("transport document has no publisher Node"))?;
+        let owner = context
+            .projected_owner(ids.id(BuiltInPolicy::Household), "nodes", parent)
+            .await?
+            .ok_or_else(|| failure("publisher Node has no registered owner"))?;
+        let local_publisher = collection_name == PEER_REGISTRY_NAME
+            && local_node(context, ids, runtime)
+                .await?
+                .is_some_and(|(node, _)| node == parent);
+        (owner, local_publisher)
+    } else {
+        let Some((node, owner)) = local_node(context, ids, runtime).await? else {
+            return Ok(changed);
+        };
+        grant
+            .change("parent", Subject::entity_set("nodes", node, ""), false)
+            .await?;
+        (owner, true)
     };
-    grant
-        .change("parent", Subject::entity_set("nodes", node, ""), false)
-        .await?;
     if collection_name == PEER_REGISTRY_NAME
+        && local_publisher
         && document.get("node_did").and_then(|value| value.as_str()) == Some(runtime.as_str())
     {
         let creator = context

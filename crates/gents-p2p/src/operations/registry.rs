@@ -15,7 +15,7 @@ use serde_json::Value;
 
 use super::{optional_string, string_list};
 use crate::p2p_reconcile::registry::{
-    registry_upsert_mutation, RegistryEntry, UpsertKind, DEFAULT_NETWORK_ID,
+    registry_upsert_mutation_for_publisher, RegistryEntry, UpsertKind, DEFAULT_NETWORK_ID,
 };
 use crate::p2p_reconcile::templates::resolve_template;
 use crate::p2p_reconcile::{heartbeat_is_fresh, REGISTRY_STALE_AFTER};
@@ -158,10 +158,15 @@ pub async fn register_self(
             .clone()
             .unwrap_or_else(|| DEFAULT_NETWORK_ID.to_owned()),
     };
-    let mutation = registry_upsert_mutation(
+    let publisher = access
+        .transport_publisher_node()
+        .await
+        .map_err(passthrough)?;
+    let mutation = registry_upsert_mutation_for_publisher(
         &entry,
         &now.to_rfc3339_opts(SecondsFormat::Secs, true),
         UpsertKind::Full,
+        publisher.as_deref(),
     );
     access
         .write("p2p.registry.register", &mutation)

@@ -33,6 +33,7 @@ fn statement(node: &str, nonce: &HomeNonce, report: &ReportCase<Reported>) -> Ho
         Reported::Absent => (ClientAuthentication::Local, AttestedAudience::Absent),
         Reported::Named => (
             ClientAuthentication::Vera {
+                publisher_node: None,
                 worker: WORKER.into(),
                 deployment: report.deployment,
             },
@@ -145,6 +146,7 @@ fn a_signed_status_is_reconciled_as_the_lean_model_says() {
         let authentication = match input.advertised {
             Advertised::Local => ClientAuthentication::Local,
             Advertised::Vera => ClientAuthentication::Vera {
+                publisher_node: None,
                 worker: WORKER.into(),
                 deployment: 2,
             },
