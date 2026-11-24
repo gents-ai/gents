@@ -1,5 +1,5 @@
 use rapidhash::{HashSetExt, RapidHashSet};
-use rig::streaming::RawStreamingChoice;
+use rig::streaming::{RawStreamingChoice, ToolCallDeltaContent};
 use serde_json::Value;
 
 use super::MessagesSseState;
@@ -20,11 +20,21 @@ fn the_parser_keeps_the_streamed_tool_text_and_the_response_request_id() {
     for line in sse.lines() {
         events.extend(state.push_line(line).expect("push"));
     }
-    let [RawStreamingChoice::ToolCall(call), RawStreamingChoice::FinalResponse(response)] =
+    let [RawStreamingChoice::ToolCallDelta {
+        internal_call_id,
+        content: ToolCallDeltaContent::Name(name),
+        ..
+    }, RawStreamingChoice::ToolCall(call), RawStreamingChoice::FinalResponse(response)] =
         &events[..]
     else {
-        panic!("expected a tool call then the final response: {events:?}");
+        panic!(
+            "expected the tool's name as it starts, the call, then the final response: {events:?}"
+        );
     };
+    assert_eq!(
+        (name.as_str(), internal_call_id),
+        ("echo", &call.internal_call_id)
+    );
     assert_eq!(
         call.additional_params
             .as_ref()
