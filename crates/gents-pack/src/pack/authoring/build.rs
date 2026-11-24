@@ -234,6 +234,7 @@ pub fn build_plugin(
         dir.is_dir(source),
         "{owner} declares source {source:?}, which is not a directory"
     );
+    let source = Path::new(source);
     let source_dir = dir.subdir(source)?;
     anyhow::ensure!(
         source_dir.is_file(entry),
@@ -241,7 +242,7 @@ pub fn build_plugin(
         source_dir.path().display()
     );
     let staged = dir.create_dir_all(Path::new("target").join("plugins").join(&plugin.name))?;
-    mirror(&source_dir, &staged)?;
+    mirror(dir, source, &staged)?;
     write_if_changed(
         &staged,
         "afb.toml",
@@ -329,11 +330,20 @@ fn toml_string(value: &str) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_owned())
 }
 
-fn mirror(from: &RootDir, to: &RootDir) -> Result<()> {
-    mirror_level(from, to, true)
+/// Mirrors the plugin source `source` of `pack` into `to`. Each file is read
+/// through the pack root, so a link in the source is copied as the file it
+/// resolves to beneath the pack, and one leading out of the pack is refused.
+fn mirror(pack: &RootDir, source: &Path, to: &RootDir) -> Result<()> {
+    mirror_level(pack, source, &pack.subdir(source)?, to, true)
 }
 
-fn mirror_level(from: &RootDir, to: &RootDir, top: bool) -> Result<()> {
+fn mirror_level(
+    pack: &RootDir,
+    relative: &Path,
+    from: &RootDir,
+    to: &RootDir,
+    top: bool,
+) -> Result<()> {
     let mut kept = std::collections::BTreeSet::new();
     for entry in from
         .entries()
@@ -343,10 +353,20 @@ fn mirror_level(from: &RootDir, to: &RootDir, top: bool) -> Result<()> {
         if name == "target" || name.to_string_lossy().starts_with('.') {
             continue;
         }
+        let below = relative.join(&name);
         if entry.kind == ChildKind::Directory {
-            mirror_level(&from.subdir(&name)?, &to.create_dir_all(&name)?, false)?;
+            mirror_level(
+                pack,
+                &below,
+                &from.subdir(&name)?,
+                &to.create_dir_all(&name)?,
+                false,
+            )?;
         } else {
-            write_if_changed(to, &name, &from.read(&name)?)?;
+            let bytes = pack
+                .read(&below)
+                .with_context(|| format!("reading {}", pack.path().join(&below).display()))?;
+            write_if_changed(to, &name, &bytes)?;
         }
         kept.insert(name);
     }
@@ -534,6 +554,46 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_link_in_a_plugin_source_mirrors_its_file_and_a_link_out_of_the_pack_is_refused() {
+        use std::os::unix::fs::symlink;
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().canonicalize().unwrap();
+        let fixtures = root.join("plugin_src/tests/fixtures");
+        std::fs::create_dir_all(fixtures.join("data")).unwrap();
+        std::fs::create_dir_all(fixtures.join("hostile")).unwrap();
+        std::fs::write(fixtures.join("data/sales.csv"), b"month,total\n").unwrap();
+        symlink("../data/sales.csv", fixtures.join("hostile/link.csv")).unwrap();
+        std::fs::create_dir_all(root.join("shared")).unwrap();
+        std::fs::write(root.join("shared/notes.txt"), b"shared").unwrap();
+        symlink("../../shared/notes.txt", root.join("plugin_src/tests/notes.txt")).unwrap();
+        let held = RootDir::open(&root).unwrap();
+
+        let staged = held.create_dir_all("target/plugins/linked").unwrap();
+        mirror(&held, Path::new("plugin_src"), &staged).unwrap();
+        assert_eq!(
+            staged.read("tests/fixtures/hostile/link.csv").unwrap(),
+            b"month,total\n"
+        );
+        assert_eq!(staged.read("tests/notes.txt").unwrap(), b"shared");
+
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.txt"), b"secret").unwrap();
+        symlink(
+            outside.path().join("secret.txt"),
+            root.join("plugin_src/tests/escape.txt"),
+        )
+        .unwrap();
+        let staged = held.create_dir_all("target/plugins/escaping").unwrap();
+        let error = mirror(&held, Path::new("plugin_src"), &staged).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("outside the allowed tool root"),
+            "{error:#}"
+        );
+        assert!(staged.read("tests/escape.txt").is_err());
+    }
+
     #[test]
     fn a_plugin_source_that_is_a_file_is_refused() {
         let dir = tempfile::tempdir().unwrap();
@@ -595,7 +655,7 @@ mod tests {
         let staged = root.join("target/plugins/format_check");
         let held = RootDir::open(&root).unwrap();
         let staged_dir = held.create_dir_all("target/plugins/format_check").unwrap();
-        mirror(&held.subdir("plugin_src").unwrap(), &staged_dir).unwrap();
+        mirror(&held, Path::new("plugin_src"), &staged_dir).unwrap();
         write_if_changed(
             &staged_dir,
             "afb.toml",
