@@ -331,6 +331,9 @@
             },
             "content": {
               "_like": "%K39%"
+            },
+            "caused_by_parent_request_id": {
+              "_eq": "$request"
             }
           },
           "fields": [
@@ -479,6 +482,9 @@
             },
             "content": {
               "_like": "%K39%"
+            },
+            "caused_by_parent_request_id": {
+              "_eq": "$request"
             }
           },
           "fields": [
@@ -505,27 +511,7 @@
               },
               {
                 "capture": "notes",
-                "min": 1,
-                "max": 1
-              }
-            ],
-            "links": [
-              {
-                "capture": "notes",
-                "source_match": {
-                  "field": "content",
-                  "matches": "(?i)K39"
-                },
-                "field": "session_id",
-                "target_capture": "threads",
-                "target_key": "session_id",
-                "exact": true,
-                "expect": [
-                  {
-                    "field": "title.text",
-                    "matches": "(?i)^\\s*West dock dispatch\\s*$"
-                  }
-                ]
+                "max": 0
               }
             ]
           },

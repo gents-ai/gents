@@ -331,6 +331,9 @@
             },
             "content": {
               "_like": "%W72%"
+            },
+            "caused_by_parent_request_id": {
+              "_eq": "$request"
             }
           },
           "fields": [

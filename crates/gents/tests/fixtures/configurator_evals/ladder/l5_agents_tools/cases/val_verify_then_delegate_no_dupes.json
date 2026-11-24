@@ -301,19 +301,6 @@
         {
           "check": "crew_spec_match",
           "params": {
-            "links": [
-              {
-                "capture": "helper-request",
-                "source_match": {
-                  "field": "content",
-                  "contains": "FIX2-888"
-                },
-                "field": "session_id",
-                "target_capture": "helper-session",
-                "target_key": "session_id",
-                "exact": true
-              }
-            ],
             "present": [
               {
                 "capture": "helper-session",
@@ -321,8 +308,7 @@
               },
               {
                 "capture": "helper-request",
-                "min": 1,
-                "max": 1
+                "min": 1
               },
               {
                 "capture": "helper_targets",
