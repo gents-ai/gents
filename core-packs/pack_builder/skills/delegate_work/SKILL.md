@@ -10,7 +10,7 @@ Every call resends your whole context, so a long session gets slow and expensive
 ## Hand off
 
 - A part with clear inputs and a clear finish: the rules plugin, the page, an import.
-- Work that takes a lot of reading and little judgment.
+- Work that takes much reading and little judgment.
 - Checking finished work. A helper that didn't build it reads `ACCEPTANCE.md` and tries each line.
 
 ## Keep
@@ -30,4 +30,4 @@ It sees only what you send. Tell it:
 - What not to touch.
 - What to report: what it did, what it checked, what failed.
 
-Start one with `agent_new`; the `engineer` target is a copy of you. For a narrower helper, create an agent and an agent target and add it to your own Tools, which applies from your next turn. Tell the user what you added. Run independent helpers at the same time, and never let two write the same file. When one reports, confirm the result with one read or run before building on it.
+Start one with `agent_new`; the `engineer` target is a copy of you. For a narrower helper, add an agent and an agent target to your Tools; that applies from your next turn. Tell the user what you added. Run independent helpers at once; never let two write the same file. A helper that starts helpers reports after they do. Confirm a result with one read or run before building on it.

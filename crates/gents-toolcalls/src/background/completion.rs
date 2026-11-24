@@ -13,6 +13,7 @@ use gents_session::request::lifecycle::queue::{QueuePolicy, QueueSource, Request
 use gents_store::graphql::escape_graphql_string;
 
 mod datetime_fields;
+mod lineage;
 mod notification_delivery;
 pub mod session_message;
 #[cfg(any(test, feature = "test-fixtures"))]

@@ -100,4 +100,30 @@ def claimToolContext : Family ClaimInput Bool where
   inputs := [{ present := true, committed := false }, { present := true, committed := true }]
   model := fun i => (claimedRecipient (admittedFixture i.present) i.committed).isSome
 
+deriving instance ToJson for Admission
+
+structure FilingInput where
+  claimedSigner : Option String
+  lineage : List Admission
+  nodeOwner : Option String
+  deriving ToJson
+
+/-- A person's signed request, a trigger's run and its continuations with the
+Node's owner observed or not, and the requests no person or trigger started:
+a delegated helper's, a continuation of a person's turn, an uncommitted claim. -/
+@[conformance_family]
+def filing : Family FilingInput (Option String) where
+  inputs :=
+    [{ claimedSigner := some "user", lineage := [.client], nodeOwner := some "owner" },
+     { claimedSigner := none, lineage := [.automatedTrigger], nodeOwner := some "owner" },
+     { claimedSigner := none, lineage := [.localControl, .automatedTrigger],
+       nodeOwner := some "owner" },
+     { claimedSigner := none, lineage := [.automatedTrigger], nodeOwner := none },
+     { claimedSigner := none, lineage := [.other], nodeOwner := some "owner" },
+     { claimedSigner := none, lineage := [.localControl, .client], nodeOwner := some "owner" },
+     { claimedSigner := none, lineage := [.client], nodeOwner := some "owner" },
+     { claimedSigner := none, lineage := [.localControl], nodeOwner := some "owner" },
+     { claimedSigner := none, lineage := [], nodeOwner := some "owner" }]
+  model := fun i => filingRecipient i.claimedSigner i.lineage i.nodeOwner
+
 end Conformance.MailboxAccess

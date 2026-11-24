@@ -150,7 +150,7 @@ impl Tool for AgentNewTool {
         });
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Starts an agent on a task in the background; its result arrives later as a message in this conversation. Returns session_id, request_id and tool_call_id immediately. End your turn instead of polling. Continue the session with agent_message, stop its current turn with agent_interrupt, and kill the call with cancel_process."
+            description: "Starts an agent on a task in the background. Its answer arrives later as a message here, after any helpers it starts report. Returns session_id, request_id and tool_call_id at once; end your turn, don't poll. Continue the session with agent_message, stop its turn with agent_interrupt, kill the call with cancel_process."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -195,7 +195,7 @@ impl Tool for AgentMessageTool {
         let mut properties = message_body_schema("message");
         properties["session_id"] = serde_json::json!({
             "type": "string",
-            "description": "A session_id that agent_new returned or agent_session_list shows; never an agent name (start an agent with agent_new) or this conversation's own session."
+            "description": "A session_id that agent_new returned or agent_session_list shows; never an agent name (use agent_new), this conversation, or the one that started you."
         });
         properties["delivery"] = serde_json::json!({
             "type": "string",
@@ -378,7 +378,7 @@ impl Tool for AgentSessionListTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_owned(),
-            description: "Find existing sessions you may message, including trigger-started work, and the session that started you when readable (listed without message or interrupt permission). Archived sessions are hidden by default. Returns activity, relationship and message/interrupt permissions. Continue with next_cursor and the same filter; a stale cursor restarts the listing.".to_owned(),
+            description: "Find existing sessions you may message, including trigger-started work, and the session that started you, which takes no messages: your answer returns there. Archived sessions are hidden by default. Returns activity, relationship and message/interrupt permissions. Continue with next_cursor and the same filter; a stale cursor restarts the listing.".to_owned(),
             parameters: serde_json::json!({
                 "type": "object", "additionalProperties": false,
                 "properties": {

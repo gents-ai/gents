@@ -79,6 +79,7 @@ import Proofs.Conformance.ToolDispatch
 import Proofs.Conformance.RequestAssembly
 import Proofs.Conformance.UsageWrite
 import Proofs.Conformance.SessionMessageKill
+import Proofs.Conformance.LineageReturn
 import Proofs.Conformance.InferenceObservationRegistry
 import Proofs.Conformance.EagerStreaming
 import Proofs.Conformance.ToolResultText
