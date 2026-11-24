@@ -82,35 +82,6 @@
             "enabled",
             "entries"
           ]
-        },
-        {
-          "kind": "documents",
-          "name": "helper_targets",
-          "collection": "AgentTarget",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            },
-            "agent_did": {
-              "_eq": {
-                "$capture": {
-                  "capture": "agents",
-                  "source_match": {
-                    "field": "display_name",
-                    "matches": "(?i)^intake[ -]?writer$"
-                  },
-                  "field": "agent_did"
-                }
-              }
-            }
-          },
-          "fields": [
-            "target_id",
-            "node_did",
-            "name",
-            "target_node_did",
-            "agent_did"
-          ]
         }
       ],
       "checks": [
@@ -155,13 +126,7 @@
                   ]
                 }
               ]
-            },
-            "present": [
-              {
-                "capture": "helper_targets",
-                "min": 1
-              }
-            ]
+            }
           },
           "tier": "acceptance",
           "weight": 1

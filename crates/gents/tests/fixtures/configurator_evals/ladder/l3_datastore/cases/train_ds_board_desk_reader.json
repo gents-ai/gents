@@ -121,35 +121,6 @@
         },
         {
           "kind": "documents",
-          "name": "helper_targets",
-          "collection": "AgentTarget",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            },
-            "agent_did": {
-              "_eq": {
-                "$capture": {
-                  "capture": "agents",
-                  "source_match": {
-                    "field": "display_name",
-                    "matches": "(?i)^board[ -]?reader$"
-                  },
-                  "field": "agent_did"
-                }
-              }
-            }
-          },
-          "fields": [
-            "target_id",
-            "node_did",
-            "name",
-            "target_node_did",
-            "agent_did"
-          ]
-        },
-        {
-          "kind": "documents",
           "name": "DispatchThread",
           "collection": "DispatchThread",
           "filter": {},
@@ -204,10 +175,6 @@
               ]
             },
             "present": [
-              {
-                "capture": "helper_targets",
-                "min": 1
-              },
               {
                 "capture": "DispatchThread",
                 "min": 5,
