@@ -40,6 +40,18 @@ pub fn effective_goal_budget(policy: &GoalStopPolicy, goal_budget: Option<i64>) 
     }
 }
 
+/// Lean `GoalStopPolicy.limitReached`: charged tokens reached the enforced
+/// budget, or (unless lifted) goal turns reached the user's turn ceiling.
+pub fn goal_limit_reached(
+    policy: &GoalStopPolicy,
+    goal_budget: Option<i64>,
+    tokens_used: i64,
+    turns: i64,
+) -> bool {
+    super::goal_budget_reached(effective_goal_budget(policy, goal_budget), tokens_used)
+        || (!policy.lifted && policy.turn_ceiling.is_some_and(|ceiling| ceiling <= turns))
+}
+
 const POLICY_FIELDS: &str =
     "_docID goal_doc_id agent_did on_blocked token_ceiling turn_ceiling lifted";
 

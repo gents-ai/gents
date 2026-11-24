@@ -15,6 +15,10 @@ pub struct CallPrint {
 pub struct ProgressRecord {
     pub streak: u64,
     pub previous: Vec<CallPrint>,
+    /// The Goal's objective and budget when the record was written; a turn
+    /// that changed them changed goal state.
+    #[serde(default)]
+    pub goal: String,
 }
 
 /// Lean `GoalProgress.noProgressLimit`.
@@ -36,6 +40,7 @@ pub fn progress_step(
             ProgressRecord {
                 streak: 0,
                 previous: calls,
+                goal: record.goal.clone(),
             },
             false,
         )
@@ -44,6 +49,7 @@ pub fn progress_step(
             ProgressRecord {
                 streak: record.streak,
                 previous: calls,
+                goal: record.goal.clone(),
             },
             false,
         )
@@ -53,6 +59,7 @@ pub fn progress_step(
             ProgressRecord {
                 streak,
                 previous: calls,
+                goal: record.goal.clone(),
             },
             NO_PROGRESS_LIMIT <= streak,
         )
@@ -99,4 +106,127 @@ pub fn result_digest(result: &str) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+/// What the harness observed of one finished goal turn (Lean
+/// `GoalProgress.Turn`, plus the deadline of a live background job).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TurnObservation {
+    pub calls: Vec<CallPrint>,
+    pub goal_state_changed: bool,
+    pub live_deadline: Option<u64>,
+}
+
+fn stream_bytes(
+    segments: &[gents_protocol::output::OutputSegment],
+) -> Vec<(
+    gents_protocol::output::OutputSource,
+    Option<gents_protocol::output::StreamPayload>,
+    String,
+)> {
+    let mut ordered: Vec<_> = segments
+        .iter()
+        .filter(|segment| !segment.runs.is_empty())
+        .collect();
+    ordered.sort_by_key(|segment| segment.ordinal);
+    let mut streams: Vec<(
+        gents_protocol::output::OutputSource,
+        u32,
+        Option<gents_protocol::output::StreamPayload>,
+        String,
+    )> = Vec::new();
+    for segment in ordered {
+        let mut cursor = 0usize;
+        for run in &segment.runs {
+            let end = (cursor + run.bytes as usize).min(segment.payload.len());
+            let text = segment.payload.get(cursor..end).unwrap_or_default();
+            cursor = end;
+            match streams
+                .iter_mut()
+                .find(|(source, stream, ..)| *source == segment.source && *stream == run.stream)
+            {
+                Some((_, _, declaration, bytes)) => {
+                    if declaration.is_none() {
+                        *declaration = run.declaration.as_ref().map(|d| d.payload.clone());
+                    }
+                    bytes.push_str(text);
+                }
+                None => streams.push((
+                    segment.source.clone(),
+                    run.stream,
+                    run.declaration.as_ref().map(|d| d.payload.clone()),
+                    text.to_owned(),
+                )),
+            }
+        }
+    }
+    streams
+        .into_iter()
+        .map(|(source, _, declaration, bytes)| (source, declaration, bytes))
+        .collect()
+}
+
+/// The turn's call prints from the latest goal request's `AgentToolCall`
+/// rows and its `AgentOutputSegment` rows: each call's name, its arguments
+/// as the provider turn emitted them (canonicalized) and a digest of its
+/// output. A running call whose deadline is after `now` (seconds) is live
+/// background work.
+pub fn observe_turn(
+    tool_calls: &[serde_json::Value],
+    segments: &[gents_protocol::output::OutputSegment],
+    now: u64,
+) -> TurnObservation {
+    use gents_protocol::output::{OutputSource, StreamPayload};
+    let streams = stream_bytes(segments);
+    let arguments = |call_id: &str| {
+        streams
+            .iter()
+            .find_map(|(source, declaration, bytes)| match (source, declaration) {
+                (
+                    OutputSource::ProviderTurn { .. },
+                    Some(StreamPayload::ToolArguments {
+                        id,
+                        call_id: native,
+                        ..
+                    }),
+                ) if id == call_id || native.as_deref() == Some(call_id) => Some(bytes.as_str()),
+                _ => None,
+            })
+    };
+    let output = |doc_id: &str| {
+        streams
+            .iter()
+            .filter(|(source, ..)| {
+                matches!(source, OutputSource::ToolCall { tool_call_doc_id } if tool_call_doc_id == doc_id)
+            })
+            .map(|(_, _, bytes)| bytes.as_str())
+            .collect::<String>()
+    };
+    let mut observation = TurnObservation::default();
+    for row in tool_calls {
+        let tool = row["tool_name"].as_str().unwrap_or_default().to_owned();
+        let state = row["lifecycle_state"].as_str().unwrap_or_default();
+        let doc_id = row["_docID"].as_str().unwrap_or_default();
+        let call_id = row["tool_call_id"].as_str().unwrap_or_default();
+        if state == "running" {
+            let deadline = row["deadline_at"]
+                .as_str()
+                .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+                .and_then(|at| u64::try_from(at.timestamp()).ok());
+            if let Some(deadline) = deadline.filter(|deadline| now < *deadline) {
+                observation.live_deadline = Some(
+                    observation
+                        .live_deadline
+                        .map_or(deadline, |d| d.max(deadline)),
+                );
+            }
+        }
+        let result = format!("{}\n{}", output(doc_id), row["terminal_output"]);
+        observation.calls.push(CallPrint {
+            tool,
+            arguments: canonical_arguments(arguments(call_id).unwrap_or_default()),
+            result: result_digest(&result),
+        });
+    }
+    observation
 }

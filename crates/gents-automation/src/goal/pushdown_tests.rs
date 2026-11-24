@@ -168,6 +168,7 @@ fn generated_goal_progress_cases_fence_the_no_progress_pause() {
         let record = ProgressRecord {
             streak: case.streak,
             previous: prints(&case.previous),
+            goal: String::new(),
         };
         let (next, pause) = progress_step(
             &record,
@@ -204,15 +205,20 @@ fn generated_goal_effective_budget_cases_fence_the_users_ceiling() {
     family::replay(|case| {
         let policy = gents_protocol::goal::GoalStopPolicy {
             token_ceiling: case.token_ceiling.map(signed),
+            turn_ceiling: case.turn_ceiling.map(signed),
             lifted: case.lifted,
             ..Default::default()
         };
+        let goal_budget = case.goal_budget.map(signed);
         family::GoalEffectiveBudgetOutput {
-            budget: crate::goal::stop_policy::effective_goal_budget(
+            budget: crate::goal::stop_policy::effective_goal_budget(&policy, goal_budget)
+                .map(|budget| u64::try_from(budget).expect("budgets are positive")),
+            limit_reached: crate::goal::stop_policy::goal_limit_reached(
                 &policy,
-                case.goal_budget.map(signed),
-            )
-            .map(|budget| u64::try_from(budget).expect("budgets are positive")),
+                goal_budget,
+                signed(case.tokens_used),
+                signed(case.turns),
+            ),
         }
     });
 }

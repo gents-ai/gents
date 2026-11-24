@@ -247,6 +247,10 @@ pub enum GoalOperationError {
     InvalidBudget,
     #[error("a goal policy ceiling must be a positive whole number")]
     InvalidCeiling,
+    #[error("your user asked to confirm a block once: the report is recorded and the goal stays active. Check once more that you cannot go on without the user; if you still cannot, report blocked again and the goal pauses for the user")]
+    ConfirmBlocked,
+    #[error("your user asked you to keep trying: the report is recorded for them and the goal stays active. Continue with another approach; the goal pauses on its own if turns stop making progress")]
+    KeepTrying,
     #[error("provide objective, token_budget, status or auto_resume to change the goal")]
     NothingToChange,
     #[error("usage_limited and budget_limited are set by the runtime when a limit is reached")]
@@ -333,6 +337,7 @@ impl GoalOperationError {
                 resource: "goal",
                 verb: "set",
             },
+            Self::ConfirmBlocked | Self::KeepTrying => NextCall::Inspect { resource: "goal" },
             Self::InvalidCeiling => NextCall::VerbHelp {
                 resource: "goal",
                 verb: "policy",

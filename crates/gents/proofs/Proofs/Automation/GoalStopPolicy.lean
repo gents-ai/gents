@@ -50,6 +50,17 @@ def effectiveBudget (policy : Policy) (goalBudget : Option Nat) : Option Nat :=
   | budget, none => budget
   | some budget, some ceiling => some (min budget ceiling)
 
+/-- The Goal's limit is reached when its charged tokens reach the enforced
+budget or, unless the policy is lifted, its goal turns reach the user's turn
+ceiling. Reaching it gives the Goal its one wrap-up turn, as a budget does. -/
+def limitReached (policy : Policy) (goalBudget : Option Nat) (tokensUsed turns : Nat) : Bool :=
+  Goals.budgetReached (effectiveBudget policy goalBudget) tokensUsed ||
+    (!policy.lifted && policy.turnCeiling.any (· ≤ turns))
+
+theorem no_policy_limit_is_the_goal_budget (goalBudget : Option Nat) (tokensUsed turns : Nat) :
+    limitReached defaults goalBudget tokensUsed turns = Goals.budgetReached goalBudget tokensUsed := by
+  cases goalBudget <;> simp [limitReached, defaults, effectiveBudget, Goals.budgetReached]
+
 theorem stop_first_pauses_on_one_report (confirming : Bool) :
     onBlockedReport .stopFirst confirming = .pause := rfl
 

@@ -63,6 +63,7 @@ pub const GOAL_FIELDS: &str = r#"
     auto_resume_at_reset
     created_at
     updated_at
+    progress_record
 "#;
 
 pub fn deterministic_goal_id(node_did: &str, session_id: &str) -> String {

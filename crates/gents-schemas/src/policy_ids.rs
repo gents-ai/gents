@@ -55,7 +55,7 @@ impl HomePolicyIds {
     /// counter 0, so every such home holds the same IDs.
     pub fn node_store() -> &'static Self {
         const NODE_STORE: HomePolicyIds = HomePolicyIds {
-            household: "4ea18f610525e2476625b09905063701daf3d1fe757ec8784f955e2a61e01b7c",
+            household: "fa4db16d6c42b787a10ea0626f9e2ffa9a16bea9890cdde011fc79190e866438",
             mailbox: "10f15ba2901821f2265d8dccc2cc49878960a5d99a489e1c6a03a7c0767dc0f2",
             client_journal: "0db680be49781d06d5793ca0eecc8fad2b1a5d05467c535325ddeb148f679b9c",
             tool_file_change: "2e14bb0746cf90a5e955db6b9bb5d9098f6aa0776849c8bcb68db4dd1e67ea82",
@@ -70,7 +70,7 @@ impl HomePolicyIds {
     /// home holds the same IDs. gents-store checks them against the seeds.
     pub fn embedded_vera() -> &'static Self {
         const EMBEDDED_VERA: HomePolicyIds = HomePolicyIds {
-            household: "0f052d0eeb2d8b274b3e1dc8f9bf473b5f6afce96aa0920ca3f489fff4777c28",
+            household: "8857a598af61b3523969541b5a4a8d654afbf79f9b01dc4e466f623647234c4b",
             mailbox: "5324b84ea41dc068f4d6d29428ace86915d450831862bbb25c3e322c09b603af",
             client_journal: "892a0e58078046d272f53661a1d1ec4091d13948122b4dc82a14eeddb3955618",
             tool_file_change: "da40747a0af6694036fad9782e338525e2ad60b41e1eebd234c22916c2beff53",
@@ -81,7 +81,7 @@ impl HomePolicyIds {
 
     pub fn embedded_vera_transport_v2() -> &'static Self {
         static V2: HomePolicyIds = HomePolicyIds {
-            household: "a73982505ab1cbfc13f34febde550d7a5a7d9042801d00d4bc9fa6d9d8c41947",
+            household: "e2a137a051676c469e62d76111609e7e584b560e8206a840a7f67003514b38f3",
             mailbox: "5324b84ea41dc068f4d6d29428ace86915d450831862bbb25c3e322c09b603af",
             client_journal: "892a0e58078046d272f53661a1d1ec4091d13948122b4dc82a14eeddb3955618",
             tool_file_change: "da40747a0af6694036fad9782e338525e2ad60b41e1eebd234c22916c2beff53",

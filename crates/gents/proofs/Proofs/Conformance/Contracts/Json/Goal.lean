@@ -461,26 +461,41 @@ structure GoalEffectiveBudgetInput where
   name : String
   goal_budget : Option Nat
   token_ceiling : Option Nat
+  turn_ceiling : Option Nat
   lifted : Bool
+  tokens_used : Nat
+  turns : Nat
   deriving Lean.ToJson
 
-/-- `GoalStopPolicy.effectiveBudget`: the budget the harness enforces. -/
+/-- `GoalStopPolicy.effectiveBudget` and `limitReached`: the budget the
+harness enforces and whether the Goal reached its limit. -/
 structure GoalEffectiveBudgetOutput where
   budget : Option Nat
+  limit_reached : Bool
   deriving Lean.ToJson
 
 @[conformance_family]
 def goalEffectiveBudget : Family GoalEffectiveBudgetInput GoalEffectiveBudgetOutput where
   inputs :=
-    [ { name := "neither", goal_budget := none, token_ceiling := none, lifted := false }
-    , { name := "goal_only", goal_budget := some 500, token_ceiling := none, lifted := false }
-    , { name := "ceiling_only", goal_budget := none, token_ceiling := some 800, lifted := false }
-    , { name := "goal_below_ceiling", goal_budget := some 500, token_ceiling := some 800, lifted := false }
-    , { name := "goal_above_ceiling", goal_budget := some 900, token_ceiling := some 800, lifted := false }
-    , { name := "lifted_ceiling", goal_budget := some 900, token_ceiling := some 800, lifted := true }
-    , { name := "lifted_without_goal_budget", goal_budget := none, token_ceiling := some 800, lifted := true } ]
+    let case (name : String) (goal ceiling turnCeiling : Option Nat) (lifted : Bool)
+        (used turns : Nat) : GoalEffectiveBudgetInput :=
+      { name, goal_budget := goal, token_ceiling := ceiling, turn_ceiling := turnCeiling,
+        lifted, tokens_used := used, turns }
+    [ case "neither" none none none false 5000000 40
+    , case "goal_only_under" (some 500) none none false 499 1
+    , case "goal_only_reached" (some 500) none none false 500 1
+    , case "ceiling_only_reached" none (some 800) none false 800 1
+    , case "goal_below_ceiling" (some 500) (some 800) none false 600 1
+    , case "goal_above_ceiling" (some 900) (some 800) none false 850 1
+    , case "lifted_ceiling" (some 900) (some 800) none true 850 1
+    , case "lifted_without_goal_budget" none (some 800) none true 5000 1
+    , case "turn_ceiling_under" none none (some 5) false 0 4
+    , case "turn_ceiling_reached" none none (some 5) false 0 5
+    , case "lifted_turn_ceiling" none none (some 5) true 0 9 ]
   model := fun i =>
-    { budget := GoalStopPolicy.effectiveBudget ⟨.stopFirst, i.token_ceiling, none, i.lifted⟩ i.goal_budget }
+    let policy : GoalStopPolicy.Policy := ⟨.stopFirst, i.token_ceiling, i.turn_ceiling, i.lifted⟩
+    { budget := GoalStopPolicy.effectiveBudget policy i.goal_budget
+    , limit_reached := GoalStopPolicy.limitReached policy i.goal_budget i.tokens_used i.turns }
 
 structure GoalCreateCase where
   name : String
