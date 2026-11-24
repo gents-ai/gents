@@ -108,7 +108,7 @@
           "fields": [
             "arrives_at",
             "leaves_at",
-            "guest_id"
+            "_guestID"
           ]
         },
         {
