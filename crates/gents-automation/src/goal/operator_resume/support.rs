@@ -38,12 +38,12 @@ pub struct FixtureNode {
 
 impl FixtureNode {
     pub async fn start() -> Self {
-        let (db, user, user_access) =
-            gents_inference::test_support::signed_test_node_without_agent(
-                "goal-operator",
-                crate::lifecycle_hooks::composition(),
-            )
-            .await;
+        let (db, user, user_access) = gents_documents::test_support::SignedHome::start(
+            "goal-operator",
+            crate::lifecycle_hooks::composition(),
+        )
+        .await
+        .into_parts();
         let admin = ConfigAccess::local_as(
             db.node.clone(),
             ::identity::Did::new(db.node_identity.did()).unwrap(),

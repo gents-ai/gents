@@ -161,7 +161,7 @@ describe("a session link that leads nowhere", () => {
     ]);
     renderIn(app, <Probe />);
     lookedAndFoundNothing(app);
-    expect(screen.getByRole("heading", { name: /^Can’t reach / })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: /^Reconnecting to / })).toBeTruthy();
   });
 
   it("says when its node refuses this app, whatever the old dial reported", () => {

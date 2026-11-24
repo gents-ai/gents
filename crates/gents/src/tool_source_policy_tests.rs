@@ -42,12 +42,13 @@ async fn enrolled_user_authors_held_tools_and_only_the_household_owner_adds_sche
         gents_lean_vocab::families::identity_delegation_tools_authoring::cases()
     })
     .await?;
-    let (db, _user, user_access, binding) =
-        gents_inference::test_support::signed_test_node_from_db(
-            crate::support::trial_store("enrolled-tools-authoring").await,
-            "enrolled-tools-authoring",
-        )
-        .await;
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
+        crate::support::trial_store("enrolled-tools-authoring").await,
+        "enrolled-tools-authoring",
+    )
+    .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, user_access) = signed_home.into_parts();
     let node_did = db.node_identity.did().to_owned();
     let agent = identity::Did::new(&binding.agent_did)?;
     let self_config =

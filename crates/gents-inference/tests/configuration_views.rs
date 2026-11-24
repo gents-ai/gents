@@ -2,7 +2,6 @@ use gents_documents::views::config::{
     AgentContextList, AgentTargetList, CompactionConfigList, DatastoreToolSurfaceList,
     DefaultAgentSelectionList, NodeList, PageList, PluginSourceList, SkillList, ToolsList,
 };
-use gents_inference::test_support::signed_test_node_without_agent;
 use gents_store::config_client::ConfigAccess;
 use gents_store::identity::{GrantSet, NodeIdentity};
 use serde_json::{json, Value};
@@ -32,11 +31,12 @@ async fn create(
 
 #[tokio::test]
 async fn configuration_views_match_model_on_served_node() -> anyhow::Result<()> {
-    let (db, _, owner) = signed_test_node_without_agent(
+    let (db, _, owner) = gents_documents::test_support::SignedHome::start(
         "configuration-views",
         gents_store::node_extension::Extensions::default(),
     )
-    .await;
+    .await
+    .into_parts();
     let (reader, stranger) = tokio::task::spawn_blocking(|| {
         (
             gents_store::test_support::test_identity("configuration-view-reader"),

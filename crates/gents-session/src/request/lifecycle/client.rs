@@ -2479,8 +2479,9 @@ mod tests {
                 crate::test_support::no_lifecycle_plugins(),
             )
             .await;
-            let (db, user, user_access, parent) =
-                gents_inference::test_support::signed_test_node_from_db(db, &name).await;
+            let signed_home = gents_documents::test_support::SignedHome::enroll(db, &name).await;
+            let parent = gents_inference::test_support::default_agent(&signed_home).await;
+            let (db, user, user_access) = signed_home.into_parts();
             let node = db.node.clone();
             let runtime = db.node_identity.clone();
             let target = gents_store::identity::provision_agent_identity_authorized(

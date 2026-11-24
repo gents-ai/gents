@@ -65,11 +65,12 @@ fn routed_snapshot(
 
 #[tokio::test]
 async fn invalid_execution_origin_route_rejection_terminalizes_without_stopping_router() {
-    let (db, _user, _access, binding) = gents_inference::test_support::signed_test_node_from_db(
+    let db = gents_documents::test_support::SignedHome::enroll(
         crate::support::trial_store("invalid-origin-route").await,
         "invalid-origin-route",
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&db).await;
     let node = db.node.clone();
     let root = db.node_identity.clone();
     let agent = gents_store::identity::resolve_agent_identity(root.as_ref(), &binding).unwrap();
@@ -150,11 +151,13 @@ pub(super) fn routed_snapshot_with_agent(
 
 #[tokio::test]
 async fn unresolvable_session_terminalizes_the_request_at_the_attempt_bound() {
-    let (db, _user, _access, binding) = gents_inference::test_support::signed_test_node_from_db(
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
         crate::support::trial_store("unresolved-session").await,
         "unresolved-session",
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, _access) = signed_home.into_parts();
     let node = db.node.clone();
     let root = db.node_identity.clone();
     let agent = gents_store::identity::resolve_agent_identity(root.as_ref(), &binding).unwrap();
@@ -284,12 +287,13 @@ async fn unresolvable_session_terminalizes_the_request_at_the_attempt_bound() {
 
 #[tokio::test]
 async fn closing_admission_cancels_a_send_to_a_full_executor_queue() {
-    let (db, _user, _user_access, binding) =
-        gents_inference::test_support::signed_test_node_from_db(
-            crate::support::trial_store("runtime-router").await,
-            "runtime-router",
-        )
-        .await;
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
+        crate::support::trial_store("runtime-router").await,
+        "runtime-router",
+    )
+    .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, _user_access) = signed_home.into_parts();
     let node = db.node.clone();
     let node_did = db.node_identity.did().to_owned();
     let agent_did = binding.agent_did;
@@ -371,12 +375,13 @@ async fn blocked_dispatch_follows_the_lean_model() {
     for case in
         gents_lean_vocab::families::router_dispatch_blocked_dispatch::cases::<String, String>()
     {
-        let (db, _user, user_access, binding) =
-            gents_inference::test_support::signed_test_node_from_db(
-                crate::support::trial_store("runtime-router").await,
-                "runtime-router",
-            )
-            .await;
+        let signed_home = gents_documents::test_support::SignedHome::enroll(
+            crate::support::trial_store("runtime-router").await,
+            "runtime-router",
+        )
+        .await;
+        let binding = gents_inference::test_support::default_agent(&signed_home).await;
+        let (db, _user, user_access) = signed_home.into_parts();
         let node = db.node.clone();
         let node_did = db.node_identity.did().to_owned();
         let agent_did = binding.agent_did;
@@ -510,12 +515,12 @@ async fn blocked_dispatch_follows_the_lean_model() {
 
 #[tokio::test]
 async fn router_generation_write_failure_closes_admission_before_dequeue_or_dispatch() {
-    let (db, _user, _user_access, binding) =
-        gents_inference::test_support::signed_test_node_from_db(
-            crate::support::trial_store("runtime-router").await,
-            "runtime-router",
-        )
-        .await;
+    let db = gents_documents::test_support::SignedHome::enroll(
+        crate::support::trial_store("runtime-router").await,
+        "runtime-router",
+    )
+    .await;
+    let binding = gents_inference::test_support::default_agent(&db).await;
     let node = db.node.clone();
     let node_did = db.node_identity.did().to_owned();
     let agent_did = binding.agent_did;
@@ -693,12 +698,13 @@ async fn accept_after_generation_handoff(input: &ReconcileInput) -> (bool, u64) 
 }
 
 async fn observed_generation_publication(input: &ReconcileInput) -> (bool, u64) {
-    let (db, _user, _user_access, binding) =
-        gents_inference::test_support::signed_test_node_from_db(
-            crate::support::trial_store("runtime-router").await,
-            "runtime-router",
-        )
-        .await;
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
+        crate::support::trial_store("runtime-router").await,
+        "runtime-router",
+    )
+    .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, _user_access) = signed_home.into_parts();
     let node = db.node.clone();
     let node_did = db.node_identity.did().to_owned();
     let agent_did = binding.agent_did;

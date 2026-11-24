@@ -1,0 +1,3 @@
+---- MODULE MCTranscriptWheelRest ----
+EXTENDS TranscriptWheelRest
+====

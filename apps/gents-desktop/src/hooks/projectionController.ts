@@ -11,6 +11,9 @@ export type DesktopUpdateRefreshScope =
     the session joins it. */
 export type ProjectionRequest = DesktopUpdateRefreshScope | "reread";
 
+/** How long an idle controller waits for more requests to join a read. */
+export const BURST_MS = 120;
+
 export function desktopUpdateRefreshScope(
   reason: string | undefined,
   selectedSessionId: string | null,
@@ -96,8 +99,13 @@ export function createProjectionController({
 
   const enqueue = (work: number) => {
     pending |= work;
-    if (pending & (SESSION | REREAD)) {
+    if (pending & (SESSION | REREAD) && pending & SESSION_DELTA) {
+      /* a full read of the session covers a store update's delta, but not
+         the index read the update owes once the tracked turn ends (alone, a
+         due delta reads as a session event): the session read pays it when
+         it finds the turn ended */
       pending &= ~SESSION_DELTA;
+      pending |= INDEX_AFTER_TERMINAL;
     }
   };
 
@@ -180,7 +188,9 @@ export function createProjectionController({
       if (disposed) return Promise.resolve();
       enqueue(requestedWork(scope));
       if (!active) {
-        active = Promise.resolve()
+        /* a burst of updates (a reconnect's snapshots, a turn's events)
+           lands as one read: requests in the next moment join this one */
+        active = new Promise<void>((resolve) => setTimeout(resolve, BURST_MS))
           .then(drain)
           .finally(() => {
             active = null;

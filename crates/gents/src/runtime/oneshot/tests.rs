@@ -13,11 +13,13 @@ async fn oneshot_fixture(
     gents_protocol::agent_identity::AgentIdentityBinding,
 ) {
     use gents_store::config_client::NodePermission;
-    let (db, user, user_access, binding) = gents_inference::test_support::signed_test_node_from_db(
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
         crate::support::trial_store(name).await,
         name,
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, user_access) = signed_home.into_parts();
     let agent =
         gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
     let admin = gents_store::config_client::ConfigAccess::local_as(

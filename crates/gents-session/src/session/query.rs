@@ -277,11 +277,13 @@ async fn stop_latch_reads_as_the_selected_actor() {
     let user =
         gents_store::identity::KeyIdentity::load_or_create(home.path().join("user.key"), None)
             .unwrap();
-    let (node_db, _owner, owner_access, binding) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "stop-latch-reads-as-the-selected-actor",
         crate::test_support::no_lifecycle_plugins(),
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (node_db, _owner, owner_access) = signed_home.into_parts();
     let node = node_db.node.clone();
     let runtime = gents_store::test_support::held_runtime_identity(node_db.node_identity.did());
     let agent = gents_store::identity::resolve_agent_identity(&runtime, &binding).unwrap();

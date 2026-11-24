@@ -29,11 +29,13 @@ struct PolicyFixture {
 
 impl PolicyFixture {
     async fn new(name: &str) -> Self {
-        let (db, _user, user_access, binding) = gents_inference::test_support::signed_test_node(
+        let signed_home = gents_documents::test_support::SignedHome::start(
             name,
             gents_session::test_support::no_lifecycle_plugins(),
         )
         .await;
+        let binding = gents_inference::test_support::default_agent(&signed_home).await;
+        let (db, _user, user_access) = signed_home.into_parts();
         let agent =
             gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
                 .expect("fixture Agent is derived from the held runtime");

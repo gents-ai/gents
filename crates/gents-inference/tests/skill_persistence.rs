@@ -1,11 +1,13 @@
 use gents_inference::test_support::document_fixtures::*;
 #[tokio::test]
 async fn skill_crud_mutations_round_trip() {
-    let (db, user, access, _binding) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "skill-crud",
         gents_store::node_extension::Extensions::default(),
     )
     .await;
+    let _binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, access) = signed_home.into_parts();
     grant_delete_permissions(&db.node, db.node_identity.as_ref(), &user).await;
     seed_automation(
         &access,

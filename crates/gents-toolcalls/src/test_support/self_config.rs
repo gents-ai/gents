@@ -105,8 +105,9 @@ impl SelfConfigFixture {
     }
 
     pub async fn from_db(db: gents_store::test_support::TestStore, name: &str) -> Self {
-        let (db, _user, user_access, binding) =
-            gents_inference::test_support::signed_test_node_from_db(db, name).await;
+        let signed_home = gents_documents::test_support::SignedHome::enroll(db, name).await;
+        let binding = gents_inference::test_support::default_agent(&signed_home).await;
+        let (db, _user, user_access) = signed_home.into_parts();
         let agent =
             gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
                 .expect("fixture Agent is derived from the held runtime");

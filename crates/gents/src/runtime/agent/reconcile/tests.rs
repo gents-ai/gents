@@ -760,11 +760,13 @@ async fn seed_fixture_agent_session(
 
 #[tokio::test]
 async fn generation_supervisor_restages_slot_on_api_key_rotation() {
-    let (db, _user, _access, binding) = gents_inference::test_support::signed_test_node_from_db(
+    let signed_home = gents_documents::test_support::SignedHome::enroll(
         crate::support::trial_store("reconcile-api-key-rotation").await,
         "reconcile-api-key-rotation",
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, _access) = signed_home.into_parts();
     let node = db.node.clone();
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let node_did = db.node_identity.did().to_string();

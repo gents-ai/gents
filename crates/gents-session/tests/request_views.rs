@@ -11,11 +11,12 @@ async fn request_views_match_model_on_served_node() -> anyhow::Result<()> {
     )
     .await?;
     assert_eq!(cases.len(), 192);
-    let (db, _, owner) = gents_inference::test_support::signed_test_node_without_agent(
+    let (db, _, owner) = gents_documents::test_support::SignedHome::start(
         "request-views",
         gents_session::test_support::no_lifecycle_plugins(),
     )
-    .await;
+    .await
+    .into_parts();
     let reader = tokio::task::spawn_blocking(|| {
         gents_store::test_support::test_identity("request-view-reader")
     })
@@ -120,11 +121,12 @@ async fn causal_request_views_match_model_on_served_node() -> anyhow::Result<()>
         tokio::task::spawn_blocking(gents_lean_vocab::families::request_views_causal_child::cases)
             .await?;
     assert_eq!(cases.len(), 16);
-    let (db, _, owner) = gents_inference::test_support::signed_test_node_without_agent(
+    let (db, _, owner) = gents_documents::test_support::SignedHome::start(
         "causal-request-views",
         gents_session::test_support::no_lifecycle_plugins(),
     )
-    .await;
+    .await
+    .into_parts();
     let (reader, stranger) = tokio::task::spawn_blocking(|| {
         (
             gents_store::test_support::test_identity("causal-request-reader"),

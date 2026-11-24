@@ -44,11 +44,13 @@ async fn accepted_background_panic_terminalizes_and_notifies_before_release() {
         AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
     };
 
-    let (db, user, owner, binding) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "hook-background-panic",
         gents_session::test_support::no_lifecycle_plugins(),
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, owner) = signed_home.into_parts();
     let node = db.node.clone();
     let agent =
         gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();

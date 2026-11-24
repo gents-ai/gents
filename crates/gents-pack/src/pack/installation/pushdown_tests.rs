@@ -143,11 +143,10 @@ async fn locally_installed_pack_agent_holds_the_projected_baseline() {
 
 async fn installed_baseline_after_local_pack_install() -> Vec<String> {
     use gents_store::identity::NodeIdentity as _;
-    let (db, user, user_access) = gents_inference::test_support::signed_test_node_without_agent(
-        "local-pack-baseline",
-        Default::default(),
-    )
-    .await;
+    let (db, user, user_access) =
+        gents_documents::test_support::SignedHome::start("local-pack-baseline", Default::default())
+            .await
+            .into_parts();
     let runtime = db.node_identity.clone();
     let (_guard, dir) = crate::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
     let (bytes, _) = crate::pack::archive::pack_dir(&dir).unwrap();
@@ -261,11 +260,12 @@ async fn installed_baseline_after_local_pack_install() -> Vec<String> {
 #[tokio::test]
 async fn pack_install_applies_exactly_the_declared_placement_readers() {
     use gents_store::identity::{GrantSet, NodeIdentity as _};
-    let (db, user, user_access) = gents_inference::test_support::signed_test_node_without_agent(
+    let (db, user, user_access) = gents_documents::test_support::SignedHome::start(
         "pack-placement-readers",
         Default::default(),
     )
-    .await;
+    .await
+    .into_parts();
     let runtime = db.node_identity.clone();
     let root = tempfile::tempdir().unwrap();
     let host_path = root.path().to_string_lossy().into_owned();
