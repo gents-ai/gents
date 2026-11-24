@@ -210,6 +210,52 @@ async fn publish_child(
         .await
 }
 
+/// The pending children of `collection` matching `filter`, a page of 64 at a
+/// time by plain `_docID > last` queries. A cursor query skips the planner's
+/// index estimates (its seek key is bound to one index), so it fell back to
+/// the first declared index, `node_did`, which every document on the node
+/// shares: each recovery walked the whole collection. A plain query is
+/// estimated and takes the selective index.
+async fn keyset_rows(
+    txn: &ConfigApplyTxn<'_>,
+    collection: &str,
+    fields: &str,
+    filter: &str,
+) -> Result<Vec<serde_json::Value>> {
+    const PAGE: usize = 64;
+    let mut rows = Vec::new();
+    let mut after: Option<String> = None;
+    loop {
+        let seek = after
+            .as_deref()
+            .map(|id| format!(r#", _docID: {{ _gt: "{}" }}"#, escape_graphql_string(id)))
+            .unwrap_or_default();
+        let response = txn
+            .execute(&format!(
+                r#"{{ {collection}(filter: {{ {filter}{seek} }}, order: [{{ _docID: ASC }}], limit: {limit}) {{ {fields} }} }}"#,
+                limit = PAGE + 1
+            ))
+            .await?;
+        let mut page = response
+            .get("data")
+            .and_then(|data| data.get(collection))
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .with_context(|| format!("{collection} recovery page omitted its rows"))?;
+        let more = page.len() > PAGE;
+        page.truncate(PAGE);
+        after = page
+            .last()
+            .and_then(|row| row.get("_docID"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned);
+        rows.extend(page);
+        if !more || after.is_none() {
+            return Ok(rows);
+        }
+    }
+}
+
 async fn load_pending(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
@@ -245,7 +291,7 @@ async fn load_pending(
         } else {
             "_docID session_doc_id node_did session_id requester_did agent_did creator_did"
         };
-        let rows = txn.cursor_rows(collection, fields, &filter).await?;
+        let rows = keyset_rows(txn, collection, fields, &filter).await?;
         for chunk in rows.chunks(64) {
             let children = chunk.iter().filter_map(|row| match serde_json::from_value::<Child>(row.clone()) {
                 Ok(child) => Some(child),
