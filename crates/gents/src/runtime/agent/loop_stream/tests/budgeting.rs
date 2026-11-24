@@ -99,12 +99,9 @@ async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fit
             "threshold_plus_one" => ("compacted prompt".to_string(), 1_000),
             other => panic!("no staged-turn fixture builds {other}"),
         };
-        let (node_db, _user, _user_access, binding) =
-            gents_inference::test_support::signed_test_node(
-                "staged-turn-reduction-commits-its-row-on",
-                gents_automation::lifecycle_hooks::composition(),
-            )
-            .await;
+        let signed_home = gents_documents::test_support::SignedHome::start("staged-turn-reduction-commits-its-row-on", gents_automation::lifecycle_hooks::composition()).await;
+        let binding = gents_inference::test_support::default_agent(&signed_home).await;
+        let (node_db, _user, _user_access) = signed_home.into_parts();
         let node = node_db.node.clone();
         let root = gents_store::test_support::held_runtime_identity(node_db.node_identity.did());
         let agent = gents_store::identity::resolve_agent_identity(&root, &binding).unwrap();
