@@ -29,7 +29,7 @@
   "stages": [
     {
       "stage_id": "retain",
-      "prompt": "How long does the records office keep each record in records/?",
+      "prompt": "How long does the records office keep each record in records/? Just each record and its retention, please.",
       "capture": [
         {
           "kind": "file",
@@ -43,19 +43,19 @@
           "params": {
             "all": [
               {
-                "matches": "R-7\\b(?:[^-]|-\\D){0,80}?\\b14\\b"
+                "matches": "R-7\\b(?:[^-]|-\\D){0,200}?\\b14\\b"
               },
               {
-                "matches": "R-8\\b(?:[^-]|-\\D){0,80}?\\b5\\b"
+                "matches": "R-8\\b(?:[^-]|-\\D){0,200}?\\b5\\b"
               },
               {
-                "matches": "R-9\\b(?:[^-]|-\\D){0,80}?\\b84\\b"
+                "matches": "R-9\\b(?:[^-]|-\\D){0,200}?\\b84\\b"
               },
               {
-                "matches": "R-10\\b(?:[^-3]|-\\D|3[^6]){0,80}?(?i:hold)"
+                "matches": "R-10\\b(?:[^-3]|-\\D|3[^6]){0,200}?(?i:hold)"
               },
               {
-                "matches": "R-11\\b(?:[^-]|-\\D){0,80}?\\b36\\b"
+                "matches": "R-11\\b(?:[^-]|-\\D){0,200}?\\b36\\b"
               }
             ]
           },

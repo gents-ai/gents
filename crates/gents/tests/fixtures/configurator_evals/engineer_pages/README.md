@@ -16,10 +16,12 @@ development tier; fixtures supply only the app collections and their rows.
 Page cases grade the stored Page and DatastoreToolSurface documents and, where
 the user asks for it, a passing page lint. The trial image has no page
 renderer, so what a page shows is graded from its module and data
-declarations, not from a render. Chart cases grade the drawn chart in a
-successful charts result (`response.chart`, and the numbers in
-`response.series`) and the answer; table cases grade the answer and any file
-the user asked for.
+declarations, not from a render. A chart case asks for a chart, so it
+requires a completed `charts` call (made directly or inside `script`), and
+grades the chart's numbers through the answer: a charts call inside `script`
+leaves no output segment, and its stored result is the response JSON followed
+by an image note, which no check can parse. Table cases grade the answer and
+any file the user asked for.
 
 ## Cases
 
@@ -30,14 +32,14 @@ the user asked for.
 | restore-my-holdings | bring back a hidden page, keep a retired one hidden | page update | My Holdings enabled and otherwise unchanged; the other two pages untouched |
 | fix-stale-calibrations | a page that shows no rows | page data declaration repair | the page declares the surface its module queries; module and the team page unchanged |
 | clear-lint-finding | fix what lint flags without changing the page | page lint, module and CSS edit | the page still shows the same table and badge; colours use theme variables; lint admitted |
-| dock-totals-bar | crates per dock as bars across two files | `charts` bar with aggregation | a bar chart whose series sums to 83 with a top of 34; Tern and 34 in the reply |
-| tide-line | each day's high water as a line | `charts` line over a per-day maximum, a non-numeric reading | a line chart of the five daily highs (sum 86, top 23); Wednesday and 23 |
+| dock-totals-bar | crates per dock as bars across two files | `charts` bar with aggregation | a completed charts call; each dock's combined total in the reply |
+| tide-line | each day's high water as a line | `charts` line over a per-day maximum, a non-numeric reading | a completed charts call; each day's high in the reply |
 | pie-slice-limit | whether 15 product lines fit one pie | `charts` help topics | the 12-slice limit and the "Other" slice in the reply |
 | unbilled-parcels | shipped parcels with no live invoice | `data_tables` SQL over two CSVs (or any route) | the four parcels and their count; inputs unchanged |
 | add-chart-keep-css | a bar chart added above a page's table | page module edit, lint | the page keeps its stylesheet, table and query, adds a BarChart of vessels; lint admitted |
 | refund-aging | overdue refunds saved for finance | day/month dates, a join, `data_tables` output or a written CSV | the saved CSV holds exactly the five refunds; the count in the reply; inputs unchanged |
 | harbor-arrivals-page | a page that lists moorings and depths and logs arrivals | page with `useQuery` and `useWrite`, surfaces over two collections, lint | the Harbour Arrivals page reads and writes, its surfaces cover Mooring and QuayDepth; lint admitted |
-| rig-flow-scatter | flow against vane angle per operator | `charts` scatter with series and correlation | a scatter with a series per operator and correlations; 5.6 and ana in the reply |
+| rig-flow-scatter | flow against vane angle per operator | `charts` scatter with series and correlation | a completed charts call; 5.6 and ana in the reply |
 
 ## Usage
 

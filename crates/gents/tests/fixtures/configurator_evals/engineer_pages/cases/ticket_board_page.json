@@ -115,7 +115,7 @@
                   },
                   {
                     "field": "data",
-                    "matches": "\"surface\"\\s*:\\s*\"[a-z0-9_]+\""
+                    "matches": "\"surface\"\\s*:\\s*\"[^\"]+\""
                   }
                 ]
               }

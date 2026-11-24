@@ -17,27 +17,13 @@
   "stages": [
     {
       "stage_id": "chart",
-      "prompt": "Chart crates per dock as bars, counting both quay.csv and the late deliveries in quay-late.csv; a dock that shows up more than once should be added up. Which dock handled the most, and how many crates?",
+      "prompt": "Chart crates per dock as bars, counting both quay.csv and the late deliveries in quay-late.csv; a dock that shows up more than once should be added up. How many crates did each dock handle?",
       "checks": [
         {
-          "check": "tool_result_matches",
+          "check": "tool_calls_expected",
           "params": {
-            "expect": [
-              {
-                "field": "response.chart",
-                "fallback_field": "chart",
-                "equals": "bar"
-              },
-              {
-                "field": "response.series",
-                "fallback_field": "series",
-                "matches": "\"sum\"\\s*:\\s*83(\\.0+)?[,}\\s]"
-              },
-              {
-                "field": "response.series",
-                "fallback_field": "series",
-                "matches": "\"max\"\\s*:\\s*34(\\.0+)?[,}\\s]"
-              }
+            "required": [
+              "charts"
             ]
           },
           "tier": "acceptance",
@@ -48,10 +34,13 @@
           "params": {
             "all": [
               {
-                "matches": "\\bTern\\b"
+                "matches": "Tern\\b(?:[^-]|-\\D){0,40}?\\b34\\b"
               },
               {
-                "matches": "\\b34\\b"
+                "matches": "Kite\\b(?:[^-]|-\\D){0,40}?\\b27\\b"
+              },
+              {
+                "matches": "Loon\\b(?:[^-]|-\\D){0,40}?\\b22\\b"
               }
             ]
           },

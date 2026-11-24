@@ -264,7 +264,7 @@
   "stages": [
     {
       "stage_id": "run",
-      "prompt": "Put a note in my inbox titled \"Warm cold bins\" listing every cold bin running warmer than 8 degrees (exactly 8 is fine), written as BIN (TEMP) and sorted by bin, like \"CB-90 (12), CB-91 (15)\".",
+      "prompt": "Put a note in my inbox titled \"Warm cold bins\" listing every cold bin running above 8 degrees, written as BIN (TEMP) and sorted by bin, like \"CB-90 (12), CB-91 (15)\". A bin at exactly 8 is still within limits, so leave it out.",
       "capture": [
         {
           "kind": "documents",

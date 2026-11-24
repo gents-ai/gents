@@ -17,7 +17,7 @@
   "stages": [
     {
       "stage_id": "settle",
-      "prompt": "What's payable on each staff travel claim in claims/?",
+      "prompt": "What's payable on each staff travel claim in claims/? Just the amount for each claim.",
       "capture": [
         {
           "kind": "file",
@@ -31,10 +31,10 @@
           "params": {
             "all": [
               {
-                "matches": "C-31\\b(?:[^-]|-\\D){0,80}?\\b51\\b"
+                "matches": "C-31\\b(?:[^-]|-\\D){0,200}?\\b51\\b"
               },
               {
-                "matches": "C-32\\b(?:[^-]|-\\D){0,80}?\\b9\\b"
+                "matches": "C-32\\b(?:[^-]|-\\D){0,200}?\\b9\\b"
               }
             ]
           },

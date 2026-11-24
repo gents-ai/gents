@@ -16,29 +16,10 @@
       "prompt": "Plot the rig trial in trials/rig.csv as a scatter of flow against vane angle, angle on the x axis, with each operator's runs in their own colour. What flow did the rig give at the widest vane angle, and whose runs track the vane angle more closely?",
       "checks": [
         {
-          "check": "tool_result_matches",
+          "check": "tool_calls_expected",
           "params": {
-            "expect": [
-              {
-                "field": "response.chart",
-                "fallback_field": "chart",
-                "equals": "scatter"
-              },
-              {
-                "field": "response.series",
-                "fallback_field": "series",
-                "matches": "\"name\"\\s*:\\s*\"ana\""
-              },
-              {
-                "field": "response.series",
-                "fallback_field": "series",
-                "matches": "\"name\"\\s*:\\s*\"lee\""
-              },
-              {
-                "field": "response.series",
-                "fallback_field": "series",
-                "matches": "\"correlation\""
-              }
+            "required": [
+              "charts"
             ]
           },
           "tier": "acceptance",

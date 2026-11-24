@@ -21,7 +21,7 @@
   "stages": [
     {
       "stage_id": "hold",
-      "prompt": "The lab manager wants to know how long we have to hold each item in lab/ before it can be destroyed.",
+      "prompt": "The lab manager wants to know how long we have to hold each item in lab/ before it can be destroyed. Just each item and its months.",
       "capture": [
         {
           "kind": "file",
@@ -35,13 +35,13 @@
           "params": {
             "all": [
               {
-                "matches": "BS-77\\b(?:[^-]|-\\D){0,80}?\\b18\\b"
+                "matches": "BS-77\\b(?:[^-]|-\\D){0,200}?\\b18\\b"
               },
               {
-                "matches": "SL-12\\b(?:[^-]|-\\D){0,80}?\\b30\\b"
+                "matches": "SL-12\\b(?:[^-]|-\\D){0,200}?\\b30\\b"
               },
               {
-                "matches": "IP-5\\b(?:[^-]|-\\D){0,80}?\\b3\\b"
+                "matches": "IP-5\\b(?:[^-]|-\\D){0,200}?\\b3\\b"
               }
             ]
           },

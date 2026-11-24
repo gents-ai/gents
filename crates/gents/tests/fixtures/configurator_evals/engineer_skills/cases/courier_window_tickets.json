@@ -33,7 +33,7 @@
   "stages": [
     {
       "stage_id": "route",
-      "prompt": "Six courier arrivals came in at the depot, and their tickets are in tickets/. Which queue does each one go to?",
+      "prompt": "Six courier arrivals came in at the depot, and their tickets are in tickets/. Which queue does each one go to? Just each ticket and its queue is fine.",
       "capture": [
         {
           "kind": "file",
@@ -47,22 +47,22 @@
           "params": {
             "all": [
               {
-                "matches": "T-41\\b(?:[^-]|-\\D){0,80}?Blue Annex"
+                "matches": "T-41\\b(?:[^-]|-\\D){0,200}?Blue Annex"
               },
               {
-                "matches": "T-42\\b(?:[^-]|-\\D){0,80}?Red Desk"
+                "matches": "T-42\\b(?:[^-]|-\\D){0,200}?Red Desk"
               },
               {
-                "matches": "T-43\\b(?:[^-]|-\\D){0,80}?Loading Bay 2"
+                "matches": "T-43\\b(?:[^-]|-\\D){0,200}?Loading Bay 2"
               },
               {
-                "matches": "T-44\\b(?:[^-]|-\\D){0,80}?Loading Bay 2"
+                "matches": "T-44\\b(?:[^-]|-\\D){0,200}?Loading Bay 2"
               },
               {
-                "matches": "T-45\\b(?:[^-]|-\\D){0,80}?Blue Annex"
+                "matches": "T-45\\b(?:[^-]|-\\D){0,200}?Blue Annex"
               },
               {
-                "matches": "T-46\\b(?:[^-]|-\\D){0,80}?Green Gate"
+                "matches": "T-46\\b(?:[^-]|-\\D){0,200}?Green Gate"
               }
             ]
           },

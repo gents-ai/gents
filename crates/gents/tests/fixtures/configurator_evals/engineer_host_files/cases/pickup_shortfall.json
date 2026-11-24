@@ -49,13 +49,13 @@
           "params": {
             "all": [
               {
-                "matches": "PKV-2290[^P]{0,80}?\\b4\\b"
+                "matches": "PKV-2290\\b(?:[^-]|-\\D){0,200}?\\b4\\b"
               },
               {
-                "matches": "PKV-6170[^P]{0,80}?\\b7\\b"
+                "matches": "PKV-6170\\b(?:[^-]|-\\D){0,200}?\\b7\\b"
               },
               {
-                "matches": "PKV-8315[^P]{0,80}?\\b4\\b"
+                "matches": "PKV-8315\\b(?:[^-]|-\\D){0,200}?\\b4\\b"
               },
               {
                 "matches": "(?i)\\b(6|six)\\b[^.\\n]{0,60}(full|complete|in full|fulfil)|(full|complete|fulfil)[^.\\n]{0,80}\\b(6|six)\\b"

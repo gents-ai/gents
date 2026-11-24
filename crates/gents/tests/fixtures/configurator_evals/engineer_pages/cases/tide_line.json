@@ -13,27 +13,13 @@
   "stages": [
     {
       "stage_id": "chart",
-      "prompt": "tide.csv logs two readings a day. Draw a line chart of each day's high water. Which day had the highest high water, and what was it?",
+      "prompt": "tide.csv logs two readings a day. Draw a line chart of each day's high water. What was each day's high, and which day had the highest?",
       "checks": [
         {
-          "check": "tool_result_matches",
+          "check": "tool_calls_expected",
           "params": {
-            "expect": [
-              {
-                "field": "response.chart",
-                "fallback_field": "chart",
-                "equals": "line"
-              },
-              {
-                "field": "response.series",
-                "fallback_field": "series",
-                "matches": "\"sum\"\\s*:\\s*86(\\.0+)?[,}\\s]"
-              },
-              {
-                "field": "response.series",
-                "fallback_field": "series",
-                "matches": "\"max\"\\s*:\\s*23(\\.0+)?[,}\\s]"
-              }
+            "required": [
+              "charts"
             ]
           },
           "tier": "acceptance",
@@ -44,10 +30,19 @@
           "params": {
             "all": [
               {
-                "matches": "(?i)\\bWednesday\\b"
+                "matches": "(?i:Monday)\\b(?:[^-]|-\\D){0,40}?\\b14\\b"
               },
               {
-                "matches": "\\b23\\b"
+                "matches": "(?i:Tuesday)\\b(?:[^-]|-\\D){0,40}?\\b12\\b"
+              },
+              {
+                "matches": "(?i:Wednesday)\\b(?:[^-]|-\\D){0,40}?\\b23\\b"
+              },
+              {
+                "matches": "(?i:Thursday)\\b(?:[^-]|-\\D){0,40}?\\b19\\b"
+              },
+              {
+                "matches": "(?i:Friday)\\b(?:[^-]|-\\D){0,40}?\\b18\\b"
               }
             ]
           },
