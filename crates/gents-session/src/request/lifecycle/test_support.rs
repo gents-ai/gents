@@ -277,8 +277,9 @@ pub async fn test_db_with(
     name: &str,
     composition: gents_store::node_extension::Extensions,
 ) -> TestDb {
-    let (db, user, user_access, binding) =
-        gents_inference::test_support::signed_test_node(name, composition).await;
+    let signed_home = gents_documents::test_support::SignedHome::start(name, composition).await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, user_access) = signed_home.into_parts();
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let agent_identity = gents_store::identity::resolve_agent_identity(identity.as_ref(), &binding)

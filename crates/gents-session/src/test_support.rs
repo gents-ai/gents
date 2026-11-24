@@ -34,11 +34,9 @@ impl ScopedWatcherFixture {
         )
         .await;
         let (home, user, client_access) =
-            gents_inference::test_support::signed_test_node_without_agent_from_db(
-                db,
-                "scoped-watcher-user",
-            )
-            .await;
+            gents_documents::test_support::SignedHome::enroll(db, "scoped-watcher-user")
+                .await
+                .into_parts();
         let node = home.node.clone();
         let runtime = home.node_identity.clone();
         let binding = gents_store::identity::provision_agent_identity_authorized(
@@ -604,11 +602,12 @@ pub async fn fork_reader_node(
 ) {
     use gents_store::config_client::NodePermission;
     use gents_store::identity::NodeIdentity;
-    let (db, user, client) = gents_inference::test_support::signed_test_node_without_agent(
+    let (db, user, client) = gents_documents::test_support::SignedHome::start(
         name,
         crate::test_support::no_lifecycle_plugins(),
     )
-    .await;
+    .await
+    .into_parts();
     let runtime = db.node_identity.as_ref();
     let admin = gents_store::config_client::ConfigAccess::local_as(
         db.node.clone(),
@@ -664,7 +663,8 @@ pub async fn test_p2p_db(name: &str) -> gents_store::test_support::TestStore {
         }),
     )
     .await;
-    let (db, _user, _access) =
-        gents_inference::test_support::signed_test_node_without_agent_from_db(db, name).await;
+    let (db, _user, _access) = gents_documents::test_support::SignedHome::enroll(db, name)
+        .await
+        .into_parts();
     db
 }
