@@ -422,7 +422,7 @@ pub struct InferenceBackend {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub request_timeout_secs: Option<i64>,
-    /// Shared backend capacity across profiles; absent resolves to 1.
+    /// Shared backend capacity across profiles; absent resolves to 4.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub max_concurrent: Option<i64>,
