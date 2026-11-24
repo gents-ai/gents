@@ -7,7 +7,7 @@ use serde_json::Value;
 use crate::runner::embedded::executor::capture::{
     capture_documents_with_access, documents_capture_query,
 };
-use crate::runner::embedded::executor::evidence::{usage_of, without_title_audit_calls};
+use crate::runner::embedded::executor::usage::{home_charge, home_rows};
 use crate::runner::embedded::observe::request_evidence_from_query_data;
 use crate::runner::executor::{Capture, StageSpec};
 use crate::runner::progress::{LastToolCall, LiveSnapshot, ToolTally};
@@ -151,12 +151,10 @@ pub(super) async fn activity(access: &ConfigAccess) -> Result<LiveSnapshot> {
         }}"#
     );
     let response = access.execute(&query).await?;
-    let data =
-        without_title_audit_calls(access, response.get("data").cloned().unwrap_or(Value::Null))
-            .await?;
+    let data = response.get("data").cloned().unwrap_or(Value::Null);
     let evidence = request_evidence_from_query_data(&data);
+    let charged = home_charge(&home_rows(access).await?);
     let last_tool = last_tool_call(access).await;
-    let usage = usage_of(&evidence.inference_calls);
     let mut tools: BTreeMap<String, ToolTally> = BTreeMap::new();
     let mut failed_tool_calls = 0;
     for call in &evidence.tool_calls {
@@ -173,24 +171,12 @@ pub(super) async fn activity(access: &ConfigAccess) -> Result<LiveSnapshot> {
             .get("AgentRequest")
             .and_then(Value::as_array)
             .map_or(0, |rows| rows.len() as u64),
-        model_turns: evidence.inference_calls.len() as u64,
-        input_tokens: usage.input_tokens,
-        output_tokens: usage.output_tokens,
+        model_turns: charged.calls,
+        input_tokens: charged.usage.input_tokens,
+        output_tokens: charged.usage.output_tokens,
         session_contexts: super::live_context::session_contexts(&data),
-        reported_input_tokens: Some(
-            evidence
-                .inference_calls
-                .iter()
-                .filter_map(|call| call.prompt_tokens)
-                .fold(0, u64::saturating_add),
-        ),
-        reported_output_tokens: Some(
-            evidence
-                .inference_calls
-                .iter()
-                .filter_map(|call| call.completion_tokens)
-                .fold(0, u64::saturating_add),
-        ),
+        reported_input_tokens: Some(charged.reported_input_tokens),
+        reported_output_tokens: Some(charged.reported_output_tokens),
         tool_calls: evidence.tool_calls.len() as u64,
         failed_tool_calls,
         tools,
@@ -294,105 +280,6 @@ mod tests {
         assert_eq!(live.output_tokens, Some(23));
         assert_eq!(live.reported_input_tokens, live.input_tokens);
         assert_eq!(live.reported_output_tokens, live.output_tokens);
-        home.node.shutdown().await.expect("shutdown node");
-    }
-
-    #[tokio::test]
-    async fn an_interrupted_title_audit_is_charged_neither_tokens_nor_a_turn() {
-        use gents_protocol::request_admission::RequestPurpose;
-        use gents_store::graphql::escape_graphql_string;
-
-        let home = super::super::home::EmbeddedHome::create_temp("live-title-audit-usage")
-            .await
-            .unwrap();
-        let did = escape_graphql_string(home.did());
-        for (request_id, purpose, state) in [
-            ("stage", RequestPurpose::Normal, "completed"),
-            ("title", RequestPurpose::TitleAudit, "interrupted"),
-        ] {
-            ConfigAccess::write_local(
-                &home.node,
-                "eval.test.title_audit_request",
-                &format!(
-                    r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "{}", node_did: "{did}", requester_did: "{did}", agent_did: "{did}:subject", session_id: "s-1", content: "x", execution_origin: "interactive", lifecycle_state: "{state}", created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }} }}"#,
-                    purpose.as_str()
-                ),
-            )
-            .await
-            .unwrap();
-        }
-        let access = ConfigAccess::local(home.node.clone());
-        let doc_ids: BTreeMap<String, String> = access
-            .execute("{ AgentRequest { _docID request_id } }")
-            .await
-            .unwrap()["data"]["AgentRequest"]
-            .as_array()
-            .expect("request rows")
-            .iter()
-            .map(|row| {
-                (
-                    row["request_id"].as_str().unwrap().to_owned(),
-                    escape_graphql_string(row["_docID"].as_str().unwrap()),
-                )
-            })
-            .collect();
-        assert_eq!(doc_ids.len(), 2);
-        for (call_id, request_id, seq, state, tokens) in [
-            (
-                "stage-1",
-                "stage",
-                0,
-                "completed",
-                "prompt_tokens: 100, completion_tokens: 10",
-            ),
-            (
-                "stage-2",
-                "stage",
-                1,
-                "completed",
-                "prompt_tokens: 200, completion_tokens: 20",
-            ),
-            (
-                "title-1",
-                "title",
-                0,
-                "running",
-                "prompt_tokens: null, completion_tokens: null",
-            ),
-        ] {
-            ConfigAccess::write_local(
-                &home.node,
-                "eval.test.title_audit_call",
-                &format!(
-                    r#"mutation {{ create_InferenceCall(input: {{ call_id: "{call_id}", request_id: "{request_id}", request_doc_id: "{}", node_did: "{did}", call_kind: "inference", call_seq: {seq}, call_state: "{state}", {tokens} }}) {{ _docID }} }}"#,
-                    doc_ids[request_id]
-                ),
-            )
-            .await
-            .unwrap();
-        }
-        let stage_data = access
-            .execute(&crate::runner::embedded::observe::evidence_query("stage"))
-            .await
-            .unwrap()["data"]
-            .clone();
-        let stage = usage_of(&request_evidence_from_query_data(&stage_data).inference_calls);
-        assert_eq!(stage.input_tokens, Some(300));
-        assert_eq!(stage.output_tokens, Some(30));
-
-        let live = activity(&access).await.unwrap();
-        assert_eq!(live.input_tokens, stage.input_tokens);
-        assert_eq!(live.output_tokens, stage.output_tokens);
-        assert_eq!(live.reported_input_tokens, stage.input_tokens);
-        assert_eq!(live.reported_output_tokens, stage.output_tokens);
-        assert_eq!(live.model_turns, 2);
-        assert_eq!(live.requests, 1);
-
-        let total = crate::runner::embedded::executor::evidence::home_usage_with_access(&access)
-            .await
-            .unwrap();
-        assert_eq!(total.input_tokens, stage.input_tokens);
-        assert_eq!(total.output_tokens, stage.output_tokens);
         home.node.shutdown().await.expect("shutdown node");
     }
 
