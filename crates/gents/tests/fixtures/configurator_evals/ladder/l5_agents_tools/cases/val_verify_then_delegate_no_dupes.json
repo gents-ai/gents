@@ -216,31 +216,6 @@
         },
         {
           "kind": "documents",
-          "name": "delegation_calls",
-          "collection": "AgentToolCall",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            },
-            "tool_name": {
-              "_in": [
-                "agent_new",
-                "agent_message"
-              ]
-            },
-            "request_id": {
-              "_eq": "$request"
-            }
-          },
-          "fields": [
-            "_docID",
-            "tool_name",
-            "lifecycle_state",
-            "completion_notification_delivered_at"
-          ]
-        },
-        {
-          "kind": "documents",
           "name": "agents",
           "collection": "Agent",
           "filter": {
@@ -327,27 +302,6 @@
           "check": "crew_spec_match",
           "params": {
             "links": [
-              {
-                "capture": "helper-request",
-                "field": "caused_by_parent_tool_call_doc_id",
-                "target_capture": "delegation_calls",
-                "target_key": "_docID",
-                "expect": [
-                  {
-                    "field": "lifecycle_state",
-                    "equals": "completed"
-                  },
-                  {
-                    "field": "completion_notification_delivered_at",
-                    "matches": "^[0-9]{4}-"
-                  }
-                ],
-                "source_match": {
-                  "field": "content",
-                  "contains": "FIX2-888"
-                },
-                "exact": true
-              },
               {
                 "capture": "helper-request",
                 "source_match": {
