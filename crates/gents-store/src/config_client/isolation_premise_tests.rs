@@ -779,3 +779,70 @@ async fn a_read_only_transaction_commits_over_a_concurrent_write_of_what_it_read
     reader.commit().await.unwrap();
     node.shutdown().await.unwrap();
 }
+
+/// A document's id is the CID of its genesis block, which links its signer's
+/// signature: the same create signed by another key takes another id, and the
+/// same key signing the same create takes the same id. So no actor but the
+/// signer can name a document's id before the creating transaction commits
+/// (the premise `Identity.SessionInterrupt.marker_squatting_needs_the_creators_key`
+/// rests on).
+#[tokio::test]
+async fn a_signed_create_takes_an_id_only_its_signer_can_derive() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = Arc::new(
+        crate::identity::KeyIdentity::load_or_create(directory.path().join("node.key"), None)
+            .unwrap(),
+    );
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .with_node_identity_did(root.did())
+            .with_node_acp_enabled()
+            .build()
+            .await
+            .unwrap(),
+    );
+    ConfigAccess::local(Arc::clone(&node)).add_collection(SDL).await.unwrap();
+    let runtime = ConfigAccess::local_as(node.clone(), identity::Did::new(root.did()).unwrap());
+    let mut signers = Vec::new();
+    for _ in 0..2 {
+        let binding = crate::identity::provision_agent_identity(root.as_ref()).unwrap();
+        let agent = crate::identity::resolve_agent_identity(root.as_ref(), &binding).unwrap();
+        crate::identity::GrantSet::AgentBaseline
+            .grant(&runtime, &identity::Did::new(agent.did()).unwrap())
+            .await
+            .unwrap();
+        signers.push(
+            ConfigAccess::local_managed_agent(
+                node.clone(),
+                identity::Did::new(agent.did()).unwrap(),
+                agent.as_ref(),
+            )
+            .unwrap(),
+        );
+    }
+    async fn signed_create(access: &ConfigAccess) -> anyhow::Result<String> {
+        access
+            .transact_write("test.isolation_premise.signed_create", |txn| {
+                Box::pin(async move {
+                    let created = txn
+                        .execute_client_signed_create(
+                            "mutation($input: IsolationProbeMutationInputArg!) { create_IsolationProbe(input: $input) { _docID } }",
+                            &json!({"input": {"key": "session", "n": 1, "m": 1}}),
+                            SDL,
+                        )
+                        .await?;
+                    Ok(crate::graphql::created_doc_id(&created, "IsolationProbe")?)
+                })
+            })
+            .await
+    }
+    let first = signed_create(&signers[0]).await.unwrap();
+    let second = signed_create(&signers[1]).await.unwrap();
+    assert_ne!(first, second, "another signer's identical create takes another id");
+    let again = signed_create(&signers[0]).await;
+    assert!(
+        again.is_err(),
+        "the same signer's identical create names the id it already holds: {again:?}"
+    );
+    node.shutdown().await.unwrap();
+}

@@ -63,4 +63,29 @@ theorem the_marker_is_read_by_the_session_readers :
         "sessions" "session-doc" "read") := by
   native_decide
 
+/-- A signed create as its id sees it: what it writes and who signs it. -/
+structure SignedCreate where
+  signer : DID
+  content : String
+  deriving DecidableEq, Repr
+
+/-- The id a signed create takes. External premise
+(`a_signed_create_takes_an_id_only_its_signer_can_derive`, gents-store): an id
+is the CID of the genesis block, which links its signer's signature, so the
+same content signed by another key takes another id. -/
+def idOf (create : SignedCreate) : SignedCreate := create
+
+/-- No one but a session's creator can name its id before the session
+commits, so no one can squat its marker first: the marker's `session_doc_id`
+is unique and the marker is created in the session's own transaction, so a
+second marker for a session that exists is refused, and a marker another
+actor creates first names an id no session of another signer takes. The
+policy gives the marker no create rule (document creation is the
+collection's), and needs none: such a marker is inert, since readers find a
+session's marker by that session's id. -/
+theorem marker_squatting_needs_the_creators_key (session squat : SignedCreate)
+    (h : squat.signer ≠ session.signer) : idOf squat ≠ idOf session := by
+  intro h_eq
+  exact h (congrArg SignedCreate.signer h_eq)
+
 end Identity.SessionInterrupt

@@ -138,3 +138,51 @@ async fn colliding_logical_interrupt_fetch_binds_owner_physical() {
     );
     node.shutdown().await.expect("shut down test node");
 }
+
+/// A session's marker is created with it, so a second marker naming the
+/// session is refused by the unique `session_doc_id`
+/// (`Identity.SessionInterrupt.marker_squatting_needs_the_creators_key`).
+#[tokio::test]
+async fn a_second_marker_for_an_existing_session_is_refused() {
+    let node_db = gents_inference::test_support::test_db(
+        "a-second-marker-for-an-existing-session",
+        crate::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
+    session(&node, "owner", "squatted").await;
+    let access = gents_store::config_client::ConfigAccess::local(node.clone());
+    let session_doc = access
+        .execute(r#"{AgentSession(filter:{session_id:{_eq:"squatted"}}){_docID}}"#)
+        .await
+        .unwrap()["data"]["AgentSession"][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let squat = gents_store::config_client::ConfigAccess::transact_local_write(
+        &node,
+        None,
+        "test.second_marker",
+        |txn| {
+            let session_doc = session_doc.clone();
+            Box::pin(async move {
+                txn.execute_with_variables(
+                    "mutation($input: AgentSessionInterruptMutationInputArg!) {create_AgentSessionInterrupt(input:$input){_docID}}",
+                    &json!({"input": {"session_doc_id": session_doc, "node_did": "intruder", "session_id": "squatted", "generation": 7}}),
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        },
+    )
+    .await;
+    assert!(squat.is_err(), "{squat:?}");
+    let markers = access
+        .execute(&format!(
+            r#"{{AgentSessionInterrupt(filter:{{session_doc_id:{{_eq:"{session_doc}"}}}}){{generation}}}}"#
+        ))
+        .await
+        .unwrap();
+    assert_eq!(markers["data"]["AgentSessionInterrupt"], json!([{"generation": 0}]));
+    node.shutdown().await.unwrap();
+}
