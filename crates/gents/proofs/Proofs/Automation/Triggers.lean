@@ -14,3 +14,4 @@ import Proofs.Automation.Triggers.FireBudget
 import Proofs.Automation.Triggers.ManualRun
 import Proofs.Automation.Triggers.CommandRun
 import Proofs.Automation.Triggers.WorkspaceFire
+import Proofs.Automation.Triggers.ScheduleOccurrence
