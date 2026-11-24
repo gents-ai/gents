@@ -744,7 +744,7 @@ async fn first_token_at_is_when_each_attempt_streamed_its_first_token() {
         ],
     )
     .unwrap();
-    let db = test_db("completion-retry-first-token").await;
+    let db = trial_store("completion-retry-first-token").await;
     let (actors, agent) =
         boot_retry_agent(&db, backend.endpoint(), 1, UNREACHED_DEADLINE.as_secs()).await;
 
