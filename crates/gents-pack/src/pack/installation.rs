@@ -18,6 +18,7 @@ mod declared_access;
 mod dependencies;
 mod documents;
 mod host_roots;
+pub use host_roots::listed_root_agents;
 mod hosted;
 pub use documents::declared_collections;
 pub(crate) use documents::{

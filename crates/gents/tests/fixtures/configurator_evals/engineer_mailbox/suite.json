@@ -1,0 +1,19 @@
+{
+  "id": "engineer-mailbox",
+  "title": "Engineer mailbox",
+  "coverage": [
+    "exact notice content",
+    "a second notice on a later turn leaves the first alone",
+    "notice gated on application records",
+    "no re-file while a condition persists",
+    "only newly qualifying readings on a later turn",
+    "a flag only after two low readings in a row",
+    "silence at an inclusive boundary",
+    "reply in chat when asked not to file",
+    "a question with choices taken from the records",
+    "a flag and an optional question in one turn",
+    "escalate the blocked part, finish the rest",
+    "notice from workspace notes"
+  ],
+  "subject": "engineer_full"
+}

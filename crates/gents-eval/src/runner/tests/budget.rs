@@ -291,5 +291,10 @@ fn trial_ceiling_holds_only_embedded_trials() {
     );
     assert_eq!(trial_ceiling(2, Isolation::Embedded), 2);
     assert_eq!(trial_ceiling(0, Isolation::Embedded), 1);
+    assert_eq!(
+        trial_ceiling(16, Isolation::Contained),
+        EMBEDDED_TRIAL_CEILING,
+        "contained trials are embedded trials"
+    );
     assert_eq!(trial_ceiling(16, Isolation::Process), 16);
 }

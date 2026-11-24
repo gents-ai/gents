@@ -20,7 +20,8 @@
     "cases/val_reasoning_effort_high.json",
     "cases/val_stream_settings.json",
     "cases/val_trap_preserve_default_profile.json",
-    "pack_config.json"
+    "pack_config.json",
+    "suite.json"
   ],
   "config": "pack_config.json"
 }

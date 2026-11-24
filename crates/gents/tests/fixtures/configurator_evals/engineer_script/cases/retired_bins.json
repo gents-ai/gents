@@ -1,0 +1,191 @@
+{
+  "case_id": "retired-bins",
+  "split": "validation",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type BinAssignment { bin: String status: String }"
+    ],
+    "documents": [
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC41",
+          "status": "active"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC42",
+          "status": "closed"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC43",
+          "status": "closed"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC45",
+          "status": "closed"
+        }
+      },
+      {
+        "collection": "BinAssignment",
+        "document": {
+          "bin": "RC45",
+          "status": "active"
+        }
+      }
+    ],
+    "files": [
+      {
+        "path": "bins.json",
+        "contents": "[\n  {\n    \"id\": \"RC41\",\n    \"retired\": true\n  },\n  {\n    \"id\": \"RC42\",\n    \"retired\": true\n  },\n  {\n    \"id\": \"RC43\",\n    \"retired\": false\n  },\n  {\n    \"id\": \"RC44\",\n    \"retired\": true\n  },\n  {\n    \"id\": \"RC45\",\n    \"retired\": true\n  }\n]\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "run",
+      "prompt": "In one script, check the bin inventory in bins.json against the BinAssignment records in the datastore. Which retired bins have no active assignment? Return {\"bins\": [...]} sorted and tell me. Don't edit the inventory.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "inner_reads",
+          "collection": "AgentToolCall",
+          "filter": {
+            "plugin_parent_tool_call_doc_id": {
+              "_ne": null
+            },
+            "tool_name": {
+              "_eq": "read_file"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            }
+          },
+          "fields": [
+            "tool_name",
+            "lifecycle_state",
+            "plugin_parent_tool_call_doc_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "inner_queries",
+          "collection": "AgentToolCall",
+          "filter": {
+            "plugin_parent_tool_call_doc_id": {
+              "_ne": null
+            },
+            "tool_name": {
+              "_eq": "query"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            }
+          },
+          "fields": [
+            "tool_name",
+            "lifecycle_state",
+            "plugin_parent_tool_call_doc_id"
+          ]
+        },
+        {
+          "kind": "file",
+          "name": "inventory",
+          "glob": "bins.json"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "script",
+              "read_file",
+              "query"
+            ],
+            "forbidden": [
+              "bash",
+              "bash_unrestricted",
+              "write_file",
+              "edit_file"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "bins",
+                "equals": [
+                  "RC42",
+                  "RC44"
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "inner_reads",
+                "min": 1
+              },
+              {
+                "capture": "inner_queries",
+                "min": 1
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "inventory",
+            "expect": [
+              {
+                "path": "bins.json",
+                "sha256": "930834b713e7ba784bc975371793621b6c0a982c42ded9eef47fa4219f360850"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "RC42"
+              },
+              {
+                "matches": "RC44"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

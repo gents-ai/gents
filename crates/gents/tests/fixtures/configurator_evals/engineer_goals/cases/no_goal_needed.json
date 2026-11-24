@@ -1,0 +1,93 @@
+{
+  "case_id": "no-goal-needed",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "counts/north.json",
+        "contents": "{\n  \"crates\": 14\n}\n"
+      },
+      {
+        "path": "counts/south.json",
+        "contents": "{\n  \"crates\": 23\n}\n"
+      },
+      {
+        "path": "counts/west.json",
+        "contents": "{\n  \"crates\": 31\n}\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "answer",
+      "settle": true,
+      "prompt": "Which file in counts/ has the most crates, and how many? Just answer.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "goal",
+          "collection": "Goal",
+          "filter": {
+            "session_id": {
+              "_eq": "$session"
+            }
+          },
+          "fields": [
+            "goal_id",
+            "objective",
+            "status",
+            "token_budget",
+            "completion_evidence",
+            "consecutive_blocked_audits",
+            "last_blocked_reason"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "write",
+              "bash",
+              "bash_unrestricted",
+              "write_file",
+              "edit_file",
+              "create_goal",
+              "update_goal"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "goal",
+            "min": 0,
+            "max": 0
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?i)west"
+              },
+              {
+                "matches": "\\b31\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

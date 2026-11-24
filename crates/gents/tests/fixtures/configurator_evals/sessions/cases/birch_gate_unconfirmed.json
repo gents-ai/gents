@@ -1,0 +1,171 @@
+{
+  "case_id": "birch-gate-unconfirmed",
+  "split": "held_out",
+  "reducer": "all",
+  "fixtures": {
+    "documents": [
+      {
+        "collection": "AgentSession",
+        "document": {
+          "node_did": "$trial",
+          "requester_did": "$evaluator",
+          "session_id": "birch-gate-plan",
+          "agent_did": "gents:agent-slot:engineer",
+          "created_at": "2026-10-12T08:00:00Z",
+          "closed_at": "2026-10-12T17:00:00Z",
+          "title": {
+            "text": "Birch pallet handoff | west gate proposed, waiting for the yard to accept",
+            "source": "user"
+          },
+          "tags": [
+            "yard"
+          ]
+        }
+      },
+      {
+        "collection": "AgentSession",
+        "document": {
+          "node_did": "$trial",
+          "requester_did": "$evaluator",
+          "session_id": "birch-yard-reply",
+          "agent_did": "gents:agent-slot:engineer",
+          "created_at": "2026-10-13T08:00:00Z",
+          "closed_at": "2026-10-13T17:00:00Z",
+          "title": {
+            "text": "Birch pallet handoff | yard confirmed the pallet count only, no gate accepted",
+            "source": "user"
+          },
+          "tags": [
+            "yard"
+          ]
+        }
+      },
+      {
+        "collection": "AgentSession",
+        "document": {
+          "node_did": "$trial",
+          "requester_did": "$evaluator",
+          "session_id": "birch-test-account",
+          "agent_did": "gents:agent-slot:engineer",
+          "created_at": "2026-10-13T09:00:00Z",
+          "closed_at": "2026-10-13T12:00:00Z",
+          "title": {
+            "text": "Birch-test pallet handoff | north gate accepted for the separate test account",
+            "source": "user"
+          },
+          "tags": [
+            "yard"
+          ]
+        }
+      },
+      {
+        "collection": "AgentSession",
+        "document": {
+          "node_did": "$trial",
+          "requester_did": "$evaluator",
+          "session_id": "birch-old-route",
+          "agent_did": "gents:agent-slot:engineer",
+          "created_at": "2026-09-30T08:00:00Z",
+          "closed_at": "2026-09-30T17:00:00Z",
+          "title": {
+            "text": "Birch pallet handoff | earlier south route expired before this handoff",
+            "source": "user"
+          },
+          "tags": [
+            "yard"
+          ]
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "investigate",
+      "prompt": "Did the yard ever accept a receiving gate for the current Birch pallet handoff? Answer UNCONFIRMED if nothing accepted one, and point me to the two conversations that show where things stand.",
+      "checks": [
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\\bUNCONFIRMED\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "sessions"
+            ],
+            "forbidden": [
+              "bash",
+              "query",
+              "config"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "links": [
+              {
+                "capture": "sources",
+                "key": "session_id",
+                "id": "birch-gate-plan",
+                "field": "session_id",
+                "target_capture": "sources",
+                "target_key": "session_id",
+                "reported_fields": [
+                  "session_id"
+                ]
+              },
+              {
+                "capture": "sources",
+                "key": "session_id",
+                "id": "birch-yard-reply",
+                "field": "session_id",
+                "target_capture": "sources",
+                "target_key": "session_id",
+                "reported_fields": [
+                  "session_id"
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "sources",
+          "collection": "AgentSession",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "session_id": {
+              "_in": [
+                "birch-gate-plan",
+                "birch-yard-reply"
+              ]
+            }
+          },
+          "fields": [
+            "_docID",
+            "session_id",
+            "title",
+            "closed_at"
+          ]
+        }
+      ]
+    }
+  ]
+}

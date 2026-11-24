@@ -1,0 +1,218 @@
+{
+  "case_id": "harbor-arrivals-page",
+  "split": "held_out",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type Mooring { vessel: String quay: String }",
+      "type QuayDepth { quay: String depth_m: Float }"
+    ],
+    "documents": [
+      {
+        "collection": "Mooring",
+        "document": {
+          "vessel": "Marlin Star",
+          "quay": "Q2"
+        }
+      },
+      {
+        "collection": "Mooring",
+        "document": {
+          "vessel": "Hollin",
+          "quay": "Q5"
+        }
+      },
+      {
+        "collection": "QuayDepth",
+        "document": {
+          "quay": "Q2",
+          "depth_m": 11.5
+        }
+      },
+      {
+        "collection": "QuayDepth",
+        "document": {
+          "quay": "Q5",
+          "depth_m": 8.5
+        }
+      },
+      {
+        "collection": "QuayDepth",
+        "document": {
+          "quay": "Q7",
+          "depth_m": 14.5
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "build",
+      "prompt": "The harbour office wants one desktop page, Harbour Arrivals, that shows the moored vessels next to the quay depths and lets the clerk log a new arrival with its name and quay. Put the page's datastore tools on one surface: read tools moored_vessels and quay_depths, and a create tool log_arrival. Lint the page before you hand it over.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "pages",
+          "collection": "Page",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "page_id",
+            "display_name",
+            "module",
+            "css",
+            "data",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "surfaces",
+          "collection": "DatastoreToolSurface",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "surface_id": {
+              "_ne": "engineer-mailbox"
+            }
+          },
+          "fields": [
+            "surface_id",
+            "display_name",
+            "entries",
+            "enabled"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "file_changes",
+          "collection": "ToolFileChange",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "tool_call_doc_id",
+            "session_id",
+            "file_changes"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "file_changes",
+            "min": 0,
+            "max": 0
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "surfaces",
+            "min_rows": 1,
+            "max_rows": 1,
+            "expect": [
+              {
+                "field": "entries",
+                "matches": "\"tool_name\"\\s*:\\s*\"moored_vessels\""
+              },
+              {
+                "field": "entries",
+                "matches": "\"tool_name\"\\s*:\\s*\"quay_depths\""
+              },
+              {
+                "field": "entries",
+                "matches": "\"tool_name\"\\s*:\\s*\"log_arrival\""
+              },
+              {
+                "field": "entries",
+                "matches": "\"collection\"\\s*:\\s*\"Mooring\""
+              },
+              {
+                "field": "entries",
+                "matches": "\"collection\"\\s*:\\s*\"QuayDepth\""
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "pages",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "pages",
+                "key": "display_name",
+                "id": "Harbour Arrivals",
+                "expect": [
+                  {
+                    "field": "data",
+                    "matches": "\"moored_vessels\""
+                  },
+                  {
+                    "field": "data",
+                    "matches": "\"quay_depths\""
+                  },
+                  {
+                    "field": "data",
+                    "matches": "\"log_arrival\""
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\buseWrite\\b"
+                  },
+                  {
+                    "field": "module",
+                    "matches": "\\buseQuery\\b"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "admitted",
+                "equals": true
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

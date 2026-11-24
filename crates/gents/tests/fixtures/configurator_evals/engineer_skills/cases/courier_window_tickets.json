@@ -1,0 +1,156 @@
+{
+  "case_id": "courier-window-tickets",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "tickets/T-41.json",
+        "contents": "{\n  \"ticket\": \"T-41\",\n  \"item\": \"envelope\",\n  \"grams\": 120,\n  \"arrival_hour\": 18,\n  \"seal\": \"intact\",\n  \"priority\": false\n}\n"
+      },
+      {
+        "path": "tickets/T-42.json",
+        "contents": "{\n  \"ticket\": \"T-42\",\n  \"item\": \"envelope\",\n  \"grams\": 80,\n  \"arrival_hour\": 9,\n  \"seal\": \"resealed\",\n  \"priority\": true\n}\n"
+      },
+      {
+        "path": "tickets/T-43.json",
+        "contents": "{\n  \"ticket\": \"T-43\",\n  \"item\": \"parcel\",\n  \"grams\": 2300,\n  \"arrival_hour\": 20,\n  \"seal\": \"broken\",\n  \"priority\": false\n}\n"
+      },
+      {
+        "path": "tickets/T-44.json",
+        "contents": "{\n  \"ticket\": \"T-44\",\n  \"item\": \"envelope\",\n  \"grams\": 650,\n  \"arrival_hour\": 11,\n  \"seal\": \"intact\",\n  \"priority\": true\n}\n"
+      },
+      {
+        "path": "tickets/T-45.json",
+        "contents": "{\n  \"ticket\": \"T-45\",\n  \"item\": \"envelope\",\n  \"grams\": 95,\n  \"arrival_hour\": 10,\n  \"seal\": \"intact\",\n  \"priority\": true\n}\n"
+      },
+      {
+        "path": "tickets/T-46.json",
+        "contents": "{\n  \"ticket\": \"T-46\",\n  \"item\": \"envelope\",\n  \"grams\": 140,\n  \"arrival_hour\": 17,\n  \"seal\": \"intact\",\n  \"priority\": false\n}\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "route",
+      "prompt": "Six courier arrivals came in at the depot, and their tickets are in tickets/. Which queue does each one go to? Reply with JSON mapping each ticket id to its queue.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "loaded",
+          "collection": "AgentOutputSegment",
+          "filter": {
+            "session_id": {
+              "_eq": "$session"
+            },
+            "payload": {
+              "_like": "Skill: Courier window%"
+            }
+          },
+          "fields": [
+            "ordinal"
+          ]
+        },
+        {
+          "kind": "file",
+          "name": "tickets",
+          "glob": "tickets/*.json"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "load_skill"
+            ],
+            "forbidden": [
+              "write",
+              "bash",
+              "bash_unrestricted",
+              "write_file",
+              "edit_file"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "loaded",
+                "min": 1
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\"T-41\"\\s*:\\s*\"Blue Annex\""
+              },
+              {
+                "matches": "\"T-42\"\\s*:\\s*\"Red Desk\""
+              },
+              {
+                "matches": "\"T-43\"\\s*:\\s*\"Loading Bay 2\""
+              },
+              {
+                "matches": "\"T-44\"\\s*:\\s*\"Loading Bay 2\""
+              },
+              {
+                "matches": "\"T-45\"\\s*:\\s*\"Blue Annex\""
+              },
+              {
+                "matches": "\"T-46\"\\s*:\\s*\"Green Gate\""
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "tickets",
+            "expect": [
+              {
+                "path": "tickets/T-41.json",
+                "equals": "{\n  \"ticket\": \"T-41\",\n  \"item\": \"envelope\",\n  \"grams\": 120,\n  \"arrival_hour\": 18,\n  \"seal\": \"intact\",\n  \"priority\": false\n}\n"
+              },
+              {
+                "path": "tickets/T-42.json",
+                "equals": "{\n  \"ticket\": \"T-42\",\n  \"item\": \"envelope\",\n  \"grams\": 80,\n  \"arrival_hour\": 9,\n  \"seal\": \"resealed\",\n  \"priority\": true\n}\n"
+              },
+              {
+                "path": "tickets/T-43.json",
+                "equals": "{\n  \"ticket\": \"T-43\",\n  \"item\": \"parcel\",\n  \"grams\": 2300,\n  \"arrival_hour\": 20,\n  \"seal\": \"broken\",\n  \"priority\": false\n}\n"
+              },
+              {
+                "path": "tickets/T-44.json",
+                "equals": "{\n  \"ticket\": \"T-44\",\n  \"item\": \"envelope\",\n  \"grams\": 650,\n  \"arrival_hour\": 11,\n  \"seal\": \"intact\",\n  \"priority\": true\n}\n"
+              },
+              {
+                "path": "tickets/T-45.json",
+                "equals": "{\n  \"ticket\": \"T-45\",\n  \"item\": \"envelope\",\n  \"grams\": 95,\n  \"arrival_hour\": 10,\n  \"seal\": \"intact\",\n  \"priority\": true\n}\n"
+              },
+              {
+                "path": "tickets/T-46.json",
+                "equals": "{\n  \"ticket\": \"T-46\",\n  \"item\": \"envelope\",\n  \"grams\": 140,\n  \"arrival_hour\": 17,\n  \"seal\": \"intact\",\n  \"priority\": false\n}\n"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

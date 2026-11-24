@@ -195,7 +195,7 @@ pub async fn build_backend_client(
     };
     let api_key = resolved_key.as_deref().unwrap_or(api_key);
     match agent.backend_provider_kind {
-        BackendProviderKind::OpenAiCompatible => {
+        BackendProviderKind::OpenAiCompatible | BackendProviderKind::Vllm => {
             let build_context = format!(
                 "building OpenAI-compatible completion client for agent {} against {}",
                 agent.agent_did, agent.backend_endpoint

@@ -23,7 +23,8 @@ use self::snapshot::{
     read_frozen_definition, read_sidecar, sidecar_path, write_frozen_definition, write_sidecar,
 };
 use self::validate::{
-    select_cases, validate_cell_identity, validate_evaluator, validate_purpose, validate_seed_range,
+    select_cases, validate_cell_identity, validate_core_pack_installer, validate_core_packs,
+    validate_evaluator, validate_purpose, validate_seed_range,
 };
 
 #[derive(Clone, Debug)]
@@ -118,12 +119,31 @@ pub async fn freeze(
     validate_cell_identity(request)?;
     validate_seed_range(request)?;
     let definition = load_definition(access, &request.owner, &request.definition_id).await?;
+    validate_core_packs(&definition, gents_core_packs::archives())?;
     let case_ids = select_cases(request, &definition)?;
 
     let run_dir = request.runs_dir.join(&request.run_id);
     let mut validated = Vec::with_capacity(request.cells.len());
     for cell in &request.cells {
-        validated.push(validate_cell(access, request, cell, isolation, &run_dir).await?);
+        validated.push(
+            validate_cell(
+                access,
+                request,
+                cell,
+                isolation,
+                definition.subject.host_bash,
+                &run_dir,
+            )
+            .await?,
+        );
+    }
+    for (cell, pack) in &validated {
+        validate_core_pack_installer(
+            &definition,
+            &cell.spec.cell_id,
+            &cell.spec.subject.agent_slot,
+            &pack.authored,
+        )?;
     }
 
     let origin = RunOrigin {
@@ -233,6 +253,7 @@ pub(crate) async fn thaw(
             definition
         }
     };
+    validate_core_packs(&definition, gents_core_packs::archives())?;
 
     let mut cells = Vec::with_capacity(record.origin.cells.len());
     for spec in &record.origin.cells {
@@ -249,9 +270,15 @@ pub(crate) async fn thaw(
                 spec.cell_id
             )));
         }
+        validate_core_pack_installer(
+            &definition,
+            &spec.cell_id,
+            &spec.subject.agent_slot,
+            &pack.authored,
+        )?;
         let inference =
             inference_binding(access, owner, &spec.cell_id, &spec.inference_profile_id).await?;
-        let unrestricted = refuse_host_bash(&pack.config, isolation)?;
+        let unrestricted = refuse_host_bash(&pack.config, isolation, definition.subject.host_bash)?;
         cells.push(FrozenCell {
             spec: spec.clone(),
             pack_dir,

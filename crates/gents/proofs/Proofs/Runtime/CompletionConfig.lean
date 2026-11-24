@@ -41,7 +41,7 @@ structure Observation where
 def nonnegative (value : Option Int) : Option Nat :=
   value.bind fun value => if value < 0 then none else some value.toNat
 
-def openAiKinds : List String := ["OpenAiCompatible", "OpenRouter", "ChatGptCodex", "XaiGrokOAuth"]
+def openAiKinds : List String := ["OpenAiCompatible", "Vllm", "OpenRouter", "ChatGptCodex", "XaiGrokOAuth"]
 
 /-- OpenRouter must honour every sent parameter rather than silently drop one.
 The modeled backend endpoint is not xAI's, so a generic Responses backend adds

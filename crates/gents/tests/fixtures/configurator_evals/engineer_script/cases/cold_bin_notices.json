@@ -1,0 +1,187 @@
+{
+  "case_id": "cold-bin-notices",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type ColdBin { bin: String temp_c: Int }"
+    ],
+    "documents": [
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-1",
+          "temp_c": 6
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-2",
+          "temp_c": 9
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-3",
+          "temp_c": 4
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-4",
+          "temp_c": 11
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-5",
+          "temp_c": 8
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-6",
+          "temp_c": 10
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-7",
+          "temp_c": -2
+        }
+      },
+      {
+        "collection": "ColdBin",
+        "document": {
+          "bin": "CB-8",
+          "temp_c": 8
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "run",
+      "prompt": "Check the ColdBin readings and flag the warm ones for me, all from one script: inside the script, query every ColdBin, find the bins warmer than 8 degrees (exactly 8 is fine), and put one item in my inbox titled \"Warm cold bins\" whose note lists them sorted by bin as \"BIN (TEMP)\" separated by commas, for example \"CB-0 (12), CB-9 (15)\". Tell me which bins you flagged.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "notices",
+          "collection": "MailboxItem",
+          "filter": {},
+          "fields": [
+            "item_key",
+            "title",
+            "summary",
+            "payload",
+            "status",
+            "kind",
+            "source_kind"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "inner_notices",
+          "collection": "AgentToolCall",
+          "filter": {
+            "plugin_parent_tool_call_doc_id": {
+              "_ne": null
+            },
+            "tool_name": {
+              "_eq": "file_mailbox_item"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            }
+          },
+          "fields": [
+            "tool_name",
+            "lifecycle_state",
+            "plugin_parent_tool_call_doc_id"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "script",
+              "query",
+              "file_mailbox_item"
+            ],
+            "forbidden": [
+              "bash",
+              "bash_unrestricted",
+              "write_file",
+              "edit_file"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "notices",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "inner_notices",
+                "min": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "notices",
+                "key": "title",
+                "id": "Warm cold bins",
+                "expect": [
+                  {
+                    "field": "summary",
+                    "fallback_field": "payload",
+                    "equals": "CB-2 (9), CB-4 (11), CB-6 (10)"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "open"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "CB-2"
+              },
+              {
+                "matches": "CB-4"
+              },
+              {
+                "matches": "CB-6"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

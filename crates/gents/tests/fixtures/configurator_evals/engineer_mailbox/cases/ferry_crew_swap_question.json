@@ -1,0 +1,165 @@
+{
+  "case_id": "ferry-crew-swap-question",
+  "split": "held_out",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "rota/swap-requests.md",
+        "contents": "# Crew swap requests\n\n## Swap 1: Thursday 18:20 sailing\nStatus: approved by the duty manager on Tuesday.\nRequested by: deckhand Priya Nandakumar.\nCandidate covers: Tomas Reyes.\n\n## Swap 2: Saturday 07:40 sailing\nStatus: waiting for the operations lead to choose a cover.\nRequested by: purser Alan Whitcombe.\nCandidate covers: Dana Okafor, Lucia Ferraz.\n\n## Swap 3: Sunday 12:05 sailing\nStatus: withdrawn by the requester.\nRequested by: engineer Mei Sato.\nCandidate covers: Jonah Price, Ruth Ellery.\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "ask",
+      "prompt": "I'm the operations lead. Go through rota/swap-requests.md: one swap is still waiting on me. Put it in my inbox as a question titled with that request's heading text after the \"## \", offering its candidate covers as the only choices. Don't decide it for me and don't edit the file.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "visible",
+          "collection": "MailboxItem",
+          "filter": {},
+          "fields": [
+            "item_key",
+            "title",
+            "kind"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "notice",
+          "collection": "MailboxItem",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "target_node_did": {
+              "_eq": "$trial"
+            },
+            "target_agent_did": {
+              "_eq": "gents:agent-slot:engineer"
+            },
+            "requester_did": {
+              "_eq": "$evaluator"
+            },
+            "session_id": {
+              "_eq": "$session"
+            }
+          },
+          "fields": [
+            "item_key",
+            "node_did",
+            "requester_did",
+            "kind",
+            "action",
+            "status",
+            "title",
+            "summary",
+            "payload",
+            "source_kind",
+            "session_id",
+            "request_id",
+            "target_node_did",
+            "target_agent_did"
+          ]
+        },
+        {
+          "kind": "file",
+          "name": "rota",
+          "glob": "rota/*"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "file_mailbox_item"
+            ],
+            "forbidden": [
+              "write",
+              "bash",
+              "bash_unrestricted",
+              "write_file",
+              "edit_file"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "visible",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "notice",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "notice",
+                "key": "title",
+                "id": "Swap 2: Saturday 07:40 sailing",
+                "expect": [
+                  {
+                    "field": "payload",
+                    "contains": "\"label\":\"Dana Okafor\""
+                  },
+                  {
+                    "field": "payload",
+                    "contains": "\"label\":\"Lucia Ferraz\""
+                  },
+                  {
+                    "field": "payload",
+                    "matches": "\"options\":\\[\\{[^\\[\\]]*\\},\\s*\\{[^\\[\\]]*\\}\\]"
+                  },
+                  {
+                    "field": "kind",
+                    "equals": "ask"
+                  },
+                  {
+                    "field": "action",
+                    "equals": "start_request"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "open"
+                  },
+                  {
+                    "field": "source_kind",
+                    "equals": "agent"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "rota",
+            "expect": [
+              {
+                "path": "rota/swap-requests.md",
+                "equals": "# Crew swap requests\n\n## Swap 1: Thursday 18:20 sailing\nStatus: approved by the duty manager on Tuesday.\nRequested by: deckhand Priya Nandakumar.\nCandidate covers: Tomas Reyes.\n\n## Swap 2: Saturday 07:40 sailing\nStatus: waiting for the operations lead to choose a cover.\nRequested by: purser Alan Whitcombe.\nCandidate covers: Dana Okafor, Lucia Ferraz.\n\n## Swap 3: Sunday 12:05 sailing\nStatus: withdrawn by the requester.\nRequested by: engineer Mei Sato.\nCandidate covers: Jonah Price, Ruth Ellery.\n"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

@@ -28,7 +28,7 @@ fn one() -> usize {
     1
 }
 
-fn some<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
+pub(super) fn some<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {

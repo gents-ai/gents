@@ -1,0 +1,127 @@
+{
+  "case_id": "cleared-manifest-recovery",
+  "split": "validation",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "dock/outbound.csv",
+        "contents": "parcel,bay,consignee,signed_by,weight_kg\nPX-3100,5,Tidewater Co,Quinn,3\nPX-3107,9,Kiln Works,Okafor,12\nPX-3114,2,Tidewater Co,Novak,17\nPX-3121,8,Quayside Labs,Lindqvist,38\nPX-3128,4,Harbour Deli,Haddad,28\nPX-3135,5,Kiln Works,Silva,12\nPX-3142,2,Kiln Works,Abara,30\nPX-3149,3,Kiln Works,Okafor,2\nPX-3156,4,Kiln Works,Brennan,12\nPX-3163,5,Tidewater Co,Haddad,36\nPX-3170,4,Kiln Works,Haddad,26\nPX-3177,5,Harbour Deli,Tanaka,28\nPX-3184,3,Kiln Works,Moreau,6\nPX-3191,6,Tidewater Co,Abara,39\nPX-3299,7,Saltmarsh Florists,Ferreira,6\nPX-3198,1,Quayside Labs,Tanaka,6\nPX-3205,5,Tidewater Co,Moreau,32\nPX-3212,6,Kiln Works,Novak,32\nPX-3219,3,Harbour Deli,Moreau,3\nPX-3226,6,North Mill,Okafor,37\nPX-3233,8,Tidewater Co,Silva,39\nPX-3240,1,North Mill,Okafor,13\nPX-3247,4,Harbour Deli,Haddad,31\nPX-3254,6,Quayside Labs,Tanaka,35\n"
+      },
+      {
+        "path": "dock/inbound.csv",
+        "contents": "parcel,bay,consignee,signed_by,weight_kg\nPX-5200,5,North Mill,Lindqvist,39\nPX-5207,6,Tidewater Co,Okafor,29\nPX-5214,2,Kiln Works,Tanaka,34\nPX-5221,6,Kiln Works,Tanaka,19\nPX-5228,2,Tidewater Co,Tanaka,21\nPX-5241,7,Quayside Labs,Brennan,11\nPX-5235,3,Harbour Deli,Brennan,21\nPX-5242,9,Kiln Works,Okafor,7\nPX-5249,8,Harbour Deli,Haddad,40\nPX-5256,6,Tidewater Co,Novak,28\nPX-5263,3,Harbour Deli,Okafor,33\nPX-5270,6,Kiln Works,Brennan,38\nPX-5277,3,North Mill,Lindqvist,12\nPX-5284,8,Tidewater Co,Brennan,5\nPX-5291,8,Tidewater Co,Brennan,31\nPX-5298,3,Quayside Labs,Novak,33\nPX-5305,6,North Mill,Moreau,20\nPX-5312,9,North Mill,Brennan,9\nPX-5319,8,Quayside Labs,Brennan,33\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "count",
+      "prompt": "How many parcels are on the outbound manifest, dock/outbound.csv, and how many on the inbound one, dock/inbound.csv? The outbound truck has left, so after that cut dock/outbound.csv down to just its header row. Leave the inbound manifest as it is.",
+      "capture": [
+        {
+          "kind": "file",
+          "name": "dock",
+          "glob": "dock/*"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "bash",
+              "bash_unrestricted"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "dock",
+            "expect": [
+              {
+                "path": "dock/outbound.csv",
+                "matches": "^parcel,bay,consignee,signed_by,weight_kg\\n?$"
+              },
+              {
+                "path": "dock/inbound.csv",
+                "sha256": "a8dc6a92fab17c2edd7b386684d43183ffba9e90bfce24723e54adc8ae915bc4"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\\b24\\b"
+              },
+              {
+                "matches": "\\b19\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "recover",
+      "prompt": "A consignee is asking about the parcel that went out on that truck from bay 7. Which parcel was it, and who signed for it?",
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "bash",
+              "bash_unrestricted"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "text",
+                "contains": "PX-3299"
+              },
+              {
+                "field": "text",
+                "contains": "Ferreira"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "PX-3299"
+              },
+              {
+                "matches": "Ferreira"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

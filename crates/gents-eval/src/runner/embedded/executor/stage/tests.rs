@@ -124,7 +124,9 @@ async fn trial_teardown_settles_scheduled_inference_without_expiring_its_lease()
         bind_test_evaluator(&mut spec, &mut home);
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).unwrap();
-        let agent_did = Box::pin(install(&spec, &home, &workspace)).await.unwrap();
+        let agent_did = Box::pin(install(&spec, &home, &workspace, &[]))
+            .await
+            .unwrap();
         let (runtime, _agent) = Box::pin(boot_runtime(
             &home,
             home.node_identity.clone(),
@@ -401,7 +403,7 @@ async fn a_seed_template_failure_ends_the_stage_before_its_deadline() {
     )
     .await
     .unwrap();
-    let agent_did = install(&spec, &home, &workspace).await.unwrap();
+    let agent_did = install(&spec, &home, &workspace, &[]).await.unwrap();
     let (event_sources_ready, ready) = watch::channel(None);
     let options = DocumentRuntimeOptions {
         runtime_snapshot_observer: Some(Arc::new(EventSourcesReady(event_sources_ready))),

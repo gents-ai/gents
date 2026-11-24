@@ -1329,10 +1329,19 @@ def replayStage (rows : List TaggedReplayRow) (issuer : ReplayIssuer) (wire : Re
   stripFirstReasoningRows ((reasoningCandidates rows).length -
     (groupCandidates (replayBaseKept rows issuer wire resolve)).length) rows
 
+/-- Only a wire whose reasoning binds its producing prefix is cut at the capture
+frontier (`ReplayFrontier`). The Responses wire replays every provenance-valid
+turn: its server refuses a turn's items without their reasoning item and itself
+ignores reasoning whose prefix changed. -/
+def prefixBound : ReplayWire → Bool
+  | .claudeMessages => true
+  | .responses => false
+
 def replayedTurnGroups (rows : List TaggedReplayRow) (issuer : ReplayIssuer)
     (wire : ReplayWire) (resolve : ReplayTag → List ResolvedReplayEvidence)
     (assemble : List TaggedReplayRow → List ReplayFlatItem) : List TurnGroup :=
   let baseKept := replayBaseKept rows issuer wire resolve
+  if !prefixBound wire then baseKept else
   let counts := baseKept.map fun group => (group.candidates.map (wireReasoningCount wire)).sum
   match locateTurns (turnHeaderOffset wire) (assemble (replayStage rows issuer wire resolve))
       counts with
@@ -1341,6 +1350,13 @@ def replayedTurnGroups (rows : List TaggedReplayRow) (issuer : ReplayIssuer)
       let turns := assembledTurns issuer wire resolve (reasoningCandidates rows) baseKept layouts
       baseKept.drop
         (turns.length - (ReplayFrontier.maxAdmissibleSuffix ReplayFrontier.turnOk turns).length)
+
+theorem responses_replays_every_provenance_valid_turn (rows : List TaggedReplayRow)
+    (issuer : ReplayIssuer) (resolve : ReplayTag → List ResolvedReplayEvidence)
+    (assemble : List TaggedReplayRow → List ReplayFlatItem) :
+    replayedTurnGroups rows issuer .responses resolve assemble =
+      replayBaseKept rows issuer .responses resolve := by
+  simp [replayedTurnGroups, prefixBound]
 
 def restoreHistoricalReasoningSuffix (rows : List TaggedReplayRow) (issuer : ReplayIssuer)
     (wire : ReplayWire) (resolve : ReplayTag → List ResolvedReplayEvidence)
@@ -1358,8 +1374,10 @@ theorem replayedTurnGroups_suffix (rows : List TaggedReplayRow) (issuer : Replay
     ReplayFrontier.maxAdmissibleSuffix_suffix _ _
   dsimp only
   split
-  · exact List.nil_suffix
-  · exact (List.drop_suffix _ _).trans hbase
+  · exact hbase
+  · split
+    · exact List.nil_suffix
+    · exact (List.drop_suffix _ _).trans hbase
 
 theorem restoreHistoricalReasoningSuffix_exact_candidates (rows : List TaggedReplayRow)
     (issuer : ReplayIssuer) (wire : ReplayWire)

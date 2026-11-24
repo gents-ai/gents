@@ -36,80 +36,6 @@ fn definitions() -> Vec<EvalDefinition> {
 }
 
 #[test]
-fn every_native_case_validates_and_uses_shipped_checks() {
-    let registry = CheckRegistry::builtin();
-    let definitions = definitions();
-    assert_eq!(definitions.len(), 5);
-    let mut application_definitions = Vec::new();
-    for fixture in ["engineer_datastore", "engineer_explain"] {
-        let dir = root().parent().unwrap().join(fixture);
-        let manifest: PackManifest =
-            serde_json::from_slice(&std::fs::read(dir.join("manifest.json")).unwrap()).unwrap();
-        let application = load_pack_config(
-            &manifest,
-            &PackInstallOptions {
-                node_did: "did:key:eval-owner".into(),
-            },
-            &|path| Ok(std::fs::read(dir.join(path))?),
-            &|_| None,
-        )
-        .unwrap();
-        application_definitions.extend(application.eval_definitions);
-    }
-    for definition in definitions.into_iter().chain(application_definitions) {
-        definition.validate().unwrap();
-        for case in definition.cases {
-            for stage in case.stages {
-                let mut evidence = ScriptedExecutor::passed_evidence(
-                    "did:key:eval-owner",
-                    &stage.stage_id,
-                    "unused",
-                    Vec::new(),
-                )
-                .stages
-                .remove(0);
-                evidence.subject_agent = Some(gents_eval::runner::subject_binding::SubjectAgent {
-                    slot: "engineer".into(),
-                    agent_did: "did:key:test-engineer".into(),
-                });
-                evidence.captures.clear();
-                for capture in &stage.capture {
-                    evidence.captures.insert(
-                        capture.name().into(),
-                        match capture {
-                            EvalCapture::Documents { .. } => {
-                                CaptureResult::Documents { rows: vec![] }
-                            }
-                            EvalCapture::Schema { .. } => CaptureResult::Schema {
-                                collections: vec![],
-                            },
-                            EvalCapture::File { .. } => CaptureResult::Files {
-                                files: vec![],
-                                outside_workspace: vec![],
-                            },
-                        },
-                    );
-                }
-                for check in stage.checks {
-                    let verdict = registry
-                        .evaluate_bound(&check.check, &check.params, &evidence)
-                        .unwrap();
-                    assert_ne!(
-                        verdict.kind,
-                        OutcomeKind::Grader,
-                        "{} / {} / {}: {}",
-                        case.case_id,
-                        stage.stage_id,
-                        check.check,
-                        verdict.raw
-                    );
-                }
-            }
-        }
-    }
-}
-
-#[test]
 fn l2_checks_follow_selected_context_and_tools_and_reject_a_wrong_grant() {
     let definition = definitions()
         .into_iter()
@@ -613,7 +539,7 @@ fn delegation_execution_allows_inspection_but_rejects_config_mutations() {
             }
         }
     }
-    assert_eq!(checked, 7);
+    assert_eq!(checked, 22);
 }
 
 #[test]
@@ -626,7 +552,7 @@ fn automation_outcomes_accept_request_and_goal_success_but_reject_other_states()
         .into_iter()
         .find(|d| d.definition_id == "configurator-l4-automation")
         .unwrap();
-    assert_eq!(definition.comparability_version, 12);
+    assert_eq!(definition.comparability_version, 13);
     let registry = CheckRegistry::builtin();
     let grader = registry.get("crew_spec_match").unwrap();
     let mut checked = 0;

@@ -17,6 +17,7 @@ pub mod client_operations;
 pub mod client_runtime;
 pub mod client_tools;
 pub mod client_workspace;
+pub mod core_packs;
 
 mod claude_request_context;
 pub mod eval;

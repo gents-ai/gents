@@ -1,0 +1,99 @@
+{
+  "case_id": "unbilled-parcels",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "shipments.csv",
+        "contents": "pid,state\nR18,shipped\nR29,packed\nR31,shipped\nR42,shipped\nR54,shipped\n"
+      },
+      {
+        "path": "invoices.csv",
+        "contents": "parcel,invoice,status\nR18,IC12,issued\nR42,IC34,void\nR88,IC53,issued\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "query",
+      "prompt": "Use SQL over shipments.csv and invoices.csv to find the shipped parcels that have not been billed; a void invoice does not count. Reply with one JSON object whose unbilled key lists their IDs in order.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "file_changes",
+          "collection": "ToolFileChange",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "tool_call_doc_id",
+            "session_id",
+            "file_changes"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "data_tables"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "file_changes",
+            "min": 0,
+            "max": 0
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "row_count",
+                "equals": 3
+              },
+              {
+                "field": "rows",
+                "contains": "R31"
+              },
+              {
+                "field": "rows",
+                "contains": "R42"
+              },
+              {
+                "field": "rows",
+                "contains": "R54"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\"unbilled\"\\s*:\\s*\\[\\s*\"R31\"\\s*,\\s*\"R42\"\\s*,\\s*\"R54\"\\s*\\]"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

@@ -12,16 +12,26 @@
   "kind": "documents",
   "assets": [
     "README.md",
+    "cases/completion_record_write_contract.json",
     "cases/default_filter_missing_field.json",
     "cases/emit_outcome_false.json",
+    "cases/held_interval_kiln_watch_pulse.json",
+    "cases/held_pause_sundial_weekday_checklist.json",
     "cases/parallel_base.json",
     "cases/parallel_two_inputs.json",
     "cases/queued_serial_two_inputs.json",
     "cases/serial_session_combo.json",
     "cases/session_template_routing.json",
+    "cases/train_daily_cron_digest.json",
+    "cases/train_interval_heartbeat_fires.json",
     "cases/train_parallel_baseline.json",
+    "cases/train_pause_nightly_freight_route.json",
+    "cases/train_resume_tide_gauge_task.json",
+    "cases/train_suspend_kiln_shift_task.json",
+    "cases/val_retime_luthier_schedule_in_place.json",
+    "cases/val_stop_fern_receipt_outcomes.json",
     "pack_config.json",
-    "cases/completion_record_write_contract.json"
+    "suite.json"
   ],
   "config": "pack_config.json"
 }

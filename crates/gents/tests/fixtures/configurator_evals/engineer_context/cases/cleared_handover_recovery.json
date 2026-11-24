@@ -1,0 +1,109 @@
+{
+  "case_id": "cleared-handover-recovery",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "handover/pier-notes.md",
+        "contents": "# Pier handover - night shift 2026-11-21\n\n## Pier 1\nGate code: 4471-KITE\nBerth status: two ferries moored, shore power on.\nSafety: no open issues.\nContact: Ines (ext 214)\n\n## Pier 2\nGate code: 9903-HERON\nBerth status: empty, fenders inspected.\nSafety: no open issues.\nContact: Malik (ext 238)\n\n## Pier 3\nGate code: 1286-OSPREY\nBerth status: barge loading until 06:00.\nSafety: OPEN - loose decking plank by bollard 12, coned off.\nContact: Dara (ext 251)\n\n## Pier 4\nGate code: 5520-TERN\nBerth status: dredger alongside, crane locked out.\nSafety: no open issues.\nContact: Priya (ext 266)\n\n## Pier 5\nGate code: 7038-PETREL\nBerth status: fuel tender due at 05:30.\nSafety: no open issues.\nContact: Tomas (ext 279)\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "clear",
+      "prompt": "Read handover/pier-notes.md and tell me only which pier has an open safety issue. Then, since those notes are stale now, replace the file's contents with the single line: Cleared after handover review.",
+      "capture": [
+        {
+          "kind": "file",
+          "name": "handover",
+          "glob": "handover/*"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "bash",
+              "bash_unrestricted"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "handover",
+            "expect": [
+              {
+                "path": "handover/pier-notes.md",
+                "matches": "^Cleared after handover review\\.?\\n?$"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?i)\\bpier\\s*3\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "recover",
+      "prompt": "I need the gate code for Pier 4 from the handover notes you just cleared. What was it?",
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "bash",
+              "bash_unrestricted"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "text",
+                "contains": "5520-TERN"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "5520-TERN"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

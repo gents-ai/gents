@@ -1,0 +1,31 @@
+{
+  "manifest_version": 1,
+  "name": "engineer_automation_graphs",
+  "version": "0.1.0",
+  "description": "Native eval definition engineer-automation-graphs: the Engineer builds document automations (filters, templates, groups, outcome chains, session routing), repairs one in place and inspects or runs a manual task, graded by the fires and requests later records cause.",
+  "authors": [
+    "gents-ai contributors"
+  ],
+  "tags": [
+    "eval"
+  ],
+  "kind": "documents",
+  "assets": [
+    "README.md",
+    "cases/bay_thread_per_key.json",
+    "cases/cold_packing_chain.json",
+    "cases/declared_quorum.json",
+    "cases/desk_ticket_routing.json",
+    "cases/dock_alert_triage.json",
+    "cases/inspection_band.json",
+    "cases/linen_proof_preview.json",
+    "cases/paired_crate_scans.json",
+    "cases/proof_slip_run.json",
+    "cases/redline_follow_up.json",
+    "cases/scale_card_repair.json",
+    "cases/yard_receipts.json",
+    "pack_config.json",
+    "suite.json"
+  ],
+  "config": "pack_config.json"
+}

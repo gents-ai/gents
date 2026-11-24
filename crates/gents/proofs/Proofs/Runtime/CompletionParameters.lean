@@ -10,19 +10,25 @@ structure ReasoningInput where
   effort : Option String
   deriving ToJson
 
-/-- The local chat server accepts chat_template_kwargs; Responses, OpenRouter
-and Codex accept reasoning.effort; Messages accepts output_config.effort.
-Codex supplies medium when its profile has no effort. Grok rejects effort. -/
+/-- vLLM's chat server reads chat_template_kwargs, an extension other
+OpenAI-compatible chat servers reject; they take the standard top-level
+reasoning_effort. Responses, OpenRouter and Codex accept reasoning.effort;
+Messages accepts output_config.effort. Codex supplies medium when its profile
+has no effort. Grok rejects effort.
+External premise: OpenAI and Venice answer 400 to chat_template_kwargs
+(2026-11-22). -/
 def reasoning (input : ReasoningInput) : Option String :=
   let effort := input.effort.orElse (fun _ =>
     if input.provider == "ChatGptCodex" then some "medium" else none)
   effort.bind fun effort =>
     if input.provider == "XaiGrokOAuth" then none
-    else if input.provider == "OpenAiCompatible" && !input.responses then
+    else if input.provider == "Vllm" && !input.responses then
       some (Json.mkObj [("chat_template_kwargs", Json.mkObj
         ([("enable_thinking", toJson (effort != "none"))] ++
           if effort == "none" then [] else [("reasoning_effort", toJson effort)]))]).compress
-    else if ["OpenAiCompatible", "OpenRouter", "ChatGptCodex"].contains input.provider then
+    else if input.provider == "OpenAiCompatible" && !input.responses then
+      some (Json.mkObj [("reasoning_effort", toJson effort)]).compress
+    else if ["OpenAiCompatible", "Vllm", "OpenRouter", "ChatGptCodex"].contains input.provider then
       some (Json.mkObj [("reasoning", Json.mkObj [("effort", toJson effort)])]).compress
     else some (Json.mkObj [("output_config", Json.mkObj [("effort", toJson effort)])]).compress
 
@@ -43,7 +49,7 @@ def cache (input : CacheInput) : Option String := do
   let scope ← if input.provider == "ClaudeCliSubscription" then normalized input.session
     else (normalized input.session).orElse (fun _ => normalized input.request)
   let key ← match input.provider with
-    | "OpenAiCompatible" => some "user"
+    | "OpenAiCompatible" | "Vllm" => some "user"
     | "ChatGptCodex" => some "prompt_cache_key"
     | "ClaudeCliSubscription" => some "_gents_session_key"
     | _ => none

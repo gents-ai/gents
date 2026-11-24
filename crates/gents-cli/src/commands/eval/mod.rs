@@ -104,6 +104,10 @@ pub(crate) fn usage_error(command: &EvalCommand) -> Option<String> {
 }
 
 pub(crate) async fn dispatch(command: EvalCommand, runtime: tokio::runtime::Handle) -> Result<()> {
+    let contained = command.allows_host_bash();
+    if contained {
+        containment::verify()?;
+    }
     if matches!(
         command,
         EvalCommand::Run(_) | EvalCommand::Batch(_) | EvalCommand::Resume(_) | EvalCommand::Init(_)
@@ -135,6 +139,15 @@ pub(crate) async fn dispatch(command: EvalCommand, runtime: tokio::runtime::Hand
         ctx.runtime.clone(),
     )
     .with_evaluator_identity(ctx.evaluator.clone(), ctx.client_signing.clone());
+    let executor = if contained {
+        tracing::warn!(
+            "--allow-host-bash: a subject whose definition opts in runs host bash unsandboxed; \
+             this process must run inside a container"
+        );
+        executor.contained()
+    } else {
+        executor
+    };
     let registry = CheckRegistry::builtin();
     let cancel = if matches!(
         command,
@@ -173,6 +186,7 @@ pub(crate) async fn execute(
         EvalCommand::List(args) => inspect::list(ctx, &args, out).await,
         EvalCommand::Show(args) => inspect::show(ctx, &args, out).await,
         EvalCommand::Trial(args) => inspect::trial(ctx, &args, out).await,
+        EvalCommand::Export(args) => export::export(ctx, &args, out).await,
         EvalCommand::Compare(args) => compare::compare(ctx, &args, out).await,
         EvalCommand::Cancel(args) => manage::cancel_run(ctx, &args, out).await,
         EvalCommand::Invalidate(args) => manage::invalidate(ctx, &args, out).await,
@@ -400,6 +414,8 @@ pub(crate) fn load_policy(
 mod batch;
 mod checks;
 mod compare;
+mod containment;
+mod export;
 mod frame;
 pub(crate) use frame::terminal_size;
 pub(crate) mod init;

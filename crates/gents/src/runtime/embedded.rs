@@ -152,22 +152,49 @@ impl EmbeddedHome {
         Ok(identity)
     }
 
+    /// The held evaluator as a shared identity, for an owner that signs as
+    /// the home's User itself.
+    pub fn evaluator_identity(&self, did: &str) -> Result<Arc<dyn NodeIdentity>> {
+        self.evaluator(did)?;
+        self.evaluator
+            .as_ref()
+            .map(|(identity, _)| identity.clone())
+            .context("evaluation requires the held client signing identity")
+    }
+
     pub fn client_access(&self, did: &str) -> Result<gents_store::config_client::ConfigAccess> {
+        Ok(gents_store::config_client::ConfigAccess::Graphql(
+            self.client_endpoint_as(did)?,
+        ))
+    }
+
+    /// The evaluator's access through this home's own node, its writes
+    /// client-signed through the home's endpoint as [`Self::client_access`]
+    /// signs them: how the CLI opens a home no runtime serves, for an owner
+    /// that needs the held store.
+    pub fn local_client_access(
+        &self,
+        did: &str,
+    ) -> Result<gents_store::config_client::ConfigAccess> {
+        let endpoint = self.client_endpoint_as(did)?;
+        Ok(gents_store::config_client::ConfigAccess::local_as(
+            self.node.clone(),
+            ::identity::Did::new(did)?,
+        )
+        .with_client_signed_writes_through(endpoint)?)
+    }
+
+    fn client_endpoint_as(&self, did: &str) -> Result<gents_store::config_client::GraphqlEndpoint> {
         self.evaluator(did)?;
         let (_, capability) = self
             .evaluator
             .as_ref()
             .context("evaluation requires the held client signing capability")?;
-        Ok(gents_store::config_client::ConfigAccess::Graphql(
-            crate::runtime::lifecycle_hooks::compose_endpoint(
-                gents_store::config_client::GraphqlEndpoint::as_principal(
-                    self.graphql_endpoint(),
-                    did,
-                )
+        Ok(crate::runtime::lifecycle_hooks::compose_endpoint(
+            gents_store::config_client::GraphqlEndpoint::as_principal(self.graphql_endpoint(), did)
                 .with_client_signing_capability(capability.clone())?
                 .with_client_signed_agent_creates(),
-            )?,
-        ))
+        )?)
     }
 
     pub async fn reopen(&mut self) -> Result<()> {

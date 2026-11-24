@@ -1,0 +1,95 @@
+{
+  "case_id": "refund-aging",
+  "split": "validation",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "orders.csv",
+        "contents": "order_id,state\nFS17,settled\nFS18,settled\nFS19,cancelled\nFS20,settled\n"
+      },
+      {
+        "path": "refunds.csv",
+        "contents": "refund_id,order_id,paid,due\nRF4,FS17,no,19/11/2026\nRF1,FS18,no,20/11/2026\nRF7,FS19,no,11/11/2026\nRF2,FS17,yes,14/11/2026\nRF6,FS11,no,01/11/2026\nRF3,FS20,no,28/10/2026\nRF9,FS20,no,27/11/2026\nRF5,FS18,no,02/12/2026\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "query",
+      "prompt": "Reconcile orders.csv and refunds.csv for the finance desk with a SQL query over the two files. As of 20 November 2026, which refunds for settled orders are unpaid and overdue? The due dates are day/month/year, and due today is still on time. Leave the files alone and reply with one JSON object whose overdue key lists the refund IDs, sorted.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "file_changes",
+          "collection": "ToolFileChange",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "tool_call_doc_id",
+            "session_id",
+            "file_changes"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "data_tables"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "file_changes",
+            "min": 0,
+            "max": 0
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "row_count",
+                "equals": 2
+              },
+              {
+                "field": "rows",
+                "contains": "RF3"
+              },
+              {
+                "field": "rows",
+                "contains": "RF4"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\"overdue\"\\s*:\\s*\\[\\s*\"RF3\"\\s*,\\s*\"RF4\"\\s*\\]"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

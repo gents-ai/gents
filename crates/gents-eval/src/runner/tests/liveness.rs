@@ -110,17 +110,32 @@ impl TrialExecutor for DrainsSlowly {
 
     async fn execute(&self, _spec: &TrialSpec, cancel: CancellationToken) -> TrialEvidence {
         request_cancel(&self.runs_dir, &self.run_id).unwrap();
-        tokio::time::timeout(Duration::from_secs(10), cancel.cancelled())
+        let run_dir = self.runs_dir.join(&self.run_id);
+        if tokio::time::timeout(STALL_CEILING, cancel.cancelled())
             .await
-            .expect("the loop saw the marker");
-        let holder = || {
-            read_progress(&self.runs_dir.join(&self.run_id))
-                .and_then(|progress| progress.holder)
-                .map(|holder| holder.written_at)
+            .is_err()
+        {
+            panic!(
+                "the loop did not see the marker for {STALL_CEILING:?}: {:?}",
+                read_progress(&run_dir)
+            );
+        }
+        let first = read_progress(&run_dir)
+            .and_then(|progress| progress.holder)
+            .map(|holder| holder.written_at);
+        let second = match &first {
+            Some(first) => Some(
+                progress_when(&run_dir, "the heartbeat refreshes the holder", |progress| {
+                    progress
+                        .holder
+                        .as_ref()
+                        .map(|holder| holder.written_at.clone())
+                        .filter(|written_at| written_at > first)
+                })
+                .await,
+            ),
+            None => None,
         };
-        let first = holder();
-        tokio::time::sleep(Duration::from_millis(1_000)).await;
-        let second = holder();
         self.seen.lock().unwrap().extend([first, second]);
         passed()
     }
@@ -189,8 +204,19 @@ impl TrialExecutor for WatchesHeartbeat {
                 .unwrap_or_default()
         };
         let first = written_at();
-        tokio::time::sleep(Duration::from_millis(600)).await;
-        let second = written_at();
+        let second = progress_when(
+            &self.run_dir,
+            "the heartbeat refreshes the slot",
+            |progress| {
+                progress
+                    .slots
+                    .values()
+                    .next()
+                    .map(|slot| slot.written_at.clone())
+                    .filter(|written_at| *written_at > first)
+            },
+        )
+        .await;
         self.seen.lock().unwrap().extend([first, second]);
         passed()
     }

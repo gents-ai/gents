@@ -366,9 +366,11 @@ impl TrialExecutor for MarksThenWaits {
 
     async fn execute(&self, _spec: &TrialSpec, cancel: CancellationToken) -> TrialEvidence {
         request_cancel(&self.runs_dir, &self.run_id).unwrap();
-        tokio::select! {
-            _ = cancel.cancelled() => self.interrupted.store(true, Ordering::SeqCst),
-            _ = tokio::time::sleep(Duration::from_secs(30)) => {}
+        if tokio::time::timeout(STALL_CEILING, cancel.cancelled())
+            .await
+            .is_ok()
+        {
+            self.interrupted.store(true, Ordering::SeqCst);
         }
         passed()
     }
@@ -400,7 +402,7 @@ async fn a_marker_written_mid_trial_interrupts_the_trial_in_flight() {
     .unwrap();
     assert!(
         executor.interrupted.load(Ordering::SeqCst),
-        "the trial saw its token cancelled, not its 30 s timeout"
+        "the trial saw its token cancelled"
     );
     assert_eq!((outcome.completed, outcome.abandoned), (0, 1));
     let trials = load_trials(&launching.access, launching.owner(), "run-mid")

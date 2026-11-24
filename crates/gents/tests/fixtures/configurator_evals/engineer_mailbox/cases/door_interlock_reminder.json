@@ -1,0 +1,298 @@
+{
+  "case_id": "door-interlock-reminder",
+  "split": "train",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "file",
+      "prompt": "Put a reminder called \u201cDoor interlock review\u201d in my inbox. The note should say \u201cCall Imogen about the dock interlock before unloading.\u201d",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "visible",
+          "collection": "MailboxItem",
+          "filter": {},
+          "fields": [
+            "item_key",
+            "title"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "notice",
+          "collection": "MailboxItem",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "target_node_did": {
+              "_eq": "$trial"
+            },
+            "target_agent_did": {
+              "_eq": "gents:agent-slot:engineer"
+            },
+            "requester_did": {
+              "_eq": "$evaluator"
+            },
+            "session_id": {
+              "_eq": "$session"
+            }
+          },
+          "fields": [
+            "item_key",
+            "node_did",
+            "requester_did",
+            "kind",
+            "action",
+            "status",
+            "title",
+            "summary",
+            "payload",
+            "source_kind",
+            "session_id",
+            "request_id",
+            "target_node_did",
+            "target_agent_did"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "file_mailbox_item"
+            ],
+            "forbidden": [
+              "write",
+              "bash",
+              "bash_unrestricted",
+              "write_file",
+              "edit_file"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "outcome",
+                "equals": "created"
+              },
+              {
+                "field": "item.title",
+                "equals": "Door interlock review"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "visible",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "notice",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "rows": [
+              {
+                "capture": "notice",
+                "key": "title",
+                "id": "Door interlock review",
+                "expect": [
+                  {
+                    "field": "summary",
+                    "fallback_field": "payload",
+                    "equals": "Call Imogen about the dock interlock before unloading."
+                  },
+                  {
+                    "field": "kind",
+                    "equals": "flag"
+                  },
+                  {
+                    "field": "action",
+                    "equals": "ack"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "open"
+                  },
+                  {
+                    "field": "source_kind",
+                    "equals": "agent"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "second",
+      "prompt": "Add another reminder for me: \u201cForklift 3 inspection\u201d, with the note \u201cForklift 3 is due for inspection at 14:00.\u201d Keep the dock interlock reminder as it is.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "visible",
+          "collection": "MailboxItem",
+          "filter": {},
+          "fields": [
+            "item_key",
+            "title"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "notice",
+          "collection": "MailboxItem",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "target_node_did": {
+              "_eq": "$trial"
+            },
+            "target_agent_did": {
+              "_eq": "gents:agent-slot:engineer"
+            },
+            "requester_did": {
+              "_eq": "$evaluator"
+            },
+            "session_id": {
+              "_eq": "$session"
+            }
+          },
+          "fields": [
+            "item_key",
+            "node_did",
+            "requester_did",
+            "kind",
+            "action",
+            "status",
+            "title",
+            "summary",
+            "payload",
+            "source_kind",
+            "session_id",
+            "request_id",
+            "target_node_did",
+            "target_agent_did"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "file_mailbox_item"
+            ],
+            "forbidden": [
+              "write",
+              "bash",
+              "bash_unrestricted",
+              "write_file",
+              "edit_file"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "visible",
+                "min": 2,
+                "max": 2
+              },
+              {
+                "capture": "notice",
+                "min": 2,
+                "max": 2
+              }
+            ],
+            "rows": [
+              {
+                "capture": "notice",
+                "key": "title",
+                "id": "Door interlock review",
+                "expect": [
+                  {
+                    "field": "summary",
+                    "fallback_field": "payload",
+                    "equals": "Call Imogen about the dock interlock before unloading."
+                  },
+                  {
+                    "field": "kind",
+                    "equals": "flag"
+                  },
+                  {
+                    "field": "action",
+                    "equals": "ack"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "open"
+                  },
+                  {
+                    "field": "source_kind",
+                    "equals": "agent"
+                  }
+                ]
+              },
+              {
+                "capture": "notice",
+                "key": "title",
+                "id": "Forklift 3 inspection",
+                "expect": [
+                  {
+                    "field": "summary",
+                    "fallback_field": "payload",
+                    "equals": "Forklift 3 is due for inspection at 14:00."
+                  },
+                  {
+                    "field": "kind",
+                    "equals": "flag"
+                  },
+                  {
+                    "field": "action",
+                    "equals": "ack"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "open"
+                  },
+                  {
+                    "field": "source_kind",
+                    "equals": "agent"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

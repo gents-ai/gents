@@ -208,7 +208,7 @@ pub(crate) async fn init_home(args: InitArgs) -> Result<Value> {
 /// database.
 pub(crate) async fn init_home_with_core_packs(
     mut args: InitArgs,
-    core_packs: default_packs::Archives<'_>,
+    core_packs: gents::core_packs::Archives<'_>,
     entry: default_packs::InitEntryPoint,
 ) -> Result<Value> {
     let registry = args.registry.clone();

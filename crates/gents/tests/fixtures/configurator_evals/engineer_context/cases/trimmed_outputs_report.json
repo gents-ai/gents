@@ -1,0 +1,105 @@
+{
+  "case_id": "trimmed-outputs-report",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "reports/shift-a.md",
+        "contents": "# Shift A report\n\n- 06:00 quay crane QC-1: lifts 14, no faults.\n- 07:00 quay crane QC-2: lifts 11, no faults.\n- 08:00 quay crane QC-3: lifts 16, no faults.\n- 09:00 quay crane QC-1: lifts 12, no faults.\n- 10:00 quay crane QC-2: lifts 13, no faults.\n- 11:00 quay crane QC-3: lifts 15, no faults.\n- 12:00 quay crane QC-1: lifts 10, no faults.\n- 13:00 quay crane QC-2: lifts 9, no faults.\n"
+      },
+      {
+        "path": "reports/shift-b.md",
+        "contents": "# Shift B report\n\n- 14:00 quay crane QC-1: lifts 12, no faults.\n- 15:00 quay crane QC-2: lifts 4, hoist brake fault, crane stood down.\n- 16:00 quay crane QC-3: lifts 13, no faults.\n- 17:00 quay crane QC-1: lifts 15, no faults.\n- 18:00 quay crane QC-3: lifts 11, no faults.\n- 19:00 quay crane QC-1: lifts 14, no faults.\n- 20:00 quay crane QC-3: lifts 12, no faults.\n- 21:00 quay crane QC-1: lifts 9, no faults.\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "read",
+      "prompt": "Read both shift reports in reports/ and tell me which shift had a crane fault, and on which crane.",
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "write_file",
+              "edit_file",
+              "bash",
+              "bash_unrestricted"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?i)\\bshift\\s*b\\b"
+              },
+              {
+                "matches": "QC-2"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "budget",
+      "prompt": "Before we go on, check your context budget. How many earlier tool outputs were trimmed out of your context for this turn, and how many bytes did that remove? Reply with JSON: trimmed_outputs and bytes_removed.",
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "context_budget"
+            ],
+            "forbidden": [
+              "write_file",
+              "edit_file",
+              "bash",
+              "bash_unrestricted"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "history_tool_outputs_stubbed_this_dispatch.count",
+                "matches": "^[1-9][0-9]*$"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "\"trimmed_outputs\"\\s*:\\s*[1-9][0-9]*\\b"
+              },
+              {
+                "matches": "\"bytes_removed\"\\s*:\\s*[1-9][0-9]*\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

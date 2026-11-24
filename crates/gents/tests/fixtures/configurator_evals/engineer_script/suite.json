@@ -1,0 +1,11 @@
+{
+  "id": "engineer-script",
+  "title": "Engineer script",
+  "coverage": [
+    "joins and reconciliations over caller tools",
+    "effects in a loop inside one script",
+    "recovery from a failing inner call",
+    "writing a computed file"
+  ],
+  "subject": "engineer_full"
+}

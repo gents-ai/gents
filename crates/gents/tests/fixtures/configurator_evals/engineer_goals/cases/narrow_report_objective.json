@@ -1,0 +1,122 @@
+{
+  "case_id": "narrow-report-objective",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "reports/q1.md",
+        "contents": "# Q1 report\nStatus: final\n\nRevenue held at 4.1M.\n"
+      },
+      {
+        "path": "reports/q2.md",
+        "contents": "# Q2 report\nStatus: draft\n\nNumbers pending review.\n"
+      },
+      {
+        "path": "reports/q3.md",
+        "contents": "# Q3 report\nStatus: final\n\nRevenue rose to 4.6M.\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "goal",
+      "settle": true,
+      "prompt": "Set this session's goal to exactly \"Copy every report in reports/ into archive/\" with a token budget of 500000. Then look at what's there: if any report is a draft, change the goal's objective to exactly \"Copy every final report in reports/ into archive/\" and leave the drafts out. Copy the files unchanged, under the same names, and finish the goal when the copies are done.",
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "goal",
+          "collection": "Goal",
+          "filter": {
+            "session_id": {
+              "_eq": "$session"
+            }
+          },
+          "fields": [
+            "goal_id",
+            "objective",
+            "status",
+            "token_budget",
+            "completion_evidence",
+            "consecutive_blocked_audits",
+            "last_blocked_reason"
+          ]
+        },
+        {
+          "kind": "file",
+          "name": "archive",
+          "glob": "archive/*"
+        },
+        {
+          "kind": "file",
+          "name": "reports",
+          "glob": "reports/*"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "create_goal"
+            ],
+            "forbidden": [
+              "bash",
+              "bash_unrestricted"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "goal",
+            "expect": [
+              {
+                "field": "objective",
+                "equals": "Copy every final report in reports/ into archive/"
+              },
+              {
+                "field": "token_budget",
+                "equals": 500000
+              },
+              {
+                "field": "status",
+                "equals": "complete"
+              }
+            ],
+            "min_rows": 1,
+            "max_rows": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "archive",
+            "expect": [
+              {
+                "path": "archive/q1.md",
+                "matches": "\\A\\# Q1 report\\nStatus: final\\n\\nRevenue held at 4\\.1M\\.\\n?\\z"
+              },
+              {
+                "path": "archive/q3.md",
+                "matches": "\\A\\# Q3 report\\nStatus: final\\n\\nRevenue rose to 4\\.6M\\.\\n?\\z"
+              },
+              {
+                "path": "archive/q2.md",
+                "exists": false
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

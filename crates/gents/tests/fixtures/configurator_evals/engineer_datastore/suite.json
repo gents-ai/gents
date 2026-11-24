@@ -1,0 +1,15 @@
+{
+  "id": "engineer-datastore",
+  "title": "Application datastore",
+  "coverage": [
+    "filtered count",
+    "ordered pagination",
+    "durable create/update/delete",
+    "protected data and owner selection",
+    "derived reads",
+    "record linkage",
+    "guarded updates and deletes"
+  ],
+  "subject": "ladder/engineer_subject",
+  "preset_self_config": true
+}

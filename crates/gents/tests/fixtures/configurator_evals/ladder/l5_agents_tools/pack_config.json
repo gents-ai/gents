@@ -3,7 +3,7 @@
   "eval_definitions": [
     {
       "definition_id": "configurator-l5-agents-tools",
-      "comparability_version": 12,
+      "comparability_version": 13,
       "title": "The Engineer \u2014 AgentTarget wiring and delegation",
       "subject": {
         "kind": "agent",
@@ -19,7 +19,13 @@
         "./cases/val_ghost_agent_refused.json",
         "./cases/val_repoint_target_in_place.json",
         "./cases/val_verify_then_delegate_no_dupes.json",
-        "./cases/heldout_mixed_valid_and_ghost.json"
+        "./cases/heldout_mixed_valid_and_ghost.json",
+        "./cases/train_stop_one_crate_load.json",
+        "./cases/train_notify_west_dock_thread.json",
+        "./cases/train_repair_intake_acknowledgement.json",
+        "./cases/val_stop_duplicate_invoice_batch.json",
+        "./cases/val_linen_replenishment_request.json",
+        "./cases/heldout_night_proof_desk_notice.json"
       ]
     }
   ]

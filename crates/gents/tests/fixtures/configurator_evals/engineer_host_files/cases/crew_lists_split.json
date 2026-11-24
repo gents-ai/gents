@@ -1,0 +1,70 @@
+{
+  "case_id": "crew-lists-split",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "crew/roster.csv",
+        "contents": "name,crew,status\nBirch,rigging,active\nAlder,rigging,active\nCedar,rigging,retired\nHazel,galley,active\nRowan,deck,retired\nJuniper,deck,retired\nAspen,galley,active\nWillow,engine,active\nMaple,galley,on leave\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "split",
+      "prompt": "Using crew/roster.csv, write one file per crew at crew/lists/<crew>.txt listing that crew's active members, one name per line in alphabetical order. Skip any crew with no active members, and don't edit the roster.",
+      "capture": [
+        {
+          "kind": "file",
+          "name": "crew",
+          "glob": "crew/**/*"
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "bash",
+              "bash_unrestricted"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "crew",
+            "expect": [
+              {
+                "path": "crew/lists/rigging.txt",
+                "matches": "^Alder\\nBirch\\n?$"
+              },
+              {
+                "path": "crew/lists/galley.txt",
+                "matches": "^Aspen\\nHazel\\n?$"
+              },
+              {
+                "path": "crew/lists/engine.txt",
+                "matches": "^Willow\\n?$"
+              },
+              {
+                "path": "crew/lists/deck.txt",
+                "exists": false
+              },
+              {
+                "path": "crew/roster.csv",
+                "sha256": "e74fe1d1ace577b202d6dfd66d7d90210793fa4a6ba8ce2098fda0909b13e9af"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

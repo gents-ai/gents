@@ -1,0 +1,139 @@
+{
+  "case_id": "cedar-receiving-not-recorded",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "documents": [
+      {
+        "collection": "AgentSession",
+        "document": {
+          "node_did": "$trial",
+          "requester_did": "$evaluator",
+          "session_id": "cedar-transfer",
+          "agent_did": "gents:agent-slot:engineer",
+          "created_at": "2026-08-03T08:00:00Z",
+          "closed_at": "2026-08-03T17:00:00Z",
+          "title": {
+            "text": "Cedar transfer | confirmed pickup 11:30 UTC | receiving time pending",
+            "source": "user"
+          },
+          "tags": [
+            "transfer"
+          ]
+        }
+      },
+      {
+        "collection": "AgentSession",
+        "document": {
+          "node_did": "$trial",
+          "requester_did": "$evaluator",
+          "session_id": "cedar-safety",
+          "agent_did": "gents:agent-slot:engineer",
+          "created_at": "2026-08-04T08:00:00Z",
+          "closed_at": "2026-08-04T17:00:00Z",
+          "title": {
+            "text": "Cedar safety drill | receiving exercise starts 17:00 UTC",
+            "source": "user"
+          },
+          "tags": [
+            "drill"
+          ]
+        }
+      },
+      {
+        "collection": "AgentSession",
+        "document": {
+          "node_did": "$trial",
+          "requester_did": "$evaluator",
+          "session_id": "larch-transfer",
+          "agent_did": "gents:agent-slot:engineer",
+          "created_at": "2026-08-05T08:00:00Z",
+          "closed_at": "2026-08-05T17:00:00Z",
+          "title": {
+            "text": "Larch transfer | confirmed receiving time 09:10 UTC",
+            "source": "user"
+          },
+          "tags": [
+            "transfer"
+          ]
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "investigate",
+      "prompt": "Look up our Cedar transfer notes. Is a receiving time actually recorded? Give only the time if present, otherwise say NOT RECORDED, followed by the Cedar transfer source session ID.",
+      "checks": [
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              "NOT RECORDED"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "sessions"
+            ],
+            "forbidden": [
+              "bash",
+              "query",
+              "config"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "links": [
+              {
+                "capture": "sources",
+                "key": "session_id",
+                "id": "cedar-transfer",
+                "field": "session_id",
+                "target_capture": "sources",
+                "target_key": "session_id",
+                "reported_fields": [
+                  "session_id"
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "sources",
+          "collection": "AgentSession",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "session_id": {
+              "_in": [
+                "cedar-transfer"
+              ]
+            }
+          },
+          "fields": [
+            "_docID",
+            "session_id",
+            "title",
+            "closed_at"
+          ]
+        }
+      ]
+    }
+  ]
+}
