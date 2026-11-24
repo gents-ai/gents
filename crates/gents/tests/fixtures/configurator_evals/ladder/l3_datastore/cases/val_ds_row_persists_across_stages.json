@@ -29,7 +29,7 @@
     },
     {
       "stage_id": "exercise",
-      "prompt": "Save an output with result once for correlation val-foxtrot-007, and tell me when it is stored.",
+      "prompt": "Save an output for correlation val-foxtrot-007 whose result is exactly \"once\", and tell me when it is stored.",
       "settle": true,
       "capture": [
         {

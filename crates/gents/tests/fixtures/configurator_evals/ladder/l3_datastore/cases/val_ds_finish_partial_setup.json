@@ -218,7 +218,7 @@
     },
     {
       "stage_id": "exercise",
-      "prompt": "Have Ledger Clerk save result resumed for correlation val-delta-005, then look it up by correlation, and tell me what it found.",
+      "prompt": "Have Ledger Clerk save a record for correlation val-delta-005 whose result is exactly \"resumed\", then look it up by correlation, and tell me what it found.",
       "settle": true,
       "capture": [
         {

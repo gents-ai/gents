@@ -135,7 +135,7 @@
     },
     {
       "stage_id": "exercise",
-      "prompt": "Have Intake Writer save result queued for correlation val-bravo-003, and tell me when it is done.",
+      "prompt": "Have Intake Writer save a record for correlation val-bravo-003 whose result is exactly \"queued\", and tell me when it is done.",
       "settle": true,
       "capture": [
         {

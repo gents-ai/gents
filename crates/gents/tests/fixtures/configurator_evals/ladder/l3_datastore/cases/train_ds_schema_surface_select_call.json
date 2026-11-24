@@ -148,7 +148,7 @@
     },
     {
       "stage_id": "exercise",
-      "prompt": "Have Results Clerk save result ok for correlation train-alpha-001, then look it up by correlation, and tell me what it found.",
+      "prompt": "Have Results Clerk save a result for correlation train-alpha-001 whose result is exactly \"ok\", then look it up by correlation, and tell me what it found.",
       "settle": true,
       "capture": [
         {

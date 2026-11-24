@@ -30,7 +30,7 @@
     },
     {
       "stage_id": "exercise",
-      "prompt": "Save an output with result ok for correlation val-alpha-002, then look it up and tell me what is stored.",
+      "prompt": "Save an output for correlation val-alpha-002 whose result is exactly \"ok\", then look it up and tell me what is stored.",
       "settle": true,
       "capture": [
         {

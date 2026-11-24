@@ -145,7 +145,7 @@
     },
     {
       "stage_id": "exercise",
-      "prompt": "Have Night Writer save result verified for correlation held-zeta-008. Then check the record yourself and tell me what is stored.",
+      "prompt": "Have Night Writer save a record for correlation held-zeta-008 whose result is exactly \"verified\". Then check the record yourself and tell me what is stored.",
       "settle": true,
       "capture": [
         {

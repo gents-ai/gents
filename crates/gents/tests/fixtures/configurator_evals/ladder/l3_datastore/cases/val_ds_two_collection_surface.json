@@ -144,7 +144,7 @@
     },
     {
       "stage_id": "exercise",
-      "prompt": "Have Flow Clerk save an output with result done and an input with message kickoff, both for correlation val-charlie-004. Tell me when both are saved.",
+      "prompt": "Have Flow Clerk save, for correlation val-charlie-004, an output whose result is exactly \"done\" and an input whose message is exactly \"kickoff\". Tell me when both are saved.",
       "settle": true,
       "capture": [
         {
