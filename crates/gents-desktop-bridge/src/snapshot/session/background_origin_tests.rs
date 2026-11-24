@@ -11,11 +11,13 @@ use gents_store::config_client::ConfigAccess;
 
 #[tokio::test]
 async fn persisted_background_inputs_keep_origin_across_transcript_windows() {
-    let (db, _user, _user_access, binding) = gents_inference::test_support::signed_test_node(
+    let signed_home = gents_documents::test_support::SignedHome::start(
         "background-origin",
         gents_automation::lifecycle_hooks::composition(),
     )
     .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, _user, _user_access) = signed_home.into_parts();
     let node = db.node.clone();
     let amy = db.node_identity.did().to_owned();
     let agent = binding.agent_did;
