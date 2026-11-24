@@ -94,7 +94,7 @@ pub(crate) const FENCES: &[(&str, usize, &str)] = &[
         "CommonWrite(AgentSession): every claim writes its session's observation, so two claims of one session's queue abort each other",
     ),
     (
-        "crates/gents-session/src/request/lifecycle/client.rs::stage_client_request_in_txn",
+        "crates/gents-session/src/request/lifecycle/client.rs::stage_client_request_checked_in_txn",
         1,
         "CommonWrite(AgentRequest): a signed create's document id is derived from its signed content, so two submissions of one signed request create one document",
     ),

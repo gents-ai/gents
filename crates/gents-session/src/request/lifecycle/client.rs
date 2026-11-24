@@ -133,6 +133,19 @@ pub async fn stage_client_request_in_txn(
     session: &str,
     agent: &str,
 ) -> anyhow::Result<String> {
+    stage_client_request_checked_in_txn(txn, create, session, agent, true).await
+}
+
+/// `check_session` false: the caller read the session's binding outside the
+/// transaction ([`bound_published_session`]), and the transaction does not
+/// read the session document, whose refreshes would abort it.
+async fn stage_client_request_checked_in_txn(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    create: &AgentRequestCreate,
+    session: &str,
+    agent: &str,
+    check_session: bool,
+) -> anyhow::Result<String> {
     anyhow::ensure!(
         txn.actor_did()
             .is_some_and(|actor| publication_admission_allowed(create, actor))
@@ -154,15 +167,17 @@ pub async fn stage_client_request_in_txn(
             fields::{agent_request as request_fields, agent_session as session_fields},
             Filter, Query, QuerySet, Selection,
         };
-        txn.run(
-            &QuerySet::new()
-                .plain(
-                    &Query::select(
-                        Selection::doc_id().field(session_fields::RELATIONSHIPS_PENDING),
-                    )
+        let reads = if check_session {
+            QuerySet::new().plain(
+                &Query::select(Selection::doc_id().field(session_fields::RELATIONSHIPS_PENDING))
                     .filter(Filter::eq(session_fields::DOC_ID, session))
                     .limit(2),
-                )
+            )
+        } else {
+            QuerySet::new()
+        };
+        txn.run(
+            &reads
                 .plain(
                     &Query::select(Selection::doc_id())
                         .filter(Filter::eq(request_fields::REQUEST_ID, &create.request_id))
@@ -172,15 +187,17 @@ pub async fn stage_client_request_in_txn(
         )
         .await?
     };
-    let sessions = observed["data"]["AgentSession"]
-        .as_array()
-        .context("client request session check omitted rows")?;
-    anyhow::ensure!(
-        sessions.len() == 1
-            && sessions[0]["_docID"] == session
-            && sessions[0]["relationships_pending"] == false,
-        "client request session relationships are incomplete"
-    );
+    if check_session {
+        let sessions = observed["data"]["AgentSession"]
+            .as_array()
+            .context("client request session check omitted rows")?;
+        anyhow::ensure!(
+            sessions.len() == 1
+                && sessions[0]["_docID"] == session
+                && sessions[0]["relationships_pending"] == false,
+            "client request session relationships are incomplete"
+        );
+    }
     // `AgentRequest.request_id` is only `@index`: a client create never adds
     // a second request under an identity the actor can already read.
     anyhow::ensure!(
@@ -697,6 +714,32 @@ pub async fn admit_client_request_in_txn(
     stage_client_request_in_txn(txn, create, &session, &agent).await
 }
 
+/// Create the request in a published session whose binding
+/// [`bound_published_session`] read before `txn`: only the selected Agent is
+/// read here. The session document is not, so the working Agent's
+/// observation refreshes never abort the commit; what that read would decide
+/// cannot change (Lean `TransactionFence.a_bound_session_stays_bound`).
+async fn admit_published_client_request_in_txn(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    create: &AgentRequestCreate,
+    session: &str,
+) -> anyhow::Result<String> {
+    let (agent, _) = gents_documents::read_desired_state_record_in_txn(
+        txn,
+        gents_store::collection::Collection::Agent,
+        &create.node_did,
+        &create.agent_did,
+    )
+    .await?
+    .context("selected agent is unavailable")?;
+    anyhow::ensure!(
+        create.session_doc_id.as_deref() == Some(session)
+            && create.agent_doc_id.as_deref() == Some(agent.as_str()),
+        "client request physical targets changed before publication"
+    );
+    stage_client_request_checked_in_txn(txn, create, session, &agent, false).await
+}
+
 /// Admits a signed request in one transaction: the session when its scope has
 /// none, its relationships and the request commit together, or none of them do
 /// (Lean `AgentSession.admitRequest`). Existing session provenance is
@@ -712,15 +755,31 @@ pub async fn submit_client_request(
             "request publication admission is not allowed"
         )));
     }
-    // The working Agent refreshes the session observation as it publishes
-    // each message, so a submission during a turn can lose its session read;
-    // the callback re-reads its targets and is transaction-only, so a
-    // confirmed conflict is rebuilt (ClientSubmissionContention.tla).
+    // A published session's binding is read once, before the transaction:
+    // its requester and Agent are immutable, its relationships only go from
+    // pending to published, and it is never deleted, so what the read decides
+    // holds at commit (Lean `TransactionFence.a_bound_session_stays_bound`).
+    // The transaction then never reads the session document, whose
+    // observation the working Agent refreshes as it publishes each message.
+    let bound = bound_published_session(access, create)
+        .await
+        .map_err(ClientSubmissionError::Rejected)?
+        .filter(|session| create.session_doc_id.as_deref() == Some(session.as_str()));
+    // A session not yet published is read in the transaction, where that
+    // refresh can make a submission during a turn lose its session read; the
+    // callback re-reads its targets and is transaction-only, so a confirmed
+    // conflict is rebuilt (ClientSubmissionContention.tla).
     access
         .transact_signed_conflict_rebuild_with_finality("request.client.submit", |txn| {
             let actor = &actor;
+            let bound = bound.as_deref();
             Box::pin(async move {
-                admit_client_request_in_txn(txn, create, actor).await?;
+                match bound {
+                    Some(session) => {
+                        admit_published_client_request_in_txn(txn, create, session).await?
+                    }
+                    None => admit_client_request_in_txn(txn, create, actor).await?,
+                };
                 Ok::<_, anyhow::Error>(())
             })
         })
@@ -732,6 +791,55 @@ pub async fn submit_client_request(
                 ClientSubmissionError::Rejected(failure.error)
             }
         })
+}
+
+/// A session's binding, read once before a send's transaction: its document
+/// when it is published (its relationships no longer pending) and its
+/// requester and Agent are the request's; `None` when it does not exist or
+/// is not published yet, so the transaction binds it as before. A session
+/// that names another requester or Agent refuses the request, as the
+/// transaction would.
+async fn bound_published_session(
+    access: &ConfigAccess,
+    create: &AgentRequestCreate,
+) -> anyhow::Result<Option<String>> {
+    use gents_protocol::document_query::{
+        fields::agent_session as session_fields, Filter, Query, Selection,
+    };
+    let read = Query::select(
+        Selection::owned(gents_protocol::session::SESSION_SCOPE_FIELDS)
+            .field(session_fields::RELATIONSHIPS_PENDING),
+    )
+    .filter(
+        Filter::eq(session_fields::NODE_DID, &create.node_did)
+            .and(Filter::eq(session_fields::SESSION_ID, &create.session_id)),
+    )
+    .limit(2)
+    .render();
+    let mut response = access.read(&read).await?;
+    /* the owner-row decoder takes the scope fields only */
+    let published = response
+        .pointer_mut("/data/AgentSession/0")
+        .and_then(serde_json::Value::as_object_mut)
+        .and_then(|row| row.remove(session_fields::RELATIONSHIPS_PENDING.name()))
+        == Some(serde_json::Value::Bool(false));
+    let gents_store::config_client::agent_session::AgentSessionRowRead::Present(existing) =
+        gents_store::config_client::agent_session::decode_agent_session_read(
+            &response,
+            &create.session_id,
+        )?
+    else {
+        return Ok(None);
+    };
+    anyhow::ensure!(
+        existing.session.requester_did.as_deref() == Some(create.requester_did.as_str()),
+        "client request changes session requester provenance"
+    );
+    anyhow::ensure!(
+        existing.session.agent_did == create.agent_did,
+        "client request changes selected session agent"
+    );
+    Ok(published.then_some(existing.doc_id))
 }
 
 /// The owner's idempotency key for a client-authored send: the signer and
