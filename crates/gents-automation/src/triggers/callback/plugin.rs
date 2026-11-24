@@ -477,7 +477,7 @@ mod tests {
 
     async fn run_echo_binding(
         digest: &str,
-    ) -> (gents_inference::test_support::TestDb, tempfile::TempDir) {
+    ) -> (gents_store::test_support::TestStore, tempfile::TempDir) {
         run_binding(digest, None, false, "").await
     }
 
@@ -486,7 +486,7 @@ mod tests {
         allowed: Option<&std::path::Path>,
         bind: bool,
         job_path: &str,
-    ) -> (gents_inference::test_support::TestDb, tempfile::TempDir) {
+    ) -> (gents_store::test_support::TestStore, tempfile::TempDir) {
         let binding = bind.then(|| gents_pack::pack::PluginDirBinding {
             input_field: "path".into(),
             original_field: Some("origin".into()),
@@ -513,7 +513,7 @@ mod tests {
         binding: Option<gents_pack::pack::PluginDirBinding>,
         allowed: Option<(&std::path::Path, gents_pack::pack::BindAccess)>,
         job_path: &str,
-    ) -> (gents_inference::test_support::TestDb, tempfile::TempDir) {
+    ) -> (gents_store::test_support::TestStore, tempfile::TempDir) {
         if binding.is_some() {
             record.declaration.input_schema = serde_json::json!({
                 "type": "object",
@@ -716,7 +716,7 @@ mod tests {
     async fn run_data_plugin(
         service: &str,
         canned: Value,
-    ) -> (gents_inference::test_support::TestDb, tempfile::TempDir) {
+    ) -> (gents_store::test_support::TestStore, tempfile::TempDir) {
         let installed = data_plugin(service, &canned);
         let digest = installed.1.digest.clone();
         run_plugin_binding(installed, &digest, None, None, "").await

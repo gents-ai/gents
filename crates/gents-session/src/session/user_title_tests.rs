@@ -425,7 +425,7 @@ async fn user_rename_rebuilds_after_confirmed_http_commit_conflict() -> anyhow::
     );
 
     let missing_signer = ConfigAccess::Graphql(GraphqlEndpoint::as_principal(
-        db.client_endpoint(),
+        db.graphql_endpoint(),
         user.did(),
     ));
     let error = super::rename_session_on(
@@ -508,7 +508,7 @@ async fn title_observation_uses_selected_agent_session_access() {
     use gents_store::identity::NodeIdentity;
 
     async fn reserve(
-        db: &gents_inference::test_support::TestDb,
+        db: &gents_store::test_support::TestStore,
         user: &gents_store::identity::KeyIdentity,
         access: &gents_store::config_client::ConfigAccess,
         agent: &AgentIdentityBinding,

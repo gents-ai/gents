@@ -180,7 +180,7 @@ impl EmbeddedExecutor {
         options.plugin_home = Some(home.path().to_path_buf());
         options.runtime_snapshot_observer = Some(Arc::new(EventSourcesReady(event_sources_ready)));
         options.tool_ceiling = trial_tool_ceiling(&workspace, spec.host_bash, self.isolation);
-        let runtime = match boot_runtime(&home, home.identity.clone(), options).await {
+        let runtime = match boot_runtime(&home, home.node_identity.clone(), options).await {
             Ok((runtime, _agent)) => runtime,
             Err(error) => {
                 close(home).await;

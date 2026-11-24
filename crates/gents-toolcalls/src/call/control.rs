@@ -709,7 +709,7 @@ mod tests {
     async fn cancel_background_tool_call_terminalizes_row_and_token() {
         use crate::call::lifecycle::admission_fixture::claimed_signed_request;
 
-        let db = gents_inference::test_support::test_db(
+        let db = gents_store::test_support::TestStore::start(
             "agent-tool-control-cancel",
             gents_session::test_support::no_lifecycle_plugins(),
         )
@@ -1020,7 +1020,7 @@ mod tests {
         use gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
         use gents_protocol::request_admission::SIGNED_REQUEST_FIELDS;
         use gents_store::identity::NodeIdentity;
-        let node_db = gents_inference::test_support::test_db(
+        let node_db = gents_store::test_support::TestStore::start(
             "owned-cancel-persists-custom-completion-",
             gents_session::test_support::no_lifecycle_plugins(),
         )

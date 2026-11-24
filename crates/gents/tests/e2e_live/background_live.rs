@@ -7,9 +7,10 @@ use serde_json::{json, Value};
 use crate::support::agent_requests::{submit_user_request, RequestActors};
 use crate::support::interrupt::BootedAgent;
 use crate::support::live_inference::{
-    bind_target, boot_live_agent_with_ceiling, live_target, rows_when, wait_for_request_terminal,
+    bind_target, boot_live_agent_with_ceiling, live_target, wait_for_request_terminal,
 };
 use crate::support::{test_db, TestDb};
+use gents_store::test_support::rows_when;
 use gents_store::test_support::snapshot_reader::SnapshotReader;
 
 const SESSION: &str = "live-background-session";

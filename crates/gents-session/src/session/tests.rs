@@ -72,7 +72,7 @@ async fn signed_compaction_fixture(
     session: &str,
     count: usize,
 ) -> (
-    gents_inference::test_support::TestDb,
+    gents_store::test_support::TestStore,
     gents_store::identity::KeyIdentity,
     std::sync::Arc<dyn gents_store::identity::NodeIdentity>,
     gents_store::config_client::ConfigAccess,
@@ -1929,7 +1929,7 @@ async fn compaction_chains_with_equal_session_labels_remain_owner_scoped() {
 }
 
 async fn reserve_signed_session(
-    db: &gents_inference::test_support::TestDb,
+    db: &gents_store::test_support::TestStore,
     user: &dyn gents_store::identity::NodeIdentity,
     client: &gents_store::config_client::ConfigAccess,
     binding: &gents_protocol::agent_identity::AgentIdentityBinding,
@@ -1958,7 +1958,7 @@ async fn reserve_signed_session(
 }
 
 pub(crate) async fn publish_shared_signed_history(
-    db: &gents_inference::test_support::TestDb,
+    db: &gents_store::test_support::TestStore,
     user: &dyn gents_store::identity::NodeIdentity,
     client: &gents_store::config_client::ConfigAccess,
     binding: &gents_protocol::agent_identity::AgentIdentityBinding,

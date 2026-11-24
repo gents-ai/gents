@@ -49,7 +49,8 @@ async fn trigger_checkpoint_uses_selected_agent_visibility_and_advances_serial_a
         serde_json::from_value(agent_row["data"]["Agent"][0].clone()).unwrap();
     assert_eq!(binding.agent_did, agent_did);
     let agent_identity =
-        gents_store::identity::resolve_agent_identity(home.identity.as_ref(), &binding).unwrap();
+        gents_store::identity::resolve_agent_identity(home.node_identity.as_ref(), &binding)
+            .unwrap();
     let agent = ConfigAccess::local_managed_agent(
         home.node.clone(),
         ::identity::Did::new(&agent_did).unwrap(),
@@ -345,7 +346,7 @@ async fn every_installed_trial_agent_can_read_its_operational_collections() {
     }
     gents_store::identity::provision_agent_identity_authorized(
         &home.node,
-        home.identity.as_ref(),
+        home.node_identity.as_ref(),
         &selected_did,
     )
     .await
@@ -482,7 +483,8 @@ async fn installing_a_pack_binds_its_inference_slot_to_the_frozen_profile() {
     )
     .unwrap();
     let agent_identity =
-        gents_store::identity::resolve_agent_identity(home.identity.as_ref(), &binding).unwrap();
+        gents_store::identity::resolve_agent_identity(home.node_identity.as_ref(), &binding)
+            .unwrap();
     let actor = ConfigAccess::local_managed_agent(
         home.node.clone(),
         ::identity::Did::new(&agent_did).unwrap(),
@@ -603,7 +605,7 @@ async fn a_trial_subject_supplies_an_omitted_default_agent() {
     );
     let agent = gents::Gents::from_default_agent_documents(
         home.node.clone(),
-        home.identity.clone(),
+        home.node_identity.clone(),
         DocumentRuntimeOptions {
             backend_admission: Some(home.backend_admission()),
             ..Default::default()
@@ -758,7 +760,7 @@ async fn subject_schemas_are_installed_before_documents_without_fixture_copies()
         &workspace,
         &home,
         &Default::default(),
-        home.identity.as_ref(),
+        home.node_identity.as_ref(),
         None,
     )
     .await
@@ -773,7 +775,7 @@ async fn subject_schemas_are_installed_before_documents_without_fixture_copies()
         &workspace,
         &home,
         &Default::default(),
-        home.identity.as_ref(),
+        home.node_identity.as_ref(),
         None,
     )
     .await

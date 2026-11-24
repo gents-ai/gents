@@ -9,7 +9,7 @@ use gents_store::identity::{KeyIdentity, NodeIdentity};
 async fn generated_captures_use_signed_storage_and_fresh_admission() {
     let temp = tempfile::tempdir().unwrap();
     let user = KeyIdentity::load_or_create(temp.path().join("user.key"), None).unwrap();
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "generated-captures-use-signed-storage-an",
         crate::test_support::no_lifecycle_plugins(),
     )

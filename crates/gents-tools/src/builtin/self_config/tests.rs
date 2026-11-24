@@ -759,7 +759,7 @@ fn config(categories: &[&str]) -> SelfConfigToolConfig {
 
 #[tokio::test]
 async fn build_fails_closed_without_node_did() {
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "self-config-empty-node-did",
         gents_session::test_support::no_lifecycle_plugins(),
     )
@@ -781,7 +781,7 @@ async fn build_fails_closed_without_node_did() {
 
 #[tokio::test]
 async fn build_registers_gated_family() {
-    let db = gents_inference::test_support::test_db(
+    let db = gents_store::test_support::TestStore::start(
         "self-config-gated-family",
         gents_session::test_support::no_lifecycle_plugins(),
     )

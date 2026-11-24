@@ -1,7 +1,7 @@
 use super::*;
 
 struct CycleFixture {
-    db: crate::test_support::TestDb,
+    db: gents_store::test_support::TestStore,
     _user_identity: gents_store::identity::KeyIdentity,
     user: gents_store::config_client::ConfigAccess,
     runtime: gents_store::config_client::ConfigAccess,
@@ -391,7 +391,7 @@ async fn runtime_probe_cycle_scopes_same_named_backends_to_its_node() {
     let listener = ModelsListener::start();
     let local = fixture.backend("same", listener.endpoint());
     let mut foreign = fixture.backend("same", "http://127.0.0.1:1/v1".into());
-    let foreign_db = crate::test_support::test_db(
+    let foreign_db = gents_store::test_support::TestStore::start(
         "health-foreign-node",
         gents_store::node_extension::Extensions::none(),
     )

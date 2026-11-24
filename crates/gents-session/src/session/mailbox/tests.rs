@@ -153,7 +153,7 @@ async fn seed_foreign_mailbox_row(
 
 pub(super) async fn test_node() -> Arc<EmbeddedNode> {
     let root = fixture_root();
-    let db = gents_inference::test_support::test_db_as(
+    let db = gents_store::test_support::TestStore::start_as(
         "mailbox",
         root.did(),
         crate::test_support::no_lifecycle_plugins(),

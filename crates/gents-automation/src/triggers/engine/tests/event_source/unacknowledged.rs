@@ -3,7 +3,7 @@ use super::*;
 const RESCAN: Duration = Duration::from_millis(50);
 
 struct Delivery {
-    db: gents_inference::test_support::TestDb,
+    db: gents_store::test_support::TestStore,
     node: Arc<defra_node::Node>,
     snapshot_tx: watch::Sender<Arc<ActiveRuntimeSnapshot>>,
     source: EventSource,
@@ -62,7 +62,7 @@ async fn ping_snapshot(
     Arc::new(resolved.activate(generation, RapidHashMap::new()))
 }
 
-async fn ping_node(schema: &str, emit_outcome: bool) -> gents_inference::test_support::TestDb {
+async fn ping_node(schema: &str, emit_outcome: bool) -> gents_store::test_support::TestStore {
     let db = crate::triggers::callback::test_node_builder("ping-node").await;
     let node = db.node.clone();
     let owner = db.node_identity.did();

@@ -61,7 +61,7 @@ async fn scheduled_probe_requires_the_held_node_and_its_native_reader_grant() {
         gents_store::node_extension::Extensions::none(),
     )
     .await;
-    let other = crate::test_support::test_db(
+    let other = gents_store::test_support::TestStore::start(
         "health-foreign-owner",
         gents_store::node_extension::Extensions::none(),
     )

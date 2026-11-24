@@ -227,10 +227,7 @@ impl LiveBridgeFixture {
             ..Default::default()
         });
         let runtime_home = EmbeddedHome::create_retained_with_p2p(&node_home, Some(p2p)).await?;
-        let operator_graphql = runtime_home
-            .graphql_endpoint()
-            .context("runtime endpoint missing")?
-            .to_owned();
+        let operator_graphql = runtime_home.graphql_endpoint().to_owned();
         let remote_core = Arc::new(
             ClientRuntime::start_with_paths_and_options(remote_paths, live_core_options()).await?,
         );

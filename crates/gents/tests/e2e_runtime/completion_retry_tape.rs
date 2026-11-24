@@ -21,12 +21,12 @@ use crate::support::builder_runtime::{
     builder_actors, fixture_agent, runtime_builder, spawn_runtime, submit_request,
 };
 use crate::support::interrupt::{wait_for_request_terminal_state, BootedAgent};
-use crate::support::live_inference::rows_when;
 use crate::support::snapshots::fetch_request_snapshot;
 use crate::support::streaming_backend::{
     MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse, StreamScript,
 };
 use crate::support::{first_row, test_db};
+use gents_store::test_support::rows_when;
 
 const RETRY_MODEL: &str = "retry-tape-model";
 const RETRY_BACKEND_ID: &str = "retry-tape-backend";

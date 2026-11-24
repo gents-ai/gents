@@ -127,7 +127,7 @@ async fn boot_cycle(cycle: &Cycle, root: &Path) -> BootedAgent {
         r#"{{ NodeReadiness(filter: {{node_did: {{_eq: "{}"}}}}) {{node_did snapshot_json updated_at}} }}"#,
         escape_graphql_string(&cycle.owner),
     );
-    crate::support::live_inference::rows_when(&cycle.access, "NodeReadiness", &query, |data| {
+    gents_store::test_support::rows_when(&cycle.access, "NodeReadiness", &query, |data| {
         let row = data["NodeReadiness"]
             .as_array()
             .and_then(|rows| rows.first())
@@ -1381,7 +1381,7 @@ async fn wait_request_completed(access: &ConfigAccess, request_id: &str) {
         "{{ AgentRequest(filter: {{ request_id: {{ _eq: \"{}\" }} }}) {{ request_id lifecycle_state failure_reason }} }}",
         escape_graphql_string(request_id)
     );
-    let rows = crate::support::live_inference::rows_when(access, "AgentRequest", &query, |data| {
+    let rows = gents_store::test_support::rows_when(access, "AgentRequest", &query, |data| {
         gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal_str(
             data["AgentRequest"][0]["lifecycle_state"].as_str(),
         )

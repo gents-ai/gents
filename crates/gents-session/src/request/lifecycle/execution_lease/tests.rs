@@ -1,42 +1,13 @@
 use super::*;
 use crate::request::lifecycle::test_support::{
-    agent_access, agent_identity, agent_signer, agent_write_value, claimed_owner,
-    expire_observed_execution, observed_case_request, observed_execution, output_segment_snapshot,
-    owner, request_row, test_node,
+    agent_access, agent_identity, agent_signer, agent_write_value, expire_observed_execution,
+    observed_case_request, observed_execution, output_segment_snapshot, request_row, test_node,
 };
+use crate::test_support::{ClaimedRequest, Stage};
 use anyhow::Result;
 use std::{sync::Arc, time::Duration};
 
 mod generated_policy;
-
-async fn claimed_owner_with_short_lease(
-    node: &Arc<EmbeddedNode>,
-    identity: &Arc<dyn gents_store::identity::NodeIdentity>,
-    agent: &gents_protocol::agent_identity::AgentIdentityBinding,
-) -> RequestLifecycle {
-    let mut lifecycle = RequestLifecycle::materialize_pending_with_execution_binding(
-        node.clone(),
-        &agent.agent_did,
-        identity.clone(),
-        "hello",
-        crate::request::lifecycle::ExecutionBinding {
-            deadline_duration_secs: 60,
-            execution_origin: ExecutionOrigin::Interactive,
-            backend_id: "lease-test".into(),
-            operator_tool_root: None,
-        },
-        TriggerLineage::default(),
-        Some(gents_store::identity::resolve_agent_identity(identity.as_ref(), agent).unwrap()),
-    )
-    .await
-    .unwrap();
-    lifecycle.set_execution_lease_duration(Duration::from_secs(2));
-    assert_eq!(
-        lifecycle.claim_with_identity().await.unwrap(),
-        ClaimOutcome::Claimed
-    );
-    lifecycle
-}
 
 async fn request_composite_version(
     access: &gents_store::config_client::ConfigAccess,
@@ -87,10 +58,14 @@ async fn await_expired(access: &gents_store::config_client::ConfigAccess, doc_id
 
 #[tokio::test]
 async fn execution_owner_drop_panic_and_abort_expire_for_recovery() {
-    let (node, _dir, identity, agent) = test_node().await;
+    let (node, home, identity, agent) = test_node().await;
     let access = agent_access(&node, &identity, &agent);
     for exit in ["drop", "panic", "abort"] {
-        let lifecycle = owner(&node, &identity, &agent).await;
+        let lifecycle = ClaimedRequest::self_signed(&home, &agent)
+            .backend("lease-test")
+            .drive(Stage::Executing)
+            .await
+            .lifecycle;
         let doc_id = lifecycle.request().doc_id.clone();
         let before = request_row(&access, &doc_id).await;
         assert!(
@@ -140,9 +115,13 @@ async fn execution_owner_drop_panic_and_abort_expire_for_recovery() {
 
 #[tokio::test]
 async fn stale_execution_owner_drop_does_not_expire_successor_generation() {
-    let (node, _dir, identity, agent) = test_node().await;
+    let (node, home, identity, agent) = test_node().await;
     let access = agent_access(&node, &identity, &agent);
-    let lifecycle = owner(&node, &identity, &agent).await;
+    let lifecycle = ClaimedRequest::self_signed(&home, &agent)
+        .backend("lease-test")
+        .drive(Stage::Executing)
+        .await
+        .lifecycle;
     let doc_id = lifecycle.request().doc_id.clone();
     let successor_generation = uuid::Uuid::new_v4().to_string();
     let successor_deadline = (Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
@@ -182,9 +161,13 @@ async fn stale_execution_owner_drop_does_not_expire_successor_generation() {
 
 #[tokio::test]
 async fn expired_execution_owner_drop_preserves_the_authoritative_deadline() {
-    let (node, _dir, identity, agent) = test_node().await;
+    let (node, home, identity, agent) = test_node().await;
     let access = agent_access(&node, &identity, &agent);
-    let lifecycle = owner(&node, &identity, &agent).await;
+    let lifecycle = ClaimedRequest::self_signed(&home, &agent)
+        .backend("lease-test")
+        .drive(Stage::Executing)
+        .await
+        .lifecycle;
     let doc_id = lifecycle.request().doc_id.clone();
     access.write("test.expired_owner_drop",
         &format!(
@@ -210,13 +193,17 @@ async fn expired_execution_owner_drop_preserves_the_authoritative_deadline() {
 
 #[tokio::test]
 async fn native_relinquishment_follows_generated_drop_cases() {
-    let (node, _dir, identity, agent) = test_node().await;
+    let (node, home, identity, agent) = test_node().await;
 
     let access = agent_access(&node, &identity, &agent);
     for case in gents_lean_vocab::families::request_execution_lease_contracts_relinquishment::cases::<
         RequestLifecycleState,
     >() {
-        let mut lifecycle = owner(&node, &identity, &agent).await;
+        let mut lifecycle = ClaimedRequest::self_signed(&home, &agent)
+            .backend("lease-test")
+            .drive(Stage::Executing)
+            .await
+            .lifecycle;
         drop(lifecycle.renewal_task.take());
         lifecycle.state = LocalLifecycleState::Completed;
         let doc_id = lifecycle.request().doc_id.clone();
@@ -279,9 +266,13 @@ async fn native_relinquishment_follows_generated_drop_cases() {
 
 #[tokio::test]
 async fn owned_stream_appends_do_not_renew_execution_lease() {
-    let (node, _dir, identity, agent) = test_node().await;
+    let (node, home, identity, agent) = test_node().await;
     let access = agent_access(&node, &identity, &agent);
-    let mut lifecycle = claimed_owner(&node, &identity, &agent).await;
+    let mut lifecycle = ClaimedRequest::self_signed(&home, &agent)
+        .backend("lease-test")
+        .drive(Stage::Claimed)
+        .await
+        .lifecycle;
     let request = lifecycle.request().clone();
     let writer = crate::request::streaming::DefraStreamWriter::new_managed(
         node.clone(),
@@ -316,10 +307,15 @@ async fn owned_stream_appends_do_not_renew_execution_lease() {
 async fn renewal_timer_advances_durable_deadline_while_provider_and_tool_reads_wait() {
     use tokio::io::AsyncReadExt;
 
-    let (node, _dir, identity, agent) = test_node().await;
+    let (node, home, identity, agent) = test_node().await;
 
     let access = agent_access(&node, &identity, &agent);
-    let mut lifecycle = claimed_owner_with_short_lease(&node, &identity, &agent).await;
+    let mut lifecycle = ClaimedRequest::self_signed(&home, &agent)
+        .backend("lease-test")
+        .lease(Duration::from_secs(2))
+        .drive(Stage::Claimed)
+        .await
+        .lifecycle;
     let writer = crate::request::streaming::DefraStreamWriter::new_managed(
         node.clone(),
         gents_store::identity::resolve_agent_identity(identity.as_ref(), &agent)
@@ -376,9 +372,14 @@ async fn renewal_timer_advances_durable_deadline_while_provider_and_tool_reads_w
 
 #[tokio::test]
 async fn renewal_after_a_simulated_scheduling_gap_cannot_revive_expired_owner() {
-    let (node, _dir, identity, agent) = test_node().await;
+    let (node, home, identity, agent) = test_node().await;
     let access = agent_access(&node, &identity, &agent);
-    let mut lifecycle = claimed_owner_with_short_lease(&node, &identity, &agent).await;
+    let mut lifecycle = ClaimedRequest::self_signed(&home, &agent)
+        .backend("lease-test")
+        .lease(Duration::from_secs(2))
+        .drive(Stage::Claimed)
+        .await
+        .lifecycle;
     let writer = crate::request::streaming::DefraStreamWriter::new_managed(
         node.clone(),
         gents_store::identity::resolve_agent_identity(identity.as_ref(), &agent)
@@ -465,9 +466,13 @@ async fn output_segment_count(
 
 #[tokio::test]
 async fn owned_begin_rejects_expiry_without_materializing_response() {
-    let (node, _dir, identity, agent) = test_node().await;
+    let (node, home, identity, agent) = test_node().await;
     let access = agent_access(&node, &identity, &agent);
-    let mut lifecycle = claimed_owner(&node, &identity, &agent).await;
+    let mut lifecycle = ClaimedRequest::self_signed(&home, &agent)
+        .backend("lease-test")
+        .drive(Stage::Claimed)
+        .await
+        .lifecycle;
     let doc_id = lifecycle.request.doc_id.clone();
     let expired = (Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
     access
@@ -497,9 +502,13 @@ async fn owned_begin_rejects_expiry_without_materializing_response() {
 
 #[tokio::test]
 async fn owned_begin_uses_only_its_own_claim_and_rechecks_its_generation() {
-    let (node, _dir, identity, agent) = test_node().await;
+    let (node, home, identity, agent) = test_node().await;
     let access = agent_access(&node, &identity, &agent);
-    let mut lifecycle = claimed_owner(&node, &identity, &agent).await;
+    let mut lifecycle = ClaimedRequest::self_signed(&home, &agent)
+        .backend("lease-test")
+        .drive(Stage::Claimed)
+        .await
+        .lifecycle;
     let doc_id = lifecycle.request.doc_id.clone();
     let writer = crate::request::streaming::DefraStreamWriter::new_managed(
         node.clone(),
@@ -545,9 +554,13 @@ async fn owned_begin_uses_only_its_own_claim_and_rechecks_its_generation() {
 
 #[tokio::test]
 async fn racing_owned_begins_commit_one_processing_transition_without_renewal() {
-    let (node, _dir, identity, agent) = test_node().await;
+    let (node, home, identity, agent) = test_node().await;
     let access = agent_access(&node, &identity, &agent);
-    let mut lifecycle = claimed_owner(&node, &identity, &agent).await;
+    let mut lifecycle = ClaimedRequest::self_signed(&home, &agent)
+        .backend("lease-test")
+        .drive(Stage::Claimed)
+        .await
+        .lifecycle;
     let before = request_row(&access, &lifecycle.request.doc_id).await;
     let mut competitor =
         RequestLifecycle::new_with_node_did(node.clone(), lifecycle.request().clone(), 60);
@@ -660,9 +673,13 @@ async fn revocation_preserves_latest_published_header_for_supersession_and_dead_
         RequestTerminalOutcome::Superseded,
         RequestTerminalOutcome::Dead,
     ] {
-        let (node, _dir, identity, agent) = test_node().await;
+        let (node, home, identity, agent) = test_node().await;
         let access = agent_access(&node, &identity, &agent);
-        let mut lifecycle = claimed_owner(&node, &identity, &agent).await;
+        let mut lifecycle = ClaimedRequest::self_signed(&home, &agent)
+            .backend("lease-test")
+            .drive(Stage::Claimed)
+            .await
+            .lifecycle;
         let writer = crate::request::streaming::DefraStreamWriter::new_managed(
             node.clone(),
             gents_store::identity::resolve_agent_identity(identity.as_ref(), &agent)
@@ -727,9 +744,13 @@ async fn expired_conflicting_source_is_revoked_without_rewriting_its_records() {
         decode_output_segment_row, output_segment_create_variables, AGENT_OUTPUT_SEGMENT_FIELDS,
         CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
-    let (node, _dir, identity, agent) = test_node().await;
+    let (node, home, identity, agent) = test_node().await;
     let access = agent_access(&node, &identity, &agent);
-    let mut lifecycle = claimed_owner(&node, &identity, &agent).await;
+    let mut lifecycle = ClaimedRequest::self_signed(&home, &agent)
+        .backend("lease-test")
+        .drive(Stage::Claimed)
+        .await
+        .lifecycle;
     let writer = crate::request::streaming::DefraStreamWriter::new_managed(
         node.clone(),
         gents_store::identity::resolve_agent_identity(identity.as_ref(), &agent)
@@ -795,9 +816,13 @@ async fn expired_conflicting_source_is_revoked_without_rewriting_its_records() {
 
 #[tokio::test]
 async fn revoked_execution_rejects_stale_progress_stream_write_and_terminalization() {
-    let (node, _dir, identity, agent) = test_node().await;
+    let (node, home, identity, agent) = test_node().await;
     let access = agent_access(&node, &identity, &agent);
-    let mut lifecycle = claimed_owner(&node, &identity, &agent).await;
+    let mut lifecycle = ClaimedRequest::self_signed(&home, &agent)
+        .backend("lease-test")
+        .drive(Stage::Claimed)
+        .await
+        .lifecycle;
     let writer = crate::request::streaming::DefraStreamWriter::new_managed(
         node.clone(),
         gents_store::identity::resolve_agent_identity(identity.as_ref(), &agent)
@@ -868,9 +893,13 @@ async fn revoked_execution_rejects_stale_progress_stream_write_and_terminalizati
 
 #[tokio::test]
 async fn expired_owner_racing_recovery_cannot_win_terminalization() {
-    let (node, _dir, identity, agent) = test_node().await;
+    let (node, home, identity, agent) = test_node().await;
     let access = agent_access(&node, &identity, &agent);
-    let mut lifecycle = owner(&node, &identity, &agent).await;
+    let mut lifecycle = ClaimedRequest::self_signed(&home, &agent)
+        .backend("lease-test")
+        .drive(Stage::Executing)
+        .await
+        .lifecycle;
     let doc_id = lifecycle.request().doc_id.clone();
     let observed = expire_observed_execution(&access, &doc_id).await;
     let (owner_result, recovery_result) = tokio::join!(
@@ -896,10 +925,14 @@ async fn expired_owner_racing_recovery_cannot_win_terminalization() {
 async fn expired_stored_deadline_blocks_old_publication_and_tool_admission_after_recovery() {
     use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
 
-    let (node, _dir, identity, agent) = test_node().await;
+    let (node, home, identity, agent) = test_node().await;
 
     let access = agent_access(&node, &identity, &agent);
-    let lifecycle = owner(&node, &identity, &agent).await;
+    let lifecycle = ClaimedRequest::self_signed(&home, &agent)
+        .backend("lease-test")
+        .drive(Stage::Executing)
+        .await
+        .lifecycle;
     let doc_id = lifecycle.request().doc_id.clone();
     let writer = crate::request::streaming::DefraStreamWriter::new_managed(
         node.clone(),
@@ -979,13 +1012,21 @@ async fn expired_stored_deadline_blocks_old_publication_and_tool_admission_after
 
 #[tokio::test]
 async fn concurrent_recovery_of_one_observed_execution_commits_one_terminal_winner() {
-    let (node, _dir, identity, agent) = test_node().await;
+    let (node, home, identity, agent) = test_node().await;
     let access = agent_access(&node, &identity, &agent);
     for processing in [false, true] {
         let lifecycle = if processing {
-            owner(&node, &identity, &agent).await
+            ClaimedRequest::self_signed(&home, &agent)
+                .backend("lease-test")
+                .drive(Stage::Executing)
+                .await
+                .lifecycle
         } else {
-            claimed_owner(&node, &identity, &agent).await
+            ClaimedRequest::self_signed(&home, &agent)
+                .backend("lease-test")
+                .drive(Stage::Claimed)
+                .await
+                .lifecycle
         };
         let doc_id = lifecycle.request().doc_id.clone();
         let observed = expire_observed_execution(&access, &doc_id).await;
@@ -1033,10 +1074,14 @@ async fn concurrent_recovery_of_one_observed_execution_commits_one_terminal_winn
 
 #[tokio::test]
 async fn cancel_racing_provider_eof_commits_one_agreeing_terminal_pair() {
-    let (node, _dir, identity, agent) = test_node().await;
+    let (node, home, identity, agent) = test_node().await;
     let access = agent_access(&node, &identity, &agent);
     for ordering in 0..3 {
-        let mut lifecycle = owner(&node, &identity, &agent).await;
+        let mut lifecycle = ClaimedRequest::self_signed(&home, &agent)
+            .backend("lease-test")
+            .drive(Stage::Executing)
+            .await
+            .lifecycle;
         let doc_id = lifecycle.request().doc_id.clone();
         let node_did = lifecycle.request().node_did.clone();
         let requester_did = lifecycle.request().requester_did.clone();
@@ -1133,10 +1178,18 @@ async fn cancel_racing_provider_eof_commits_one_agreeing_terminal_pair() {
 
 #[tokio::test]
 async fn native_doc_id_targeting_preserves_request_update_filters() {
-    let (node, _dir, identity, agent) = test_node().await;
+    let (node, home, identity, agent) = test_node().await;
     let access = agent_access(&node, &identity, &agent);
-    let target = claimed_owner(&node, &identity, &agent).await;
-    let unrelated = claimed_owner(&node, &identity, &agent).await;
+    let target = ClaimedRequest::self_signed(&home, &agent)
+        .backend("lease-test")
+        .drive(Stage::Claimed)
+        .await
+        .lifecycle;
+    let unrelated = ClaimedRequest::self_signed(&home, &agent)
+        .backend("lease-test")
+        .drive(Stage::Claimed)
+        .await
+        .lifecycle;
     let before = request_row(&access, &target.request.doc_id).await;
     let unrelated_before = request_row(&access, &unrelated.request.doc_id).await;
     let doc_id = escape_graphql_string(&target.request.doc_id);
@@ -1211,12 +1264,11 @@ async fn generated_renewal_invalidates_real_publication_point_read_transaction()
             RequestLifecycleState,
         >()
     {
-        let (node, _dir, identity, agent) = test_node().await;
+        let (node, home, identity, agent) = test_node().await;
         let access = agent_access(&node, &identity, &agent);
         let epoch = Utc::now();
         let lifecycle = observed_case_request(
-            &node,
-            &identity,
+            &home,
             &agent,
             case.input.pre.lease.duration.unwrap(),
             case.input.pre.lease.explicit_deadline.unwrap(),
@@ -1366,12 +1418,11 @@ async fn generated_recovery_invalidates_real_admitted_renewal_transaction() {
             RequestLifecycleState,
         >()
     {
-        let (node, _dir, identity, agent) = test_node().await;
+        let (node, home, identity, agent) = test_node().await;
         let access = agent_access(&node, &identity, &agent);
         let epoch = Utc::now();
         let lifecycle = observed_case_request(
-            &node,
-            &identity,
+            &home,
             &agent,
             case.input.pre.lease.duration.unwrap(),
             case.input.pre.lease.explicit_deadline.unwrap(),
@@ -1459,12 +1510,11 @@ async fn renewal_expiring_during_mutation_rolls_back_before_commit_admission() {
         >()
     {
         let (admitted, expired) = (&case.input.admitted, &case.input.recheck);
-        let (node, _dir, identity, agent) = test_node().await;
+        let (node, home, identity, agent) = test_node().await;
         let access = agent_access(&node, &identity, &agent);
         let epoch = Utc::now();
         let lifecycle = observed_case_request(
-            &node,
-            &identity,
+            &home,
             &agent,
             admitted.pre.lease.duration.unwrap(),
             admitted.pre.lease.explicit_deadline.unwrap(),
@@ -1497,10 +1547,14 @@ async fn renewal_expiring_during_mutation_rolls_back_before_commit_admission() {
 
 #[tokio::test]
 async fn natural_finish_retries_changed_pending_snapshot_and_selects_exact_saved_header() {
-    let (node, _dir, identity, agent) = test_node().await;
+    let (node, home, identity, agent) = test_node().await;
 
     let access = agent_access(&node, &identity, &agent);
-    let mut lifecycle = owner(&node, &identity, &agent).await;
+    let mut lifecycle = ClaimedRequest::self_signed(&home, &agent)
+        .backend("lease-test")
+        .drive(Stage::Executing)
+        .await
+        .lifecycle;
     let writer = crate::request::streaming::DefraStreamWriter::new_managed(
         node.clone(),
         gents_store::identity::resolve_agent_identity(identity.as_ref(), &agent)
@@ -1594,16 +1648,20 @@ async fn natural_finish_retries_changed_pending_snapshot_and_selects_exact_saved
 /// record and every lifecycle write are that Agent's documents.
 async fn parked_fixture() -> (
     Arc<EmbeddedNode>,
-    gents_inference::test_support::TestDb,
+    gents_documents::test_support::SignedHome,
     Arc<dyn gents_store::identity::NodeIdentity>,
     gents_protocol::agent_identity::AgentIdentityBinding,
     gents_store::config_client::ConfigAccess,
     RequestLifecycle,
 ) {
-    let (node, db, identity, agent) = test_node().await;
+    let (node, home, identity, agent) = test_node().await;
     let access = agent_access(&node, &identity, &agent);
-    let lifecycle = owner(&node, &identity, &agent).await;
-    (node, db, identity, agent, access, lifecycle)
+    let lifecycle = ClaimedRequest::self_signed(&home, &agent)
+        .backend("lease-test")
+        .drive(Stage::Executing)
+        .await
+        .lifecycle;
+    (node, home, identity, agent, access, lifecycle)
 }
 
 async fn agent_update_request(
@@ -2170,10 +2228,14 @@ async fn lean_periodic_renewal_waits_for_abandoned_native_operation_before_next_
         let mut views = Vec::new();
         let mut attempt_return_observed = false;
         let mut next_renewal_started = false;
-        let (node, _dir, identity, agent) = test_node().await;
+        let (node, home, identity, agent) = test_node().await;
 
         let access = agent_access(&node, &identity, &agent);
-        let mut lifecycle = owner(&node, &identity, &agent).await;
+        let mut lifecycle = ClaimedRequest::self_signed(&home, &agent)
+            .backend("lease-test")
+            .drive(Stage::Executing)
+            .await
+            .lifecycle;
         lifecycle.drop_renewal_task();
         let doc_id = lifecycle.request().doc_id.clone();
         let row = request_row(&access, &doc_id).await;

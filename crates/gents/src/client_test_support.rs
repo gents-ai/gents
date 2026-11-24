@@ -83,7 +83,7 @@ impl ServedRuntimeHome {
     }
 
     pub fn runtime(&self) -> &Arc<dyn NodeIdentity> {
-        &self.home.identity
+        &self.home.node_identity
     }
 
     pub fn user(&self) -> &Arc<dyn NodeIdentity> {
@@ -92,7 +92,7 @@ impl ServedRuntimeHome {
 
     /// The runtime's authenticated DefraDB GraphQL URL.
     pub fn graphql(&self) -> &str {
-        self.home.graphql_endpoint().unwrap()
+        self.home.graphql_endpoint()
     }
 
     pub fn home_path(&self) -> &std::path::Path {

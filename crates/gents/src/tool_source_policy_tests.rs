@@ -43,7 +43,11 @@ async fn enrolled_user_authors_held_tools_and_only_the_household_owner_adds_sche
     })
     .await?;
     let (db, _user, user_access, binding) =
-        crate::test_support::root::signed_test_node("enrolled-tools-authoring").await;
+        gents_inference::test_support::signed_test_node_from_db(
+            crate::support::trial_store("enrolled-tools-authoring").await,
+            "enrolled-tools-authoring",
+        )
+        .await;
     let node_did = db.node_identity.did().to_owned();
     let agent = identity::Did::new(&binding.agent_did)?;
     let self_config =

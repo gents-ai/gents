@@ -43,7 +43,7 @@ async fn apply(access: &ConfigAccess, documents: Vec<(Collection, Value)>) {
 }
 
 async fn install(
-    db: &gents_inference::test_support::TestDb,
+    db: &gents_store::test_support::TestStore,
     user: &gents_store::identity::KeyIdentity,
     access: &ConfigAccess,
     archive: &PackArchive,
@@ -53,7 +53,7 @@ async fn install(
 }
 
 async fn install_in(
-    db: &gents_inference::test_support::TestDb,
+    db: &gents_store::test_support::TestStore,
     user: &gents_store::identity::KeyIdentity,
     access: &ConfigAccess,
     archive: &PackArchive,
@@ -105,7 +105,7 @@ async fn install_in(
 /// Publishing and reading application schemas are node permissions the
 /// fixture User does not hold by default.
 async fn grant_schema(
-    db: &gents_inference::test_support::TestDb,
+    db: &gents_store::test_support::TestStore,
     user: &gents_store::identity::KeyIdentity,
 ) {
     let admin = ConfigAccess::local_as(

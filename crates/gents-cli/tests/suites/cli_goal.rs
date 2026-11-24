@@ -47,7 +47,7 @@ async fn start_paused_goal(
         r#"{{AgentToolCall(filter: {{request_id: {{_eq: "{}"}}, tool_name: {{_eq: "bash_unrestricted"}}}}) {{lifecycle_state}}}}"#,
         crate::support::escape_graphql_string(&predecessor)
     );
-    gents::support::live_inference::rows_when(&live.access, "AgentToolCall", &query, |data| {
+    gents_store::test_support::rows_when(&live.access, "AgentToolCall", &query, |data| {
         data["AgentToolCall"]
             .as_array()
             .is_some_and(|rows| rows.iter().any(|row| row["lifecycle_state"] == "running"))

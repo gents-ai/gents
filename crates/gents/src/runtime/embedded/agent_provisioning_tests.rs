@@ -9,8 +9,11 @@ async fn authorized_provisioning_grants_no_direct_node_permission() {
     )
     .direct
     .is_empty());
-    let (db, owner, _) =
-        crate::test_support::root::signed_test_node_without_agent("provision-no-direct").await;
+    let (db, owner, _) = gents_inference::test_support::signed_test_node_without_agent_from_db(
+        crate::support::trial_store("provision-no-direct").await,
+        "provision-no-direct",
+    )
+    .await;
     let node = db.node.clone();
     let runtime = db.node_identity.clone();
     let runtime = runtime.as_ref();

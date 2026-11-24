@@ -129,7 +129,7 @@ async fn trial_teardown_settles_scheduled_inference_without_expiring_its_lease()
             .unwrap();
         let (runtime, _agent) = Box::pin(boot_runtime(
             &home,
-            home.identity.clone(),
+            home.node_identity.clone(),
             DocumentRuntimeOptions::default(),
         ))
         .await
@@ -411,7 +411,7 @@ async fn a_seed_template_failure_ends_the_stage_before_its_deadline() {
     };
     let (runtime, _agent) = crate::runner::embedded::home::boot_runtime_within(
         &home,
-        home.identity.clone(),
+        home.node_identity.clone(),
         options,
         Duration::from_secs(30),
     )

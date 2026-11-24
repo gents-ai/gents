@@ -1,5 +1,5 @@
 async fn create_user_message(
-    db: &crate::support::TestDb,
+    db: &gents_store::test_support::TestStore,
     author: (
         &gents_store::identity::KeyIdentity,
         &gents_store::config_client::ConfigAccess,

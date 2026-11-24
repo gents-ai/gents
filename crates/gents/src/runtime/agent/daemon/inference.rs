@@ -703,13 +703,17 @@ pub(super) mod tests {
     async fn held_daemon_fixture(
         name: &str,
     ) -> (
-        crate::support::TestDb,
+        gents_store::test_support::TestStore,
         gents_store::identity::KeyIdentity,
         gents_store::config_client::ConfigAccess,
         Arc<ResolvedAgent>,
     ) {
         use gents_store::config_client::NodePermission;
-        let (db, user, access, binding) = crate::test_support::root::signed_test_node(name).await;
+        let (db, user, access, binding) = gents_inference::test_support::signed_test_node_from_db(
+            crate::support::trial_store(name).await,
+            name,
+        )
+        .await;
         let config = test_agent_with_binding(db.node_identity.clone(), binding);
         let admin = gents_store::config_client::ConfigAccess::local_as(
             db.node.clone(),
@@ -733,7 +737,7 @@ pub(super) mod tests {
     }
 
     fn held_daemon_agent_access(
-        db: &crate::support::TestDb,
+        db: &gents_store::test_support::TestStore,
         config: &ResolvedAgent,
     ) -> gents_store::config_client::ConfigAccess {
         gents_store::config_client::ConfigAccess::local_managed_agent(
@@ -758,7 +762,7 @@ pub(super) mod tests {
     }
 
     async fn create_held_routed_request(
-        db: &crate::support::TestDb,
+        db: &gents_store::test_support::TestStore,
         user: &gents_store::identity::KeyIdentity,
         access: &gents_store::config_client::ConfigAccess,
         agent_config: &ResolvedAgent,
@@ -815,7 +819,7 @@ pub(super) mod tests {
     }
 
     async fn create_enrollment_daemon_request(
-        db: &crate::support::TestDb,
+        db: &gents_store::test_support::TestStore,
         member_access: &gents_store::config_client::ConfigAccess,
         agent_config: &ResolvedAgent,
         member: &dyn NodeIdentity,

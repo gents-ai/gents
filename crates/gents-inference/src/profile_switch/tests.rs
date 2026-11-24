@@ -57,7 +57,7 @@ fn provision_agents(
 }
 
 struct Fixture {
-    _db: crate::test_support::TestDb,
+    _db: gents_store::test_support::TestStore,
     cache: crate::usage_observation::UsageCache,
     node: Arc<EmbeddedNode>,
     access: ConfigAccess,

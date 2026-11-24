@@ -148,7 +148,7 @@ fn group_caused_keeps_every_request_of_one_call() {
 #[tokio::test]
 async fn caused_requests_match_the_lean_projection() {
     for case in gents_lean_vocab::families::session_origin_projection::cases() {
-        let node_db = gents_inference::test_support::test_db(
+        let node_db = gents_store::test_support::TestStore::start(
             "caused-requests-match-the-lean-projection",
             crate::test_support::no_lifecycle_plugins(),
         )
@@ -197,7 +197,7 @@ fn scope(session_id: &str) -> SessionScope {
 
 #[tokio::test]
 async fn physical_request_scope_batch_keeps_requested_missing_and_foreign_rows_distinct() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "physical-request-scope-batch-keeps-reque",
         crate::test_support::no_lifecycle_plugins(),
     )
@@ -297,7 +297,7 @@ async fn session_lineage_matches_the_lean_partition() {
 /// label-only read is ambiguous there.
 #[tokio::test]
 async fn recorded_opening_reads_the_exact_session_scope() {
-    let node_db = gents_inference::test_support::test_db(
+    let node_db = gents_store::test_support::TestStore::start(
         "recorded-opening-reads-the-exact-session",
         crate::test_support::no_lifecycle_plugins(),
     )

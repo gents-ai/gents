@@ -460,7 +460,7 @@ fn published_history(
 /// Which direct session grant lets another user read the child's whole
 /// transcript as its owner reads it.
 async fn fork_readers(
-    db: &gents_inference::test_support::TestDb,
+    db: &gents_store::test_support::TestStore,
     client: &ConfigAccess,
     requester: &str,
     child: &str,

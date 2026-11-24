@@ -41,7 +41,7 @@ async fn apply(access: &ConfigAccess, documents: Vec<(Collection, Value)>) {
 }
 
 async fn install_in(
-    db: &gents_inference::test_support::TestDb,
+    db: &gents_store::test_support::TestStore,
     user: &gents_store::identity::KeyIdentity,
     access: &ConfigAccess,
     archive: &PackArchive,

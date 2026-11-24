@@ -32,7 +32,7 @@ async fn agent_query(
 async fn fixture(
     initial_state: &str,
 ) -> (
-    crate::test_support::TestDb,
+    gents_store::test_support::TestStore,
     gents_store::identity::ManagedAgentSigner,
     StaleInferenceCallRow,
 ) {
