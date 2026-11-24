@@ -597,9 +597,12 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
         let reached_in = Arc::clone(&reached);
         let release_in = Arc::clone(&release);
         let paused_in = Arc::clone(&paused);
+        // The interrupt reads the running parent by id, and the parent's
+        // lease renewal may commit inside the pause; like the production
+        // owner, the interrupt then rebuilds (InterruptLatchContention.tla).
         let interrupt = tokio::spawn(async move {
             access
-                .transact_write("test.http_interrupt_overlap", |txn| {
+                .transact_signed_conflict_rebuild("test.http_interrupt_overlap", |txn| {
                     let reached = Arc::clone(&reached_in);
                     let release = Arc::clone(&release_in);
                     let paused = Arc::clone(&paused_in);

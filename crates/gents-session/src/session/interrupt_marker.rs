@@ -39,7 +39,9 @@ pub fn wake_drained_at_claim(recorded: Option<i64>, current: i64) -> bool {
 }
 
 /// Creates the marker of a session this transaction has just created, as the
-/// session's creator, at generation 0, with the session as its parent.
+/// session's creator, at generation 0, with the session as its parent. A
+/// transaction with no actor creates documents no actor owns and that document
+/// ACP does not govern, so the marker takes no relationship either.
 pub async fn create_in_txn(
     txn: &ConfigApplyTxn<'_>,
     session_doc_id: &str,
@@ -57,8 +59,10 @@ pub async fn create_in_txn(
         )
         .await?;
     let doc_id = gents_store::graphql::created_doc_id(&created, COLLECTION)?;
-    txn.add_resource_relationship(COLLECTION, &doc_id, "parent", "sessions", session_doc_id)
-        .await?;
+    if txn.actor_did().is_some() {
+        txn.add_resource_relationship(COLLECTION, &doc_id, "parent", "sessions", session_doc_id)
+            .await?;
+    }
     Ok(doc_id)
 }
 

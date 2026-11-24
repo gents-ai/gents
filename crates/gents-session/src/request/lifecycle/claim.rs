@@ -483,17 +483,20 @@ fn parse_rfc3339_utc(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
         .map(|dt| dt.with_timezone(&chrono::Utc))
 }
 
+/// The request's lifecycle state and `valid_until`: a request interrupted
+/// before its claim is not claimed.
 async fn fetch_ttl(
     node: &std::sync::Arc<EmbeddedNode>,
     actor: identity::Did,
     doc_id: &str,
-) -> Result<Option<String>> {
+) -> Result<(Option<RequestLifecycleState>, Option<String>)> {
     use gents_protocol::document_query::{
         fields::agent_request as fields, Filter, Query, Selection,
     };
     let query = Query::select(
         Selection::new()
             .field(fields::REQUEST_ID)
+            .field(fields::LIFECYCLE_STATE)
             .field(fields::VALID_UNTIL),
     )
     .filter(Filter::eq(fields::DOC_ID, doc_id))
@@ -511,7 +514,10 @@ async fn fetch_ttl(
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("AgentRequest {doc_id} not found"))?,
     )?;
-    Ok(row.valid_until.filter(|s| !s.is_empty()))
+    Ok((
+        row.lifecycle_state,
+        row.valid_until.filter(|s| !s.is_empty()),
+    ))
 }
 
 impl RequestLifecycle {
@@ -542,7 +548,12 @@ impl RequestLifecycle {
         F: FnOnce() -> (chrono::DateTime<chrono::Utc>, String),
     {
         self.ensure_state(&[LocalLifecycleState::Pending], "claim")?;
-        let valid_until = fetch_ttl(&self.node, self.actor_did()?, &self.request.doc_id).await?;
+        let (state, valid_until) =
+            fetch_ttl(&self.node, self.actor_did()?, &self.request.doc_id).await?;
+        if state == Some(RequestLifecycleState::Interrupted) {
+            self.state = LocalLifecycleState::Interrupted;
+            return Ok(DurableClaimOutcome::NotClaimed(ClaimOutcome::Interrupted));
+        }
         self.valid_until_at_claim =
             match super::parse_valid_until(valid_until.as_deref(), ttl_now()) {
                 super::TtlOutcome::Malformed(error) => {

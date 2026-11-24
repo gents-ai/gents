@@ -726,7 +726,7 @@ async fn wake_in_txn(
         .execute_local_response(&format!(
             r#"{{ AgentRequest(
         filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
-        _docID request_id node_did session_id lifecycle_state backend_id deadline execution_generation
+        _docID request_id node_did requester_did session_id lifecycle_state backend_id deadline execution_generation
         execution_lease_secs execution_lease_expires_at interrupt_generation terminal_output
         background_completion_input_through_sequence
     }} }}"#
