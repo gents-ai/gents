@@ -7,4 +7,10 @@ export type EvalSubject = { kind: EvalSubjectKind, inference_slots?: Array<strin
  * before its first stage, left as `gents init` leaves them on the
  * Engineer, from the archives the running build carries.
  */
-core_packs?: Array<string> | null, };
+core_packs?: Array<string> | null,
+/**
+ * Core packs of `core_packs` each trial then turns on for the subject
+ * as `gents config pack starter --enable` turns one on: a fixture for a
+ * pack init installs but leaves off.
+ */
+enabled_core_packs?: Array<string> | null, };

@@ -1,0 +1,12 @@
+{
+  "input": {
+    "script": "console.log('first'); console.log('x'.repeat(70000)); console.log('after'); return 1;"
+  },
+  "expect": {
+    "result": 1,
+    "console": [
+      "first",
+      "(2 more console lines omitted)"
+    ]
+  }
+}

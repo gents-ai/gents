@@ -3023,7 +3023,7 @@ async fn configured_file_limits_reach_file_tools_as_default_and_maximum() {
             output["content"]
                 .as_str()
                 .unwrap()
-                .contains("[Showing first 10 of 104 bytes]"),
+                .contains("[Showing first 10 of 100 bytes]"),
             "{output}"
         );
     }

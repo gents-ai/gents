@@ -240,7 +240,6 @@ fn hooks_admitted(task_id: &str, hooks: &[TaskHook]) -> bool {
         prompt_template: "run the task".to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
-        goal_blocked_audit_threshold: None,
         goal_max_infrastructure_retries: None,
         hooks: hooks.to_vec(),
         command: None,

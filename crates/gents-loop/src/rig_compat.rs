@@ -50,7 +50,7 @@ where
 /// list is the whole completion surface a replacement of Rig must cover.
 pub mod completion {
     pub use rig::completion::{CompletionError, CompletionRequest, Usage};
-    pub use rig::streaming::{RawStreamingChoice, RawStreamingToolCall};
+    pub use rig::streaming::{RawStreamingChoice, RawStreamingToolCall, ToolCallDeltaContent};
 }
 
 pub mod call;

@@ -203,16 +203,45 @@ fn unexercised(case: &EvalCase) -> Option<&EvalStage> {
             .iter()
             .any(|check| grades_configuration(stage, check))
     })?;
-    let exercised = case.stages[built + 1..]
+    let stage = &case.stages[built];
+    let exercised = stage
+        .checks
         .iter()
-        .any(|stage| stage.checks.iter().any(|check| grades_a_run(stage, check)));
-    (!exercised).then(|| &case.stages[built])
+        .any(|check| grades_a_run_in_place(stage, check))
+        || case.stages[built + 1..]
+            .iter()
+            .any(|stage| stage.checks.iter().any(|check| grades_a_run(stage, check)));
+    (!exercised).then_some(stage)
+}
+
+fn grades_a_run_in_place(stage: &EvalStage, check: &EvalCheckRef) -> bool {
+    !matches!(
+        check.check.as_str(),
+        "final_message_matches" | "captured_files_match"
+    ) && !grades_absence(check)
+        && grades_a_run(stage, check)
 }
 
 fn grades_configuration(stage: &EvalStage, check: &EvalCheckRef) -> bool {
     match check.check.as_str() {
         "schema_matches" => true,
-        "crew_spec_match" => read_captures(stage, check).any(is_configuration),
+        "crew_spec_match" => {
+            !grades_absence(check) && read_captures(stage, check).any(is_configuration)
+        }
+        _ => false,
+    }
+}
+
+fn grades_absence(check: &EvalCheckRef) -> bool {
+    let params = &check.params;
+    match check.check.as_str() {
+        "crew_spec_match" => {
+            params
+                .as_object()
+                .is_some_and(|object| object.keys().all(|key| key == "present"))
+                && array(&params["present"]).all(|entry| entry["max"] == 0)
+        }
+        "captured_rows_count" => params["max"] == 0,
         _ => false,
     }
 }

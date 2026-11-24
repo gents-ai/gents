@@ -1,8 +1,3 @@
----
-name: control-access
-description: Load when deciding who sees or changes app data, or when sharing an app. Says what the node enforces.
----
-
 # Control access
 
 ## Write the table first
@@ -16,6 +11,6 @@ For each collection: who reads, who writes, who must never see it. Use the perso
 
 ## Check what the node can enforce
 
-Before promising a restriction, read `schema help collections policy` and `p2p help scope`. A node a person joins can expose more than one app's data. If the request is "share this with my team and nothing else" and the node can't limit that, say so before building and offer what it can do. Never describe a restriction as in place until you have seen it refuse someone. Test the forbidden action from a different identity, next to an allowed one; a success alone proves half.
+Before promising a restriction, read `schema help collections policy` and `p2p help scope`. Tools decide which collections an agent queries or writes; a document policy decides which documents each identity reads or changes, through any tool: `config` `policy create`, its `@policy` line on a new collection, then `policy grant` per document. A document belongs to the agent that writes it. A node a person joins can expose more than one app's data: if it can't limit a request like "share this with my team and nothing else", say so before building and offer what it can do. Never call a restriction in place until you have seen it refuse a different identity next to an allowed one; a success alone proves half.
 
-Next: `package-pack`.
+Next: load `package-or-install` to make it a pack.

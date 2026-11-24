@@ -8,6 +8,25 @@
     "filtered discovery",
     "prior-session lookups"
   ],
-  "subject": "sessions/subject",
-  "preset_self_config": true
+  "subject_fixtures": [
+    {
+      "name": "partner-agent",
+      "why": "A second agent on the node whose sessions the Engineer investigates. It shares the Engineer's Context.",
+      "documents": {
+        "agents": [
+          {
+            "agent_slot": "partner",
+            "display_name": "Partner",
+            "description": "Partner agent for shared session fixtures.",
+            "context_id": "engineer-context",
+            "inference_profile_id": "gents:inference-slot:engineer",
+            "tags": []
+          }
+        ]
+      },
+      "slot_agents": [
+        "partner"
+      ]
+    }
+  ]
 }

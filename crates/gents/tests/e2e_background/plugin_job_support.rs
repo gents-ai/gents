@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use gents::runtime::embedded::EmbeddedHome;
 use gents::{DocumentRuntimeOptions, Gents};
 use gents_documents::{AgentTools, IntegrationTools, PluginToolRef, Tools};
 use gents_pack::pack::archive::{pack_dir, PackArchive};
@@ -24,8 +23,9 @@ use crate::support::accepted_turn::{
 use crate::support::fixtures::{
     agent_target, bind_selected_managed_agent_backend, configure_agent_tools_as,
 };
-use crate::support::{managed_agent_fixture, test_db_from_home, ManagedAgentFixture, TestDb};
+use crate::support::{managed_agent_fixture, trial_store_at, ManagedAgentFixture};
 use gents_inference::test_support::scripted_backend::{ScriptedBackend, StreamChunk, StreamPlan};
+use gents_store::test_support::TestStore;
 use gents_store::test_support::STALL_CEILING;
 
 pub(crate) const PARENT: &str = "plugin-job-parent";
@@ -139,7 +139,7 @@ pub(crate) struct JobActors {
 }
 
 pub(crate) async fn install_job_fixture(
-    db: &TestDb,
+    db: &TestStore,
     plugin_home: &Path,
     settings: PluginJobSettings,
 ) -> JobActors {
@@ -287,7 +287,7 @@ pub(crate) async fn install_job_fixture(
 }
 
 pub(crate) struct JobHarness {
-    pub db: TestDb,
+    pub db: TestStore,
     pub actors: JobActors,
     pub plugin_home: PathBuf,
     pub runtime: AcceptedTurnRuntime,
@@ -306,7 +306,7 @@ impl JobHarness {
 }
 
 async fn boot_runtime(
-    db: &TestDb,
+    db: &TestStore,
     plugin_home: &Path,
     prepared: PreparedAcceptedTurn,
 ) -> AcceptedTurnRuntime {
@@ -315,7 +315,7 @@ async fn boot_runtime(
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
+            backend_admission: Some(db.backend_admission()),
             plugin_home: Some(plugin_home.to_path_buf()),
             ..Default::default()
         },
@@ -326,7 +326,7 @@ async fn boot_runtime(
 }
 
 pub(crate) async fn boot_job_harness(
-    db: TestDb,
+    db: TestStore,
     plugin_home: PathBuf,
     session_id: &str,
     accepted_chunks: Vec<StreamChunk>,
@@ -334,7 +334,7 @@ pub(crate) async fn boot_job_harness(
 ) -> JobHarness {
     let actors = install_job_fixture(&db, &plugin_home, job_settings()).await;
     // A child inherits the pin's cwd, and an empty one cannot be resolved.
-    let cwd = db.data_path().join("job_cwd");
+    let cwd = db.path().join("job_cwd");
     std::fs::create_dir_all(&cwd).expect("create the job working folder");
     let cwd = cwd
         .canonicalize()
@@ -378,11 +378,7 @@ pub(crate) async fn reboot_job_harness(
     session_id: &str,
     plans: Vec<StreamPlan>,
 ) -> JobHarness {
-    let db = test_db_from_home(
-        EmbeddedHome::open_retained(data_path)
-            .await
-            .expect("reopen the retained store"),
-    );
+    let db = trial_store_at(data_path).await;
     let user = crate::support::load_managed_fixture_user(&db).await;
     let access = db.client_access(&user);
     let response = access.execute("{ DefaultAgentSelection { node_did default_agent_did } Agent { node_did agent_did creation_nonce display_name } }").await.expect("read retained job identities");

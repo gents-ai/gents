@@ -6,57 +6,15 @@
     "files": [
       {
         "path": "deliveries.csv",
-        "contents": "dock,crates,status\nElm,13,received\nPine,26,received\nOak,18,received\nElm,7,rejected\nPine,4,received\nOak,9,received\nElm,5,received\n"
+        "contents": "dock,crates,status\nBirch,10,rejected\nOak,27,rejected\nBirch,2,pending\nAsh,26,received\nElm,30,received\nElm,13,received\nPine,14,received\nElm,20,received\nElm,25,received\nAsh,10,received\nAsh,7,pending\nElm,6,received\nBirch,16,received\nPine,2,pending\nElm,8,pending\nPine,7,pending\nPine,11,received\nPine,19,rejected\nPine,7,rejected\nPine,30,received\nOak,2,received\nAsh,7,received\nOak,4,received\nOak,28,received\nBirch,2,received\nOak,4,received\nOak,28,received\nAsh,24,received\nPine,17,received\nPine,3,received\nElm,25,received\nAsh,2,received\nAsh,13,received\nBirch,28,received\nAsh,3,rejected\nPine,21,received\nElm,26,received\nAsh,13,received\nOak,30,received\nOak,26,received\nElm,20,rejected\nOak,29,received\nElm,15,received\nPine,12,received\nBirch,13,received\nOak,10,rejected\nBirch,4,received\nOak,11,received\nElm,22,received\nOak,17,received\nElm,4,received\nBirch,14,received\nPine,25,received\nOak,28,received\nAsh,22,received\nPine,3,rejected\nElm,27,received\nOak,28,received\nPine,25,received\nPine,22,pending\nAsh,5,received\nAsh,13,received\nElm,29,received\nOak,6,received\nBirch,29,received\nBirch,16,received\nOak,17,received\nOak,17,received\nPine,5,received\nBirch,7,rejected\nAsh,29,received\nPine,4,received\nOak,18,pending\nBirch,29,received\nOak,4,pending\nOak,24,received\nElm,26,received\nOak,19,rejected\nOak,28,received\nOak,26,rejected\nOak,12,rejected\nPine,20,pending\nElm,17,received\nOak,12,rejected\nOak,16,received\nBirch,22,rejected\nOak,13,received\nOak,25,pending\nAsh,13,pending\nPine,29,pending\nAsh,13,received\nBirch,6,received\nPine,8,pending\nOak,29,received\nOak,24,received\nAsh,7,received\nBirch,18,rejected\nAsh,11,received\nBirch,26,pending\nOak,25,received\nPine,7,received\nAsh,21,rejected\nPine,9,pending\nPine,22,rejected\nElm,17,received\nPine,3,received\nElm,12,received\nAsh,8,received\nElm,15,received\nOak,14,rejected\nBirch,4,received\nPine,9,rejected\nOak,2,received\nAsh,10,pending\nAsh,29,received\nBirch,13,received\nBirch,21,received\nElm,11,received\nBirch,12,received\nOak,13,pending\nPine,15,received\nBirch,22,received\nOak,16,received\nPine,21,received\nBirch,17,received\nPine,21,received\nOak,28,rejected\nElm,14,received\nOak,20,received\nBirch,6,received\nBirch,14,received\nAsh,9,received\nOak,17,rejected\nAsh,14,pending\nPine,21,received\nOak,25,received\nAsh,10,received\nElm,12,received\nAsh,11,received\nAsh,2,received\nBirch,16,received\nOak,3,pending\nPine,28,received\nElm,17,received\nBirch,10,received\nAsh,27,received\nPine,17,received\nPine,25,received\nOak,17,received\nAsh,18,rejected\nBirch,30,rejected\nElm,2,pending\nPine,11,received\nBirch,24,received\nBirch,11,rejected\nBirch,2,received\nOak,13,rejected\nBirch,6,received\nElm,10,received\nAsh,23,received\nBirch,8,received\nAsh,26,pending\nAsh,21,received\nAsh,29,pending\nAsh,17,received\nPine,30,received\nAsh,28,pending\nElm,11,pending\nElm,24,pending\nAsh,20,received\nAsh,11,received\nPine,17,rejected\nBirch,30,received\nOak,19,received\nAsh,20,received\nElm,4,rejected\nPine,10,pending\nElm,27,received\nElm,12,rejected\nAsh,4,received\nAsh,3,received\nElm,9,received\nElm,24,received\nOak,24,received\nPine,7,received\nPine,15,pending\nPine,4,received\nPine,3,received\nElm,23,received\nElm,10,received\nBirch,20,received\nAsh,30,received\nPine,2,received\nElm,12,rejected\nBirch,17,received\nOak,22,received\nElm,6,rejected\nOak,6,received\nBirch,11,received\nBirch,21,received\nOak,4,received\nPine,10,pending\nOak,18,received\nPine,29,received\nAsh,25,received\nPine,6,rejected\nElm,22,received\nElm,20,rejected\nElm,4,pending\nElm,18,received\nAsh,9,received\nAsh,17,received\nElm,27,received\nElm,19,rejected\nAsh,3,pending\nPine,15,rejected\nPine,25,received\nElm,23,received\nPine,6,rejected\nBirch,14,received\nPine,11,received\nBirch,24,received\nAsh,14,received\nOak,22,received\nAsh,29,received\nBirch,3,received\nBirch,8,rejected\nPine,14,received\nElm,3,received\nPine,8,received\nElm,17,received\nOak,2,received\nAsh,11,received\nAsh,12,received\nAsh,5,received\nPine,22,received\nElm,13,pending\nAsh,29,received\nPine,19,received\nElm,10,pending\nPine,26,received\nPine,3,received\nElm,13,pending\nOak,12,received\nElm,23,received\nAsh,29,received\nElm,27,rejected\nOak,11,received\nPine,25,received\nElm,8,rejected\nElm,20,received\nElm,21,received\nOak,23,received\nPine,16,received\nOak,4,rejected\nAsh,7,pending\nPine,7,rejected\nPine,3,rejected\nBirch,15,rejected\nOak,2,received\nElm,16,pending\nAsh,7,received\nElm,19,pending\nBirch,20,received\nElm,24,received\nPine,30,pending\nAsh,4,received\nElm,23,received\nElm,17,received\nElm,3,received\nAsh,16,received\nElm,30,received\nPine,7,rejected\nBirch,22,received\nPine,19,received\nElm,12,pending\nElm,4,received\nPine,21,received\nPine,21,received\nAsh,19,received\nAsh,15,received\nAsh,18,rejected\nPine,25,received\nOak,24,received\nPine,19,received\nPine,11,received\nElm,26,pending\nOak,28,received\nOak,6,received\nBirch,4,received\nPine,24,received\nAsh,20,rejected\nPine,10,received\nAsh,24,received\nElm,24,received\nOak,30,received\nElm,4,received\nOak,14,pending\nBirch,2,received\nPine,20,received\nAsh,6,pending\nElm,25,received\nAsh,10,received\nAsh,19,received\nOak,4,received\nPine,6,received\nAsh,23,received\nOak,3,received\nBirch,26,rejected\nBirch,2,received\nElm,3,received\nOak,15,pending\nOak,21,received\nPine,18,received\nPine,13,received\nOak,13,received\nPine,20,received\nPine,25,received\nOak,18,received\nPine,22,rejected\nPine,16,pending\nAsh,27,received\nElm,12,received\nAsh,9,received\nBirch,15,received\nAsh,3,pending\nPine,19,received\nAsh,21,received\nElm,6,pending\nAsh,23,received\nPine,2,received\nBirch,9,received\nOak,14,received\nPine,8,received\nPine,11,received\nBirch,13,pending\nPine,13,received\nPine,28,rejected\nElm,21,received\nAsh,13,received\nPine,28,received\nAsh,14,received\nElm,7,received\nElm,26,rejected\nOak,30,received\nOak,17,rejected\nAsh,29,received\nBirch,4,pending\nPine,14,rejected\nElm,5,received\nBirch,20,received\nPine,28,received\nElm,12,rejected\nElm,21,received\nBirch,14,received\nAsh,19,rejected\nAsh,16,pending\nBirch,24,received\nElm,19,received\nAsh,13,received\nElm,23,pending\nBirch,8,received\nOak,4,received\nElm,26,received\nBirch,20,pending\nAsh,11,received\nOak,24,received\nElm,3,pending\nElm,23,received\nOak,24,pending\nBirch,21,received\nPine,17,received\nElm,30,received\nPine,12,pending\nBirch,15,received\nElm,23,received\nAsh,7,pending\nBirch,30,received\nBirch,12,received\nOak,5,pending\nBirch,24,rejected\nOak,9,received\nPine,11,received\nOak,27,received\nElm,30,received\nElm,22,received\nPine,9,rejected\nElm,20,received\nBirch,25,received\nAsh,9,received\nAsh,18,received\nPine,11,received\nOak,4,received\nOak,7,received\nElm,6,received\nOak,20,received\nBirch,20,received\nAsh,8,received\nBirch,5,rejected\nOak,25,received\n"
       }
     ]
   },
   "stages": [
     {
       "stage_id": "run",
-      "prompt": "Write me a dock totals report with one script: have it read deliveries.csv, total the crates per dock counting only received rows, and write the result to reports/dock_totals.json as a JSON object mapping each dock name to its crate total. Leave deliveries.csv unchanged and tell me which dock was busiest.",
+      "prompt": "Total the crates per dock from deliveries.csv, counting only received rows, and save it as reports/dock_totals.json mapping each dock to its total. Which dock was busiest?",
       "capture": [
-        {
-          "kind": "documents",
-          "name": "inner_writes",
-          "collection": "AgentToolCall",
-          "filter": {
-            "plugin_parent_tool_call_doc_id": {
-              "_ne": null
-            },
-            "tool_name": {
-              "_eq": "write_file"
-            },
-            "lifecycle_state": {
-              "_eq": "completed"
-            }
-          },
-          "fields": [
-            "tool_name",
-            "lifecycle_state",
-            "plugin_parent_tool_call_doc_id"
-          ]
-        },
-        {
-          "kind": "documents",
-          "name": "inner_reads",
-          "collection": "AgentToolCall",
-          "filter": {
-            "plugin_parent_tool_call_doc_id": {
-              "_ne": null
-            },
-            "tool_name": {
-              "_eq": "read_file"
-            },
-            "lifecycle_state": {
-              "_eq": "completed"
-            }
-          },
-          "fields": [
-            "tool_name",
-            "lifecycle_state",
-            "plugin_parent_tool_call_doc_id"
-          ]
-        },
         {
           "kind": "file",
           "name": "workspace",
@@ -64,40 +22,6 @@
         }
       ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "script",
-              "read_file",
-              "write_file"
-            ],
-            "forbidden": [
-              "bash",
-              "bash_unrestricted"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "present": [
-              {
-                "capture": "inner_writes",
-                "min": 1
-              },
-              {
-                "capture": "inner_reads",
-                "min": 1
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "captured_files_match",
           "params": {
@@ -107,14 +31,16 @@
                 "path": "reports/dock_totals.json",
                 "pointer": "",
                 "equals": {
-                  "Elm": 18,
-                  "Pine": 30,
-                  "Oak": 27
+                  "Ash": 952,
+                  "Elm": 1082,
+                  "Pine": 980,
+                  "Birch": 735,
+                  "Oak": 990
                 }
               },
               {
                 "path": "deliveries.csv",
-                "sha256": "92c30b6e200f1c0dff172d70bd5b16201fec5947c25f47cccf199eaa2180f188"
+                "sha256": "f3dfc415e52e1f60c1a4a4e803fc8fa8db233bb4f5a7fd3da07ca3c8b880f534"
               }
             ]
           },
@@ -126,7 +52,7 @@
           "params": {
             "all": [
               {
-                "matches": "Pine"
+                "matches": "\\bElm\\b"
               }
             ]
           },

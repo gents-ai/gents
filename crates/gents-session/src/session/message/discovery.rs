@@ -161,6 +161,22 @@ pub(super) fn listed_session(
     }
 }
 
+/// Whether `session_id` names the session that started `caller`'s, as its
+/// verified creation receipt records it.
+pub async fn is_starter(
+    node: &Arc<EmbeddedNode>,
+    caller: &gents_protocol::row::AgentRequest,
+    session_id: &str,
+) -> Result<bool> {
+    let access =
+        ConfigAccess::local_as(node.clone(), identity::Did::new(caller.agent_did.clone())?);
+    let lineage =
+        crate::session::origin::lineage(&access, &SessionScope::of_request(caller)).await?;
+    Ok(lineage
+        .started_by
+        .is_some_and(|starter| starter.scope.session_id == session_id))
+}
+
 async fn starter_entry(
     node: &Arc<EmbeddedNode>,
     caller: &gents_protocol::row::AgentRequest,

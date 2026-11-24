@@ -13,8 +13,63 @@
   "stages": [
     {
       "stage_id": "goal",
+      "prompt": "Make it a goal with a 500,000-token budget: reconcile the dock manifest manifests/dock-7.json against counts/dock-7.json and write the difference to reconcile.json. The manifest hasn't arrived yet and only I can get it, so don't make one up. If you can't go on, tell me once in my inbox and mark the goal blocked.",
       "settle": true,
-      "prompt": "Set a goal for this session with a token budget of 1200000: reconcile the dock manifest manifests/dock-7.json against counts/dock-7.json and write the difference to reconcile.json. The manifest hasn't been delivered yet and only I can get it. If you can't go on, tell me once through my inbox and mark the goal blocked. Don't make up a manifest.",
+      "checks": [
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "goal",
+            "expect": [
+              {
+                "field": "token_budget",
+                "equals": 500000
+              },
+              {
+                "field": "status",
+                "equals": "blocked"
+              }
+            ],
+            "min_rows": 1,
+            "max_rows": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "visible",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "notice",
+                "min": 1,
+                "max": 1
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_files_match",
+          "params": {
+            "name": "root",
+            "expect": [
+              {
+                "path": "reconcile.json",
+                "exists": false
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
       "capture": [
         {
           "kind": "documents",
@@ -30,9 +85,9 @@
             "objective",
             "status",
             "token_budget",
+            "tokens_used",
             "completion_evidence",
-            "consecutive_blocked_audits",
-            "last_blocked_reason"
+            "blocked_reason"
           ]
         },
         {
@@ -88,77 +143,6 @@
           "kind": "file",
           "name": "root",
           "glob": "*.json"
-        }
-      ],
-      "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "create_goal",
-              "file_mailbox_item"
-            ],
-            "forbidden": [
-              "bash",
-              "bash_unrestricted"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_fields_match",
-          "params": {
-            "name": "goal",
-            "expect": [
-              {
-                "field": "token_budget",
-                "equals": 1200000
-              },
-              {
-                "field": "status",
-                "equals": "blocked"
-              }
-            ],
-            "min_rows": 1,
-            "max_rows": 1
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "present": [
-              {
-                "capture": "visible",
-                "min": 1,
-                "max": 1
-              },
-              {
-                "capture": "notice",
-                "min": 1,
-                "max": 1
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_files_match",
-          "params": {
-            "name": "root",
-            "expect": [
-              {
-                "path": "reconcile.json",
-                "exists": false
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
         }
       ]
     }

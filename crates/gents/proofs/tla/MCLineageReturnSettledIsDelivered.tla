@@ -1,0 +1,3 @@
+---- MODULE MCLineageReturnSettledIsDelivered ----
+EXTENDS LineageReturn
+====

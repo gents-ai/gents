@@ -7,7 +7,6 @@ fn halt_verdicts_follow_the_lean_goal_halt_model() {
     gents_lean_vocab::families::hook_decisions_goal_halt::replay::<String>(|case| {
         let state = case.status.as_deref().map(|status| GoalState {
             status: GoalStatus::parse(status).expect("the model names a known status"),
-            blocked_audits: 0,
             wrapup_requested: false,
             wrapup_completed: false,
         });
@@ -25,7 +24,6 @@ fn halt_verdicts_follow_the_lean_goal_halt_model() {
                 Some(
                     gents_lean_vocab::families::hook_decisions_goal_halt::PausedGoalWire {
                         status: paused.status.as_str().to_owned(),
-                        blocked_audits: u64::try_from(paused.blocked_audits).unwrap(),
                         wrapup_requested: paused.wrapup_requested,
                         wrapup_completed: paused.wrapup_completed,
                     },

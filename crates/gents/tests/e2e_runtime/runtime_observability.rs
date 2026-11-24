@@ -9,7 +9,7 @@ use tokio::sync::watch;
 use crate::support::fixtures::bind_managed_agent_backend;
 use crate::support::interrupt::TEST_RUNTIME_READY_TIMEOUT;
 use crate::support::snapshots::{fetch_runtime_snapshot_as, RuntimeSnapshot};
-use crate::support::{managed_agent_fixture, test_db};
+use crate::support::{managed_agent_fixture, trial_store};
 use gents_store::test_support::snapshot_reader::SnapshotReader;
 
 const UNUSED_BACKEND_ENDPOINT: &str = "http://127.0.0.1:9/v1";
@@ -112,7 +112,7 @@ where
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
-    let db = test_db("runtime-observability").await;
+    let db = trial_store("runtime-observability").await;
     let fixture = managed_agent_fixture(&db).await;
     let identity = db.node_identity.clone();
     bind_managed_agent_backend(
@@ -136,7 +136,7 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
+            backend_admission: Some(db.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             process_state_observer: Some(observer.clone()),
             runtime_snapshot_observer: Some(observer),

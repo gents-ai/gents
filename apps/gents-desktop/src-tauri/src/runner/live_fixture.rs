@@ -504,21 +504,14 @@ fn live_core_options() -> ClientRuntimeOptions {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
-
     use super::{find_in_node_stores, refresh_every_node};
     use std::time::{Duration, Instant};
 
     use anyhow::{bail, Context, Result};
-    use axum::extract::State;
-    use axum::http::{header, StatusCode};
-    use axum::response::{IntoResponse, Response};
-    use axum::routing::{get, post};
-    use axum::Router;
     use gents_desktop_bridge::client_runtime::ClientRuntime;
+    use gents_inference::test_support::scripted_backend::{ScriptedBackend, StreamResponse};
     use gents_protocol::row::{decode_node_readiness_snapshot, AgentRequestRow};
     use serde_json::Value;
-    use tokio::sync::oneshot;
 
     use super::{run_on_live_runtime, LiveBackendOverride, LiveBridgeFixture};
     use gents_desktop_bridge::commands::{
@@ -535,9 +528,9 @@ mod tests {
     fn live_fixture_writes_skill_create_delete_to_runtime() -> Result<()> {
         let _guard = live_fixture_test_lock();
         run_on_live_runtime(async {
-            let mock = MockChatEndpoint::start(MODEL_NAME, "ok").await?;
+            let mock = ScriptedBackend::builder(MODEL_NAME).replies("ok").start()?;
             let fixture =
-                LiveBridgeFixture::start(Some(mock.backend_override(MODEL_NAME)), None, false)
+                LiveBridgeFixture::start(Some(backend_override(&mock, MODEL_NAME)), None, false)
                     .await?;
             let result = skill_create_delete_case(fixture.as_ref()).await;
             fixture.shutdown().await?;
@@ -549,9 +542,9 @@ mod tests {
     fn live_fixture_desktop_chat_slash_skill_loads_on_node() -> Result<()> {
         let _guard = live_fixture_test_lock();
         run_on_live_runtime(async {
-            let mock = MockChatEndpoint::start_with_held_prompt(MODEL_NAME, "skill loaded").await?;
+            let mock = held_prompt_backend("skill loaded")?;
             let fixture =
-                LiveBridgeFixture::start(Some(mock.backend_override(MODEL_NAME)), None, false)
+                LiveBridgeFixture::start(Some(backend_override(&mock, MODEL_NAME)), None, false)
                     .await?;
             let result = slash_skill_chat_case(fixture.as_ref(), &mock).await;
             fixture.shutdown().await?;
@@ -589,7 +582,7 @@ mod tests {
 
     async fn slash_skill_chat_case(
         fixture: &LiveBridgeFixture,
-        mock: &MockChatEndpoint,
+        mock: &ScriptedBackend,
     ) -> Result<()> {
         let node_did = fixture.node_did().to_string();
         let agent_did = fixture
@@ -624,7 +617,7 @@ mod tests {
         .await
         .context("node runtime did not reconcile the skill binding before chat submit")?;
 
-        let release = HeldResponseRelease(mock.held_response.clone());
+        let release = HeldResponseRelease(mock);
         let initial = send_chat_message(
             fixture.desktop_core().as_ref(),
             ChatSendRequest {
@@ -746,7 +739,7 @@ mod tests {
         assert_eq!(
             session.latest_request_id.as_deref(),
             Some(initial.request_id.as_str()),
-            "initial={} submitted={} source_rows={:?} gate_permits={:?}",
+            "initial={} submitted={} source_rows={:?} provider_requests={:?}",
             initial.request_id,
             submitted.request_id,
             fixture
@@ -758,9 +751,7 @@ mod tests {
                 .filter(|row| row.request_id == initial.request_id
                     || row.request_id == submitted.request_id)
                 .collect::<Vec<_>>(),
-            mock.held_response
-                .as_ref()
-                .map(|gate| gate.available_permits()),
+            mock.recorded_requests().len(),
         );
         let queued_turn = session
             .queued_turns
@@ -795,15 +786,18 @@ mod tests {
             "queued skill provider request",
             Duration::from_secs(120),
             || async {
-                Ok(mock.captured_chat_requests().into_iter().find(|request| {
-                    request.to_string().contains(skill_body)
-                        && request["messages"].as_array().is_some_and(|messages| {
-                            messages.iter().any(|message| {
-                                message["role"] == "user"
-                                    && message["content"].to_string().contains(task)
+                Ok(mock
+                    .observed_completion_bodies()
+                    .into_iter()
+                    .find(|request| {
+                        request.to_string().contains(skill_body)
+                            && request["messages"].as_array().is_some_and(|messages| {
+                                messages.iter().any(|message| {
+                                    message["role"] == "user"
+                                        && message["content"].to_string().contains(task)
+                                })
                             })
-                        })
-                }))
+                    }))
             },
         )
         .await?;
@@ -1058,13 +1052,10 @@ mod tests {
         })
     }
 
-    async fn wait_for_captured_chat_request(
-        mock: &MockChatEndpoint,
-        needle: &str,
-    ) -> Result<Value> {
+    async fn wait_for_captured_chat_request(mock: &ScriptedBackend, needle: &str) -> Result<Value> {
         let deadline = Instant::now() + Duration::from_secs(120);
         loop {
-            let captured = mock.captured_chat_requests();
+            let captured = mock.observed_completion_bodies();
             if let Some(request) = captured
                 .iter()
                 .find(|request| has_exact_user_text(request, needle))
@@ -1135,184 +1126,43 @@ mod tests {
 
     const HELD_PROMPT: &str = "HOLD_FIRST_SLASH_SKILL_FIXTURE_TURN";
 
+    const HELD_GATE: &str = "held-prompt";
+
     // Drop unblocks the provider before fixture shutdown drains requests.
-    struct HeldResponseRelease(Option<Arc<tokio::sync::Semaphore>>);
+    struct HeldResponseRelease<'a>(&'a ScriptedBackend);
 
-    impl Drop for HeldResponseRelease {
+    impl Drop for HeldResponseRelease<'_> {
         fn drop(&mut self) {
-            if let Some(gate) = self.0.take() {
-                gate.add_permits(1);
-            }
+            self.0.release(HELD_GATE);
         }
     }
 
-    #[derive(Clone)]
-    struct MockState {
-        model_name: String,
-        final_text: String,
-        held_response: Option<Arc<tokio::sync::Semaphore>>,
-        captured: Arc<Mutex<Vec<Value>>>,
-    }
-
-    struct MockChatEndpoint {
-        endpoint: String,
-        held_response: Option<Arc<tokio::sync::Semaphore>>,
-        captured: Arc<Mutex<Vec<Value>>>,
-        shutdown: Option<oneshot::Sender<()>>,
-    }
-
-    impl MockChatEndpoint {
-        async fn start(model_name: &str, final_text: &str) -> Result<Self> {
-            Self::start_inner(model_name, final_text, None).await
-        }
-
-        async fn start_with_held_prompt(model_name: &str, final_text: &str) -> Result<Self> {
-            Self::start_inner(
-                model_name,
-                final_text,
-                Some(Arc::new(tokio::sync::Semaphore::new(0))),
-            )
-            .await
-        }
-
-        async fn start_inner(
-            model_name: &str,
-            final_text: &str,
-            held_response: Option<Arc<tokio::sync::Semaphore>>,
-        ) -> Result<Self> {
-            let captured = Arc::new(Mutex::new(Vec::new()));
-            let state = Arc::new(MockState {
-                model_name: model_name.to_string(),
-                final_text: final_text.to_string(),
-                held_response: held_response.clone(),
-                captured: Arc::clone(&captured),
-            });
-            let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-                .await
-                .context("mock chat endpoint failed to bind a port")?;
-            let port = listener.local_addr()?.port();
-            let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-            let app = Router::new()
-                .route("/v1/models", get(handle_models))
-                .route("/models", get(handle_models))
-                .route("/v1/chat/completions", post(handle_chat))
-                .route("/chat/completions", post(handle_chat))
-                .fallback(handle_fallback)
-                .with_state(state);
-            tokio::spawn(async move {
-                let _ = axum::serve(listener, app)
-                    .with_graceful_shutdown(async move {
-                        let _ = shutdown_rx.await;
-                    })
-                    .await;
-            });
-
-            Ok(Self {
-                endpoint: format!("http://127.0.0.1:{port}/v1"),
-                held_response,
-                captured,
-                shutdown: Some(shutdown_tx),
+    /// Answers every completion with `final_text`, holding the one whose user
+    /// text is exactly [`HELD_PROMPT`] until the gate is released.
+    fn held_prompt_backend(final_text: &'static str) -> Result<ScriptedBackend> {
+        ScriptedBackend::builder(MODEL_NAME)
+            .respond(move |request| {
+                let reply = StreamResponse::text(final_text);
+                Some(if has_exact_user_text(request, HELD_PROMPT) {
+                    reply.after(HELD_GATE)
+                } else {
+                    reply
+                })
             })
-        }
-
-        fn backend_override(&self, model_name: &str) -> LiveBackendOverride {
-            LiveBackendOverride {
-                inference_url: Some(self.endpoint.clone()),
-                model_name: Some(model_name.to_string()),
-                provider: Some(
-                    gents_inference::backends::provider::BackendProviderKind::OpenAiCompatible
-                        .as_str()
-                        .to_owned(),
-                ),
-                api_key: Some("desktop-live-test-key".to_string()),
-                ..Default::default()
-            }
-        }
-
-        fn captured_chat_requests(&self) -> Vec<Value> {
-            self.captured
-                .lock()
-                .expect("captured mock request mutex poisoned")
-                .clone()
-        }
+            .start()
     }
 
-    impl Drop for MockChatEndpoint {
-        fn drop(&mut self) {
-            if let Some(shutdown) = self.shutdown.take() {
-                let _ = shutdown.send(());
-            }
+    fn backend_override(backend: &ScriptedBackend, model_name: &str) -> LiveBackendOverride {
+        LiveBackendOverride {
+            inference_url: Some(backend.endpoint().to_owned()),
+            model_name: Some(model_name.to_string()),
+            provider: Some(
+                gents_inference::backends::provider::BackendProviderKind::OpenAiCompatible
+                    .as_str()
+                    .to_owned(),
+            ),
+            api_key: Some("desktop-live-test-key".to_string()),
+            ..Default::default()
         }
-    }
-
-    async fn handle_models(State(state): State<Arc<MockState>>) -> Response {
-        (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "application/json")],
-            serde_json::json!({ "data": [{ "id": state.model_name }] }).to_string(),
-        )
-            .into_response()
-    }
-
-    async fn handle_chat(State(state): State<Arc<MockState>>, body: String) -> Response {
-        let request_json = match serde_json::from_str::<Value>(&body) {
-            Ok(value) => value,
-            Err(_) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    [(header::CONTENT_TYPE, "application/json")],
-                    r#"{"error":"invalid json"}"#,
-                )
-                    .into_response()
-            }
-        };
-        let held = has_exact_user_text(&request_json, HELD_PROMPT);
-        state
-            .captured
-            .lock()
-            .expect("captured mock request mutex poisoned")
-            .push(request_json);
-        if held {
-            if let Some(gate) = &state.held_response {
-                let _permit = gate
-                    .acquire()
-                    .await
-                    .expect("fixture response gate remains open");
-            }
-        }
-        (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/event-stream")],
-            completion_text_sse(&state.final_text),
-        )
-            .into_response()
-    }
-
-    async fn handle_fallback() -> Response {
-        (
-            StatusCode::NOT_FOUND,
-            [(header::CONTENT_TYPE, "application/json")],
-            r#"{"error":"not found"}"#,
-        )
-            .into_response()
-    }
-
-    fn completion_text_sse(text: &str) -> String {
-        let chunk_1 = serde_json::json!({
-            "choices": [{ "delta": { "content": text }, "finish_reason": null }],
-            "usage": null
-        });
-        let chunk_2 = serde_json::json!({
-            "choices": [{
-                "delta": { "content": null, "tool_calls": [] },
-                "finish_reason": "stop"
-            }],
-            "usage": { "prompt_tokens": 24, "completion_tokens": 6, "total_tokens": 30 }
-        });
-        format!(
-            "data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
-            serde_json::to_string(&chunk_1).expect("serialize completion chunk 1"),
-            serde_json::to_string(&chunk_2).expect("serialize completion chunk 2"),
-        )
     }
 }

@@ -17,7 +17,7 @@ const SEEDED_TURNS: usize = 12;
 const SEEDED_TURN_BYTES: usize = 10_000;
 
 pub(super) async fn compaction_runtime_reduces_valid_canonical_history() {
-    let db = test_db("compaction-gate").await;
+    let db = trial_store("compaction-gate").await;
     let compaction_marker = gents_loop::compaction::summary::compaction_request_prompt();
     let checkpoint =
         serde_json::to_string(&gents_loop::compaction::summary::ContinuationCheckpoint {
@@ -152,7 +152,11 @@ async fn seed_bulky_history(actors: &RequestActors, session_id: &str) {
     }
 }
 
-async fn boot_agent(db: &support::TestDb, actors: &RequestActors, endpoint: &str) -> BootedAgent {
+async fn boot_agent(
+    db: &gents_store::test_support::TestStore,
+    actors: &RequestActors,
+    endpoint: &str,
+) -> BootedAgent {
     support::fixtures::bind_managed_agent_backend(db, &actors.fixture, BACKEND_ID, endpoint, MODEL)
         .await;
     let runtime = managed_runtime_builder(db, actors.agent_did())

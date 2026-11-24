@@ -55,11 +55,11 @@ mod turn_threading;
 
 pub use contract::{
     AuthoredInput, EstimateSeedGuard, FinishOrIntake, FoldedPrompt, LoopConfig, LoopReplayInput,
-    LoopStreamItem, ProviderConfigurationGuard, ProviderConfigurationGuardError,
+    LoopStreamItem, ProviderConfigurationGuard, ProviderConfigurationGuardError, ReboundTools,
     RenderedRequestSink, ReplayEstimateSeed, ReplayEvidenceResolveError, ReplayEvidenceResolver,
     ReplayEvidenceRow, ReplayEvidenceViolation, SteeringSnapshot, StructuredOutputConfig,
-    TaggedMessage, TurnCompactionError, TurnCompactionOutcome, TurnCompactionRequest,
-    TurnReductionCommit,
+    TaggedMessage, ToolRebinding, TurnCompactionError, TurnCompactionOutcome,
+    TurnCompactionRequest, TurnReductionCommit,
 };
 pub use invalid_tool_progress::DEFAULT_MAX_INVALID_TOOL_CALLS;
 pub use one_shot::{
@@ -290,6 +290,8 @@ where
     H: SessionHook + 'static,
 {
     try_stream! {
+        let mut config = config;
+        let mut tools = tools;
         let model = Arc::new(model);
         let hook = hook.map(Arc::new);
         if let Some(hook) = &hook { hook.bind_tool_surface(tools.clone()).await; }
@@ -378,6 +380,10 @@ where
                 let (reply, committed) = tokio::sync::oneshot::channel();
                 yield OwnedLoopItem::Output(LoopStreamItem::SteeringBoundary { reply });
                 new_messages.extend(receive_steering(committed).await?.into_iter().map(|row| TaggedMessage::unassociated(row.message)));
+            }
+            if let Some(rebound) = take_rebound_tools(&mut config).await {
+                tools = rebound;
+                if let Some(hook) = &hook { hook.bind_tool_surface(tools.clone()).await; }
             }
             let preparation_started = std::time::Instant::now();
             let (mut request, turn_context_decision) = build_budgeted_request(
@@ -1735,6 +1741,19 @@ where
         }
         }
     }
+}
+
+/// The toolset staged since the last turn boundary, installed in `config`:
+/// its preamble, configuration check and tool choice. The anchored call was
+/// sent another toolset, so it no longer describes a prefix of the next
+/// request (Lean `ContextCalibration.State.invalidate`).
+async fn take_rebound_tools(config: &mut LoopConfig) -> Option<Arc<Vec<Box<dyn ToolDyn>>>> {
+    let rebound = (config.tool_rebinding.as_ref()?)().await?;
+    config.preamble = rebound.preamble;
+    config.configuration_guard = rebound.configuration_guard;
+    config.tool_choice = (!rebound.tools.is_empty()).then_some(ToolChoice::Auto);
+    config.context_calibration.invalidate_anchor();
+    Some(rebound.tools)
 }
 
 async fn receive_steering(

@@ -23,6 +23,101 @@ fn admission_matches_executable_lean_owner() {
     });
 }
 
+#[derive(Debug, Clone, Copy, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum PendingOperation {
+    Create,
+    Update,
+    Delete,
+}
+
+#[derive(Debug, Clone, Copy, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Sibling {
+    CreateOutside,
+    CreateInside,
+    UpdateTarget,
+    UpdateOther,
+    DeleteTarget,
+}
+
+#[tokio::test]
+async fn a_sibling_write_stales_a_pending_preview_as_the_model_decides() {
+    let (db, tool) = fixture().await;
+    let node = db.node.clone();
+    let cases = gents_lean_vocab::families::tool_policy_application_write_stale_after::cases::<
+        PendingOperation,
+        Sibling,
+    >();
+    for (index, case) in cases.into_iter().enumerate() {
+        let target = format!("target-{index}");
+        let other = format!("other-{index}");
+        let selected = format!("queued-{index}");
+        let unselected = format!("held-{index}");
+        for (reference, status) in [(&target, &selected), (&other, &unselected)] {
+            apply(
+                &tool,
+                call(
+                    "create",
+                    json!({"reference":reference,"status":status}),
+                    None,
+                ),
+            )
+            .await
+            .unwrap();
+        }
+        let selection = json!({"status":{"_eq":selected}});
+        let pending = match case.input.operation {
+            PendingOperation::Create => call(
+                "create",
+                json!({"reference":format!("pending-{index}"),"status":unselected}),
+                None,
+            ),
+            PendingOperation::Update => call("update", json!({"tags":["sent"]}), Some(selection)),
+            PendingOperation::Delete => call("delete", Value::Null, Some(selection)),
+        };
+        let preview = tool.execute(&pending).await.unwrap();
+        let next: WriteParams =
+            serde_json::from_value(preview["next_call"]["args"].clone()).unwrap();
+        let touch = json!({"payload":{"touched":index}});
+        let sibling = match case.input.sibling {
+            Sibling::CreateOutside => call(
+                "create",
+                json!({"reference":format!("later-{index}"),"status":unselected}),
+                None,
+            ),
+            Sibling::CreateInside => call(
+                "create",
+                json!({"reference":format!("later-{index}"),"status":selected}),
+                None,
+            ),
+            Sibling::UpdateTarget => {
+                call("update", touch, Some(json!({"reference":{"_eq":target}})))
+            }
+            Sibling::UpdateOther => call("update", touch, Some(json!({"reference":{"_eq":other}}))),
+            Sibling::DeleteTarget => call(
+                "delete",
+                Value::Null,
+                Some(json!({"reference":{"_eq":target}})),
+            ),
+        };
+        apply(&tool, sibling).await.unwrap();
+        let stale = match tool.execute(&next).await {
+            Ok(receipt) => {
+                assert_eq!(receipt["committed"], true, "{receipt}");
+                false
+            }
+            Err(error) => {
+                let error = format!("{error:#}");
+                assert!(error.contains("stale digest"), "{:?}: {error}", case.input);
+                true
+            }
+        };
+        case.check(stale);
+    }
+    node.shutdown().await.expect("node shutdown");
+}
+
 fn call(operation: &str, input: Value, filter: Option<Value>) -> WriteParams {
     let mut options = Map::new();
     if operation != "delete" {
@@ -79,12 +174,8 @@ async fn preview_create_update_delete_and_fresh_reads_preserve_json() {
     assert_eq!(before["data"]["Parcel"], json!([]));
     let next: WriteParams = serde_json::from_value(preview["next_call"]["args"].clone()).unwrap();
     tool.execute(&next).await.unwrap();
-    assert!(tool
-        .execute(&next)
-        .await
-        .unwrap_err()
-        .to_string()
-        .contains("stale"));
+    let again = format!("{:#}", tool.execute(&next).await.unwrap_err());
+    assert!(again.contains("already exists"), "{again}");
     let rows = access
         .execute("{Parcel{reference status tags payload}}")
         .await

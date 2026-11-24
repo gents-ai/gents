@@ -18,8 +18,6 @@ const FIXTURE_NAMES: &[&str] = &[
     "test_db",
     "spawn_runtime",
     "node_builder",
-    "MockModelEndpoint",
-    "FakeLlm",
     "managed_agent",
     "ManagedAgentFixture",
     "test_identity",
@@ -33,7 +31,6 @@ const FIXTURE_DUPLICATES: &[(&str, usize, &str)] = &[
     ("managed_agent", 4, "root tests/support and automation pushdown copies of Agent installation; callers move to SignedHome::create_agent"),
     ("node_builder", 3, "raw-node builders in gents-store, gents-host and gents-desktop-bridge; callers move to TestStore"),
     ("spawn_runtime", 2, "two root copies of the runtime boot; they move to the running-runtime fixture"),
-    ("test_db", 2, "the root EmbeddedHome fixture and the automation pushdown copy; callers move to TestStore"),
     ("test_identity", 7, "key-file identities written per crate; callers move to gents_store::test_support::test_identity"),
 ];
 
@@ -41,7 +38,6 @@ const FIXTURE_DUPLICATES: &[(&str, usize, &str)] = &[
 #[rustfmt::skip]
 const TESTS_INCLUDED_INTO_SRC: &[(&str, usize, &str)] = &[
     ("crates/gents-session/src/session/provider_context_reduction.rs", 1, "a durable-reduction conformance consumer kept in the root tests directory; it moves beside its owner in gents-session"),
-    ("crates/gents/src/lib.rs", 1, "the root tests/support fixtures compile into the library for the crates above; they move into the lowest owning crate's src/test_support"),
 ];
 
 /// Test-only implementations of production traits outside a `src/test_support`
@@ -67,7 +63,7 @@ const TEST_TRAIT_IMPLEMENTATIONS: &[(&str, usize, &str)] = &[
 /// `sleep(` calls in test code, per crate.
 #[rustfmt::skip]
 const TEST_SLEEPS: &[(&str, usize, &str)] = &[
-    ("gents", 56, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
+    ("gents", 54, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-automation", 21, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-cli", 15, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),
     ("gents-client-host", 29, "sleeps that stand in for an event the test could wait on; each converted wait lowers the count"),

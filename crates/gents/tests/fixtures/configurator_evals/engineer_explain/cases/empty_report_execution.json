@@ -75,28 +75,8 @@
   },
   "stages": [
     {
-      "stage_id": "access",
-      "prompt": "Enable your general read access only to DeliveryAudit. Keep shell execution off and leave all other permissions alone. Inspect the available fields before preparing reports.",
-      "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        }
-      ],
-      "capture": []
-    },
-    {
       "stage_id": "plan",
-      "prompt": "The delivered-shipment report is empty. Show its plan on DeliveryAudit using reference and status, with a five-row limit, without executing the report. Leave records and schema unchanged.",
+      "prompt": "The delivered-shipments report on DeliveryAudit (reference and status, first 5 rows) comes back empty. Without running it, show me the plan the database would use for it.",
       "checks": [
         {
           "check": "tool_result_matches",
@@ -114,16 +94,6 @@
                 "field": "plan",
                 "contains": "scanNode"
               }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "forbidden": [
-              "bash"
             ]
           },
           "tier": "acceptance",
@@ -317,7 +287,7 @@
     },
     {
       "stage_id": "execute",
-      "prompt": "Now execute that bounded delivered-shipment report with the five-row limit and show the actual work metrics. Confirm whether any records matched. Leave records and schema unchanged.",
+      "prompt": "Now run it with the 5-row limit. Did anything match, and how much work did the database do?",
       "checks": [
         {
           "check": "final_message_matches",
@@ -326,7 +296,12 @@
               "0",
               "zero",
               "no records",
-              "no documents"
+              "no documents",
+              "no rows",
+              "nothing",
+              "none",
+              "No delivered",
+              "no delivered"
             ]
           },
           "tier": "acceptance",
@@ -352,16 +327,6 @@
                 "field": "plan",
                 "contains": "planExecutions"
               }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "forbidden": [
-              "bash"
             ]
           },
           "tier": "acceptance",

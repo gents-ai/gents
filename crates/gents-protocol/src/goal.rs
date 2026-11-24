@@ -12,30 +12,28 @@ pub struct GoalSnapshot {
     pub token_budget: Option<i64>,
     pub tokens_used: i64,
     pub active_time_seconds: i64,
-    pub consecutive_blocked_audits: i64,
-    /// The Goal's pinned threshold, or the default when its Task set none.
-    pub blocked_audit_threshold: i64,
     /// The Goal's pinned limit, or the default when its Task set none.
     pub max_infrastructure_retries: i64,
     pub continuation_sequence: i64,
     pub wrapup_requested: bool,
     pub wrapup_completed: bool,
-    pub last_blocked_reason: Option<String>,
+    /// What the working Agent said it needs when it reported the Goal
+    /// blocked; shown to the user, never read by a decision.
+    pub blocked_reason: Option<String>,
     pub last_failure: Option<String>,
     pub completion_evidence: Option<String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
 }
 
-/// The limits a Goal pins when it is created: a Task's
-/// `goal_blocked_audit_threshold` and `goal_max_infrastructure_retries`.
-/// Unset values are the controller defaults. Goals the model creates with goal
-/// tools, and Goals a person starts, have no Task and keep the defaults. The
-/// creation claim records them beside the token budget, so a replayed creation
-/// with other limits conflicts (`GoalAutomation.decideCreate`).
+/// The limit a Goal pins when it is created: a Task's
+/// `goal_max_infrastructure_retries`. Unset is the controller default. Goals
+/// the model creates with goal tools, and Goals a person starts, have no Task
+/// and keep the default. The creation claim records it beside the token
+/// budget, so a replayed creation with another limit conflicts
+/// (`GoalAutomation.decideCreate`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct GoalLimits {
-    pub blocked_audit_threshold: Option<i64>,
     pub max_infrastructure_retries: Option<i64>,
 }
 
@@ -53,15 +51,12 @@ pub const GOAL_FIELDS: &str = r#"
     assignment_root_request_doc_id
     active_time_seconds
     active_started_at
-    consecutive_blocked_audits
-    last_blocked_request_id
-    last_blocked_reason
+    blocked_reason
     last_continued_from_request_id
     continuation_sequence
     wrapup_requested
     wrapup_completed
     infrastructure_retry_count
-    blocked_audit_threshold
     max_infrastructure_retries
     last_failure
     completion_evidence

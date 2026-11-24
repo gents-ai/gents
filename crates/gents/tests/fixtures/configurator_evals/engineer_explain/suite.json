@@ -5,9 +5,6 @@
     "scan and index evidence",
     "explicit bounded execution",
     "empty results",
-    "schema recovery",
-    "protected collection refusal"
-  ],
-  "subject": "ladder/engineer_subject",
-  "preset_self_config": true
+    "schema recovery"
+  ]
 }

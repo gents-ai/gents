@@ -1,5 +1,6 @@
-use super::{fake_llm, read_session, Attachment};
+use super::{read_session, Attachment};
 use anyhow::{ensure, Context, Result};
+use gents_inference::test_support::scripted_backend::StreamResponse;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_store::config_client::ConfigAccess;
 use serde_json::{json, Value};
@@ -148,7 +149,7 @@ impl Options {
     }
 }
 
-pub fn reply(request: &Value, options: Options) -> Option<fake_llm::ChatAction> {
+pub fn reply(request: &Value, options: Options) -> Option<StreamResponse> {
     let message = request["messages"]
         .as_array()?
         .iter()
@@ -170,11 +171,11 @@ pub fn reply(request: &Value, options: Options) -> Option<fake_llm::ChatAction> 
         .iter()
         .any(|message| message["role"] == "tool" && message["tool_call_id"] == ACTION_CALL_ID);
     let response = if options.profile && turn == 1 && !action_completed {
-        fake_llm::tool_call_sse_with_id(ACTION_CALL_ID, "read_file", r#"{"path":"AGENTS.md"}"#)
+        StreamResponse::tool_call(ACTION_CALL_ID, "read_file", r#"{"path":"AGENTS.md"}"#)
     } else {
-        fake_llm::completion_text_sse(&format!("History reply {turn:02}."))
+        StreamResponse::text(format!("History reply {turn:02}."))
     };
-    Some(fake_llm::ChatAction::Sse(response))
+    Some(response)
 }
 
 pub struct EditorRun<'a> {
@@ -565,23 +566,20 @@ fn history_options_validate_explicit_qualification_scope() {
     assert!(Options::parse(None, Some("true")).is_err());
     let request = json!({"messages":[{"role":"user","content":"History fixture turn 1000"}]});
     assert!(reply(&request, default).is_none());
-    let Some(fake_llm::ChatAction::Sse(response)) = reply(&request, long) else {
+    let Some(response) = reply(&request, long) else {
         panic!("history completion");
     };
-    assert_eq!(
-        response,
-        fake_llm::completion_text_sse("History reply 1000.")
-    );
+    assert_eq!(response, StreamResponse::text("History reply 1000."));
 }
 
 #[test]
 fn history_profile_can_answer_one_followup_after_the_seeded_turns() {
     let options = Options::parse(None, None).unwrap();
     let request = |turn| json!({"messages":[{"role":"user","content":format!("History fixture turn {turn}")}]});
-    let Some(fake_llm::ChatAction::Sse(response)) = reply(&request(46), options) else {
+    let Some(response) = reply(&request(46), options) else {
         panic!("the post-update request must have a finite provider response");
     };
-    assert_eq!(response, fake_llm::completion_text_sse("History reply 46."));
+    assert_eq!(response, StreamResponse::text("History reply 46."));
     assert!(reply(&request(47), options).is_none());
 }
 
@@ -591,14 +589,13 @@ fn history_profile_calls_read_file_until_its_exact_result_then_completes() {
     let ordinary = Options::parse(None, None).unwrap();
     let mut request = json!({"messages":[{"role":"user","content":"History fixture turn 01"}]});
     let response = |request: &Value, options| {
-        let Some(fake_llm::ChatAction::Sse(response)) = reply(request, options) else {
+        let Some(response) = reply(request, options) else {
             panic!("history response");
         };
         response
     };
-    let completion = fake_llm::completion_text_sse("History reply 01.");
-    let call =
-        fake_llm::tool_call_sse_with_id(ACTION_CALL_ID, "read_file", r#"{"path":"AGENTS.md"}"#);
+    let completion = StreamResponse::text("History reply 01.");
+    let call = StreamResponse::tool_call(ACTION_CALL_ID, "read_file", r#"{"path":"AGENTS.md"}"#);
     assert_eq!(response(&request, ordinary), completion);
     assert_eq!(response(&request, profile), call);
     request["messages"].as_array_mut().unwrap().push(json!({
@@ -614,7 +611,7 @@ fn history_profile_calls_read_file_until_its_exact_result_then_completes() {
     }));
     assert_eq!(
         response(&request, profile),
-        fake_llm::completion_text_sse("History reply 02.")
+        StreamResponse::text("History reply 02.")
     );
 }
 

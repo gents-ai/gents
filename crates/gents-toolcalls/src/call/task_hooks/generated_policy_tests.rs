@@ -13,7 +13,6 @@ fn task_with_hooks(task_id: &str, hooks: Vec<TaskHook>) -> Task {
         prompt_template: "run the task".to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
-        goal_blocked_audit_threshold: None,
         goal_max_infrastructure_retries: None,
         hooks,
         command: None,

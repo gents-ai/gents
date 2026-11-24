@@ -10,12 +10,12 @@ use crate::support::fixtures::configure_agent_tools_as;
 use crate::support::live_inference::{
     bind_target, boot_live_agent_with_ceiling, live_target, wait_for_request_terminal,
 };
-use crate::support::test_db;
+use crate::support::trial_store;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn live_tool_turn_captures_are_attributed_and_reconstructable() {
     let target = live_target().await;
-    let db = test_db("live-tool-turn-captures").await;
+    let db = trial_store("live-tool-turn-captures").await;
     let actors = bind_target(&db, &target).await;
     let access = &actors.fixture.access;
     let workspace = tempfile::tempdir().unwrap();

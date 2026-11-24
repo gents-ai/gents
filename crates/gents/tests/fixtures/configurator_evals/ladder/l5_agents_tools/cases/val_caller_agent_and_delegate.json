@@ -5,62 +5,7 @@
   "stages": [
     {
       "stage_id": "helper-and-target",
-      "prompt": "Create a checking-helper assistant for delegated checks, using our current model, and make it available for you to delegate to. Set up the connection without sending a message yet.",
-      "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "targets",
-            "min": 1,
-            "max": 1
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "agents": {
-              "agents": "agents",
-              "contexts": "contexts",
-              "tools": "tools",
-              "expect": [
-                {
-                  "agent_did": "gents:agent-slot:engineer",
-                  "delegates": {
-                    "targets": "targets",
-                    "agents": [
-                      "checking-helper"
-                    ]
-                  }
-                },
-                {
-                  "agent_did": "checking-helper",
-                  "source_match": {
-                    "field": "display_name",
-                    "matches": "(?i)^checking[ -]helper$"
-                  }
-                }
-              ]
-            }
-          },
-          "tier": "acceptance",
-          "weight": 1
-        }
-      ],
+      "prompt": "Create an assistant called Checking Helper for delegated checks, and set it up so you can hand work to it. Do not message it yet.",
       "capture": [
         {
           "kind": "documents",
@@ -76,7 +21,8 @@
             "display_name",
             "context_id",
             "enabled",
-            "inference_profile_id"
+            "inference_profile_id",
+            "tags"
           ]
         },
         {
@@ -90,8 +36,8 @@
           },
           "fields": [
             "context_id",
-            "tools_id",
-            "system_prompt"
+            "system_prompt",
+            "tools_id"
           ]
         },
         {
@@ -107,17 +53,32 @@
             "tools_id",
             "host",
             "datastore",
+            "self_config",
             "agents",
-            "self_config"
+            "remote",
+            "built_ins",
+            "integrations"
           ]
         },
         {
           "kind": "documents",
-          "name": "targets",
+          "name": "helper_targets",
           "collection": "AgentTarget",
           "filter": {
             "node_did": {
               "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^checking[ -]helper$"
+                  },
+                  "field": "agent_did"
+                }
+              }
             }
           },
           "fields": [
@@ -127,79 +88,79 @@
             "target_node_did",
             "agent_did"
           ]
+        },
+        {
+          "kind": "documents",
+          "name": "helper_sessions",
+          "collection": "AgentSession",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^checking[ -]helper$"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            }
+          },
+          "fields": [
+            "session_id",
+            "agent_did",
+            "title",
+            "stopped_at"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "agents": {
+              "agents": "agents",
+              "contexts": "contexts",
+              "tools": "tools",
+              "expect": [
+                {
+                  "agent_did": "checking-helper",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^checking[ -]helper$"
+                  },
+                  "agent": [
+                    {
+                      "field": "enabled",
+                      "equals": true
+                    }
+                  ]
+                }
+              ]
+            },
+            "present": [
+              {
+                "capture": "helper_targets",
+                "min": 1
+              },
+              {
+                "capture": "helper_sessions",
+                "max": 0
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
         }
       ]
     },
     {
       "stage_id": "caller-selects-target",
-      "prompt": "Create Coordinator for organizing checks, with its own instructions and access to the same Checking Helper. Reuse the existing helper connection; keep your own helper list unchanged. Set this up without sending a message yet.",
-      "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "config"
-            ],
-            "forbidden": [
-              "bash"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "targets",
-            "min": 1
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "agents": {
-              "agents": "agents",
-              "contexts": "contexts",
-              "tools": "tools",
-              "expect": [
-                {
-                  "agent_did": "gents:agent-slot:engineer",
-                  "delegates": {
-                    "targets": "targets",
-                    "agents": [
-                      "checking-helper"
-                    ]
-                  }
-                },
-                {
-                  "agent_did": "coordinator",
-                  "delegates": {
-                    "targets": "targets",
-                    "agents": [
-                      "checking-helper"
-                    ]
-                  },
-                  "source_match": {
-                    "field": "display_name",
-                    "matches": "(?i)\\bcoordinator\\b"
-                  }
-                },
-                {
-                  "agent_did": "checking-helper",
-                  "source_match": {
-                    "field": "display_name",
-                    "matches": "(?i)^checking[ -]helper$"
-                  }
-                }
-              ]
-            }
-          },
-          "tier": "acceptance",
-          "weight": 1
-        }
-      ],
+      "prompt": "Create a Coordinator assistant for organizing checks that you can hand work to. It should be able to hand work to the same Checking Helper itself; reuse the existing connection. Do not message either yet.",
       "capture": [
         {
           "kind": "documents",
@@ -215,7 +176,8 @@
             "display_name",
             "context_id",
             "enabled",
-            "inference_profile_id"
+            "inference_profile_id",
+            "tags"
           ]
         },
         {
@@ -229,8 +191,8 @@
           },
           "fields": [
             "context_id",
-            "tools_id",
-            "system_prompt"
+            "system_prompt",
+            "tools_id"
           ]
         },
         {
@@ -246,8 +208,68 @@
             "tools_id",
             "host",
             "datastore",
+            "self_config",
             "agents",
-            "self_config"
+            "remote",
+            "built_ins",
+            "integrations"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "helper_targets",
+          "collection": "AgentTarget",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^coordinator$"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            }
+          },
+          "fields": [
+            "target_id",
+            "node_did",
+            "name",
+            "target_node_did",
+            "agent_did"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "helper_sessions",
+          "collection": "AgentSession",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^coordinator$"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            }
+          },
+          "fields": [
+            "session_id",
+            "agent_did",
+            "title",
+            "stopped_at"
           ]
         },
         {
@@ -266,111 +288,105 @@
             "target_node_did",
             "agent_did"
           ]
+        },
+        {
+          "kind": "documents",
+          "name": "checking_targets",
+          "collection": "AgentTarget",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^checking[ -]helper$"
+                  },
+                  "field": "agent_did"
+                }
+              }
+            }
+          },
+          "fields": [
+            "target_id",
+            "node_did",
+            "name",
+            "target_node_did",
+            "agent_did"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "agents": {
+              "agents": "agents",
+              "contexts": "contexts",
+              "tools": "tools",
+              "expect": [
+                {
+                  "agent_did": "coordinator",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^coordinator$"
+                  },
+                  "agent": [
+                    {
+                      "field": "enabled",
+                      "equals": true
+                    }
+                  ],
+                  "delegates": {
+                    "targets": "targets",
+                    "agents": [
+                      "checking-helper"
+                    ]
+                  }
+                },
+                {
+                  "agent_did": "checking-helper",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^checking[ -]helper$"
+                  },
+                  "agent": [
+                    {
+                      "field": "enabled",
+                      "equals": true
+                    }
+                  ]
+                }
+              ]
+            },
+            "present": [
+              {
+                "capture": "helper_targets",
+                "min": 1
+              },
+              {
+                "capture": "helper_sessions",
+                "max": 0
+              },
+              {
+                "capture": "checking_targets",
+                "min": 1,
+                "max": 1
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
         }
       ]
     },
     {
       "stage_id": "delegate",
-      "prompt": "Ask Checking Helper to reply with exactly PONG-7391 and report its reply when it arrives.",
-      "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "agent_new"
-            ],
-            "forbidden": [
-              "bash"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "helper-session",
-            "min": 1
-          },
-          "tier": "acceptance",
-          "weight": 2
-        },
-        {
-          "check": "captured_fields_match",
-          "params": {
-            "name": "helper-request",
-            "expect": [
-              {
-                "field": "content",
-                "contains": "PONG-7391"
-              },
-              {
-                "field": "lifecycle_state",
-                "equals": "completed"
-              },
-              {
-                "field": "terminal_output",
-                "contains": "message_doc_id"
-              }
-            ],
-            "max_rows": 1
-          },
-          "tier": "acceptance",
-          "weight": 2
-        },
-        {
-          "check": "crew_spec_match",
-          "params": {
-            "links": [
-              {
-                "capture": "helper-request",
-                "field": "caused_by_parent_tool_call_doc_id",
-                "target_capture": "delegation_calls",
-                "target_key": "_docID",
-                "expect": [
-                  {
-                    "field": "lifecycle_state",
-                    "equals": "completed"
-                  },
-                  {
-                    "field": "completion_notification_delivered_at",
-                    "matches": "^[0-9]{4}-"
-                  }
-                ],
-                "source_match": {
-                  "field": "content",
-                  "contains": "PONG-7391"
-                },
-                "exact": true
-              },
-              {
-                "capture": "helper-request",
-                "source_match": {
-                  "field": "content",
-                  "contains": "PONG-7391"
-                },
-                "field": "session_id",
-                "target_capture": "helper-session",
-                "target_key": "session_id",
-                "exact": true
-              }
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 2
-        },
-        {
-          "check": "final_message_matches",
-          "params": {
-            "all": [
-              "PONG-7391"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        }
-      ],
+      "prompt": "Ask Coordinator to get the reply PONG-7391 from Checking Helper and pass it back to you. Tell me what came back.",
+      "settle": true,
       "capture": [
         {
           "kind": "documents",
@@ -410,7 +426,8 @@
           "fields": [
             "session_id",
             "agent_did",
-            "node_did"
+            "title",
+            "stopped_at"
           ]
         },
         {
@@ -435,6 +452,12 @@
             },
             "purpose": {
               "_eq": "normal"
+            },
+            "content": {
+              "_like": "%PONG-7391%"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
             }
           },
           "fields": [
@@ -444,35 +467,110 @@
             "content",
             "lifecycle_state",
             "terminal_output",
-            "caused_by_parent_tool_call_doc_id"
+            "caused_by_parent_tool_call_doc_id",
+            "caused_by_parent_request_id"
           ]
         },
         {
           "kind": "documents",
-          "name": "delegation_calls",
-          "collection": "AgentToolCall",
+          "name": "coordinator_requests",
+          "collection": "AgentRequest",
           "filter": {
             "node_did": {
               "_eq": "$trial"
             },
-            "tool_name": {
-              "_in": [
-                "agent_new",
-                "agent_message"
-              ]
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^coordinator$"
+                  },
+                  "field": "agent_did"
+                }
+              }
             },
-            "request_id": {
-              "_eq": "$request"
+            "purpose": {
+              "_eq": "normal"
             }
           },
           "fields": [
-            "_docID",
+            "request_id",
+            "agent_did",
+            "session_id",
+            "content",
             "lifecycle_state",
-            "completion_notification_delivered_at"
+            "terminal_output",
+            "caused_by_parent_tool_call_doc_id",
+            "caused_by_parent_request_id"
           ]
         }
       ],
-      "settle": true
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "links": [
+              {
+                "capture": "helper-request",
+                "source_match": {
+                  "field": "content",
+                  "contains": "PONG-7391"
+                },
+                "field": "caused_by_parent_request_id",
+                "target_capture": "coordinator_requests",
+                "target_key": "request_id",
+                "exact": true,
+                "expect": [
+                  {
+                    "field": "lifecycle_state",
+                    "equals": "completed"
+                  }
+                ]
+              },
+              {
+                "capture": "helper-request",
+                "source_match": {
+                  "field": "content",
+                  "contains": "PONG-7391"
+                },
+                "field": "session_id",
+                "target_capture": "helper-session",
+                "target_key": "session_id",
+                "exact": true
+              }
+            ],
+            "present": [
+              {
+                "capture": "helper-session",
+                "min": 1
+              },
+              {
+                "capture": "helper-request",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "capture": "coordinator_requests",
+                "min": 1
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              "PONG-7391"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
     }
   ]
 }

@@ -6,71 +6,55 @@
     "files": [
       {
         "path": "orders.csv",
-        "contents": "order_id,state\nFS17,settled\nFS18,settled\nFS19,cancelled\nFS20,settled\n"
+        "contents": "order_id,state\nFS10,settled\nFS11,settled\nFS12,settled\nFS13,settled\nFS14,settled\nFS15,cancelled\nFS16,cancelled\nFS17,settled\nFS18,open\nFS19,settled\nFS20,open\nFS21,settled\nFS22,settled\nFS23,settled\nFS24,open\nFS25,settled\nFS26,open\nFS27,cancelled\nFS28,cancelled\nFS29,settled\nFS30,cancelled\nFS31,settled\nFS32,cancelled\nFS33,settled\nFS34,settled\nFS35,settled\nFS36,settled\nFS37,open\nFS38,settled\nFS39,settled\n"
       },
       {
         "path": "refunds.csv",
-        "contents": "refund_id,order_id,paid,due\nRF4,FS17,no,19/11/2026\nRF1,FS18,no,20/11/2026\nRF7,FS19,no,11/11/2026\nRF2,FS17,yes,14/11/2026\nRF6,FS11,no,01/11/2026\nRF3,FS20,no,28/10/2026\nRF9,FS20,no,27/11/2026\nRF5,FS18,no,02/12/2026\n"
+        "contents": "refund_id,order_id,paid,due\nRF1,FS37,yes,24/11/2026\nRF2,FS32,no,17/11/2026\nRF3,FS35,no,20/11/2026\nRF4,FS36,no,04/12/2026\nRF5,FS23,no,04/11/2026\nRF6,FS26,no,04/12/2026\nRF7,FS30,yes,08/11/2026\nRF8,FS24,yes,20/11/2026\nRF9,FS37,no,01/12/2026\nRF10,FS6,yes,24/11/2026\nRF11,FS11,yes,04/12/2026\nRF12,FS10,yes,12/11/2026\nRF13,FS29,yes,04/11/2026\nRF14,FS33,yes,03/11/2026\nRF15,FS30,yes,04/11/2026\nRF16,FS22,yes,27/11/2026\nRF17,FS5,yes,10/11/2026\nRF18,FS38,yes,21/11/2026\nRF19,FS16,yes,26/11/2026\nRF20,FS39,no,05/11/2026\nRF21,FS14,yes,14/11/2026\nRF22,FS36,no,21/11/2026\nRF23,FS10,yes,11/11/2026\nRF24,FS33,no,06/11/2026\nRF25,FS17,no,11/11/2026\nRF26,FS26,yes,27/11/2026\nRF27,FS26,no,23/11/2026\nRF28,FS18,no,29/11/2026\nRF29,FS17,no,29/11/2026\nRF30,FS18,no,24/11/2026\nRF31,FS11,no,16/11/2026\nRF32,FS17,no,21/11/2026\nRF33,FS30,no,27/11/2026\nRF34,FS25,yes,31/10/2026\nRF35,FS12,yes,20/11/2026\nRF36,FS6,yes,28/11/2026\nRF37,FS11,no,26/11/2026\nRF38,FS26,yes,07/11/2026\nRF39,FS24,yes,01/11/2026\nRF40,FS19,yes,16/11/2026\n"
       }
     ]
   },
   "stages": [
     {
       "stage_id": "query",
-      "prompt": "Reconcile orders.csv and refunds.csv for the finance desk with a SQL query over the two files. As of 20 November 2026, which refunds for settled orders are unpaid and overdue? The due dates are day/month/year, and due today is still on time. Leave the files alone and reply with one JSON object whose overdue key lists the refund IDs, sorted.",
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "file_changes",
-          "collection": "ToolFileChange",
-          "filter": {
-            "node_did": {
-              "_eq": "$trial"
-            }
-          },
-          "fields": [
-            "tool_call_doc_id",
-            "session_id",
-            "file_changes"
-          ]
-        }
-      ],
+      "prompt": "As of 20 November 2026, which refunds for settled orders are unpaid and overdue? The due dates in refunds.csv are day/month/year, and a refund due today is still on time. Save them to overdue_refunds.csv for the finance desk and tell me how many there are.",
       "checks": [
         {
-          "check": "tool_calls_expected",
+          "check": "captured_files_match",
           "params": {
-            "required": [
-              "data_tables"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "captured_rows_count",
-          "params": {
-            "name": "file_changes",
-            "min": 0,
-            "max": 0
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
-        {
-          "check": "tool_result_matches",
-          "params": {
+            "name": "workspace",
             "expect": [
               {
-                "field": "row_count",
-                "equals": 2
+                "path": "orders.csv",
+                "sha256": "a387c686a4606c87f53084e9b040b41048c1fc4ad55a9d5bdb7e2dbbeb346623"
               },
               {
-                "field": "rows",
-                "contains": "RF3"
+                "path": "refunds.csv",
+                "sha256": "800ef2f266a7553d60451ca8620db99225c8a74fd83ed80951b6132ad1dae312"
               },
               {
-                "field": "rows",
-                "contains": "RF4"
+                "path": "overdue_refunds.csv",
+                "matches": "^[^\\n]*(\\r?\\n[^\\n]+){4,5}(\\r?\\n)?$"
+              },
+              {
+                "path": "overdue_refunds.csv",
+                "matches": "\\bRF5\\b"
+              },
+              {
+                "path": "overdue_refunds.csv",
+                "matches": "\\bRF20\\b"
+              },
+              {
+                "path": "overdue_refunds.csv",
+                "matches": "\\bRF24\\b"
+              },
+              {
+                "path": "overdue_refunds.csv",
+                "matches": "\\bRF25\\b"
+              },
+              {
+                "path": "overdue_refunds.csv",
+                "matches": "\\bRF31\\b"
               }
             ]
           },
@@ -82,12 +66,19 @@
           "params": {
             "all": [
               {
-                "matches": "\"overdue\"\\s*:\\s*\\[\\s*\"RF3\"\\s*,\\s*\"RF4\"\\s*\\]"
+                "matches": "(?i)\\b(5|five)\\b[^.\\n]{0,40}\\b(refunds?|overdue)|\\b(refunds?|overdue)[^.\\n]{0,60}\\b(5|five)\\b"
               }
             ]
           },
           "tier": "acceptance",
           "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "file",
+          "name": "workspace",
+          "glob": "*.csv"
         }
       ]
     }

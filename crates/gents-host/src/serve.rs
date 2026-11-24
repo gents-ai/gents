@@ -1004,7 +1004,6 @@ async fn serve_foreground(
             if applied_pack.is_some() {
                 let probe_options = gents_inference::backends::health::BackendProberOptions::default();
                 let probe_client = reqwest::Client::builder()
-                    .timeout(probe_options.probe_timeout)
                     .build()
                     .context("building post-apply backend probe client")?;
                 let probe_outcome = gents_inference::backends::health::run_backend_probe_cycle(

@@ -1,0 +1,3 @@
+---- MODULE MCOwnToolsRebindingWrittenDocument ----
+EXTENDS OwnToolsRebinding
+====

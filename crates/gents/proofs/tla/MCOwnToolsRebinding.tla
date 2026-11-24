@@ -1,0 +1,3 @@
+---- MODULE MCOwnToolsRebinding ----
+EXTENDS OwnToolsRebinding
+====

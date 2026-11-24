@@ -95,7 +95,7 @@ theorem conflicting_expected_counts_reject :
     decision [parent,child] [physicalEdge] 10 20 1 .trigger entry
       {contract with countValid := false} [first,second] = .reject := by decide
 
-private def goal : Goals.State := ⟨.active,0,false,false⟩
+private def goal : Goals.State := ⟨.active, false, false⟩
 
 theorem unmet_chain_cannot_complete_goal :
     completeGoal goal (decision [parent,child] [physicalEdge] 10 20 1 .trigger

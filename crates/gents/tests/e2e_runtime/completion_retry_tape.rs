@@ -22,7 +22,7 @@ use crate::support::builder_runtime::{
 };
 use crate::support::interrupt::{wait_for_request_terminal_state, BootedAgent};
 use crate::support::snapshots::fetch_request_snapshot;
-use crate::support::{first_row, test_db};
+use crate::support::{first_row, trial_store};
 use gents_inference::test_support::scripted_backend::{
     ScriptedBackend, StreamChunk, StreamPlan, StreamResponse, StreamScript,
 };
@@ -49,7 +49,7 @@ async fn backend_restart_cluster_recovers() {
         })
         .collect::<Vec<_>>();
     let backend = ScriptedBackend::start_with_plans(RETRY_MODEL, plans).unwrap();
-    let db = test_db("completion-retry-cluster").await;
+    let db = trial_store("completion-retry-cluster").await;
     let (actors, agent) =
         boot_retry_agent(&db, backend.endpoint(), 3, UNREACHED_DEADLINE.as_secs()).await;
 
@@ -139,7 +139,7 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
         )],
     )
     .unwrap();
-    let db = test_db("completion-retry-backoff-liveness").await;
+    let db = trial_store("completion-retry-backoff-liveness").await;
     let unreached_backoff_ms = i64::try_from(UNREACHED_DEADLINE.as_millis()).unwrap();
     let (actors, runtime) = build_retry_agent_with_liveness(
         &db,
@@ -309,7 +309,7 @@ async fn deadline_tight_fails_cleanly() {
         )],
     )
     .unwrap();
-    let db = test_db("completion-retry-deadline-tight").await;
+    let db = trial_store("completion-retry-deadline-tight").await;
     let deadline_duration_secs = 1u64;
     let (actors, agent) =
         boot_retry_agent(&db, backend.endpoint(), 1, deadline_duration_secs).await;
@@ -384,7 +384,7 @@ async fn interactive_budget_is_quick() {
     let backend =
         ScriptedBackend::start_with_plans(RETRY_MODEL, vec![StreamPlan::new(marker, responses)])
             .unwrap();
-    let db = test_db("completion-retry-interactive-budget").await;
+    let db = trial_store("completion-retry-interactive-budget").await;
     let (actors, agent) =
         boot_retry_agent(&db, backend.endpoint(), 1, UNREACHED_DEADLINE.as_secs()).await;
 
@@ -512,7 +512,7 @@ async fn start_stall_tape(
     execution_origin: &str,
 ) -> (
     ScriptedBackend,
-    crate::support::TestDb,
+    gents_store::test_support::TestStore,
     RequestActors,
     BootedAgent,
     String,
@@ -521,7 +521,7 @@ async fn start_stall_tape(
         ScriptedBackend::start_with_plans(RETRY_MODEL, vec![StreamPlan::new(marker, responses)])
             .unwrap();
     let test_name = format!("completion-retry-{marker}");
-    let db = test_db(&test_name).await;
+    let db = trial_store(&test_name).await;
     let actors = builder_actors(&db, RETRY_BACKEND_ID, backend.endpoint(), RETRY_MODEL, 1).await;
     let runtime = fixture_agent(
         runtime_builder(&db, &actors).tool_ceiling(ToolCeiling::meta_only()),
@@ -595,7 +595,7 @@ async fn provider_headers_that_never_arrive_fail_the_attempt_and_retry() {
     assert_stall_recovered(
         marker,
         vec![
-            StreamResponse::HoldHeaders(StreamScript::completes(marker, ["never released"])),
+            StreamResponse::completes(marker, ["never released"]).after(marker),
             StreamResponse::completes(marker, ["recovered after header stall"]),
         ],
     )
@@ -679,7 +679,7 @@ async fn deterministic_400_tape() {
         )],
     )
     .unwrap();
-    let db = test_db("completion-retry-deterministic-400").await;
+    let db = trial_store("completion-retry-deterministic-400").await;
     let (actors, agent) =
         build_retry_agent(&db, backend.endpoint(), 1, UNREACHED_DEADLINE.as_secs()).await;
     let request_id = "req-deterministic-400";
@@ -714,8 +714,130 @@ async fn deterministic_400_tape() {
     agent.shutdown().await;
 }
 
+/// A call records its first token when the provider streams it, not when the
+/// call is dispatched: the backend holds the stream open after the request
+/// arrives, and the token follows the release. An attempt that fails before a
+/// token records none, and its retry records its own.
+#[tokio::test]
+async fn first_token_at_is_when_each_attempt_streamed_its_first_token() {
+    let held = "first-token-held";
+    let retried = "first-token-retried";
+    let backend = ScriptedBackend::start_with_plans(
+        RETRY_MODEL,
+        vec![
+            StreamPlan::new(
+                held,
+                vec![StreamResponse::Stream(StreamScript::paused_before(
+                    held,
+                    vec![StreamChunk::text("released first token")],
+                ))],
+            ),
+            StreamPlan::new(
+                retried,
+                vec![
+                    StreamResponse::service_unavailable(format!(
+                        "HTTP status 503 before any token for {retried}"
+                    )),
+                    StreamResponse::completes(retried, ["token after the retry"]),
+                ],
+            ),
+        ],
+    )
+    .unwrap();
+    let db = test_db("completion-retry-first-token").await;
+    let (actors, agent) =
+        boot_retry_agent(&db, backend.endpoint(), 1, UNREACHED_DEADLINE.as_secs()).await;
+
+    let held_doc = submit_request(
+        &actors,
+        "req-first-token-held",
+        "session-first-token-held",
+        "interactive",
+        &format!("answer once the stream is released {held}"),
+    )
+    .await;
+    backend.wait_for_request(held).await;
+    let released_at = chrono::Utc::now();
+    backend.release(held);
+    assert_eq!(
+        wait_for_request_terminal_state(&actors, &held_doc).await,
+        RequestLifecycleState::Completed
+    );
+    let calls = fetch_first_tokens(&actors, "req-first-token-held").await;
+    let [call] = calls.as_slice() else {
+        panic!("one streamed attempt: {calls:?}");
+    };
+    let first_token = rfc3339(call.first_token_at.as_deref());
+    assert!(
+        rfc3339(call.started_at.as_deref()) < released_at
+            && released_at <= first_token
+            && first_token <= rfc3339(call.ended_at.as_deref()),
+        "the first token follows the release, not the dispatch (released {released_at}): {call:?}"
+    );
+
+    let retried_doc = submit_request(
+        &actors,
+        "req-first-token-retried",
+        "session-first-token-retried",
+        "interactive",
+        &format!("answer after a refused attempt {retried}"),
+    )
+    .await;
+    assert_eq!(
+        wait_for_request_terminal_state(&actors, &retried_doc).await,
+        RequestLifecycleState::Completed
+    );
+    let calls = fetch_first_tokens(&actors, "req-first-token-retried").await;
+    let [refused, recovered] = calls.as_slice() else {
+        panic!("a refused attempt and its retry: {calls:?}");
+    };
+    assert_eq!(
+        (
+            refused.call_state.as_str(),
+            refused.first_token_at.as_deref()
+        ),
+        ("failed", None),
+        "{calls:?}"
+    );
+    let first_token = rfc3339(recovered.first_token_at.as_deref());
+    assert!(
+        recovered.call_state == "completed"
+            && rfc3339(recovered.started_at.as_deref()) <= first_token
+            && first_token <= rfc3339(recovered.ended_at.as_deref()),
+        "{calls:?}"
+    );
+    agent.shutdown().await;
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct FirstTokenRow {
+    call_state: String,
+    started_at: Option<String>,
+    first_token_at: Option<String>,
+    ended_at: Option<String>,
+}
+
+async fn fetch_first_tokens(actors: &RequestActors, request_id: &str) -> Vec<FirstTokenRow> {
+    let request_id = escape_graphql_string(request_id);
+    let response = actors
+        .query(&format!(
+            r#"{{ InferenceCall(
+                filter: {{ request_id: {{ _eq: "{request_id}" }}, call_kind: {{ _eq: "inference" }} }},
+                order: {{ call_seq: ASC }}
+            ) {{ call_state started_at first_token_at ended_at }} }}"#
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "fetch first tokens failed: {:?}",
+        response.errors
+    );
+    serde_json::from_value(response.data.expect("first token rows")["InferenceCall"].clone())
+        .expect("decode first token rows")
+}
+
 async fn boot_retry_agent(
-    db: &crate::support::TestDb,
+    db: &gents_store::test_support::TestStore,
     endpoint: &str,
     max_concurrent: usize,
     deadline_duration_secs: u64,
@@ -734,7 +856,7 @@ async fn boot_retry_agent(
 }
 
 async fn build_retry_agent(
-    db: &crate::support::TestDb,
+    db: &gents_store::test_support::TestStore,
     endpoint: &str,
     max_concurrent: usize,
     deadline_duration_secs: u64,
@@ -751,7 +873,7 @@ async fn build_retry_agent(
 }
 
 async fn build_retry_agent_with_liveness(
-    db: &crate::support::TestDb,
+    db: &gents_store::test_support::TestStore,
     endpoint: &str,
     max_concurrent: usize,
     deadline_duration_secs: u64,

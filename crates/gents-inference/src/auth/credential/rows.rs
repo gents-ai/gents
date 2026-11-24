@@ -96,6 +96,9 @@ pub(super) fn credential_input(credential: &OAuthCredential, omitted: &[&str]) -
     for field in omitted {
         object.remove(*field);
     }
+    if let Some(email) = token_account_email(credential) {
+        object.insert("account_email".to_owned(), Value::String(email));
+    }
     Ok(input)
 }
 

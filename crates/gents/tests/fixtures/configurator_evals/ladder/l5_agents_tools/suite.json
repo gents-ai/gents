@@ -9,7 +9,5 @@
     "missing target refusal",
     "existing-thread message",
     "agent_stop"
-  ],
-  "subject": "ladder/engineer_subject",
-  "preset_self_config": true
+  ]
 }

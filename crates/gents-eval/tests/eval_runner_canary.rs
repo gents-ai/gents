@@ -589,6 +589,102 @@ async fn a_failing_first_stage_skips_the_second_and_grades_it_skipped_prerequisi
 }
 
 #[tokio::test]
+async fn a_slot_whose_provider_dropped_its_streams_is_attempted_again() {
+    let backend = ScriptedBackend::start_with_plans(MODEL, answering_plans()).unwrap();
+    backend.hold(SOLO_MARKER).close();
+    let (canary, mut request) = canary_request(backend.endpoint(), "run-dropped").await;
+    request.case_ids = Some(vec!["one-stage".into()]);
+    request.max_infra_retries = 2;
+    let executor = canary.executor();
+    let registry = CheckRegistry::builtin();
+    let options = RunOptions::default();
+    let mut trial_changes =
+        gents_store::subscription_source::subscribe_collections(&canary._home.node, ["EvalTrial"])
+            .unwrap();
+    let provider_returns = async {
+        loop {
+            let trials = load_trials(&canary.access, &request.owner, &request.run_id)
+                .await
+                .unwrap();
+            if trials.iter().any(|trial| trial.completion.is_some()) {
+                backend.release(SOLO_MARKER);
+                break;
+            }
+            trial_changes
+                .recv()
+                .await
+                .expect("the trial change stream stays open");
+        }
+    };
+
+    let (outcome, ()) = tokio::join!(
+        run(
+            &canary.access,
+            &request,
+            &executor,
+            &registry,
+            CancellationToken::new(),
+            &options,
+        ),
+        provider_returns
+    );
+    let outcome = outcome.unwrap();
+
+    let mut trials = load_trials(&canary.access, &request.owner, &request.run_id)
+        .await
+        .unwrap();
+    trials.sort_by_key(|trial| trial.identity.attempt);
+    assert_eq!(
+        (
+            outcome.completed,
+            outcome.not_evidence,
+            outcome.breaker_tripped
+        ),
+        (2, 0, false),
+        "{trials:#?}"
+    );
+    let stages = |trial: &TrialRecord| {
+        trial
+            .completion
+            .as_ref()
+            .unwrap()
+            .stages
+            .iter()
+            .map(|stage| (stage.failure_kind, stage.provider_reason))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        trials.iter().map(stages).collect::<Vec<_>>(),
+        [
+            vec![(
+                Some(OutcomeKind::Provider),
+                Some(ProviderReason::Unavailable)
+            )],
+            vec![(None, None)],
+        ],
+        "{trials:#?}"
+    );
+
+    let report = gents_eval::report::load_report(
+        &canary.access,
+        &request.owner,
+        &canary.runs_dir(),
+        &request.run_id,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        report.cells[0]
+            .slots
+            .iter()
+            .map(|slot| (slot.case_id.as_str(), slot.class, slot.attempts))
+            .collect::<Vec<_>>(),
+        [("one-stage", gents_eval::report::SlotClass::Pass, 2)],
+        "the report counts the slot once, by its latest attempt"
+    );
+}
+
+#[tokio::test]
 async fn a_finished_trial_exports_the_bodies_its_provider_received_and_the_message_it_ended_on() {
     const REASONING: &str = "weighing what the canary should report";
     let mut plans = answering_plans();
@@ -728,7 +824,7 @@ async fn a_finished_trial_exports_the_bodies_its_provider_received_and_the_messa
 
 #[tokio::test]
 async fn a_responses_backend_runs_its_trial_without_a_sampling_seed() {
-    let backend = support::mock_endpoint::MockModelEndpoint::start(MODEL).unwrap();
+    let backend = ScriptedBackend::start(MODEL, Vec::new()).unwrap();
     let (canary, mut request) = canary_request(backend.endpoint(), "run-responses").await;
     let mut responses = backend_document(
         &canary.owner,
@@ -798,8 +894,10 @@ async fn a_responses_backend_runs_its_trial_without_a_sampling_seed() {
 
 #[tokio::test]
 async fn a_responses_reasoning_backend_runs_a_second_request_in_the_session() {
-    let backend =
-        support::mock_endpoint::MockModelEndpoint::start_with_reasoning_tool_turns(MODEL).unwrap();
+    let backend = ScriptedBackend::builder(MODEL)
+        .unscripted(gents_inference::test_support::scripted_backend::Unscripted::ReasoningToolTurn)
+        .start()
+        .unwrap();
     let (canary, mut request) = canary_request(backend.endpoint(), "run-responses-replay").await;
     let mut responses = backend_document(
         &canary.owner,
@@ -1228,6 +1326,7 @@ async fn canary_request(endpoint: &str, run_id: &str) -> (Canary, RunRequest) {
             },
         ],
         runs_dir: canary.runs_dir(),
+        divergences: None,
     };
     (canary, request)
 }

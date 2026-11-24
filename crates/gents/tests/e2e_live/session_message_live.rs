@@ -28,8 +28,9 @@ use crate::support::live_inference::{
     live_target, terminal_assistant_answer, wait_for_assistant_answer, wait_for_request_terminal,
     InferenceTarget, LiveAgentSpec, LiveUser,
 };
-use crate::support::{first_optional_row, snapshots::fetch_runtime_snapshot, test_db, TestDb};
+use crate::support::{first_optional_row, snapshots::fetch_runtime_snapshot, trial_store};
 use gents_store::test_support::snapshot_reader::{SnapshotChanges, SnapshotReader};
+use gents_store::test_support::TestStore;
 use gents_store::test_support::STALL_CEILING;
 
 const RESEARCHER_AGENT_NAME: &str = "live-researcher";
@@ -58,7 +59,7 @@ fn completion_marker(tool_call_id: &str, tool_name: &str) -> String {
 async fn live_local_create_session() -> Result<()> {
     let target = live_target().await;
 
-    let db = test_db("session-message-live-local").await;
+    let db = trial_store("session-message-live-local").await;
     let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
     let node_did = identity.did().to_string();
     let profile_id = format!("{node_did}:orchestrator-inference");
@@ -266,7 +267,7 @@ Wait for that foreground tool call to finish, then reply exactly CHILD_MANAGED_S
 If you receive a message STEERING_NOTE, do not call any tool for it; append STEERING_ACK to your final reply."#
     );
 
-    let db = test_db("backgrounding-live-standard-path").await;
+    let db = trial_store("backgrounding-live-standard-path").await;
     let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
     let node_did = identity.did().to_string();
     let profile_id = format!("{node_did}:orchestrator-inference");
@@ -309,7 +310,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
+            backend_admission: Some(db.backend_admission()),
             tool_ceiling: ToolCeiling::readwrite(workspace.path()).with_command_timeout_secs(180),
             ..Default::default()
         },
@@ -834,7 +835,7 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
     let alpha_second = code_word("ALPHATWO");
     let beta_first = code_word("BETA");
 
-    let db = test_db("session-message-live-fan-out").await;
+    let db = trial_store("session-message-live-fan-out").await;
     let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
     let node_did = identity.did().to_string();
     let profile_id = format!("{node_did}:orchestrator-inference");
@@ -1106,7 +1107,7 @@ async fn live_agent_interrupt_is_spawner_only() -> Result<()> {
     let release = ProcessGate::new(workspace.path()).await;
     let blocked_args = blocked_bash_args("BLOCKER_STARTED", &release, "BLOCKER_DONE");
 
-    let db = test_db("session-message-live-interrupt").await;
+    let db = trial_store("session-message-live-interrupt").await;
     let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
     let node_did = identity.did().to_string();
     let profile_id = format!("{node_did}:orchestrator-inference");
@@ -1307,7 +1308,7 @@ async fn live_hop_bound_stops_chain() -> Result<()> {
     init_live_test_tracing();
     let target = live_target().await;
 
-    let db = test_db("session-message-live-hop").await;
+    let db = trial_store("session-message-live-hop").await;
     let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
     let node_did = identity.did().to_string();
     let profile_id = format!("{node_did}:orchestrator-inference");
@@ -1461,7 +1462,7 @@ agent_new returns, including an error, then reply exactly RELAY_DONE and call no
 }
 
 struct LiveNode {
-    db: TestDb,
+    db: TestStore,
     live: LiveUser,
     identity: Arc<dyn NodeIdentity>,
     did: String,
@@ -1471,7 +1472,7 @@ struct LiveNode {
 
 impl LiveNode {
     async fn new(name: &str, target: &InferenceTarget, orchestrator_prompt: &str) -> Self {
-        let db = test_db(name).await;
+        let db = trial_store(name).await;
         let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
         let did = identity.did().to_string();
         let profile = format!("{did}:orchestrator-inference");
@@ -1498,7 +1499,7 @@ impl LiveNode {
         }
     }
 
-    fn db(&self) -> &TestDb {
+    fn db(&self) -> &TestStore {
         &self.db
     }
 
@@ -2630,12 +2631,15 @@ tell the user the research is under way without calling any other tool. Do not a
 questions yourself. When a background completion notification arrives, relay its answer to the user \
 without calling any tool.";
 
-async fn boot_document_agent(db: &TestDb, identity: Arc<dyn NodeIdentity>) -> Result<BootedAgent> {
+async fn boot_document_agent(
+    db: &TestStore,
+    identity: Arc<dyn NodeIdentity>,
+) -> Result<BootedAgent> {
     let agent = Gents::from_default_agent_documents(
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
+            backend_admission: Some(db.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -2644,7 +2648,7 @@ async fn boot_document_agent(db: &TestDb, identity: Arc<dyn NodeIdentity>) -> Re
     Ok(boot_loaded_document_agent(db, agent).await)
 }
 
-async fn boot_loaded_document_agent(db: &TestDb, agent: Gents) -> BootedAgent {
+async fn boot_loaded_document_agent(db: &TestStore, agent: Gents) -> BootedAgent {
     let node_did = agent.node_did().to_string();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
@@ -2653,7 +2657,7 @@ async fn boot_loaded_document_agent(db: &TestDb, agent: Gents) -> BootedAgent {
 }
 
 async fn boot_workspace_agent(
-    db: &TestDb,
+    db: &TestStore,
     identity: Arc<dyn NodeIdentity>,
     workspace: &Path,
 ) -> Result<BootedAgent> {
@@ -2661,7 +2665,7 @@ async fn boot_workspace_agent(
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
+            backend_admission: Some(db.backend_admission()),
             tool_ceiling: ToolCeiling::readwrite(workspace)
                 .with_command_timeout_secs(BLOCKED_COMMAND_TIMEOUT_SECS),
             ..Default::default()
@@ -2682,7 +2686,7 @@ fn blocked_bash_args(started: &str, release: &ProcessGate, done: &str) -> serde_
 }
 
 async fn configure_bash_agent_tools(
-    db: &TestDb,
+    db: &TestStore,
     node_did: &str,
     agent_did: &str,
     workspace: &Path,
@@ -2752,7 +2756,7 @@ fn target_documents(targets: Vec<AgentTargetDocument>) -> Vec<(Collection, serde
 }
 
 async fn authorize_session_targets(
-    db: &TestDb,
+    db: &TestStore,
     node_did: &str,
     agent_did: &str,
     targets: Vec<AgentTargetDocument>,
@@ -2774,7 +2778,7 @@ async fn authorize_session_targets(
 }
 
 async fn configure_standard_backgrounding_tools(
-    db: &TestDb,
+    db: &TestStore,
     node_did: &str,
     parent_agent_did: &str,
     child_agent_did: &str,

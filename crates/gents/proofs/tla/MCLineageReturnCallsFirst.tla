@@ -1,0 +1,3 @@
+---- MODULE MCLineageReturnCallsFirst ----
+EXTENDS LineageReturn
+====

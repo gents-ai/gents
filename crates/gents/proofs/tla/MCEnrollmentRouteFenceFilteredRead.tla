@@ -1,0 +1,4 @@
+---- MODULE MCEnrollmentRouteFenceFilteredRead ----
+EXTENDS EnrollmentRouteFence
+
+====

@@ -673,6 +673,9 @@ def SsePayload.toModel (p : SsePayload) : PromptAssembly.ClaudeSse.Payload :=
   | .messageStop => .messageStop
 
 def SseEmitted.ofModel : PromptAssembly.ClaudeSse.Emitted → SseEmitted
+  | .toolName id name =>
+      { kind := "tool_name", text := none, signature := none, id := some id, name := some name
+        arguments := none }
   | .message text =>
       { kind := "message", text := some text, signature := none, id := none, name := none
         arguments := none }

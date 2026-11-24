@@ -12,6 +12,7 @@ pub(super) fn outcome_text(outcome: &PatchOutcome) -> Result<String> {
             "created",
             "changed",
             "effect",
+            "next_turn",
         ],
     )
     .pretty()

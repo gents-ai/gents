@@ -15,10 +15,6 @@ pub fn validate_task_goal_declaration(
                 "goal token budget requires a goal objective template"
             );
             anyhow::ensure!(
-                limits.blocked_audit_threshold.is_none(),
-                "goal blocked-audit threshold requires a goal objective template"
-            );
-            anyhow::ensure!(
                 limits.max_infrastructure_retries.is_none(),
                 "goal infrastructure retry limit requires a goal objective template"
             );
@@ -31,12 +27,6 @@ pub fn validate_task_goal_declaration(
             anyhow::ensure!(
                 token_budget.is_none_or(|budget| budget > 0),
                 "goal token budget must be positive"
-            );
-            anyhow::ensure!(
-                limits
-                    .blocked_audit_threshold
-                    .is_none_or(|threshold| threshold > 0),
-                "goal blocked-audit threshold must be positive"
             );
             anyhow::ensure!(
                 limits

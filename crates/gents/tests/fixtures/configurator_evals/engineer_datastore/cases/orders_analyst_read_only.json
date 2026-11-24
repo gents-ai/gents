@@ -1,0 +1,447 @@
+{
+  "case_id": "orders-analyst-read-only",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type Order { order_id: String @index(unique: true) customer: String status: String total_cents: Int }"
+    ],
+    "documents": [
+      {
+        "collection": "Order",
+        "document": {
+          "order_id": "O-101",
+          "customer": "Halden Cycles",
+          "status": "open",
+          "total_cents": 12000
+        }
+      },
+      {
+        "collection": "Order",
+        "document": {
+          "order_id": "O-102",
+          "customer": "Brook & Vane",
+          "status": "shipped",
+          "total_cents": 8000
+        }
+      },
+      {
+        "collection": "Order",
+        "document": {
+          "order_id": "O-103",
+          "customer": "Halden Cycles",
+          "status": "open",
+          "total_cents": 4500
+        }
+      },
+      {
+        "collection": "Order",
+        "document": {
+          "order_id": "O-104",
+          "customer": "Mossgate Farm",
+          "status": "open",
+          "total_cents": 30000
+        }
+      },
+      {
+        "collection": "Order",
+        "document": {
+          "order_id": "O-105",
+          "customer": "Brook & Vane",
+          "status": "cancelled",
+          "total_cents": 6000
+        }
+      },
+      {
+        "collection": "Order",
+        "document": {
+          "order_id": "O-106",
+          "customer": "Mossgate Farm",
+          "status": "shipped",
+          "total_cents": 15000
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "grant",
+      "prompt": "Set up an agent called Orders analyst that can read the Order table but can't change it.",
+      "checks": [
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "grantee",
+            "min": 1,
+            "max": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "records",
+                "min": 6,
+                "max": 6
+              }
+            ],
+            "rows": [
+              {
+                "capture": "records",
+                "key": "order_id",
+                "id": "O-101",
+                "expect": [
+                  {
+                    "field": "customer",
+                    "equals": "Halden Cycles"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "open"
+                  },
+                  {
+                    "field": "total_cents",
+                    "equals": 12000
+                  }
+                ]
+              },
+              {
+                "capture": "records",
+                "key": "order_id",
+                "id": "O-102",
+                "expect": [
+                  {
+                    "field": "customer",
+                    "equals": "Brook & Vane"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "shipped"
+                  },
+                  {
+                    "field": "total_cents",
+                    "equals": 8000
+                  }
+                ]
+              },
+              {
+                "capture": "records",
+                "key": "order_id",
+                "id": "O-103",
+                "expect": [
+                  {
+                    "field": "customer",
+                    "equals": "Halden Cycles"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "open"
+                  },
+                  {
+                    "field": "total_cents",
+                    "equals": 4500
+                  }
+                ]
+              },
+              {
+                "capture": "records",
+                "key": "order_id",
+                "id": "O-104",
+                "expect": [
+                  {
+                    "field": "customer",
+                    "equals": "Mossgate Farm"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "open"
+                  },
+                  {
+                    "field": "total_cents",
+                    "equals": 30000
+                  }
+                ]
+              },
+              {
+                "capture": "records",
+                "key": "order_id",
+                "id": "O-105",
+                "expect": [
+                  {
+                    "field": "customer",
+                    "equals": "Brook & Vane"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "cancelled"
+                  },
+                  {
+                    "field": "total_cents",
+                    "equals": 6000
+                  }
+                ]
+              },
+              {
+                "capture": "records",
+                "key": "order_id",
+                "id": "O-106",
+                "expect": [
+                  {
+                    "field": "customer",
+                    "equals": "Mossgate Farm"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "shipped"
+                  },
+                  {
+                    "field": "total_cents",
+                    "equals": 15000
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "grantee",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "enabled": {
+              "_eq": true
+            },
+            "display_name": {
+              "_ilike": "%orders analyst%"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "records",
+          "collection": "Order",
+          "filter": {},
+          "fields": [
+            "order_id",
+            "customer",
+            "status",
+            "total_cents"
+          ]
+        }
+      ]
+    },
+    {
+      "stage_id": "exercise",
+      "settle": true,
+      "prompt": "Ask the Orders analyst how many orders are open and what they total in cents. Then have it try to mark O-103 as shipped, and tell me what happened.",
+      "checks": [
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "grantee_runs",
+            "min": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?i)\\b(?:3|three)\\b[^.\\n]{0,60}(?:orders?|open)|(?:orders?|open)[^.\\n]{0,60}?\\b(?:3|three)\\b"
+              },
+              {
+                "matches": "\\b46[,.]?500\\b"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "records",
+                "min": 6,
+                "max": 6
+              }
+            ],
+            "rows": [
+              {
+                "capture": "records",
+                "key": "order_id",
+                "id": "O-101",
+                "expect": [
+                  {
+                    "field": "customer",
+                    "equals": "Halden Cycles"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "open"
+                  },
+                  {
+                    "field": "total_cents",
+                    "equals": 12000
+                  }
+                ]
+              },
+              {
+                "capture": "records",
+                "key": "order_id",
+                "id": "O-102",
+                "expect": [
+                  {
+                    "field": "customer",
+                    "equals": "Brook & Vane"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "shipped"
+                  },
+                  {
+                    "field": "total_cents",
+                    "equals": 8000
+                  }
+                ]
+              },
+              {
+                "capture": "records",
+                "key": "order_id",
+                "id": "O-103",
+                "expect": [
+                  {
+                    "field": "customer",
+                    "equals": "Halden Cycles"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "open"
+                  },
+                  {
+                    "field": "total_cents",
+                    "equals": 4500
+                  }
+                ]
+              },
+              {
+                "capture": "records",
+                "key": "order_id",
+                "id": "O-104",
+                "expect": [
+                  {
+                    "field": "customer",
+                    "equals": "Mossgate Farm"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "open"
+                  },
+                  {
+                    "field": "total_cents",
+                    "equals": 30000
+                  }
+                ]
+              },
+              {
+                "capture": "records",
+                "key": "order_id",
+                "id": "O-105",
+                "expect": [
+                  {
+                    "field": "customer",
+                    "equals": "Brook & Vane"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "cancelled"
+                  },
+                  {
+                    "field": "total_cents",
+                    "equals": 6000
+                  }
+                ]
+              },
+              {
+                "capture": "records",
+                "key": "order_id",
+                "id": "O-106",
+                "expect": [
+                  {
+                    "field": "customer",
+                    "equals": "Mossgate Farm"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "shipped"
+                  },
+                  {
+                    "field": "total_cents",
+                    "equals": 15000
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "grantee_runs",
+          "collection": "AgentRequest",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            },
+            "agent_did": {
+              "_ne": "gents:agent-slot:engineer"
+            },
+            "purpose": {
+              "_eq": "normal"
+            },
+            "lifecycle_state": {
+              "_eq": "completed"
+            }
+          },
+          "fields": [
+            "request_id",
+            "agent_did",
+            "lifecycle_state"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "records",
+          "collection": "Order",
+          "filter": {},
+          "fields": [
+            "order_id",
+            "customer",
+            "status",
+            "total_cents"
+          ]
+        }
+      ]
+    }
+  ]
+}

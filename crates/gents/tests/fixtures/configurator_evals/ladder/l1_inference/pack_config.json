@@ -3,12 +3,20 @@
   "eval_definitions": [
     {
       "definition_id": "configurator-l1-inference",
-      "comparability_version": 9,
+      "comparability_version": 10,
       "title": "Configurator L1 Inference: profile, execution and binding",
       "subject": {
         "kind": "agent",
         "inference_slots": [
           "engineer"
+        ],
+        "core_packs": [
+          "gents/pack_builder",
+          "gents/web",
+          "gents/dynamic_workflows",
+          "gents/charts",
+          "gents/data_tables",
+          "gents/script"
         ]
       },
       "cases": [

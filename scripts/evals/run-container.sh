@@ -25,10 +25,13 @@
 # Each --target is a target file whose endpoint is http://127.0.0.1:<port> on
 # the docker host; slots run --per-replica (default 2) at a time on each and
 # --max-running (default no cap beyond that) in all.
+# Every trial runs the Engineer the image's `gents init --engineer` makes
+# (`gents utils eval subject`), with its suite's fixtures; --subject replaces
+# it with a subject directory.
 # --command-execution names the mode every trial's Engineer runs commands in
-# (GENTS_EVAL_COMMAND_EXECUTION, default off): unrestricted grants the subject
-# host bash as `gents init --tool-package yolo` does and sets
-# GENTS_EVAL_ALLOW_HOST_BASH=1 inside the containers, so it holds there; such
+# (GENTS_EVAL_COMMAND_EXECUTION, default off): unrestricted keeps the host bash
+# and background processes init gives the Engineer and sets
+# GENTS_EVAL_ALLOW_HOST_BASH=1 inside the containers, so they hold there; such
 # a run's summary is marked unauthenticated, since the trial shares a uid with
 # its grader. resume restarts the orchestrator: finished slots stay, the others
 # run again from a fresh eval home. status prints the

@@ -64,7 +64,7 @@ impl Tool for CreateGoalTool {
                         "type": "integer",
                         "minimum": 1,
                         "maximum": i64::MAX,
-                        "description": "Optional positive aggregate token budget for the goal. Omit it to create an uncapped goal with no aggregate limit; there is no default cap."
+                        "description": "Optional positive charged-token budget for the goal. Omit it to create an uncapped goal; there is no default cap. Reaching a budget pauses the goal after one wrap-up turn."
                     }
                 },
                 "required": ["objective"]
@@ -90,7 +90,7 @@ impl Tool for GetGoalTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Read the durable goal attached to the current session, including status, charged token usage, active time, and continuation audit state.".to_string(),
+            description: "Read the durable goal attached to the current session, including status, charged token usage, active time, and continuation state.".to_string(),
             parameters: json!({
                 "type": "object",
                 "additionalProperties": false,
@@ -117,7 +117,7 @@ impl Tool for UpdateGoalTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Edit the active goal's objective or token budget, or mark it complete or blocked. Omit status when editing; edits apply only while the goal is active, and a refusal says how that goal can run again. Completion requires the objective to be achieved; blocked requires the identical reason in consecutive goal turns (3 by default).".to_string(),
+            description: "Edit the active goal's objective or token budget, or mark it complete or blocked. Omit status when editing; edits apply only while the goal is active, and a refusal says how that goal can run again. Completion requires the objective to be achieved. Blocked pauses the goal and hands control to the user: use it when you need something only they can give, not because the work is hard.".to_string(),
             parameters: json!({
                 "type": "object",
                 "additionalProperties": false,
@@ -128,7 +128,7 @@ impl Tool for UpdateGoalTool {
                     },
                     "reason": {
                         "type": "string",
-                        "description": "Concise completion evidence or the repeated blocking condition."
+                        "description": "Concise completion evidence, or what you need from the user."
                     },
                     "objective": {
                         "type": "string",
@@ -139,7 +139,7 @@ impl Tool for UpdateGoalTool {
                         "type": "integer",
                         "minimum": 1,
                         "maximum": i64::MAX,
-                        "description": "Positive aggregate goal budget. Omit to keep the goal's existing budget unchanged (an omitted budget never clears or resets an explicit cap). Budget changes apply to the active goal only; a budget_limited goal cannot be reactivated here."
+                        "description": "Positive aggregate goal budget. Omit to keep the goal's existing budget unchanged (an omitted budget never clears or resets an explicit cap). Budget changes apply to the active goal only; the user raises or lifts the budget of a budget_limited goal."
                     }
                 }
             }),
@@ -209,7 +209,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_goal_help_states_omitted_budget_is_uncapped_with_no_default_cap() {
+    async fn create_goal_help_states_omitted_budget_is_uncapped_and_a_budget_pauses() {
         let tools = build_goal_tools(true);
         let create = tools
             .iter()
@@ -219,8 +219,10 @@ mod tests {
         let budget = &definition.parameters["properties"]["token_budget"];
         let description = budget["description"].as_str().expect("budget description");
         assert!(
-            description.contains("uncapped") && description.contains("no default cap"),
-            "create_goal budget help must say an omitted budget is uncapped with no default cap, got: {description}"
+            description.contains("uncapped")
+                && description.contains("no default cap")
+                && description.contains("pauses the goal"),
+            "create_goal budget help must say an omitted budget is uncapped with no default cap and that reaching a budget pauses the goal, got: {description}"
         );
         assert_eq!(
             budget["required"],
@@ -234,7 +236,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_goal_help_states_omission_preserves_cap_and_no_reactivation() {
+    async fn update_goal_help_states_omission_preserves_cap_and_what_blocked_does() {
         let tools = build_goal_tools(false);
         let update = tools
             .iter()
@@ -267,8 +269,18 @@ mod tests {
             "update_goal budget help must say an omitted budget preserves the existing cap, got: {description}"
         );
         assert!(
-            description.contains("budget_limited goal cannot be reactivated"),
-            "update_goal budget help must say a budget_limited goal cannot be reactivated, got: {description}"
+            description.contains("the user raises or lifts the budget"),
+            "update_goal budget help must say the user raises or lifts a reached budget, got: {description}"
+        );
+        assert!(
+            definition
+                .description
+                .contains("Blocked pauses the goal and hands control to the user")
+                && definition
+                    .description
+                    .contains("not because the work is hard"),
+            "update_goal must say a blocked report pauses the goal, got: {}",
+            definition.description
         );
         assert_eq!(
             definition.parameters["properties"]["status"]["enum"],

@@ -524,7 +524,15 @@ structure BackendControls where
   queuedLimit : Nat
 deriving DecidableEq, Repr
 
-def defaultBackendControls : BackendControls := ⟨10, 10, 1, 100⟩
+/-- The controls of a backend document that sets none: ten-second connection and
+discovery timeouts, four concurrent inference calls and a queue of one hundred.
+
+Decision: the default admits four concurrent calls per backend, for every
+provider kind, so a second session, a delegate Agent or a parallel workflow step
+runs beside the first call on the same backend instead of waiting for it. A
+backend document's `max_concurrent` replaces it, and one session still runs one
+request at a time (`SessionQueueState.active`), whatever the backend admits. -/
+def defaultBackendControls : BackendControls := ⟨10, 10, 4, 100⟩
 
 def resolveBackendControls (connect discovery concurrent queue : Option Int) :
     Option BackendControls := do
@@ -552,7 +560,7 @@ theorem resolved_backend_controls_positive (connect discovery concurrent queue :
         next q hq =>
           have hb1 := ConfigDefaults.resolveNat_lower_bound 10 1 connect c (by decide) hc
           have hb2 := ConfigDefaults.resolveNat_lower_bound 10 1 discovery d (by decide) hd
-          have hb3 := ConfigDefaults.resolveNat_lower_bound 1 1 concurrent n (by decide) hn
+          have hb3 := ConfigDefaults.resolveNat_lower_bound 4 1 concurrent n (by decide) hn
           cases h
           exact ⟨hb1, hb2, hb3⟩
 
@@ -566,7 +574,7 @@ theorem backend_zero_capacity_rejected (connect discovery queue : Option Int) :
   split <;> simp_all
 
 theorem backend_zero_queue_allowed :
-    resolveBackendControls none none none (some 0) = some ⟨10, 10, 1, 0⟩ := rfl
+    resolveBackendControls none none none (some 0) = some ⟨10, 10, 4, 0⟩ := rfl
 
 theorem backend_negative_queue_rejected (queue : Int) (h : queue < 0) :
     resolveBackendControls none none none (some queue) = none := by

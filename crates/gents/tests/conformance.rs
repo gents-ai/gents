@@ -27,7 +27,9 @@ use support::snapshots::{
     fetch_request_lineage_snapshot, fetch_request_snapshot, fetch_request_snapshot_raw,
     fetch_session_snapshot, RequestLineageSnapshot, RequestSnapshot,
 };
-use support::{build_request, first_optional_row, first_row, test_db, BACKEND_ID, DEADLINE_SECS};
+use support::{
+    build_request, first_optional_row, first_row, trial_store, BACKEND_ID, DEADLINE_SECS,
+};
 
 #[path = "conformance/compaction_gate.rs"]
 mod compaction_gate;

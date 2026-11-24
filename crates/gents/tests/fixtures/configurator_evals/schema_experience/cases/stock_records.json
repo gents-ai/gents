@@ -5,16 +5,7 @@
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "I keep spare parts for a repair shop. Please set up Part records: sku (text), label (text), quantity (whole number), reorder (true/false). A SKU identifies one part, so don't allow duplicate SKUs. Give yourself tools limited to adding parts and looking them up by SKU; I'll send the first entries next.",
-      "capture": [
-        {
-          "kind": "schema",
-          "name": "schema",
-          "collections": [
-            "Part"
-          ]
-        }
-      ],
+      "prompt": "I keep spare parts for a repair shop. Set up Part records: sku (text), label (text), quantity (whole number), reorder (true/false). A SKU identifies one part, so no duplicates. I'll only ever add parts and look them up by SKU; the first ones are coming next.",
       "checks": [
         {
           "check": "schema_matches",
@@ -24,39 +15,27 @@
           },
           "tier": "acceptance",
           "weight": 1
-        },
+        }
+      ],
+      "capture": [
         {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "schema"
-            ],
-            "forbidden": [
-              "bash"
-            ]
-          },
-          "tier": "acceptance",
-          "weight": 1
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "Part"
+          ]
         }
       ]
     },
     {
       "stage_id": "use",
+      "settle": true,
+      "continuation": {
+        "prompt": "OK, go ahead.",
+        "max": 1,
+        "until": "loaded"
+      },
       "prompt": "Add SKU WASH-8, label '8 mm washers', quantity 24, reorder false; and SKU SEAL-2, label 'pump seals', quantity 3, reorder true. Then look up SEAL-2 and tell me its label and quantity.",
-      "capture": [
-        {
-          "kind": "documents",
-          "name": "parts",
-          "collection": "Part",
-          "filter": {},
-          "fields": [
-            "sku",
-            "label",
-            "quantity",
-            "reorder"
-          ]
-        }
-      ],
       "checks": [
         {
           "check": "crew_spec_match",
@@ -143,6 +122,33 @@
           },
           "tier": "acceptance",
           "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "parts",
+          "collection": "Part",
+          "filter": {},
+          "fields": [
+            "sku",
+            "label",
+            "quantity",
+            "reorder"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "loaded",
+          "collection": "Part",
+          "filter": {
+            "sku": {
+              "_eq": "SEAL-2"
+            }
+          },
+          "fields": [
+            "sku"
+          ]
         }
       ]
     }

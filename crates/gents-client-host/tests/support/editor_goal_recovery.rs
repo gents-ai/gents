@@ -1,15 +1,14 @@
-use super::{fake_llm, ChatAction};
 use anyhow::{ensure, Context, Result};
+use gents_inference::test_support::scripted_backend::{
+    ScriptedBackend, StreamChunk, StreamResponse, StreamScript,
+};
 use gents_protocol::{request_lifecycle::RequestLifecycleState, row::AgentRequestRow};
 use gents_store::config_client::ConfigAccess;
 use gents_store::test_support::snapshot_reader::SnapshotReader;
 use serde_json::{json, Value};
 use std::path::Path;
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
-};
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 pub const TITLE: &str = "Recover blocked and limited goals";
 pub const DRAFT: &str = "Keep this unsent goal follow-up";
@@ -18,55 +17,36 @@ pub const RESUMING: &str = "Recovered goal";
 pub const WRAPUP: &str = "Budget wrap-up completed.";
 pub const BLOCKED_REASON: &str = "The fixture dependency remains unavailable.";
 
+/// Releases the resumed Goal reply the provider holds.
+pub const GATE: &str = "goal-recovery";
+
+#[derive(Default)]
 pub struct Provider {
     attempts: AtomicUsize,
-    gate: Arc<tokio::sync::Semaphore>,
-}
-
-impl Default for Provider {
-    fn default() -> Self {
-        Self {
-            attempts: AtomicUsize::new(0),
-            gate: Arc::new(tokio::sync::Semaphore::new(0)),
-        }
-    }
 }
 
 impl Provider {
-    pub fn reply(
-        &self,
-        request: &Value,
-        emitted: &tokio::sync::watch::Sender<Option<Instant>>,
-    ) -> Option<ChatAction> {
+    pub fn reply(&self, request: &Value) -> Option<StreamResponse> {
         if !is_goal_input(request) {
-            return Some(ChatAction::Sse(fake_llm::completion_text_sse(TITLE)));
+            return Some(StreamResponse::text(TITLE));
         }
         match self.attempts.fetch_add(1, Ordering::SeqCst) {
             0 => None,
-            audit @ (1 | 3 | 5) => Some(ChatAction::Sse(fake_llm::tool_call_sse_with_id(
-                &format!("goal-blocked-audit-{}", audit.div_ceil(2)),
+            1 => Some(StreamResponse::tool_call(
+                "goal-blocked-report",
                 "update_goal",
-                &json!({"status":"blocked", "reason":BLOCKED_REASON}).to_string(),
-            ))),
-            2 | 4 | 6 => Some(ChatAction::Sse(fake_llm::completion_text_sse(
-                "The dependency is still unavailable.",
-            ))),
-            7 => Some(ChatAction::HttpError(
-                axum::http::StatusCode::TOO_MANY_REQUESTS,
+                json!({"status":"blocked", "reason":BLOCKED_REASON}).to_string(),
+            )),
+            2 => Some(StreamResponse::status(
+                axum::http::StatusCode::TOO_MANY_REQUESTS.as_u16(),
                 json!({"error":{"type":"insufficient_quota", "code":"insufficient_quota", "message":"Your monthly usage limit has been reached."}}).to_string(),
             )),
-            8 => Some(ChatAction::GatedSse(
-                vec![(Duration::ZERO, format!("data: {}\n\n", json!({"choices":[{"delta":{"content":RESUMING},"finish_reason":null}],"usage":null})))],
-                Arc::clone(&self.gate),
-                fake_llm::completion_text_sse(" and finished."),
-                emitted.clone(),
+            3 => Some(StreamResponse::Stream(
+                StreamScript::paused(GATE, [RESUMING])
+                    .then(vec![StreamChunk::text(" and finished.")]),
             )),
-            9.. => Some(ChatAction::Sse(fake_llm::completion_text_sse(WRAPUP))),
+            4.. => Some(StreamResponse::text(WRAPUP)),
         }
-    }
-
-    pub fn release(&self) {
-        self.gate.add_permits(1);
     }
 }
 
@@ -93,7 +73,7 @@ pub async fn wait_for_source_blocked(
             let settled = value["data"]["Goal"].as_array().is_some_and(|goals| {
                 goals.len() == 1
                     && goals[0]["status"] == "blocked"
-                    && goals[0]["last_blocked_reason"] == BLOCKED_REASON
+                    && goals[0]["blocked_reason"] == BLOCKED_REASON
             }) && value["data"]["AgentRequest"]
                 .as_array()
                 .is_some_and(|requests| {
@@ -117,7 +97,7 @@ pub async fn wait_for_source_blocked(
 
 pub async fn verify(
     access: &ConfigAccess,
-    _provider: &fake_llm::FakeLlm,
+    _provider: &ScriptedBackend,
     root: &Path,
     node: &str,
     session: &str,

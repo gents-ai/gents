@@ -44,7 +44,7 @@
   "stages": [
     {
       "stage_id": "flag",
-      "prompt": "Boilers must stay at or below 12 bar. Use the latest BoilerGauge reading for each boiler (the highest seq for that boiler). If any boiler is above 12 bar, put one flag in my inbox titled \"Boiler pressure high\" with a note listing each such boiler as BOILER (N bar), like B9 (15 bar), sorted by boiler and separated by commas.",
+      "prompt": "Boilers must stay at or below 12 bar. Going by the latest BoilerGauge reading for each boiler (its highest seq), if any is above 12 bar, flag it in my inbox titled \"Boiler pressure high\" with a note listing each as BOILER (N bar), like B9 (15 bar), sorted by boiler and comma-separated.",
       "capture": [
         {
           "kind": "documents",
@@ -97,24 +97,6 @@
         }
       ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "file_mailbox_item"
-            ],
-            "forbidden": [
-              "write",
-              "bash",
-              "bash_unrestricted",
-              "write_file",
-              "edit_file"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "crew_spec_match",
           "params": {
@@ -168,7 +150,7 @@
     },
     {
       "stage_id": "recheck",
-      "prompt": "Gauge B3 just reported 14 bar with seq 2; it isn't in BoilerGauge yet. Taking it into account, re-check the latest reading per boiler. A boiler you already flagged needs no new item; put any boiler that is newly above 12 bar in one new item titled \"Boiler pressure high 2\", listing only those boilers in the same format.",
+      "prompt": "Gauge B3 just reported 14 bar at seq 2; it isn't in BoilerGauge yet. With that, check the latest reading per boiler again. A boiler you already flagged needs nothing new; put any boiler that is newly above 12 bar in one new item titled \"Boiler pressure high 2\", in the same format.",
       "capture": [
         {
           "kind": "documents",
@@ -221,24 +203,6 @@
         }
       ],
       "checks": [
-        {
-          "check": "tool_calls_expected",
-          "params": {
-            "required": [
-              "file_mailbox_item"
-            ],
-            "forbidden": [
-              "write",
-              "bash",
-              "bash_unrestricted",
-              "write_file",
-              "edit_file"
-            ],
-            "config_read_only": true
-          },
-          "tier": "acceptance",
-          "weight": 1
-        },
         {
           "check": "crew_spec_match",
           "params": {

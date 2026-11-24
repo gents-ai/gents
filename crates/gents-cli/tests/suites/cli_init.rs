@@ -508,11 +508,11 @@ async fn init_supports_provider_auth_backend_fields() -> Result<()> {
 
     let model_name = format!("mock-openrouter-model-{}", Uuid::new_v4().simple());
     let raw_api_key = "openrouter-raw-key";
-    let mock_endpoint = MockChatEndpoint::start_with_required_bearer(
-        &model_name,
-        "OPENROUTER_BACKEND_OK",
-        Some(raw_api_key),
-    )?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .replies("OPENROUTER_BACKEND_OK")
+            .require_bearer(Some(raw_api_key))
+            .start()?;
 
     let port = allocate_port()?;
     let agent_name = format!("cli-openrouter-{}", Uuid::new_v4().simple());
@@ -1264,7 +1264,10 @@ async fn init_pins_the_tool_root_under_an_explicit_workspace_root_policy() -> Re
 
     let expected_reply = format!("pinned-root-{}", Uuid::new_v4().simple());
     let model_name = format!("pinned-root-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockChatEndpoint::start(&model_name, &expected_reply)?;
+    let mock_endpoint =
+        gents_inference::test_support::scripted_backend::ScriptedBackend::builder(&model_name)
+            .replies(&expected_reply)
+            .start()?;
     let agent_name = format!("cli-pinned-root-{}", Uuid::new_v4().simple());
     let port = allocate_port()?;
     let graphql = graphql_url(port);

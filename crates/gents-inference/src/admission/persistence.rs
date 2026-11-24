@@ -203,6 +203,7 @@ pub async fn persist_existing_call_terminal(
     provider_limit: Option<gents_protocol::provider_limit::RecordedProviderLimit>,
     usage: Option<ProviderCallUsage>,
     cache_observation: CachedInputTokensObservation,
+    first_token_at: Option<&str>,
 ) -> Result<()> {
     let Some(sources) = terminal_write_sources(call_state) else {
         anyhow::bail!("invalid terminal InferenceCall state: {call_state}");
@@ -222,12 +223,13 @@ pub async fn persist_existing_call_terminal(
     let provider_limit = provider_limit_fields(provider_limit);
     let (prompt_tokens, completion_tokens, cached_input_tokens) =
         usage_fields(usage, cache_observation)?;
+    let first_token_at = optional_graphql_string("first_token_at", first_token_at);
     let mutation = format!(
         r#"mutation {{ update_InferenceCall(
             docID: "{doc_id}",
             filter: {{ call_id: {{ _eq: "{call_id}" }}, call_state: {live_source} }},
             input: {{ call_state: "{call_state}", {failure_reason} {provider_limit} ended_at: "{ended_at}",
-                {prompt_tokens} {completion_tokens} {cached_input_tokens} }}
+                {prompt_tokens} {completion_tokens} {cached_input_tokens} {first_token_at} }}
         ) {{ _docID }} }}"#
     );
     let response = call_access(&node, call)?
@@ -250,7 +252,7 @@ pub async fn persist_existing_call_terminal(
             r#"mutation {{ update_InferenceCall(
                 docID: "{doc_id}",
                 filter: {{ {terminal_filter} }},
-                input: {{ {prompt_tokens} {completion_tokens} {cached_input_tokens} }}
+                input: {{ {prompt_tokens} {completion_tokens} {cached_input_tokens} {first_token_at} }}
             ) {{ _docID }} }}"#
         );
         let response = call_access(&node, call)?

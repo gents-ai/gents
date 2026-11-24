@@ -65,6 +65,7 @@ impl DefraSessionHook {
             .await
         {
             Ok(target) => self
+                .tool_bindings()
                 .background_tool_registry
                 .timeouts()
                 .for_execution(target.tool_name(), target.selected_service_id()),

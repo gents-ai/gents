@@ -79,6 +79,7 @@ import Proofs.Conformance.ToolDispatch
 import Proofs.Conformance.RequestAssembly
 import Proofs.Conformance.UsageWrite
 import Proofs.Conformance.SessionMessageKill
+import Proofs.Conformance.LineageReturn
 import Proofs.Conformance.InferenceObservationRegistry
 import Proofs.Conformance.EagerStreaming
 import Proofs.Conformance.ToolResultText
@@ -95,6 +96,7 @@ import Proofs.Conformance.ProviderUsageRefusal
 import Proofs.Conformance.Identity.ProviderUsageEvidence
 import Proofs.Conformance.EventSourceCursor
 import Proofs.Conformance.ScheduleCadence
+import Proofs.Conformance.Triggers.ScheduleOccurrence
 import Proofs.Conformance.Identity.AgentTargetAccess
 import Proofs.Conformance.Identity.WorkspaceCompletion
 import Proofs.Conformance.SessionObservation
@@ -115,6 +117,7 @@ import Proofs.Conformance.HomeResolution
 import Proofs.Conformance.PluginStoreHome
 import Proofs.Conformance.PluginPublication
 import Proofs.Conformance.SurfacePublication
+import Proofs.Conformance.ToolRebinding
 import Proofs.Conformance.GraphqlName
 import Proofs.Conformance.ClaudeRefresh
 import Proofs.Conformance.Identity.BlockScope
@@ -130,6 +133,7 @@ import Proofs.Conformance.Identity.SessionChildRecovery
 import Proofs.Conformance.Identity.OwnerRegistration
 import Proofs.Conformance.Identity.CreatedAgentAccess
 import Proofs.Conformance.Identity.ApplicationPairingAccess
+import Proofs.Conformance.Identity.ApplicationPolicy
 import Proofs.Conformance.ApplicationPairing
 import Proofs.Conformance.Identity.EnrollmentGrantTraces
 import Proofs.Conformance.Functions.Automation
@@ -325,6 +329,7 @@ import Proofs.Conformance.ContractCases.CompactionCanonicalProjection
 import Proofs.Conformance.CompletionRetry.Contracts
 import Proofs.Conformance.AccountRotation.Contracts
 import Proofs.Conformance.AccountStore
+import Proofs.Conformance.AccountListing
 import Proofs.Conformance.UsageRead
 import Proofs.Conformance.Triggers.Contracts
 import Proofs.Conformance.EventGroups

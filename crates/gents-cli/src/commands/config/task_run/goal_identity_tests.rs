@@ -261,7 +261,6 @@ async fn generated_manual_task_identity_is_frozen_before_signed_admission() -> R
             goal_id: selected.clone(),
             goal_objective: Some("Task work".into()),
             goal_token_budget: None,
-            goal_blocked_audit_threshold: None,
             goal_max_infrastructure_retries: None,
             goal_assignment_applied: false,
             emit_outcome: false,

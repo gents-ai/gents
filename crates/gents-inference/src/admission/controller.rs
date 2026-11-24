@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use defra_node::Node as EmbeddedNode;
@@ -18,6 +18,8 @@ use gents_store::drop_cleanup::DropCleanup;
 pub(super) struct CapacityPool {
     ledger: Mutex<CapacityLedger>,
     waiters: AtomicUsize,
+    /// Response items received by the calls this pool admitted.
+    progress: AtomicU64,
 }
 
 struct CapacityLedger {
@@ -50,7 +52,12 @@ impl CapacityPool {
                 held: 0,
             }),
             waiters: AtomicUsize::new(0),
+            progress: AtomicU64::new(0),
         })
+    }
+
+    pub(super) fn progress_mark(&self) -> u64 {
+        self.progress.load(Ordering::SeqCst)
     }
 
     fn ledger(&self) -> MutexGuard<'_, CapacityLedger> {
@@ -198,6 +205,12 @@ pub(super) struct PoolPermit {
     permit: Option<(Arc<Semaphore>, OwnedSemaphorePermit)>,
 }
 
+impl PoolPermit {
+    pub(super) fn record_progress(&self) {
+        self.pool.progress.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
 impl Drop for PoolPermit {
     fn drop(&mut self) {
         self.pool.release(self.permit.take());
@@ -324,6 +337,7 @@ impl BackendAdmissionController {
                     None,
                     None,
                     gents_loop::rig_compat::CachedInputTokensObservation::NotAvailable,
+                    None,
                 )
                 .await
                 {
@@ -497,6 +511,7 @@ impl Drop for QueuedCallGuard {
                 Some("Cancelled"), None,
                 None,
                 gents_loop::rig_compat::CachedInputTokensObservation::NotAvailable,
+                None,
             )
             .await
             {

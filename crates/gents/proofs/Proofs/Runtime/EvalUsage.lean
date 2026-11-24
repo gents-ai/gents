@@ -17,7 +17,7 @@ structure Request where
   deriving BEq, ToJson
 
 /-- An `InferenceCall`: the request it names, its `call_kind`, `call_seq`,
-recorded counts and run times. -/
+recorded counts, run times and `first_token_at`. -/
 structure Call where
   request : Option Nat
   kind : String
@@ -27,6 +27,7 @@ structure Call where
   cached : Option Nat
   started : Option Nat
   ended : Option Nat
+  firstToken : Option Nat
   deriving BEq, ToJson
 
 /-- An `AgentToolCall`: whether it names a plugin parent
@@ -175,10 +176,33 @@ def firstTurn (home : Home) (turns : List Call) : Option Call :=
       | none => some call
       | some held => if call.seq < held.seq then some call else some held) none
 
+/-- A call's time to first token: from its `started_at` to its
+`first_token_at`, the first streamed text, reasoning or tool-call delta the
+provider sent. `started_at` is the call's slot admission, just before it is
+dispatched; headers, keep-alives and message ids are not tokens. A call that
+was not streamed, or that failed before a token, has none. A retry is a call
+of its own and has its own. -/
+def firstTokenMs (call : Call) : Option Nat := do
+  let started ← call.started
+  let token ← call.firstToken
+  pure (token - started)
+
+/-- The middle value, or the mean of the two middle values rounded down. -/
+def median (values : List Nat) : Option Nat :=
+  let sorted := values.mergeSort fun a b => a ≤ b
+  let middle := sorted.length / 2
+  if sorted.length % 2 == 1 then sorted[middle]?
+  else do
+    let low ← sorted[middle - 1]?
+    let high ← sorted[middle]?
+    pure ((low + high) / 2)
+
 structure Subject where
   requests : Nat
   firstRequest : Bool
   firstPromptTokens : Option Nat
+  firstRequestFirstTokenMs : Option Nat
+  medianFirstTokenMs : Option Nat
   turns : Totals
   compaction : Totals
   direct : Count
@@ -200,6 +224,8 @@ def subjectUsage (home : Home) : Option Subject :=
     { requests := requests.length
       firstRequest := first.isSome
       firstPromptTokens := first.bind (·.input)
+      firstRequestFirstTokenMs := first.bind firstTokenMs
+      medianFirstTokenMs := median (turns.filterMap firstTokenMs)
       turns := totals turns
       compaction := totals (calls.filter (·.kind == "compaction"))
       direct := count tools .direct
@@ -240,6 +266,13 @@ theorem subject_request_is_public (home : Home) (request : Request)
     (own : subjectRequest home request = true) : request.purpose = "normal" := by
   simp only [subjectRequest, Bool.and_eq_true, beq_iff_eq] at own
   exact own.1
+
+theorem unstreamed_call_has_no_first_token (call : Call) (unstreamed : call.firstToken = none) :
+    firstTokenMs call = none := by
+  simp [firstTokenMs, unstreamed]
+
+theorem no_streamed_turn_has_no_median : median [] = none := by
+  simp [median]
 
 theorem script_call_is_inside_its_script (tool : Tool)
     (process : tool.spawned = false) (parent : tool.pluginParent = true) :

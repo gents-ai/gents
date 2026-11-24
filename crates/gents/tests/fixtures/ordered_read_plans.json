@@ -592,5 +592,17 @@
         "trigger": "probe"
       }
     ]
+  },
+  {
+    "read": {
+      "path": "crates/gents/src/support/interrupt.rs",
+      "collection": "InferenceCall",
+      "arguments": "filter: { request_id: { _eq: \"$GENTS_escaped_request_id$\" }, call_kind: { _eq: \"inference\" } }, order: { call_seq: DESC }, limit: 1"
+    },
+    "bindings": [
+      {
+        "escaped_request_id": "probe"
+      }
+    ]
   }
 ]
