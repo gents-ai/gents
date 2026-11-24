@@ -1,10 +1,12 @@
-import { act, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it } from "vitest";
+import { act, renderHook, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import { resetSessionViews, seenMarks } from "../src/ui/app/sessionViews";
 import { ListedSessionStatus } from "../src/ui/screens/SessionStatus";
 import { sessionKeyOf } from "../src/hooks/fleetStore";
-import { node, publish, renderIn, testApp } from "./app-fixture";
+import { useSessionShown } from "../src/ui/hooks/useSessionShown";
+import type { Route } from "../src/ui/lib/router";
+import { node, publish, renderIn, testApp, withApp } from "./app-fixture";
 
 const NODE = "did:key:z6MkAgent";
 const OTHER_NODE = "did:key:z6MkOther";
@@ -83,5 +85,65 @@ describe("the new mark", () => {
     expect(
       screen.queryByRole("img", { name: "Finished · new since you looked" }),
     ).toBeNull();
+  });
+
+  describe("on a phone, back at the sessions list", () => {
+    const windowWide = (wide: boolean) =>
+      vi.spyOn(window, "matchMedia").mockImplementation(
+        (query) =>
+          ({
+            matches: query === "(min-width: 768px)" ? wide : false,
+            media: query,
+            addEventListener: () => {},
+            removeEventListener: () => {},
+          }) as unknown as MediaQueryList,
+      );
+    afterEach(() => vi.restoreAllMocks());
+
+    const showing = (wide: boolean) => {
+      windowWide(wide);
+      const app = testApp({
+        deployments: [node({ nodeDid: NODE, sessions: [session("r1", "completed")] })],
+        selection: { nodeDid: NODE, sessionId: "s1" },
+      });
+      const page = renderHook((route: Route) => useSessionShown(route), {
+        initialProps: { name: "session", sessionId: "s1", nodeDid: NODE } as Route,
+        wrapper: withApp(app),
+      });
+      return { app, back: () => page.rerender({ name: "sessions" } as Route) };
+    };
+    const reply = (app: ReturnType<typeof testApp>) =>
+      act(() =>
+        publish(app, [node({ nodeDid: NODE, sessions: [session("r2", "completed")] })]),
+      );
+    const key = sessionKeyOf(session("r1", "completed"));
+
+    it("marks a reply that lands after going back as new", () => {
+      const { app, back } = showing(false);
+      expect(seenMarks.of(key)).toEqual({ request: "r1", done: true });
+      back();
+      expect(app.stores.selection.getState().sessionId).toBe("s1");
+      reply(app);
+      expect(seenMarks.of(key)).toEqual({ request: "r1", done: true });
+      renderIn(app, <ListedSessionStatus session={session("r2", "completed")} />);
+      expect(
+        screen.getByRole("img", { name: "Finished · new since you looked" }),
+      ).toBeInTheDocument();
+    });
+
+    it("sees the reply once the session is open again", () => {
+      const { app, back } = showing(false);
+      back();
+      reply(app);
+      act(() => app.sessionShown.setState({ shown: true }));
+      expect(seenMarks.of(key)).toEqual({ request: "r2", done: true });
+    });
+
+    it("keeps a wide window's selected session seen beside the list", () => {
+      const { app, back } = showing(true);
+      back();
+      reply(app);
+      expect(seenMarks.of(key)).toEqual({ request: "r2", done: true });
+    });
   });
 });

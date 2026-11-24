@@ -47,9 +47,9 @@ end ClientSnapshotObservation
 
 namespace ObserverResync
 
-deriving instance Lean.ToJson for Change, Delivery
+deriving instance Lean.ToJson for Change, Delivery, AppEvent
 
-attribute [conformance_function] deliver
+attribute [conformance_function] deliver asksRetryNow
 
 end ObserverResync
 

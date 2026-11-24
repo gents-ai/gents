@@ -323,8 +323,8 @@ export function AgentCard({
     reach.root && shortPath(reach.root, { home: reach.local ? home : null, max: 40 }),
   ].filter(Boolean) as string[];
   return (
-    <div className="@container mb-8 grid gap-4">
-      <div className="flex items-start gap-4">
+    <div className="@container mb-8 grid grid-cols-[minmax(0,1fr)] gap-4">
+      <div className="flex items-start gap-4 max-md:flex-wrap">
         <AvatarRoll
           rollId={deployment.nodeDid}
           name={name}

@@ -88,7 +88,11 @@ impl ClientJournal {
                     &key,
                     gents_store::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
                 )
-                .map(|builder| builder.with_signing_key(defra_node::SigningKey::Ed25519(signer)))
+                .map(|builder| {
+                    on_platform_workers(
+                        builder.with_signing_key(defra_node::SigningKey::Ed25519(signer)),
+                    )
+                })
             })
             .await??;
             Ok((lease, identity, builder))
@@ -159,6 +163,16 @@ impl ClientJournal {
         stopped?;
         Ok(())
     }
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn on_platform_workers(builder: defra_node::NodeBuilder) -> defra_node::NodeBuilder {
+    builder.with_workers(super::phone::pool_config())
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn on_platform_workers(builder: defra_node::NodeBuilder) -> defra_node::NodeBuilder {
+    builder
 }
 
 #[cfg(test)]
