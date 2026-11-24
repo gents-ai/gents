@@ -174,4 +174,42 @@ theorem a_declared_store_fence_fences (decider writer : Footprint) (fence : Fenc
     fencedAgainst decider writer = true :=
   a_named_fence_fences decider writer fence h
 
+/-- A transaction that writes, deletes and inserts nothing (a read-only one)
+makes no writer abort: whatever it read, a writer that commits after it
+began commits. -/
+theorem a_transaction_that_writes_nothing_aborts_no_writer (reader writer : Footprint)
+    (h_writes : reader.writes = []) (h_deletes : reader.deletes = [])
+    (h_unique : reader.uniqueInserts = []) :
+    fencedAgainst writer reader = false := by
+  simp [fencedAgainst, conflicts, h_writes, h_deletes, h_unique]
+
+/-- The only fence a read-only transaction can name is a point read, and it
+orders nothing but that transaction's own reads: when the writer commits
+first, the reader's commit aborts and it reads again. No write of the
+reader's waits on it, so a decision taken on what it read is fenced only by
+the later transaction that acts on it. -/
+theorem a_read_only_transaction_names_only_point_reads (reader writer : Footprint)
+    (fence : Fence) (h_writes : reader.writes = [])
+    (h_unique : reader.uniqueInserts = []) (h : fence.holds reader writer = true) :
+    ∃ doc, fence = .pointRead doc := by
+  cases fence with
+  | commonWrite doc => simp [Fence.holds, h_writes] at h
+  | pointRead doc => exact ⟨doc, rfl⟩
+  | uniqueIndex value => simp [Fence.holds, h_unique] at h
+
+/-- Reading again rows a transaction already read, in the same transaction,
+adds nothing the store validates. -/
+theorem reading_the_same_rows_again_adds_no_conflict (decider writer : Footprint)
+    (read : Read) :
+    fencedAgainst ((decider.read read).read read) writer =
+      fencedAgainst (decider.read read) writer := by
+  cases read with
+  | byDocId doc | byUniqueKey doc =>
+      simp only [fencedAgainst, conflicts, Footprint.read, List.any_cons]
+      cases writer.writes.contains doc <;> simp
+  | filtered returned =>
+      simp only [fencedAgainst, conflicts, Footprint.read, List.any_append]
+      cases returned.any writer.deletes.contains <;> simp
+  | arrivalHead => rfl
+
 end TransactionFence

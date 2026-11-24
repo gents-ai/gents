@@ -28,6 +28,8 @@ mod conformance;
 mod follow;
 mod read;
 mod reissue;
+#[cfg(test)]
+mod round_trips;
 mod target;
 
 /// Lean `SessionOperations.requestLookup`.
@@ -210,19 +212,29 @@ where
     /* who is asking, and whether this request is already held, do not
     depend on the message body, so they are read while it is prepared */
     let lookups = async {
-        let requester =
-            crate::session::client_requester_scope(access, &node_did, &session_id, &actor)
-                .await
-                .map_err(RequestOperationError::passthrough)?;
+        let scope = crate::session::client_session_scope(access, &node_did, &session_id, &actor)
+            .await
+            .map_err(RequestOperationError::passthrough)?;
         let held = if supplied_request_id.is_some() {
-            recover_scoped_send(access, &node_did, &session_id, &requester, &request_id).await?
+            recover_scoped_send(
+                access,
+                &node_did,
+                &session_id,
+                &scope.requester_did,
+                &request_id,
+            )
+            .await?
         } else {
             None
         };
-        Ok::<_, RequestOperationError>((requester, held))
+        Ok::<_, RequestOperationError>((scope, held))
     };
     let (lookups, body) = futures::join!(lookups, prepare(node_did.clone(), session_id.clone()));
-    let (requester, held) = lookups?;
+    let (scope, held) = lookups?;
+    let crate::session::ClientSessionScope {
+        requester_did: requester,
+        agent_did: session_agent,
+    } = scope;
     if let Some(receipt) = held {
         return Ok(receipt);
     }
@@ -251,7 +263,13 @@ where
             request_input,
             delivery.resolve(),
         ),
-        target::resolve_agent(access, &node_did, &session_id, agent_did.as_deref()),
+        target::resolve_agent(
+            access,
+            &node_did,
+            &session_id,
+            session_agent,
+            agent_did.as_deref(),
+        ),
     );
     let request_input = request_input.map_err(target::user_message_error)?;
     let agent_did = agent_did?;

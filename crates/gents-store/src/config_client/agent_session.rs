@@ -41,19 +41,43 @@ pub async fn read_agent_session_owner_in_txn(
     node_did: &str,
     session_id: &str,
 ) -> Result<AgentSessionRowRead> {
+    let query = session_owner_query(node_did, session_id);
+    decode_agent_session_read(&txn.execute(&query).await?, session_id)
+}
+
+/// [`load_agent_session_owner_in_txn`] as one plain read. A check that reads
+/// nothing else needs no transaction around it: one that writes nothing
+/// makes no writer wait, and fences nothing a later write relies on
+/// (Lean `TransactionFence.a_transaction_that_writes_nothing_aborts_no_writer`,
+/// `a_read_only_transaction_names_only_point_reads`); over HTTP its begin and
+/// commit are two more round trips.
+pub async fn load_agent_session_owner(
+    access: &super::ConfigAccess,
+    node_did: &str,
+    session_id: &str,
+) -> Result<Option<SessionOwnerRow>> {
+    let query = session_owner_query(node_did, session_id);
+    Ok(
+        match decode_agent_session_read(&access.execute(&query).await?, session_id)? {
+            AgentSessionRowRead::Present(row) => Some(*row),
+            AgentSessionRowRead::Absent => None,
+        },
+    )
+}
+
+fn session_owner_query(node_did: &str, session_id: &str) -> String {
     let scope = format!(
         r#"node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }}"#,
         escape_graphql_string(node_did),
         escape_graphql_string(session_id),
     );
-    let query = format!(
+    format!(
         r#"{{
             AgentSession(filter: {{ {scope} }}, limit: 2) {{
                 {SESSION_SCOPE_FIELDS}
             }}
         }}"#
-    );
-    decode_agent_session_read(&txn.execute(&query).await?, session_id)
+    )
 }
 
 /// Decodes the session-row query's response. DefraDB answers a filtered

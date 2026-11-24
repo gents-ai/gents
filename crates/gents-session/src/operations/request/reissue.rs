@@ -86,10 +86,12 @@ pub(super) async fn retry(
     request_id: Option<String>,
 ) -> Result<ReissueReceipt, RequestOperationError> {
     let session_id = target::row_field("session_id", parent.session_id.clone())?;
-    let requester =
-        crate::session::client_requester_scope(access, &lineage.node_did, &session_id, actor)
-            .await
-            .map_err(RequestOperationError::passthrough)?;
+    let crate::session::ClientSessionScope {
+        requester_did: requester,
+        agent_did: session_agent,
+    } = crate::session::client_session_scope(access, &lineage.node_did, &session_id, actor)
+        .await
+        .map_err(RequestOperationError::passthrough)?;
     let successor = target::nonblank(request_id).unwrap_or_else(fresh_id);
     if let Some(existing) = reconcile_client_retry(
         access,
@@ -125,6 +127,7 @@ pub(super) async fn retry(
         access,
         &lineage.node_did,
         &session_id,
+        session_agent,
         parent.agent_did.as_deref(),
     )
     .await?;
@@ -188,10 +191,12 @@ pub(super) async fn resend(
     };
     let session_id = derived("session");
     let successor = target::nonblank(request_id).unwrap_or_else(|| derived("request"));
-    let requester =
-        crate::session::client_requester_scope(access, &lineage.node_did, &session_id, actor)
-            .await
-            .map_err(RequestOperationError::passthrough)?;
+    let crate::session::ClientSessionScope {
+        requester_did: requester,
+        agent_did: session_agent,
+    } = crate::session::client_session_scope(access, &lineage.node_did, &session_id, actor)
+        .await
+        .map_err(RequestOperationError::passthrough)?;
     let held = held_client_request(
         access,
         ClientRequestScope {
@@ -218,6 +223,7 @@ pub(super) async fn resend(
         access,
         &lineage.node_did,
         &session_id,
+        session_agent,
         parent.agent_did.as_deref(),
     )
     .await?;

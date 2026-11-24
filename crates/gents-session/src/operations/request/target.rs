@@ -78,26 +78,16 @@ pub(super) fn user_message_error(error: UserMessageInputError) -> RequestOperati
     }
 }
 
+/// The Agent a request in `session_id` runs: the session's own
+/// (`session_agent`, from [`crate::session::client_session_scope`]), which a
+/// requested one must match, else the requested one, else the node's default.
 pub(super) async fn resolve_agent(
     access: &ConfigAccess,
     node_did: &str,
     session_id: &str,
+    session_agent: Option<String>,
     requested: Option<&str>,
 ) -> Result<String, RequestOperationError> {
-    let session_agent = access
-        .transact_readonly("operations.request.session_agent", |txn| {
-            Box::pin(async move {
-                Ok::<_, anyhow::Error>(
-                    gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
-                        txn, node_did, session_id,
-                    )
-                    .await?
-                    .map(|row| row.session.agent_did),
-                )
-            })
-        })
-        .await
-        .map_err(RequestOperationError::passthrough)?;
     let requested = requested.map(str::trim).filter(|value| !value.is_empty());
     if let (Some(existing), Some(requested)) = (session_agent.as_deref(), requested) {
         if existing != requested {

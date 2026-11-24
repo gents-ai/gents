@@ -420,16 +420,31 @@ pub async fn ensure_request_session_in_txn(
     )
     .await?;
     check_request_session_scope(existing.as_ref(), create, actor)?;
-    let created =
-        crate::session::ensure_reserved_session_in_txn(txn, new_request_session(create)).await?;
-    let session = gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
-        txn,
-        &create.node_did,
-        &create.session_id,
-    )
-    .await?
-    .context("reserved client session disappeared")?
-    .doc_id;
+    /* an existing session is the row just read in this transaction: reading
+    it again to reserve it, and again for its document, reads the same rows
+    and adds nothing the store validates at commit (Lean
+    `TransactionFence.reading_the_same_rows_again_adds_no_conflict`) */
+    let (session, created) = match existing {
+        Some(existing) => {
+            gents_protocol::session::validate_agent_session(&existing.session)?;
+            (existing.doc_id, false)
+        }
+        None => {
+            let created =
+                crate::session::ensure_reserved_session_in_txn(txn, new_request_session(create))
+                    .await?;
+            let session =
+                gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
+                    txn,
+                    &create.node_did,
+                    &create.session_id,
+                )
+                .await?
+                .context("reserved client session disappeared")?
+                .doc_id;
+            (session, created)
+        }
+    };
     let (agent, _) = gents_documents::read_desired_state_record_in_txn(
         txn,
         gents_store::collection::Collection::Agent,
