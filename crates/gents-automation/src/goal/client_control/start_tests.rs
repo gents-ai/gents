@@ -31,8 +31,13 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
 }
 
 async fn drive_start(case: &StartInput<String>) -> bool {
-    let (db, user, access, binding) =
-        crate::test_support::signed_test_node("generated-goal-start").await;
+    let signed_home = gents_documents::test_support::SignedHome::start(
+        "generated-goal-start",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let binding = gents_inference::test_support::default_agent(&signed_home).await;
+    let (db, user, access) = signed_home.into_parts();
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let foreign = tokio::task::spawn_blocking(|| {
@@ -944,8 +949,13 @@ async fn client_goal_control_cannot_publish_user_graph_as_the_agent() {
     let mut staged = Vec::new();
     let mut handed_off = vec![None; handoff.len()];
     for replacement in [false, true] {
-        let (db, user, client, binding) =
-            crate::test_support::signed_test_node("goal-actor-fence").await;
+        let signed_home = gents_documents::test_support::SignedHome::start(
+            "goal-actor-fence",
+            crate::lifecycle_hooks::composition(),
+        )
+        .await;
+        let binding = gents_inference::test_support::default_agent(&signed_home).await;
+        let (db, user, client) = signed_home.into_parts();
         let node = db.node.clone();
         let runtime = db.node_identity.clone();
         let agent =
