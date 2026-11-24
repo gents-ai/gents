@@ -9,7 +9,7 @@ A source (a schedule or a new document) fires a trigger. The trigger starts a ta
 
 ## One consumer per event
 
-Waking every agent to check whether an event is theirs wastes inference and creates sessions. Put the deciding field on the document and filter on it. In a turn-based app, the event names who moves next and each player's trigger filters on it.
+Waking every agent to check whether an event is theirs wastes inference. Put the deciding field on the document and filter on it. In a turn-based app, the event names who moves next and each player's trigger filters on it.
 
 ## Never feed your own trigger
 
@@ -24,10 +24,10 @@ A task that writes to the collection that fires it can loop until the node goes 
 
 ## Keep the agent small
 
-Its Tools carry only what its task needs. A routine job is one tool call and a short reply. An agent never configures its own triggers.
+Its Tools carry only what its task needs. A routine job is a tool call and a short reply. An agent never configures its own triggers.
 
 ## Turn it on one step at a time
 
-Enable one trigger, cause one event, and inspect its request, session and output. Count the fires. If there are more than expected, disable the trigger first. Then enable the rest. Send any failure someone must know about to the mailbox.
+Enable one trigger, cause one event, and inspect its request and output. Count the fires. If there are more than expected, disable the trigger first, then enable the rest. A task's mailbox items reach the node's owner: send any failure someone must know about.
 
 Next: `control-access`.
