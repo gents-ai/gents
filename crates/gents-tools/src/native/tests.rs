@@ -1925,6 +1925,8 @@ async fn read_only_bash_git_runs_under_the_read_only_profile() {
         let status = std::process::Command::new("git")
             .args(args)
             .current_dir(&root)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
             .status()
             .unwrap();
         assert!(status.success(), "git {args:?}");
