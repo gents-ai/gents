@@ -22,5 +22,6 @@ import Proofs.Clients.ClientShell.PackWatch
 import Proofs.Clients.ClientShell.AuthorityRestart
 import Proofs.Clients.ClientShell.ViewRest
 import Proofs.Clients.ClientShell.LineageReread
+import Proofs.Clients.ClientShell.SessionShown
 
 import Proofs.Clients.ClientShell.Telemetry

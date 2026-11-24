@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 import { toast } from "sonner";
+import { useKeptScroll } from "@/hooks/useKeptScroll";
 import { Check } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
 import { Input } from "@gents/ui/components/input";
@@ -65,6 +66,7 @@ import {
   keepRegistryPage,
   matches,
   packsListView,
+  packsScroll,
   partLabel,
   partsOf,
   publisherOf,
@@ -72,7 +74,6 @@ import {
   readRegistryAccount,
   rememberPacksAuthor,
   rememberPacksQuery,
-  rememberPacksScroll,
   rememberPacksView,
   statusOf,
   text,
@@ -290,35 +291,6 @@ async function installFromFile(review: (path: string) => void) {
   }
 }
 
-/* Each list is put back where it was scrolled to once its rows are drawn,
-   and every scroll after is kept. Listening in a layout effect stops before
-   the list's rows are taken away, so the scroll that clamps doesn't count. */
-function useKeptScroll(
-  scroller: HTMLElement | null,
-  view: "installed" | "registry",
-  drawn: boolean,
-) {
-  const pending = useRef<number | null>(null);
-  const shown = useRef<string | null>(null);
-  useLayoutEffect(() => {
-    if (shown.current !== view) {
-      shown.current = view;
-      pending.current = packsListView().scroll[view];
-    }
-    if (!scroller || !drawn || pending.current === null) return;
-    scroller.scrollTop = pending.current;
-    pending.current = null;
-  }, [scroller, view, drawn]);
-  useLayoutEffect(() => {
-    if (!scroller) return;
-    const keep = () => {
-      if (pending.current === null) rememberPacksScroll(view, scroller.scrollTop);
-    };
-    scroller.addEventListener("scroll", keep, { passive: true });
-    return () => scroller.removeEventListener("scroll", keep);
-  }, [scroller, view]);
-}
-
 const ALL_AUTHORS = "";
 
 function AuthorMenu({ author }: { author: string | null }) {
@@ -405,6 +377,7 @@ function PacksHome({
     scroller,
     view,
     view === "installed" ? !local || packs !== null : searched !== null,
+    packsScroll,
   );
   const isMine = (pack: string) => mine.some((m) => m.pack === pack);
   const elsewhereFound = found.filter((p) => !isMine(nameOf(p)));
