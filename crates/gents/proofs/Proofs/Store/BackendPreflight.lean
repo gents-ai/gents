@@ -18,14 +18,13 @@ theorem unavailable_never_opens : decision .unavailable ≠ "open" := by decide
 theorem incompatible_never_opens : decision .incompatible ≠ "open" := by decide
 
 /-- A store's lineage marker is a file in its own data directory, named this
-prefix and then the lineage version in decimal. The version moves with the
-node grants and the Household policy a store is created under as well as with
-its format: v2 began when the Agent baseline gained `get-collection`
-(gents#3747, `Identity.GrantSets.widened_baseline_blocks_actorless_reconcile`),
-v3 when `agent_manager` came to take only the Node administrators' userset
-(gents#3794, `Identity.Household.catalog_restriction_keeps_policy_id`). Those
-changes keep the policy ID, so only the marker tells one lineage's store from
-another's before DefraDB refuses to register the policy. It is read from the
+prefix and then the lineage version in decimal. The version names the node
+grants and the Household policy a store is created under as well as its
+format. A change to those grants can keep the policy ID
+(`Identity.GrantSets.widened_baseline_blocks_actorless_reconcile`,
+`Identity.Household.catalog_restriction_keeps_policy_id`), so only the marker
+tells one lineage's store from another's before DefraDB refuses to register
+the policy. It is read from the
 directory's names alone, so a refusal leaves the store unopened, and a store
 without this build's marker is never opened: there is no conversion. -/
 def markerPrefix : String := ".gents-private-backend-v"
