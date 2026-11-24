@@ -77,16 +77,23 @@ impl AccountRow for OAuthCredentialSummary {
     }
 }
 
-pub(super) fn resolver_order<R: AccountRow>(a: &R, b: &R) -> std::cmp::Ordering {
+pub(super) fn resolver_order<R>(a: &R, b: &R) -> std::cmp::Ordering
+where
+    R: AccountRow,
+{
     (a.connected_at(), a.credential_id()).cmp(&(b.connected_at(), b.credential_id()))
 }
 
-pub fn pick_oauth_credential<'c, R: AccountRow + 'c>(
-    rows: impl IntoIterator<Item = &'c R>,
+pub fn pick_oauth_credential<'c, R, Rows>(
+    rows: Rows,
     node_did: &str,
     provider: &str,
     pick: AccountPick<'_>,
-) -> Option<&'c R> {
+) -> Option<&'c R>
+where
+    R: AccountRow + 'c,
+    Rows: IntoIterator<Item = &'c R>,
+{
     rows.into_iter()
         .filter(|row| row.node_did() == node_did && row.provider() == provider && row.enabled())
         .filter(|row| match pick {
@@ -98,11 +105,11 @@ pub fn pick_oauth_credential<'c, R: AccountRow + 'c>(
 
 /// The accounts a pool backend rotates over (Lean `oauthPool`): every enabled
 /// row of `provider` the node owns, in the resolver's order.
-pub fn pick_oauth_pool<'c, R: AccountRow + 'c>(
-    rows: impl IntoIterator<Item = &'c R>,
-    node_did: &str,
-    provider: &str,
-) -> Vec<&'c R> {
+pub fn pick_oauth_pool<'c, R, Rows>(rows: Rows, node_did: &str, provider: &str) -> Vec<&'c R>
+where
+    R: AccountRow + 'c,
+    Rows: IntoIterator<Item = &'c R>,
+{
     let mut pool: Vec<_> = rows
         .into_iter()
         .filter(|row| row.node_did() == node_did && row.provider() == provider && row.enabled())
