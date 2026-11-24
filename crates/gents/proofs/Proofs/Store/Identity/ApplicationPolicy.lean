@@ -28,14 +28,8 @@ External premise: the pinned DefraDB `validate_resource_interface`. -/
 def documentPermissions : List String := ["read", "update", "delete"]
 
 /-- Decision: a name beginning `Gents` is the runtime's. Every built-in policy
-is named so (`Household.policyName`, and "Gents retained file images").
-External premise (the pinned DefraDB `generate_policy_id`): a local policy ID
-hashes the policy name with its resource, relation and permission names, its
-expressions and the registration counter, and a remote ID covers the definition
-and its creator. So a policy with another name never takes a built-in policy's
-ID, at any counter: a home always registers its built-in policies where it
-expects them (`Household.registerPolicy`), and an Agent's policy cannot make a
-home unopenable. -/
+is named so (`Household.policyName`, and "Gents retained file images"), so an
+Agent's policy never carries a runtime policy's name. -/
 def reservedName (name : String) : Bool := name.startsWith "Gents"
 
 theorem household_name_reserved : reservedName policyName = true := by native_decide
