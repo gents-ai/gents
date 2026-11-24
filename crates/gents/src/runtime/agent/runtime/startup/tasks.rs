@@ -269,20 +269,22 @@ pub(super) fn spawn_callback_engine(startup: StartupTasks<'_>) -> AbortOnDropHan
 pub(super) fn spawn_readiness(
     startup: StartupTasks<'_>,
     lifecycle: &Arc<RuntimeLifecycleCoordinator>,
-    initial_active_snapshot: &ActiveRuntimeSnapshot,
     readiness_fatal_error: mpsc::UnboundedSender<anyhow::Error>,
 ) -> AbortOnDropHandle<()> {
     let StartupTasks {
         cancel,
         runtime_status,
         startup_barrier,
+        active_snapshot_rx,
         ..
     } = startup;
+    let (ready_agent_count, ready_unavailable_count) = {
+        let initial = active_snapshot_rx.borrow();
+        (initial.agents.len(), initial.unavailable_agents.len())
+    };
     let ready_cancel = cancel.child_token();
     let ready_startup_barrier = startup_barrier.clone();
     let ready_lifecycle = lifecycle.clone();
-    let ready_agent_count = initial_active_snapshot.agents.len();
-    let ready_unavailable_count = initial_active_snapshot.unavailable_agents.len();
     let ready_runtime_status = runtime_status.clone();
     let readiness_handle = AbortOnDropHandle::new(tokio::spawn(async move {
         let mut watchdog = tokio::time::interval(std::time::Duration::from_secs(60));

@@ -161,7 +161,11 @@ def runtimeReconcileResolve : Family ReconcileInput ReconcileResolveOutput where
 Production tracks in-flight work per Agent slot: a published generation that
 replaces an Agent's slot retires the old slot, which keeps running the call in
 flight and exits when that call finishes, so a slot's generation is the
-generation of every call it runs. The runtime fixture restages the Agent's
+generation of every call it runs. A slot's request channel is held open only
+by the generation snapshots that name it (the supervisor's, the published
+watch's and the router's routed one); once the next generation is published
+and routed, none names the retired slot, so its channel closes and its task
+exits when its last call finishes. The runtime fixture restages the Agent's
 slot with no call, with a claimed request whose inference call the model
 endpoint holds, and after the endpoint answers it, and counts the slot tasks
 not yet joined. -/

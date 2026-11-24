@@ -20,17 +20,26 @@ struct Retirement {
     finished: bool,
 }
 
-async fn live_calls(node: &defra_node::Node) -> (u64, serde_json::Value) {
-    let data = node
+/// The held request's rows: its request as the User who submitted it reads
+/// it, and its inference calls as the Agent that owns them reads them.
+async fn live_calls(home: &AgentRuntimeHome) -> (u64, serde_json::Value) {
+    let request = home
+        .home
+        .user_access
         .read_data(&format!(
-            r#"{{
-                AgentRequest(filter: {{ request_id: {{ _eq: "{REQUEST}" }} }}) {{
-                    lifecycle_state execution_lease_expires_at
-                }}
-                InferenceCall(filter: {{ request_id: {{ _eq: "{REQUEST}" }} }}) {{ call_state }}
-            }}"#
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{REQUEST}" }} }}) {{ lifecycle_state }} }}"#
         ))
         .await;
+    let calls = home
+        .agent_access()
+        .read_data(&format!(
+            r#"{{ InferenceCall(filter: {{ request_id: {{ _eq: "{REQUEST}" }} }}) {{ call_state }} }}"#
+        ))
+        .await;
+    let data = serde_json::json!({
+        "AgentRequest": request["AgentRequest"],
+        "InferenceCall": calls["InferenceCall"],
+    });
     let request_live = data["AgentRequest"]
         .as_array()
         .into_iter()
@@ -72,11 +81,12 @@ async fn retire_runtime_slot(call_in_flight: bool) -> Retirement {
         } else {
             "retire-slot-idle"
         },
+        None,
         backend.endpoint(),
         1,
+        gents_inference::backends::registry::HEALTHY_PROBE_STATUS,
     )
     .await;
-    let node = home.home.store.node.clone();
     let agent_did = home.agent.did().to_owned();
     let mut runtime = BootedRuntime::boot(
         &home,
@@ -93,14 +103,14 @@ async fn retire_runtime_slot(call_in_flight: bool) -> Retirement {
         .active_generation;
 
     if call_in_flight {
-        home.submit_request(REQUEST, "retire-session", REQUEST)
+        home.submit_request(&agent_did, REQUEST, "retire-session", REQUEST)
             .await;
         held.entered().await;
         read_when_changed(
-            node.as_ref(),
+            &home.home.user_access,
             "InferenceCall",
             "the held call runs",
-            async || match live_calls(&node).await {
+            async || match live_calls(&home).await {
                 (1, data)
                     if data["InferenceCall"]
                         .as_array()
@@ -138,13 +148,13 @@ async fn retire_runtime_slot(call_in_flight: bool) -> Retirement {
 
     let while_held = if call_in_flight {
         record(runtime.joined_retired_slots(), &mut joined);
-        let observed = (running(&joined), live_calls(&node).await.0);
+        let observed = (running(&joined), live_calls(&home).await.0);
         held.release();
         read_when_changed(
-            node.as_ref(),
+            &home.home.user_access,
             "AgentRequest",
             "the held request finishes",
-            async || match live_calls(&node).await {
+            async || match live_calls(&home).await {
                 (0, data) => Ok(data),
                 (_, data) => Err(data.to_string()),
             },
@@ -158,12 +168,12 @@ async fn retire_runtime_slot(call_in_flight: bool) -> Retirement {
         let slot = runtime
             .next_joined_retired_slot(format!(
                 "joined {joined:?}, published {published}, held request {}",
-                live_calls(&node).await.1
+                live_calls(&home).await.1
             ))
             .await;
         record(vec![slot], &mut joined);
     }
-    let (live_calls_after, after) = live_calls(&node).await;
+    let (live_calls_after, after) = live_calls(&home).await;
     let retirement = Retirement {
         retired_generation,
         while_held,

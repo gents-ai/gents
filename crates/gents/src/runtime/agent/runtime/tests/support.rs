@@ -2,6 +2,7 @@ use super::super::*;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 
 pub(super) use crate::runtime::status::RuntimeStatusHandle;
+pub(super) use crate::test_support::running_runtime::AgentRuntimeHome;
 pub(super) use gents_documents::Tools;
 pub(super) use gents_protocol::node_readiness::{
     AgentReadinessState, AgentReadinessUnavailableReason, NodeReadinessProcessState,
@@ -265,142 +266,84 @@ pub(super) async fn create_user_agent_session(
         .unwrap();
 }
 
-pub(super) struct HeldRuntimeFixture {
-    pub db: gents_store::test_support::TestStore,
-    pub user: KeyIdentity,
-    pub user_access: gents_store::config_client::ConfigAccess,
-    pub agent: std::sync::Arc<dyn NodeIdentity>,
-}
-
-impl HeldRuntimeFixture {
-    pub fn admission(&self) -> gents_store::local::backend_protection::BackendAdmission {
-        self.db.backend_admission()
-    }
-
-    pub async fn agent_config_access(&self) -> gents_store::config_client::ConfigAccess {
-        use gents_store::config_client::NodePermission;
-        let runtime_did = self.db.node_identity.did();
-        let admin = gents_store::config_client::ConfigAccess::local_as(
-            self.db.node.clone(),
-            runtime_did.parse().unwrap(),
-        );
-        let agent_did = identity::Did::new(self.agent.did()).unwrap();
-        for permission in [
-            NodePermission::CollectionGet,
-            NodePermission::DocumentRead,
-            NodePermission::DocumentUpdate,
-        ] {
-            admin
-                .grant_node_permission(&agent_did, permission)
-                .await
-                .unwrap();
-        }
-        self.user_access
-            .transact_write("test.runtime.agent_config", |txn| {
-                let agent_did = &agent_did;
-                Box::pin(async move {
-                    gents_documents::grant_selected_self_configuration(
-                        txn,
-                        runtime_did,
-                        agent_did.as_str(),
-                    )
-                    .await
-                })
-            })
+/// The Agent of `fixture` with read and update grants on the runtime's
+/// configuration, as the Engineer's self-configuration grants them.
+pub(super) async fn agent_config_access(
+    fixture: &AgentRuntimeHome,
+) -> gents_store::config_client::ConfigAccess {
+    use gents_store::config_client::NodePermission;
+    let runtime_did = fixture.home.node_identity.did();
+    let admin = gents_store::config_client::ConfigAccess::local_as(
+        fixture.home.node.clone(),
+        runtime_did.parse().unwrap(),
+    );
+    let agent_did = identity::Did::new(fixture.agent.did()).unwrap();
+    for permission in [
+        NodePermission::CollectionGet,
+        NodePermission::DocumentRead,
+        NodePermission::DocumentUpdate,
+    ] {
+        admin
+            .grant_node_permission(&agent_did, permission)
             .await
             .unwrap();
-        gents_store::config_client::ConfigAccess::local_managed_agent(
-            self.db.node.clone(),
-            agent_did,
-            self.agent.as_ref(),
-        )
-        .unwrap()
     }
-}
-
-pub(super) async fn held_runtime_fixture(
-    name: &str,
-    backend_id: &str,
-    endpoint: &str,
-) -> HeldRuntimeFixture {
-    held_runtime_fixture_with_status(name, backend_id, endpoint, 1, "healthy").await
-}
-
-pub(super) async fn held_runtime_fixture_with_status(
-    name: &str,
-    backend_id: &str,
-    endpoint: &str,
-    max_concurrent: i64,
-    probe_status: &str,
-) -> HeldRuntimeFixture {
-    use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-    let (db, user, user_access, binding) = gents_inference::test_support::signed_test_node_from_db(
-        crate::support::trial_store(name).await,
-        name,
-    )
-    .await;
-    let node_did = db.node_identity.did();
-    let profile_id = format!("{}:inference", binding.agent_did);
-    let docs = [
-        (
-            gents_store::collection::Collection::InferenceProfile,
-            serde_json::json!({
-                "node_did": node_did, "profile_id": profile_id,
-                "backend_id": backend_id, "model_name": "default"
-            }),
-        ),
-        (
-            gents_store::collection::Collection::InferenceBackend,
-            serde_json::json!({
-                "node_did": node_did, "backend_id": backend_id,
-                "name": backend_id, "provider_kind": "OpenAiCompatible", "endpoint": endpoint,
-                "max_concurrent": max_concurrent, "auth": {"kind": "unauthenticated"}
-            }),
-        ),
-    ]
-    .into_iter()
-    .map(|(collection, value)| DesiredStateApplyDocument {
-        collection,
-        add: value.clone(),
-        update: value,
-    })
-    .collect();
-    let plan = DesiredStateApplyPlan::new(docs).unwrap();
-    user_access
-        .transact_write("test.runtime.inference", |txn| {
-            let plan = &plan;
+    fixture
+        .home
+        .user_access
+        .transact_write("test.runtime.agent_config", |txn| {
+            let agent_did = &agent_did;
             Box::pin(async move {
-                gents_documents::apply_desired_state_plan(
+                gents_documents::grant_selected_self_configuration(
                     txn,
-                    plan,
-                    &gents_inference::resolved::ProviderProfilePolicy,
+                    runtime_did,
+                    agent_did.as_str(),
                 )
                 .await
             })
         })
         .await
         .unwrap();
-    let runtime_access = gents_store::config_client::ConfigAccess::local_as(
-        db.node.clone(),
-        node_did.parse().unwrap(),
-    );
-    gents_inference::backends::registry::set_backend_probe_status_as(
-        &runtime_access,
-        node_did,
-        backend_id,
+    gents_store::config_client::ConfigAccess::local_managed_agent(
+        fixture.home.node.clone(),
+        agent_did,
+        fixture.agent.as_ref(),
+    )
+    .unwrap()
+}
+
+pub(super) async fn held_runtime_fixture(
+    name: &str,
+    backend_id: &str,
+    endpoint: &str,
+) -> AgentRuntimeHome {
+    held_runtime_fixture_with_status(name, backend_id, endpoint, 1, "healthy").await
+}
+
+/// An [`AgentRuntimeHome`] whose Agent also holds node grants to read,
+/// update and delete documents and change relationships.
+pub(super) async fn held_runtime_fixture_with_status(
+    name: &str,
+    backend_id: &str,
+    endpoint: &str,
+    max_concurrent: i64,
+    probe_status: &str,
+) -> AgentRuntimeHome {
+    let fixture = AgentRuntimeHome::start(
+        name,
+        Some(backend_id),
+        endpoint,
+        max_concurrent,
         probe_status,
     )
-    .await
-    .unwrap();
-    let agent =
-        gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
-    grant_held_agent_operations(&db.node, db.node_identity.as_ref(), agent.as_ref()).await;
-    HeldRuntimeFixture {
-        db,
-        user,
-        user_access,
-        agent,
-    }
+    .await;
+    grant_held_agent_operations(
+        &fixture.home.node,
+        fixture.home.node_identity.as_ref(),
+        fixture.agent.as_ref(),
+    )
+    .await;
+    fixture
 }
 
 pub(super) async fn grant_held_agent_operations(
