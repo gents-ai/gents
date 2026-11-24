@@ -164,6 +164,7 @@ storage = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "615c
 vera = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "615cca6ac6ba47830c4d95c85d72d7e4d9f785c7" }
 vera-delegation = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "615cca6ac6ba47830c4d95c85d72d7e4d9f785c7" }
 vera-embedded = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "615cca6ac6ba47830c4d95c85d72d7e4d9f785c7" }
+workers = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "615cca6ac6ba47830c4d95c85d72d7e4d9f785c7" }
 # The revision DefraDB's vera-embedded builds the node from, for its start errors.
 vera-node = { git = "https://github.com/sourcenetwork/vera.rs", rev = "8193eac0c0cf19421ad1920dd678963585259d72" }
 vera-crypto = { git = "https://github.com/sourcenetwork/vera.rs", rev = "8193eac0c0cf19421ad1920dd678963585259d72" }

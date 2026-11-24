@@ -77,6 +77,15 @@ mimalloc.workspace = true
 tauri-plugin-deep-link = "~2.4.10"
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 
+[target.'cfg(target_os = "ios")'.dependencies]
+# Marks the app's data folder excluded from iCloud backup (backup_exclusion.rs).
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSURL", "NSValue", "NSError", "NSObject"] }
+
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+nuclei = { version = "0.5.6", default-features = false }
+workers.workspace = true
+
 [target.'cfg(target_os = "macos")'.dependencies]
 # What tauri-plugin-notification delivers through (via notify-rust); used
 # directly to wait on a notice's click. Keep it on notify-rust's version.
@@ -86,5 +95,5 @@ objc2-app-kit = { version = "0.3", default-features = false, features = ["std", 
 block2 = "0.6"
 objc2-core-foundation = "0.3"
 
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSBundle", "NSDate", "NSRunLoop", "NSString", "NSUUID", "NSSet", "NSArray", "NSDictionary", "NSHTTPCookie", "NSKeyValueObserving", "NSURL", "NSURLRequest", "NSGeometry", "NSError", "NSObject"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSBundle", "NSDate", "NSRunLoop", "NSString", "NSUUID", "NSSet", "NSArray", "NSDictionary", "NSHTTPCookie", "NSKeyValueObserving", "NSURL", "NSURLRequest", "NSGeometry", "NSError", "NSObject", "NSValue"] }
 objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "WKWebsiteDataStore", "WKHTTPCookieStore", "WKWebView", "WKWebViewConfiguration", "WKNavigationDelegate", "WKUIDelegate", "WKNavigationAction", "WKNavigation", "WKWindowFeatures", "WKFrameInfo", "WKOpenPanelParameters", "objc2-app-kit", "block2"] }

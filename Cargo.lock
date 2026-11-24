@@ -6135,6 +6135,7 @@ dependencies = [
  "tracing",
  "ts-rs",
  "wiremock",
+ "workers",
 ]
 
 [[package]]
@@ -6168,6 +6169,7 @@ dependencies = [
  "gents-workspace-hack",
  "mac-notification-sys",
  "mimalloc",
+ "nuclei",
  "objc2",
  "objc2-app-kit",
  "objc2-core-foundation",
@@ -6189,6 +6191,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "workers",
 ]
 
 [[package]]
