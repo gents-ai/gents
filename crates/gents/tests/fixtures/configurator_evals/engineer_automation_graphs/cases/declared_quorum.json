@@ -10,7 +10,7 @@
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "Each new SamplePart says in its required field how many parts its batch needs. Log every part as it arrives with PART and its reference, and once a batch has all its parts, send one more note: BATCH, the batch name, complete. Set it up now; parts come in later.",
+      "prompt": "Set up an automation for new SamplePart records: each part gets a run that replies PART and its reference, and once a batch has all the parts its required field asks for, one more run replies BATCH, the batch name, complete. Set it up now; parts come in later.",
       "checks": [],
       "capture": []
     },
@@ -31,7 +31,7 @@
           "params": {
             "all": [
               {
-                "matches": "(?i)\\bpart\\W+QR1\\b"
+                "matches": "(?im)^\\W*(?:[a-z]+\\W+){0,2}part\\W+QR1\\W*$"
               }
             ]
           },
@@ -58,7 +58,7 @@
           "params": {
             "all": [
               {
-                "matches": "(?i)\\bpart\\W+QS1\\b"
+                "matches": "(?im)^\\W*(?:[a-z]+\\W+){0,2}part\\W+QS1\\W*$"
               }
             ]
           },

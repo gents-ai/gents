@@ -10,7 +10,7 @@
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "Check each new ScaleReading against our inspection band, more than 4 and less than 8 units, and give me a one-line verdict: INSPECT and the reading_id inside the band, CLEAR and the reading_id outside it. Set it up now; readings come in later.",
+      "prompt": "Set up an automation for new ScaleReading records: each one gets a run that replies with a one-line verdict, INSPECT and the reading_id when its units are more than 4 and less than 8, CLEAR and the reading_id otherwise. Set it up now; readings come in later.",
       "checks": [],
       "capture": []
     },
@@ -31,7 +31,7 @@
           "params": {
             "all": [
               {
-                "matches": "(?i)\\bclear\\W+BR2\\b"
+                "matches": "(?im)^\\W*(?:[a-z]+\\W+){0,2}clear\\W+BR2\\W*$"
               }
             ]
           },
@@ -58,7 +58,7 @@
           "params": {
             "all": [
               {
-                "matches": "(?i)\\bclear\\W+BR5\\b"
+                "matches": "(?im)^\\W*(?:[a-z]+\\W+){0,2}clear\\W+BR5\\W*$"
               }
             ]
           },
@@ -86,7 +86,7 @@
           "params": {
             "all": [
               {
-                "matches": "(?i)\\binspect\\W+BL6\\b"
+                "matches": "(?im)^\\W*(?:[a-z]+\\W+){0,2}inspect\\W+BL6\\W*$"
               }
             ]
           },

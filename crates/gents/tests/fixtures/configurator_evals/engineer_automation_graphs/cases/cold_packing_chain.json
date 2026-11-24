@@ -10,7 +10,7 @@
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "When a new PackingSlip comes in, confirm it: PACKED and the slip. Once a confirmation has gone through for a slip whose handoff_id starts with cold-, follow up in that same conversation with CHILL and the handoff_id. Other slips get no follow-up. Set it up now; slips come in later.",
+      "prompt": "Set up an automation for new PackingSlip records: each one gets a run that replies PACKED and the slip. Once that run has finished for a slip whose handoff_id starts with cold-, start a follow-up run that replies CHILL and the handoff_id. Other slips get no follow-up. Set it up now; slips come in later.",
       "checks": [],
       "capture": []
     },
@@ -31,7 +31,7 @@
           "params": {
             "all": [
               {
-                "matches": "(?i)\\bpacked\\W+H7\\b"
+                "matches": "(?im)^\\W*(?:[a-z]+\\W+){0,2}packed\\W+H7\\W*$"
               }
             ]
           },
@@ -91,9 +91,9 @@
                 "capture": "follow",
                 "key": "lifecycle_state",
                 "id": "completed",
-                "field": "session_id",
-                "target_capture": "confirm",
-                "target_key": "session_id",
+                "field": "caused_by_trigger_id",
+                "target_capture": "outcome_fires",
+                "target_key": "trigger_id",
                 "exact": true
               }
             ]
@@ -170,6 +170,29 @@
             "caused_by_source_doc_id",
             "caused_by_correlation",
             "execution_origin"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "outcome_fires",
+          "collection": "TriggerFire",
+          "filter": {
+            "owner_did": {
+              "_eq": "$trial"
+            },
+            "source_collection": {
+              "_eq": "FireOutcome"
+            }
+          },
+          "fields": [
+            "fire_key",
+            "trigger_id",
+            "task_id",
+            "request_id",
+            "session_id",
+            "source_collection",
+            "source_doc_id",
+            "source_handoff_id"
           ]
         }
       ]

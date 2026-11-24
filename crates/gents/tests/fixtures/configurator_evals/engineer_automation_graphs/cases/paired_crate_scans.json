@@ -10,7 +10,7 @@
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "Log each new CrateScan as it arrives with SCAN and its scan_id. When both scans of a lot are in, send one more note: LOT, the lot, complete. Set it up now; scans come in later.",
+      "prompt": "Set up an automation for new CrateScan records: each scan gets a run that replies SCAN and its scan_id, and once both scans of a lot are in, one more run replies LOT, the lot, complete. Set it up now; scans come in later.",
       "checks": [],
       "capture": []
     },
@@ -31,7 +31,7 @@
           "params": {
             "all": [
               {
-                "matches": "(?i)\\bscan\\W+S1\\b"
+                "matches": "(?im)^\\W*(?:[a-z]+\\W+){0,2}scan\\W+S1\\W*$"
               }
             ]
           },
@@ -58,7 +58,7 @@
           "params": {
             "all": [
               {
-                "matches": "(?i)\\bscan\\W+S2\\b"
+                "matches": "(?im)^\\W*(?:[a-z]+\\W+){0,2}scan\\W+S2\\W*$"
               }
             ]
           },

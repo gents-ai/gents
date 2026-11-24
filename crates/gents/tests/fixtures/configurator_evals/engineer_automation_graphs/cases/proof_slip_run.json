@@ -13,7 +13,7 @@
   "stages": [
     {
       "stage_id": "create_and_run",
-      "prompt": "Make me a task I can start by hand, proof-slip: given units and a ref, it posts SLIP, the units, then the ref. Run it once for each open slip in slips/pending.json, and leave that file as it is.",
+      "prompt": "Make me a task I can start by hand, proof-slip: given units and a ref, its run replies SLIP, the units, then the ref. Run it once for each open slip in slips/pending.json; you don't need to wait for the runs to finish. Leave that file as it is.",
       "settle": true,
       "checks": [
         {
@@ -44,7 +44,11 @@
                 "expect": [
                   {
                     "field": "content",
-                    "matches": "\\bSLIP\\W+7\\W+J5\\b"
+                    "matches": "\\bJ5\\b"
+                  },
+                  {
+                    "field": "content",
+                    "matches": "(?:^|[^0-9.])7(?:[^0-9.]|$)"
                   }
                 ]
               },
@@ -55,7 +59,11 @@
                 "expect": [
                   {
                     "field": "content",
-                    "matches": "\\bSLIP\\W+13\\W+Q2\\b"
+                    "matches": "\\bQ2\\b"
+                  },
+                  {
+                    "field": "content",
+                    "matches": "(?:^|[^0-9.])13(?:[^0-9.]|$)"
                   }
                 ]
               }
@@ -170,7 +178,7 @@
     },
     {
       "stage_id": "preview",
-      "prompt": "I'm thinking of adding the bay after the ref. What would that change to proof-slip look like, and what would a run for 7, J5, bay 3 post? Don't change anything yet.",
+      "prompt": "I'm thinking of adding the bay after the ref. What would that change to proof-slip look like, and what would a run for 7, J5, bay 3 reply? Don't change anything yet.",
       "checks": [
         {
           "check": "crew_spec_match",

@@ -10,7 +10,7 @@
   "stages": [
     {
       "stage_id": "configure",
-      "prompt": "Triage each new DockAlert with a one-line verdict: LOG and its code when severity is info, UNSET and its code when it has no severity, ESCALATE and its code for any other severity. Set it up now; alerts come in later.",
+      "prompt": "Set up an automation for new DockAlert records: each one gets a run that replies with a one-line triage, LOG and the code when severity is info, UNSET and the code when it has no severity, ESCALATE and the code for any other severity. Set it up now; alerts come in later.",
       "checks": [],
       "capture": []
     },
@@ -31,7 +31,7 @@
           "params": {
             "all": [
               {
-                "matches": "(?i)\\blog\\W+DA1\\b"
+                "matches": "(?im)^\\W*(?:[a-z]+\\W+){0,2}log\\W+DA1\\W*$"
               }
             ]
           },
@@ -57,7 +57,7 @@
           "params": {
             "all": [
               {
-                "matches": "(?i)\\bunset\\W+DA2\\b"
+                "matches": "(?im)^\\W*(?:[a-z]+\\W+){0,2}unset\\W+DA2\\W*$"
               }
             ]
           },
@@ -84,7 +84,7 @@
           "params": {
             "all": [
               {
-                "matches": "(?i)\\bescalate\\W+DA3\\b"
+                "matches": "(?im)^\\W*(?:[a-z]+\\W+){0,2}escalate\\W+DA3\\W*$"
               }
             ]
           },
@@ -112,7 +112,7 @@
           "params": {
             "all": [
               {
-                "matches": "(?i)\\bescalate\\W+DA4\\b"
+                "matches": "(?im)^\\W*(?:[a-z]+\\W+){0,2}escalate\\W+DA4\\W*$"
               }
             ]
           },
