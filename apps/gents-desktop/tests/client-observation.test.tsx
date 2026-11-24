@@ -300,6 +300,41 @@ describe("following the client while it runs", () => {
     }
   });
 
+  it("asks every node to reconnect now when the device comes online or its network changes", async () => {
+    let stop: (() => void) | undefined;
+    const connection = new EventTarget();
+    Object.defineProperty(navigator, "connection", {
+      configurable: true,
+      get: () => connection,
+    });
+    vi.useFakeTimers();
+    try {
+      const api = bridgeApi();
+      const app = testApp({ api, snapshot: running });
+      stop = startClientObservation(
+        app,
+        vi.fn(async () => () => {}),
+      );
+      await vi.advanceTimersByTimeAsync(BURST);
+      expect(api.reconnectNode).not.toHaveBeenCalled();
+
+      window.dispatchEvent(new Event("online"));
+      expect(api.reconnectNode.mock.calls).toEqual([[null]]);
+
+      connection.dispatchEvent(new Event("change"));
+      expect(api.reconnectNode.mock.calls).toEqual([[null], [null]]);
+
+      /* the observer's retry now leaves a connected node alone, so asking
+         for every node restarts only those still lost */
+      window.dispatchEvent(new Event("focus"));
+      expect(api.reconnectNode.mock.calls).toHaveLength(2);
+    } finally {
+      stop?.();
+      Reflect.deleteProperty(navigator, "connection");
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps one bridge listener while the person moves between sessions", async () => {
     const listen = vi.fn<DesktopClientUpdatedListenerFactory>(async () => () => {});
     const app = testApp({
